@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block title %}Manager Approvals{% endblock %}
+{% block content %}
+<h2>Pending for Manager</h2>
+<table class="table">
+<thead><tr><th>Employee</th><th>Amount</th><th>Action</th></tr></thead>
+<tbody>
+  {% for r in items %}
+  <tr>
+    <td>{{ r.requester }}</td><td>{{ r.amount }}</td>
+    <td>
+      <a href="#" class="btn btn-sm btn-success">Approve</a>
+      <a href="#" class="btn btn-sm btn-danger">Reject</a>
+    </td>
+  </tr>
+  {% empty %}
+  <tr><td colspan="3">None</td></tr>
+  {% endfor %}
+</tbody>
+</table>
+{% endblock %}

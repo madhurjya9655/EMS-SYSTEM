@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+{% block title %}List Doer Tasks{% endblock %}
+{% block content %}
+<h2>List Doer Tasks</h2>
+<form method="get" class="mb-3">{{ form.as_p }}<button class="btn btn-primary">Filter</button></form>
+<form method="post">{% csrf_token %}
+  <button class="btn btn-danger mb-2">Delete</button>
+  <table class="table">
+    <thead>
+      <tr>
+        <th></th>
+        <th>Task Code</th>
+        <th>Task Title</th>
+        <th>Message</th>
+        <th>Doer Name</th>
+        <th>Assigned By</th>
+        <th>Assign Date</th>
+        <th>Planned Date</th>
+        <th>Actual Date</th>
+        <th>Status</th>
+        <th>Delay</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for i in items %}
+      <tr>
+        <td><input type="checkbox" name="sel" value="{{ i.pk }}"></td>
+        <td>CHK{{ i.pk }}</td>
+        <td>{{ i.task.title }}</td>
+        <td>{{ i.task.description }}</td>
+        <td>{{ i.user }}</td>
+        <td>{{ i.task.created_at|date:"d M, Y" }}</td>
+        <td>{{ i.task.start_date|date:"d M, Y h:i A" }}</td>
+        <td>{{ i.task.due_date|date:"d M, Y h:i A" }}</td>
+        <td>{{ i.completed_at|date:"d M, Y h:i A" }}</td>
+        <td>{{ i.task.status }}</td>
+        <td>{{ i.completed_at|timeuntil:i.task.due_date }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</form>
+{% endblock %}

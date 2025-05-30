@@ -1,0 +1,9 @@
+{% extends 'base.html' %}
+{% block title %}Apply Leave{% endblock %}
+{% block content %}
+<h2>Apply for Leave</h2>
+<form method="post">{% csrf_token %}
+  {{ form.as_p }}
+  <button class="btn btn-primary">Submit</button>
+</form>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}New Sales Plan{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">New Sales Plan</div>
+  <div class="card-body">
+    <form method="post">
+      {% csrf_token %}
+      <div class="row g-3">
+        <div class="col-md-4">{{ form.metric.label_tag }} {{ form.metric }}</div>
+        <div class="col-md-4">{{ form.period_type.label_tag }} {{ form.period_type }}</div>
+        <div class="col-md-4">{{ form.target.label_tag }} {{ form.target }}</div>
+      </div>
+      <div class="row g-3 mt-3">
+        <div class="col-md-6">{{ form.period_start.label_tag }} {{ form.period_start }}</div>
+        <div class="col-md-6">{{ form.period_end.label_tag }} {{ form.period_end }}</div>
+      </div>
+      <button type="submit" class="btn btn-primary mt-3">Save Plan</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

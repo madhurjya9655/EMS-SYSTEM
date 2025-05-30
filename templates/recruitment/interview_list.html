@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block title %}Interviews{% endblock %}
+{% block content %}
+<h2>Interviews</h2>
+<table class="table">
+  <tr><th>Candidate</th><th>Date & Time</th><th>Location</th><th>Feedback</th></tr>
+  {% for i in interviews %}
+  <tr>
+    <td>{{ i.candidate.name }}</td>
+    <td>{{ i.scheduled_at }}</td>
+    <td>{{ i.location }}</td>
+    <td><a href="{% url 'interview_feedback' i.pk %}">Add/View</a></td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

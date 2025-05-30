@@ -1,0 +1,22 @@
+{% extends 'base.html' %}
+{% block title %}Manager Approvals{% endblock %}
+{% block content %}
+<h2>Pending Leaves for Manager</h2>
+<table class="table">
+  <thead><tr><th>Employee</th><th>Dates</th><th>Action</th></tr></thead>
+  <tbody>
+    {% for lr in leaves %}
+    <tr>
+      <td>{{ lr.requester }}</td>
+      <td>{{ lr.start_date }} – {{ lr.end_date }}</td>
+      <td>
+        <a href="{% url 'leave:apply_leave' %}?id={{ lr.id }}" class="btn btn-sm btn-success">Approve</a>
+        <a href="{% url 'leave:apply_leave' %}?id={{ lr.id }}&reject=1" class="btn btn-sm btn-danger">Reject</a>
+      </td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="3">No pending requests.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

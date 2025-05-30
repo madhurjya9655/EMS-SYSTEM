@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block title %}Pending Manager Approvals{% endblock %}
+{% block content %}
+<h2>Pending Manager Approvals</h2>
+<table class="table">
+  <tr><th>Requester</th><th>Amount</th><th>Urgency</th><th>Action</th></tr>
+  {% for req in requests %}
+  <tr>
+    <td>{{ req.requester }}</td>
+    <td>{{ req.amount }}</td>
+    <td>{{ req.urgency }}</td>
+    <td><a href="{% url 'petty_cash_manager_approve' req.pk %}">Review</a></td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

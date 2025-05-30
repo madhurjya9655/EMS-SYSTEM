@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Leave Detail{% endblock %}
+{% block content %}
+<div class="card mb-4">
+  <div class="card-header">
+    Leave Request #{{ leave.pk }}
+  </div>
+  <div class="card-body">
+    <p><strong>Type:</strong> {{ leave.leave_type.name }}</p>
+    <p><strong>Period:</strong> {{ leave.start_date }} – {{ leave.end_date }}</p>
+    <p><strong>Days:</strong> {{ leave.days }}</p>
+    <p><strong>Reason:</strong> {{ leave.reason }}</p>
+    <p><strong>Status:</strong>
+      {% if leave.status == 'PM' %}Manager Pending
+      {% elif leave.status == 'PH' %}HR Pending
+      {% elif leave.status == 'A' %}Approved
+      {% else %}Rejected{% endif %}
+    </p>
+    {% if leave.manager_comment %}
+    <p><strong>Manager Comment:</strong> {{ leave.manager_comment }}</p>
+    {% endif %}
+    {% if leave.hr_comment %}
+    <p><strong>HR Comment:</strong> {{ leave.hr_comment }}</p>
+    {% endif %}
+    <a href="{% url 'my_leaves' %}" class="btn btn-secondary mt-3">Back</a>
+  </div>
+</div>
+{% endblock %}

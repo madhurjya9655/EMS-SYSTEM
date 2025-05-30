@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Finance Review{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">Finance Review #{{ object.pk }}</div>
+  <div class="card-body">
+    <form method="post">
+      {% csrf_token %}
+      <div class="mb-3">{{ form.status.label_tag }} {{ form.status }}</div>
+      <div class="mb-3">{{ form.finance_comment.label_tag }} {{ form.finance_comment }}</div>
+      <button type="submit" class="btn btn-primary">Submit</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

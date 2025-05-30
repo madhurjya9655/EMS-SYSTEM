@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}HR Review{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">HR Review Leave Request</div>
+  <div class="card-body">
+    <p><strong>Employee:</strong> {{ object.employee.first_name }} {{ object.employee.last_name }}</p>
+    <p><strong>Type:</strong> {{ object.leave_type.name }}</p>
+    <p><strong>Dates:</strong> {{ object.start_date }} to {{ object.end_date }}</p>
+    <p><strong>Reason:</strong> {{ object.reason }}</p>
+    <form method="post">
+      {% csrf_token %}
+      <div class="mb-3">
+        {{ form.status.label_tag }} {{ form.status }}
+      </div>
+      <div class="mb-3">
+        {{ form.hr_comment.label_tag }} {{ form.hr_comment }}
+      </div>
+      <button type="submit" class="btn btn-primary">Submit</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

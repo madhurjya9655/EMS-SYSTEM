@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+{% block title %}List FMS Tasks{% endblock %}
+{% block content %}
+<h2>FMS Tasks</h2>
+<form method="get" class="mb-3">{{ form.as_p }}<button class="btn btn-primary">Filter</button></form>
+<form method="post">{% csrf_token %}
+  <button class="btn btn-danger mb-2">Delete</button>
+  <table class="table">
+    <thead>
+      <tr>
+        <th></th>
+        <th>FMS Name</th>
+        <th>Details</th>
+        <th>Status</th>
+        <th>Planned Date</th>
+        <th>Actual Date</th>
+        <th>Delay (H:M:S)</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tasks %}
+      <tr>
+        <td><input type="checkbox" name="sel" value="{{ t.pk }}"></td>
+        <td>CHK{{ t.pk }}</td>
+        <td>{{ t.title }}<br>{{ t.description }}</td>
+        <td>{{ t.status }}</td>
+        <td>{{ t.start_date|date:"d M, Y h:i A" }}</td>
+        <td>{% with c=t.completions.last %}{{ c.completed_at|date:"d M, Y h:i A" }}{% endwith %}</td>
+        <td>{% with c=t.completions.last %}{{ c.completed_at|timeuntil:t.due_date }}{% endwith %}</td>
+        <td>
+          <a href="#"><i class="bi bi-pencil"></i></a>
+          <a href="#"><i class="bi bi-trash"></i></a>
+          <a href="#"><i class="bi bi-calendar3"></i></a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</form>
+{% endblock %}

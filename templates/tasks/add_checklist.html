@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+{% block title %}Add Checklist{% endblock %}
+{% block content %}
+<h2>Add Checklist</h2>
+<form method="post" enctype="multipart/form-data">{% csrf_token %}
+  <div class="row">
+    <div class="col-md-4">{{ form.assign_by.label_tag }}{{ form.assign_by }}</div>
+    <div class="col-md-4">{{ form.task_name.label_tag }}{{ form.task_name }}</div>
+    <div class="col-md-4">{{ form.assign_to.label_tag }}{{ form.assign_to }}</div>
+  </div>
+  <div class="row mt-3">
+    <div class="col-md-4">{{ form.planned_date.label_tag }}{{ form.planned_date }}</div>
+    <div class="col-md-4">{{ form.priority.label_tag }}{{ form.priority }}</div>
+    <div class="col-md-4">{{ form.attachment_mandatory.label_tag }}{{ form.attachment_mandatory }}</div>
+  </div>
+  <div class="row mt-3">
+    <div class="col-md-4">{{ form.mode.label_tag }}{{ form.mode }}</div>
+    <div class="col-md-4">{{ form.frequency.label_tag }}{{ form.frequency }}</div>
+    <div class="col-md-4">{{ form.remind_before_days.label_tag }}{{ form.remind_before_days }}</div>
+  </div>
+  <div class="row mt-3">
+    <div class="col-md-4">{{ form.message.label_tag }}{{ form.message }}</div>
+    <div class="col-md-4">{{ form.media_upload.label_tag }}{{ form.media_upload }}</div>
+    <div class="col-md-4">{{ form.assign_pc.label_tag }}{{ form.assign_pc }}</div>
+  </div>
+  <div class="row mt-3">
+    <div class="col-md-4">{{ form.group_name.label_tag }}{{ form.group_name }}</div>
+    <div class="col-md-4">{{ form.notify_to.label_tag }}{{ form.notify_to }}</div>
+    <div class="col-md-4">{{ form.auditor.label_tag }}{{ form.auditor }}</div>
+  </div>
+  <div class="form-check mt-3">{{ form.set_reminder }}{{ form.set_reminder.label_tag }}</div>
+  <div id="reminder_fields" class="mt-3">
+    <div class="row">
+      <div class="col-md-4">{{ form.reminder_mode.label_tag }}{{ form.reminder_mode }}</div>
+      <div class="col-md-4">{{ form.reminder_frequency.label_tag }}{{ form.reminder_frequency }}</div>
+      <div class="col-md-4">{{ form.reminder_before_days.label_tag }}{{ form.reminder_before_days }}</div>
+    </div>
+    <div class="row mt-3">
+      <div class="col-md-4">{{ form.reminder_starting_time.label_tag }}{{ form.reminder_starting_time }}</div>
+      <div class="col-md-4">{{ form.checklist_auto_close.label_tag }}{{ form.checklist_auto_close }}</div>
+      <div class="col-md-4">{{ form.checklist_auto_close_days.label_tag }}{{ form.checklist_auto_close_days }}</div>
+    </div>
+  </div>
+  <button type="submit" class="btn btn-primary mt-4">Submit</button>
+</form>
+<script>
+document.getElementById('id_set_reminder').addEventListener('change',function(){
+  document.getElementById('reminder_fields').style.display=this.checked?'block':'none'
+})
+window.onload=function(){
+  document.getElementById('reminder_fields').style.display=document.getElementById('id_set_reminder').checked?'block':'none'
+}
+</script>
+{% endblock %}

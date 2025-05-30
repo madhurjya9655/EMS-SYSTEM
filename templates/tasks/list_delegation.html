@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block title %}List Delegations{% endblock %}
+{% block content %}
+<h2>List Delegations</h2>
+<table class="table">
+  <thead>
+    <tr>
+      <th>Task Name</th><th>Message</th><th>Assign By</th><th>Assign To</th><th>Planned Date</th><th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for d in items %}
+    <tr>
+      <td>{{ d.task_name }}</td>
+      <td>{{ d.task_name }}</td>
+      <td>{{ d.assign_by }}</td>
+      <td>{{ d.assign_to }}</td>
+      <td>{{ d.planned_date|date:"d M, Y" }}</td>
+      <td>
+        <a href="#"><i class="bi bi-eye"></i></a>
+        <a href="#"><i class="bi bi-pencil"></i></a>
+        <a href="#"><i class="bi bi-calendar3"></i></a>
+        <a href="#"><i class="bi bi-trash"></i></a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

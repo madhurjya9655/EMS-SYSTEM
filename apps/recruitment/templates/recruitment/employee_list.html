@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Employees{% endblock %}
+{% block content %}
+<h1>Employees</h1>
+<table class="table table-striped">
+  <thead>
+    <tr>
+      <th>#</th><th>Name</th><th>Email</th><th>Dept</th><th>Joined</th><th>Active</th><th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for e in employees %}
+    <tr>
+      <td>{{ forloop.counter }}</td>
+      <td><a href="{% url 'employee_detail' e.pk %}">{{ e.first_name }} {{ e.last_name }}</a></td>
+      <td>{{ e.email }}</td>
+      <td>{{ e.department }}</td>
+      <td>{{ e.date_joined }}</td>
+      <td>{{ e.is_active|yesno:"Yes,No" }}</td>
+      <td>
+        <a href="{% url 'employee_edit' e.pk %}" class="btn btn-sm btn-secondary">Edit</a>
+        <a href="{% url 'employee_delete' e.pk %}" class="btn btn-sm btn-danger">Delete</a>
+      </td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="7">No employees found.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

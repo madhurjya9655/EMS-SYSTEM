@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block title %}My Petty Cash Requests{% endblock %}
+{% block content %}
+<h2>My Petty Cash Requests</h2>
+<a href="{% url 'petty_cash_create' %}" class="btn btn-primary mb-3">New Request</a>
+<table class="table">
+  <tr><th>Reason</th><th>Amount</th><th>Urgency</th><th>Status</th></tr>
+  {% for req in requests %}
+  <tr>
+    <td>{{ req.reason }}</td>
+    <td>{{ req.amount }}</td>
+    <td>{{ req.urgency }}</td>
+    <td>{{ req.status }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

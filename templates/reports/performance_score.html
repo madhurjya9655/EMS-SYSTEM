@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block title %}Performance Score{% endblock %}
+{% block content %}
+<h2>Performance Score</h2>
+<form method="get" class="mb-3">{{ form.as_p }}<button class="btn btn-primary">Filter</button></form>
+{% if p %}
+<table class="table">
+  <tr><th>Total Tasks</th><td>{{ p.total }}</td></tr>
+  <tr><th>Completed Tasks</th><td>{{ p.completed }}</td></tr>
+  <tr><th>Completion %</th><td>{{ p.pct|floatformat:2 }}%</td></tr>
+</table>
+{% endif %}
+{% endblock %}

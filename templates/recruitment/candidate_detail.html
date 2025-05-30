@@ -1,0 +1,9 @@
+{% extends 'base.html' %}
+{% block title %}Candidate{% endblock %}
+{% block content %}
+<h2>{{ candidate.name }}</h2>
+<p>Email: {{ candidate.email }}</p>
+<p>Status: {{ candidate.status }}</p>
+<p><a href="{{ candidate.resume.url }}">Download Resume</a></p>
+<p><a href="{% url 'offer_letter' candidate.pk %}">Download Offer Letter</a></p>
+{% endblock %}

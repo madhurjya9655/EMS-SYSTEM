@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% block title %}My Petty Cash{% endblock %}
+{% block content %}
+<h2>My Petty Cash Requests</h2>
+<table class="table">
+  <thead><tr><th>ID</th><th>Reason</th><th>Amount</th><th>Status</th></tr></thead>
+  <tbody>
+    {% for r in items %}
+    <tr><td>{{ r.id }}</td><td>{{ r.reason }}</td><td>{{ r.amount }}</td><td>{{ r.status }}</td></tr>
+    {% empty %}
+    <tr><td colspan="4">No requests.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

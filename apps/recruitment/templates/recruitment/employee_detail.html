@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Employee Detail{% endblock %}
+{% block content %}
+<h1>{{ employee.first_name }} {{ employee.last_name }}</h1>
+<ul class="list-group">
+  <li class="list-group-item"><strong>Email:</strong> {{ employee.email }}</li>
+  <li class="list-group-item"><strong>Department:</strong> {{ employee.department }}</li>
+  <li class="list-group-item"><strong>Date Joined:</strong> {{ employee.date_joined }}</li>
+  <li class="list-group-item"><strong>Active:</strong> {{ employee.is_active|yesno:"Yes,No" }}</li>
+</ul>
+<a href="{% url 'employee_list' %}" class="btn btn-secondary mt-3">Back to List</a>
+{% endblock %}

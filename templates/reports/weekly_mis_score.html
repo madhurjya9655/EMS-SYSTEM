@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block title %}Weekly MIS Score{% endblock %}
+{% block content %}
+<h2>Weekly MIS Score</h2>
+<form method="get" class="mb-3">{{ form.as_p }}<button class="btn btn-primary">Filter</button></form>
+{% if r %}
+<table class="table">
+  <tr><th>Tasks Assigned</th><td>{{ r.assigned }}</td></tr>
+  <tr><th>Completed On Time</th><td>{{ r.on_time }}</td></tr>
+  <tr><th>Completed Late</th><td>{{ r.late }}</td></tr>
+  <tr><th>Pending Tasks</th><td>{{ r.pending }}</td></tr>
+</table>
+{% endif %}
+{% endblock %}

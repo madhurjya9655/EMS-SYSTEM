@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Add User{% endblock %}
+{% block content %}
+<h2 class="mb-4">Add User</h2>
+<form method="post">
+  {% csrf_token %}
+  <div class="row">
+    <div class="col-md-4">{{ uf.first_name.label_tag }}{{ uf.first_name }}</div>
+    <div class="col-md-4">{{ uf.last_name.label_tag }}{{ uf.last_name }}</div>
+    <div class="col-md-4">{{ uf.username.label_tag }}{{ uf.username }}</div>
+  </div>
+  <div class="row mt-3">
+    <div class="col-md-4">{{ uf.email.label_tag }}{{ uf.email }}</div>
+    <div class="col-md-4">{{ uf.password.label_tag }}{{ uf.password }}</div>
+    <div class="col-md-4">{{ pf.role.label_tag }}{{ pf.role }}</div>
+  </div>
+  <div class="row mt-3">
+    <div class="col-md-4">{{ pf.phone.label_tag }}{{ pf.phone }}</div>
+    <div class="col-md-4">{{ pf.branch.label_tag }}{{ pf.branch }}</div>
+    <div class="col-md-4">{{ pf.department.label_tag }}{{ pf.department }}</div>
+  </div>
+  <div class="row mt-3">
+    <div class="col-md-4">{{ pf.team_leader.label_tag }}{{ pf.team_leader }}</div>
+  </div>
+  <hr class="my-4">
+  <h5>Select User Privilege</h5>
+  <div class="row">
+    {% for checkbox in pf.permissions %}
+      <div class="col-sm-4">
+        <div class="form-check">{{ checkbox.tag }} {{ checkbox.choice_label }}</div>
+      </div>
+    {% endfor %}
+  </div>
+  <button class="btn btn-primary mt-4" type="submit">Submit</button>
+</form>
+{% endblock %}

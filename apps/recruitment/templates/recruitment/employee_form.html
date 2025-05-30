@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Add Employee{% endblock %}
+{% block content %}
+<h1>Add Employee</h1>
+<form method="post" novalidate>
+  {% csrf_token %}
+  <div class="row g-3">
+    <div class="col-md-6">
+      {{ form.first_name.label_tag }} {{ form.first_name }} {{ form.first_name.errors }}
+    </div>
+    <div class="col-md-6">
+      {{ form.last_name.label_tag }} {{ form.last_name }} {{ form.last_name.errors }}
+    </div>
+    <div class="col-md-6">
+      {{ form.email.label_tag }} {{ form.email }} {{ form.email.errors }}
+    </div>
+    <div class="col-md-6">
+      {{ form.department.label_tag }} {{ form.department }} {{ form.department.errors }}
+    </div>
+    <div class="col-12 form-check">
+      {{ form.is_active }} {{ form.is_active.label_tag }} {{ form.is_active.errors }}
+    </div>
+  </div>
+  <button type="submit" class="btn btn-primary mt-3">Save</button>
+</form>
+{% endblock %}

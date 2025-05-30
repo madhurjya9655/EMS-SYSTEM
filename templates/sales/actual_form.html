@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Update Actual{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">Update Actual for #{{ object.pk }}</div>
+  <div class="card-body">
+    <form method="post">
+      {% csrf_token %}
+      <div class="mb-3">{{ form.actual.label_tag }} {{ form.actual }}</div>
+      <button type="submit" class="btn btn-primary">Save Actual</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

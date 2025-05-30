@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block title %}HR Approvals{% endblock %}
+{% block content %}
+<h2>Pending Leaves for HR</h2>
+<table class="table">
+  <thead><tr><th>Employee</th><th>Dates</th><th>Action</th></tr></thead>
+  <tbody>
+    {% for lr in leaves %}
+    <tr>
+      <td>{{ lr.requester }}</td>
+      <td>{{ lr.start_date }} – {{ lr.end_date }}</td>
+      <td>
+        <a href="#" class="btn btn-sm btn-success">Finalize</a>
+      </td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="3">No items.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

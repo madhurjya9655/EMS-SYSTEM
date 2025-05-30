@@ -1,0 +1,45 @@
+{% extends 'base.html' %}
+{% block title %}List Checklists{% endblock %}
+{% block content %}
+<h2>List Checklists</h2>
+<form method="post">{% csrf_token %}
+  <button class="btn btn-danger mb-2">Delete</button>
+  <table class="table">
+    <thead>
+      <tr>
+        <th><input type="checkbox"></th>
+        <th>Task Name</th>
+        <th>Master Task Code</th>
+        <th>Message</th>
+        <th>Assign To</th>
+        <th>Frequency</th>
+        <th>Planned Date</th>
+        <th>Remind Before Days</th>
+        <th>Reminder</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for i in items %}
+      <tr>
+        <td><input type="checkbox" name="sel" value="{{ i.pk }}"></td>
+        <td>{{ i.task_name }}</td>
+        <td>{{ i.pk|stringformat:"06d" }}</td>
+        <td>{{ i.message }}</td>
+        <td>{{ i.assign_to }}</td>
+        <td>{{ i.frequency }} {{ i.mode }}</td>
+        <td>{{ i.planned_date|date:"d M, Y h:i A" }}</td>
+        <td>{{ i.remind_before_days }}</td>
+        <td>{% if i.set_reminder %}{{ i.reminder_mode }} every {{ i.reminder_frequency }}{% else %}-{% endif %}</td>
+        <td>
+          <a href="#"><i class="bi bi-eye"></i></a>
+          <a href="#"><i class="bi bi-pencil"></i></a>
+          <a href="#"><i class="bi bi-calendar3"></i></a>
+          <a href="#"><i class="bi bi-trash"></i></a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</form>
+{% endblock %}

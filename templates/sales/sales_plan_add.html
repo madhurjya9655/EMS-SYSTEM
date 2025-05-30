@@ -1,0 +1,9 @@
+{% extends 'base.html' %}
+{% block title %}New Sales Plan{% endblock %}
+{% block content %}
+<h2>New Sales Plan</h2>
+<form method="post">{% csrf_token %}
+  {{ form.as_p }}
+  <button class="btn btn-primary">Submit</button>
+</form>
+{% endblock %}
