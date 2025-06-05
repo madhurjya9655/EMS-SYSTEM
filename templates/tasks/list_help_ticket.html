@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% block title %}Help Ticket Tasks{% endblock %}
+{% block content %}
+<h2>Help Ticket Tasks (Placeholder)</h2>
+<ul class="list-group">
+  {% for h in items %}
+  <li class="list-group-item">
+    <!-- Replace with actual HelpTicket fields once model exists -->
+    {{ h }}
+  </li>
+  {% empty %}
+  <li class="list-group-item">No Help Ticket tasks available.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

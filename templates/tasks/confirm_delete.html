@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block title %}Confirm Delete{% endblock %}
+{% block content %}
+<h2>Confirm Delete {{ type }}</h2>
+<p>Are you sure you want to delete “{{ object.task_name }}”?</p>
+<form method="post">{% csrf_token %}
+  <button type="submit" class="btn btn-danger">Yes, Delete</button>
+  <a href="{% if type == 'Checklist' %}{% url 'tasks:list_checklist' %}{% else %}{% url 'tasks:list_delegation' %}{% endif %}" class="btn btn-secondary">Cancel</a>
+</form>
+{% endblock %}

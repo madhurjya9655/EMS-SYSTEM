@@ -4,168 +4,617 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}EMS{% endblock %}</title>
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <title>{% block title %}BOS EMS{% endblock %}</title>
+
+  <!-- Font-Awesome -->
+  <link
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    rel="stylesheet"
+  >
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+    rel="stylesheet"
+  >
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+  >
   <link href="{% static 'css/custom.css' %}" rel="stylesheet">
+
   <style>
     :root {
-      --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      --secondary-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-      --glass-bg: rgba(255,255,255,0.1);
-      --glass-border: rgba(255,255,255,0.2);
-      --shadow-soft: 0 8px 32px rgba(0,0,0,0.1);
-      --shadow-hover: 0 12px 40px rgba(0,0,0,0.15);
-      --border-radius: 16px;
+      --sidebar-width: 240px;
+      --primary-blue: #2563eb;
+      --sidebar-bg: #ffffff;
+      --sidebar-text: #6b7280;
+      --sidebar-active: #2563eb;
+      --sidebar-hover: #f3f4f6;
+      --border-color: #e5e7eb;
+      --text-gray: #6b7280;
+      --text-dark: #374151;
     }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
     body {
       font-family: 'Inter', sans-serif;
-      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-      min-height: 100vh;
-      margin: 0;
+      background-color: #f8fafc;
+      overflow-x: hidden;
     }
-    .navbar {
-      background: var(--primary-gradient) !important;
-      backdrop-filter: blur(20px);
-      box-shadow: var(--shadow-soft);
-      border-bottom: 1px solid var(--glass-border);
-      z-index: 2000;
+
+    /* Top Header */
+    .top-header {
+      background: var(--primary-blue);
+      color: white;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 1rem;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 1000;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
-    .nav-link, .navbar-brand {
-      transition: transform .3s, box-shadow .3s;
+
+    .logo-section {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      font-size: 1.1rem;
     }
-    .nav-link:hover, .navbar-brand:hover {
-      transform: translateY(-2px);
-      box-shadow: var(--shadow-hover);
+
+    .logo-icon {
+      background: white;
+      color: var(--primary-blue);
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
     }
-    .dropdown-menu {
-      background: rgba(255,255,255,0.95);
-      backdrop-filter: blur(20px);
-      border: 1px solid var(--glass-border);
-      border-radius: var(--border-radius);
-      box-shadow: var(--shadow-soft);
-      overflow: visible !important;
-      z-index: 3000;
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
     }
-    .dropdown, .navbar-collapse {
-      overflow: visible !important;
+
+    .header-select {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: white;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      min-width: 150px;
     }
-    .dropdown-item:hover {
-      background: var(--secondary-gradient);
-      color: #fff !important;
+
+    .header-select option {
+      background: var(--primary-blue);
+      color: white;
     }
-    footer {
-      background: rgba(255,255,255,0.9);
-      text-align: center;
+
+    .user-info {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.875rem;
+    }
+
+    .mobile-toggle {
+      display: none;
+      background: none;
+      border: none;
+      color: white;
+      font-size: 1.2rem;
+      cursor: pointer;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      background: var(--sidebar-bg);
+      width: var(--sidebar-width);
+      height: calc(100vh - 60px);
+      position: fixed;
+      top: 60px;
+      left: 0;
+      border-right: 1px solid var(--border-color);
+      overflow-y: auto;
+      transition: transform 0.3s ease;
+      z-index: 900;
+    }
+
+    .sidebar.collapsed {
+      transform: translateX(-100%);
+    }
+
+    .sidebar-menu {
       padding: 1rem 0;
+    }
+
+    .menu-item {
+      display: block;
+      padding: 0.75rem 1.5rem;
+      color: var(--sidebar-text);
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: background 0.2s ease, color 0.2s ease;
+      border: none;
+      background: none;
+      width: 100%;
+      text-align: left;
+    }
+
+    .menu-item:hover {
+      background: var(--sidebar-hover);
+      color: var(--text-dark);
+    }
+
+    .menu-item.active {
+      background: #eff6ff;
+      color: var(--sidebar-active);
+      border-right: 3px solid var(--sidebar-active);
+    }
+
+    .menu-item i {
+      width: 20px;
+      margin-right: 0.75rem;
+      font-size: 1rem;
+    }
+
+    .menu-item .fa-chevron-down {
+      float: right;
+      margin-left: auto;
+      font-size: 0.75rem;
+      transition: transform 0.2s ease;
+    }
+
+    .submenu {
+      background: #f8fafc;
+      border-top: 1px solid var(--border-color);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .submenu .menu-item {
+      padding-left: 3rem;
+      font-size: 0.8rem;
+      color: var(--text-gray);
+    }
+
+    /* Main Content */
+    .main-content {
+      margin-left: var(--sidebar-width);
+      margin-top: 60px;
+      padding: 2rem;
+      min-height: calc(100vh - 60px);
+      transition: margin-left 0.3s ease;
+    }
+
+    .main-content.expanded {
+      margin-left: 0;
+    }
+
+    /* Footer */
+    footer {
+      background: var(--sidebar-bg);
+      border-top: 1px solid var(--border-color);
+      text-align: center;
+      padding: 1rem;
       margin-top: auto;
+      color: var(--text-gray);
+      font-size: 0.875rem;
+    }
+
+    /* Mobile Responsiveness */
+    @media (max-width: 768px) {
+      .mobile-toggle {
+        display: block;
+      }
+
+      .header-select {
+        display: none;
+      }
+
+      .sidebar {
+        transform: translateX(-100%);
+      }
+
+      .sidebar.show {
+        transform: translateX(0);
+      }
+
+      .main-content {
+        margin-left: 0;
+        padding: 1rem;
+      }
+
+      .user-info span:first-child {
+        display: none;
+      }
+    }
+
+    /* Overlay for mobile */
+    .sidebar-overlay {
+      display: none;
+      position: fixed;
+      top: 60px;
+      left: 0;
+      width: 100%;
+      height: calc(100vh - 60px);
+      background: rgba(0,0,0,0.5);
+      z-index: 850;
+    }
+
+    .sidebar-overlay.show {
+      display: block;
+    }
+
+    /* Custom scrollbar for sidebar */
+    .sidebar::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    .sidebar::-webkit-scrollbar-track {
+      background: #f1f1f1;
+    }
+
+    .sidebar::-webkit-scrollbar-thumb {
+      background: #c1c1c1;
+      border-radius: 2px;
+    }
+
+    .sidebar::-webkit-scrollbar-thumb:hover {
+      background: #a8a8a8;
+    }
+
+    /* Logout button styling */
+    .logout-btn {
+      background: none;
+      border: 1px solid rgba(255,255,255,0.3);
+      color: white;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: background 0.2s ease, border-color 0.2s ease;
+    }
+
+    .logout-btn:hover {
+      background: rgba(255,255,255,0.1);
+      border-color: rgba(255,255,255,0.5);
     }
   </style>
 </head>
-<body class="d-flex flex-column min-vh-100">
-<nav class="navbar navbar-expand-lg navbar-dark">
-  <div class="container-fluid">
-    <a class="navbar-brand" href="{% url 'recruitment:home' %}"><i class="fas fa-cogs"></i> EMS</a>
-    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav">
-      <span class="navbar-toggler-icon"></span>
-    </button>
-    <div class="collapse navbar-collapse" id="mainNav">
-      <ul class="navbar-nav me-auto">
-
-        <li class="nav-item"><a class="nav-link" href="{% url 'recruitment:employee_list' %}"><i class="fas fa-users"></i> Employees</a></li>
-        <li class="nav-item"><a class="nav-link" href="{% url 'recruitment:employee_add' %}"><i class="fas fa-user-plus"></i> Add Employee</a></li>
-
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown" data-bs-display="static"><i class="fas fa-calendar-day"></i> Leave</a>
-          <ul class="dropdown-menu">
-            <li><a class="dropdown-item" href="{% url 'leave:my_leaves' %}"><i class="fas fa-file-alt"></i> My Leaves</a></li>
-            {% if user|has_group:"Manager" %}<li><a class="dropdown-item" href="{% url 'leave:pending_leaves' %}"><i class="fas fa-check-circle"></i> Manager Approvals</a></li>{% endif %}
-            {% if user|has_group:"HR"      %}<li><a class="dropdown-item" href="{% url 'leave:hr_leaves'      %}"><i class="fas fa-user-tie"></i> HR Approvals</a></li>{% endif %}
-          </ul>
-        </li>
-
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown" data-bs-display="static"><i class="fas fa-wallet"></i> Petty Cash</a>
-          <ul class="dropdown-menu">
-            <li><a class="dropdown-item" href="{% url 'petty_cash:list_requests'   %}"><i class="fas fa-file-invoice-dollar"></i> My Requests</a></li>
-            {% if user|has_group:"Manager" %}<li><a class="dropdown-item" href="{% url 'petty_cash:manager_requests' %}"><i class="fas fa-check"></i> Manager Approvals</a></li>{% endif %}
-            {% if user|has_group:"Finance" %}<li><a class="dropdown-item" href="{% url 'petty_cash:finance_requests' %}"><i class="fas fa-coins"></i> Finance Approvals</a></li>{% endif %}
-          </ul>
-        </li>
-
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown" data-bs-display="static"><i class="fas fa-chart-line"></i> Sales</a>
-          <ul class="dropdown-menu">
-            <li><a class="dropdown-item" href="{% url 'sales:sales_plan_list'   %}"><i class="fas fa-list"></i> My Plans</a></li>
-            <li><a class="dropdown-item" href="{% url 'sales:sales_plan_add'    %}"><i class="fas fa-plus-circle"></i> New Plan</a></li>
-            <li><a class="dropdown-item" href="{% url 'sales:sales_dashboard'   %}"><i class="fas fa-tachometer-alt"></i> Dashboard</a></li>
-          </ul>
-        </li>
-
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown" data-bs-display="static"><i class="fas fa-receipt"></i> Reimbursement</a>
-          <ul class="dropdown-menu">
-            <li><a class="dropdown-item" href="{% url 'reimbursement:my_reimbursements' %}"><i class="fas fa-file-medical"></i> My Requests</a></li>
-            {% if user|has_group:"Manager" %}<li><a class="dropdown-item" href="{% url 'reimbursement:manager_pending'   %}"><i class="fas fa-check-square"></i> Manager Approvals</a></li>{% endif %}
-            {% if user|has_group:"Finance" %}<li><a class="dropdown-item" href="{% url 'reimbursement:finance_pending'   %}"><i class="fas fa-wallet"></i> Finance Approvals</a></li>{% endif %}
-          </ul>
-        </li>
-
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown" data-bs-display="static"><i class="fas fa-tasks"></i> Master Tasks</a>
-          <ul class="dropdown-menu">
-            <li><a class="dropdown-item" href="{% url 'tasks:list_checklist'     %}"><i class="fas fa-clipboard-list"></i> List Checklist</a></li>
-            <li><a class="dropdown-item" href="{% url 'tasks:add_checklist'      %}"><i class="fas fa-clipboard-plus"></i> Add Checklist</a></li>
-            <li><a class="dropdown-item" href="{% url 'tasks:list_delegation'    %}"><i class="fas fa-user-clock"></i> List Delegation</a></li>
-            <li><a class="dropdown-item" href="{% url 'tasks:add_delegation'     %}"><i class="fas fa-user-plus"></i> Add Delegation</a></li>
-            <li><a class="dropdown-item" href="{% url 'tasks:bulk_upload'        %}"><i class="fas fa-upload"></i> Bulk Upload</a></li>
-          </ul>
-        </li>
-
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown" data-bs-display="static"><i class="fas fa-chart-pie"></i> Reports</a>
-          <ul class="dropdown-menu">
-            <li><a class="dropdown-item" href="{% url 'reports:doer_tasks'           %}"><i class="fas fa-tasks-alt"></i> Doer Tasks</a></li>
-            <li><a class="dropdown-item" href="{% url 'reports:weekly_mis_score'    %}"><i class="fas fa-calendar-week"></i> Weekly MIS Score</a></li>
-            <li><a class="dropdown-item" href="{% url 'reports:performance_score'  %}"><i class="fas fa-percentage"></i> Performance Score</a></li>
-            <li><a class="dropdown-item" href="{% url 'reports:auditor_report'      %}"><i class="fas fa-audit"></i> Auditor Report</a></li>
-          </ul>
-        </li>
-
-        {% if user.is_superuser %}
-        <li class="nav-item">
-          <a class="nav-link" data-bs-toggle="collapse" href="#usersSubmenu"><i class="fas fa-user-friends"></i> Users <i class="fas fa-chevron-down"></i></a>
-          <div class="collapse ps-3" id="usersSubmenu">
-            <a class="nav-link" href="{% url 'users:user_list' %}"><i class="fas fa-list"></i> List Users</a>
-            <a class="nav-link" href="{% url 'users:user_add'  %}"><i class="fas fa-user-plus"></i> Add User</a>
-          </div>
-        </li>
-        {% endif %}
-
-      </ul>
-      <ul class="navbar-nav">
-        {% if user.is_authenticated %}
-        <li class="nav-item">
-          <form method="post" action="{% url 'logout' %}">
-            {% csrf_token %}
-            <button class="btn btn-outline-light nav-link"><i class="fas fa-sign-out-alt"></i> Logout</button>
-          </form>
-        </li>
-        {% endif %}
-      </ul>
+<body>
+  <!-- Top Header -->
+  <div class="top-header">
+    <div class="logo-section">
+      <button class="mobile-toggle" onclick="toggleSidebar()">
+        <i class="fas fa-bars"></i>
+      </button>
+      <div class="logo-icon">M</div>
+      <span>BOS EMS by Madhurjya</span>
+    </div>
+    <div class="header-right">
+      <select class="header-select">
+        <option>All Branches</option>
+        <option>Branch 1</option>
+        <option>Branch 2</option>
+      </select>
+      <div class="user-info">
+        <span>{{ user.get_full_name|default:user.username }}</span>
+        <i class="fas fa-user-circle" style="font-size: 1.5rem;"></i>
+      </div>
+      {% if user.is_authenticated %}
+      <form method="post" action="{% url 'logout' %}" style="margin: 0;">
+        {% csrf_token %}
+        <button class="logout-btn">
+          <i class="fas fa-sign-out-alt"></i> Logout
+        </button>
+      </form>
+      {% endif %}
     </div>
   </div>
-</nav>
 
-<div class="container my-4 flex-grow-1">
-  {% block content %}{% endblock %}
-</div>
+  <!-- Sidebar Overlay for Mobile -->
+  <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
 
-<footer>
-  <small>© {{ now|date:"Y" }} Developed by Madhurjya Bora</small>
-</footer>
+  <!-- Sidebar -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-menu">
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+      <a href="{% url 'dashboard:home' %}" class="menu-item {% if request.resolver_match.url_name == 'home' and request.resolver_match.app_name == 'dashboard' %}active{% endif %}">
+        <i class="fas fa-tachometer-alt"></i>
+        Dashboard
+      </a>
+
+      <a href="{% url 'recruitment:employee_list' %}" class="menu-item {% if request.resolver_match.url_name == 'employee_list' and request.resolver_match.app_name == 'recruitment' %}active{% endif %}">
+        <i class="fas fa-users"></i>
+        Employees
+      </a>
+
+      <a href="{% url 'recruitment:employee_add' %}" class="menu-item {% if request.resolver_match.url_name == 'employee_add' and request.resolver_match.app_name == 'recruitment' %}active{% endif %}">
+        <i class="fas fa-user-plus"></i>
+        Add Employee
+      </a>
+
+      <button class="menu-item" onclick="toggleSubmenu('leaveSubmenu')">
+        <i class="fas fa-calendar-day"></i>
+        Leave Register
+        <i class="fas fa-chevron-down"></i>
+      </button>
+      <div class="submenu" id="leaveSubmenu" style="display: none;">
+        <a href="{% url 'leave:my_leaves' %}" class="menu-item {% if request.resolver_match.url_name == 'my_leaves' and request.resolver_match.app_name == 'leave' %}active{% endif %}">
+          <i class="fas fa-file-alt"></i>
+          My Leaves
+        </a>
+        {% if user|has_group:"Manager" %}
+        <a href="{% url 'leave:pending_leaves' %}" class="menu-item {% if request.resolver_match.url_name == 'pending_leaves' and request.resolver_match.app_name == 'leave' %}active{% endif %}">
+          <i class="fas fa-check-circle"></i>
+          Manager Approvals
+        </a>
+        {% endif %}
+        {% if user|has_group:"HR" %}
+        <a href="{% url 'leave:hr_leaves' %}" class="menu-item {% if request.resolver_match.url_name == 'hr_leaves' and request.resolver_match.app_name == 'leave' %}active{% endif %}">
+          <i class="fas fa-user-tie"></i>
+          HR Approvals
+        </a>
+        {% endif %}
+      </div>
+
+      <button class="menu-item" onclick="toggleSubmenu('masterTasksSubmenu')">
+        <i class="fas fa-tasks"></i>
+        Master Tasks
+        <i class="fas fa-chevron-down"></i>
+      </button>
+      <div class="submenu" id="masterTasksSubmenu" style="display: none;">
+        <a href="{% url 'tasks:list_checklist' %}" class="menu-item {% if request.resolver_match.url_name == 'list_checklist' and request.resolver_match.app_name == 'tasks' %}active{% endif %}">
+          <i class="fas fa-clipboard-list"></i>
+          List Checklist
+        </a>
+        <a href="{% url 'tasks:add_checklist' %}" class="menu-item {% if request.resolver_match.url_name == 'add_checklist' and request.resolver_match.app_name == 'tasks' %}active{% endif %}">
+          <i class="fas fa-clipboard-plus"></i>
+          Add Checklist
+        </a>
+        <a href="{% url 'tasks:list_delegation' %}" class="menu-item {% if request.resolver_match.url_name == 'list_delegation' and request.resolver_match.app_name == 'tasks' %}active{% endif %}">
+          <i class="fas fa-user-clock"></i>
+          List Delegation
+        </a>
+        <a href="{% url 'tasks:add_delegation' %}" class="menu-item {% if request.resolver_match.url_name == 'add_delegation' and request.resolver_match.app_name == 'tasks' %}active{% endif %}">
+          <i class="fas fa-user-plus"></i>
+          Add Delegation
+        </a>
+        <a href="{% url 'tasks:bulk_upload' %}" class="menu-item {% if request.resolver_match.url_name == 'bulk_upload' and request.resolver_match.app_name == 'tasks' %}active{% endif %}">
+          <i class="fas fa-upload"></i>
+          Bulk Upload
+        </a>
+      </div>
+
+      <a href="#" class="menu-item">
+        <i class="fas fa-desktop"></i>
+        FMS Manager
+      </a>
+
+      <a href="#" class="menu-item">
+        <i class="fas fa-question-circle"></i>
+        Help Ticket
+      </a>
+
+      <button class="menu-item" onclick="toggleSubmenu('pettyCashSubmenu')">
+        <i class="fas fa-wallet"></i>
+        Petty Cash
+        <i class="fas fa-chevron-down"></i>
+      </button>
+      <div class="submenu" id="pettyCashSubmenu" style="display: none;">
+        <a href="{% url 'petty_cash:list_requests' %}" class="menu-item {% if request.resolver_match.url_name == 'list_requests' and request.resolver_match.app_name == 'petty_cash' %}active{% endif %}">
+          <i class="fas fa-file-invoice-dollar"></i>
+          My Requests
+        </a>
+        {% if user|has_group:"Manager" %}
+        <a href="{% url 'petty_cash:manager_requests' %}" class="menu-item {% if request.resolver_match.url_name == 'manager_requests' and request.resolver_match.app_name == 'petty_cash' %}active{% endif %}">
+          <i class="fas fa-check"></i>
+          Manager Approvals
+        </a>
+        {% endif %}
+        {% if user|has_group:"Finance" %}
+        <a href="{% url 'petty_cash:finance_requests' %}" class="menu-item {% if request.resolver_match.url_name == 'finance_requests' and request.resolver_match.app_name == 'petty_cash' %}active{% endif %}">
+          <i class="fas fa-coins"></i>
+          Finance Approvals
+        </a>
+        {% endif %}
+      </div>
+
+      <button class="menu-item" onclick="toggleSubmenu('salesSubmenu')">
+        <i class="fas fa-chart-line"></i>
+        Sales
+        <i class="fas fa-chevron-down"></i>
+      </button>
+      <div class="submenu" id="salesSubmenu" style="display: none;">
+        <a href="{% url 'sales:sales_plan_list' %}" class="menu-item {% if request.resolver_match.url_name == 'sales_plan_list' and request.resolver_match.app_name == 'sales' %}active{% endif %}">
+          <i class="fas fa-list"></i>
+          My Plans
+        </a>
+        <a href="{% url 'sales:sales_plan_add' %}" class="menu-item {% if request.resolver_match.url_name == 'sales_plan_add' and request.resolver_match.app_name == 'sales' %}active{% endif %}">
+          <i class="fas fa-plus-circle"></i>
+          New Plan
+        </a>
+        <a href="{% url 'sales:sales_dashboard' %}" class="menu-item {% if request.resolver_match.url_name == 'sales_dashboard' and request.resolver_match.app_name == 'sales' %}active{% endif %}">
+          <i class="fas fa-tachometer-alt"></i>
+          Dashboard
+        </a>
+      </div>
+
+      <button class="menu-item" onclick="toggleSubmenu('reimbursementSubmenu')">
+        <i class="fas fa-receipt"></i>
+        Reimbursement
+        <i class="fas fa-chevron-down"></i>
+      </button>
+      <div class="submenu" id="reimbursementSubmenu" style="display: none;">
+        <a href="{% url 'reimbursement:my_reimbursements' %}" class="menu-item {% if request.resolver_match.url_name == 'my_reimbursements' and request.resolver_match.app_name == 'reimbursement' %}active{% endif %}">
+          <i class="fas fa-file-medical"></i>
+          My Requests
+        </a>
+        {% if user|has_group:"Manager" %}
+        <a href="{% url 'reimbursement:manager_pending' %}" class="menu-item {% if request.resolver_match.url_name == 'manager_pending' and request.resolver_match.app_name == 'reimbursement' %}active{% endif %}">
+          <i class="fas fa-check-square"></i>
+          Manager Approvals
+        </a>
+        {% endif %}
+        {% if user|has_group:"Finance" %}
+        <a href="{% url 'reimbursement:finance_pending' %}" class="menu-item {% if request.resolver_match.url_name == 'finance_pending' and request.resolver_match.app_name == 'reimbursement' %}active{% endif %}">
+          <i class="fas fa-wallet"></i>
+          Finance Approvals
+        </a>
+        {% endif %}
+      </div>
+
+      <button class="menu-item" onclick="toggleSubmenu('reportsSubmenu')">
+        <i class="fas fa-chart-pie"></i>
+        Reports
+        <i class="fas fa-chevron-down"></i>
+      </button>
+      <div class="submenu" id="reportsSubmenu" style="display: none;">
+        <a href="{% url 'reports:doer_tasks' %}" class="menu-item {% if request.resolver_match.url_name == 'doer_tasks' and request.resolver_match.app_name == 'reports' %}active{% endif %}">
+          <i class="fas fa-tasks-alt"></i>
+          Doer Tasks
+        </a>
+        <a href="{% url 'reports:weekly_mis_score' %}" class="menu-item {% if request.resolver_match.url_name == 'weekly_mis_score' and request.resolver_match.app_name == 'reports' %}active{% endif %}">
+          <i class="fas fa-calendar-week"></i>
+          Weekly MIS Score
+        </a>
+        <a href="{% url 'reports:performance_score' %}" class="menu-item {% if request.resolver_match.url_name == 'performance_score' and request.resolver_match.app_name == 'reports' %}active{% endif %}">
+          <i class="fas fa-percent"></i>
+          Performance Score
+        </a>
+        <a href="{% url 'reports:auditor_report' %}" class="menu-item {% if request.resolver_match.url_name == 'auditor_report' and request.resolver_match.app_name == 'reports' %}active{% endif %}">
+          <i class="fas fa-search"></i>
+          Auditor Report
+        </a>
+      </div>
+
+      {% if user.is_superuser %}
+      <button class="menu-item" onclick="toggleSubmenu('usersSubmenu')">
+        <i class="fas fa-user-friends"></i>
+        Users
+        <i class="fas fa-chevron-down"></i>
+      </button>
+      <div class="submenu" id="usersSubmenu" style="display: none;">
+        <a href="{% url 'users:user_list' %}" class="menu-item {% if request.resolver_match.url_name == 'user_list' and request.resolver_match.app_name == 'users' %}active{% endif %}">
+          <i class="fas fa-list"></i>
+          List Users
+        </a>
+        <a href="{% url 'users:user_add' %}" class="menu-item {% if request.resolver_match.url_name == 'user_add' and request.resolver_match.app_name == 'users' %}active{% endif %}">
+          <i class="fas fa-user-plus"></i>
+          Add User
+        </a>
+      </div>
+      {% endif %}
+
+      <a href="#" class="menu-item">
+        <i class="fas fa-building"></i>
+        Organization
+      </a>
+
+      <a href="#" class="menu-item">
+        <i class="fas fa-cog"></i>
+        Settings
+      </a>
+
+      <a href="#" class="menu-item">
+        <i class="fas fa-cube"></i>
+        Resources
+      </a>
+
+      <a href="#" class="menu-item">
+        <i class="fas fa-rocket"></i>
+        Quick Launch
+      </a>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="main-content" id="mainContent">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer>
+    <small>© {{ now|date:"Y" }} Developed by Madhurjya Bora</small>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.sidebar-overlay');
+      const mainContent = document.getElementById('mainContent');
+      if (window.innerWidth <= 768) {
+        sidebar.classList.toggle('show');
+        overlay.classList.toggle('show');
+      } else {
+        sidebar.classList.toggle('collapsed');
+        mainContent.classList.toggle('expanded');
+      }
+    }
+
+    function toggleSubmenu(submenuId) {
+      const submenu = document.getElementById(submenuId);
+      const button = submenu.previousElementSibling;
+      const chevron = button.querySelector('.fa-chevron-down');
+      if (submenu.style.display === 'none' || submenu.style.display === '') {
+        submenu.style.display = 'block';
+        chevron.style.transform = 'rotate(180deg)';
+      } else {
+        submenu.style.display = 'none';
+        chevron.style.transform = 'rotate(0deg)';
+      }
+    }
+
+    window.addEventListener('resize', function() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.sidebar-overlay');
+      const mainContent = document.getElementById('mainContent');
+      if (window.innerWidth > 768) {
+        sidebar.classList.remove('show');
+        overlay.classList.remove('show');
+        if (sidebar.classList.contains('collapsed')) {
+          mainContent.classList.add('expanded');
+        } else {
+          mainContent.classList.remove('expanded');
+        }
+      } else {
+        sidebar.classList.remove('collapsed');
+        mainContent.classList.remove('expanded');
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', function() {
+      const currentPath = window.location.pathname;
+      const menuItems = document.querySelectorAll('.menu-item[href]');
+      menuItems.forEach(item => {
+        item.classList.remove('active');
+        if (item.getAttribute('href') === currentPath) {
+          item.classList.add('active');
+          const submenu = item.closest('.submenu');
+          if (submenu) {
+            submenu.style.display = 'block';
+            const button = submenu.previousElementSibling;
+            const chevron = button.querySelector('.fa-chevron-down');
+            chevron.style.transform = 'rotate(180deg)';
+          }
+        }
+      });
+    });
+  </script>
 </body>
 </html>

@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block title %}FMS Tasks{% endblock %}
+{% block content %}
+<h2>FMS Tasks (Placeholder)</h2>
+<ul class="list-group">
+  {% for f in items %}
+  <li class="list-group-item">
+    {{ f.metric }} – {{ f.employee }} – Target: {{ f.target }} – Actual: {{ f.actual }}
+  </li>
+  {% empty %}
+  <li class="list-group-item">No FMS tasks available.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

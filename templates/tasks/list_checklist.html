@@ -2,19 +2,21 @@
 {% block title %}List Checklists{% endblock %}
 {% block content %}
 <h2>List Checklists</h2>
-<form method="post">{% csrf_token %}
-  <button class="btn btn-danger mb-2">Delete</button>
-  <table class="table">
+
+<!-- Bulk Delete Form -->
+<form method="post" action="{% url 'tasks:list_checklist' %}">{% csrf_token %}
+  <button class="btn btn-danger mb-2">Delete Selected</button>
+  <table class="table table-hover">
     <thead>
       <tr>
-        <th><input type="checkbox"></th>
+        <th><input type="checkbox" id="select_all"></th>
         <th>Task Name</th>
         <th>Master Task Code</th>
         <th>Message</th>
         <th>Assign To</th>
         <th>Frequency</th>
         <th>Planned Date</th>
-        <th>Remind Before Days</th>
+        <th>Remind Before</th>
         <th>Reminder</th>
         <th>Action</th>
       </tr>
@@ -25,21 +27,48 @@
         <td><input type="checkbox" name="sel" value="{{ i.pk }}"></td>
         <td>{{ i.task_name }}</td>
         <td>{{ i.pk|stringformat:"06d" }}</td>
-        <td>{{ i.message }}</td>
+        <td>{{ i.message|truncatechars:20 }}</td>
         <td>{{ i.assign_to }}</td>
         <td>{{ i.frequency }} {{ i.mode }}</td>
         <td>{{ i.planned_date|date:"d M, Y h:i A" }}</td>
         <td>{{ i.remind_before_days }}</td>
-        <td>{% if i.set_reminder %}{{ i.reminder_mode }} every {{ i.reminder_frequency }}{% else %}-{% endif %}</td>
         <td>
-          <a href="#"><i class="bi bi-eye"></i></a>
-          <a href="#"><i class="bi bi-pencil"></i></a>
-          <a href="#"><i class="bi bi-calendar3"></i></a>
-          <a href="#"><i class="bi bi-trash"></i></a>
+          {% if i.set_reminder %}
+            {{ i.reminder_mode }} every {{ i.reminder_frequency }}
+          {% else %}
+            &mdash;
+          {% endif %}
+        </td>
+        <td>
+          <!-- View (no URL hooked yet) -->
+          <a href="#" title="View"><i class="fas fa-eye"></i></a>
+
+          <!-- Edit -->
+          <a href="{% url 'tasks:edit_checklist' i.pk %}" title="Edit">
+            <i class="fas fa-edit"></i>
+          </a>
+
+          <!-- Reassign -->
+          <a href="{% url 'tasks:reassign_checklist' i.pk %}" title="Reassign">
+            <i class="fas fa-user-edit"></i>
+          </a>
+
+          <!-- Delete -->
+          <a href="{% url 'tasks:delete_checklist' i.pk %}" title="Delete">
+            <i class="fas fa-trash"></i>
+          </a>
         </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
 </form>
+
+<script>
+  // “Select All” checkbox logic
+  document.getElementById('select_all').addEventListener('change', function(){
+    let checkboxes = document.querySelectorAll('input[name="sel"]');
+    checkboxes.forEach(cb => cb.checked = this.checked);
+  });
+</script>
 {% endblock %}

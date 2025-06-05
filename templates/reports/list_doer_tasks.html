@@ -1,43 +1,68 @@
-{% extends 'base.html' %}
-{% block title %}List Doer Tasks{% endblock %}
+{# apps/reports/templates/reports/list_doer_tasks.html #}
+{% extends "base.html" %}
+{% block title %}Doer Tasks{% endblock %}
+
 {% block content %}
-<h2>List Doer Tasks</h2>
-<form method="get" class="mb-3">{{ form.as_p }}<button class="btn btn-primary">Filter</button></form>
-<form method="post">{% csrf_token %}
-  <button class="btn btn-danger mb-2">Delete</button>
-  <table class="table">
+  <h2>Doer Tasks</h2>
+
+  <form method="get" class="row g-3 mb-4">
+    <div class="col-md-4">
+      {{ form.doer.label_tag }}
+      {{ form.doer }}
+    </div>
+    <div class="col-md-4">
+      {{ form.department.label_tag }}
+      {{ form.department }}
+    </div>
+    <div class="col-md-4">
+      {{ form.date_from.label_tag }}
+      {{ form.date_from }}
+    </div>
+    <div class="col-md-4">
+      {{ form.date_to.label_tag }}
+      {{ form.date_to }}
+    </div>
+    <div class="col-md-12">
+      <button type="submit" class="btn btn-primary">Filter</button>
+    </div>
+  </form>
+
+  <table class="table table-striped">
     <thead>
       <tr>
-        <th></th>
-        <th>Task Code</th>
-        <th>Task Title</th>
-        <th>Message</th>
-        <th>Doer Name</th>
+        <th>Task Name</th>
         <th>Assigned By</th>
-        <th>Assign Date</th>
+        <th>Assigned To</th>
         <th>Planned Date</th>
-        <th>Actual Date</th>
-        <th>Status</th>
-        <th>Delay</th>
+        <th>Department (Group)</th>
+        <th>Priority</th>
       </tr>
     </thead>
     <tbody>
-      {% for i in items %}
-      <tr>
-        <td><input type="checkbox" name="sel" value="{{ i.pk }}"></td>
-        <td>CHK{{ i.pk }}</td>
-        <td>{{ i.task.title }}</td>
-        <td>{{ i.task.description }}</td>
-        <td>{{ i.user }}</td>
-        <td>{{ i.task.created_at|date:"d M, Y" }}</td>
-        <td>{{ i.task.start_date|date:"d M, Y h:i A" }}</td>
-        <td>{{ i.task.due_date|date:"d M, Y h:i A" }}</td>
-        <td>{{ i.completed_at|date:"d M, Y h:i A" }}</td>
-        <td>{{ i.task.status }}</td>
-        <td>{{ i.completed_at|timeuntil:i.task.due_date }}</td>
-      </tr>
+      {% for item in items %}
+        <tr>
+          {# ← Changed “item.task” to “item.task_name” #}
+          <td>{{ item.task_name }}</td>
+
+          {# “assign_by” is a FK to User; you can show full name or username #}
+          <td>{{ item.assign_by.get_full_name|default:item.assign_by.username }}</td>
+
+          {# “assign_to” is also a User FK #}
+          <td>{{ item.assign_to.get_full_name|default:item.assign_to.username }}</td>
+
+          <td>{{ item.planned_date|date:"Y-m-d H:i" }}</td>
+
+          {# group_name holds department/category #}
+          <td>{{ item.group_name|default:"—" }}</td>
+
+          {# priority is a CharField #}
+          <td>{{ item.priority }}</td>
+        </tr>
+      {% empty %}
+        <tr>
+          <td colspan="6" class="text-center text-muted">No tasks found.</td>
+        </tr>
       {% endfor %}
     </tbody>
   </table>
-</form>
 {% endblock %}

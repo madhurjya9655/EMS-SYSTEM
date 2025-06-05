@@ -1,13 +1,66 @@
-{% extends 'base.html' %}
+{% extends "base.html" %}
+{% load static %}
 {% block title %}Performance Score{% endblock %}
+
 {% block content %}
-<h2>Performance Score</h2>
-<form method="get" class="mb-3">{{ form.as_p }}<button class="btn btn-primary">Filter</button></form>
+<div class="row mb-4">
+  <div class="col">
+    <h2>Performance View for Employees</h2>
+    <form method="get" class="row gy-3 gx-3 align-items-end">
+      <div class="col-md-4">
+        <label for="id_doer">Doer Name</label>
+        {{ form.doer }}
+      </div>
+      <div class="col-md-3">
+        <label for="id_date_from">From</label>
+        {{ form.date_from }}
+      </div>
+      <div class="col-md-3">
+        <label for="id_date_to">To</label>
+        {{ form.date_to }}
+      </div>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-primary w-100">Submit</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 {% if p %}
-<table class="table">
-  <tr><th>Total Tasks</th><td>{{ p.total }}</td></tr>
-  <tr><th>Completed Tasks</th><td>{{ p.completed }}</td></tr>
-  <tr><th>Completion %</th><td>{{ p.pct|floatformat:2 }}%</td></tr>
-</table>
+<div class="card shadow-sm">
+  <div class="card-body">
+    <h5>Results for {{ form.cleaned_data.doer.get_full_name }} ({{ form.cleaned_data.doer.username }})</h5>
+    <table class="table table-bordered mt-3">
+      <thead class="table-light">
+        <tr>
+          <th>Metric</th>
+          <th>Count</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Checklist Tasks Planned</td>
+          <td>{{ p.plan_checklists }}</td>
+        </tr>
+        <tr>
+          <td>Delegation Tasks Planned</td>
+          <td>{{ p.plan_delegations }}</td>
+        </tr>
+        <tr>
+          <td><strong>Total Planned</strong></td>
+          <td><strong>{{ p.total_planned }}</strong></td>
+        </tr>
+        <tr>
+          <td>Total Completed (assumed)</td>
+          <td>{{ p.total_completed }}</td>
+        </tr>
+        <tr>
+          <td><strong>Performance Score ( ((Actual/Plan)×100)−100 )</strong></td>
+          <td><strong>{{ p.score_pct }} %</strong></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endif %}
 {% endblock %}
