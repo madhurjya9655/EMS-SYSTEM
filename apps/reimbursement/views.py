@@ -27,7 +27,10 @@ class ReimbursementDetailView(LoginRequiredMixin, DetailView):
 
 class ManagerRequiredMixin(UserPassesTestMixin):
     def test_func(self):
-        return self.request.user.groups.filter(name='Manager').exists()
+        user = self.request.user
+        if user.is_superuser:
+            return True
+        return user.groups.filter(name='Manager').exists()
 
 class ManagerPendingView(LoginRequiredMixin, ManagerRequiredMixin, ListView):
     model = Reimbursement
@@ -44,7 +47,10 @@ class ManagerReviewView(LoginRequiredMixin, ManagerRequiredMixin, UpdateView):
 
 class FinanceRequiredMixin(UserPassesTestMixin):
     def test_func(self):
-        return self.request.user.groups.filter(name='Finance').exists()
+        user = self.request.user
+        if user.is_superuser:
+            return True
+        return user.groups.filter(name='Finance').exists()
 
 class FinancePendingView(LoginRequiredMixin, FinanceRequiredMixin, ListView):
     model = Reimbursement

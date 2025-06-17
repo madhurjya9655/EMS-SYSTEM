@@ -1,19 +1,36 @@
 {% extends "base.html" %}
-{% block title %}Login{% endblock %}
+{% load widget_tweaks %}
+
+{% block title %}Sign In{% endblock %}
+
 {% block content %}
-<h1>Login</h1>
-<form method="post" class="w-50 mx-auto">
-  {% csrf_token %}
-  <div class="mb-3">
-    {{ form.username.label_tag }}
-    {{ form.username }}
-    {{ form.username.errors }}
+<div class="content-card" style="max-width:400px; margin:3rem auto;">
+  <div class="card-header">
+    <h2 class="page-title">Sign In</h2>
   </div>
-  <div class="mb-3">
-    {{ form.password.label_tag }}
-    {{ form.password }}
-    {{ form.password.errors }}
+  <div class="card-body">
+    <form method="post" novalidate>
+      {% csrf_token %}
+      {% if form.non_field_errors %}
+        <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+      {% endif %}
+
+      <div class="mb-3">
+        {{ form.username.label_tag }}
+        {{ form.username|add_class:"form-control" }}
+        {{ form.username.errors }}
+      </div>
+      <div class="mb-3">
+        {{ form.password.label_tag }}
+        {{ form.password|add_class:"form-control" }}
+        {{ form.password.errors }}
+      </div>
+
+      <button type="submit" class="btn btn-primary w-100">Log in</button>
+    </form>
+    <p class="mt-3 text-center">
+      <a href="{% url 'password_reset' %}">Forgot password?</a>
+    </p>
   </div>
-  <button type="submit" class="btn btn-primary">Login</button>
-</form>
+</div>
 {% endblock %}

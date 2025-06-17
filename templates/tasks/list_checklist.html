@@ -1,74 +1,46 @@
-{% extends 'base.html' %}
-{% block title %}List Checklists{% endblock %}
+{% extends "base.html" %}
+{% block title %}Checklist Tasks{% endblock %}
 {% block content %}
-<h2>List Checklists</h2>
-
-<!-- Bulk Delete Form -->
-<form method="post" action="{% url 'tasks:list_checklist' %}">{% csrf_token %}
-  <button class="btn btn-danger mb-2">Delete Selected</button>
-  <table class="table table-hover">
-    <thead>
-      <tr>
-        <th><input type="checkbox" id="select_all"></th>
-        <th>Task Name</th>
-        <th>Master Task Code</th>
-        <th>Message</th>
-        <th>Assign To</th>
-        <th>Frequency</th>
-        <th>Planned Date</th>
-        <th>Remind Before</th>
-        <th>Reminder</th>
-        <th>Action</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for i in items %}
-      <tr>
-        <td><input type="checkbox" name="sel" value="{{ i.pk }}"></td>
-        <td>{{ i.task_name }}</td>
-        <td>{{ i.pk|stringformat:"06d" }}</td>
-        <td>{{ i.message|truncatechars:20 }}</td>
-        <td>{{ i.assign_to }}</td>
-        <td>{{ i.frequency }} {{ i.mode }}</td>
-        <td>{{ i.planned_date|date:"d M, Y h:i A" }}</td>
-        <td>{{ i.remind_before_days }}</td>
-        <td>
-          {% if i.set_reminder %}
-            {{ i.reminder_mode }} every {{ i.reminder_frequency }}
-          {% else %}
-            &mdash;
-          {% endif %}
-        </td>
-        <td>
-          <!-- View (no URL hooked yet) -->
-          <a href="#" title="View"><i class="fas fa-eye"></i></a>
-
-          <!-- Edit -->
-          <a href="{% url 'tasks:edit_checklist' i.pk %}" title="Edit">
-            <i class="fas fa-edit"></i>
-          </a>
-
-          <!-- Reassign -->
-          <a href="{% url 'tasks:reassign_checklist' i.pk %}" title="Reassign">
-            <i class="fas fa-user-edit"></i>
-          </a>
-
-          <!-- Delete -->
-          <a href="{% url 'tasks:delete_checklist' i.pk %}" title="Delete">
-            <i class="fas fa-trash"></i>
-          </a>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</form>
-
-<script>
-  // “Select All” checkbox logic
-  document.getElementById('select_all').addEventListener('change', function(){
-    let checkboxes = document.querySelectorAll('input[name="sel"]');
-    checkboxes.forEach(cb => cb.checked = this.checked);
-  });
-</script>
+<div class="card shadow-sm">
+  <div class="card-header bg-white">
+    <h5 class="mb-0">CHECKLIST TASKS</h5>
+  </div>
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>Task Code</th>
+          <th>Task Title</th>
+          <th>Message</th>
+          <th>Planned Date</th>
+          <th>Status</th>
+          <th>Delay</th>
+          <th>Doer Notes</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in items %}
+        <tr>
+          <td>{{ t.id }}</td>
+          <td>{{ t.task_name }}</td>
+          <td>{{ t.message|truncatechars:30 }}</td>
+          <td>{{ t.planned_date|date:"Y-m-d H:i" }}</td>
+          <td>{{ t.status }}</td>
+          <td>{{ t.delay|default:"-" }}</td>
+          <td>{{ t.doer_notes|default:"-" }}</td>
+          <td>
+            <a href="{% url 'tasks:edit_checklist' t.id %}" class="btn btn-sm btn-outline-secondary">Edit</a>
+            <a href="{% url 'tasks:delete_checklist' t.id %}" class="btn btn-sm btn-outline-danger">Delete</a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="8" class="text-center text-muted">No record found.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endblock %}

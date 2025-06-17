@@ -31,9 +31,9 @@
               <td>{{ week_score.delegation.current }}</td>
             </tr>
             <tr>
-              <td>FMS</td>
-              <td>{{ week_score.fms.previous }}</td>
-              <td>{{ week_score.fms.current }}</td>
+              <td>Help Ticket</td>
+              <td>{{ week_score.help_ticket.previous }}</td>
+              <td>{{ week_score.help_ticket.current }}</td>
             </tr>
           </tbody>
         </table>
@@ -51,35 +51,19 @@
         <table class="table mb-0">
           <tbody>
             <tr>
-              <td>FMS</td>
-              <td>{{ pending_tasks.fms }}</td>
+              <td>Checklist</td>
+              <td>{{ pending_tasks.checklist }}</td>
             </tr>
             <tr>
               <td>Delegation</td>
               <td>{{ pending_tasks.delegation }}</td>
             </tr>
             <tr>
-              <td>Checklist</td>
-              <td>{{ pending_tasks.checklist }}</td>
-            </tr>
-            <tr>
-              <td>Help-Ticket</td>
+              <td>Help Ticket</td>
               <td>{{ pending_tasks.help_ticket }}</td>
             </tr>
           </tbody>
         </table>
-      </div>
-    </div>
-  </div>
-
-  <!-- Plan vs Actual Chart Card -->
-  <div class="col-lg-4">
-    <div class="card shadow-sm mb-4">
-      <div class="card-header bg-white">
-        <h5 class="mb-0">Plan vs Actual</h5>
-      </div>
-      <div class="card-body">
-        <canvas id="planActualChart" height="200"></canvas>
       </div>
     </div>
   </div>
@@ -88,17 +72,9 @@
 <!-- Buttons Row -->
 <div class="row mb-4">
   <div class="col">
-    <a href="{% url 'tasks:list_checklist' %}" class="btn btn-danger me-2">Checklist Tasks</a>
+    <a href="{% url 'tasks:list_checklist' %}" class="btn btn-primary me-2">Checklist Tasks</a>
     <a href="{% url 'tasks:list_delegation' %}" class="btn btn-primary me-2">Delegation Tasks</a>
-    <a href="{% url 'tasks:list_fms' %}" class="btn btn-info me-2">FMS Tasks</a>
-    <a href="{% url 'tasks:bulk_upload' %}" class="btn btn-primary me-2">Pipe Line Tasks</a>
     <a href="{% url 'tasks:list_help_ticket' %}" class="btn btn-primary">Help Ticket Tasks</a>
-  </div>
-  <div class="col text-end">
-    <div class="form-check form-switch">
-      <input class="form-check-input" type="checkbox" id="toggleTodayOnly">
-      <label class="form-check-label" for="toggleTodayOnly">Today Only</label>
-    </div>
   </div>
 </div>
 
@@ -129,10 +105,9 @@
             <td>{{ t.message|truncatechars:30 }}</td>
             <td>{{ t.planned_date|date:"Y-m-d H:i" }}</td>
             <td>{{ t.status }}</td>
-            <td>{{ t.delay }}</td>
+            <td>{{ t.delay|default:"-" }}</td>
             <td>{{ t.doer_notes|default:"-" }}</td>
             <td>
-              {# Remove the “t.id” here – “add_checklist” takes no arguments #}
               <a href="{% url 'tasks:add_checklist' %}" class="btn btn-sm btn-outline-secondary">
                 Edit
               </a>
@@ -147,40 +122,4 @@
     </table>
   </div>
 </div>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
-  const ctx = document.getElementById('planActualChart').getContext('2d');
-  new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: {{ chart_labels|safe }},
-      datasets: [
-        {
-          label: 'Plan',
-          data: {{ chart_plan_values|safe }},
-          backgroundColor: 'rgba(54, 162, 235, 0.5)',
-          borderWidth: 1
-        },
-        {
-          label: 'Actual',
-          data: {{ chart_actual_values|safe }},
-          backgroundColor: 'rgba(255, 206, 86, 0.5)',
-          borderWidth: 1
-        }
-      ]
-    },
-    options: {
-      scales: {
-        y: {
-          beginAtZero: true
-        }
-      }
-    }
-  });
-
-  document.getElementById('toggleTodayOnly').addEventListener('change', function(e) {
-    // JS to filter checklist tasks by today if needed
-  });
-</script>
 {% endblock %}

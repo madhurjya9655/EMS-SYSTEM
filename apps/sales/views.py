@@ -6,18 +6,26 @@ from .forms import KPIPlanForm, KPIActualForm
 
 class SalesTeamRequiredMixin(UserPassesTestMixin):
     def test_func(self):
-        return self.request.user.groups.filter(
-            name__in=['Sales Executive','Sales Manager','Marketing Executive','Admin']
+        user = self.request.user
+        if user.is_superuser:
+            return True
+        return user.groups.filter(
+            name__in=[
+                'Sales Executive',
+                'Sales Manager',
+                'Marketing Executive',
+                'Admin'
+            ]
         ).exists()
 
 class PlanCreateView(LoginRequiredMixin, SalesTeamRequiredMixin, CreateView):
     model = SalesKPI
     form_class = KPIPlanForm
     template_name = 'sales/plan_form.html'
+    success_url = reverse_lazy('sales:sales_plan_list')
     def form_valid(self, form):
         form.instance.employee = self.request.user
         return super().form_valid(form)
-    success_url = reverse_lazy('sales:sales_plan_list')
 
 class PlanListView(LoginRequiredMixin, SalesTeamRequiredMixin, ListView):
     model = SalesKPI
@@ -36,7 +44,7 @@ class ManagerDashboardView(LoginRequiredMixin, SalesTeamRequiredMixin, TemplateV
     template_name = 'sales/dashboard.html'
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        kpis = SalesKPI.objects.all().order_by('metric','period_start')
+        kpis = SalesKPI.objects.all().order_by('metric', 'period_start')
         summary = {}
         for choice, label in SalesKPI.METRIC_CHOICES:
             items = kpis.filter(metric=choice)

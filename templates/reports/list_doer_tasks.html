@@ -1,68 +1,77 @@
-{# apps/reports/templates/reports/list_doer_tasks.html #}
+{# templates/reports/list_doer_tasks.html #}
 {% extends "base.html" %}
-{% block title %}Doer Tasks{% endblock %}
+{% load static %}
+
+{% block title %}List Task{% endblock %}
+
+{% block extra_css %}
+<style>
+.table-responsive {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.table tbody tr {
+  border-left-width: 4px;
+  border-left-style: solid;
+}
+.table tbody td.message-cell {
+  max-width: 200px;
+  white-space: normal;
+  overflow-y: auto;
+}
+.table thead th {
+  vertical-align: middle;
+}
+</style>
+{% endblock %}
 
 {% block content %}
-  <h2>Doer Tasks</h2>
-
-  <form method="get" class="row g-3 mb-4">
-    <div class="col-md-4">
-      {{ form.doer.label_tag }}
-      {{ form.doer }}
+<div class="card mb-4">
+  <div class="card-body">
+    <h5 class="mb-3">List Task</h5>
+    <button class="btn btn-success me-2">Switch Doer</button>
+    <button class="btn btn-danger">Delete</button>
+    <hr>
+    <div class="table-responsive">
+      <table class="table align-middle mb-0">
+        <thead>
+          <tr>
+            <th><input type="checkbox"></th>
+            <th>Task Code <i class="fas fa-arrow-up text-primary"></i><i class="fas fa-arrow-down text-danger"></i></th>
+            <th>Task Title <i class="fas fa-arrow-up text-primary"></i><i class="fas fa-arrow-down text-danger"></i></th>
+            <th>Message</th>
+            <th>Doer Name <i class="fas fa-arrow-up text-primary"></i><i class="fas fa-arrow-down text-danger"></i></th>
+            <th>Assigned By <i class="fas fa-arrow-up text-primary"></i><i class="fas fa-arrow-down text-danger"></i></th>
+            <th>Assign Date <i class="fas fa-arrow-up text-primary"></i><i class="fas fa-arrow-down text-danger"></i></th>
+            <th>Planned Date <i class="fas fa-arrow-up text-primary"></i><i class="fas fa-arrow-down text-danger"></i></th>
+            <th>Actual Date <i class="fas fa-arrow-up text-primary"></i><i class="fas fa-arrow-down text-danger"></i></th>
+            <th>Status</th>
+            <th>Delay <i class="fas fa-arrow-up text-primary"></i></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in items %}
+          <tr style="border-left-color: {{ item.priority_color }};">
+            <td><input type="checkbox" name="selected" value="{{ item.id }}"></td>
+            <td>{{ item.task_code }}</td>
+            <td>{{ item.task_title }}</td>
+            <td class="message-cell">{{ item.message }}</td>
+            <td>{{ item.doer.get_full_name|default:item.doer.username }}</td>
+            <td>{{ item.assigned_by.get_full_name|default:item.assigned_by.username }}</td>
+            <td>{{ item.assign_date|date:"d M, Y h:i A" }}</td>
+            <td>{{ item.planned_date|date:"d M, Y h:i A" }}</td>
+            <td>{{ item.actual_date|date:"d M, Y h:i A" }}</td>
+            <td>{{ item.status }}</td>
+            <td>{{ item.delay }}</td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="11" class="text-center text-muted">No tasks found.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
-    <div class="col-md-4">
-      {{ form.department.label_tag }}
-      {{ form.department }}
-    </div>
-    <div class="col-md-4">
-      {{ form.date_from.label_tag }}
-      {{ form.date_from }}
-    </div>
-    <div class="col-md-4">
-      {{ form.date_to.label_tag }}
-      {{ form.date_to }}
-    </div>
-    <div class="col-md-12">
-      <button type="submit" class="btn btn-primary">Filter</button>
-    </div>
-  </form>
-
-  <table class="table table-striped">
-    <thead>
-      <tr>
-        <th>Task Name</th>
-        <th>Assigned By</th>
-        <th>Assigned To</th>
-        <th>Planned Date</th>
-        <th>Department (Group)</th>
-        <th>Priority</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for item in items %}
-        <tr>
-          {# ← Changed “item.task” to “item.task_name” #}
-          <td>{{ item.task_name }}</td>
-
-          {# “assign_by” is a FK to User; you can show full name or username #}
-          <td>{{ item.assign_by.get_full_name|default:item.assign_by.username }}</td>
-
-          {# “assign_to” is also a User FK #}
-          <td>{{ item.assign_to.get_full_name|default:item.assign_to.username }}</td>
-
-          <td>{{ item.planned_date|date:"Y-m-d H:i" }}</td>
-
-          {# group_name holds department/category #}
-          <td>{{ item.group_name|default:"—" }}</td>
-
-          {# priority is a CharField #}
-          <td>{{ item.priority }}</td>
-        </tr>
-      {% empty %}
-        <tr>
-          <td colspan="6" class="text-center text-muted">No tasks found.</td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  </div>
+</div>
 {% endblock %}

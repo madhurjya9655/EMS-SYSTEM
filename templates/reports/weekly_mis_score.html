@@ -1,14 +1,123 @@
-{% extends 'base.html' %}
+{% extends "base.html" %}
+{% load static %}
 {% block title %}Weekly MIS Score{% endblock %}
 {% block content %}
-<h2>Weekly MIS Score</h2>
-<form method="get" class="mb-3">{{ form.as_p }}<button class="btn btn-primary">Filter</button></form>
-{% if r %}
-<table class="table">
-  <tr><th>Tasks Assigned</th><td>{{ r.assigned }}</td></tr>
-  <tr><th>Completed On Time</th><td>{{ r.on_time }}</td></tr>
-  <tr><th>Completed Late</th><td>{{ r.late }}</td></tr>
-  <tr><th>Pending Tasks</th><td>{{ r.pending }}</td></tr>
-</table>
-{% endif %}
+<div class="container-fluid px-0">
+  <div class="card mb-4">
+    <div class="card-body">
+      <form method="get" class="row gx-3 gy-0 align-items-center mb-4">
+        <div class="col-md-3">
+          <label class="form-label">Doer Name:</label>
+          {{ form.doer }}
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">From:</label>
+          {{ form.date_from }}
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">To:</label>
+          {{ form.date_to }}
+        </div>
+        <div class="col-md-3 d-flex justify-content-end align-items-center">
+          <button type="submit" class="btn btn-primary me-2">Submit</button>
+          <button type="button" class="btn btn-danger me-2" onclick="window.print()">Print</button>
+          <a href="#" class="btn btn-success me-2">Export CSV</a>
+          <button type="button" class="btn btn-danger">Compact Print</button>
+        </div>
+      </form>
+      {% if header %}
+        <h5 class="mb-4">{{ header }}</h5>
+      {% endif %}
+      {% if rows %}
+        {% for r in rows %}
+          <div class="card mb-4">
+            <div class="card-header">{{ r.category }} Score</div>
+            <div class="table-responsive">
+              <table class="table mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th></th>
+                    <th>Last Week Actual(%)</th>
+                    <th>Planned Task</th>
+                    <th>Completed Task</th>
+                    <th>% Not Completed</th>
+                    <th>Last Week Commitment</th>
+                    <th>This Week Commitment</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>All work should be done</td>
+                    <td>{{ r.last_pct }}%</td>
+                    <td>{{ r.planned }}</td>
+                    <td>{{ r.completed }}</td>
+                    <td>{{ r.percent }}%</td>
+                    <td></td>
+                    <td><input type="text" class="form-control"></td>
+                  </tr>
+                  <tr class="table-light">
+                    <td>All work should be done ontime</td>
+                    <td>{{ r.last_pct }}%</td>
+                    <td>{{ r.planned }}</td>
+                    <td>{{ r.completed }}</td>
+                    <td>{{ r.percent }}%</td>
+                    <td></td>
+                    <td><input type="text" class="form-control"></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        {% endfor %}
+        <div class="card mb-4">
+          <div class="card-header">Average Score</div>
+          <div class="table-responsive">
+            <table class="table mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th></th>
+                  {% for r in rows %}<th>{{ r.category }}</th>{% endfor %}
+                  <th>Average</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>% work should be done</td>
+                  {% for r in rows %}<td>{{ r.percent }}%</td>{% endfor %}
+                  <td>0%</td>
+                </tr>
+                <tr class="table-light">
+                  <td>% work should be done ontime</td>
+                  {% for r in rows %}<td>{{ r.percent }}%</td>{% endfor %}
+                  <td>0%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="mb-4">
+          <p>Total pending task before {{ form.date_from.value }}</p>
+          <p>
+            Total Pending Checklist: 0 &nbsp;
+            Total Pending Delegation: 0 &nbsp;
+            Total Pending Help Ticket: 0 &nbsp;
+            Total Not Required Count: 0
+          </p>
+          <p>Total On-Hold FMS task: 0</p>
+          <p>
+            Previous delayed task completed this week<br>
+            Total Delayed Checklist: 0 &nbsp;
+            Total Delayed Delegation: 0 &nbsp;
+            Total Delayed FMS: 0
+          </p>
+        </div>
+        <div class="text-end">
+          <button type="button" class="btn btn-success">UPDATE COMMITMENT</button>
+        </div>
+      {% else %}
+        <div class="text-center text-muted">No record found.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
 {% endblock %}
