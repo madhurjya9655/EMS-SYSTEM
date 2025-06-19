@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Tasks{% endblock %}
+{% block content %}
+<div class="card shadow-sm mb-4">
+  <div class="card-header bg-white">
+    <ul class="nav nav-tabs card-header-tabs">
+      <li class="nav-item">
+        <a id="tab-checklist" class="nav-link {% if current_tab == 'checklist' %}active{% endif %}"
+           href="{% url 'tasks:list_checklist' %}">Checklist Tasks</a>
+      </li>
+      <li class="nav-item">
+        <a id="tab-delegation" class="nav-link {% if current_tab == 'delegation' %}active{% endif %}"
+           href="{% url 'tasks:list_delegation' %}">Delegation Tasks</a>
+      </li>
+      <li class="nav-item">
+        <a id="tab-help_ticket" class="nav-link {% if current_tab == 'help_ticket' %}active{% endif %}"
+           href="{% url 'tasks:list_help_ticket' %}">Help Ticket Tasks</a>
+      </li>
+    </ul>
+  </div>
+  <div class="card-body p-0" id="tab-content">
+    {% block tab_content %}{% endblock %}
+  </div>
+</div>
+<script>
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.addEventListener('click', e => {
+      e.preventDefault();
+      let url = new URL(link.href, location.origin);
+      url.searchParams.set('partial','1');
+      fetch(url)
+        .then(r => r.text())
+        .then(html => {
+          document.getElementById('tab-content').innerHTML = html;
+          history.pushState(null, '', link.href);
+          document.querySelectorAll('.nav-link').forEach(a => a.classList.remove('active'));
+          link.classList.add('active');
+        });
+    });
+  });
+  window.addEventListener('popstate', () => {
+    let path = location.pathname.split('/').pop();
+    let tab = document.getElementById('tab-' + path);
+    if (tab) tab.click();
+  });
+</script>
+{% endblock %}

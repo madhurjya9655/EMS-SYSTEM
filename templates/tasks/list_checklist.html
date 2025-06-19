@@ -1,46 +1,5 @@
-{% extends "base.html" %}
+{% extends "tasks/tasks_base.html" %}
 {% block title %}Checklist Tasks{% endblock %}
-{% block content %}
-<div class="card shadow-sm">
-  <div class="card-header bg-white">
-    <h5 class="mb-0">CHECKLIST TASKS</h5>
-  </div>
-  <div class="card-body p-0">
-    <table class="table table-hover mb-0">
-      <thead>
-        <tr>
-          <th>Task Code</th>
-          <th>Task Title</th>
-          <th>Message</th>
-          <th>Planned Date</th>
-          <th>Status</th>
-          <th>Delay</th>
-          <th>Doer Notes</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for t in items %}
-        <tr>
-          <td>{{ t.id }}</td>
-          <td>{{ t.task_name }}</td>
-          <td>{{ t.message|truncatechars:30 }}</td>
-          <td>{{ t.planned_date|date:"Y-m-d H:i" }}</td>
-          <td>{{ t.status }}</td>
-          <td>{{ t.delay|default:"-" }}</td>
-          <td>{{ t.doer_notes|default:"-" }}</td>
-          <td>
-            <a href="{% url 'tasks:edit_checklist' t.id %}" class="btn btn-sm btn-outline-secondary">Edit</a>
-            <a href="{% url 'tasks:delete_checklist' t.id %}" class="btn btn-sm btn-outline-danger">Delete</a>
-          </td>
-        </tr>
-        {% empty %}
-        <tr>
-          <td colspan="8" class="text-center text-muted">No record found.</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
+{% block tab_content %}
+{% include "tasks/partial_list_checklist.html" %}
 {% endblock %}

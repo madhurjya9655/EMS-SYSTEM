@@ -1,8 +1,14 @@
 {% extends 'base.html' %}
 {% block title %}Bulk Upload{% endblock %}
 {% block content %}
-<h2>Upload CSV</h2>
-<form method="post" enctype="multipart/form-data">{% csrf_token %}
+<h2>Bulk Upload</h2>
+<div class="mb-4">
+  <a href="{% url 'tasks:download_checklist_template' %}" class="btn btn-outline-primary me-2">Download Checklist Template</a>
+  <a href="{% url 'tasks:download_delegation_template' %}" class="btn btn-outline-primary">Download Delegation Template</a>
+</div>
+<h2>Upload CSV or Excel</h2>
+<form method="post" enctype="multipart/form-data">
+  {% csrf_token %}
   <div class="row">
     <div class="col-md-6">{{ form.form_type.label_tag }}{{ form.form_type }}</div>
     <div class="col-md-6">{{ form.csv_file.label_tag }}{{ form.csv_file }}</div>

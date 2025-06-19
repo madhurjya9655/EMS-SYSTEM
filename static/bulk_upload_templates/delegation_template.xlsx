@@ -1,0 +1,7 @@
+Task Name, Message,Assigned By,Assigned To,Planned Date,Priority,Set Reminder,Reminder Mode, Reminder Frequency, Set Reminder Before Days,Notify Me,Auditor,Make Attachment Mandatory When Work Done,,
+task1,Message for task,Nasim,Suprakash,16-07-2022 14:20,Low,Yes,Hours,1,0,,,,,
+task2,Message for task,Nasim,Suprakash,19-07-2022 14:20,Medium,,,,,Nasim,,Yes,,
+task3,Message for task,,Suprakash,19-07-2022 14:20,High,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,Should be Dropdown,Should be Dropdown,DD/MM/YYYY HH:MM:SS,Should be Dropdown,Should be Dropdown,Should be Dropdown,,,Should be Dropdown,,Should be Dropdown,,

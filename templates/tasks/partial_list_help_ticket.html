@@ -1,0 +1,21 @@
+<table class="table table-hover mb-0">
+  <thead>
+    <tr>
+      <th>ID</th><th>Title</th><th>Description</th>
+      <th>Planned Date</th><th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in items %}
+    <tr>
+      <td>{{ t.id }}</td>
+      <td>{{ t.title }}</td>
+      <td>{{ t.description|truncatechars:30 }}</td>
+      <td>{{ t.planned_date|date:"Y-m-d H:i" }}</td>
+      <td>{{ t.status }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="5" class="text-center text-muted">No Help Ticket tasks available.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

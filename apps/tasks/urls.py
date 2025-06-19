@@ -2,7 +2,6 @@ from django.urls import path
 from . import views
 
 app_name = "tasks"
-
 urlpatterns = [
     path('checklist/', views.list_checklist, name='list_checklist'),
     path('checklist/add/', views.add_checklist, name='add_checklist'),
@@ -15,5 +14,7 @@ urlpatterns = [
     path('delegation/reassign/<int:pk>/', views.reassign_delegation, name='reassign_delegation'),
     path('fms/', views.list_fms, name='list_fms'),
     path('bulkupload/', views.bulk_upload, name='bulk_upload'),
+    path('bulkupload/checklist-template/', views.download_checklist_template, name='download_checklist_template'),
+    path('bulkupload/delegation-template/', views.download_delegation_template, name='download_delegation_template'),
     path('help_ticket/', views.list_help_ticket, name='list_help_ticket'),
 ]
