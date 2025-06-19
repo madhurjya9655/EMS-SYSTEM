@@ -1,17 +1,16 @@
 {% extends 'base.html' %}
-{% block title %}Finance Approval{% endblock %}
+{% block title %}Finance Review{% endblock %}
 {% block content %}
-<h2>Finance Approval</h2>
-<p><strong>Reason:</strong> {{ request_obj.reason }}</p>
-<p><strong>Amount:</strong> {{ request_obj.amount }}</p>
-<p><strong>Urgency:</strong> {{ request_obj.urgency }}</p>
-<p><strong>Manager Comment:</strong> {{ request_obj.manager_comment }}</p>
+<h2>Finance Review: Request #{{ request.pk }}</h2>
+<p><strong>Reason:</strong> {{ request.reason }}</p>
+<p><strong>Amount:</strong> {{ request.amount }}</p>
+<p><strong>Urgency:</strong> {{ request.urgency }}</p>
 <form method="post">{% csrf_token %}
   <div class="mb-3">
-    <label for="finance_comment" class="form-label">Comment</label>
-    <textarea name="finance_comment" id="finance_comment" class="form-control"></textarea>
+    <label class="form-label">Comment</label>
+    <textarea name="finance_comment" class="form-control">{{ request.finance_comment }}</textarea>
   </div>
-  <button type="submit" name="action" value="approve" class="btn btn-success">Approve</button>
-  <button type="submit" name="action" value="reject" class="btn btn-danger">Reject</button>
+  <button name="action" value="approve" class="btn btn-success me-2">Approve</button>
+  <button name="action" value="reject" class="btn btn-danger">Reject</button>
 </form>
 {% endblock %}

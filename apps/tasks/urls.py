@@ -12,6 +12,7 @@ urlpatterns = [
     path('delegation/add/', views.add_delegation, name='add_delegation'),
     path('delegation/edit/<int:pk>/', views.edit_delegation, name='edit_delegation'),
     path('delegation/delete/<int:pk>/', views.delete_delegation, name='delete_delegation'),
+    path('delegation/reassign/<int:pk>/', views.reassign_delegation, name='reassign_delegation'),
     path('fms/', views.list_fms, name='list_fms'),
     path('bulkupload/', views.bulk_upload, name='bulk_upload'),
     path('help_ticket/', views.list_help_ticket, name='list_help_ticket'),

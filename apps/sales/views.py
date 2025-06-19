@@ -1,24 +1,10 @@
-from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.generic import CreateView, ListView, UpdateView, TemplateView
 from django.urls import reverse_lazy
 from .models import SalesKPI
 from .forms import KPIPlanForm, KPIActualForm
 
-class SalesTeamRequiredMixin(UserPassesTestMixin):
-    def test_func(self):
-        user = self.request.user
-        if user.is_superuser:
-            return True
-        return user.groups.filter(
-            name__in=[
-                'Sales Executive',
-                'Sales Manager',
-                'Marketing Executive',
-                'Admin'
-            ]
-        ).exists()
-
-class PlanCreateView(LoginRequiredMixin, SalesTeamRequiredMixin, CreateView):
+class PlanCreateView(LoginRequiredMixin, CreateView):
     model = SalesKPI
     form_class = KPIPlanForm
     template_name = 'sales/plan_form.html'
@@ -27,30 +13,31 @@ class PlanCreateView(LoginRequiredMixin, SalesTeamRequiredMixin, CreateView):
         form.instance.employee = self.request.user
         return super().form_valid(form)
 
-class PlanListView(LoginRequiredMixin, SalesTeamRequiredMixin, ListView):
+class PlanListView(LoginRequiredMixin, ListView):
     model = SalesKPI
     template_name = 'sales/plan_list.html'
     context_object_name = 'kpis'
     def get_queryset(self):
         return SalesKPI.objects.filter(employee=self.request.user)
 
-class ActualUpdateView(LoginRequiredMixin, SalesTeamRequiredMixin, UpdateView):
+class ActualUpdateView(LoginRequiredMixin, UpdateView):
     model = SalesKPI
     form_class = KPIActualForm
     template_name = 'sales/actual_form.html'
     success_url = reverse_lazy('sales:sales_plan_list')
 
-class ManagerDashboardView(LoginRequiredMixin, SalesTeamRequiredMixin, TemplateView):
+class ManagerDashboardView(LoginRequiredMixin, TemplateView):
     template_name = 'sales/dashboard.html'
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
+        ctx = super().get_context_data(**kwargs)
         kpis = SalesKPI.objects.all().order_by('metric', 'period_start')
         summary = {}
         for choice, label in SalesKPI.METRIC_CHOICES:
             items = kpis.filter(metric=choice)
-            total_target = sum(item.target for item in items)
-            total_actual = sum(item.actual for item in items)
-            summary[label] = {'target': total_target, 'actual': total_actual}
-        context['summary'] = summary
-        context['kpis'] = kpis
-        return context
+            summary[label] = {
+                'target': sum(i.target for i in items),
+                'actual': sum(i.actual for i in items)
+            }
+        ctx['summary'] = summary
+        ctx['kpis'] = kpis
+        return ctx

@@ -1,7 +1,12 @@
 from django import forms
 from .models import PettyCashRequest
 
-class PettyCashRequestForm(forms.ModelForm):
+class PettyCashForm(forms.ModelForm):
     class Meta:
-        model = PettyCashRequest
-        fields = ['reason','amount','urgency']
+        model  = PettyCashRequest
+        fields = ['reason', 'amount', 'urgency']
+        widgets = {
+            'reason':  forms.Textarea(attrs={'rows': 3}),
+            'amount':  forms.NumberInput(),
+            'urgency': forms.Select(),
+        }

@@ -2,76 +2,65 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}List Task{% endblock %}
-
-{% block extra_css %}
-<style>
-.table-responsive {
-  max-height: 60vh;
-  overflow-y: auto;
-}
-.table tbody tr {
-  border-left-width: 4px;
-  border-left-style: solid;
-}
-.table tbody td.message-cell {
-  max-width: 200px;
-  white-space: normal;
-  overflow-y: auto;
-}
-.table thead th {
-  vertical-align: middle;
-}
-</style>
-{% endblock %}
+{% block title %}Doer Tasks Report{% endblock %}
 
 {% block content %}
-<div class="card mb-4">
-  <div class="card-body">
-    <h5 class="mb-3">List Task</h5>
-    <button class="btn btn-success me-2">Switch Doer</button>
-    <button class="btn btn-danger">Delete</button>
-    <hr>
+  <div class="page-header">
+    <h1 class="page-title">Doer Tasks Report</h1>
+  </div>
+
+  <div class="content-card p-4 mb-4">
+    <form method="get" class="row g-3">
+      <div class="col-md-3">
+        {{ form.doer.label_tag }}
+        {{ form.doer }}
+      </div>
+      <div class="col-md-3">
+        {{ form.department.label_tag }}
+        {{ form.department }}
+      </div>
+      <div class="col-md-2">
+        {{ form.date_from.label_tag }}
+        {{ form.date_from }}
+      </div>
+      <div class="col-md-2">
+        {{ form.date_to.label_tag }}
+        {{ form.date_to }}
+      </div>
+      <div class="col-md-2 d-flex align-items-end">
+        <button type="submit" class="btn btn-primary w-100">Filter</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="content-card">
     <div class="table-responsive">
-      <table class="table align-middle mb-0">
+      <table class="table table-hover mb-0">
         <thead>
           <tr>
-            <th><input type="checkbox"></th>
-            <th>Task Code <i class="fas fa-arrow-up text-primary"></i><i class="fas fa-arrow-down text-danger"></i></th>
-            <th>Task Title <i class="fas fa-arrow-up text-primary"></i><i class="fas fa-arrow-down text-danger"></i></th>
-            <th>Message</th>
-            <th>Doer Name <i class="fas fa-arrow-up text-primary"></i><i class="fas fa-arrow-down text-danger"></i></th>
-            <th>Assigned By <i class="fas fa-arrow-up text-primary"></i><i class="fas fa-arrow-down text-danger"></i></th>
-            <th>Assign Date <i class="fas fa-arrow-up text-primary"></i><i class="fas fa-arrow-down text-danger"></i></th>
-            <th>Planned Date <i class="fas fa-arrow-up text-primary"></i><i class="fas fa-arrow-down text-danger"></i></th>
-            <th>Actual Date <i class="fas fa-arrow-up text-primary"></i><i class="fas fa-arrow-down text-danger"></i></th>
+            <th>Doer</th>
+            <th>Task Name</th>
+            <th>Assigned By</th>
+            <th>Planned Date</th>
             <th>Status</th>
-            <th>Delay <i class="fas fa-arrow-up text-primary"></i></th>
           </tr>
         </thead>
         <tbody>
           {% for item in items %}
-          <tr style="border-left-color: {{ item.priority_color }};">
-            <td><input type="checkbox" name="selected" value="{{ item.id }}"></td>
-            <td>{{ item.task_code }}</td>
-            <td>{{ item.task_title }}</td>
-            <td class="message-cell">{{ item.message }}</td>
-            <td>{{ item.doer.get_full_name|default:item.doer.username }}</td>
-            <td>{{ item.assigned_by.get_full_name|default:item.assigned_by.username }}</td>
-            <td>{{ item.assign_date|date:"d M, Y h:i A" }}</td>
-            <td>{{ item.planned_date|date:"d M, Y h:i A" }}</td>
-            <td>{{ item.actual_date|date:"d M, Y h:i A" }}</td>
+          <tr>
+            <td>{{ item.assign_to.get_full_name|default:item.assign_to.username }}</td>
+            <td>{{ item.task_name }}</td>
+            <td>{{ item.assign_by.get_full_name|default:item.assign_by.username }}</td>
+            <td>{{ item.planned_date|date:"Y-m-d" }}</td>
             <td>{{ item.status }}</td>
-            <td>{{ item.delay }}</td>
           </tr>
           {% empty %}
           <tr>
-            <td colspan="11" class="text-center text-muted">No tasks found.</td>
+            <td colspan="5" class="text-center text-muted">No tasks found for these criteria.</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   </div>
-</div>
 {% endblock %}

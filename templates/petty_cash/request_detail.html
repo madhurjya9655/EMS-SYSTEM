@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block title %}Petty Cash #{{ request.pk }}{% endblock %}
+{% block content %}
+<h2>Request #{{ request.pk }}</h2>
+<p><strong>Reason:</strong> {{ request.reason }}</p>
+<p><strong>Amount:</strong> {{ request.amount }}</p>
+<p><strong>Urgency:</strong> {{ request.urgency }}</p>
+<p><strong>Status:</strong> {{ request.status }}</p>
+<p><strong>Submitted:</strong> {{ request.created_at|date:"Y-m-d H:i" }}</p>
+{% if request.manager_comment %}
+  <p><strong>Manager Comment:</strong> {{ request.manager_comment }}</p>
+{% endif %}
+{% if request.finance_comment %}
+  <p><strong>Finance Comment:</strong> {{ request.finance_comment }}</p>
+{% endif %}
+<a href="{% url 'petty_cash:list_requests' %}" class="btn btn-secondary mt-3">Back</a>
+{% endblock %}

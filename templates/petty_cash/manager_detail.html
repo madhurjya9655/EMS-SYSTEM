@@ -1,16 +1,16 @@
 {% extends 'base.html' %}
-{% block title %}Manager Approval{% endblock %}
+{% block title %}Manager Review{% endblock %}
 {% block content %}
-<h2>Manager Approval</h2>
-<p><strong>Reason:</strong> {{ request_obj.reason }}</p>
-<p><strong>Amount:</strong> {{ request_obj.amount }}</p>
-<p><strong>Urgency:</strong> {{ request_obj.urgency }}</p>
+<h2>Manager Review: Request #{{ request.pk }}</h2>
+<p><strong>Reason:</strong> {{ request.reason }}</p>
+<p><strong>Amount:</strong> {{ request.amount }}</p>
+<p><strong>Urgency:</strong> {{ request.urgency }}</p>
 <form method="post">{% csrf_token %}
   <div class="mb-3">
-    <label for="manager_comment" class="form-label">Comment</label>
-    <textarea name="manager_comment" id="manager_comment" class="form-control"></textarea>
+    <label class="form-label">Comment</label>
+    <textarea name="manager_comment" class="form-control">{{ request.manager_comment }}</textarea>
   </div>
-  <button type="submit" name="action" value="approve" class="btn btn-success">Approve</button>
-  <button type="submit" name="action" value="reject" class="btn btn-danger">Reject</button>
+  <button name="action" value="approve" class="btn btn-success me-2">Approve</button>
+  <button name="action" value="reject" class="btn btn-danger">Reject</button>
 </form>
 {% endblock %}

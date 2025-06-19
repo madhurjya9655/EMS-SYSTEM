@@ -3,10 +3,10 @@
 {% block title %}Dashboard{% endblock %}
 
 {% block content %}
-<div class="row mb-4">
+<div class="row g-4 mb-4">
   <!-- Week Score Card -->
-  <div class="col-lg-4">
-    <div class="card shadow-sm mb-4">
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100">
       <div class="card-header bg-white">
         <h5 class="mb-0">Week Score (%)</h5>
       </div>
@@ -42,8 +42,8 @@
   </div>
 
   <!-- Pending Task Card -->
-  <div class="col-lg-4">
-    <div class="card shadow-sm mb-4">
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100">
       <div class="card-header bg-white">
         <h5 class="mb-0">Pending Task</h5>
       </div>
@@ -85,7 +85,7 @@
   </div>
   <div class="card-body p-0">
     <table class="table table-hover mb-0">
-      <thead>
+      <thead class="table-light">
         <tr>
           <th>Task Code</th>
           <th>Task Title</th>
@@ -108,9 +108,7 @@
             <td>{{ t.delay|default:"-" }}</td>
             <td>{{ t.doer_notes|default:"-" }}</td>
             <td>
-              <a href="{% url 'tasks:add_checklist' %}" class="btn btn-sm btn-outline-secondary">
-                Edit
-              </a>
+              <a href="{% url 'tasks:edit_checklist' t.id %}" class="btn btn-sm btn-outline-secondary">Edit</a>
             </td>
           </tr>
         {% empty %}

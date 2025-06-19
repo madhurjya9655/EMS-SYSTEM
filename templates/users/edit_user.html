@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}Add User{% endblock %}
+{% block title %}Edit User{% endblock %}
 {% block content %}
-<h2 class="mb-4">Add User</h2>
+<h2 class="mb-4">Edit {{ user_obj.get_full_name|default:user_obj.username }}</h2>
 <form method="post">
   {% csrf_token %}
   <div class="row">
@@ -31,6 +31,7 @@
       </div>
     {% endfor %}
   </div>
-  <button class="btn btn-primary mt-4" type="submit">Submit</button>
+  <button class="btn btn-primary mt-4" type="submit">Save Changes</button>
+  <a href="{% url 'users:list_users' %}" class="btn btn-secondary mt-4 ms-2">Cancel</a>
 </form>
 {% endblock %}

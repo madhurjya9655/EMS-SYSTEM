@@ -1,0 +1,44 @@
+{# templates/petty_cash/list_requests.html #}
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block title %}My Petty Cash Requests{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>My Petty Cash Requests</h2>
+</div>
+
+<div class="content-card">
+  <div class="table-responsive">
+    <table class="table mb-0">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Reason</th>
+          <th>Amount (₹)</th>
+          <th>Urgency</th>
+          <th>Status</th>
+          <th>Requested On</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for req in requests %}
+        <tr>
+          <td>{{ forloop.counter }}</td>
+          <td>{{ req.reason }}</td>
+          <td>₹{{ req.amount|floatformat:2|intcomma }}</td>
+          <td>{{ req.get_urgency_display }}</td>
+          <td>{{ req.status }}</td>
+          <td>{{ req.created_at|date:"Y-m-d H:i" }}</td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="6" class="text-center">No requests found.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,9 +1,0 @@
-{% extends 'base.html' %}
-{% block title %}New Petty Cash Request{% endblock %}
-{% block content %}
-<h2>New Petty Cash Request</h2>
-<form method="post">{% csrf_token %}
-  {{ form.as_p }}
-  <button type="submit" class="btn btn-success">Submit</button>
-</form>
-{% endblock %}

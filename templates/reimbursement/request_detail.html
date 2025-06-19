@@ -8,23 +8,19 @@
     <p><strong>Category:</strong> {{ request.get_category_display }}</p>
     <p><strong>Submitted:</strong> {{ request.submitted_at|date:"Y-m-d H:i" }}</p>
     <p><strong>Status:</strong>
-{% if request.status == 'PM' %}Manager Pending
-{% elif request.status == 'PF' %}Finance Pending
-{% elif request.status == 'A' %}Approved
-{% else %}Rejected{% endif %}
-
+      {% if request.status == 'PM' %}Manager Pending
+      {% elif request.status == 'PF' %}Finance Pending
+      {% elif request.status == 'A' %}Approved
+      {% else %}Rejected{% endif %}
     </p>
     <p><strong>Bill:</strong> <a href="{{ request.bill.url }}" target="_blank">Download</a></p>
     {% if request.manager_comment %}
-    <p><strong>Manager Comment:</strong> {{ request.manager_comment }}</p>
+      <p><strong>Manager Comment:</strong> {{ request.manager_comment }}</p>
     {% endif %}
     {% if request.finance_comment %}
-    <p><strong>Finance Comment:</strong> {{ request.finance_comment }}</p>
+      <p><strong>Finance Comment:</strong> {{ request.finance_comment }}</p>
     {% endif %}
-    <a href="{% url 'my_reimbursements' %}" class="btn btn-secondary mt-3">Back</a>
+    <a href="{% url 'reimbursement:my_reimbursements' %}" class="btn btn-secondary mt-3">Back</a>
   </div>
 </div>
 {% endblock %}
-html
-Copy
-Edit
