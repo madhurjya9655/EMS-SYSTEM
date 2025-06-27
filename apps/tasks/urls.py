@@ -1,3 +1,4 @@
+# apps/tasks/urls.py
 from django.urls import path
 from . import views
 
@@ -7,6 +8,7 @@ urlpatterns = [
     path('checklist/add/', views.add_checklist, name='add_checklist'),
     path('checklist/edit/<int:pk>/', views.edit_checklist, name='edit_checklist'),
     path('checklist/delete/<int:pk>/', views.delete_checklist, name='delete_checklist'),
+    path('checklist/complete/<int:pk>/', views.complete_checklist, name='complete_checklist'),
     path('delegation/', views.list_delegation, name='list_delegation'),
     path('delegation/add/', views.add_delegation, name='add_delegation'),
     path('delegation/edit/<int:pk>/', views.edit_delegation, name='edit_delegation'),

@@ -1,38 +1,57 @@
 {% extends "base.html" %}
 {% block title %}Users{% endblock %}
+
 {% block content %}
-<h2 class="mb-4">List Users</h2>
-<a href="{% url 'users:add_user' %}" class="btn btn-success mb-3">
-  <i class="fas fa-user-plus"></i> Add User
-</a>
-<table class="table table-hover">
-  <thead>
-    <tr>
-      <th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>Role</th><th>Action</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for u in users %}
-    <tr>
-      <td>{{ u.first_name }} {{ u.last_name }}</td>
-      <td>{{ u.username }}</td>
-      <td>{{ u.email }}</td>
-      <td>{{ u.profile.phone }}</td>
-      <td>{{ u.profile.role }}</td>
-      <td>
-        {% if request.user.is_superuser %}
-          <a href="{% url 'users:edit_user' u.pk %}" class="btn btn-sm btn-primary me-1">
-            <i class="fas fa-edit"></i>
-          </a>
-        {% endif %}
-        <a href="{% url 'users:delete_user' u.pk %}" class="btn btn-sm btn-danger">
-          <i class="fas fa-trash"></i>
-        </a>
-      </td>
-    </tr>
-    {% empty %}
-    <tr><td colspan="6">No users found.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+  <h2 class="mb-4">List Users</h2>
+  <a href="{% url 'users:add_user' %}" class="btn btn-success mb-3">
+    <i class="fas fa-user-plus"></i> Add User
+  </a>
+
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>Name</th>
+          <th>Username</th>
+          <th>Email</th>
+          <th>Phone</th>
+          <th>Role</th>
+          <th>Department</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>{{ u.first_name }} {{ u.last_name }}</td>
+          <td>{{ u.username }}</td>
+          <td>{{ u.email }}</td>
+          <td>{{ u.profile.phone }}</td>
+          <td>{{ u.profile.role }}</td>
+          <td>{{ u.profile.department }}</td>
+          <td class="d-flex gap-1">
+            {% if request.user.is_superuser %}
+            <a href="{% url 'users:edit_user' u.pk %}" class="btn btn-sm btn-primary">
+              <i class="fas fa-edit"></i>
+            </a>
+            {% endif %}
+            <a href="{% url 'users:delete_user' u.pk %}" class="btn btn-sm btn-danger">
+              <i class="fas fa-trash"></i>
+            </a>
+            {% if request.user.is_superuser %}
+            <a href="{% url 'users:toggle_active' u.pk %}"
+               class="btn btn-sm {% if u.is_active %}btn-secondary{% else %}btn-outline-success{% endif %}">
+              {% if u.is_active %}INACTIVE{% else %}ACTIVE{% endif %}
+            </a>
+            {% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="7" class="text-center text-muted">No users found.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 {% endblock %}

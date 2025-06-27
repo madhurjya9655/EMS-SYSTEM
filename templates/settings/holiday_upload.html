@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Upload Holiday List{% endblock %}
+{% block content %}
+<div class="page-header mb-4"><h2>Upload Holiday List</h2></div>
+<form method="post" enctype="multipart/form-data">
+  {% csrf_token %}
+  <div class="row g-3 align-items-end">
+    <div class="col-md-6">
+      {{ form.file.label_tag }}
+      {{ form.file }}
+      {{ form.file.errors }}
+    </div>
+    <div class="col-md-2">
+      <button class="btn btn-primary">Upload CSV</button>
+    </div>
+  </div>
+</form>
+{% endblock %}

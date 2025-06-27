@@ -1,67 +1,66 @@
 {% extends "base.html" %}
-{% load static %}
 {% block title %}Dashboard{% endblock %}
 
 {% block content %}
 <div class="row g-4 mb-4">
-  <!-- Week Score Card -->
+  <!-- Week Score -->
   <div class="col-md-6">
     <div class="card shadow-sm h-100">
-      <div class="card-header bg-white">
-        <h5 class="mb-0">Week Score (%)</h5>
-      </div>
+      <div class="card-header bg-white"><h5 class="mb-0">Week Score (%)</h5></div>
       <div class="card-body p-0">
         <table class="table mb-0">
           <thead class="table-light">
-            <tr>
-              <th></th>
-              <th>Previous</th>
-              <th>Current</th>
-            </tr>
+            <tr><th></th><th>Previous</th><th>Current</th></tr>
           </thead>
           <tbody>
+            {% if not selected or selected == 'checklist' %}
             <tr>
               <td>Checklist</td>
               <td>{{ week_score.checklist.previous }}</td>
               <td>{{ week_score.checklist.current }}</td>
             </tr>
+            {% endif %}
+            {% if not selected or selected == 'delegation' %}
             <tr>
               <td>Delegation</td>
               <td>{{ week_score.delegation.previous }}</td>
               <td>{{ week_score.delegation.current }}</td>
             </tr>
+            {% endif %}
+            {% if not selected or selected == 'help_ticket' %}
             <tr>
               <td>Help Ticket</td>
               <td>{{ week_score.help_ticket.previous }}</td>
               <td>{{ week_score.help_ticket.current }}</td>
             </tr>
+            {% endif %}
+            <tr>
+              <td><strong>Time Spent</strong></td>
+              <td>{{ prev_time }}</td>
+              <td>{{ curr_time }}</td>
+            </tr>
           </tbody>
         </table>
       </div>
     </div>
   </div>
 
-  <!-- Pending Task Card -->
+  <!-- Pending Tasks -->
   <div class="col-md-6">
     <div class="card shadow-sm h-100">
-      <div class="card-header bg-white">
-        <h5 class="mb-0">Pending Task</h5>
-      </div>
+      <div class="card-header bg-white"><h5 class="mb-0">Pending Task</h5></div>
       <div class="card-body p-0">
         <table class="table mb-0">
           <tbody>
-            <tr>
-              <td>Checklist</td>
-              <td>{{ pending_tasks.checklist }}</td>
-            </tr>
-            <tr>
-              <td>Delegation</td>
-              <td>{{ pending_tasks.delegation }}</td>
-            </tr>
-            <tr>
-              <td>Help Ticket</td>
-              <td>{{ pending_tasks.help_ticket }}</td>
-            </tr>
+            {% if not selected or selected == 'checklist' %}
+            <tr><td>Checklist</td><td>{{ pending_tasks.checklist }}</td></tr>
+            {% endif %}
+            {% if not selected or selected == 'delegation' %}
+            <tr><td>Delegation</td><td>{{ pending_tasks.delegation }}</td></tr>
+            {% endif %}
+            {% if not selected or selected == 'help_ticket' %}
+            <tr><td>Help Ticket</td><td>{{ pending_tasks.help_ticket }}</td></tr>
+            {% endif %}
           </tbody>
         </table>
       </div>
@@ -69,55 +68,50 @@
   </div>
 </div>
 
-<!-- Buttons Row -->
+<!-- Task Switcher + Today Toggle -->
 <div class="row mb-4">
-  <div class="col">
-    <a href="{% url 'tasks:list_checklist' %}" class="btn btn-primary me-2">Checklist Tasks</a>
-    <a href="{% url 'tasks:list_delegation' %}" class="btn btn-primary me-2">Delegation Tasks</a>
-    <a href="{% url 'tasks:list_help_ticket' %}" class="btn btn-primary">Help Ticket Tasks</a>
+  <div class="col d-flex gap-2 flex-wrap">
+    <a href="?task_type=checklist{% if today_only %}&today=1{% endif %}"
+       class="btn btn-primary {% if selected == 'checklist' or not selected %}active{% endif %}">
+      Checklist Tasks
+    </a>
+    <a href="?task_type=delegation{% if today_only %}&today=1{% endif %}"
+       class="btn btn-primary {% if selected == 'delegation' %}active{% endif %}">
+      Delegation Tasks
+    </a>
+    <a href="?task_type=help_ticket{% if today_only %}&today=1{% endif %}"
+       class="btn btn-primary {% if selected == 'help_ticket' %}active{% endif %}">
+      Help Ticket Tasks
+    </a>
+  </div>
+  <div class="col-auto d-flex align-items-center">
+    <span class="me-2">All</span>
+    <div class="form-check form-switch">
+      <input class="form-check-input" type="checkbox" id="todayOnlySwitch"
+             {% if today_only %}checked{% endif %} onchange="onTodayToggle()">
+    </div>
+    <span class="ms-2">Today Only</span>
   </div>
 </div>
 
-<!-- Checklist Tasks Table -->
-<div class="card shadow-sm">
-  <div class="card-header bg-white">
-    <h5 class="mb-0">CHECKLIST TASKS</h5>
-  </div>
-  <div class="card-body p-0">
-    <table class="table table-hover mb-0">
-      <thead class="table-light">
-        <tr>
-          <th>Task Code</th>
-          <th>Task Title</th>
-          <th>Message</th>
-          <th>Planned Date</th>
-          <th>Status</th>
-          <th>Delay</th>
-          <th>Doer Notes</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for t in checklist_tasks %}
-          <tr>
-            <td>{{ t.id }}</td>
-            <td>{{ t.task_name }}</td>
-            <td>{{ t.message|truncatechars:30 }}</td>
-            <td>{{ t.planned_date|date:"Y-m-d H:i" }}</td>
-            <td>{{ t.status }}</td>
-            <td>{{ t.delay|default:"-" }}</td>
-            <td>{{ t.doer_notes|default:"-" }}</td>
-            <td>
-              <a href="{% url 'tasks:edit_checklist' t.id %}" class="btn btn-sm btn-outline-secondary">Edit</a>
-            </td>
-          </tr>
-        {% empty %}
-          <tr>
-            <td colspan="8" class="text-center text-muted">No record found.</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
+<!-- Include the right partial (all of which are already scoped to request.user) -->
+{% if selected == 'delegation' %}
+  {% include 'dashboard/partials/delegation_tasks.html' %}
+{% elif selected == 'help_ticket' %}
+  {% include 'dashboard/partials/help_ticket_tasks.html' %}
+{% else %}
+  {% include 'dashboard/partials/checklist_tasks.html' %}
+{% endif %}
+
+<script>
+  function onTodayToggle(){
+    const params = new URLSearchParams(window.location.search);
+    if (document.getElementById('todayOnlySwitch').checked) {
+      params.set('today','1');
+    } else {
+      params.delete('today');
+    }
+    window.location.search = params.toString();
+  }
+</script>
 {% endblock %}

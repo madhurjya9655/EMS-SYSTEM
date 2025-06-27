@@ -1,123 +1,154 @@
 {% extends "base.html" %}
-{% load static %}
+{% load static widget_tweaks %}
+
 {% block title %}Weekly MIS Score{% endblock %}
+
 {% block content %}
+<link
+  rel="stylesheet"
+  href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css"
+/>
+
 <div class="container-fluid px-0">
+  <!-- FILTERS CARD -->
   <div class="card mb-4">
     <div class="card-body">
-      <form method="get" class="row gx-3 gy-0 align-items-center mb-4">
+      <form method="get" class="row gx-3 gy-2 align-items-center mb-4">
         <div class="col-md-3">
-          <label class="form-label">Doer Name:</label>
-          {{ form.doer }}
+          <label class="form-label">
+            <i class="fas fa-user me-1"></i> Doer Name:
+          </label>
+          {{ form.doer|add_class:"form-select" }}
         </div>
         <div class="col-md-3">
-          <label class="form-label">From:</label>
-          {{ form.date_from }}
+          <label class="form-label">
+            <i class="fas fa-calendar me-1"></i> From:
+          </label>
+          {{ form.date_from|add_class:"form-control" }}
         </div>
         <div class="col-md-3">
-          <label class="form-label">To:</label>
-          {{ form.date_to }}
+          <label class="form-label">
+            <i class="fas fa-calendar me-1"></i> To:
+          </label>
+          {{ form.date_to|add_class:"form-control" }}
         </div>
-        <div class="col-md-3 d-flex justify-content-end align-items-center">
+        <div class="col-md-3">
+          <label class="form-label">
+            <i class="fas fa-building me-1"></i> Department:
+          </label>
+          {{ form.department|add_class:"form-select" }}
+        </div>
+        <div class="col-12 text-end">
           <button type="submit" class="btn btn-primary me-2">Submit</button>
           <button type="button" class="btn btn-danger me-2" onclick="window.print()">Print</button>
-          <a href="#" class="btn btn-success me-2">Export CSV</a>
-          <button type="button" class="btn btn-danger">Compact Print</button>
+          <button type="button" class="btn btn-success me-2" onclick="exportCSV()">Export CSV</button>
+          <button type="button" class="btn btn-danger" onclick="compactPrint()">Compact Print</button>
         </div>
       </form>
       {% if header %}
-        <h5 class="mb-4">{{ header }}</h5>
-      {% endif %}
-      {% if rows %}
-        {% for r in rows %}
-          <div class="card mb-4">
-            <div class="card-header">{{ r.category }} Score</div>
-            <div class="table-responsive">
-              <table class="table mb-0">
-                <thead class="table-light">
-                  <tr>
-                    <th></th>
-                    <th>Last Week Actual(%)</th>
-                    <th>Planned Task</th>
-                    <th>Completed Task</th>
-                    <th>% Not Completed</th>
-                    <th>Last Week Commitment</th>
-                    <th>This Week Commitment</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>All work should be done</td>
-                    <td>{{ r.last_pct }}%</td>
-                    <td>{{ r.planned }}</td>
-                    <td>{{ r.completed }}</td>
-                    <td>{{ r.percent }}%</td>
-                    <td></td>
-                    <td><input type="text" class="form-control"></td>
-                  </tr>
-                  <tr class="table-light">
-                    <td>All work should be done ontime</td>
-                    <td>{{ r.last_pct }}%</td>
-                    <td>{{ r.planned }}</td>
-                    <td>{{ r.completed }}</td>
-                    <td>{{ r.percent }}%</td>
-                    <td></td>
-                    <td><input type="text" class="form-control"></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        {% endfor %}
-        <div class="card mb-4">
-          <div class="card-header">Average Score</div>
-          <div class="table-responsive">
-            <table class="table mb-0">
-              <thead class="table-light">
-                <tr>
-                  <th></th>
-                  {% for r in rows %}<th>{{ r.category }}</th>{% endfor %}
-                  <th>Average</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>% work should be done</td>
-                  {% for r in rows %}<td>{{ r.percent }}%</td>{% endfor %}
-                  <td>0%</td>
-                </tr>
-                <tr class="table-light">
-                  <td>% work should be done ontime</td>
-                  {% for r in rows %}<td>{{ r.percent }}%</td>{% endfor %}
-                  <td>0%</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <div class="mb-4">
-          <p>Total pending task before {{ form.date_from.value }}</p>
-          <p>
-            Total Pending Checklist: 0 &nbsp;
-            Total Pending Delegation: 0 &nbsp;
-            Total Pending Help Ticket: 0 &nbsp;
-            Total Not Required Count: 0
-          </p>
-          <p>Total On-Hold FMS task: 0</p>
-          <p>
-            Previous delayed task completed this week<br>
-            Total Delayed Checklist: 0 &nbsp;
-            Total Delayed Delegation: 0 &nbsp;
-            Total Delayed FMS: 0
-          </p>
-        </div>
-        <div class="text-end">
-          <button type="button" class="btn btn-success">UPDATE COMMITMENT</button>
-        </div>
-      {% else %}
-        <div class="text-center text-muted">No record found.</div>
+      <h5 class="mb-0">
+        <i class="fas fa-info-circle me-1"></i>{{ header }}
+      </h5>
       {% endif %}
     </div>
   </div>
+
+  <!-- CATEGORY CARDS -->
+  {% for r in rows %}
+  <div class="card mb-4">
+    <div class="card-header">{{ r.category }} Score</div>
+    <div class="table-responsive">
+      <table class="table mb-0">
+        <thead class="table-light">
+          <tr>
+            <th></th>
+            <th>Last Week Actual(%)</th>
+            <th>Planned Task</th>
+            <th>Completed Task</th>
+            <th>Time (HH:MM)</th>
+            <th>% Not Completed</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>All work should be done</td>
+            <td>{{ r.last_pct }}%</td>
+            <td>{{ r.planned }}</td>
+            <td>{{ r.completed }}</td>
+            <td>{{ r.time }}</td>
+            <td>{{ r.percent }}%</td>
+          </tr>
+          <tr class="table-light">
+            <td>All work should be done ontime</td>
+            <td>{{ r.last_pct }}%</td>
+            <td>{{ r.planned }}</td>
+            <td>{{ r.completed }}</td>
+            <td>{{ r.time }}</td>
+            <td>{{ r.percent }}%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endfor %}
+
+  <!-- TOTAL TIME CARD -->
+  <div class="card mb-4">
+    <div class="card-header">Total Working Time This Week</div>
+    <div class="card-body">
+      <p class="mb-0"><strong>{{ total_hours }}</strong></p>
+    </div>
+  </div>
+
+  <!-- BOTTOM SUMMARY -->
+  {% if week_start %}
+  <div class="mt-4">
+    <hr>
+    <p><strong>Total pending task before {{ week_start|date:"d/m/Y" }}</strong></p>
+    <p>
+      Total Pending Checklist: {{ pending_checklist }} &nbsp;&nbsp;
+      Total Pending Delegation: {{ pending_delegation }}
+    </p>
+    <p><strong>Previous delayed task completed this week</strong></p>
+    <p>
+      Total Delayed Checklist: {{ delayed_checklist }} &nbsp;&nbsp;
+      Total Delayed Delegation: {{ delayed_delegation }}
+    </p>
+    <button class="btn btn-success">UPDATE COMMITMENT</button>
+  </div>
+  {% endif %}
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+<script>
+function exportCSV() {
+  const p = new URLSearchParams(new FormData(document.querySelector('form')));
+  window.location.href = '?' + p.toString() + '&export=csv';
+}
+function compactPrint() {
+  const w = window.open();
+  w.document.write(`
+    <html><head><title>Compact Weekly MIS</title>
+    <style>
+      body{font-family:Arial,sans-serif;font-size:12px;margin:20px;}
+      table{width:100%;border-collapse:collapse;margin-bottom:20px;}
+      th,td{border:1px solid #ddd;padding:8px;text-align:center;}
+      th{background:#f2f2f2;}
+    </style></head>
+    <body>${document.querySelector('.container-fluid').innerHTML}</body></html>
+  `);
+  w.document.close();
+  w.print();
+}
+document.addEventListener('DOMContentLoaded', () => {
+  flatpickr("#id_date_from", {
+    dateFormat: "Y-m-d",
+    enable: [date => date.getDay() === 1]
+  });
+  flatpickr("#id_date_to", {
+    dateFormat: "Y-m-d",
+    enable: [date => date.getDay() === 6]
+  });
+});
+</script>
 {% endblock %}

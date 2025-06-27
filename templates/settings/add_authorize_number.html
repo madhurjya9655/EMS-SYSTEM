@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Add Authorized Number{% endblock %}
+{% block content %}
+  <div class="page-header mb-4"><h2 class="page-title">Add Authorized Number</h2></div>
+  <div class="card">
+    <div class="card-body">
+      <form method="post" class="row g-3">
+        {% csrf_token %}
+        <div class="col-md-8">
+          {{ form.mobile_number.label_tag }}
+          {{ form.mobile_number }}
+          {{ form.mobile_number.errors }}
+        </div>
+        <div class="col-md-4 text-end">
+          <button class="btn btn-primary">Submit</button>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endblock %}

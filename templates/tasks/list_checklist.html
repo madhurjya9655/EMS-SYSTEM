@@ -1,5 +1,99 @@
 {% extends "tasks/tasks_base.html" %}
 {% block title %}Checklist Tasks{% endblock %}
 {% block tab_content %}
-{% include "tasks/partial_list_checklist.html" %}
+
+<div class="card mb-4">
+  <!-- Title + actions -->
+  <div class="card-header d-flex justify-content-between align-items-center border-0">
+    <h5 class="mb-0">Checklist Tasks</h5>
+    <div>
+      <a href="{% url 'tasks:add_checklist' %}" class="btn btn-sm btn-primary">Add Checklist</a>
+      <a href="{% url 'tasks:bulk_upload' %}" class="btn btn-sm btn-secondary">Bulk Upload</a>
+    </div>
+  </div>
+
+  <!-- FILTER header, now solid primary blue -->
+  <div
+    class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
+    data-bs-toggle="collapse"
+    href="#filterPanel"
+    role="button"
+    aria-expanded="true"
+    style="cursor: pointer;"
+  >
+    <span>FILTER</span>
+    <i class="fas fa-minus" style="color: blue !important;"></i>
+  </div>
+
+  <!-- Filter panel -->
+  <div id="filterPanel" class="collapse show">
+    <div class="card-body">
+      <form method="get">
+        <div class="row g-3 align-items-end">
+          <div class="col-md-2">
+            <label class="form-label">Keyword</label>
+            <input type="text" name="keyword" class="form-control" value="{{ request.GET.keyword }}">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Assign To</label>
+            <select name="assign_to" class="form-select">
+              <option value="">All</option>
+              {% for user in users %}
+              <option value="{{ user.id }}"{% if request.GET.assign_to == user.id|stringformat:"s" %} selected{% endif %}>
+                {{ user.get_full_name|default:user.username }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Priority</label>
+            <select name="priority" class="form-select">
+              <option value="">All</option>
+              {% for code,label in priority_choices %}
+              <option value="{{ code }}"{% if request.GET.priority == code %} selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Group Name</label>
+            <select name="group_name" class="form-select">
+              <option value="">All</option>
+              {% for g in group_names %}
+              <option value="{{ g }}"{% if request.GET.group_name == g %} selected{% endif %}>{{ g }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Start Date</label>
+            <input type="date" name="start_date" class="form-control" value="{{ request.GET.start_date }}">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">End Date</label>
+            <input type="date" name="end_date" class="form-control" value="{{ request.GET.end_date }}">
+          </div>
+          <div class="col-12 text-end">
+            <button type="submit" class="btn btn-primary">FILTER</button>
+            <a href="{% url 'tasks:list_checklist' %}" class="btn btn-warning">RESET FILTER</a>
+            <button type="submit" name="download" value="1" class="btn btn-success">DOWNLOAD CSV</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="table-responsive">
+  {% include "tasks/partial_list_checklist.html" %}
+</div>
+
+<script>
+  document.querySelectorAll('[data-bs-toggle="collapse"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const icon = btn.querySelector('i');
+      icon.classList.toggle('fa-minus');
+      icon.classList.toggle('fa-plus');
+    });
+  });
+</script>
+
 {% endblock %}

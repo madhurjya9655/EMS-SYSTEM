@@ -1,7 +1,0 @@
-Task name,Message,Assigned To,Frequency,Planned date,Remind Before Days,Mode,Priority,Set Reminder,Reminder Mode, Reminder Frequency, Set Reminder Before Days,Notify Me,Make Attachment Mandatory When Work Done
-Task 1,Message for task,Suprakash,1,16/10/2023 10:05,0,day,Low,,,,,,
-Task 2,Message for task,Shilpi Das,1,16/10/2023 10:05,2,week,High,Yes,Hours,4,0,Nasim,Yes
-Task 3,Message for task,Suprakash,1,16/10/2023 10:05,0,day,Medium,,,,,,
-Task 4,Message for task,Shilpi Das,1,16/10/2023 10:05,7,month,High,Yes,Days,1,3,Nasim,Yes
-,,,,,,,,,,,,,
-,,SHOULD BE DROPDOWN LIST,,ONLY DD/MM/YYYY HH:MM:SS,,SHOULD BE DROPDOWN LIST,SHOULD BE DROPDOWN LIST,SHOULD BE DROPDOWN LIST,SHOULD BE DROPDOWN LIST,,,SHOULD BE DROPDOWN LIST,SHOULD BE DROPDOWN LIST

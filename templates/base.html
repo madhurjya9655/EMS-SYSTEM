@@ -177,15 +177,19 @@
     <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
     <nav class="sidebar" id="sidebar">
       <div class="nav-section">
+        <!-- Dashboard -->
         <a href="{% url 'dashboard:home' %}"
            class="nav-item {% if request.resolver_match.app_name == 'dashboard' and request.resolver_match.url_name == 'home' %}active{% endif %}">
           <i class="fas fa-tachometer-alt"></i> Dashboard
         </a>
+
+        <!-- Employees -->
         <a href="{% url 'recruitment:employee_list' %}"
            class="nav-item {% if request.resolver_match.app_name == 'recruitment' and request.resolver_match.url_name == 'employee_list' %}active{% endif %}">
           <i class="fas fa-users"></i> Employees
         </a>
 
+        <!-- Leave Register -->
         <button class="nav-item" onclick="toggleSubmenu('leaveSubmenu')">
           <i class="fas fa-calendar-day"></i> Leave Register <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -208,6 +212,7 @@
           {% endif %}
         </div>
 
+        <!-- Master Tasks -->
         <button class="nav-item" onclick="toggleSubmenu('masterTasksSubmenu')">
           <i class="fas fa-tasks"></i> Master Tasks <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -234,56 +239,42 @@
           </a>
         </div>
 
+        <!-- Help Ticket -->
         <a href="{% url 'tasks:list_help_ticket' %}"
            class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_help_ticket' %}active{% endif %}">
           <i class="fas fa-question-circle"></i> Help Ticket
         </a>
 
-   <button class="nav-item" onclick="toggleSubmenu('pettyCashSubmenu')">
-      <i class="fas fa-wallet"></i> Petty Cash
-      <i class="fas fa-chevron-down chevron"></i>
-    </button>
-    <div class="submenu" id="pettyCashSubmenu" style="display: none;">
-      <a
-        href="{% url 'petty_cash:list_requests' %}"
-        class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'list_requests' %}active{% endif %}"
-      >
-        <i class="fas fa-file-invoice-dollar"></i>
-        My Requests
-      </a>
+        <!-- Petty Cash -->
+        <button class="nav-item" onclick="toggleSubmenu('pettyCashSubmenu')">
+          <i class="fas fa-wallet"></i> Petty Cash <i class="fas fa-chevron-down chevron"></i>
+        </button>
+        <div class="submenu" id="pettyCashSubmenu" style="display:none;">
+          <a href="{% url 'petty_cash:list_requests' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'list_requests' %}active{% endif %}">
+            <i class="fas fa-file-invoice-dollar"></i> My Requests
+          </a>
+          {% if user|has_group:"EA" %}
+          <a href="{% url 'petty_cash:apply_request' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'apply_request' %}active{% endif %}">
+            <i class="fas fa-plus-circle"></i> New Request
+          </a>
+          {% endif %}
+          {% if user|has_group:"Manager" %}
+          <a href="{% url 'petty_cash:manager_requests' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'manager_requests' %}active{% endif %}">
+            <i class="fas fa-check"></i> Manager Approvals
+          </a>
+          {% endif %}
+          {% if user|has_group:"Finance" %}
+          <a href="{% url 'petty_cash:finance_requests' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'finance_requests' %}active{% endif %}">
+            <i class="fas fa-coins"></i> Finance Approvals
+          </a>
+          {% endif %}
+        </div>
 
-      {% if user|has_group:"EA" %}
-      <a
-        href="{% url 'petty_cash:apply_request' %}"
-        class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'apply_request' %}active{% endif %}"
-      >
-        <i class="fas fa-plus-circle"></i>
-        New Request
-      </a>
-      {% endif %}
-
-      {% if user|has_group:"Manager" %}
-      <a
-        href="{% url 'petty_cash:manager_requests' %}"
-        class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'manager_requests' %}active{% endif %}"
-      >
-        <i class="fas fa-check"></i>
-        Manager Approvals
-      </a>
-      {% endif %}
-
-      {% if user|has_group:"Finance" %}
-      <a
-        href="{% url 'petty_cash:finance_requests' %}"
-        class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'finance_requests' %}active{% endif %}"
-      >
-        <i class="fas fa-coins"></i>
-        Finance Approvals
-      </a>
-      {% endif %}
-    </div>
-
-
+        <!-- Sales -->
         <button class="nav-item" onclick="toggleSubmenu('salesSubmenu')">
           <i class="fas fa-chart-line"></i> Sales <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -302,6 +293,7 @@
           </a>
         </div>
 
+        <!-- Reimbursement -->
         <button class="nav-item" onclick="toggleSubmenu('reimbursementSubmenu')">
           <i class="fas fa-receipt"></i> Reimbursement <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -324,6 +316,7 @@
           {% endif %}
         </div>
 
+        <!-- Reports -->
         <button class="nav-item" onclick="toggleSubmenu('reportsSubmenu')">
           <i class="fas fa-chart-pie"></i> Reports <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -343,6 +336,7 @@
         </div>
 
         {% if user.is_superuser %}
+        <!-- Users -->
         <button class="nav-item" onclick="toggleSubmenu('usersSubmenu')">
           <i class="fas fa-user-friends"></i> Users <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -358,7 +352,21 @@
         </div>
         {% endif %}
 
-        <a href="#" class="nav-item"><i class="fas fa-cog"></i> Settings</a>
+        <!-- Settings -->
+        <button class="nav-item" onclick="toggleSubmenu('settingsSubmenu')">
+          <i class="fas fa-cog"></i> Settings <i class="fas fa-chevron-down chevron"></i>
+        </button>
+        <div class="submenu" id="settingsSubmenu" style="display:none;">
+          <a href="{% url 'settings:authorized_list' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}active{% endif %}">
+            <i class="fas fa-phone"></i> Authorized Numbers
+          </a>
+          <a href="{% url 'settings:holiday_list' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}active{% endif %}">
+            <i class="fas fa-calendar-day"></i> Holiday List
+          </a>
+        </div>
+
       </div>
     </nav>
   {% endif %}
@@ -389,7 +397,7 @@
         const submenu = document.getElementById(id),
               btn     = submenu.previousElementSibling,
               chev    = btn.querySelector('.chevron');
-        if (submenu.style.display === 'none' || submenu.style.display === '') {
+        if (!submenu.style.display || submenu.style.display === 'none') {
           submenu.style.display = 'block';
           chev.style.transform  = 'rotate(180deg)';
         } else {
@@ -397,28 +405,24 @@
           chev.style.transform  = 'rotate(0deg)';
         }
       }
-      window.addEventListener('resize', function() {
+      window.addEventListener('resize', () => {
         const sidebar = document.getElementById('sidebar'),
               overlay = document.querySelector('.sidebar-overlay'),
               main    = document.getElementById('mainContent');
         if (window.innerWidth > 768) {
           sidebar.classList.remove('show');
           overlay.classList.remove('show');
-          if (sidebar.classList.contains('collapsed')) {
-            main.classList.add('expanded');
-          } else {
-            main.classList.remove('expanded');
-          }
+          if (sidebar.classList.contains('collapsed')) main.classList.add('expanded');
+          else main.classList.remove('expanded');
         } else {
           sidebar.classList.remove('collapsed');
           main.classList.remove('expanded');
         }
       });
-      document.addEventListener('DOMContentLoaded', function() {
+      document.addEventListener('DOMContentLoaded', () => {
         const path  = window.location.pathname,
               items = document.querySelectorAll('.nav-item[href]');
         items.forEach(item => {
-          item.classList.remove('active');
           if (item.getAttribute('href') === path) {
             item.classList.add('active');
             const submenu = item.closest('.submenu');

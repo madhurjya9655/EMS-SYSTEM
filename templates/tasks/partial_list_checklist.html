@@ -1,28 +1,66 @@
-<table class="table table-hover mb-0">
-  <thead>
-    <tr>
-      <th>Task Code</th><th>Task Title</th><th>Message</th>
-      <th>Planned Date</th><th>Status</th><th>Delay</th>
-      <th>Doer Notes</th><th>Action</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for t in items %}
-    <tr>
-      <td>{{ t.id }}</td>
-      <td>{{ t.task_name }}</td>
-      <td>{{ t.message|truncatechars:30 }}</td>
-      <td>{{ t.planned_date|date:"Y-m-d H:i" }}</td>
-      <td>{{ t.status }}</td>
-      <td>{{ t.delay|default:"-" }}</td>
-      <td>{{ t.doer_notes|default:"-" }}</td>
-      <td>
-        <a href="{% url 'tasks:edit_checklist' t.id %}" class="btn btn-sm btn-outline-secondary">Edit</a>
-        <a href="{% url 'tasks:delete_checklist' t.id %}" class="btn btn-sm btn-outline-danger">Delete</a>
-      </td>
-    </tr>
-    {% empty %}
-    <tr><td colspan="8" class="text-center text-muted">No record found.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+<form method="post">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-danger mb-3">Delete</button>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead>
+        <tr>
+          <th style="width:40px">
+            <input type="checkbox" id="select-all">
+          </th>
+          <th>Task Name <i class="fas fa-sort"></i></th>
+          <th>Message</th>
+          <th>Assign To <i class="fas fa-sort"></i></th>
+          <th>Frequency</th>
+          <th>Planned Date <i class="fas fa-sort"></i></th>
+          <th>Remind Before Days</th>
+          <th>Reminder</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td>
+            <input type="checkbox" class="row-checkbox" name="sel" value="{{ item.id }}">
+          </td>
+          <td>{{ item.task_name }}</td>
+          <td style="max-width:200px; white-space:nowrap; overflow-x:auto;">
+            {{ item.message }}
+          </td>
+          <td>{{ item.assign_to.get_full_name|default:item.assign_to.username }}</td>
+          <td>{{ item.frequency }} {{ item.mode }}</td>
+          <td>{{ item.planned_date|date:"d M, Y h:i A" }}</td>
+          <td>{{ item.remind_before_days }}</td>
+          <td>{{ item.reminder_mode }}({{ item.reminder_frequency }})</td>
+          <td>
+            <a href="{% url 'tasks:edit_checklist' item.id %}"
+               class="btn btn-sm btn-outline-secondary">
+              <i class="fas fa-edit"></i>
+            </a>
+            <a href="{% url 'tasks:delete_checklist' item.id %}"
+               class="btn btn-sm btn-outline-danger">
+              <i class="fas fa-trash"></i>
+            </a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="9" class="text-center text-muted">
+            No checklists found.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</form>
+
+<script>
+  document
+    .getElementById('select-all')
+    .addEventListener('change', function(){
+      document.querySelectorAll('.row-checkbox')
+              .forEach(cb => cb.checked = this.checked);
+    });
+</script>

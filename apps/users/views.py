@@ -23,12 +23,10 @@ def add_user(request):
             user = uf.save(commit=False)
             user.set_password(uf.cleaned_data['password'])
             user.is_staff = True
+            user.is_active = True
             user.save()
-            # assign group
-            role = pf.cleaned_data['role']
-            grp, _ = Group.objects.get_or_create(name=role)
+            grp, _ = Group.objects.get_or_create(name=pf.cleaned_data['role'])
             user.groups.add(grp)
-            # save profile
             profile = pf.save(commit=False)
             profile.user = user
             profile.save()
@@ -52,7 +50,6 @@ def edit_user(request, pk):
             if pwd:
                 user.set_password(pwd)
             user.save()
-            # reassign group
             user.groups.clear()
             grp, _ = Group.objects.get_or_create(name=pf.cleaned_data['role'])
             user.groups.add(grp)
@@ -74,4 +71,12 @@ def edit_user(request, pk):
 def delete_user(request, pk):
     u = get_object_or_404(User, pk=pk)
     u.delete()
+    return redirect('users:list_users')
+
+@login_required
+@user_passes_test(admin_only)
+def toggle_active(request, pk):
+    u = get_object_or_404(User, pk=pk)
+    u.is_active = not u.is_active
+    u.save()
     return redirect('users:list_users')

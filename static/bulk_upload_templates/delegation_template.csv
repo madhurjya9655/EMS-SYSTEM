@@ -1,0 +1,7 @@
+Task Name,Assign To,Planned Date,Priority,Make Attachment Mandatory,Time per Task (minutes),Audio Recording
+Server Reboot,madhurjya,7/2/2025,High,No,30,
+Client Call,saurabh,7/4/2025,Medium,Yes,45,call_recording.mp3
+Inventory Check,amreen,7/6/2025,Low,No,20,
+,,,,,,
+,,,,,,
+,,Should be Dropdown,Should be Dropdown,DD/MM/YYYY HH:MM:SS,,Should be Dropdown

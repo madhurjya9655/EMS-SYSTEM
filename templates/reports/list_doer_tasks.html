@@ -1,6 +1,5 @@
-{# templates/reports/list_doer_tasks.html #}
 {% extends "base.html" %}
-{% load static %}
+{% load widget_tweaks %}
 
 {% block title %}Doer Tasks Report{% endblock %}
 
@@ -9,31 +8,42 @@
     <h1 class="page-title">Doer Tasks Report</h1>
   </div>
 
-  <div class="content-card p-4 mb-4">
-    <form method="get" class="row g-3">
-      <div class="col-md-3">
-        {{ form.doer.label_tag }}
-        {{ form.doer }}
+  <div class="card mb-4">
+    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
+         data-bs-toggle="collapse" href="#filterPanel" role="button" aria-expanded="true">
+      <span>FILTER</span>
+      <i class="fas fa-minus"></i>
+    </div>
+    <div id="filterPanel" class="collapse show">
+      <div class="card-body">
+        <form method="get" class="row g-3">
+          <div class="col-md-3">
+            {{ form.doer.label_tag }}
+            {{ form.doer|add_class:"form-select" }}
+          </div>
+          <div class="col-md-3">
+            {{ form.department.label_tag }}
+            {{ form.department|add_class:"form-select" }}
+          </div>
+          <div class="col-md-3">
+            {{ form.date_from.label_tag }}
+            {{ form.date_from|add_class:"form-control" }}
+          </div>
+          <div class="col-md-3">
+            {{ form.date_to.label_tag }}
+            {{ form.date_to|add_class:"form-control" }}
+          </div>
+          <div class="col-12 text-end">
+            <button type="submit" class="btn btn-primary">FILTER</button>
+            <a href="{% url 'reports:doer_tasks' %}" class="btn btn-warning">RESET FILTER</a>
+            <button type="submit" name="export" value="csv" class="btn btn-success">DOWNLOAD CSV</button>
+          </div>
+        </form>
       </div>
-      <div class="col-md-3">
-        {{ form.department.label_tag }}
-        {{ form.department }}
-      </div>
-      <div class="col-md-2">
-        {{ form.date_from.label_tag }}
-        {{ form.date_from }}
-      </div>
-      <div class="col-md-2">
-        {{ form.date_to.label_tag }}
-        {{ form.date_to }}
-      </div>
-      <div class="col-md-2 d-flex align-items-end">
-        <button type="submit" class="btn btn-primary w-100">Filter</button>
-      </div>
-    </form>
+    </div>
   </div>
 
-  <div class="content-card">
+  <div class="card">
     <div class="table-responsive">
       <table class="table table-hover mb-0">
         <thead>
@@ -63,4 +73,14 @@
       </table>
     </div>
   </div>
+
+  <script>
+    document.querySelectorAll('[data-bs-toggle="collapse"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const icon = btn.querySelector('i');
+        icon.classList.toggle('fa-minus');
+        icon.classList.toggle('fa-plus');
+      });
+    });
+  </script>
 {% endblock %}

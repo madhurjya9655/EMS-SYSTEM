@@ -1,21 +1,69 @@
-{% extends 'base.html' %}
+{% extends "base.html" %}
 {% block title %}Add Delegation{% endblock %}
+
 {% block content %}
-<h2>Add Delegation</h2>
-<form method="post" enctype="multipart/form-data">{% csrf_token %}
-  <div class="row">
-    <div class="col-md-4">{{ form.assign_by.label_tag }}{{ form.assign_by }}</div>
-    <div class="col-md-4">{{ form.task_name.label_tag }}{{ form.task_name }}</div>
-    <div class="col-md-4">{{ form.assign_to.label_tag }}{{ form.assign_to }}</div>
-  </div>
-  <div class="row mt-3">
-    <div class="col-md-4">{{ form.planned_date.label_tag }}{{ form.planned_date }}</div>
-    <div class="col-md-4">{{ form.priority.label_tag }}{{ form.priority }}</div>
-    <div class="col-md-4">{{ form.attachment_mandatory.label_tag }}{{ form.attachment_mandatory }}</div>
-  </div>
-  <div class="row mt-3">
-    <div class="col-md-4">{{ form.audio_recording.label_tag }}{{ form.audio_recording }}</div>
-  </div>
-  <button type="submit" class="btn btn-primary mt-4">Submit</button>
-</form>
+  <!-- Flatpickr CSS/JS -->
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css"
+  />
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+
+  <h2 class="mb-4">Add Delegation</h2>
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <div class="row g-3">
+      <div class="col-md-4">
+        {{ form.assign_by.label_tag }}<br>
+        {{ form.assign_by }}
+      </div>
+      <div class="col-md-4">
+        {{ form.task_name.label_tag }}<br>
+        {{ form.task_name }}
+      </div>
+      <div class="col-md-4">
+        {{ form.assign_to.label_tag }}<br>
+        {{ form.assign_to }}
+      </div>
+    </div>
+
+    <div class="row g-3 mt-3">
+      <div class="col-md-4">
+        {{ form.planned_date.label_tag }}<br>
+        {{ form.planned_date }}
+      </div>
+      <div class="col-md-4">
+        {{ form.priority.label_tag }}<br>
+        {{ form.priority }}
+      </div>
+      <div class="col-md-4">
+        <div class="form-check mt-3">
+          {{ form.attachment_mandatory }} {{ form.attachment_mandatory.label_tag }}
+        </div>
+      </div>
+    </div>
+
+    <div class="row g-3 mt-3">
+      <div class="col-md-4">
+        {{ form.audio_recording.label_tag }}<br>
+        {{ form.audio_recording }}
+      </div>
+      <div class="col-md-4">
+        {{ form.time_per_task_minutes.label_tag }}<br>
+        {{ form.time_per_task_minutes }}
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary mt-4">Submit</button>
+  </form>
+
+  <script>
+    // Flatpickr on delegation.planned_date: disable Sundays
+    flatpickr("#id_planned_date", {
+      dateFormat: "Y-m-d",
+      disable: [
+        date => date.getDay() === 0
+      ]
+    });
+  </script>
 {% endblock %}

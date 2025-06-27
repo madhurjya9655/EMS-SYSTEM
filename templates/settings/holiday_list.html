@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Company Holidays{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Holiday List</h1>
+</div>
+
+<div class="row mb-4">
+  <!-- manual add -->
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header bg-primary text-white">Add Holiday</div>
+      <div class="card-body">
+        <form method="post">
+          {% csrf_token %}
+          {{ add_form.management_form }}
+          <div class="mb-3">
+            {{ add_form.date.label_tag }} {{ add_form.date }}
+          </div>
+          <div class="mb-3">
+            {{ add_form.name.label_tag }} {{ add_form.name }}
+          </div>
+          <button class="btn btn-primary">Save</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- batch upload -->
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header bg-secondary text-white">Upload via Excel/CSV</div>
+      <div class="card-body">
+        <form method="post" enctype="multipart/form-data">
+          {% csrf_token %}
+          {{ upload_form.management_form }}
+          <div class="mb-3">
+            {{ upload_form.file.label_tag }} {{ upload_form.file }}
+          </div>
+          <button class="btn btn-secondary">Upload</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Name</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for h in holidays %}
+        <tr>
+          <td>{{ h.date|date:"Y-m-d" }}</td>
+          <td>{{ h.name }}</td>
+          <td>
+            <a href="{% url 'settings:holiday_delete' h.pk %}"
+               class="btn btn-sm btn-danger"
+               onclick="return confirm('Remove this holiday?');">
+              <i class="fas fa-trash"></i>
+            </a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="3" class="text-center text-muted">No holidays defined.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

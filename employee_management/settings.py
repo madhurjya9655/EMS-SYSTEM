@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     "apps.users",
     "dashboard",
     "widget_tweaks",
+    "apps.settings",
 ]
 
 MIDDLEWARE = [

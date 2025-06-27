@@ -1,13 +1,10 @@
 from datetime import date, timedelta
 from django.shortcuts import render
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse
-from django.db.models import Sum, Count, Q, Avg,F
+from django.db.models import Sum, F
 from .forms_reports import PCReportFilterForm
-from apps.tasks.models import Checklist, Delegation, HelpTicket
+from apps.tasks.models import Checklist, Delegation
 from django.contrib.auth import get_user_model
-import csv
-import json
 
 User = get_user_model()
 
@@ -18,43 +15,6 @@ def get_week_dates(frm, to):
     start = today - timedelta(days=today.weekday())
     return start, start + timedelta(days=6)
 
-def week_number(start):
-    fy_start = date(start.year if start.month >= 4 else start.year-1, 4, 1)
-    return ((start - fy_start).days // 7) + 1
-
-def calculate_stats(doer, start, end):
-    stats = []
-    categories = [
-        ('Checklist', Checklist, 'planned_date__range', ('status', 'Completed')),
-        ('Delegation', Delegation, 'planned_date__range', None),
-        ('Help Ticket', HelpTicket, 'planned_date__range', ('status', 'Closed')),
-    ]
-    for name, Model, date_kw, status in categories:
-        planned = Model.objects.filter(assign_to=doer, **{date_kw: (start, end)}).count()
-        if status:
-            completed = Model.objects.filter(
-                assign_to=doer,
-                **{date_kw: (start, end)},
-                **{status[0]: status[1]}
-            ).count()
-        else:
-            completed = planned
-        pct = round(((completed - planned) / planned) * 100, 2) if planned else 0
-        stats.append({
-            'category': name,
-            'planned': planned,
-            'completed': completed,
-            'percent': pct,
-        })
-    return stats
-
-def ordinal(n):
-    if 4 <= n % 100 <= 20:
-        suf = 'th'
-    else:
-        suf = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
-    return f"{n:02d}{suf}"
-
 @login_required
 def list_doer_tasks(request):
     form = PCReportFilterForm(request.GET or None, user=request.user)
@@ -64,12 +24,15 @@ def list_doer_tasks(request):
         if d['doer']:
             items = items.filter(assign_to=d['doer'])
         if d['department']:
-            items = items.filter(group_name__icontains=d['department'])
+            items = items.filter(assign_to__groups__name=d['department'])
         if d['date_from']:
             items = items.filter(planned_date__date__gte=d['date_from'])
         if d['date_to']:
             items = items.filter(planned_date__date__lte=d['date_to'])
-    return render(request, 'reports/list_doer_tasks.html', {'form': form, 'items': items})
+    return render(request, 'reports/list_doer_tasks.html', {
+        'form': form,
+        'items': items,
+    })
 
 @login_required
 def list_fms_tasks(request):
@@ -85,263 +48,202 @@ def list_fms_tasks(request):
             items = items.filter(planned_date__gte=d['date_from'])
         if d['date_to']:
             items = items.filter(planned_date__lte=d['date_to'])
-    return render(request, 'reports/list_fms_tasks.html', {'form': form, 'items': items})
+    return render(request, 'reports/list_fms_tasks.html', {
+        'form': form,
+        'items': items,
+    })
 
 @login_required
 def weekly_mis_score(request):
     form = PCReportFilterForm(request.GET or None, user=request.user)
     rows = []
+    header = ''
+    total_hours = ''
+    week_start = None
+    pending_checklist = pending_delegation = delayed_checklist = delayed_delegation = 0
+
     if form.is_valid() and form.cleaned_data.get('doer'):
         doer = form.cleaned_data['doer']
         frm, to = get_week_dates(form.cleaned_data['date_from'], form.cleaned_data['date_to'])
+        week_start = frm
         prev_frm = frm - timedelta(days=7)
-        prev_to = frm - timedelta(days=1)
+        prev_to  = frm - timedelta(days=1)
 
-        this_week = calculate_stats(doer, frm, to)
-        last_week = calculate_stats(doer, prev_frm, prev_to)
+        # Checklist & Delegation stats
+        for Model, label in [(Checklist, 'Checklist'), (Delegation, 'Delegation')]:
+            date_kw = 'planned_date__date' if Model is Checklist else 'planned_date'
+            look_this = {f"{date_kw}__range": (frm, to)}
+            look_last = {f"{date_kw}__range": (prev_frm, prev_to)}
 
-        for i, data in enumerate(this_week):
+            planned      = Model.objects.filter(assign_to=doer, **look_this).count()
+            planned_last = Model.objects.filter(assign_to=doer, **look_last).count()
+
+            if Model is Checklist:
+                completed      = Model.objects.filter(assign_to=doer, **look_this, status='Completed').count()
+                completed_last = Model.objects.filter(assign_to=doer, **look_last, status='Completed').count()
+            else:
+                completed      = planned
+                completed_last = planned_last
+
+            pct      = round((completed      / planned      * 100), 2) if planned      else 0
+            pct_last = round((completed_last / planned_last * 100), 2) if planned_last else 0
+
             rows.append({
-                'category': data['category'],
-                'last_pct': last_week[i]['percent'],
-                'planned': data['planned'],
-                'completed': data['completed'],
-                'percent': data['percent'],
+                'category':  label,
+                'last_pct':  pct_last,
+                'planned':   planned,
+                'completed': completed,
+                'percent':   pct,
             })
 
+        # total minutes per category
+        mins_check = 0
+        for rec in Checklist.objects.filter(assign_to=doer, planned_date__date__range=(frm, to)):
+            m = rec.time_per_task_minutes or 0
+            if rec.mode == 'Daily':
+                run_start = max(frm, rec.planned_date.date())
+                days      = (to - run_start).days + 1
+                occ       = (days + rec.frequency - 1)//rec.frequency
+            else:
+                occ = 1
+            mins_check += m * occ
+
+        mins_deg = Delegation.objects.filter(assign_to=doer, planned_date__range=(frm, to))\
+                                      .aggregate(total=Sum('time_per_task_minutes'))['total'] or 0
+
+        # inject time into rows
+        for row in rows:
+            if row['category'] == 'Checklist':
+                row['time'] = f"{mins_check//60:02d}:{mins_check%60:02d}"
+            else:
+                row['time'] = f"{mins_deg//60:02d}:{mins_deg%60:02d}"
+
+        total = mins_check + mins_deg
+        total_hours = f"{total//60:02d}:{total%60:02d}"
+
+        # pending before week start
+        pending_checklist  = Checklist.objects.filter(assign_to=doer, planned_date__date__lt=frm, status='Pending').count()
+        pending_delegation = Delegation.objects.filter(assign_to=doer, planned_date__lt=frm).count()
+
+        # delayed this week
+        delayed_checklist = Checklist.objects.filter(
+            assign_to=doer,
+            completed_at__date__range=(frm, to),
+            completed_at__gt=F('planned_date')
+        ).count()
+        delayed_delegation = 0
+
+        phone = getattr(doer.profile, 'phone', '')
+        dept  = getattr(doer.profile, 'department', '')
+        header = f"{doer.get_full_name().upper()} ({phone}) – {frm:%d %b, %Y} to {to:%d %b, %Y} [{dept}]"
+
     return render(request, 'reports/weekly_mis_score.html', {
-        'form': form,
-        'rows': rows,
+        'form':               form,
+        'rows':               rows,
+        'header':             header,
+        'total_hours':        total_hours,
+        'week_start':         week_start,
+        'pending_checklist':  pending_checklist,
+        'pending_delegation': pending_delegation,
+        'delayed_checklist':  delayed_checklist,
+        'delayed_delegation': delayed_delegation,
     })
-
-def get_checklist_score(doer, date_from, date_to):
-    checklist_all = Checklist.objects.filter(
-        assign_to=doer,
-        planned_date__date__range=[date_from, date_to]
-    )
-    
-    planned_all = checklist_all.count()
-    completed_all = checklist_all.filter(status='Completed').count()
-    not_completed_all = planned_all - completed_all
-    not_completed_pct_all = round((not_completed_all / planned_all * 100), 2) if planned_all > 0 else 0
-    
-    # Adjusting the logic for on-time completion without 'completed_date'
-    checklist_ontime = checklist_all.filter(
-        assign_to=doer,
-        planned_date__date__range=[date_from, date_to],
-        status='Completed'
-    )
-    
-    planned_ontime = planned_all
-    completed_ontime = checklist_ontime.count()
-    not_completed_ontime = planned_ontime - completed_ontime
-    not_completed_pct_ontime = round((not_completed_ontime / planned_ontime * 100), 2) if planned_ontime > 0 else 0
-    
-    return [
-        {
-            'task_type': 'All work should be done',
-            'planned_task': planned_all,
-            'completed_task': completed_all,
-            'not_completed_pct': not_completed_pct_all,
-        },
-        {
-            'task_type': 'All work should be done ontime',
-            'planned_task': planned_ontime,
-            'completed_task': completed_ontime,
-            'not_completed_pct': not_completed_pct_ontime,
-        }
-    ]
-
-def get_delegation_score(doer, date_from, date_to):
-    delegation_all = Delegation.objects.filter(
-        assign_to=doer,
-        planned_date__range=[date_from, date_to]
-    )
-    
-    planned_all = delegation_all.count()
-    completed_all = planned_all
-    not_completed_all = 0
-    not_completed_pct_all = 0
-    
-    return [
-        {
-            'task_type': 'All work should be done',
-            'planned_task': planned_all,
-            'completed_task': completed_all,
-            'not_completed_pct': not_completed_pct_all,
-        }
-    ]
-
-def get_fms_score(doer, date_from, date_to):
-    return [
-        {
-            'task_type': 'All work should be done',
-            'planned_task': 0,
-            'completed_task': 0,
-            'not_completed_pct': 0,
-        },
-        {
-            'task_type': 'All work should be done ontime',
-            'planned_task': 0,
-            'completed_task': 0,
-            'not_completed_pct': 0,
-        }
-    ]
-
-def get_audit_score(doer, date_from, date_to):
-    audit_all = HelpTicket.objects.filter(
-        assign_to=doer,
-        planned_date__date__range=[date_from, date_to]
-    )
-    
-    planned_all = audit_all.count()
-    completed_all = audit_all.filter(status='Closed').count()
-    not_completed_all = planned_all - completed_all
-    not_completed_pct_all = round((not_completed_all / planned_all * 100), 2) if planned_all > 0 else 0
-    
-    audit_ontime = HelpTicket.objects.filter(
-        assign_to=doer,
-        planned_date__date__range=[date_from, date_to],
-        status='Closed',
-        updated_at__lte=F('planned_date')
-    )
-    
-    planned_ontime = planned_all
-    completed_ontime = audit_ontime.count()
-    not_completed_ontime = planned_ontime - completed_ontime
-    not_completed_pct_ontime = round((not_completed_ontime / planned_ontime * 100), 2) if planned_ontime > 0 else 0
-    
-    return [
-        {
-            'task_type': 'All work should be done',
-            'planned_task': planned_all,
-            'completed_task': completed_all,
-            'not_completed_pct': not_completed_pct_all,
-        },
-        {
-            'task_type': 'All work should be done ontime',
-            'planned_task': planned_ontime,
-            'completed_task': completed_ontime,
-            'not_completed_pct': not_completed_pct_ontime,
-        }
-    ]
-
-def calculate_summary(checklist_data, delegation_data, fms_data, audit_data):
-    def get_avg_completion_rate(data):
-        if not data:
-            return 0.0
-        total_planned = sum(item['planned_task'] for item in data)
-        total_completed = sum(item['completed_task'] for item in data)
-        return round((total_completed / total_planned * 100), 2) if total_planned > 0 else 0.0
-    
-    checklist_avg = get_avg_completion_rate(checklist_data)
-    delegation_avg = get_avg_completion_rate(delegation_data)
-    fms_avg = get_avg_completion_rate(fms_data)
-    audit_avg = get_avg_completion_rate(audit_data)
-    
-    overall_avg = round((checklist_avg + delegation_avg + fms_avg + audit_avg) / 4, 2)
-    
-    checklist_ontime = checklist_data[1]['completed_task'] / checklist_data[1]['planned_task'] * 100 if checklist_data[1]['planned_task'] > 0 else 0
-    delegation_ontime = delegation_avg
-    fms_ontime = fms_avg
-    audit_ontime = audit_data[1]['completed_task'] / audit_data[1]['planned_task'] * 100 if audit_data[1]['planned_task'] > 0 else 0
-    overall_ontime = round((checklist_ontime + delegation_ontime + fms_ontime + audit_ontime) / 4, 2)
-    
-    return {
-        'checklist_avg': checklist_avg,
-        'delegation_avg': delegation_avg,
-        'fms_avg': fms_avg,
-        'audit_avg': audit_avg,
-        'overall_avg': overall_avg,
-        'checklist_ontime': round(checklist_ontime, 2),
-        'delegation_ontime': round(delegation_ontime, 2),
-        'fms_ontime': round(fms_ontime, 2),
-        'audit_ontime': round(audit_ontime, 2),
-        'overall_ontime': overall_ontime,
-    }
-
-def export_performance_csv(performance_data, header):
-    response = HttpResponse(content_type='text/csv')
-    response['Content-Disposition'] = 'attachment; filename="performance_report.csv"'
-    
-    writer = csv.writer(response)
-    writer.writerow([header])
-    writer.writerow([])
-    
-    if performance_data.get('checklist_score'):
-        writer.writerow(['Checklist Score'])
-        writer.writerow(['Task Type', 'Planned Task', 'Completed Task', '% Not Completed'])
-        for item in performance_data['checklist_score']:
-            writer.writerow([item['task_type'], item['planned_task'], item['completed_task'], item['not_completed_pct']])
-        writer.writerow([])
-    
-    if performance_data.get('delegation_score'):
-        writer.writerow(['Delegation Score'])
-        writer.writerow(['Task Type', 'Planned Task', 'Completed Task', '% Not Completed'])
-        for item in performance_data['delegation_score']:
-            writer.writerow([item['task_type'], item['planned_task'], item['completed_task'], item['not_completed_pct']])
-        writer.writerow([])
-    
-    if performance_data.get('fms_score'):
-        writer.writerow(['FMS Score'])
-        writer.writerow(['Task Type', 'Planned Task', 'Completed Task', '% Not Completed'])
-        for item in performance_data['fms_score']:
-            writer.writerow([item['task_type'], item['planned_task'], item['completed_task'], item['not_completed_pct']])
-        writer.writerow([])
-    
-    if performance_data.get('audit_score'):
-        writer.writerow(['Audit Score'])
-        writer.writerow(['Task Type', 'Planned Task', 'Completed Task', '% Not Completed'])
-        for item in performance_data['audit_score']:
-            writer.writerow([item['task_type'], item['planned_task'], item['completed_task'], item['not_completed_pct']])
-        writer.writerow([])
-    
-    if performance_data.get('summary'):
-        writer.writerow(['Summary'])
-        writer.writerow(['Average Score', 'Checklist', 'Delegation', 'FMS', 'Audit', 'Overall Average'])
-        summary = performance_data['summary']
-        writer.writerow(['% work should be done', summary['checklist_avg'], summary['delegation_avg'], summary['fms_avg'], summary['audit_avg'], summary['overall_avg']])
-        writer.writerow(['% work should be done ontime', summary['checklist_ontime'], summary['delegation_ontime'], summary['fms_ontime'], summary['audit_ontime'], summary['overall_ontime']])
-    
-    return response
 
 @login_required
 def performance_score(request):
     form = PCReportFilterForm(request.GET or None, user=request.user)
-    header = ''
-    performance_data = None
+    header             = ''
+    checklist_data     = []
+    delegation_data    = []
+    summary            = {}
+    time_checklist     = ''
+    time_delegation    = ''
+    total_hours        = ''
+    week_start         = None
+    pending_checklist  = pending_delegation = delayed_checklist = delayed_delegation = 0
 
     if form.is_valid() and (form.cleaned_data.get('doer') or not request.user.is_staff):
         doer = form.cleaned_data.get('doer') or request.user
-        date_from, date_to = get_week_dates(form.cleaned_data.get('date_from'), form.cleaned_data.get('date_to'))
+        frm, to = get_week_dates(form.cleaned_data.get('date_from'), form.cleaned_data.get('date_to'))
+        week_start = frm
 
-        phone = doer.profile.phone if hasattr(doer, 'profile') else ''
-        dept = doer.profile.department if hasattr(doer, 'profile') else ''
-        header = f"{doer.get_full_name().upper()}({phone})(DEPARTMENT - {dept}) - {ordinal(date_from.day)} {date_from.strftime('%b, %Y')} - {ordinal(date_to.day)} {date_to.strftime('%b, %Y')}"
+        # Checklist stats
+        qs = Checklist.objects.filter(assign_to=doer, planned_date__date__range=(frm, to))
+        p  = qs.count()
+        c  = qs.filter(status='Completed').count()
+        pct_not = round((p - c) / p * 100, 2) if p else 0
+        pct_on  = round((p - c) / p * 100, 2) if p else 0
+        checklist_data = [
+            {'task_type':'All work should be done',      'planned':p, 'completed':c, 'pct':pct_not},
+            {'task_type':'All work should be done ontime','planned':p, 'completed':c, 'pct':pct_on},
+        ]
 
-        checklist_data = get_checklist_score(doer, date_from, date_to)
-        delegation_data = get_delegation_score(doer, date_from, date_to)
-        fms_data = get_fms_score(doer, date_from, date_to)
-        audit_data = get_audit_score(doer, date_from, date_to)
+        # Delegation stats
+        qs2 = Delegation.objects.filter(assign_to=doer, planned_date__range=(frm, to))
+        p2  = qs2.count()
+        delegation_data = [
+            {'task_type':'All work should be done',      'planned':p2, 'completed':p2, 'pct':0},
+            {'task_type':'All work should be done ontime','planned':p2, 'completed':p2, 'pct':0},
+        ]
 
-        performance_data = {
-            'checklist_score': checklist_data,
-            'delegation_score': delegation_data,
-            'fms_score': fms_data,
-            'audit_score': audit_data,
-            'summary': calculate_summary(checklist_data, delegation_data, fms_data, audit_data)
+        # time
+        m_check = 0
+        for rec in qs:
+            m = rec.time_per_task_minutes or 0
+            if rec.mode == 'Daily':
+                sr = max(frm, rec.planned_date.date())
+                days = (to - sr).days + 1
+                occ  = (days + rec.frequency - 1)//rec.frequency
+            else:
+                occ = 1
+            m_check += m * occ
+        time_checklist = f"{m_check//60:02d}:{m_check%60:02d}"
+
+        m_deg = qs2.aggregate(total=Sum('time_per_task_minutes'))['total'] or 0
+        time_delegation = f"{m_deg//60:02d}:{m_deg%60:02d}"
+
+        total = m_check + m_deg
+        total_hours = f"{total//60:02d}:{total%60:02d}"
+
+        # summary
+        sa = round((c / p * 100), 2) if p else 0
+        so = sa
+        da = round((p2 / p2 * 100), 2) if p2 else 0
+        summary = {
+            'checklist_avg':     sa,
+            'checklist_ontime':  so,
+            'delegation_avg':    da,
+            'delegation_ontime': da,
+            'overall_avg':       round((sa + da)/2, 2),
+            'overall_ontime':    round((so + da)/2, 2),
         }
 
-        if request.GET.get('export') == 'csv':
-            return export_performance_csv(performance_data, header)
+        # pending & delayed
+        pending_checklist  = Checklist.objects.filter(assign_to=doer, planned_date__date__lt=frm, status='Pending').count()
+        pending_delegation = Delegation.objects.filter(assign_to=doer, planned_date__lt=frm).count()
+        delayed_checklist  = Checklist.objects.filter(
+            assign_to=doer,
+            completed_at__date__range=(frm, to),
+            completed_at__gt=F('planned_date')
+        ).count()
+        delayed_delegation = 0
+
+        phone = getattr(doer.profile, 'phone', '')
+        dept  = getattr(doer.profile, 'department', '')
+        header = f"{doer.get_full_name().upper()} ({phone}) – {frm:%d %b, %Y} to {to:%d %b, %Y} [{dept}]"
 
     return render(request, 'reports/performance_score.html', {
-        'form': form,
-        'header': header,
-        'performance_data': performance_data,
+        'form':               form,
+        'header':             header,
+        'checklist_data':     checklist_data,
+        'delegation_data':    delegation_data,
+        'time_checklist':     time_checklist,
+        'time_delegation':    time_delegation,
+        'summary':            summary,
+        'total_hours':        total_hours,
+        'week_start':         week_start,
+        'pending_checklist':  pending_checklist,
+        'pending_delegation': pending_delegation,
+        'delayed_checklist':  delayed_checklist,
+        'delayed_delegation': delayed_delegation,
     })
-
-@login_required
-def auditor_report(request):
-    form = PCReportFilterForm(request.GET or None, user=request.user)
-    return render(request, 'reports/auditor_report.html', {'form': form})
