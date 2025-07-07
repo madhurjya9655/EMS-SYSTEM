@@ -1,0 +1,6 @@
+Task Name,Message,Assign To,Planned Date,Priority,Make Attachment Mandatory,Mode,Frequency,Time per Task (minutes),Reminder Before Days,Assign PC,Notify To,Set Reminder,Reminder Mode,Reminder Frequency,Reminder Before Days,Reminder Starting Time,Checklist Auto Close,Checklist Auto Close Days
+Daily Backup,Run database backup,saurabh,7/1/2025 9:00,High,No,Daily,1,15,1,bob,charlie,Yes,Weekly,1,1,8:00,No,0
+Monthly Report,Compile & email sales report,amreen,7/5/2025 10:00,Medium,Yes,Monthly,1,30,2,,dan,No,,,0,,Yes,3
+System Audit,Review system logs,pankaj,7/3/2025 14:30,Low,No,Weekly,1,10,0,alice,,Yes,Daily,1,0,9:00,No,0
+,,SHOULD BE DROPDOWN LIST,,ONLY DD/MM/YYYY HH:MM:SS,,,SHOULD BE DROPDOWN LIST,SHOULD BE DROPDOWN LIST,SHOULD BE DROPDOWN LIST,SHOULD BE DROPDOWN LIST,,,SHOULD BE DROPDOWN LIST,SHOULD BE DROPDOWN LIST,,,,
+,,all Employees should be there in a Dropdown even when a new Employee will be add in a system then he willl be add in a dropdown,,,,,Day/Week/Month/Year,Low/Medium/High,Yes/No,Hours/Days,,,Employees are the Dropdown,Yes/No,,,,

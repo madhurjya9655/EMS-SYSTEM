@@ -1,5 +1,256 @@
-{% extends "tasks/tasks_base.html" %}
-{% block title %}Help Ticket Tasks{% endblock %}
-{% block tab_content %}
-{% include "tasks/partial_list_help_ticket.html" %}
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Help Tickets{% endblock %}
+
+{% block content %}
+  <div class="page-header mb-4 d-flex justify-content-between align-items-center">
+    <h1 class="h3">Help Tickets</h1>
+    <!-- now visible to every logged-in user -->
+    <a href="{% url 'tasks:add_help_ticket' %}" class="btn btn-primary">
+      <i class="fas fa-plus"></i> New Ticket
+    </a>
+  </div>
+
+  <!-- FILTER PANEL -->
+  <div class="mb-4">
+    <div class="card">
+      <div class="card-header"
+           data-bs-toggle="collapse"
+           data-bs-target="#filterPanel"
+           style="cursor:pointer;">
+        FILTER <i class="fas fa-minus float-end"></i>
+      </div>
+      <div id="filterPanel" class="collapse show">
+        <div class="card-body">
+          <form method="get" class="row g-3">
+            <div class="col-md-3">
+              <label class="form-label">From Date</label>
+              <input type="date" name="from_date"
+                     value="{{ request.GET.from_date }}"
+                     class="form-control">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">To Date</label>
+              <input type="date" name="to_date"
+                     value="{{ request.GET.to_date }}"
+                     class="form-control">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Assigned By</label>
+              <select name="assign_by" class="form-select">
+                <option value="all">All</option>
+                {% for u in users %}
+                  <option value="{{ u.id }}"
+                    {% if request.GET.assign_by|stringformat:"s" == u.id|stringformat:"s" %}
+                      selected
+                    {% endif %}>
+                    {{ u.get_full_name|default:u.username }}
+                  </option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Problem Solver</label>
+              <select name="assign_to" class="form-select">
+                <option value="all">All</option>
+                {% for u in users %}
+                  <option value="{{ u.id }}"
+                    {% if request.GET.assign_to|stringformat:"s" == u.id|stringformat:"s" %}
+                      selected
+                    {% endif %}>
+                    {{ u.get_full_name|default:u.username }}
+                  </option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Status</label>
+              <select name="status" class="form-select">
+                <option value="all">All</option>
+                {% for key,label in status_choices %}
+                  <option value="{{ key }}"
+                    {% if request.GET.status == key %}selected{% endif %}>
+                    {{ label }}
+                  </option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-12 text-end">
+              <button type="submit" class="btn btn-primary">Apply</button>
+              <a href="{% url 'tasks:list_help_ticket' %}"
+                 class="btn btn-secondary">Reset</a>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TABS -->
+  <div class="btn-group mb-3" role="group">
+    <a href="{% url 'tasks:list_help_ticket' %}"
+       class="btn btn-outline-primary {% if current_tab == 'all' %}active{% endif %}">
+      All
+    </a>
+    <a href="{% url 'tasks:assigned_to_me' %}"
+       class="btn btn-outline-primary {% if current_tab == 'assigned_to' %}active{% endif %}">
+      Assigned To Me
+    </a>
+    <a href="{% url 'tasks:assigned_by_me' %}"
+       class="btn btn-outline-primary {% if current_tab == 'assigned_by' %}active{% endif %}">
+      Assigned By Me
+    </a>
+  </div>
+
+  <!-- RESULTS TABLE -->
+  <div class="card">
+    <div class="card-body">
+      <div class="table-responsive">
+        <table class="table table-striped align-middle">
+          <thead>
+            <tr>
+              {% if current_tab == 'assigned_to' %}
+                <th>Ticket ID</th>
+                <th>Assigned By</th>
+                <th>Subject</th>
+                <th>Message</th>
+                <th>Assigned Date</th>
+                <th>Planned Date</th>
+                <th>Delay</th>
+                <th>Priority</th>
+                <th>Status</th>
+                <th>Attachment</th>
+                <th>Action / Resolved Note</th>
+
+              {% elif current_tab == 'assigned_by' %}
+                <th>Ticket ID</th>
+                <th>Problem Solver</th>
+                <th>Subject</th>
+                <th>Assigned Date</th>
+                <th>Planned Date</th>
+                <th>Resolved Date</th>
+                <th>Delay</th>
+                <th>Resolved By</th>
+                <th>Resolved Notes</th>
+                <th>Attachment</th>
+                <th>Note</th>
+                <th>Status</th>
+
+              {% else %}
+                <th>Ticket ID</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Planned Date</th>
+                <th>Status</th>
+                <th class="text-end">Actions</th>
+              {% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for ticket in items %}
+              <tr>
+                {% if current_tab == 'assigned_to' %}
+                  <td>{{ ticket.id }}</td>
+                  <td>{{ ticket.assign_by.get_full_name|default:ticket.assign_by.username }}</td>
+                  <td>{{ ticket.title }}</td>
+                  <td>{{ ticket.description|truncatewords:10 }}</td>
+                  <td>{{ ticket.created_at|date:"Y-m-d H:i" }}</td>
+                  <td>{{ ticket.planned_date|date:"Y-m-d H:i" }}</td>
+                  <td>{{ ticket.delay }}</td>
+                  <td>{{ ticket.priority }}</td>
+                  <td>{{ ticket.status }}</td>
+                  <td>
+                    {% if ticket.media_upload %}
+                      <a href="{{ ticket.media_upload.url }}" download>Download</a>
+                    {% else %}–{% endif %}
+                  </td>
+                  <td>
+                    {% if ticket.status == "Closed" %}
+                      {{ ticket.resolved_notes }}
+                    {% else %}
+                      <a href="{% url 'tasks:edit_help_ticket' ticket.pk %}"
+                         class="btn btn-sm btn-outline-secondary me-1">
+                        <i class="fas fa-edit"></i>
+                      </a>
+                      <a href="{% url 'tasks:delete_help_ticket' ticket.pk %}"
+                         class="btn btn-sm btn-outline-danger">
+                        <i class="fas fa-trash"></i>
+                      </a>
+                    {% endif %}
+                  </td>
+
+                {% elif current_tab == 'assigned_by' %}
+                  <td>{{ ticket.id }}</td>
+                  <td>{{ ticket.assign_to.get_full_name|default:ticket.assign_to.username }}</td>
+                  <td>{{ ticket.title }}</td>
+                  <td>{{ ticket.created_at|date:"Y-m-d H:i" }}</td>
+                  <td>{{ ticket.planned_date|date:"Y-m-d H:i" }}</td>
+                  <td>
+                    {% if ticket.resolved_at %}
+                      {{ ticket.resolved_at|date:"Y-m-d H:i" }}
+                    {% else %}–{% endif %}
+                  </td>
+                  <td>{{ ticket.delay }}</td>
+                  <td>
+                    {% if ticket.resolved_by %}
+                      {{ ticket.resolved_by.get_full_name|default:ticket.resolved_by.username }}
+                    {% else %}–{% endif %}
+                  </td>
+                  <td>{{ ticket.resolved_notes }}</td>
+                  <td>
+                    {% if ticket.media_upload %}
+                      <a href="{{ ticket.media_upload.url }}" download>Download</a>
+                    {% else %}–{% endif %}
+                  </td>
+                  <td>{{ ticket.note }}</td>
+                  <td>{{ ticket.status }}</td>
+
+                {% else %}
+                  <td>{{ ticket.id }}</td>
+                  <td>{{ ticket.assign_by.get_full_name|default:ticket.assign_by.username }}</td>
+                  <td>{{ ticket.assign_to.get_full_name|default:ticket.assign_to.username }}</td>
+                  <td>{{ ticket.planned_date|date:"Y-m-d H:i" }}</td>
+                  <td>{{ ticket.status }}</td>
+                  <td class="text-end">
+                    {% if can_create %}
+                      <a href="{% url 'tasks:edit_help_ticket' ticket.pk %}"
+                         class="btn btn-sm btn-outline-secondary">
+                        <i class="fas fa-edit"></i>
+                      </a>
+                      <a href="{% url 'tasks:delete_help_ticket' ticket.pk %}"
+                         class="btn btn-sm btn-outline-danger">
+                        <i class="fas fa-trash"></i>
+                      </a>
+                    {% endif %}
+                  </td>
+                {% endif %}
+              </tr>
+            {% empty %}
+              {# proper colspan per tab so no syntax errors #}
+              {% if current_tab == 'assigned_to' %}
+                <tr>
+                  <td colspan="11" class="text-center text-muted">
+                    No records found.
+                  </td>
+                </tr>
+              {% elif current_tab == 'assigned_by' %}
+                <tr>
+                  <td colspan="12" class="text-center text-muted">
+                    No records found.
+                  </td>
+                </tr>
+              {% else %}
+                <tr>
+                  <td colspan="6" class="text-center text-muted">
+                    No records found.
+                  </td>
+                </tr>
+              {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 {% endblock %}

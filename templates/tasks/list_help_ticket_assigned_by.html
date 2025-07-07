@@ -1,0 +1,65 @@
+{% extends "tasks/help_ticket_tasks_base.html" %}
+{% load static %}
+
+{% block title %}HELP TICKETS (ASSIGNED BY ME){% endblock %}
+
+{% block help_ticket_content %}
+  <div class="mb-3">
+    <div class="bg-primary text-white px-3 py-2 rounded">
+      FILTER
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-striped align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Ticket ID</th>
+              <th>Problem Solver</th>
+              <th>Subject</th>
+              <th>Assigned Date</th>
+              <th>Planned Date</th>
+              <th>Resolved Date</th>
+              <th>Delay</th>
+              <th>Resolved By</th>
+              <th>Resolved Notes</th>
+              <th>Attachment</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for ticket in items %}
+              <tr>
+                <td>HT-{{ ticket.id }}</td>
+                <td>{{ ticket.assign_to.get_full_name|default:ticket.assign_to.username }}</td>
+                <td>{{ ticket.title }}</td>
+                <td>{{ ticket.created_at|date:"d M, Y h:i A" }}</td>
+                <td>{{ ticket.planned_date|date:"d M, Y h:i A" }}</td>
+                <td>{{ ticket.resolved_at|date:"d M, Y h:i A" }}</td>
+                <td>{{ ticket.delay }}</td>
+                <td>{{ ticket.resolved_by.get_full_name|default:ticket.resolved_by.username }}</td>
+                <td class="text-wrap">{{ ticket.resolved_notes }}</td>
+                <td>
+                  {% if ticket.media_upload %}
+                    <a href="{{ ticket.media_upload.url }}" download>Download</a>
+                  {% else %}
+                    &ndash;
+                  {% endif %}
+                </td>
+                <td>{{ ticket.status }}</td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="11" class="text-center py-4 text-muted">
+                  No tickets assigned by you.
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endblock %}

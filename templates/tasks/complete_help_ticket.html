@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Complete Help Ticket{% endblock %}
+
+{% block content %}
+<div class="page-header mb-4">
+  <h2>Complete Help Ticket HT-{{ ticket.id }}</h2>
+</div>
+
+<form method="post" enctype="multipart/form-data">
+  {% csrf_token %}
+  {% if messages %}
+    {% for m in messages %}
+      <div class="alert alert-{{ m.tags }}">{{ m }}</div>
+    {% endfor %}
+  {% endif %}
+
+  <div class="mb-3">
+    <label class="form-label">Your Note <span class="text-danger">*</span></label>
+    <textarea name="resolved_notes"
+              class="form-control"
+              rows="4"
+              required>{{ ticket.resolved_notes }}</textarea>
+  </div>
+
+  <div class="mb-3">
+    <label class="form-label">Attachment (optional)</label>
+    <input type="file" name="media_upload" class="form-control">
+  </div>
+
+  <button type="submit" class="btn btn-success">Submit &amp; Close</button>
+  <a href="{{ request.GET.next|default:reverse('dashboard:home') }}?task_type=help_ticket"
+     class="btn btn-secondary">Cancel</a>
+</form>
+{% endblock %}

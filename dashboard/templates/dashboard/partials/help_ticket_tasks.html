@@ -1,29 +1,100 @@
-<div class="card shadow-sm">
-  <div class="card-header bg-white"><h5 class="mb-0">Help Ticket Tasks</h5></div>
+{# dashboard/partials/help_ticket_tasks.html #}
+{% load static %}
+
+<div class="card">
   <div class="card-body p-0">
-    <table class="table table-hover mb-0">
-      <thead class="table-light">
-        <tr>
-          <th>ID</th>
-          <th>Title</th>
-          <th>Planned Date</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for t in tasks %}
-        <tr>
-          <td>{{ t.id }}</td>
-          <td>{{ t.title }}</td>
-          <td>{{ t.planned_date|date:"Y-m-d H:i" }}</td>
-          <td>{{ t.status }}</td>
-        </tr>
-        {% empty %}
-        <tr>
-          <td colspan="4" class="text-center text-muted">No record found.</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="table-responsive">
+      <table class="table table-striped align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>
+              Ticket ID
+              <i class="fas fa-arrow-up text-danger small"></i>
+              <i class="fas fa-arrow-down text-primary small"></i>
+            </th>
+            <th>
+              Assigned By
+              <i class="fas fa-arrow-up text-danger small"></i>
+              <i class="fas fa-arrow-down text-primary small"></i>
+            </th>
+            <th>
+              Subject
+              <i class="fas fa-arrow-up text-danger small"></i>
+              <i class="fas fa-arrow-down text-primary small"></i>
+            </th>
+            <th>
+              Message
+              <i class="fas fa-arrow-up text-danger small"></i>
+              <i class="fas fa-arrow-down text-primary small"></i>
+            </th>
+            <th>
+              Assigned Date
+              <i class="fas fa-arrow-up text-danger small"></i>
+              <i class="fas fa-arrow-down text-primary small"></i>
+            </th>
+            <th>
+              Planned Date
+              <i class="fas fa-arrow-up text-danger small"></i>
+              <i class="fas fa-arrow-down text-primary small"></i>
+            </th>
+            <th>Delay</th>
+            <th>
+              Priority
+              <i class="fas fa-arrow-up text-danger small"></i>
+              <i class="fas fa-arrow-down text-primary small"></i>
+            </th>
+            <th>
+              Status
+              <i class="fas fa-arrow-up text-danger small"></i>
+              <i class="fas fa-arrow-down text-primary small"></i>
+            </th>
+            <th>Attachment</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in tasks %}
+            <tr>
+              <td>HT-{{ item.id }}</td>
+              <td>{{ item.assign_by.get_full_name|default:item.assign_by.username }}</td>
+              <td>{{ item.title }}</td>
+              <td>{{ item.description|truncatewords:10 }}</td>
+              <td>{{ item.created_at|date:"d M, Y h:i A" }}</td>
+              <td>{{ item.planned_date|date:"d M, Y h:i A" }}</td>
+              <td>{{ item.delay }}</td>
+              <td>{{ item.priority }}</td>
+              <td>{{ item.status }}</td>
+              <td>
+                {% if item.media_upload %}
+                  <a href="{{ item.media_upload.url }}" download>Download</a>
+                {% else %}
+                  &ndash;
+                {% endif %}
+              </td>
+              <td class="d-flex gap-2">
+                <a
+                  href="{% url 'tasks:note_help_ticket' item.id %}?next={{ request.path }}"
+                  class="btn btn-sm btn-primary">
+                  NOTE
+                </a>
+                {% if item.status != "Closed" %}
+                  <a
+                    href="{% url 'tasks:note_help_ticket' item.id %}?next={{ request.path }}"
+                    class="btn btn-sm btn-success">
+                    COMPLETE
+                  </a>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="11" class="text-center text-muted py-4">
+                No tickets to show.
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>

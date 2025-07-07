@@ -1,75 +1,37 @@
 {% extends "base.html" %}
-{% block title %}Company Holidays{% endblock %}
-
+{% block title %}Holiday List{% endblock %}
 {% block content %}
-<div class="page-header">
-  <h1 class="page-title">Holiday List</h1>
-</div>
+<div class="page-header mb-4"><h2>Holiday List</h2></div>
+<div class="card mb-5">
+  <div class="card-body">
+    <form method="post" class="row g-3 mb-4">{% csrf_token %}
+      {{ add_form.management_form }}
+      <div class="col-md-4">{{ add_form.date.label_tag }}{{ add_form.date }}</div>
+      <div class="col-md-4">{{ add_form.name.label_tag }}{{ add_form.name }}</div>
+      <div class="col-auto"><button name="add-date" class="btn btn-primary">Add</button></div>
+    </form>
 
-<div class="row mb-4">
-  <!-- manual add -->
-  <div class="col-md-6">
-    <div class="card">
-      <div class="card-header bg-primary text-white">Add Holiday</div>
-      <div class="card-body">
-        <form method="post">
-          {% csrf_token %}
-          {{ add_form.management_form }}
-          <div class="mb-3">
-            {{ add_form.date.label_tag }} {{ add_form.date }}
-          </div>
-          <div class="mb-3">
-            {{ add_form.name.label_tag }} {{ add_form.name }}
-          </div>
-          <button class="btn btn-primary">Save</button>
-        </form>
-      </div>
-    </div>
-  </div>
+    <form method="post" enctype="multipart/form-data" class="row g-3 mb-4">{% csrf_token %}
+      {{ upload_form.management_form }}
+      <div class="col-md-6">{{ upload_form.file.label_tag }}{{ upload_form.file }}</div>
+      <div class="col-auto"><button class="btn btn-secondary">Upload</button></div>
+    </form>
 
-  <!-- batch upload -->
-  <div class="col-md-6">
-    <div class="card">
-      <div class="card-header bg-secondary text-white">Upload via Excel/CSV</div>
-      <div class="card-body">
-        <form method="post" enctype="multipart/form-data">
-          {% csrf_token %}
-          {{ upload_form.management_form }}
-          <div class="mb-3">
-            {{ upload_form.file.label_tag }} {{ upload_form.file }}
-          </div>
-          <button class="btn btn-secondary">Upload</button>
-        </form>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="card">
-  <div class="table-responsive">
-    <table class="table table-hover mb-0">
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Name</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
+    <table class="table">
+      <thead><tr><th>Date</th><th>Name</th><th>Actions</th></tr></thead>
       <tbody>
         {% for h in holidays %}
         <tr>
-          <td>{{ h.date|date:"Y-m-d" }}</td>
+          <td>{{ h.date }}</td>
           <td>{{ h.name }}</td>
           <td>
-            <a href="{% url 'settings:holiday_delete' h.pk %}"
-               class="btn btn-sm btn-danger"
-               onclick="return confirm('Remove this holiday?');">
-              <i class="fas fa-trash"></i>
+            <a href="{% url 'settings:holiday_delete' h.pk %}" class="btn btn-sm btn-danger">
+              Delete
             </a>
           </td>
         </tr>
         {% empty %}
-        <tr><td colspan="3" class="text-center text-muted">No holidays defined.</td></tr>
+        <tr><td colspan="3">No holidays yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>

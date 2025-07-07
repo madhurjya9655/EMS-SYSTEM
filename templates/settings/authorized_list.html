@@ -1,53 +1,29 @@
 {% extends "base.html" %}
 {% block title %}Authorized Numbers{% endblock %}
-
 {% block content %}
-<div class="page-header">
-  <h1 class="page-title">Authorized Numbers</h1>
-</div>
-
-<div class="card mb-4">
+<div class="page-header mb-4"><h2>Authorized Numbers</h2></div>
+<div class="card mb-5">
   <div class="card-body">
-    <form method="post" class="row g-3 align-items-end">
-      {% csrf_token %}
-      <div class="col-md-5">
-        {{ form.label.label_tag }} {{ form.label }}
-      </div>
-      <div class="col-md-5">
-        {{ form.number.label_tag }} {{ form.number }}
-      </div>
-      <div class="col-md-2 text-end">
-        <button class="btn btn-primary">Add</button>
-      </div>
+    <form method="post" class="row g-3 mb-4">{% csrf_token %}
+      <div class="col-md-4">{{ form.label.label_tag }}{{ form.label }}</div>
+      <div class="col-md-4">{{ form.number.label_tag }}{{ form.number }}</div>
+      <div class="col-auto"><button class="btn btn-primary">Add</button></div>
     </form>
-  </div>
-</div>
-
-<div class="card">
-  <div class="table-responsive">
-    <table class="table table-hover mb-0">
-      <thead>
-        <tr>
-          <th>Label</th>
-          <th>Number</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
+    <table class="table">
+      <thead><tr><th>Label</th><th>Number</th><th>Actions</th></tr></thead>
       <tbody>
         {% for num in numbers %}
         <tr>
           <td>{{ num.label }}</td>
           <td>{{ num.number }}</td>
           <td>
-            <a href="{% url 'settings:authorized_delete' num.pk %}"
-               class="btn btn-sm btn-danger"
-               onclick="return confirm('Delete this number?');">
-              <i class="fas fa-trash"></i>
+            <a href="{% url 'settings:authorized_delete' num.pk %}" class="btn btn-sm btn-danger">
+              Delete
             </a>
           </td>
         </tr>
         {% empty %}
-        <tr><td colspan="3" class="text-center text-muted">No authorized numbers.</td></tr>
+        <tr><td colspan="3">No numbers yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>

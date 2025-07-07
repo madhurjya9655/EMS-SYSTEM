@@ -7,7 +7,7 @@ from .models import Profile
 
 UserModel = get_user_model()
 
-# your hard-coded departments
+# hard-coded departments
 DEPARTMENT_CHOICES = [
     ('', 'Select One'),
     ('FINANCE', 'FINANCE'),
@@ -16,22 +16,51 @@ DEPARTMENT_CHOICES = [
     ('SALES OPERATION TEAM', 'SALES OPERATION TEAM'),
 ]
 
-# your existing module choices
+# all of your current + missing menu options
 MODULE_CHOICES = [
-    ('leave_apply',       'Leave Apply'),
-    ('leave_list',        'Leave List'),
-    ('reimbursement_apply','Reimbursement Apply'),
-    ('reimbursement_list','Reimbursement List'),
-    ('pettycash_apply',   'Petty-Cash Apply'),
-    ('pettycash_list',    'Petty-Cash List'),
-    ('sales_plan_add',    'Add Sales Plan'),
-    ('sales_plan_list',   'List Sales Plan'),
-    ('tasks_add_checklist','Add Checklist'),
-    ('tasks_list_checklist','List Checklist'),
-    ('tasks_add_delegation','Add Delegation'),
-    ('tasks_list_delegation','List Delegation'),
-    ('reports_doer_tasks','View Doer Tasks Report'),
-    ('reports_performance_score','View Performance Score'),
+    # Leave
+    ('leave_apply',           'Leave Apply'),
+    ('leave_list',            'Leave List'),
+
+    # Master Tasks
+    ('tasks_list_checklist',  'List Checklist'),
+    ('tasks_add_checklist',   'Add Checklist'),
+    ('tasks_list_delegation', 'List Delegation'),
+    ('tasks_add_delegation',  'Add Delegation'),
+    ('tasks_bulk_upload',     'Bulk Upload'),
+
+    # Help Ticket
+    ('help_ticket_list',          'List All Tickets'),
+    ('help_ticket_add',           'Add Ticket'),
+    ('help_ticket_assigned_to',   'Assigned to Me'),
+    ('help_ticket_assigned_by',   'Assigned by Me'),
+
+    # Petty Cash
+    ('pettycash_apply',       'Petty-Cash Apply'),
+    ('pettycash_list',        'Petty-Cash List'),
+
+    # Sales
+    ('sales_plan_add',        'Add Sales Plan'),
+    ('sales_plan_list',       'List Sales Plan'),
+    ('sales_dashboard',       'Dashboard'),
+
+    # Reimbursement
+    ('reimbursement_apply',   'Reimbursement Apply'),
+    ('reimbursement_list',    'Reimbursement List'),
+
+    # Reports
+    ('reports_doer_tasks',          'Doer Tasks'),
+    ('reports_weekly_mis_score',    'Weekly MIS Score'),
+    ('reports_performance_score',   'Performance Score'),
+
+    # Users
+    ('users_list',            'List Users'),
+    ('users_add',             'Add User'),
+
+    # Settings
+    ('settings_authorized_numbers', 'Authorized Numbers'),
+    ('settings_holiday_list',       'Holiday List'),
+    ('settings_system_settings',    'System Settings'),
 ]
 
 class CustomAuthForm(AuthenticationForm):

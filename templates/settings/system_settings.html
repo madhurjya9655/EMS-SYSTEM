@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}System Settings{% endblock %}
+{% block content %}
+<div class="page-header mb-4"><h2>System Settings</h2></div>
+<form method="post" enctype="multipart/form-data" class="card p-4">
+  {% csrf_token %}
+  {{ form.non_field_errors }}
+
+  {# WhatsApp API #}
+  <div class="mb-4">
+    <h5 class="text-primary">WhatsApp API</h5>
+    <div class="row g-3">
+      <div class="col-md-3">{{ form.whatsapp_vendor.label_tag }}{{ form.whatsapp_vendor }}</div>
+      <div class="col-md-3">{{ form.whatsapp_api_key.label_tag }}{{ form.whatsapp_api_key }}</div>
+      <div class="col-md-3">{{ form.whatsapp_sender_id.label_tag }}{{ form.whatsapp_sender_id }}</div>
+      <div class="col-md-3">{{ form.whatsapp_webhook_url.label_tag }}{{ form.whatsapp_webhook_url }}</div>
+    </div>
+  </div><hr>
+
+  {# Authorized Channels & MIS toggles #}
+  <div class="mb-4">
+    <h5 class="text-primary">Authorized & MIS Delivery</h5>
+    <div class="row g-3">
+      <div class="col-md-6">
+        {{ form.authorized_phones.label_tag }}{{ form.authorized_phones }}
+        {% if form.authorized_phones.help_text %}<small class="form-text text-muted">{{ form.authorized_phones.help_text }}</small>{% endif %}
+      </div>
+      <div class="col-md-6">
+        {{ form.authorized_emails.label_tag }}{{ form.authorized_emails }}
+        {% if form.authorized_emails.help_text %}<small class="form-text text-muted">{{ form.authorized_emails.help_text }}</small>{% endif %}
+      </div>
+      <div class="col-md-4">
+        <label>Daily MIS</label><br>
+        {{ form.send_daily_doer }} {{ form.send_daily_doer.label_tag }}<br>
+        {{ form.send_daily_admin }} {{ form.send_daily_admin.label_tag }}
+      </div>
+      <div class="col-md-4">
+        <label>Weekly MIS</label><br>
+        {{ form.send_weekly_doer }} {{ form.send_weekly_doer.label_tag }}<br>
+        {{ form.send_weekly_admin }} {{ form.send_weekly_admin.label_tag }}
+      </div>
+      <div class="col-md-4">
+        <label>Monthly MIS</label><br>
+        {{ form.send_monthly_doer }} {{ form.send_monthly_doer.label_tag }}<br>
+        {{ form.send_monthly_admin }} {{ form.send_monthly_admin.label_tag }}
+      </div>
+      <div class="col-md-6">
+        <label>WhatsApp Pending Checklist</label><br>
+        {{ form.notify_wapp_pending_checklist }} {{ form.notify_wapp_pending_checklist.label_tag }}
+      </div>
+      <div class="col-md-6">
+        <label>WhatsApp Pending Delegation</label><br>
+        {{ form.notify_wapp_pending_delegation }} {{ form.notify_wapp_pending_delegation.label_tag }}
+      </div>
+      <div class="col-md-6">
+        <label>Email Pending Checklist</label><br>
+        {{ form.notify_email_pending_checklist }} {{ form.notify_email_pending_checklist.label_tag }}
+      </div>
+      <div class="col-md-6">
+        <label>Email Pending Delegation</label><br>
+        {{ form.notify_email_pending_delegation }} {{ form.notify_email_pending_delegation.label_tag }}
+      </div>
+    </div>
+  </div><hr>
+
+  {# Performance weightage #}
+  <div class="mb-4">
+    <h5 class="text-primary">MIS Performance Weightage</h5>
+    {{ form.mis_performance_mode.label_tag }} {{ form.mis_performance_mode }}
+    <div class="row g-3 mt-2">
+      <div class="col-md-4">{{ form.checklist_weightage.label_tag }}{{ form.checklist_weightage }}</div>
+      <div class="col-md-4">{{ form.delegation_weightage.label_tag }}{{ form.delegation_weightage }}</div>
+      <div class="col-md-4">{{ form.fms_weightage.label_tag }}{{ form.fms_weightage }}</div>
+    </div>
+    <div class="mt-3">
+      <label>Priority Weight</label><br>
+      {{ form.weight_low.label_tag }} {{ form.weight_low }}
+      {{ form.weight_medium.label_tag }} {{ form.weight_medium }}
+      {{ form.weight_high.label_tag }} {{ form.weight_high }}
+    </div>
+  </div><hr>
+
+  {# Gmail SMTP #}
+  <div class="mb-4">
+    <h5 class="text-primary">Gmail SMTP</h5>
+    <div class="row g-3">
+      <div class="col-md-4">{{ form.smtp_from_name.label_tag }}{{ form.smtp_from_name }}</div>
+      <div class="col-md-4">{{ form.smtp_username.label_tag }}{{ form.smtp_username }}</div>
+      <div class="col-md-4">{{ form.smtp_password.label_tag }}{{ form.smtp_password }}</div>
+    </div>
+    <button type="button" class="btn btn-sm btn-success mt-2">CHECK SMTP</button>
+  </div><hr>
+
+  {# IMS #}
+  <div class="mb-4">
+    <h5 class="text-primary">IMS Notifications</h5>
+    <div class="row g-3">
+      <div class="col-md-4">{{ form.high_stock_notification_freq.label_tag }}{{ form.high_stock_notification_freq }} Days</div>
+      <div class="col-md-4">{{ form.low_stock_notification_freq.label_tag }}{{ form.low_stock_notification_freq }} Days</div>
+      <div class="col-md-4">{{ form.stockout_notification_freq.label_tag }}{{ form.stockout_notification_freq }} Days</div>
+      <div class="col-md-4">{{ form.max_fast_flowing_product.label_tag }}{{ form.max_fast_flowing_product }}</div>
+      <div class="col-md-4">{{ form.max_slow_flowing_product.label_tag }}{{ form.max_slow_flowing_product }}</div>
+    </div>
+  </div><hr>
+
+  {# WhatsApp Marketing #}
+  <div class="mb-4">
+    <h5 class="text-primary">WhatsApp Marketing</h5>
+    <div class="row g-3">
+      <div class="col-md-4">{{ form.marketing_mode.label_tag }}{{ form.marketing_mode }}</div>
+      <div class="col-md-8">
+        <label>Freeze / To / Minutes After Sending</label><br>
+        {{ form.marketing_freeze_min }} to {{ form.marketing_freeze_max }} then after {{ form.marketing_after_sending }} minutes
+      </div>
+      <div class="col-md-8">
+        <label>Sleep Time Min / Max (minutes)</label><br>
+        {{ form.marketing_sleep_min }} to {{ form.marketing_sleep_max }}
+      </div>
+    </div>
+  </div><hr>
+
+  {# Logo #}
+  <div class="mb-4">
+    <h5 class="text-primary">Display Logo</h5>
+    <div class="row g-3">
+      <div class="col-md-6">{{ form.logo.label_tag }}{{ form.logo }}</div>
+      <div class="col-md-6">
+        {% if form.instance.logo %}
+          <p>Current logo:</p>
+          <img src="{{ form.instance.logo.url }}" style="max-height:80px;">
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="text-end">
+    <button type="submit" class="btn btn-primary px-5">Save</button>
+  </div>
+</form>
+{% endblock %}

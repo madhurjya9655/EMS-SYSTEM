@@ -1,0 +1,4 @@
+Task Name,Message,Assign To,Planned Date,Priority,Make Attachment Mandatory,Mode,Frequency,Time per Task (minutes),Reminder Before Days,Assign PC,Notify To,Set Reminder,Reminder Mode,Reminder Frequency,Reminder Starting Time,Checklist Auto Close,Checklist Auto Close Days
+Daily Backup,Run database backup,madhurjya,7/1/2025 9:00,High,No,Daily,1,15,bob,charlie,Yes,Weekly,1,8:00,No,0:00,
+Monthly Report,Compile & email sales report,amreen,7/5/2025 10:00,Medium,Yes,Monthly,1,30,,dan,No,,0,Yes,3,,
+,,,,,,,,,,,,,,,,,

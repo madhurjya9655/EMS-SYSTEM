@@ -1,4 +1,4 @@
-{% load static group_tags %}
+{% load static group_tags permission_tags %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -96,45 +96,10 @@
       margin-bottom: 2rem; border: 1px solid #f1f5f9;
     }
     .page-title { font-size: 1.8rem; font-weight: 700; color: #1e293b; margin-bottom: 0.5rem; }
-    .page-subtitle { color: #64748b; font-size: 1rem; }
-    .content-card {
-      background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-      border: 1px solid #f1f5f9; overflow: hidden;
+    footer {
+      background: white; border-top: 1px solid #f1f5f9; text-align: center;
+      padding: 1.5rem; color: #64748b; font-size: 0.9rem; margin-top: 2rem;
     }
-    .card-header {
-      padding: 1.5rem 2rem; border-bottom: 1px solid #f1f5f9;
-      background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-      display: flex; justify-content: between; align-items: center;
-    }
-    .card-title { font-size: 1.1rem; font-weight: 600; color: #1e293b; }
-    .table-responsive { background: white; }
-    .table { margin: 0; border-collapse: separate; border-spacing: 0; }
-    .table th {
-      background: #f8fafc; padding: 1rem 1.5rem; font-weight: 600;
-      color: #475569; font-size: 0.85rem; text-transform: uppercase;
-      letter-spacing: 0.5px; border-bottom: 1px solid #e2e8f0;
-    }
-    .table td {
-      padding: 1rem 1.5rem; border-bottom: 1px solid #f1f5f9; color: #334155;
-    }
-    .table tbody tr:hover { background: #f8fafc; transition: background 0.2s ease; }
-    .btn-primary {
-      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
-      border: none; padding: 0.7rem 1.5rem; border-radius: 8px;
-      font-weight: 500; transition: all 0.2s ease;
-      box-shadow: 0 2px 8px rgba(79, 70, 229, 0.2);
-    }
-    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(79, 70, 229, 0.3); }
-    .sidebar-overlay {
-      display: none; position: fixed; top: var(--header-height); left: 0;
-      width: 100%; height: calc(100vh - var(--header-height));
-      background: rgba(0, 0, 0, 0.5); z-index: 850; backdrop-filter: blur(4px);
-    }
-    .sidebar-overlay.show { display: block; }
-    .sidebar::-webkit-scrollbar { width: 4px; }
-    .sidebar::-webkit-scrollbar-track { background: #f1f5f9; }
-    .sidebar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
-    .sidebar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
     @media (max-width: 768px) {
       .mobile-toggle { display: block; }
       .branch-select, .user-menu span:first-child { display: none; }
@@ -143,14 +108,11 @@
       .main-content { margin-left: 0; padding: 1rem; }
       .page-header { padding: 1.5rem; }
     }
-    footer {
-      background: white; border-top: 1px solid #f1f5f9; text-align: center;
-      padding: 1.5rem; color: #64748b; font-size: 0.9rem; margin-top: 2rem;
-    }
   </style>
 </head>
 <body>
   {% if user.is_authenticated %}
+    <!-- Header -->
     <div class="header">
       <div class="logo">
         <button class="mobile-toggle" onclick="toggleSidebar()"><i class="fas fa-bars"></i></button>
@@ -174,9 +136,11 @@
       </div>
     </div>
 
+    <!-- Sidebar -->
     <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
     <nav class="sidebar" id="sidebar">
       <div class="nav-section">
+
         <!-- Dashboard -->
         <a href="{% url 'dashboard:home' %}"
            class="nav-item {% if request.resolver_match.app_name == 'dashboard' and request.resolver_match.url_name == 'home' %}active{% endif %}">
@@ -217,33 +181,68 @@
           <i class="fas fa-tasks"></i> Master Tasks <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="masterTasksSubmenu" style="display:none;">
+          {% if user|has_permission:"tasks_list_checklist" %}
           <a href="{% url 'tasks:list_checklist' %}"
              class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}active{% endif %}">
             <i class="fas fa-clipboard-list"></i> List Checklist
           </a>
+          {% endif %}
+          {% if user|has_permission:"tasks_add_checklist" %}
           <a href="{% url 'tasks:add_checklist' %}"
              class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_checklist' %}active{% endif %}">
             <i class="fas fa-clipboard-plus"></i> Add Checklist
           </a>
+          {% endif %}
+          {% if user|has_permission:"tasks_list_delegation" %}
           <a href="{% url 'tasks:list_delegation' %}"
              class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_delegation' %}active{% endif %}">
             <i class="fas fa-user-clock"></i> List Delegation
           </a>
+          {% endif %}
+          {% if user|has_permission:"tasks_add_delegation" %}
           <a href="{% url 'tasks:add_delegation' %}"
              class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_delegation' %}active{% endif %}">
             <i class="fas fa-user-plus"></i> Add Delegation
           </a>
+          {% endif %}
+          {% if user|has_permission:"tasks_bulk_upload" %}
           <a href="{% url 'tasks:bulk_upload' %}"
              class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'bulk_upload' %}active{% endif %}">
             <i class="fas fa-upload"></i> Bulk Upload
           </a>
+          {% endif %}
         </div>
 
         <!-- Help Ticket -->
-        <a href="{% url 'tasks:list_help_ticket' %}"
-           class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_help_ticket' %}active{% endif %}">
-          <i class="fas fa-question-circle"></i> Help Ticket
-        </a>
+        <button class="nav-item" onclick="toggleSubmenu('helpTicketSubmenu')">
+          <i class="fas fa-question-circle"></i> Help Ticket <i class="fas fa-chevron-down chevron"></i>
+        </button>
+        <div class="submenu" id="helpTicketSubmenu" style="display:none;">
+          {% if user|has_permission:"help_ticket_list" %}
+          <a href="{% url 'tasks:list_help_ticket' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_help_ticket' %}active{% endif %}">
+            <i class="fas fa-list"></i> List All Tickets
+          </a>
+          {% endif %}
+          {% if user|has_permission:"help_ticket_add" %}
+          <a href="{% url 'tasks:add_help_ticket' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_help_ticket' %}active{% endif %}">
+            <i class="fas fa-plus-circle"></i> Add Ticket
+          </a>
+          {% endif %}
+          {% if user|has_permission:"help_ticket_assigned_to" %}
+          <a href="{% url 'tasks:assigned_to_me' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_to_me' %}active{% endif %}">
+            <i class="fas fa-user-clock"></i> Assigned to Me
+          </a>
+          {% endif %}
+          {% if user|has_permission:"help_ticket_assigned_by" %}
+          <a href="{% url 'tasks:assigned_by_me' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_by_me' %}active{% endif %}">
+            <i class="fas fa-user-plus"></i> Assigned by Me
+          </a>
+          {% endif %}
+        </div>
 
         <!-- Petty Cash -->
         <button class="nav-item" onclick="toggleSubmenu('pettyCashSubmenu')">
@@ -336,7 +335,6 @@
         </div>
 
         {% if user.is_superuser %}
-        <!-- Users -->
         <button class="nav-item" onclick="toggleSubmenu('usersSubmenu')">
           <i class="fas fa-user-friends"></i> Users <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -364,6 +362,10 @@
           <a href="{% url 'settings:holiday_list' %}"
              class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}active{% endif %}">
             <i class="fas fa-calendar-day"></i> Holiday List
+          </a>
+          <a href="{% url 'settings:system_settings' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}active{% endif %}">
+            <i class="fas fa-sliders-h"></i> System Settings
           </a>
         </div>
 
@@ -428,7 +430,8 @@
             const submenu = item.closest('.submenu');
             if (submenu) {
               submenu.style.display = 'block';
-              submenu.previousElementSibling.querySelector('.chevron').style.transform = 'rotate(180deg)';
+              submenu.previousElementSibling
+                     .querySelector('.chevron').style.transform = 'rotate(180deg)';
             }
           }
         });

@@ -1,15 +1,20 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% block title %}Logged Out{% endblock %}
 
 {% block content %}
-<div class="content-card" style="max-width:400px; margin:3rem auto;">
-  <div class="card-header">
-    <h2 class="page-title">Logged Out</h2>
+<div class="container text-center py-5">
+  <img src="{% static 'images/bos logo.png' %}"
+       alt="BOS EMS Logo"
+       style="height:80px; margin-bottom:1.5rem;">
+
+  <div class="alert alert-success shadow-sm">
+    <strong>Success!</strong> You have been logged out.
   </div>
-  <div class="card-body text-center">
-    <p>You have been successfully logged out.</p>
-    <a href="{% url 'login' %}" class="btn btn-primary">Log in again</a>
-  </div>
+
+  <a href="{% url 'login' %}" class="btn btn-primary mt-3">
+    Sign in again
+  </a>
 </div>
 {% endblock %}

@@ -1,0 +1,24 @@
+{# templates/tasks/help_ticket_tasks_base.html #}
+{% extends "base.html" %}
+{% block content %}
+  <div class="page-header mb-4"><h2>Help Ticket</h2></div>
+  <div class="d-flex gap-3 mb-4">
+    <a href="{% url 'tasks:list_help_ticket' %}"
+       class="btn btn-outline-secondary {% if current_tab == 'all' %}active{% endif %}">
+      List All Help Ticket
+    </a>
+    <a href="{% url 'tasks:add_help_ticket' %}"
+       class="btn btn-outline-secondary {% if current_tab == 'add' %}active{% endif %}">
+      Add New Ticket
+    </a>
+    <a href="{% url 'tasks:assigned_to_me' %}"
+       class="btn btn-outline-secondary {% if current_tab == 'assigned_to' %}active{% endif %}">
+      Assigned to Me
+    </a>
+    <a href="{% url 'tasks:assigned_by_me' %}"
+       class="btn btn-outline-secondary {% if current_tab == 'assigned_by' %}active{% endif %}">
+      Assigned by Me
+    </a>
+  </div>
+  {% block help_ticket_content %}{% endblock %}
+{% endblock %}

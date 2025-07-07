@@ -1,0 +1,45 @@
+{# templates/tasks/note_help_ticket.html #}
+{% extends "base.html" %}
+{% load static %}
+
+{% block content %}
+<div class="container py-5">
+  <h2 class="mb-4">
+    {% if ticket.status != "Closed" %}
+      Add Note &amp; Close HT-{{ ticket.id }}
+    {% else %}
+      Edit Note for HT-{{ ticket.id }}
+    {% endif %}
+  </h2>
+
+  <form method="post"
+        enctype="multipart/form-data"
+        action="?next={{ next }}">
+    {% csrf_token %}
+    <div class="mb-3">
+      <label for="resolved_notes" class="form-label">Your Note</label>
+      <textarea id="resolved_notes"
+                name="resolved_notes"
+                class="form-control"
+                rows="6"
+                required>{{ ticket.resolved_notes }}</textarea>
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">Attachment (optional)</label>
+      <input type="file"
+             name="media_upload"
+             class="form-control">
+    </div>
+
+    <button type="submit" class="btn btn-primary">
+      {% if ticket.status != "Closed" %}
+        Submit Note &amp; Close
+      {% else %}
+        Update Note
+      {% endif %}
+    </button>
+    <a href="{{ next }}" class="btn btn-secondary ms-2">Cancel</a>
+  </form>
+</div>
+{% endblock %}
