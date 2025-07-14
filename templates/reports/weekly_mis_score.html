@@ -4,10 +4,7 @@
 {% block title %}Weekly MIS Score{% endblock %}
 
 {% block content %}
-<link
-  rel="stylesheet"
-  href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css"
-/>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css"/>
 
 <div class="container-fluid px-0">
   <!-- FILTERS CARD -->
@@ -15,131 +12,214 @@
     <div class="card-body">
       <form method="get" class="row gx-3 gy-2 align-items-center mb-4">
         <div class="col-md-3">
-          <label class="form-label">
-            <i class="fas fa-user me-1"></i> Doer Name:
-          </label>
+          <label class="form-label"><i class="fas fa-user me-1"></i> Doer Name:</label>
           {{ form.doer|add_class:"form-select" }}
         </div>
         <div class="col-md-3">
-          <label class="form-label">
-            <i class="fas fa-calendar me-1"></i> From:
-          </label>
+          <label class="form-label"><i class="fas fa-calendar me-1"></i> From:</label>
           {{ form.date_from|add_class:"form-control" }}
         </div>
         <div class="col-md-3">
-          <label class="form-label">
-            <i class="fas fa-calendar me-1"></i> To:
-          </label>
+          <label class="form-label"><i class="fas fa-calendar me-1"></i> To:</label>
           {{ form.date_to|add_class:"form-control" }}
         </div>
         <div class="col-md-3">
-          <label class="form-label">
-            <i class="fas fa-building me-1"></i> Department:
-          </label>
+          <label class="form-label"><i class="fas fa-building me-1"></i> Department:</label>
           {{ form.department|add_class:"form-select" }}
         </div>
-        <div class="col-12 text-end">
-          <button type="submit" class="btn btn-primary me-2">Submit</button>
-          <button type="button" class="btn btn-danger me-2" onclick="window.print()">Print</button>
-          <button type="button" class="btn btn-success me-2" onclick="exportCSV()">Export CSV</button>
-          <button type="button" class="btn btn-danger" onclick="compactPrint()">Compact Print</button>
+        <div class="col-12 mt-3">
+          <button type="submit" class="btn btn-primary">SUBMIT</button>
+          <button type="button" class="btn btn-danger ms-2">PRINT</button>
+          <button type="button" class="btn btn-success ms-2">EXPORT CSV</button>
+          <button type="button" class="btn btn-danger ms-2">COMPACT PRINT</button>
         </div>
       </form>
       {% if header %}
-      <h5 class="mb-0">
-        <i class="fas fa-info-circle me-1"></i>{{ header }}
-      </h5>
+      <h5 class="mb-0 mt-4"><i class="fas fa-info-circle me-1"></i>{{ header }}</h5>
+      {% endif %}
+      {% if commitment_message %}
+      <div class="alert alert-success mt-2">{{ commitment_message }}</div>
       {% endif %}
     </div>
   </div>
 
-  <!-- CATEGORY CARDS -->
-  {% for r in rows %}
-  <div class="card mb-4">
-    <div class="card-header">{{ r.category }} Score</div>
-    <div class="table-responsive">
-      <table class="table mb-0">
-        <thead class="table-light">
-          <tr>
-            <th></th>
-            <th>Last Week Actual(%)</th>
-            <th>Planned Task</th>
-            <th>Completed Task</th>
-            <th>Time (HH:MM)</th>
-            <th>% Not Completed</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>All work should be done</td>
-            <td>{{ r.last_pct }}%</td>
-            <td>{{ r.planned }}</td>
-            <td>{{ r.completed }}</td>
-            <td>{{ r.time }}</td>
-            <td>{{ r.percent }}%</td>
-          </tr>
-          <tr class="table-light">
-            <td>All work should be done ontime</td>
-            <td>{{ r.last_pct }}%</td>
-            <td>{{ r.planned }}</td>
-            <td>{{ r.completed }}</td>
-            <td>{{ r.time }}</td>
-            <td>{{ r.percent }}%</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-  {% endfor %}
+  <!-- SCORE TABLES AND COMMITMENTS -->
+  <form method="post" autocomplete="off">
+    {% csrf_token %}
 
-  <!-- TOTAL TIME CARD -->
-  <div class="card mb-4">
-    <div class="card-header">Total Working Time This Week</div>
-    <div class="card-body">
-      <p class="mb-0"><strong>{{ total_hours }}</strong></p>
+    <!-- Checklist Score -->
+    <div class="card mb-4">
+      <div class="card-header">Checklist Score</div>
+      <div class="table-responsive">
+        <table class="table mb-0" style="min-width:1200px;">
+          <thead class="table-light">
+            <tr>
+              <th></th>
+              <th>Last Week Actual(%)</th>
+              <th>Planned Task</th>
+              <th>Completed Task</th>
+              <th>% Not Completed</th>
+              <th>Last Week Commitment</th>
+              <th>This Week Commitment</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>All work should be done</td>
+              <td>{{ rows.0.last_pct }}</td>
+              <td>{{ rows.0.planned }}</td>
+              <td>{{ rows.0.completed }}</td>
+              <td>{{ rows.0.percent }}</td>
+              <td>
+                {% if last_week_commitment %}
+                  {{ last_week_commitment.checklist }}
+                  {% if last_week_commitment.checklist_desc %}<br>
+                  <small>{{ last_week_commitment.checklist_desc }}</small>{% endif %}
+                {% else %}-{% endif %}
+              </td>
+              <td>
+                {{ commitment_form.checklist|add_class:"form-control" }}
+              </td>
+            </tr>
+            <tr>
+              <td>All work should be done ontime</td>
+              <td>{{ rows.0.last_pct }}</td>
+              <td>{{ rows.0.planned }}</td>
+              <td>{{ rows.0.completed }}</td>
+              <td>{{ rows.0.percent }}</td>
+              <td></td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
-  </div>
 
-  <!-- BOTTOM SUMMARY -->
-  {% if week_start %}
-  <div class="mt-4">
-    <hr>
-    <p><strong>Total pending task before {{ week_start|date:"d/m/Y" }}</strong></p>
-    <p>
-      Total Pending Checklist: {{ pending_checklist }} &nbsp;&nbsp;
-      Total Pending Delegation: {{ pending_delegation }}
-    </p>
-    <p><strong>Previous delayed task completed this week</strong></p>
-    <p>
-      Total Delayed Checklist: {{ delayed_checklist }} &nbsp;&nbsp;
-      Total Delayed Delegation: {{ delayed_delegation }}
-    </p>
-    <button class="btn btn-success">UPDATE COMMITMENT</button>
-  </div>
-  {% endif %}
+    <!-- Delegation Score -->
+    <div class="card mb-4">
+      <div class="card-header">Delegation Score</div>
+      <div class="table-responsive">
+        <table class="table mb-0" style="min-width:1200px;">
+          <thead class="table-light">
+            <tr>
+              <th></th>
+              <th>Last Week Actual(%)</th>
+              <th>Planned Task</th>
+              <th>Completed Task</th>
+              <th>% Not Completed</th>
+              <th>Last Week Commitment</th>
+              <th>This Week Commitment</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>All work should be done</td>
+              <td>{{ rows.1.last_pct }}</td>
+              <td>{{ rows.1.planned }}</td>
+              <td>{{ rows.1.completed }}</td>
+              <td>{{ rows.1.percent }}</td>
+              <td>
+                {% if last_week_commitment %}
+                  {{ last_week_commitment.delegation }}
+                  {% if last_week_commitment.delegation_desc %}<br>
+                  <small>{{ last_week_commitment.delegation_desc }}</small>{% endif %}
+                {% else %}-{% endif %}
+              </td>
+              <td>
+                {{ commitment_form.delegation|add_class:"form-control" }}
+              </td>
+            </tr>
+            <tr>
+              <td>All work should be done ontime</td>
+              <td>{{ rows.1.last_pct }}</td>
+              <td>{{ rows.1.planned }}</td>
+              <td>{{ rows.1.completed }}</td>
+              <td>{{ rows.1.percent }}</td>
+              <td></td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Average Score Table (No FMS, No Audit) -->
+    <div class="card mb-4">
+      <div class="table-responsive">
+        <table class="table mb-0" style="min-width:900px;">
+          <thead class="table-light">
+            <tr>
+              <th>Average Score</th>
+              <th>Checklist</th>
+              <th>Delegation</th>
+              <th>Average</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>% work should be done</td>
+              <td>
+                {% if avg_scores %}
+                  {{ avg_scores.checklist }}
+                {% else %}0{% endif %}
+              </td>
+              <td>
+                {% if avg_scores %}
+                  {{ avg_scores.delegation }}
+                {% else %}0{% endif %}
+              </td>
+              <td>
+                {% if avg_scores %}
+                  {{ avg_scores.average }}
+                {% else %}0{% endif %}
+              </td>
+            </tr>
+            <tr>
+              <td>% work should be done ontime</td>
+              <td>
+                {% if avg_scores %}
+                  {{ avg_scores.checklist_ontime }}
+                {% else %}0{% endif %}
+              </td>
+              <td>
+                {% if avg_scores %}
+                  {{ avg_scores.delegation_ontime }}
+                {% else %}0{% endif %}
+              </td>
+              <td>
+                {% if avg_scores %}
+                  {{ avg_scores.average_ontime }}
+                {% else %}0{% endif %}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% if week_start %}
+    <div class="mt-4">
+      <p><strong>Total pending task before {{ week_start|date:"d/m/Y" }}</strong></p>
+      <p>
+        Total Pending Checklist: {{ pending_checklist }} &nbsp;&nbsp;
+        Total Pending Delegation: {{ pending_delegation }}
+      </p>
+      <p><strong>Previous delayed task completed this week</strong></p>
+      <p>
+        Total Delayed Checklist: {{ delayed_checklist }} &nbsp;&nbsp;
+        Total Delayed Delegation: {{ delayed_delegation }}
+      </p>
+    </div>
+    {% endif %}
+
+    <div class="mt-4 text-end">
+      <button type="submit" name="update_commitment" class="btn btn-success" style="min-width:180px;">UPDATE COMMITMENT</button>
+    </div>
+  </form>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 <script>
-function exportCSV() {
-  const p = new URLSearchParams(new FormData(document.querySelector('form')));
-  window.location.href = '?' + p.toString() + '&export=csv';
-}
-function compactPrint() {
-  const w = window.open();
-  w.document.write(`
-    <html><head><title>Compact Weekly MIS</title>
-    <style>
-      body{font-family:Arial,sans-serif;font-size:12px;margin:20px;}
-      table{width:100%;border-collapse:collapse;margin-bottom:20px;}
-      th,td{border:1px solid #ddd;padding:8px;text-align:center;}
-      th{background:#f2f2f2;}
-    </style></head>
-    <body>${document.querySelector('.container-fluid').innerHTML}</body></html>
-  `);
-  w.document.close();
-  w.print();
-}
 document.addEventListener('DOMContentLoaded', () => {
   flatpickr("#id_date_from", {
     dateFormat: "Y-m-d",

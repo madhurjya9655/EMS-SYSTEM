@@ -1,9 +1,9 @@
 from django.shortcuts import render, redirect, get_object_or_404
-from django.contrib.auth.decorators import login_required, user_passes_test
+from apps.users.decorators import has_permission
 from .models import LeaveRequest
 from .forms import LeaveRequestForm
 
-@login_required
+@has_permission('leave_apply')
 def apply_leave(request):
     if request.method == 'POST':
         form = LeaveRequestForm(request.POST)
@@ -17,13 +17,12 @@ def apply_leave(request):
         form = LeaveRequestForm()
     return render(request, 'leave/apply_leave.html', {'form': form})
 
-@login_required
+@has_permission('leave_list')
 def my_leaves(request):
     leaves = LeaveRequest.objects.filter(employee=request.user)
     return render(request, 'leave/my_leaves.html', {'leaves': leaves})
 
-@login_required
-@user_passes_test(lambda u: u.groups.filter(name='Manager').exists())
+@has_permission('leave_pending_manager')
 def pending_leaves(request):
     leaves = LeaveRequest.objects.filter(status='Pending Manager')
     if request.method == 'POST':
@@ -33,8 +32,7 @@ def pending_leaves(request):
         return redirect('leave:pending_leaves')
     return render(request, 'leave/pending_leaves.html', {'leaves': leaves})
 
-@login_required
-@user_passes_test(lambda u: u.groups.filter(name='HR').exists())
+@has_permission('leave_pending_hr')
 def hr_leaves(request):
     leaves = LeaveRequest.objects.filter(status='Pending HR')
     if request.method == 'POST':

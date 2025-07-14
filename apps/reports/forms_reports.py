@@ -72,3 +72,13 @@ class WeeklyMISFilterForm(forms.Form):
         super().__init__(*args, **kwargs)
         if user and not (user.is_staff or user.is_superuser):
             self.fields['doer'].queryset = User.objects.filter(pk=user.pk)
+
+class WeeklyMISCommitmentForm(forms.Form):
+    checklist = forms.IntegerField(label="Checklist Commitment (number)", min_value=0, required=False)
+    checklist_desc = forms.CharField(label="Checklist Commitment (description)", widget=forms.Textarea(attrs={'rows':2}), required=False)
+    delegation = forms.IntegerField(label="Delegation Commitment (number)", min_value=0, required=False)
+    delegation_desc = forms.CharField(label="Delegation Commitment (description)", widget=forms.Textarea(attrs={'rows':2}), required=False)
+    fms = forms.IntegerField(label="FMS Commitment (number)", min_value=0, required=False)
+    fms_desc = forms.CharField(label="FMS Commitment (description)", widget=forms.Textarea(attrs={'rows':2}), required=False)
+    audit = forms.IntegerField(label="Audit Commitment (number)", min_value=0, required=False)
+    audit_desc = forms.CharField(label="Audit Commitment (description)", widget=forms.Textarea(attrs={'rows':2}), required=False)

@@ -1,10 +1,7 @@
-# apps/tasks/views.py
-
 import csv
 import io
 import math
-from datetime import datetime, timedelta
-
+from datetime import datetime, timedelta, time
 import pandas as pd
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -31,7 +28,6 @@ can_create = lambda u: u.is_superuser or u.groups.filter(
     name__in=['Admin', 'Manager', 'EA', 'CEO']
 ).exists()
 
-
 def parse_int(val, default=0):
     if val is None:
         return default
@@ -39,7 +35,6 @@ def parse_int(val, default=0):
         return default if math.isnan(val) else int(val)
     s = str(val).strip()
     return int(s) if s.isdigit() else default
-
 
 def parse_time_val(val):
     if val is None:
@@ -51,18 +46,138 @@ def parse_time_val(val):
     s = str(val).strip()
     return parse_time(s) if s else None
 
+def get_default_time():
+    return time(10, 30)
+
+def get_next_date(mode, freq, start, target_weekday=None):
+    next_date = start
+    if mode == 'Daily':
+        while True:
+            next_date += timedelta(days=freq)
+            if next_date.weekday() != 6:  # skip Sunday
+                break
+        return next_date
+    elif mode == 'Weekly':
+        weekday = target_weekday if target_weekday is not None else start.weekday()
+        count = 0
+        while count < freq:
+            next_date += timedelta(days=1)
+            if next_date.weekday() == weekday and next_date.weekday() != 6:
+                count += 1
+        return next_date
+    elif mode == 'Monthly':
+        month = next_date.month - 1 + freq
+        year = next_date.year + month // 12
+        month = month % 12 + 1
+        day = next_date.day
+        for last_day in range(31, 27, -1):
+            try:
+                datetime(year, month, last_day)
+                break
+            except:
+                continue
+        if day > last_day:
+            day = last_day
+        next_date = next_date.replace(year=year, month=month, day=day)
+        while next_date.weekday() == 6:
+            next_date += timedelta(days=1)
+        return next_date
+    elif mode == 'Yearly':
+        try:
+            next_date = next_date.replace(year=next_date.year + freq)
+        except Exception:
+            next_date = next_date.replace(year=next_date.year + freq, day=28)
+        while next_date.weekday() == 6:
+            next_date += timedelta(days=1)
+        return next_date
+    return start
+
+def create_missing_recurring_checklist_tasks():
+    """
+    For each recurring checklist, if the latest instance is completed (or today is after the last planned_date),
+    generate the next instance at 10:30AM (skipping Sunday), only ONE future instance at a time.
+    """
+    today = timezone.localdate()
+    now = timezone.localtime()
+    qs = Checklist.objects.filter(mode__in=['Daily', 'Weekly', 'Monthly', 'Yearly'])
+    for checklist in qs:
+        freq = checklist.frequency
+        if freq < 1:
+            continue
+        mode = checklist.mode
+        assign_to = checklist.assign_to
+        task_name = checklist.task_name
+
+        # Always use the planned_time of the original (or 10:30)
+        planned_time = checklist.planned_date.time() if checklist.planned_date else get_default_time()
+        if planned_time == time(0, 0) or not planned_time:
+            planned_time = get_default_time()
+
+        # The most recent occurrence
+        last_task = Checklist.objects.filter(
+            assign_to=assign_to,
+            task_name=task_name,
+            mode=mode,
+        ).order_by('-planned_date').first()
+        if last_task:
+            prev_date = timezone.localtime(last_task.planned_date)
+        else:
+            prev_date = timezone.localtime(checklist.planned_date)
+
+        # If the last planned_date is in the past (completed or missed), generate next
+        if prev_date.date() < today or (last_task and last_task.status == 'Completed'):
+            # Recurrence logic: set the time to 10:30am and never Sunday
+            if prev_date.time() != planned_time:
+                prev_date = datetime.combine(prev_date.date(), planned_time)
+                prev_date = timezone.make_aware(prev_date)
+            target_weekday = checklist.planned_date.weekday() if mode == 'Weekly' else None
+            next_date = get_next_date(mode, freq, prev_date, target_weekday)
+            # Always 10:30AM
+            if next_date.time() != planned_time:
+                next_date = datetime.combine(next_date.date(), planned_time)
+                next_date = timezone.make_aware(next_date)
+            # Only create if not already exists, and never for Sunday
+            if next_date.weekday() != 6 and not Checklist.objects.filter(
+                assign_to=assign_to,
+                task_name=task_name,
+                planned_date=next_date
+            ).exists():
+                Checklist.objects.create(
+                    assign_by=checklist.assign_by,
+                    task_name=checklist.task_name,
+                    assign_to=assign_to,
+                    planned_date=next_date,
+                    priority=checklist.priority,
+                    attachment_mandatory=checklist.attachment_mandatory,
+                    mode=mode,
+                    frequency=freq,
+                    time_per_task_minutes=checklist.time_per_task_minutes,
+                    remind_before_days=checklist.remind_before_days,
+                    message=checklist.message,
+                    assign_pc=checklist.assign_pc,
+                    group_name=checklist.group_name,
+                    notify_to=checklist.notify_to,
+                    auditor=checklist.auditor,
+                    set_reminder=checklist.set_reminder,
+                    reminder_mode=checklist.reminder_mode,
+                    reminder_frequency=checklist.reminder_frequency,
+                    reminder_before_days=checklist.reminder_before_days,
+                    reminder_starting_time=checklist.reminder_starting_time,
+                    checklist_auto_close=checklist.checklist_auto_close,
+                    checklist_auto_close_days=checklist.checklist_auto_close_days,
+                    actual_duration_minutes=0
+                )
 
 @has_permission('tasks_list_checklist')
 def list_checklist(request):
+    create_missing_recurring_checklist_tasks()
     if request.method == 'POST':
         if ids := request.POST.getlist('sel'):
             Checklist.objects.filter(pk__in=ids).delete()
         return redirect('tasks:list_checklist')
-
     qs = Checklist.objects.all()
     if kw := request.GET.get('keyword', '').strip():
         qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
-
     for param, lookup in [
         ('assign_to', 'assign_to_id'),
         ('priority', 'priority'),
@@ -72,9 +187,7 @@ def list_checklist(request):
     ]:
         if v := request.GET.get(param, '').strip():
             qs = qs.filter(**{lookup: v})
-
     ordered = qs.order_by('-planned_date')
-
     if request.GET.get('download'):
         resp = HttpResponse(content_type='text/csv')
         resp['Content-Disposition'] = 'attachment; filename="checklist.csv"'
@@ -93,7 +206,6 @@ def list_checklist(request):
                 itm.status,
             ])
         return resp
-
     grouped = (
         ordered
         .values('task_name', 'assign_to_id')
@@ -101,7 +213,6 @@ def list_checklist(request):
         .values_list('first_id', flat=True)
     )
     items = Checklist.objects.filter(id__in=grouped).order_by('-planned_date')
-
     ctx = {
         'items': items,
         'users': User.objects.order_by('username'),
@@ -115,18 +226,25 @@ def list_checklist(request):
         return render(request, 'tasks/partial_list_checklist.html', ctx)
     return render(request, 'tasks/list_checklist.html', ctx)
 
-
 @has_permission('tasks_add_checklist')
 def add_checklist(request):
     if request.method == 'POST':
         form = ChecklistForm(request.POST, request.FILES)
         if form.is_valid():
-            form.save()
+            obj = form.save(commit=False)
+            dt = obj.planned_date
+            # Always save today task at now() or at 10:30am if only date is given
+            if dt and (dt.time() == time(0, 0) or dt.time() is None):
+                now = timezone.localtime()
+                planned_time = get_default_time()
+                planned_dt = datetime.combine(dt.date(), planned_time)
+                obj.planned_date = timezone.make_aware(planned_dt)
+            obj.save()
+            form.save_m2m()
             return redirect('tasks:list_checklist')
     else:
         form = ChecklistForm(initial={'assign_by': request.user})
     return render(request, 'tasks/add_checklist.html', {'form': form})
-
 
 @has_permission('tasks_add_checklist')
 def edit_checklist(request, pk):
@@ -134,12 +252,18 @@ def edit_checklist(request, pk):
     if request.method == 'POST':
         form = ChecklistForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
-            form.save()
+            obj2 = form.save(commit=False)
+            dt = obj2.planned_date
+            if dt and (dt.time() == time(0, 0) or dt.time() is None):
+                planned_time = get_default_time()
+                planned_dt = datetime.combine(dt.date(), planned_time)
+                obj2.planned_date = timezone.make_aware(planned_dt)
+            obj2.save()
+            form.save_m2m()
             return redirect('tasks:list_checklist')
     else:
         form = ChecklistForm(instance=obj)
     return render(request, 'tasks/add_checklist.html', {'form': form})
-
 
 @has_permission('tasks_list_checklist')
 def delete_checklist(request, pk):
@@ -150,7 +274,6 @@ def delete_checklist(request, pk):
     return render(request, 'tasks/confirm_delete.html', {
         'object': obj, 'type': 'Checklist'
     })
-
 
 @has_permission('tasks_list_checklist')
 def reassign_checklist(request, pk):
@@ -164,7 +287,6 @@ def reassign_checklist(request, pk):
         'object': obj,
         'all_users': User.objects.order_by('username')
     })
-
 
 @login_required
 def complete_checklist(request, pk):
@@ -188,7 +310,6 @@ def complete_checklist(request, pk):
         'form': form, 'object': obj
     })
 
-
 @has_permission('tasks_list_delegation')
 def list_delegation(request):
     if request.method == 'POST':
@@ -201,7 +322,6 @@ def list_delegation(request):
         return render(request, 'tasks/partial_list_delegation.html', ctx)
     return render(request, 'tasks/list_delegation.html', ctx)
 
-
 @has_permission('tasks_add_delegation')
 def add_delegation(request):
     if request.method == 'POST':
@@ -212,7 +332,6 @@ def add_delegation(request):
     else:
         form = DelegationForm(initial={'assign_by': request.user})
     return render(request, 'tasks/add_delegation.html', {'form': form})
-
 
 @has_permission('tasks_add_delegation')
 def edit_delegation(request, pk):
@@ -226,7 +345,6 @@ def edit_delegation(request, pk):
         form = DelegationForm(instance=obj)
     return render(request, 'tasks/add_delegation.html', {'form': form})
 
-
 @has_permission('tasks_list_delegation')
 def delete_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
@@ -236,7 +354,6 @@ def delete_delegation(request, pk):
     return render(request, 'tasks/confirm_delete.html', {
         'object': obj, 'type': 'Delegation'
     })
-
 
 @has_permission('tasks_list_delegation')
 def reassign_delegation(request, pk):
@@ -250,7 +367,6 @@ def reassign_delegation(request, pk):
         'object': obj,
         'all_users': User.objects.order_by('username')
     })
-
 
 @login_required
 def complete_delegation(request, pk):
@@ -273,7 +389,6 @@ def complete_delegation(request, pk):
         'form': form, 'object': obj
     })
 
-
 @has_permission('tasks_bulk_upload')
 def bulk_upload(request):
     if request.method == 'POST':
@@ -282,7 +397,6 @@ def bulk_upload(request):
             upload = form.save()
             f = upload.csv_file
             ext = f.name.rsplit('.', 1)[-1].lower()
-
             if ext in ('xls', 'xlsx'):
                 xl = pd.read_excel(f, sheet_name=None)
                 sheet = (
@@ -300,15 +414,12 @@ def bulk_upload(request):
                     except:
                         continue
                 rows = list(csv.DictReader(io.StringIO(text)))
-
             if upload.form_type == 'checklist':
                 for row in rows:
-                    # bulk‐upload checklist logic exactly as before…
                     uname = str(row.get('Assign To', '')).strip()
                     atou = User.objects.filter(username=uname).first()
                     if not atou:
                         continue
-
                     pl = row.get('Planned Date', '')
                     if isinstance(pl, pd.Timestamp):
                         planned_date = pl.to_pydatetime()
@@ -331,12 +442,10 @@ def bulk_upload(request):
                         planned_date = timezone.make_aware(
                             planned_date, timezone.get_current_timezone()
                         )
-
                     time_per = parse_int(
                         row.get('Time per Task (minutes)', 0)
                     )
                     rst_time = parse_time_val(row.get('Reminder Starting Time'))
-
                     chk = Checklist(
                         assign_by=request.user,
                         task_name=str(row.get('Task Name', '')).strip(),
@@ -381,12 +490,10 @@ def bulk_upload(request):
                     chk.save()
             else:
                 for row in rows:
-                    # bulk‐upload delegation logic exactly as before…
                     uname = str(row.get('Assign To','')).strip()
                     atou = User.objects.filter(username=uname).first()
                     if not atou:
                         continue
-
                     pd_val = row.get('Planned Date','')
                     if isinstance(pd_val, pd.Timestamp):
                         pdate = pd_val.date()
@@ -402,13 +509,11 @@ def bulk_upload(request):
                                 pdate = None
                     if not pdate:
                         continue
-
                     mode_val = str(row.get('Mode','Daily')).strip()
                     freq_val = parse_int(row.get('Frequency','1'))
                     time_per = parse_int(
                         row.get('Time per Task (minutes)', 0)
                     )
-
                     deg = Delegation(
                         assign_by=request.user,
                         task_name=str(row.get('Task Name','')).strip(),
@@ -423,7 +528,6 @@ def bulk_upload(request):
                         frequency=freq_val
                     )
                     deg.save()
-
             messages.success(
                 request,
                 "Your file has been uploaded and processed successfully."
@@ -436,9 +540,7 @@ def bulk_upload(request):
             )
     else:
         form = BulkUploadForm()
-
     return render(request, 'tasks/bulk_upload.html', {'form': form})
-
 
 @has_permission('tasks_bulk_upload')
 def download_checklist_template(request):
@@ -451,7 +553,6 @@ def download_checklist_template(request):
         filename='checklist_template.csv'
     )
 
-
 @has_permission('tasks_bulk_upload')
 def download_delegation_template(request):
     path = finders.find('bulk_upload_templates/delegation_template.csv')
@@ -463,26 +564,22 @@ def download_delegation_template(request):
         filename='delegation_template.csv'
     )
 
-
 @login_required
 def list_fms(request):
     items = FMS.objects.all().order_by('-planned_date')
     return render(request, 'tasks/list_fms.html', {'items': items})
-
 
 @login_required
 def list_help_ticket(request):
     qs = HelpTicket.objects.select_related('assign_by', 'assign_to')
     if not can_create(request.user):
         qs = qs.filter(assign_to=request.user)
-
     for param, lookup in [
         ('from_date', 'planned_date__date__gte'),
         ('to_date',   'planned_date__date__lte'),
     ]:
         if v := request.GET.get(param, '').strip():
             qs = qs.filter(**{lookup: v})
-
     for param, lookup in [
         ('assign_by', 'assign_by_id'),
         ('assign_to', 'assign_to_id'),
@@ -491,7 +588,6 @@ def list_help_ticket(request):
         v = request.GET.get(param, 'all')
         if v != 'all':
             qs = qs.filter(**{lookup: v})
-
     items = qs.order_by('-planned_date')
     return render(request, 'tasks/list_help_ticket.html', {
         'items': items,
@@ -501,31 +597,25 @@ def list_help_ticket(request):
         'status_choices': HelpTicket.STATUS_CHOICES,
     })
 
-
 @login_required
 def assigned_to_me(request):
-    # only open (non-Closed) tickets here
     items = HelpTicket.objects.filter(
         assign_to=request.user
     ).exclude(status='Closed').order_by('-planned_date')
-
     return render(request, 'tasks/list_help_ticket_assigned_to.html', {
         'items': items,
         'current_tab': 'assigned_to',
     })
-
 
 @login_required
 def assigned_by_me(request):
     items = HelpTicket.objects.filter(
         assign_by=request.user
     ).order_by('-planned_date')
-
     return render(request, 'tasks/list_help_ticket_assigned_by.html', {
         'items': items,
         'current_tab': 'assigned_by',
     })
-
 
 @login_required
 def add_help_ticket(request):
@@ -544,7 +634,6 @@ def add_help_ticket(request):
         'can_create': can_create(request.user)
     })
 
-
 @login_required
 def edit_help_ticket(request, pk):
     obj = get_object_or_404(HelpTicket, pk=pk)
@@ -561,24 +650,13 @@ def edit_help_ticket(request, pk):
         'can_create': can_create(request.user)
     })
 
-
 @login_required
 def complete_help_ticket(request, pk):
-    """
-    This view is now just a redirect--POSTs from your page-based form
-    should go to note_help_ticket rather than here.
-    """
     return redirect('tasks:note_help_ticket', pk=pk)
-
 
 @login_required
 def note_help_ticket(request, pk):
-    """
-    Full‐page form for adding/editing your note + optional attachment,
-    and closing the ticket if it's still open.
-    """
     ticket = get_object_or_404(HelpTicket, pk=pk, assign_to=request.user)
-
     if request.method == 'POST':
         notes = request.POST.get('resolved_notes', '').strip()
         ticket.resolved_notes = notes
@@ -591,15 +669,12 @@ def note_help_ticket(request, pk):
         ticket.save()
         messages.success(request, f"Note saved for HT-{ticket.id}.")
         return redirect(request.GET.get('next', reverse('tasks:assigned_to_me')))
-
-    # GET => render the standalone form
     return render(request, 'tasks/note_help_ticket.html', {
         'ticket': ticket,
         'next':    request.GET.get('next', reverse('tasks:assigned_to_me'))
     })
 
-
-@has_permission('help_ticket_list')
+@login_required
 def delete_help_ticket(request, pk):
     obj = get_object_or_404(HelpTicket, pk=pk)
     if request.method == 'POST':

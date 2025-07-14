@@ -1,5 +1,3 @@
-# apps/users/forms.py
-
 from django import forms
 from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import AuthenticationForm
@@ -7,7 +5,6 @@ from .models import Profile
 
 UserModel = get_user_model()
 
-# hard-coded departments
 DEPARTMENT_CHOICES = [
     ('', 'Select One'),
     ('FINANCE', 'FINANCE'),
@@ -16,7 +13,6 @@ DEPARTMENT_CHOICES = [
     ('SALES OPERATION TEAM', 'SALES OPERATION TEAM'),
 ]
 
-# all of your current + missing menu options
 MODULE_CHOICES = [
     # Leave
     ('leave_apply',           'Leave Apply'),
@@ -64,15 +60,10 @@ MODULE_CHOICES = [
 ]
 
 class CustomAuthForm(AuthenticationForm):
-    """
-    Used by your login view.  Must be present so your
-    import in urls.py doesn’t fail.
-    """
     error_messages = {
         'invalid_login': "Please enter a correct username and password.",
         'inactive':      "Your account is inactive; please contact the administrator.",
     }
-
     def clean(self):
         username = self.cleaned_data.get('username')
         password = self.cleaned_data.get('password')
@@ -89,7 +80,6 @@ class CustomAuthForm(AuthenticationForm):
                     )
         return super().clean()
 
-
 class UserForm(forms.ModelForm):
     password = forms.CharField(widget=forms.PasswordInput)
 
@@ -99,16 +89,21 @@ class UserForm(forms.ModelForm):
 
     def clean_username(self):
         username = self.cleaned_data['username']
-        if UserModel.objects.filter(username=username).exists():
+        qs = UserModel.objects.filter(username=username)
+        if self.instance and self.instance.pk:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
             raise forms.ValidationError("This username is already taken.")
         return username
 
     def clean_email(self):
         email = self.cleaned_data['email']
-        if UserModel.objects.filter(email=email).exists():
+        qs = UserModel.objects.filter(email=email)
+        if self.instance and self.instance.pk:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
             raise forms.ValidationError("This email address is already in use.")
         return email
-
 
 class ProfileForm(forms.ModelForm):
     department = forms.ChoiceField(
@@ -134,8 +129,17 @@ class ProfileForm(forms.ModelForm):
             'permissions'
         ]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        instance = kwargs.get('instance', None)
+        if instance and getattr(instance, 'pk', None) and getattr(instance, 'permissions', None):
+            self.initial['permissions'] = instance.permissions
+
     def clean_phone(self):
         phone = self.cleaned_data['phone']
-        if Profile.objects.filter(phone=phone).exists():
+        qs = Profile.objects.filter(phone=phone)
+        if self.instance and self.instance.pk:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
             raise forms.ValidationError("This phone number is already registered.")
         return phone

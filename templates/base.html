@@ -11,95 +11,39 @@
   <link href="{% static 'css/custom.css' %}" rel="stylesheet">
   <style>
     :root {
-      --primary: #4f46e5;
-      --primary-light: #6366f1;
-      --primary-dark: #3730a3;
-      --sidebar-width: 280px;
-      --header-height: 70px;
+      --primary: #4f46e5; --primary-light: #6366f1; --primary-dark: #3730a3;
+      --sidebar-width: 280px; --header-height: 70px;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; background: #f8fafc; }
-    .header {
-      position: fixed; top: 0; left: 0; right: 0;
-      height: var(--header-height);
-      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
-      z-index: 1000; box-shadow: 0 4px 20px rgba(79, 70, 229, 0.15);
-      display: flex; align-items: center; padding: 0 2rem; justify-content: space-between;
-    }
+    .header { position: fixed; top: 0; left: 0; right: 0; height: var(--header-height); background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%); z-index: 1000; box-shadow: 0 4px 20px rgba(79, 70, 229, 0.15); display: flex; align-items: center; padding: 0 2rem; justify-content: space-between; }
     .logo { display: flex; align-items: center; gap: 12px; color: white; }
-    .logo-icon {
-      width: 40px; height: 40px;
-      background: rgba(255, 255, 255, 0.2);
-      border-radius: 10px;
-      display: flex; align-items: center; justify-content: center;
-      font-weight: 700; backdrop-filter: blur(10px);
-    }
+    .logo-icon { width: 40px; height: 40px; background: rgba(255, 255, 255, 0.2); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-weight: 700; backdrop-filter: blur(10px);}
+    .logo-icon img { max-width: 32px; max-height: 32px; border-radius: 7px; }
     .logo-text { font-size: 1.25rem; font-weight: 600; }
     .header-actions { display: flex; align-items: center; gap: 1.5rem; }
-    .branch-select {
-      background: rgba(255, 255, 255, 0.15);
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      color: white; padding: 0.6rem 1.2rem; border-radius: 8px;
-      font-size: 0.9rem; backdrop-filter: blur(10px); min-width: 160px;
-    }
+    .branch-select { background: rgba(255, 255, 255, 0.15); border: 1px solid rgba(255, 255, 255, 0.3); color: white; padding: 0.6rem 1.2rem; border-radius: 8px; font-size: 0.9rem; backdrop-filter: blur(10px); min-width: 160px; }
     .branch-select option { background: var(--primary); color: white; }
     .user-menu { display: flex; align-items: center; gap: 0.8rem; color: white; font-size: 0.9rem; }
-    .user-avatar {
-      width: 36px; height: 36px; background: rgba(255, 255, 255, 0.2);
-      border-radius: 50%; display: flex; align-items: center; justify-content: center;
-      backdrop-filter: blur(10px);
-    }
-    .logout-btn {
-      background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.3);
-      color: white; padding: 0.6rem 1.2rem; border-radius: 8px; font-size: 0.85rem;
-      backdrop-filter: blur(10px); transition: all 0.2s ease;
-    }
-    .logout-btn:hover { background: rgba(255, 255, 255, 0.2); transform: translateY(-1px); }
-    .mobile-toggle {
-      display: none; background: none; border: none; color: white;
-      font-size: 1.3rem; cursor: pointer;
-    }
-    .sidebar {
-      position: fixed; top: var(--header-height); left: 0;
-      width: var(--sidebar-width); height: calc(100vh - var(--header-height));
-      background: white; box-shadow: 4px 0 20px rgba(0, 0, 0, 0.08);
-      overflow-y: auto; transition: transform 0.3s ease; z-index: 900;
-    }
+    .user-avatar { width: 36px; height: 36px; background: rgba(255, 255, 255, 0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(10px);}
+    .logout-btn { background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.3); color: white; padding: 0.6rem 1.2rem; border-radius: 8px; font-size: 0.85rem; backdrop-filter: blur(10px); transition: all 0.2s ease;}
+    .logout-btn:hover { background: rgba(255, 255, 255, 0.2); transform: translateY(-1px);}
+    .mobile-toggle { display: none; background: none; border: none; color: white; font-size: 1.3rem; cursor: pointer;}
+    .sidebar { position: fixed; top: var(--header-height); left: 0; width: var(--sidebar-width); height: calc(100vh - var(--header-height)); background: white; box-shadow: 4px 0 20px rgba(0, 0, 0, 0.08); overflow-y: auto; transition: transform 0.3s ease; z-index: 900;}
     .sidebar.collapsed { transform: translateX(-100%); }
-    .nav-section { padding: 1.5rem 0; border-bottom: 1px solid #f1f5f9; }
-    .nav-item {
-      display: block; padding: 0.8rem 1.5rem; color: #64748b;
-      text-decoration: none; font-size: 0.9rem; font-weight: 500;
-      transition: all 0.2s ease; width: 100%; text-align: left;
-      border: none; background: none; position: relative;
-    }
-    .nav-item:hover { background: #f8fafc; color: var(--primary); transform: translateX(4px); }
-    .nav-item.active {
-      background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
-      color: var(--primary); border-right: 3px solid var(--primary);
-    }
+    .nav-section { padding: 1.5rem 0; border-bottom: 1px solid #f1f5f9;}
+    .nav-item { display: block; padding: 0.8rem 1.5rem; color: #64748b; text-decoration: none; font-size: 0.9rem; font-weight: 500; transition: all 0.2s ease; width: 100%; text-align: left; border: none; background: none; position: relative;}
+    .nav-item:hover { background: #f8fafc; color: var(--primary); transform: translateX(4px);}
+    .nav-item.active { background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); color: var(--primary); border-right: 3px solid var(--primary);}
     .nav-item i { width: 20px; margin-right: 0.8rem; font-size: 1rem; }
     .nav-item .chevron { float: right; font-size: 0.75rem; transition: transform 0.2s ease; }
-    .submenu {
-      background: #f8fafc; border-left: 2px solid #e2e8f0; margin-left: 1rem;
-    }
-    .submenu .nav-item { padding: 0.6rem 2.5rem; font-size: 0.85rem; color: #64748b; }
-    .main-content {
-      margin-left: var(--sidebar-width); margin-top: var(--header-height);
-      padding: 2rem; min-height: calc(100vh - var(--header-height));
-      transition: margin-left 0.3s ease;
-    }
+    .submenu { background: #f8fafc; border-left: 2px solid #e2e8f0; margin-left: 1rem;}
+    .submenu .nav-item { padding: 0.6rem 2.5rem; font-size: 0.85rem; color: #64748b;}
+    .main-content { margin-left: var(--sidebar-width); margin-top: var(--header-height); padding: 2rem; min-height: calc(100vh - var(--header-height)); transition: margin-left 0.3s ease;}
     .main-content.expanded { margin-left: 0; }
-    .page-header {
-      background: white; padding: 2rem; border-radius: 12px;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-      margin-bottom: 2rem; border: 1px solid #f1f5f9;
-    }
+    .page-header { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08); margin-bottom: 2rem; border: 1px solid #f1f5f9;}
     .page-title { font-size: 1.8rem; font-weight: 700; color: #1e293b; margin-bottom: 0.5rem; }
-    footer {
-      background: white; border-top: 1px solid #f1f5f9; text-align: center;
-      padding: 1.5rem; color: #64748b; font-size: 0.9rem; margin-top: 2rem;
-    }
+    footer { background: white; border-top: 1px solid #f1f5f9; text-align: center; padding: 1.5rem; color: #64748b; font-size: 0.9rem; margin-top: 2rem;}
     @media (max-width: 768px) {
       .mobile-toggle { display: block; }
       .branch-select, .user-menu span:first-child { display: none; }
@@ -116,7 +60,10 @@
     <div class="header">
       <div class="logo">
         <button class="mobile-toggle" onclick="toggleSidebar()"><i class="fas fa-bars"></i></button>
-        <div class="logo-icon">M</div>
+        <div class="logo-icon">
+          <!-- Replace this path with your actual logo file -->
+          <img src="{% static 'images/bos logo.png' %}" alt="EMS Logo">
+        </div>
         <span class="logo-text">BOS EMS</span>
       </div>
       <div class="header-actions">
@@ -140,7 +87,6 @@
     <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
     <nav class="sidebar" id="sidebar">
       <div class="nav-section">
-
         <!-- Dashboard -->
         <a href="{% url 'dashboard:home' %}"
            class="nav-item {% if request.resolver_match.app_name == 'dashboard' and request.resolver_match.url_name == 'home' %}active{% endif %}">
@@ -148,20 +94,25 @@
         </a>
 
         <!-- Employees -->
+        {% if user|has_permission:"users_list" or user|has_group:"HR" or user.is_superuser %}
         <a href="{% url 'recruitment:employee_list' %}"
            class="nav-item {% if request.resolver_match.app_name == 'recruitment' and request.resolver_match.url_name == 'employee_list' %}active{% endif %}">
           <i class="fas fa-users"></i> Employees
         </a>
+        {% endif %}
 
         <!-- Leave Register -->
+        {% if user|has_permission:"leave_list" or user|has_permission:"leave_apply" or user|has_group:"Manager" or user|has_group:"HR" %}
         <button class="nav-item" onclick="toggleSubmenu('leaveSubmenu')">
           <i class="fas fa-calendar-day"></i> Leave Register <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="leaveSubmenu" style="display:none;">
+          {% if user|has_permission:"leave_list" or user|has_permission:"leave_apply" %}
           <a href="{% url 'leave:my_leaves' %}"
              class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'my_leaves' %}active{% endif %}">
             <i class="fas fa-file-alt"></i> My Leaves
           </a>
+          {% endif %}
           {% if user|has_group:"Manager" %}
           <a href="{% url 'leave:pending_leaves' %}"
              class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'pending_leaves' %}active{% endif %}">
@@ -175,8 +126,10 @@
           </a>
           {% endif %}
         </div>
+        {% endif %}
 
         <!-- Master Tasks -->
+        {% if user|has_permission:"tasks_list_checklist" or user|has_permission:"tasks_add_checklist" or user|has_permission:"tasks_list_delegation" or user|has_permission:"tasks_add_delegation" or user|has_permission:"tasks_bulk_upload" %}
         <button class="nav-item" onclick="toggleSubmenu('masterTasksSubmenu')">
           <i class="fas fa-tasks"></i> Master Tasks <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -212,8 +165,10 @@
           </a>
           {% endif %}
         </div>
+        {% endif %}
 
         <!-- Help Ticket -->
+        {% if user|has_permission:"help_ticket_list" or user|has_permission:"help_ticket_add" or user|has_permission:"help_ticket_assigned_to" or user|has_permission:"help_ticket_assigned_by" %}
         <button class="nav-item" onclick="toggleSubmenu('helpTicketSubmenu')">
           <i class="fas fa-question-circle"></i> Help Ticket <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -243,17 +198,21 @@
           </a>
           {% endif %}
         </div>
+        {% endif %}
 
         <!-- Petty Cash -->
+        {% if user|has_permission:"pettycash_list" or user|has_permission:"pettycash_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
         <button class="nav-item" onclick="toggleSubmenu('pettyCashSubmenu')">
           <i class="fas fa-wallet"></i> Petty Cash <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="pettyCashSubmenu" style="display:none;">
+          {% if user|has_permission:"pettycash_list" %}
           <a href="{% url 'petty_cash:list_requests' %}"
              class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'list_requests' %}active{% endif %}">
             <i class="fas fa-file-invoice-dollar"></i> My Requests
           </a>
-          {% if user|has_group:"EA" %}
+          {% endif %}
+          {% if user|has_permission:"pettycash_apply" or user|has_group:"EA" %}
           <a href="{% url 'petty_cash:apply_request' %}"
              class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'apply_request' %}active{% endif %}">
             <i class="fas fa-plus-circle"></i> New Request
@@ -272,35 +231,47 @@
           </a>
           {% endif %}
         </div>
+        {% endif %}
 
         <!-- Sales -->
+        {% if user|has_permission:"sales_plan_list" or user|has_permission:"sales_plan_add" or user|has_permission:"sales_dashboard" %}
         <button class="nav-item" onclick="toggleSubmenu('salesSubmenu')">
           <i class="fas fa-chart-line"></i> Sales <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="salesSubmenu" style="display:none;">
+          {% if user|has_permission:"sales_plan_list" %}
           <a href="{% url 'sales:sales_plan_list' %}"
              class="nav-item {% if request.resolver_match.app_name == 'sales' and request.resolver_match.url_name == 'sales_plan_list' %}active{% endif %}">
             <i class="fas fa-list"></i> My Plans
           </a>
+          {% endif %}
+          {% if user|has_permission:"sales_plan_add" %}
           <a href="{% url 'sales:sales_plan_add' %}"
              class="nav-item {% if request.resolver_match.app_name == 'sales' and request.resolver_match.url_name == 'sales_plan_add' %}active{% endif %}">
             <i class="fas fa-plus-circle"></i> New Plan
           </a>
+          {% endif %}
+          {% if user|has_permission:"sales_dashboard" %}
           <a href="{% url 'sales:sales_dashboard' %}"
              class="nav-item {% if request.resolver_match.app_name == 'sales' and request.resolver_match.url_name == 'sales_dashboard' %}active{% endif %}">
             <i class="fas fa-tachometer-alt"></i> Dashboard
           </a>
+          {% endif %}
         </div>
+        {% endif %}
 
         <!-- Reimbursement -->
+        {% if user|has_permission:"reimbursement_list" or user|has_permission:"reimbursement_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
         <button class="nav-item" onclick="toggleSubmenu('reimbursementSubmenu')">
           <i class="fas fa-receipt"></i> Reimbursement <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="reimbursementSubmenu" style="display:none;">
+          {% if user|has_permission:"reimbursement_list" or user|has_permission:"reimbursement_apply" %}
           <a href="{% url 'reimbursement:my_reimbursements' %}"
              class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'my_reimbursements' %}active{% endif %}">
             <i class="fas fa-file-medical"></i> My Requests
           </a>
+          {% endif %}
           {% if user|has_group:"Manager" %}
           <a href="{% url 'reimbursement:manager_pending' %}"
              class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'manager_pending' %}active{% endif %}">
@@ -314,26 +285,36 @@
           </a>
           {% endif %}
         </div>
+        {% endif %}
 
         <!-- Reports -->
+        {% if user|has_permission:"reports_doer_tasks" or user|has_permission:"reports_weekly_mis_score" or user|has_permission:"reports_performance_score" %}
         <button class="nav-item" onclick="toggleSubmenu('reportsSubmenu')">
           <i class="fas fa-chart-pie"></i> Reports <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="reportsSubmenu" style="display:none;">
+          {% if user|has_permission:"reports_doer_tasks" %}
           <a href="{% url 'reports:doer_tasks' %}"
              class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'doer_tasks' %}active{% endif %}">
             <i class="fas fa-tasks-alt"></i> Doer Tasks
           </a>
+          {% endif %}
+          {% if user|has_permission:"reports_weekly_mis_score" %}
           <a href="{% url 'reports:weekly_mis_score' %}"
              class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'weekly_mis_score' %}active{% endif %}">
             <i class="fas fa-calendar-week"></i> Weekly MIS Score
           </a>
+          {% endif %}
+          {% if user|has_permission:"reports_performance_score" %}
           <a href="{% url 'reports:performance_score' %}"
              class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'performance_score' %}active{% endif %}">
             <i class="fas fa-percent"></i> Performance Score
           </a>
+          {% endif %}
         </div>
+        {% endif %}
 
+        <!-- Users Management (Superuser only) -->
         {% if user.is_superuser %}
         <button class="nav-item" onclick="toggleSubmenu('usersSubmenu')">
           <i class="fas fa-user-friends"></i> Users <i class="fas fa-chevron-down chevron"></i>
@@ -350,7 +331,7 @@
         </div>
         {% endif %}
 
-        <!-- Settings -->
+        <!-- Settings (visible to all authenticated users) -->
         <button class="nav-item" onclick="toggleSubmenu('settingsSubmenu')">
           <i class="fas fa-cog"></i> Settings <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -368,7 +349,6 @@
             <i class="fas fa-sliders-h"></i> System Settings
           </a>
         </div>
-
       </div>
     </nav>
   {% endif %}

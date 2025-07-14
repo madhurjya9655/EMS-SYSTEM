@@ -22,7 +22,7 @@
           <div class="col-md-7">
             <div class="card-body p-5">
               <h3 class="mb-4">Welcome Back</h3>
-              <form method="post" novalidate>
+              <form method="post" novalidate id="loginForm" autocomplete="on">
                 {% csrf_token %}
                 {% if form.non_field_errors %}
                   <div class="alert alert-danger">{{ form.non_field_errors }}</div>
@@ -68,6 +68,34 @@
         input.type = input.type === 'password' ? 'text' : 'password';
         btn.textContent = input.type === 'password' ? 'Show' : 'Hide';
       });
+    });
+
+    // Remember Me Logic (save in localStorage, autofill on load)
+    document.addEventListener('DOMContentLoaded', function () {
+      let username = localStorage.getItem('rememberedUsername');
+      let password = localStorage.getItem('rememberedPassword');
+      if (username) {
+        document.querySelector('input[name="username"]').value = username;
+      }
+      if (password) {
+        document.querySelector('input[name="password"]').value = password;
+      }
+      if (username && password) {
+        document.getElementById('remember').checked = true;
+      }
+    });
+
+    document.getElementById('loginForm').addEventListener('submit', function(e) {
+      let remember = document.getElementById('remember').checked;
+      let username = document.querySelector('input[name="username"]').value;
+      let password = document.querySelector('input[name="password"]').value;
+      if (remember) {
+        localStorage.setItem('rememberedUsername', username);
+        localStorage.setItem('rememberedPassword', password);
+      } else {
+        localStorage.removeItem('rememberedUsername');
+        localStorage.removeItem('rememberedPassword');
+      }
     });
   </script>
 </div>

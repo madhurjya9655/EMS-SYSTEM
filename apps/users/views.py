@@ -1,11 +1,32 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required, user_passes_test
-from django.contrib.auth.models import User, Group
+from django.contrib.auth.models import User
+from django.contrib.auth.views import LoginView
+from django.urls import reverse_lazy
 from .models import Profile
-from .forms import UserForm, ProfileForm
+from .forms import UserForm, ProfileForm, CustomAuthForm
 
 def admin_only(user):
     return user.is_superuser
+
+class CustomLoginView(LoginView):
+    template_name = 'registration/login.html'
+    authentication_form = CustomAuthForm
+    redirect_authenticated_user = True
+
+    def form_valid(self, form):
+        remember = self.request.POST.get('remember')
+        if remember:
+            # 2 weeks
+            self.request.session.set_expiry(1209600)
+        else:
+            # Browser close
+            self.request.session.set_expiry(0)
+        return super().form_valid(form)
+
+    def get_success_url(self):
+        # Always redirect to dashboard after login
+        return reverse_lazy('dashboard:home')
 
 @login_required
 @user_passes_test(admin_only)
@@ -22,13 +43,12 @@ def add_user(request):
         if uf.is_valid() and pf.is_valid():
             user = uf.save(commit=False)
             user.set_password(uf.cleaned_data['password'])
-            user.is_staff = True
+            user.is_staff = False
             user.is_active = True
             user.save()
-            grp, _ = Group.objects.get_or_create(name=pf.cleaned_data['role'])
-            user.groups.add(grp)
             profile = pf.save(commit=False)
             profile.user = user
+            profile.permissions = pf.cleaned_data['permissions']
             profile.save()
             return redirect('users:list_users')
     else:
@@ -50,11 +70,9 @@ def edit_user(request, pk):
             if pwd:
                 user.set_password(pwd)
             user.save()
-            user.groups.clear()
-            grp, _ = Group.objects.get_or_create(name=pf.cleaned_data['role'])
-            user.groups.add(grp)
             profile = pf.save(commit=False)
             profile.user = user
+            profile.permissions = pf.cleaned_data['permissions']
             profile.save()
             return redirect('users:list_users')
     else:
@@ -80,3 +98,6 @@ def toggle_active(request, pk):
     u.is_active = not u.is_active
     u.save()
     return redirect('users:list_users')
+
+def custom_permission_denied_view(request, exception=None):
+    return render(request, 'users/no_permission.html', status=403)

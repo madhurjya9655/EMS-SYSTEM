@@ -56,8 +56,8 @@ class CompleteChecklistForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # require file only if admin set it mandatory
         self.fields['doer_file'].required = self.instance.attachment_mandatory
+        self.fields['doer_notes'].required = False
 
 class DelegationForm(forms.ModelForm):
     planned_date = forms.DateField(
@@ -102,6 +102,7 @@ class CompleteDelegationForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['doer_file'].required = self.instance.attachment_mandatory
+        self.fields['doer_notes'].required = False
 
 class BulkUploadForm(forms.ModelForm):
     class Meta:

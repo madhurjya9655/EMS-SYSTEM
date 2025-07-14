@@ -1,36 +1,24 @@
-# apps/users/decorators.py
-
+from django.shortcuts import render
 from functools import wraps
 from django.contrib.auth.decorators import login_required
-from django.core.exceptions import PermissionDenied
 
-def has_permission(perm_code):
-    """
-    @has_permission('tasks_list_checklist')
-    def list_checklist(request): …
-    """
+def has_permission(perm_code, group=None):
     def decorator(view_func):
         @login_required
         @wraps(view_func)
         def _wrapped(request, *args, **kwargs):
             user = request.user
-
-            # superusers bypass
             if user.is_superuser:
                 return view_func(request, *args, **kwargs)
-
-            # must have a profile with a permissions list
+            if group and user.groups.filter(name=group).exists():
+                return view_func(request, *args, **kwargs)
             try:
                 profile = user.profile
             except Exception:
-                raise PermissionDenied
-
+                return render(request, 'users/no_permission.html', status=403)
             perms = getattr(profile, 'permissions', None) or []
             if perm_code in perms:
                 return view_func(request, *args, **kwargs)
-
-            # otherwise 403
-            raise PermissionDenied
-
+            return render(request, 'users/no_permission.html', status=403)
         return _wrapped
     return decorator
