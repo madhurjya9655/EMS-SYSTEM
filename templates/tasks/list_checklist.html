@@ -3,7 +3,6 @@
 {% block tab_content %}
 
 <div class="card mb-4">
-  <!-- Title + actions -->
   <div class="card-header d-flex justify-content-between align-items-center border-0">
     <h5 class="mb-0">Checklist Tasks</h5>
     <div>
@@ -11,8 +10,6 @@
       <a href="{% url 'tasks:bulk_upload' %}" class="btn btn-sm btn-secondary">Bulk Upload</a>
     </div>
   </div>
-
-  <!-- FILTER header, now solid primary blue -->
   <div
     class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
     data-bs-toggle="collapse"
@@ -24,8 +21,6 @@
     <span>FILTER</span>
     <i class="fas fa-minus" style="color: blue !important;"></i>
   </div>
-
-  <!-- Filter panel -->
   <div id="filterPanel" class="collapse show">
     <div class="card-body">
       <form method="get">

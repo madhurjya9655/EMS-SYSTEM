@@ -1,6 +1,6 @@
-from django.shortcuts import render
 from functools import wraps
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import PermissionDenied
 
 def has_permission(perm_code, group=None):
     def decorator(view_func):
@@ -15,10 +15,10 @@ def has_permission(perm_code, group=None):
             try:
                 profile = user.profile
             except Exception:
-                return render(request, 'users/no_permission.html', status=403)
+                raise PermissionDenied
             perms = getattr(profile, 'permissions', None) or []
             if perm_code in perms:
                 return view_func(request, *args, **kwargs)
-            return render(request, 'users/no_permission.html', status=403)
+            raise PermissionDenied
         return _wrapped
     return decorator

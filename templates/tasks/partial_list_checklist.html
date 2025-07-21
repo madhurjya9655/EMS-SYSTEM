@@ -1,6 +1,6 @@
-<form method="post">
+<form method="post" action="">
   {% csrf_token %}
-  <button type="submit" class="btn btn-danger mb-3">Delete</button>
+  <button type="submit" class="btn btn-danger mb-3" onclick="return confirm('Are you sure you want to delete selected tasks?');">Delete</button>
   <div class="table-responsive">
     <table class="table table-hover align-middle">
       <thead>
@@ -57,10 +57,11 @@
 </form>
 
 <script>
-  document
-    .getElementById('select-all')
-    .addEventListener('change', function(){
+  var selectAll = document.getElementById('select-all');
+  if (selectAll) {
+    selectAll.addEventListener('change', function(){
       document.querySelectorAll('.row-checkbox')
               .forEach(cb => cb.checked = this.checked);
     });
+  }
 </script>

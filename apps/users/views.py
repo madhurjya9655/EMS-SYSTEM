@@ -5,6 +5,8 @@ from django.contrib.auth.views import LoginView
 from django.urls import reverse_lazy
 from .models import Profile
 from .forms import UserForm, ProfileForm, CustomAuthForm
+from .permissions import PERMISSIONS_STRUCTURE
+from django.contrib import messages
 
 def admin_only(user):
     return user.is_superuser
@@ -17,15 +19,12 @@ class CustomLoginView(LoginView):
     def form_valid(self, form):
         remember = self.request.POST.get('remember')
         if remember:
-            # 2 weeks
-            self.request.session.set_expiry(1209600)
+            self.request.session.set_expiry(1209600)  # 2 weeks
         else:
-            # Browser close
-            self.request.session.set_expiry(0)
+            self.request.session.set_expiry(0)  # Browser close
         return super().form_valid(form)
 
     def get_success_url(self):
-        # Always redirect to dashboard after login
         return reverse_lazy('dashboard:home')
 
 @login_required
@@ -54,7 +53,11 @@ def add_user(request):
     else:
         uf = UserForm()
         pf = ProfileForm()
-    return render(request, 'users/add_user.html', {'uf': uf, 'pf': pf})
+    return render(request, 'users/add_user.html', {
+        'uf': uf,
+        'pf': pf,
+        'permissions_structure': PERMISSIONS_STRUCTURE,
+    })
 
 @login_required
 @user_passes_test(admin_only)
@@ -82,14 +85,28 @@ def edit_user(request, pk):
         'uf': uf,
         'pf': pf,
         'user_obj': user_obj,
+        'permissions_structure': PERMISSIONS_STRUCTURE,
     })
 
 @login_required
 @user_passes_test(admin_only)
 def delete_user(request, pk):
-    u = get_object_or_404(User, pk=pk)
-    u.delete()
-    return redirect('users:list_users')
+    try:
+        user = User.objects.get(pk=pk)
+    except User.DoesNotExist:
+        messages.error(request, "No user matches the given query.")
+        return render(request, "users/user_not_found.html", status=404)
+
+    if request.method == "POST":
+        if user == request.user:
+            messages.error(request, "You cannot delete your own account!")
+            return redirect("users:list_users")
+        user.delete()
+        messages.success(request, "User deleted successfully.")
+        return redirect('users:list_users')
+
+    # Show confirm page if GET
+    return render(request, "users/confirm_delete.html", {"user": user})
 
 @login_required
 @user_passes_test(admin_only)
@@ -98,6 +115,3 @@ def toggle_active(request, pk):
     u.is_active = not u.is_active
     u.save()
     return redirect('users:list_users')
-
-def custom_permission_denied_view(request, exception=None):
-    return render(request, 'users/no_permission.html', status=403)

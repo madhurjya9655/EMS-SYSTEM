@@ -1,5 +1,25 @@
 <div class="card shadow-sm">
-  <div class="card-header bg-white"><h5 class="mb-0">Checklist Tasks</h5></div>
+  <div class="card-header bg-white d-flex justify-content-between align-items-center">
+    <h5 class="mb-0">Checklist Tasks</h5>
+    <div>
+      <!-- Today Only and Show All buttons -->
+      <form method="get" class="d-inline">
+        {% for key, value in request.GET.items %}
+          {% if key != 'today_only' %}
+            <input type="hidden" name="{{ key }}" value="{{ value }}">
+          {% endif %}
+        {% endfor %}
+        <button type="submit" name="today_only" value="1"
+          class="btn btn-sm {% if request.GET.today_only %}btn-primary{% else %}btn-outline-primary{% endif %}">
+          Today Only
+        </button>
+      </form>
+      <a href="?" class="btn btn-sm btn-outline-secondary ms-1
+         {% if not request.GET.today_only %}active{% endif %}">
+        Show All
+      </a>
+    </div>
+  </div>
   <div class="card-body p-0">
     <table class="table table-hover mb-0">
       <thead class="table-light">
@@ -10,6 +30,7 @@
           <th>Planned Date</th>
           <th>Status</th>
           <th>Time/Task</th>
+          <th><b>Actual Time</b></th>
           <th>Delay</th>
           <th>Action</th>
         </tr>
@@ -17,24 +38,35 @@
       <tbody>
         {% for t in tasks %}
         <tr>
-          <td>{{ t.id }}</td>
+          <td>{% if t.id %}{{ t.id }}{% else %}-{% endif %}</td>
           <td>{{ t.task_name }}</td>
           <td>{{ t.message|truncatechars:30 }}</td>
           <td>{{ t.planned_date|date:"Y-m-d H:i" }}</td>
           <td>{{ t.status }}</td>
           <td>{{ t.time_per_task_minutes }} min</td>
-          <td>{{ t.delay }}</td>
+          <td>
+            {% if t.actual_time_taken is not None %}
+              {{ t.actual_time_taken }} min
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td>{% if t.delay %}{{ t.delay }}{% else %}-{% endif %}</td>
           <td>
             {% if t.status == 'Pending' %}
-            <a href="{% url 'tasks:complete_checklist' t.id %}?next={{ request.get_full_path }}" class="btn btn-sm btn-success">COMPLETE</a>
+              {% if not t.is_virtual %}
+                <a href="{% url 'tasks:complete_checklist' t.id %}?next={{ request.get_full_path }}" class="btn btn-sm btn-success">COMPLETE</a>
+              {% else %}
+                <span class="text-warning">Missed Occurrence</span>
+              {% endif %}
             {% else %}
-            <span class="text-muted">Done</span>
+              <span class="text-muted">Done</span>
             {% endif %}
           </td>
         </tr>
         {% empty %}
         <tr>
-          <td colspan="8" class="text-center text-muted">No record found.</td>
+          <td colspan="9" class="text-center text-muted">No record found.</td>
         </tr>
         {% endfor %}
       </tbody>

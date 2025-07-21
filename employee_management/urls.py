@@ -6,16 +6,8 @@ from apps.users.views import CustomLoginView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-
-    # Custom login with remember me and dashboard redirect
-    path(
-        'accounts/login/',
-        CustomLoginView.as_view(),
-        name='login'
-    ),
+    path('accounts/login/', CustomLoginView.as_view(), name='login'),
     path('accounts/', include('django.contrib.auth.urls')),
-
-    # App includes
     path('leave/',         include(('apps.leave.urls',          'leave'),        namespace='leave')),
     path('petty_cash/',    include(('apps.petty_cash.urls',     'petty_cash'),   namespace='petty_cash')),
     path('sales/',         include(('apps.sales.urls',          'sales'),        namespace='sales')),
@@ -30,7 +22,3 @@ urlpatterns = [
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-
-# --- ADD THIS AT THE END! ---
-# Custom handler for 403 PermissionDenied
-handler403 = 'apps.users.views.custom_permission_denied_view'

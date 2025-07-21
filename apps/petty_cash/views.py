@@ -1,6 +1,6 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import get_user_model
-from apps.users.decorators import has_permission
+from apps.users.permissions import has_permission
 
 from .models import PettyCashRequest
 from .forms  import PettyCashForm

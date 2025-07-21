@@ -3,52 +3,93 @@
 {% block title %}Edit User{% endblock %}
 
 {% block content %}
-  <h2 class="mb-4">
-    Edit {{ user_obj.get_full_name|default:user_obj.username }}
-  </h2>
-  <form method="post" class="row g-4">
+  <h2 class="mb-4">Edit {{ user_obj.get_full_name|default:user_obj.username }}</h2>
+  <form method="post" class="mb-4">
     {% csrf_token %}
-
-    {# First / Last / Username #}
-    <div class="col-md-4">{{ uf.first_name.label_tag }}{{ uf.first_name }}</div>
-    <div class="col-md-4">{{ uf.last_name.label_tag }}{{ uf.last_name }}</div>
-    <div class="col-md-4">{{ uf.username.label_tag }}{{ uf.username }}</div>
-
-    {# Email / Password / Role #}
-    <div class="col-md-4">{{ uf.email.label_tag }}{{ uf.email }}</div>
-    <div class="col-md-4">{{ uf.password.label_tag }}{{ uf.password }}</div>
-    <div class="col-md-4">{{ pf.role.label_tag }}{{ pf.role }}</div>
-
-    {# Phone / Branch / Department #}
-    <div class="col-md-4">{{ pf.phone.label_tag }}{{ pf.phone }}</div>
-    <div class="col-md-4">{{ pf.branch.label_tag }}{{ pf.branch }}</div>
-    <div class="col-md-4">
-      <label class="form-label">{{ pf.department.label }}</label>
-      {{ pf.department }}
-    </div>
-
-    {# Team Leader #}
-    <div class="col-md-4">{{ pf.team_leader.label_tag }}{{ pf.team_leader }}</div>
-
-    {# Permissions #}
-    <div class="col-12">
-      <hr class="my-4">
-      <h5>Select User Privilege</h5>
-      <div class="row">
-        {% for ch in pf.permissions %}
-          <div class="col-sm-4">
-            <div class="form-check">
-              {{ ch.tag }} {{ ch.choice_label }}
-            </div>
-          </div>
-        {% endfor %}
+    <div class="row mb-3">
+      <div class="col-md-4">
+        {{ uf.first_name.label_tag }}{{ uf.first_name }}
+      </div>
+      <div class="col-md-4">
+        {{ uf.last_name.label_tag }}{{ uf.last_name }}
+      </div>
+      <div class="col-md-4">
+        {{ uf.username.label_tag }}{{ uf.username }}
       </div>
     </div>
+    <div class="row mb-3">
+      <div class="col-md-4">
+        {{ uf.email.label_tag }}{{ uf.email }}
+      </div>
+      <div class="col-md-4">
+        {{ uf.password.label_tag }}{{ uf.password }}
+      </div>
+      <div class="col-md-4">
+        {{ pf.role.label_tag }}{{ pf.role }}
+      </div>
+    </div>
+    <div class="row mb-3">
+      <div class="col-md-4">
+        {{ pf.phone.label_tag }}{{ pf.phone }}
+      </div>
+      <div class="col-md-4">
+        {{ pf.branch.label_tag }}{{ pf.branch }}
+      </div>
+      <div class="col-md-4">
+        {{ pf.department.label_tag }}{{ pf.department }}
+      </div>
+    </div>
+    <div class="row mb-4">
+      <div class="col-md-4">
+        {{ pf.team_leader.label_tag }}{{ pf.team_leader }}
+      </div>
+      <div class="col-md-4"></div>
+      <div class="col-md-4"></div>
+    </div>
 
-    {# Actions #}
-    <div class="col-12 text-end">
+    <hr class="my-4">
+    <h5>Select User Privilege</h5>
+    <div class="row">
+      {% for module, perms in permissions_structure.items %}
+        <div class="col-md-4 mb-4">
+          <div style="font-weight: 600; font-size: 1.08rem; margin-bottom: .35em;">
+            <input type="checkbox" class="select-all-module me-2" data-module="{{ module|slugify }}">
+            {{ module }}
+          </div>
+          {% for code, label in perms %}
+            <div class="form-check ms-4">
+              <input
+                type="checkbox"
+                name="permissions"
+                value="{{ code }}"
+                id="perm_{{ code }}"
+                class="form-check-input module-{{ module|slugify }} permission-checkbox"
+                {% if pf.permissions.value and code in pf.permissions.value %}checked{% endif %}
+              >
+              <label class="form-check-label" for="perm_{{ code }}">
+                {{ label }}
+              </label>
+            </div>
+          {% endfor %}
+        </div>
+      {% endfor %}
+    </div>
+    {{ pf.permissions.errors }}
+
+    <div class="col-12 text-end mt-4">
       <button type="submit" class="btn btn-primary">Save Changes</button>
       <a href="{% url 'users:list_users' %}" class="btn btn-secondary ms-2">Cancel</a>
     </div>
   </form>
+  <script>
+    // "Select all" logic for grouped modules
+    document.querySelectorAll('.select-all-module').forEach(function(selectAllBox) {
+      selectAllBox.addEventListener('change', function() {
+        var mod = this.getAttribute('data-module');
+        document.querySelectorAll('.permission-checkbox.module-' + mod).forEach(function(cb) {
+          cb.checked = selectAllBox.checked;
+        });
+      });
+    });
+  </script>
 {% endblock %}

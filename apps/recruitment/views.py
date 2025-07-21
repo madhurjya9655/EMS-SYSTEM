@@ -8,6 +8,7 @@ from django.http import HttpResponse
 from datetime import date
 from .models import Employee, Candidate, InterviewSchedule, InterviewFeedback
 from .forms import EmployeeForm, CandidateForm, CandidateStatusForm, InterviewScheduleForm, InterviewFeedbackForm
+from apps.users.permissions import has_permission
 
 class EmployeeListView(LoginRequiredMixin, ListView):
     login_url = 'login'

@@ -4,6 +4,7 @@ from django.views.generic import CreateView, ListView, UpdateView, TemplateView
 from django.urls import reverse_lazy
 from .models import SalesKPI
 from .forms import KPIPlanForm, KPIActualForm
+from apps.users.permissions import has_permission
 
 class HasPermissionMixin:
     permission_code = None

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% load widget_tweaks %}
+{% load widget_tweaks custom_filters %}
+
 
 {% block title %}Performance Score{% endblock %}
 {% block content %}
@@ -48,7 +49,8 @@
             <th>Task Type</th>
             <th>Planned</th>
             <th>Completed</th>
-            <th>Time (HH:MM)</th>
+            <th>Time Assigned (HH:MM)</th>
+            <th>Actual Time Taken (HH:MM)</th>
             <th>% Not Completed</th>
           </tr>
         </thead>
@@ -59,6 +61,11 @@
             <td>{{ it.planned }}</td>
             <td>{{ it.completed }}</td>
             <td>{{ time_checklist }}</td>
+            <td>
+              {% with hh=it.actual_minutes|divisibleby:60 mm=it.actual_minutes|modulo:60 %}
+                {{ it.actual_minutes|divisibleby:60|stringformat:"02d" }}:{{ it.actual_minutes|modulo:60|stringformat:"02d" }}
+              {% endwith %}
+            </td>
             <td>{{ it.pct }}%</td>
           </tr>
           {% endfor %}
@@ -79,7 +86,8 @@
             <th>Task Type</th>
             <th>Planned</th>
             <th>Completed</th>
-            <th>Time (HH:MM)</th>
+            <th>Time Assigned (HH:MM)</th>
+            <th>Actual Time Taken (HH:MM)</th>
             <th>% Not Completed</th>
           </tr>
         </thead>
@@ -90,6 +98,11 @@
             <td>{{ it.planned }}</td>
             <td>{{ it.completed }}</td>
             <td>{{ time_delegation }}</td>
+            <td>
+              {% with hh=it.actual_minutes|divisibleby:60 mm=it.actual_minutes|modulo:60 %}
+                {{ it.actual_minutes|divisibleby:60|stringformat:"02d" }}:{{ it.actual_minutes|modulo:60|stringformat:"02d" }}
+              {% endwith %}
+            </td>
             <td>{{ it.pct }}%</td>
           </tr>
           {% endfor %}

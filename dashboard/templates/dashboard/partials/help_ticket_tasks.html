@@ -7,47 +7,19 @@
       <table class="table table-striped align-middle mb-0">
         <thead class="table-light">
           <tr>
+            <th>Ticket ID</th>
+            <th>Assigned By</th>
+            <th>Subject</th>
+            <th>Message</th>
+            <th>Assigned Date</th>
+            <th>Planned Date</th>
             <th>
-              Ticket ID
-              <i class="fas fa-arrow-up text-danger small"></i>
-              <i class="fas fa-arrow-down text-primary small"></i>
-            </th>
-            <th>
-              Assigned By
-              <i class="fas fa-arrow-up text-danger small"></i>
-              <i class="fas fa-arrow-down text-primary small"></i>
-            </th>
-            <th>
-              Subject
-              <i class="fas fa-arrow-up text-danger small"></i>
-              <i class="fas fa-arrow-down text-primary small"></i>
-            </th>
-            <th>
-              Message
-              <i class="fas fa-arrow-up text-danger small"></i>
-              <i class="fas fa-arrow-down text-primary small"></i>
-            </th>
-            <th>
-              Assigned Date
-              <i class="fas fa-arrow-up text-danger small"></i>
-              <i class="fas fa-arrow-down text-primary small"></i>
-            </th>
-            <th>
-              Planned Date
-              <i class="fas fa-arrow-up text-danger small"></i>
-              <i class="fas fa-arrow-down text-primary small"></i>
+              Actual <br>
+              Time <span title="Time taken in minutes" class="text-warning">&#x23F0;</span>
             </th>
             <th>Delay</th>
-            <th>
-              Priority
-              <i class="fas fa-arrow-up text-danger small"></i>
-              <i class="fas fa-arrow-down text-primary small"></i>
-            </th>
-            <th>
-              Status
-              <i class="fas fa-arrow-up text-danger small"></i>
-              <i class="fas fa-arrow-down text-primary small"></i>
-            </th>
+            <th>Priority</th>
+            <th>Status</th>
             <th>Attachment</th>
             <th>Action</th>
           </tr>
@@ -61,6 +33,13 @@
               <td>{{ item.description|truncatewords:10 }}</td>
               <td>{{ item.created_at|date:"d M, Y h:i A" }}</td>
               <td>{{ item.planned_date|date:"d M, Y h:i A" }}</td>
+              <td>
+                {% if item.actual_time_taken %}
+                  {{ item.actual_time_taken }} min
+                {% else %}
+                  &ndash;
+                {% endif %}
+              </td>
               <td>{{ item.delay }}</td>
               <td>{{ item.priority }}</td>
               <td>{{ item.status }}</td>
@@ -88,7 +67,7 @@
             </tr>
           {% empty %}
             <tr>
-              <td colspan="11" class="text-center text-muted py-4">
+              <td colspan="12" class="text-center text-muted py-4">
                 No tickets to show.
               </td>
             </tr>

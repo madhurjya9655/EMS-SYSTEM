@@ -1,6 +1,7 @@
 import csv
 import io
 import math
+import pytz
 from datetime import datetime, timedelta, time
 import pandas as pd
 from django.contrib import messages
@@ -13,8 +14,10 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime, parse_time
+from django.core.mail import EmailMultiAlternatives
+from django.template.loader import render_to_string
 
-from apps.users.decorators import has_permission
+from apps.users.permissions import has_permission
 from .forms import (
     BulkUploadForm,
     ChecklistForm, CompleteChecklistForm,
@@ -27,6 +30,8 @@ User = get_user_model()
 can_create = lambda u: u.is_superuser or u.groups.filter(
     name__in=['Admin', 'Manager', 'EA', 'CEO']
 ).exists()
+
+site_url = "https://ems-system-d26q.onrender.com"
 
 def parse_int(val, default=0):
     if val is None:
@@ -47,14 +52,14 @@ def parse_time_val(val):
     return parse_time(s) if s else None
 
 def get_default_time():
-    return time(10, 30)
+    return time(10, 0)
 
 def get_next_date(mode, freq, start, target_weekday=None):
     next_date = start
     if mode == 'Daily':
         while True:
             next_date += timedelta(days=freq)
-            if next_date.weekday() != 6:  # skip Sunday
+            if next_date.weekday() != 6:
                 break
         return next_date
     elif mode == 'Weekly':
@@ -93,12 +98,9 @@ def get_next_date(mode, freq, start, target_weekday=None):
     return start
 
 def create_missing_recurring_checklist_tasks():
-    """
-    For each recurring checklist, if the latest instance is completed (or today is after the last planned_date),
-    generate the next instance at 10:30AM (skipping Sunday), only ONE future instance at a time.
-    """
-    today = timezone.localdate()
-    now = timezone.localtime()
+    ist = pytz.timezone('Asia/Kolkata')
+    today = timezone.localtime(timezone.now(), ist).date()
+    now = timezone.localtime(timezone.now(), ist)
     qs = Checklist.objects.filter(mode__in=['Daily', 'Weekly', 'Monthly', 'Yearly'])
     for checklist in qs:
         freq = checklist.frequency
@@ -107,36 +109,27 @@ def create_missing_recurring_checklist_tasks():
         mode = checklist.mode
         assign_to = checklist.assign_to
         task_name = checklist.task_name
-
-        # Always use the planned_time of the original (or 10:30)
-        planned_time = checklist.planned_date.time() if checklist.planned_date else get_default_time()
+        planned_time = checklist.planned_date.time() if checklist.planned_date else time(10, 0)
         if planned_time == time(0, 0) or not planned_time:
-            planned_time = get_default_time()
-
-        # The most recent occurrence
+            planned_time = time(10, 0)
         last_task = Checklist.objects.filter(
             assign_to=assign_to,
             task_name=task_name,
             mode=mode,
         ).order_by('-planned_date').first()
         if last_task:
-            prev_date = timezone.localtime(last_task.planned_date)
+            prev_date = timezone.localtime(last_task.planned_date, ist)
         else:
-            prev_date = timezone.localtime(checklist.planned_date)
-
-        # If the last planned_date is in the past (completed or missed), generate next
+            prev_date = timezone.localtime(checklist.planned_date, ist)
         if prev_date.date() < today or (last_task and last_task.status == 'Completed'):
-            # Recurrence logic: set the time to 10:30am and never Sunday
             if prev_date.time() != planned_time:
                 prev_date = datetime.combine(prev_date.date(), planned_time)
-                prev_date = timezone.make_aware(prev_date)
+                prev_date = ist.localize(prev_date)
             target_weekday = checklist.planned_date.weekday() if mode == 'Weekly' else None
             next_date = get_next_date(mode, freq, prev_date, target_weekday)
-            # Always 10:30AM
             if next_date.time() != planned_time:
                 next_date = datetime.combine(next_date.date(), planned_time)
-                next_date = timezone.make_aware(next_date)
-            # Only create if not already exists, and never for Sunday
+                next_date = ist.localize(next_date)
             if next_date.weekday() != 6 and not Checklist.objects.filter(
                 assign_to=assign_to,
                 task_name=task_name,
@@ -168,13 +161,69 @@ def create_missing_recurring_checklist_tasks():
                     actual_duration_minutes=0
                 )
 
-@has_permission('tasks_list_checklist')
+def calculate_delegation_assigned_time(qs, up_to=None):
+    if up_to is None:
+        up_to = timezone.localdate()
+    total = 0
+    for d in qs:
+        freq = d.frequency or 1
+        minutes = d.time_per_task_minutes or 0
+        mode = getattr(d, 'mode', 'Daily')
+        planned_date = d.planned_date
+        start = planned_date
+        if start > up_to:
+            continue
+        occur = 0
+        if mode == 'Daily':
+            days = (up_to - start).days
+            if days >= 0:
+                occur = (days // freq) + 1
+        elif mode == 'Weekly':
+            delta_weeks = ((up_to - start).days // 7)
+            if delta_weeks >= 0:
+                occur = (delta_weeks // freq) + 1
+        elif mode == 'Monthly':
+            months = (up_to.year - start.year) * 12 + (up_to.month - start.month)
+            if up_to.day >= start.day:
+                months += 0
+            else:
+                months -= 1
+            if months >= 0:
+                occur = (months // freq) + 1
+        elif mode == 'Yearly':
+            years = up_to.year - start.year
+            if (up_to.month, up_to.day) < (start.month, start.day):
+                years -= 1
+            if years >= 0:
+                occur = (years // freq) + 1
+        else:
+            occur = 1 if start <= up_to else 0
+        total += occur * minutes
+    return total
+
+def calculate_delegation_actual_time(qs, up_to=None):
+    if up_to is None:
+        up_to = timezone.localdate()
+    total = 0
+    for d in qs.filter(status='Completed'):
+        if d.completed_at:
+            if hasattr(d.completed_at, 'date'):
+                comp_date = d.completed_at.date()
+            else:
+                comp_date = d.completed_at
+            if comp_date <= up_to:
+                total += d.actual_duration_minutes or 0
+    return total
+
+@has_permission('list_checklist')
 def list_checklist(request):
     create_missing_recurring_checklist_tasks()
     if request.method == 'POST':
-        if ids := request.POST.getlist('sel'):
+        ids = request.POST.getlist('sel')
+        if ids:
             Checklist.objects.filter(pk__in=ids).delete()
         return redirect('tasks:list_checklist')
+
     qs = Checklist.objects.all()
     if kw := request.GET.get('keyword', '').strip():
         qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
@@ -187,7 +236,13 @@ def list_checklist(request):
     ]:
         if v := request.GET.get(param, '').strip():
             qs = qs.filter(**{lookup: v})
-    ordered = qs.order_by('-planned_date')
+
+    if request.GET.get('today_only'):
+        today = timezone.localdate()
+        qs = qs.filter(planned_date__date=today)
+
+    items = qs.order_by('-planned_date')
+
     if request.GET.get('download'):
         resp = HttpResponse(content_type='text/csv')
         resp['Content-Disposition'] = 'attachment; filename="checklist.csv"'
@@ -196,7 +251,7 @@ def list_checklist(request):
             'Task Name', 'Assign To', 'Planned Date',
             'Priority', 'Group Name', 'Status'
         ])
-        for itm in ordered:
+        for itm in items:
             w.writerow([
                 itm.task_name,
                 itm.assign_to.get_full_name() or itm.assign_to.username,
@@ -206,13 +261,7 @@ def list_checklist(request):
                 itm.status,
             ])
         return resp
-    grouped = (
-        ordered
-        .values('task_name', 'assign_to_id')
-        .annotate(first_id=Min('id'))
-        .values_list('first_id', flat=True)
-    )
-    items = Checklist.objects.filter(id__in=grouped).order_by('-planned_date')
+
     ctx = {
         'items': items,
         'users': User.objects.order_by('username'),
@@ -226,14 +275,13 @@ def list_checklist(request):
         return render(request, 'tasks/partial_list_checklist.html', ctx)
     return render(request, 'tasks/list_checklist.html', ctx)
 
-@has_permission('tasks_add_checklist')
+@has_permission('add_checklist')
 def add_checklist(request):
     if request.method == 'POST':
         form = ChecklistForm(request.POST, request.FILES)
         if form.is_valid():
             obj = form.save(commit=False)
             dt = obj.planned_date
-            # Always save today task at now() or at 10:30am if only date is given
             if dt and (dt.time() == time(0, 0) or dt.time() is None):
                 now = timezone.localtime()
                 planned_time = get_default_time()
@@ -241,12 +289,32 @@ def add_checklist(request):
                 obj.planned_date = timezone.make_aware(planned_dt)
             obj.save()
             form.save_m2m()
+            if obj.assign_to.email:
+                complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
+                subject = f"New Checklist Task Assigned: {obj.task_name}"
+                html_message = render_to_string(
+                    'email/checklist_assigned.html',
+                    {
+                        'task': obj,
+                        'assign_by': obj.assign_by,
+                        'assign_to': obj.assign_to,
+                        'complete_url': complete_url,
+                    }
+                )
+                msg = EmailMultiAlternatives(
+                    subject,
+                    html_message,
+                    None,
+                    [obj.assign_to.email]
+                )
+                msg.attach_alternative(html_message, "text/html")
+                msg.send(fail_silently=False)
             return redirect('tasks:list_checklist')
     else:
         form = ChecklistForm(initial={'assign_by': request.user})
     return render(request, 'tasks/add_checklist.html', {'form': form})
 
-@has_permission('tasks_add_checklist')
+@has_permission('add_checklist')
 def edit_checklist(request, pk):
     obj = get_object_or_404(Checklist, pk=pk)
     if request.method == 'POST':
@@ -260,12 +328,32 @@ def edit_checklist(request, pk):
                 obj2.planned_date = timezone.make_aware(planned_dt)
             obj2.save()
             form.save_m2m()
+            if obj2.assign_to.email:
+                complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj2.id])}"
+                subject = f"Checklist Task Updated: {obj2.task_name}"
+                html_message = render_to_string(
+                    'email/checklist_assigned.html',
+                    {
+                        'task': obj2,
+                        'assign_by': obj2.assign_by,
+                        'assign_to': obj2.assign_to,
+                        'complete_url': complete_url,
+                    }
+                )
+                msg = EmailMultiAlternatives(
+                    subject,
+                    html_message,
+                    None,
+                    [obj2.assign_to.email]
+                )
+                msg.attach_alternative(html_message, "text/html")
+                msg.send(fail_silently=True)
             return redirect('tasks:list_checklist')
     else:
         form = ChecklistForm(instance=obj)
     return render(request, 'tasks/add_checklist.html', {'form': form})
 
-@has_permission('tasks_list_checklist')
+@has_permission('list_checklist')
 def delete_checklist(request, pk):
     obj = get_object_or_404(Checklist, pk=pk)
     if request.method == 'POST':
@@ -275,13 +363,33 @@ def delete_checklist(request, pk):
         'object': obj, 'type': 'Checklist'
     })
 
-@has_permission('tasks_list_checklist')
+@has_permission('list_checklist')
 def reassign_checklist(request, pk):
     obj = get_object_or_404(Checklist, pk=pk)
     if request.method == 'POST':
         if uid := request.POST.get('assign_to'):
             obj.assign_to = User.objects.get(pk=uid)
             obj.save()
+            if obj.assign_to.email:
+                complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
+                subject = f"Checklist Task Reassigned: {obj.task_name}"
+                html_message = render_to_string(
+                    'email/checklist_assigned.html',
+                    {
+                        'task': obj,
+                        'assign_by': obj.assign_by,
+                        'assign_to': obj.assign_to,
+                        'complete_url': complete_url,
+                    }
+                )
+                msg = EmailMultiAlternatives(
+                    subject,
+                    html_message,
+                    None,
+                    [obj.assign_to.email]
+                )
+                msg.attach_alternative(html_message, "text/html")
+                msg.send(fail_silently=True)
             return redirect('tasks:list_checklist')
     return render(request, 'tasks/reassign_checklist.html', {
         'object': obj,
@@ -310,42 +418,97 @@ def complete_checklist(request, pk):
         'form': form, 'object': obj
     })
 
-@has_permission('tasks_list_delegation')
+@has_permission('list_delegation')
 def list_delegation(request):
     if request.method == 'POST':
         if ids := request.POST.getlist('sel'):
             Delegation.objects.filter(pk__in=ids).delete()
         return redirect('tasks:list_delegation')
     items = Delegation.objects.all().order_by('-planned_date')
-    ctx = {'items': items, 'current_tab': 'delegation'}
+
+    # TODAY ONLY filter
+    if request.GET.get('today_only'):
+        today = timezone.localdate()
+        items = items.filter(planned_date=today)
+
+    up_to = timezone.localdate()
+    assign_time = calculate_delegation_assigned_time(items, up_to)
+    actual_time = calculate_delegation_actual_time(items, up_to)
+
+    ctx = {
+        'items': items,
+        'current_tab': 'delegation',
+        'assign_time': assign_time,
+        'actual_time': actual_time,
+    }
     if request.GET.get('partial'):
         return render(request, 'tasks/partial_list_delegation.html', ctx)
     return render(request, 'tasks/list_delegation.html', ctx)
 
-@has_permission('tasks_add_delegation')
+@has_permission('add_delegation')
 def add_delegation(request):
     if request.method == 'POST':
         form = DelegationForm(request.POST, request.FILES)
         if form.is_valid():
-            form.save()
+            obj = form.save()
+            if obj.assign_to.email:
+                complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[obj.id])}"
+                subject = f"New Delegation Task Assigned: {obj.task_name}"
+                html_message = render_to_string(
+                    'email/delegation_assigned.html',
+                    {
+                        'delegation': obj,
+                        'assign_by': obj.assign_by,
+                        'assign_to': obj.assign_to,
+                        'complete_url': complete_url,
+                    }
+                )
+                msg = EmailMultiAlternatives(
+                    subject,
+                    html_message,
+                    None,
+                    [obj.assign_to.email]
+                )
+                msg.attach_alternative(html_message, "text/html")
+                msg.send(fail_silently=True)
             return redirect('tasks:list_delegation')
     else:
         form = DelegationForm(initial={'assign_by': request.user})
     return render(request, 'tasks/add_delegation.html', {'form': form})
 
-@has_permission('tasks_add_delegation')
+@has_permission('add_delegation')
 def edit_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
     if request.method == 'POST':
         form = DelegationForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
-            form.save()
+            obj2 = form.save()
+            if obj2.assign_to.email:
+                complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[obj2.id])}"
+                subject = f"Delegation Task Updated: {obj2.task_name}"
+                html_message = render_to_string(
+                    'email/delegation_assigned.html',
+                    {
+                        'delegation': obj2,
+                        'assign_by': obj2.assign_by,
+                        'assign_to': obj2.assign_to,
+                        'complete_url': complete_url,
+                    }
+                )
+                msg = EmailMultiAlternatives(
+                    subject,
+                    html_message,
+                    None,
+                    [obj2.assign_to.email]
+                )
+                msg.attach_alternative(html_message, "text/html")
+                msg.send(fail_silently=True)
             return redirect('tasks:list_delegation')
     else:
         form = DelegationForm(instance=obj)
     return render(request, 'tasks/add_delegation.html', {'form': form})
 
-@has_permission('tasks_list_delegation')
+@has_permission('list_delegation')
 def delete_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
     if request.method == 'POST':
@@ -355,13 +518,33 @@ def delete_delegation(request, pk):
         'object': obj, 'type': 'Delegation'
     })
 
-@has_permission('tasks_list_delegation')
+@has_permission('list_delegation')
 def reassign_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
     if request.method == 'POST':
         if uid := request.POST.get('assign_to'):
             obj.assign_to = User.objects.get(pk=uid)
             obj.save()
+            if obj.assign_to.email:
+                complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[obj.id])}"
+                subject = f"Delegation Task Reassigned: {obj.task_name}"
+                html_message = render_to_string(
+                    'email/delegation_assigned.html',
+                    {
+                        'delegation': obj,
+                        'assign_by': obj.assign_by,
+                        'assign_to': obj.assign_to,
+                        'complete_url': complete_url,
+                    }
+                )
+                msg = EmailMultiAlternatives(
+                    subject,
+                    html_message,
+                    None,
+                    [obj.assign_to.email]
+                )
+                msg.attach_alternative(html_message, "text/html")
+                msg.send(fail_silently=True)
             return redirect('tasks:list_delegation')
     return render(request, 'tasks/reassign_delegation.html', {
         'object': obj,
@@ -378,6 +561,9 @@ def complete_delegation(request, pk):
             now = timezone.now()
             obj.status = 'Completed'
             obj.completed_at = now
+            planned_datetime = datetime.combine(obj.planned_date, time(0, 0), tzinfo=now.tzinfo)
+            mins = int((now - planned_datetime).total_seconds() // 60)
+            obj.actual_duration_minutes = max(mins, 0)
             obj.save()
             return redirect(
                 request.GET.get('next', 'dashboard:home') +
@@ -389,7 +575,7 @@ def complete_delegation(request, pk):
         'form': form, 'object': obj
     })
 
-@has_permission('tasks_bulk_upload')
+@has_permission('bulk_upload')
 def bulk_upload(request):
     if request.method == 'POST':
         form = BulkUploadForm(request.POST, request.FILES)
@@ -525,7 +711,8 @@ def bulk_upload(request):
                         ).strip().lower() in ['yes','true','1'],
                         time_per_task_minutes=time_per,
                         mode=mode_val,
-                        frequency=freq_val
+                        frequency=freq_val,
+                        actual_duration_minutes=0
                     )
                     deg.save()
             messages.success(
@@ -542,7 +729,7 @@ def bulk_upload(request):
         form = BulkUploadForm()
     return render(request, 'tasks/bulk_upload.html', {'form': form})
 
-@has_permission('tasks_bulk_upload')
+@has_permission('bulk_upload')
 def download_checklist_template(request):
     path = finders.find('bulk_upload_templates/checklist_template.csv')
     if not path:
@@ -553,7 +740,7 @@ def download_checklist_template(request):
         filename='checklist_template.csv'
     )
 
-@has_permission('tasks_bulk_upload')
+@has_permission('bulk_upload')
 def download_delegation_template(request):
     path = finders.find('bulk_upload_templates/delegation_template.csv')
     if not path:
@@ -625,6 +812,26 @@ def add_help_ticket(request):
             ticket = form.save(commit=False)
             ticket.assign_by = request.user
             ticket.save()
+            if ticket.assign_to.email:
+                complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
+                subject = f"New Help Ticket Assigned: {ticket.title}"
+                html_message = render_to_string(
+                    'email/help_ticket_assigned.html',
+                    {
+                        'ticket': ticket,
+                        'assign_by': ticket.assign_by,
+                        'assign_to': ticket.assign_to,
+                        'complete_url': complete_url,
+                    }
+                )
+                msg = EmailMultiAlternatives(
+                    subject,
+                    html_message,
+                    None,
+                    [ticket.assign_to.email]
+                )
+                msg.attach_alternative(html_message, "text/html")
+                msg.send(fail_silently=True)
             return redirect('tasks:list_help_ticket')
     else:
         form = HelpTicketForm()
@@ -640,7 +847,27 @@ def edit_help_ticket(request, pk):
     if request.method == 'POST':
         form = HelpTicketForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
-            form.save()
+            ticket = form.save()
+            if ticket.assign_to.email:
+                complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
+                subject = f"Help Ticket Updated: {ticket.title}"
+                html_message = render_to_string(
+                    'email/help_ticket_assigned.html',
+                    {
+                        'ticket': ticket,
+                        'assign_by': ticket.assign_by,
+                        'assign_to': ticket.assign_to,
+                        'complete_url': complete_url,
+                    }
+                )
+                msg = EmailMultiAlternatives(
+                    subject,
+                    html_message,
+                    None,
+                    [ticket.assign_to.email]
+                )
+                msg.attach_alternative(html_message, "text/html")
+                msg.send(fail_silently=True)
             return redirect('tasks:list_help_ticket')
     else:
         form = HelpTicketForm(instance=obj)
@@ -666,6 +893,9 @@ def note_help_ticket(request, pk):
             ticket.status = 'Closed'
             ticket.resolved_at = timezone.now()
             ticket.resolved_by = request.user
+            if ticket.resolved_at and ticket.planned_date:
+                mins = int((ticket.resolved_at - ticket.planned_date).total_seconds() // 60)
+                ticket.actual_duration_minutes = max(mins, 0)
         ticket.save()
         messages.success(request, f"Note saved for HT-{ticket.id}.")
         return redirect(request.GET.get('next', reverse('tasks:assigned_to_me')))

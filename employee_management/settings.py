@@ -23,7 +23,6 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django.contrib.humanize",
-    # Your apps
     "apps.recruitment",
     "apps.leave",
     "apps.core",
@@ -92,7 +91,7 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = "UTC"
+TIME_ZONE = "Asia/Kolkata"
 USE_I18N = True
 USE_TZ = True
 
@@ -103,23 +102,14 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# Authentication redirects
 LOGIN_URL           = 'login'
 LOGIN_REDIRECT_URL  = 'dashboard:home'
 LOGOUT_REDIRECT_URL = 'login'
 
-# Email configuration (set for production, or use console backend for local testing)
-
-# For production (uncomment and set your real values)
-EMAIL_BACKEND       = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST          = ''        # e.g. 'smtp.gmail.com'
-EMAIL_PORT          = 587       # or 465 for SSL, 25 for non-TLS
-EMAIL_USE_TLS       = True      # True for TLS, False for SSL or plain
-EMAIL_USE_SSL       = False     # True for SSL, False otherwise
-EMAIL_HOST_USER     = ''        # your@email.com
-EMAIL_HOST_PASSWORD = ''        # your email password or app password
-DEFAULT_FROM_EMAIL  = ''        # e.g. 'noreply@yourdomain.com'
-
-# For development/testing (uncomment this and comment out SMTP settings above)
-# EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
-# DEFAULT_FROM_EMAIL = 'no-reply@example.com'
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'pankajjain@blueoceansteels.com'
+EMAIL_HOST_PASSWORD = 'bxmc zsri vazp nywq'
+DEFAULT_FROM_EMAIL = 'pankajjain@blueoceansteels.com'

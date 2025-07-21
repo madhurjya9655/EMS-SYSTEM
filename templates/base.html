@@ -1,10 +1,12 @@
-{% load static group_tags permission_tags %}
+{% load static group_tags permission_tags custom_filters %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}BOS EMS{% endblock %}</title>
+  <link rel="shortcut icon" href="{% static 'favicon.ico' %}">
+  <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -44,6 +46,8 @@
     .page-header { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08); margin-bottom: 2rem; border: 1px solid #f1f5f9;}
     .page-title { font-size: 1.8rem; font-weight: 700; color: #1e293b; margin-bottom: 0.5rem; }
     footer { background: white; border-top: 1px solid #f1f5f9; text-align: center; padding: 1.5rem; color: #64748b; font-size: 0.9rem; margin-top: 2rem;}
+    .sidebar-overlay { display: none; position: fixed; top: var(--header-height); left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.12); z-index: 899; }
+    .sidebar.show ~ .sidebar-overlay, .sidebar-overlay.show { display: block; }
     @media (max-width: 768px) {
       .mobile-toggle { display: block; }
       .branch-select, .user-menu span:first-child { display: none; }
@@ -56,12 +60,10 @@
 </head>
 <body>
   {% if user.is_authenticated %}
-    <!-- Header -->
     <div class="header">
       <div class="logo">
         <button class="mobile-toggle" onclick="toggleSidebar()"><i class="fas fa-bars"></i></button>
         <div class="logo-icon">
-          <!-- Replace this path with your actual logo file -->
           <img src="{% static 'images/bos logo.png' %}" alt="EMS Logo">
         </div>
         <span class="logo-text">BOS EMS</span>
@@ -82,9 +84,6 @@
         </form>
       </div>
     </div>
-
-    <!-- Sidebar -->
-    <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
     <nav class="sidebar" id="sidebar">
       <div class="nav-section">
         <!-- Dashboard -->
@@ -92,15 +91,13 @@
            class="nav-item {% if request.resolver_match.app_name == 'dashboard' and request.resolver_match.url_name == 'home' %}active{% endif %}">
           <i class="fas fa-tachometer-alt"></i> Dashboard
         </a>
-
         <!-- Employees -->
-        {% if user|has_permission:"users_list" or user|has_group:"HR" or user.is_superuser %}
+        {% if user|has_permission:"list_users" or user|has_group:"HR" or user.is_superuser %}
         <a href="{% url 'recruitment:employee_list' %}"
            class="nav-item {% if request.resolver_match.app_name == 'recruitment' and request.resolver_match.url_name == 'employee_list' %}active{% endif %}">
           <i class="fas fa-users"></i> Employees
         </a>
         {% endif %}
-
         <!-- Leave Register -->
         {% if user|has_permission:"leave_list" or user|has_permission:"leave_apply" or user|has_group:"Manager" or user|has_group:"HR" %}
         <button class="nav-item" onclick="toggleSubmenu('leaveSubmenu')">
@@ -127,71 +124,71 @@
           {% endif %}
         </div>
         {% endif %}
-
-        <!-- Master Tasks -->
-        {% if user|has_permission:"tasks_list_checklist" or user|has_permission:"tasks_add_checklist" or user|has_permission:"tasks_list_delegation" or user|has_permission:"tasks_add_delegation" or user|has_permission:"tasks_bulk_upload" %}
-        <button class="nav-item" onclick="toggleSubmenu('masterTasksSubmenu')">
-          <i class="fas fa-tasks"></i> Master Tasks <i class="fas fa-chevron-down chevron"></i>
+        <!-- Checklist -->
+        {% if user|has_permission:"add_checklist" or user|has_permission:"list_checklist" %}
+        <button class="nav-item" onclick="toggleSubmenu('checklistSubmenu')">
+          <i class="fas fa-clipboard-list"></i> Checklist <i class="fas fa-chevron-down chevron"></i>
         </button>
-        <div class="submenu" id="masterTasksSubmenu" style="display:none;">
-          {% if user|has_permission:"tasks_list_checklist" %}
-          <a href="{% url 'tasks:list_checklist' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}active{% endif %}">
-            <i class="fas fa-clipboard-list"></i> List Checklist
-          </a>
-          {% endif %}
-          {% if user|has_permission:"tasks_add_checklist" %}
+        <div class="submenu" id="checklistSubmenu" style="display:none;">
+          {% if user|has_permission:"add_checklist" %}
           <a href="{% url 'tasks:add_checklist' %}"
              class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_checklist' %}active{% endif %}">
             <i class="fas fa-clipboard-plus"></i> Add Checklist
           </a>
           {% endif %}
-          {% if user|has_permission:"tasks_list_delegation" %}
-          <a href="{% url 'tasks:list_delegation' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_delegation' %}active{% endif %}">
-            <i class="fas fa-user-clock"></i> List Delegation
+          {% if user|has_permission:"list_checklist" %}
+          <a href="{% url 'tasks:list_checklist' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}active{% endif %}">
+            <i class="fas fa-clipboard-list"></i> List Checklist
           </a>
           {% endif %}
-          {% if user|has_permission:"tasks_add_delegation" %}
+        </div>
+        {% endif %}
+        <!-- Delegation -->
+        {% if user|has_permission:"add_delegation" or user|has_permission:"list_delegation" %}
+        <button class="nav-item" onclick="toggleSubmenu('delegationSubmenu')">
+          <i class="fas fa-users-cog"></i> Delegation <i class="fas fa-chevron-down chevron"></i>
+        </button>
+        <div class="submenu" id="delegationSubmenu" style="display:none;">
+          {% if user|has_permission:"add_delegation" %}
           <a href="{% url 'tasks:add_delegation' %}"
              class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_delegation' %}active{% endif %}">
             <i class="fas fa-user-plus"></i> Add Delegation
           </a>
           {% endif %}
-          {% if user|has_permission:"tasks_bulk_upload" %}
-          <a href="{% url 'tasks:bulk_upload' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'bulk_upload' %}active{% endif %}">
-            <i class="fas fa-upload"></i> Bulk Upload
+          {% if user|has_permission:"list_delegation" %}
+          <a href="{% url 'tasks:list_delegation' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_delegation' %}active{% endif %}">
+            <i class="fas fa-user-clock"></i> List Delegation
           </a>
           {% endif %}
         </div>
         {% endif %}
-
-        <!-- Help Ticket -->
-        {% if user|has_permission:"help_ticket_list" or user|has_permission:"help_ticket_add" or user|has_permission:"help_ticket_assigned_to" or user|has_permission:"help_ticket_assigned_by" %}
-        <button class="nav-item" onclick="toggleSubmenu('helpTicketSubmenu')">
-          <i class="fas fa-question-circle"></i> Help Ticket <i class="fas fa-chevron-down chevron"></i>
+        <!-- Tickets -->
+        {% if user|has_permission:"add_ticket" or user|has_permission:"list_all_tickets" or user|has_permission:"assigned_to_me" or user|has_permission:"assigned_by_me" %}
+        <button class="nav-item" onclick="toggleSubmenu('ticketsSubmenu')">
+          <i class="fas fa-ticket-alt"></i> Tickets <i class="fas fa-chevron-down chevron"></i>
         </button>
-        <div class="submenu" id="helpTicketSubmenu" style="display:none;">
-          {% if user|has_permission:"help_ticket_list" %}
-          <a href="{% url 'tasks:list_help_ticket' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_help_ticket' %}active{% endif %}">
-            <i class="fas fa-list"></i> List All Tickets
-          </a>
-          {% endif %}
-          {% if user|has_permission:"help_ticket_add" %}
+        <div class="submenu" id="ticketsSubmenu" style="display:none;">
+          {% if user|has_permission:"add_ticket" %}
           <a href="{% url 'tasks:add_help_ticket' %}"
              class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_help_ticket' %}active{% endif %}">
             <i class="fas fa-plus-circle"></i> Add Ticket
           </a>
           {% endif %}
-          {% if user|has_permission:"help_ticket_assigned_to" %}
+          {% if user|has_permission:"list_all_tickets" %}
+          <a href="{% url 'tasks:list_help_ticket' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_help_ticket' %}active{% endif %}">
+            <i class="fas fa-list"></i> List All Tickets
+          </a>
+          {% endif %}
+          {% if user|has_permission:"assigned_to_me" %}
           <a href="{% url 'tasks:assigned_to_me' %}"
              class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_to_me' %}active{% endif %}">
             <i class="fas fa-user-clock"></i> Assigned to Me
           </a>
           {% endif %}
-          {% if user|has_permission:"help_ticket_assigned_by" %}
+          {% if user|has_permission:"assigned_by_me" %}
           <a href="{% url 'tasks:assigned_by_me' %}"
              class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_by_me' %}active{% endif %}">
             <i class="fas fa-user-plus"></i> Assigned by Me
@@ -199,20 +196,19 @@
           {% endif %}
         </div>
         {% endif %}
-
         <!-- Petty Cash -->
-        {% if user|has_permission:"pettycash_list" or user|has_permission:"pettycash_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
+        {% if user|has_permission:"petty_cash_list" or user|has_permission:"petty_cash_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
         <button class="nav-item" onclick="toggleSubmenu('pettyCashSubmenu')">
           <i class="fas fa-wallet"></i> Petty Cash <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="pettyCashSubmenu" style="display:none;">
-          {% if user|has_permission:"pettycash_list" %}
+          {% if user|has_permission:"petty_cash_list" %}
           <a href="{% url 'petty_cash:list_requests' %}"
              class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'list_requests' %}active{% endif %}">
             <i class="fas fa-file-invoice-dollar"></i> My Requests
           </a>
           {% endif %}
-          {% if user|has_permission:"pettycash_apply" or user|has_group:"EA" %}
+          {% if user|has_permission:"petty_cash_apply" or user|has_group:"EA" %}
           <a href="{% url 'petty_cash:apply_request' %}"
              class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'apply_request' %}active{% endif %}">
             <i class="fas fa-plus-circle"></i> New Request
@@ -232,34 +228,26 @@
           {% endif %}
         </div>
         {% endif %}
-
         <!-- Sales -->
-        {% if user|has_permission:"sales_plan_list" or user|has_permission:"sales_plan_add" or user|has_permission:"sales_dashboard" %}
+        {% if user|has_permission:"add_sales_plan" or user|has_permission:"list_sales_plan" %}
         <button class="nav-item" onclick="toggleSubmenu('salesSubmenu')">
           <i class="fas fa-chart-line"></i> Sales <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="salesSubmenu" style="display:none;">
-          {% if user|has_permission:"sales_plan_list" %}
+          {% if user|has_permission:"list_sales_plan" %}
           <a href="{% url 'sales:sales_plan_list' %}"
              class="nav-item {% if request.resolver_match.app_name == 'sales' and request.resolver_match.url_name == 'sales_plan_list' %}active{% endif %}">
             <i class="fas fa-list"></i> My Plans
           </a>
           {% endif %}
-          {% if user|has_permission:"sales_plan_add" %}
+          {% if user|has_permission:"add_sales_plan" %}
           <a href="{% url 'sales:sales_plan_add' %}"
              class="nav-item {% if request.resolver_match.app_name == 'sales' and request.resolver_match.url_name == 'sales_plan_add' %}active{% endif %}">
             <i class="fas fa-plus-circle"></i> New Plan
           </a>
           {% endif %}
-          {% if user|has_permission:"sales_dashboard" %}
-          <a href="{% url 'sales:sales_dashboard' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'sales' and request.resolver_match.url_name == 'sales_dashboard' %}active{% endif %}">
-            <i class="fas fa-tachometer-alt"></i> Dashboard
-          </a>
-          {% endif %}
         </div>
         {% endif %}
-
         <!-- Reimbursement -->
         {% if user|has_permission:"reimbursement_list" or user|has_permission:"reimbursement_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
         <button class="nav-item" onclick="toggleSubmenu('reimbursementSubmenu')">
@@ -286,26 +274,25 @@
           {% endif %}
         </div>
         {% endif %}
-
         <!-- Reports -->
-        {% if user|has_permission:"reports_doer_tasks" or user|has_permission:"reports_weekly_mis_score" or user|has_permission:"reports_performance_score" %}
+        {% if user|has_permission:"doer_tasks" or user|has_permission:"weekly_mis_score" or user|has_permission:"performance_score" %}
         <button class="nav-item" onclick="toggleSubmenu('reportsSubmenu')">
           <i class="fas fa-chart-pie"></i> Reports <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="reportsSubmenu" style="display:none;">
-          {% if user|has_permission:"reports_doer_tasks" %}
+          {% if user|has_permission:"doer_tasks" %}
           <a href="{% url 'reports:doer_tasks' %}"
              class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'doer_tasks' %}active{% endif %}">
             <i class="fas fa-tasks-alt"></i> Doer Tasks
           </a>
           {% endif %}
-          {% if user|has_permission:"reports_weekly_mis_score" %}
+          {% if user|has_permission:"weekly_mis_score" %}
           <a href="{% url 'reports:weekly_mis_score' %}"
              class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'weekly_mis_score' %}active{% endif %}">
             <i class="fas fa-calendar-week"></i> Weekly MIS Score
           </a>
           {% endif %}
-          {% if user|has_permission:"reports_performance_score" %}
+          {% if user|has_permission:"performance_score" %}
           <a href="{% url 'reports:performance_score' %}"
              class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'performance_score' %}active{% endif %}">
             <i class="fas fa-percent"></i> Performance Score
@@ -313,53 +300,60 @@
           {% endif %}
         </div>
         {% endif %}
-
-        <!-- Users Management (Superuser only) -->
-        {% if user.is_superuser %}
+        <!-- Users Management -->
+        {% if user|has_permission:"list_users" or user|has_permission:"add_user" or user.is_superuser %}
         <button class="nav-item" onclick="toggleSubmenu('usersSubmenu')">
           <i class="fas fa-user-friends"></i> Users <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="usersSubmenu" style="display:none;">
+          {% if user|has_permission:"list_users" or user.is_superuser %}
           <a href="{% url 'users:list_users' %}"
              class="nav-item {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'list_users' %}active{% endif %}">
             <i class="fas fa-list"></i> List Users
           </a>
+          {% endif %}
+          {% if user|has_permission:"add_user" or user.is_superuser %}
           <a href="{% url 'users:add_user' %}"
              class="nav-item {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'add_user' %}active{% endif %}">
             <i class="fas fa-user-plus"></i> Add User
           </a>
+          {% endif %}
         </div>
         {% endif %}
-
-        <!-- Settings (visible to all authenticated users) -->
+        <!-- Settings -->
+        {% if user|has_permission:"authorized_numbers" or user|has_permission:"system_settings" %}
         <button class="nav-item" onclick="toggleSubmenu('settingsSubmenu')">
           <i class="fas fa-cog"></i> Settings <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="settingsSubmenu" style="display:none;">
+          {% if user|has_permission:"authorized_numbers" %}
           <a href="{% url 'settings:authorized_list' %}"
              class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}active{% endif %}">
             <i class="fas fa-phone"></i> Authorized Numbers
           </a>
+          {% endif %}
           <a href="{% url 'settings:holiday_list' %}"
              class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}active{% endif %}">
             <i class="fas fa-calendar-day"></i> Holiday List
           </a>
+          {% if user|has_permission:"system_settings" %}
           <a href="{% url 'settings:system_settings' %}"
              class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}active{% endif %}">
             <i class="fas fa-sliders-h"></i> System Settings
           </a>
+          {% endif %}
         </div>
+        {% endif %}
       </div>
     </nav>
+    <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
   {% endif %}
-
   <main class="{% if user.is_authenticated %}main-content{% else %}container mt-5{% endif %}" id="mainContent">
     {% block content %}{% endblock %}
   </main>
-
   {% if user.is_authenticated %}
     <footer>
-      <small>© {{ now|date:"Y" }} Developed by Madhurjya Bora</small>
+      <small>© {% now "Y" %} Developed by Madhurjya Bora</small>
     </footer>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>

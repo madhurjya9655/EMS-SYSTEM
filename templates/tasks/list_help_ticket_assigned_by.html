@@ -33,14 +33,46 @@
             {% for ticket in items %}
               <tr>
                 <td>HT-{{ ticket.id }}</td>
-                <td>{{ ticket.assign_to.get_full_name|default:ticket.assign_to.username }}</td>
+                <td>
+                  {% if ticket.assign_to %}
+                    {{ ticket.assign_to.get_full_name|default:ticket.assign_to.username }}
+                  {% else %}
+                    &ndash;
+                  {% endif %}
+                </td>
                 <td>{{ ticket.title }}</td>
-                <td>{{ ticket.created_at|date:"d M, Y h:i A" }}</td>
-                <td>{{ ticket.planned_date|date:"d M, Y h:i A" }}</td>
-                <td>{{ ticket.resolved_at|date:"d M, Y h:i A" }}</td>
-                <td>{{ ticket.delay }}</td>
-                <td>{{ ticket.resolved_by.get_full_name|default:ticket.resolved_by.username }}</td>
-                <td class="text-wrap">{{ ticket.resolved_notes }}</td>
+                <td>
+                  {% if ticket.created_at %}
+                    {{ ticket.created_at|date:"d M, Y h:i A" }}
+                  {% else %}
+                    &ndash;
+                  {% endif %}
+                </td>
+                <td>
+                  {% if ticket.planned_date %}
+                    {{ ticket.planned_date|date:"d M, Y h:i A" }}
+                  {% else %}
+                    &ndash;
+                  {% endif %}
+                </td>
+                <td>
+                  {% if ticket.resolved_at %}
+                    {{ ticket.resolved_at|date:"d M, Y h:i A" }}
+                  {% else %}
+                    &ndash;
+                  {% endif %}
+                </td>
+                <td>{{ ticket.delay|default:"-" }}</td>
+                <td>
+                  {% if ticket.resolved_by %}
+                    {{ ticket.resolved_by.get_full_name|default:ticket.resolved_by.username }}
+                  {% else %}
+                    &ndash;
+                  {% endif %}
+                </td>
+                <td class="text-wrap">
+                  {{ ticket.resolved_notes|default:"-" }}
+                </td>
                 <td>
                   {% if ticket.media_upload %}
                     <a href="{{ ticket.media_upload.url }}" download>Download</a>

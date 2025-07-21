@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="alert alert-danger mt-5">
+    <h2>User Not Found</h2>
+    <p>The requested user does not exist.</p>
+    <a href="{% url 'users:list_users' %}" class="btn btn-primary mt-3">Back to Users</a>
+  </div>
+{% endblock %}

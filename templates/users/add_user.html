@@ -3,183 +3,153 @@
 {% block title %}Add User{% endblock %}
 
 {% block content %}
-  <div class="page-header mb-4">
-    <h2 class="page-title">Add User</h2>
-  </div>
+<div class="page-header mb-4">
+  <h2 class="page-title">Add User</h2>
+</div>
 
-  <div class="card mb-5">
-    <div class="card-body">
-      <form method="post" class="row g-4">
-        {% csrf_token %}
+<div class="card mb-5">
+  <div class="card-body">
+    <form method="post" class="row g-4">
+      {% csrf_token %}
 
-        {# First Name #}
-        <div class="col-md-4">
-          <label for="id_first_name" class="form-label">First name</label>
-          <input
-            type="text"
-            name="first_name"
-            id="id_first_name"
-            class="form-control"
-            value="{{ uf.first_name.value|default_if_none:'' }}"
-          >
-          {{ uf.first_name.errors }}
-        </div>
+      <!-- User Info -->
+      <div class="col-md-4">
+        <label for="id_first_name" class="form-label">First name</label>
+        <input type="text" name="first_name" id="id_first_name" class="form-control" value="{{ uf.first_name.value|default_if_none:'' }}">
+        {% for error in uf.first_name.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+      <div class="col-md-4">
+        <label for="id_last_name" class="form-label">Last name</label>
+        <input type="text" name="last_name" id="id_last_name" class="form-control" value="{{ uf.last_name.value|default_if_none:'' }}">
+        {% for error in uf.last_name.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+      <div class="col-md-4">
+        <label for="id_username" class="form-label">Username</label>
+        <input type="text" name="username" id="id_username" class="form-control" value="{{ uf.username.value|default_if_none:'' }}">
+        {% for error in uf.username.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+      <div class="col-md-4">
+        <label for="id_email" class="form-label">Email</label>
+        <input type="email" name="email" id="id_email" class="form-control" value="{{ uf.email.value|default_if_none:'' }}">
+        {% for error in uf.email.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+      <div class="col-md-4">
+        <label for="id_password" class="form-label">Password</label>
+        <input type="password" name="password" id="id_password" class="form-control">
+        {% for error in uf.password.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+      <div class="col-md-4">
+        <label for="id_role" class="form-label">Role in BOS</label>
+        <select name="role" id="id_role" class="form-select">
+          <option value="">Select One</option>
+          {% for val, label in pf.role.field.choices %}
+            <option value="{{ val }}" {% if pf.role.value == val %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        {% for error in pf.role.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+      <div class="col-md-4">
+        <label for="id_phone" class="form-label">Phone <small>(10 digits)</small></label>
+        <input type="text" name="phone" id="id_phone" class="form-control" value="{{ pf.phone.value|default_if_none:'' }}">
+        {% for error in pf.phone.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+      <div class="col-md-4">
+        <label for="id_branch" class="form-label">Branch</label>
+        <input type="text" name="branch" id="id_branch" class="form-control" value="{{ pf.branch.value|default_if_none:'' }}">
+        {% for error in pf.branch.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+      <div class="col-md-4">
+        <label for="id_department" class="form-label">Department</label>
+        <select name="department" id="id_department" class="form-select">
+          <option value="">Select One</option>
+          <option value="FINANCE" {% if pf.department.value == 'FINANCE' %}selected{% endif %}>FINANCE</option>
+          <option value="MARKETING" {% if pf.department.value == 'MARKETING' %}selected{% endif %}>MARKETING</option>
+          <option value="MDO TEAM" {% if pf.department.value == 'MDO TEAM' %}selected{% endif %}>MDO TEAM</option>
+          <option value="SALES OPERATION TEAM" {% if pf.department.value == 'SALES OPERATION TEAM' %}selected{% endif %}>SALES OPERATION TEAM</option>
+        </select>
+        {% for error in pf.department.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+      <div class="col-md-4">
+        <label for="id_team_leader" class="form-label">Team Leader</label>
+        <select name="team_leader" id="id_team_leader" class="form-select">
+          <option value="">---------</option>
+          {% for user in pf.team_leader.field.queryset %}
+            <option value="{{ user.pk }}" {% if pf.team_leader.value|stringformat:"s" == user.pk|stringformat:"s" %}selected{% endif %}>{{ user.get_full_name|default:user.username }}</option>
+          {% endfor %}
+        </select>
+        {% for error in pf.team_leader.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
 
-        {# Last Name #}
-        <div class="col-md-4">
-          <label for="id_last_name" class="form-label">Last name</label>
-          <input
-            type="text"
-            name="last_name"
-            id="id_last_name"
-            class="form-control"
-            value="{{ uf.last_name.value|default_if_none:'' }}"
-          >
-          {{ uf.last_name.errors }}
-        </div>
-
-        {# Username #}
-        <div class="col-md-4">
-          <label for="id_username" class="form-label">Username</label>
-          <input
-            type="text"
-            name="username"
-            id="id_username"
-            class="form-control"
-            value="{{ uf.username.value|default_if_none:'' }}"
-          >
-          {{ uf.username.errors }}
-        </div>
-
-        {# Email #}
-        <div class="col-md-4">
-          <label for="id_email" class="form-label">Email</label>
-          <input
-            type="email"
-            name="email"
-            id="id_email"
-            class="form-control"
-            value="{{ uf.email.value|default_if_none:'' }}"
-          >
-          {{ uf.email.errors }}
-        </div>
-
-        {# Password #}
-        <div class="col-md-4">
-          <label for="id_password" class="form-label">Password</label>
-          <input
-            type="password"
-            name="password"
-            id="id_password"
-            class="form-control"
-          >
-          {{ uf.password.errors }}
-        </div>
-
-        {# Role #}
-        <div class="col-md-4">
-          <label for="id_role" class="form-label">Role in BOS</label>
-          <select name="role" id="id_role" class="form-select">
-            <option value="">Select One</option>
-            {% for val,label in pf.role.field.choices %}
-              <option value="{{ val }}" {% if pf.role.value == val %}selected{% endif %}>
-                {{ label }}
-              </option>
-            {% endfor %}
-          </select>
-          {{ pf.role.errors }}
-        </div>
-
-        {# Phone #}
-        <div class="col-md-4">
-          <label for="id_phone" class="form-label">Phone <small>(10 digits)</small></label>
-          <input
-            type="text"
-            name="phone"
-            id="id_phone"
-            class="form-control"
-            value="{{ pf.phone.value|default_if_none:'' }}"
-          >
-          {{ pf.phone.errors }}
-        </div>
-
-        {# Branch #}
-        <div class="col-md-4">
-          <label for="id_branch" class="form-label">Branch</label>
-          <input
-            type="text"
-            name="branch"
-            id="id_branch"
-            class="form-control"
-            value="{{ pf.branch.value|default_if_none:'' }}"
-          >
-          {{ pf.branch.errors }}
-        </div>
-
-        {# Department #}
-        <div class="col-md-4">
-          <label for="id_department" class="form-label">Department</label>
-          <select name="department" id="id_department" class="form-select">
-            <option value="">Select One</option>
-            <option value="FINANCE"        {% if pf.department.value == 'FINANCE' %}selected{% endif %}>FINANCE</option>
-            <option value="MARKETING"      {% if pf.department.value == 'MARKETING' %}selected{% endif %}>MARKETING</option>
-            <option value="MDO TEAM"       {% if pf.department.value == 'MDO TEAM' %}selected{% endif %}>MDO TEAM</option>
-            <option value="SALES OPERATION TEAM"
-              {% if pf.department.value == 'SALES OPERATION TEAM' %}selected{% endif %}>
-              SALES OPERATION TEAM
-            </option>
-          </select>
-          {{ pf.department.errors }}
-        </div>
-
-        {# Team Leader #}
-        <div class="col-md-4">
-          <label for="id_team_leader" class="form-label">Team Leader</label>
-          <select name="team_leader" id="id_team_leader" class="form-select">
-            <option value="">---------</option>
-            {% for user in pf.team_leader.field.queryset %}
-              <option
-                value="{{ user.pk }}"
-                {% if pf.team_leader.value|stringformat:"s" == user.pk|stringformat:"s" %}selected{% endif %}
-              >
-                {{ user.get_full_name|default:user.username }}
-              </option>
-            {% endfor %}
-          </select>
-          {{ pf.team_leader.errors }}
-        </div>
-
-        {# Permissions #}
-        <div class="col-12">
-          <hr class="my-4">
-          <h5>Select User Privilege</h5>
-          <div class="row">
-            {% for val,label in pf.permissions.field.choices %}
-              <div class="col-sm-6 col-md-4 mb-2">
-                <div class="form-check">
+      <!-- Permissions -->
+      <div class="col-12">
+        <hr class="my-4">
+        <h5 class="mb-3">Select User Privilege</h5>
+        <div class="row">
+          {% for module, perms in permissions_structure.items %}
+            <div class="col-md-4 mb-4">
+              <div style="font-weight: 600; font-size: 1.08rem; margin-bottom: .35em;">
+                <input type="checkbox" class="select-all-module me-2" data-module="{{ module|slugify }}">
+                {{ module }}
+              </div>
+              {% for code, label in perms %}
+                <div class="form-check ms-4">
                   <input
                     type="checkbox"
                     name="permissions"
-                    value="{{ val }}"
-                    id="id_permissions_{{ forloop.counter0 }}"
-                    class="form-check-input"
-                    {% if val in pf.permissions.value %}checked{% endif %}
+                    value="{{ code }}"
+                    id="perm_{{ code }}"
+                    class="form-check-input module-{{ module|slugify }} permission-checkbox"
+                    {% if pf.permissions.value and code in pf.permissions.value %}checked{% endif %}
                   >
-                  <label for="id_permissions_{{ forloop.counter0 }}" class="form-check-label">
+                  <label class="form-check-label" for="perm_{{ code }}">
                     {{ label }}
                   </label>
                 </div>
-              </div>
-            {% endfor %}
-          </div>
-          {{ pf.permissions.errors }}
+              {% endfor %}
+            </div>
+          {% endfor %}
         </div>
+        {% for error in pf.permissions.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
 
-        {# Submit #}
-        <div class="col-12 text-end">
-          <button type="submit" class="btn btn-primary px-5">Submit</button>
-        </div>
-      </form>
-    </div>
+      <div class="col-12 text-end">
+        <button type="submit" class="btn btn-primary px-5">Submit</button>
+      </div>
+    </form>
   </div>
+</div>
+
+<script>
+  // "Select all" logic for grouped modules
+  document.querySelectorAll('.select-all-module').forEach(function(selectAllBox) {
+    selectAllBox.addEventListener('change', function() {
+      var mod = this.getAttribute('data-module');
+      document.querySelectorAll('.permission-checkbox.module-' + mod).forEach(function(cb) {
+        cb.checked = selectAllBox.checked;
+      });
+    });
+  });
+</script>
 {% endblock %}

@@ -81,6 +81,7 @@ class Delegation(models.Model):
     frequency = models.PositiveIntegerField(default=1)
     doer_file = models.FileField(upload_to='delegation_doer/', blank=True, null=True)
     doer_notes = models.TextField(blank=True, null=True)
+    actual_duration_minutes = models.PositiveIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
@@ -132,6 +133,7 @@ class HelpTicket(models.Model):
     resolved_at = models.DateTimeField(null=True, blank=True)
     resolved_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='help_tickets_resolved')
     resolved_notes = models.TextField(blank=True)
+    actual_duration_minutes = models.PositiveIntegerField(null=True, blank=True)  # <--- ADDED FIELD
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

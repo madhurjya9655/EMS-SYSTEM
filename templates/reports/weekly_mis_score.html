@@ -58,6 +58,8 @@
               <th>Last Week Actual(%)</th>
               <th>Planned Task</th>
               <th>Completed Task</th>
+              <th>Time Assigned (HH:MM)</th>
+              <th>Actual Time Taken (HH:MM)</th>
               <th>% Not Completed</th>
               <th>Last Week Commitment</th>
               <th>This Week Commitment</th>
@@ -69,6 +71,8 @@
               <td>{{ rows.0.last_pct }}</td>
               <td>{{ rows.0.planned }}</td>
               <td>{{ rows.0.completed }}</td>
+              <td>{{ time_checklist }}</td>
+              <td>{{ actual_time_checklist }}</td>
               <td>{{ rows.0.percent }}</td>
               <td>
                 {% if last_week_commitment %}
@@ -78,7 +82,8 @@
                 {% else %}-{% endif %}
               </td>
               <td>
-                {{ commitment_form.checklist|add_class:"form-control" }}
+                {{ commitment_form.checklist|add_class:"form-control" }}<br>
+                {{ commitment_form.checklist_desc|add_class:"form-control mt-2" }}
               </td>
             </tr>
             <tr>
@@ -86,9 +91,20 @@
               <td>{{ rows.0.last_pct }}</td>
               <td>{{ rows.0.planned }}</td>
               <td>{{ rows.0.completed }}</td>
+              <td>{{ time_checklist }}</td>
+              <td>{{ actual_time_checklist }}</td>
               <td>{{ rows.0.percent }}</td>
-              <td></td>
-              <td></td>
+              <td>
+                {% if last_week_commitment %}
+                  {{ last_week_commitment.checklist_ontime }}
+                  {% if last_week_commitment.checklist_ontime_desc %}<br>
+                  <small>{{ last_week_commitment.checklist_ontime_desc }}</small>{% endif %}
+                {% else %}-{% endif %}
+              </td>
+              <td>
+                {{ commitment_form.checklist_ontime|add_class:"form-control" }}<br>
+                {{ commitment_form.checklist_ontime_desc|add_class:"form-control mt-2" }}
+              </td>
             </tr>
           </tbody>
         </table>
@@ -106,6 +122,8 @@
               <th>Last Week Actual(%)</th>
               <th>Planned Task</th>
               <th>Completed Task</th>
+              <th>Time Assigned (HH:MM)</th>
+              <th>Actual Time Taken (HH:MM)</th>
               <th>% Not Completed</th>
               <th>Last Week Commitment</th>
               <th>This Week Commitment</th>
@@ -117,6 +135,8 @@
               <td>{{ rows.1.last_pct }}</td>
               <td>{{ rows.1.planned }}</td>
               <td>{{ rows.1.completed }}</td>
+              <td>{{ time_delegation }}</td>
+              <td>{{ actual_time_delegation }}</td>
               <td>{{ rows.1.percent }}</td>
               <td>
                 {% if last_week_commitment %}
@@ -126,7 +146,8 @@
                 {% else %}-{% endif %}
               </td>
               <td>
-                {{ commitment_form.delegation|add_class:"form-control" }}
+                {{ commitment_form.delegation|add_class:"form-control" }}<br>
+                {{ commitment_form.delegation_desc|add_class:"form-control mt-2" }}
               </td>
             </tr>
             <tr>
@@ -134,16 +155,27 @@
               <td>{{ rows.1.last_pct }}</td>
               <td>{{ rows.1.planned }}</td>
               <td>{{ rows.1.completed }}</td>
+              <td>{{ time_delegation }}</td>
+              <td>{{ actual_time_delegation }}</td>
               <td>{{ rows.1.percent }}</td>
-              <td></td>
-              <td></td>
+              <td>
+                {% if last_week_commitment %}
+                  {{ last_week_commitment.delegation_ontime }}
+                  {% if last_week_commitment.delegation_ontime_desc %}<br>
+                  <small>{{ last_week_commitment.delegation_ontime_desc }}</small>{% endif %}
+                {% else %}-{% endif %}
+              </td>
+              <td>
+                {{ commitment_form.delegation_ontime|add_class:"form-control" }}<br>
+                {{ commitment_form.delegation_ontime_desc|add_class:"form-control mt-2" }}
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
     </div>
 
-    <!-- Average Score Table (No FMS, No Audit) -->
+    <!-- Average Score Table -->
     <div class="card mb-4">
       <div class="table-responsive">
         <table class="table mb-0" style="min-width:900px;">
@@ -158,39 +190,15 @@
           <tbody>
             <tr>
               <td>% work should be done</td>
-              <td>
-                {% if avg_scores %}
-                  {{ avg_scores.checklist }}
-                {% else %}0{% endif %}
-              </td>
-              <td>
-                {% if avg_scores %}
-                  {{ avg_scores.delegation }}
-                {% else %}0{% endif %}
-              </td>
-              <td>
-                {% if avg_scores %}
-                  {{ avg_scores.average }}
-                {% else %}0{% endif %}
-              </td>
+              <td>{% if avg_scores %}{{ avg_scores.checklist }}{% else %}0{% endif %}</td>
+              <td>{% if avg_scores %}{{ avg_scores.delegation }}{% else %}0{% endif %}</td>
+              <td>{% if avg_scores %}{{ avg_scores.average }}{% else %}0{% endif %}</td>
             </tr>
             <tr>
               <td>% work should be done ontime</td>
-              <td>
-                {% if avg_scores %}
-                  {{ avg_scores.checklist_ontime }}
-                {% else %}0{% endif %}
-              </td>
-              <td>
-                {% if avg_scores %}
-                  {{ avg_scores.delegation_ontime }}
-                {% else %}0{% endif %}
-              </td>
-              <td>
-                {% if avg_scores %}
-                  {{ avg_scores.average_ontime }}
-                {% else %}0{% endif %}
-              </td>
+              <td>{% if avg_scores %}{{ avg_scores.checklist_ontime }}{% else %}0{% endif %}</td>
+              <td>{% if avg_scores %}{{ avg_scores.delegation_ontime }}{% else %}0{% endif %}</td>
+              <td>{% if avg_scores %}{{ avg_scores.average_ontime }}{% else %}0{% endif %}</td>
             </tr>
           </tbody>
         </table>

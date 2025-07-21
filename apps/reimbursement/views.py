@@ -4,6 +4,7 @@ from django.urls import reverse_lazy
 from django.views.generic import ListView, CreateView, UpdateView, DetailView
 from .models import Reimbursement
 from .forms import ReimbursementForm, ManagerReviewForm, FinanceReviewForm
+from apps.users.permissions import has_permission
 
 # Employee: List their reimbursements
 class MyReimbursementsView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
