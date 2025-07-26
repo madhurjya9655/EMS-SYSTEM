@@ -71,7 +71,7 @@ WSGI_APPLICATION = "employee_management.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "NAME": "/opt/render/project/src/db/db.sqlite3",
     }
 }
 
