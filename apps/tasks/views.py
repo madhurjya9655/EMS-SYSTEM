@@ -8,7 +8,7 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.staticfiles import finders
-from django.db.models import Q, Min
+from django.db.models import Q
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -25,6 +25,7 @@ from .forms import (
     HelpTicketForm
 )
 from .models import BulkUpload, Checklist, Delegation, FMS, HelpTicket
+from apps.settings.models import Holiday
 
 User = get_user_model()
 can_create = lambda u: u.is_superuser or u.groups.filter(
@@ -33,74 +34,70 @@ can_create = lambda u: u.is_superuser or u.groups.filter(
 
 site_url = "https://ems-system-d26q.onrender.com"
 
-def parse_int(val, default=0):
-    if val is None:
-        return default
-    if isinstance(val, float):
-        return default if math.isnan(val) else int(val)
-    s = str(val).strip()
-    return int(s) if s.isdigit() else default
+# ----- RECURRING SCHEDULING LOGIC -----
+IST = pytz.timezone('Asia/Kolkata')
+ASSIGN_HOUR = 10
+ASSIGN_MINUTE = 0
 
-def parse_time_val(val):
-    if val is None:
-        return None
-    if hasattr(val, 'hour') and hasattr(val, 'minute'):
-        return val
-    if isinstance(val, pd.Timestamp):
-        return val.to_pydatetime().time()
-    s = str(val).strip()
-    return parse_time(s) if s else None
+def is_working_day(dt):
+    return dt.weekday() != 6 and not Holiday.objects.filter(date=dt).exists()
 
-def get_default_time():
-    return time(10, 0)
+def next_working_day(dt):
+    while not is_working_day(dt):
+        dt += timedelta(days=1)
+    return dt
 
-def get_next_date(mode, freq, start, target_weekday=None):
-    next_date = start
-    if mode == 'Daily':
-        while True:
-            next_date += timedelta(days=freq)
-            if next_date.weekday() != 6:
-                break
-        return next_date
-    elif mode == 'Weekly':
-        weekday = target_weekday if target_weekday is not None else start.weekday()
-        count = 0
-        while count < freq:
-            next_date += timedelta(days=1)
-            if next_date.weekday() == weekday and next_date.weekday() != 6:
-                count += 1
-        return next_date
-    elif mode == 'Monthly':
-        month = next_date.month - 1 + freq
-        year = next_date.year + month // 12
-        month = month % 12 + 1
-        day = next_date.day
-        for last_day in range(31, 27, -1):
+def get_next_planned_datetime(prev_dt, mode, freq, orig_weekday=None, orig_day=None):
+    date_part = prev_dt.date()
+    if mode == "Daily":
+        n = 0
+        d = date_part
+        while n < freq:
+            d += timedelta(days=1)
+            if is_working_day(d):
+                n += 1
+        return IST.localize(datetime.combine(d, time(ASSIGN_HOUR, ASSIGN_MINUTE)))
+    elif mode == "Weekly":
+        weeks = freq
+        base = date_part + timedelta(weeks=weeks)
+        for i in range(7):
+            d = base + timedelta(days=i)
+            if d.weekday() == orig_weekday and is_working_day(d):
+                return IST.localize(datetime.combine(d, time(ASSIGN_HOUR, ASSIGN_MINUTE)))
+    elif mode == "Monthly":
+        y, m = date_part.year, date_part.month
+        total_month = m - 1 + freq
+        y += total_month // 12
+        m = (total_month % 12) + 1
+        d = None
+        for day_try in [orig_day] + list(range(31, 27, -1)):
             try:
-                datetime(year, month, last_day)
+                d = datetime(y, m, day_try)
                 break
-            except:
+            except ValueError:
                 continue
-        if day > last_day:
-            day = last_day
-        next_date = next_date.replace(year=year, month=month, day=day)
-        while next_date.weekday() == 6:
-            next_date += timedelta(days=1)
-        return next_date
-    elif mode == 'Yearly':
-        try:
-            next_date = next_date.replace(year=next_date.year + freq)
-        except Exception:
-            next_date = next_date.replace(year=next_date.year + freq, day=28)
-        while next_date.weekday() == 6:
-            next_date += timedelta(days=1)
-        return next_date
-    return start
+        date_obj = d.date()
+        date_obj = next_working_day(date_obj)
+        return IST.localize(datetime.combine(date_obj, time(ASSIGN_HOUR, ASSIGN_MINUTE)))
+    elif mode == "Yearly":
+        y = date_part.year + freq
+        m = date_part.month
+        d = None
+        for day_try in [orig_day] + list(range(31, 27, -1)):
+            try:
+                d = datetime(y, m, day_try)
+                break
+            except ValueError:
+                continue
+        date_obj = d.date()
+        date_obj = next_working_day(date_obj)
+        return IST.localize(datetime.combine(date_obj, time(ASSIGN_HOUR, ASSIGN_MINUTE)))
+    # Fallback: today 10:00
+    date_obj = next_working_day(date_part)
+    return IST.localize(datetime.combine(date_obj, time(ASSIGN_HOUR, ASSIGN_MINUTE)))
 
 def create_missing_recurring_checklist_tasks():
-    ist = pytz.timezone('Asia/Kolkata')
-    today = timezone.localtime(timezone.now(), ist).date()
-    now = timezone.localtime(timezone.now(), ist)
+    today = timezone.localtime(timezone.now(), IST).date()
     qs = Checklist.objects.filter(mode__in=['Daily', 'Weekly', 'Monthly', 'Yearly'])
     for checklist in qs:
         freq = checklist.frequency
@@ -109,37 +106,29 @@ def create_missing_recurring_checklist_tasks():
         mode = checklist.mode
         assign_to = checklist.assign_to
         task_name = checklist.task_name
-        planned_time = checklist.planned_date.time() if checklist.planned_date else time(10, 0)
-        if planned_time == time(0, 0) or not planned_time:
-            planned_time = time(10, 0)
+
+        orig_weekday = checklist.planned_date.weekday() if mode == 'Weekly' else None
+        orig_day = checklist.planned_date.day if mode in ['Monthly', 'Yearly'] else None
+
         last_task = Checklist.objects.filter(
             assign_to=assign_to,
             task_name=task_name,
             mode=mode,
         ).order_by('-planned_date').first()
-        if last_task:
-            prev_date = timezone.localtime(last_task.planned_date, ist)
-        else:
-            prev_date = timezone.localtime(checklist.planned_date, ist)
-        if prev_date.date() < today or (last_task and last_task.status == 'Completed'):
-            if prev_date.time() != planned_time:
-                prev_date = datetime.combine(prev_date.date(), planned_time)
-                prev_date = ist.localize(prev_date)
-            target_weekday = checklist.planned_date.weekday() if mode == 'Weekly' else None
-            next_date = get_next_date(mode, freq, prev_date, target_weekday)
-            if next_date.time() != planned_time:
-                next_date = datetime.combine(next_date.date(), planned_time)
-                next_date = ist.localize(next_date)
-            if next_date.weekday() != 6 and not Checklist.objects.filter(
+        prev_dt = timezone.localtime(last_task.planned_date, IST) if last_task else timezone.localtime(checklist.planned_date, IST)
+        # Only create next if last is overdue or completed
+        if prev_dt.date() < today or (last_task and last_task.status == 'Completed'):
+            next_dt = get_next_planned_datetime(prev_dt, mode, freq, orig_weekday, orig_day)
+            if not Checklist.objects.filter(
                 assign_to=assign_to,
                 task_name=task_name,
-                planned_date=next_date
+                planned_date=next_dt
             ).exists():
                 Checklist.objects.create(
                     assign_by=checklist.assign_by,
                     task_name=checklist.task_name,
                     assign_to=assign_to,
-                    planned_date=next_date,
+                    planned_date=next_dt,
                     priority=checklist.priority,
                     attachment_mandatory=checklist.attachment_mandatory,
                     mode=mode,
@@ -160,6 +149,27 @@ def create_missing_recurring_checklist_tasks():
                     checklist_auto_close_days=checklist.checklist_auto_close_days,
                     actual_duration_minutes=0
                 )
+
+def parse_int(val, default=0):
+    if val is None:
+        return default
+    if isinstance(val, float):
+        return default if math.isnan(val) else int(val)
+    s = str(val).strip()
+    return int(s) if s.isdigit() else default
+
+def parse_time_val(val):
+    if val is None:
+        return None
+    if hasattr(val, 'hour') and hasattr(val, 'minute'):
+        return val
+    if isinstance(val, pd.Timestamp):
+        return val.to_pydatetime().time()
+    s = str(val).strip()
+    return parse_time(s) if s else None
+
+def get_default_time():
+    return time(ASSIGN_HOUR, ASSIGN_MINUTE)
 
 def calculate_delegation_assigned_time(qs, up_to=None):
     if up_to is None:
@@ -283,7 +293,6 @@ def add_checklist(request):
             obj = form.save(commit=False)
             dt = obj.planned_date
             if dt and (dt.time() == time(0, 0) or dt.time() is None):
-                now = timezone.localtime()
                 planned_time = get_default_time()
                 planned_dt = datetime.combine(dt.date(), planned_time)
                 obj.planned_date = timezone.make_aware(planned_dt)
@@ -426,7 +435,6 @@ def list_delegation(request):
         return redirect('tasks:list_delegation')
     items = Delegation.objects.all().order_by('-planned_date')
 
-    # TODAY ONLY filter
     if request.GET.get('today_only'):
         today = timezone.localdate()
         items = items.filter(planned_date=today)
