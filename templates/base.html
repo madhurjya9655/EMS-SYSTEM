@@ -86,7 +86,6 @@
     </div>
     <nav class="sidebar" id="sidebar">
       <div class="nav-section">
-        <!-- Dashboard -->
         <a href="{% url 'dashboard:home' %}"
            class="nav-item {% if request.resolver_match.app_name == 'dashboard' and request.resolver_match.url_name == 'home' %}active{% endif %}">
           <i class="fas fa-tachometer-alt"></i> Dashboard
@@ -143,6 +142,12 @@
           </a>
           {% endif %}
         </div>
+        {% endif %}
+        <!-- Bulk Upload -->
+        {% if user|has_permission:"add_checklist" or user|has_permission:"add_delegation" %}
+        <a href="{% url 'tasks:bulk_upload' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'bulk_upload' %}active{% endif %}">
+          <i class="fas fa-upload"></i> Bulk Upload
+        </a>
         {% endif %}
         <!-- Delegation -->
         {% if user|has_permission:"add_delegation" or user|has_permission:"list_delegation" %}
@@ -228,26 +233,6 @@
           {% endif %}
         </div>
         {% endif %}
-        <!-- Sales -->
-        {% if user|has_permission:"add_sales_plan" or user|has_permission:"list_sales_plan" %}
-        <button class="nav-item" onclick="toggleSubmenu('salesSubmenu')">
-          <i class="fas fa-chart-line"></i> Sales <i class="fas fa-chevron-down chevron"></i>
-        </button>
-        <div class="submenu" id="salesSubmenu" style="display:none;">
-          {% if user|has_permission:"list_sales_plan" %}
-          <a href="{% url 'sales:sales_plan_list' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'sales' and request.resolver_match.url_name == 'sales_plan_list' %}active{% endif %}">
-            <i class="fas fa-list"></i> My Plans
-          </a>
-          {% endif %}
-          {% if user|has_permission:"add_sales_plan" %}
-          <a href="{% url 'sales:sales_plan_add' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'sales' and request.resolver_match.url_name == 'sales_plan_add' %}active{% endif %}">
-            <i class="fas fa-plus-circle"></i> New Plan
-          </a>
-          {% endif %}
-        </div>
-        {% endif %}
         <!-- Reimbursement -->
         {% if user|has_permission:"reimbursement_list" or user|has_permission:"reimbursement_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
         <button class="nav-item" onclick="toggleSubmenu('reimbursementSubmenu')">
@@ -300,7 +285,7 @@
           {% endif %}
         </div>
         {% endif %}
-        <!-- Users Management -->
+        <!-- Users -->
         {% if user|has_permission:"list_users" or user|has_permission:"add_user" or user.is_superuser %}
         <button class="nav-item" onclick="toggleSubmenu('usersSubmenu')">
           <i class="fas fa-user-friends"></i> Users <i class="fas fa-chevron-down chevron"></i>
@@ -404,8 +389,11 @@
             const submenu = item.closest('.submenu');
             if (submenu) {
               submenu.style.display = 'block';
-              submenu.previousElementSibling
-                     .querySelector('.chevron').style.transform = 'rotate(180deg)';
+              const parentBtn = submenu.previousElementSibling;
+              if (parentBtn) {
+                const chev = parentBtn.querySelector('.chevron');
+                if (chev) chev.style.transform = 'rotate(180deg)';
+              }
             }
           }
         });
