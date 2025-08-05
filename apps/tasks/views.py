@@ -34,7 +34,6 @@ can_create = lambda u: u.is_superuser or u.groups.filter(
 
 site_url = "https://ems-system-d26q.onrender.com"
 
-# ----- RECURRING SCHEDULING LOGIC -----
 IST = pytz.timezone('Asia/Kolkata')
 ASSIGN_HOUR = 10
 ASSIGN_MINUTE = 0
@@ -92,7 +91,6 @@ def get_next_planned_datetime(prev_dt, mode, freq, orig_weekday=None, orig_day=N
         date_obj = d.date()
         date_obj = next_working_day(date_obj)
         return IST.localize(datetime.combine(date_obj, time(ASSIGN_HOUR, ASSIGN_MINUTE)))
-    # Fallback: today 10:00
     date_obj = next_working_day(date_part)
     return IST.localize(datetime.combine(date_obj, time(ASSIGN_HOUR, ASSIGN_MINUTE)))
 
@@ -116,7 +114,6 @@ def create_missing_recurring_checklist_tasks():
             mode=mode,
         ).order_by('-planned_date').first()
         prev_dt = timezone.localtime(last_task.planned_date, IST) if last_task else timezone.localtime(checklist.planned_date, IST)
-        # Only create next if last is overdue or completed
         if prev_dt.date() < today or (last_task and last_task.status == 'Completed'):
             next_dt = get_next_planned_datetime(prev_dt, mode, freq, orig_weekday, orig_day)
             if not Checklist.objects.filter(
@@ -124,7 +121,7 @@ def create_missing_recurring_checklist_tasks():
                 task_name=task_name,
                 planned_date=next_dt
             ).exists():
-                Checklist.objects.create(
+                new_obj = Checklist.objects.create(
                     assign_by=checklist.assign_by,
                     task_name=checklist.task_name,
                     assign_to=assign_to,
@@ -149,6 +146,26 @@ def create_missing_recurring_checklist_tasks():
                     checklist_auto_close_days=checklist.checklist_auto_close_days,
                     actual_duration_minutes=0
                 )
+                if new_obj.assign_to.email:
+                    complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
+                    subject = f"New Checklist Task Assigned: {new_obj.task_name}"
+                    html_message = render_to_string(
+                        'email/checklist_assigned.html',
+                        {
+                            'task': new_obj,
+                            'assign_by': new_obj.assign_by,
+                            'assign_to': new_obj.assign_to,
+                            'complete_url': complete_url,
+                        }
+                    )
+                    msg = EmailMultiAlternatives(
+                        subject,
+                        html_message,
+                        None,
+                        [new_obj.assign_to.email]
+                    )
+                    msg.attach_alternative(html_message, "text/html")
+                    msg.send(fail_silently=False)
 
 def parse_int(val, default=0):
     if val is None:
@@ -905,6 +922,30 @@ def note_help_ticket(request, pk):
                 mins = int((ticket.resolved_at - ticket.planned_date).total_seconds() // 60)
                 ticket.actual_duration_minutes = max(mins, 0)
         ticket.save()
+        if ticket.status == 'Closed':
+            recipients = []
+            if ticket.assign_to.email:
+                recipients.append(ticket.assign_to.email)
+            if ticket.assign_by.email and ticket.assign_by.email not in recipients:
+                recipients.append(ticket.assign_by.email)
+            if recipients:
+                subject = f"Help Ticket Closed: {ticket.title}"
+                html_message = render_to_string(
+                    'email/help_ticket_closed.html',
+                    {
+                        'ticket': ticket,
+                        'assign_by': ticket.assign_by,
+                        'assign_to': ticket.assign_to,
+                    }
+                )
+                msg = EmailMultiAlternatives(
+                    subject,
+                    html_message,
+                    None,
+                    recipients
+                )
+                msg.attach_alternative(html_message, "text/html")
+                msg.send(fail_silently=True)
         messages.success(request, f"Note saved for HT-{ticket.id}.")
         return redirect(request.GET.get('next', reverse('tasks:assigned_to_me')))
     return render(request, 'tasks/note_help_ticket.html', {
