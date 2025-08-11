@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+{% block title %}Collection Plan{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Collection Plan</h1>
+</div>
+<form method="get" class="mb-3">
+  <div class="row g-2 align-items-end">
+    <div class="col">
+      <label for="from" class="form-label">From Date</label>
+      <input type="date" class="form-control" name="from" value="{{ request.GET.from }}">
+    </div>
+    <div class="col">
+      <label for="to" class="form-label">To Date</label>
+      <input type="date" class="form-control" name="to" value="{{ request.GET.to }}">
+    </div>
+    <div class="col">
+      <label for="mode" class="form-label">Mode</label>
+      <select class="form-control" name="mode">
+        <option value="">All</option>
+        <option value="weekly" {% if request.GET.mode == "weekly" %}selected{% endif %}>Weekly</option>
+        <option value="monthly" {% if request.GET.mode == "monthly" %}selected{% endif %}>Monthly</option>
+      </select>
+    </div>
+    <div class="col-auto">
+      <button type="submit" class="btn btn-primary">Filter</button>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-bordered align-middle">
+      <thead>
+        <tr>
+          <th>Customer Name</th>
+          <th>Overdue Amount</th>
+          <th>Planned Collection</th>
+          <th>Actual Collection</th>
+          <th>Period</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in collections %}
+        <tr>
+          <td>{{ item.customer.name }}</td>
+          <td>{{ item.overdue_amount }}</td>
+          <td>{{ item.planned }}</td>
+          <td>{{ item.actual }}</td>
+          <td>{{ item.period_start|date:"d M" }} - {{ item.period_end|date:"d M" }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" class="text-center">No collection plans found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

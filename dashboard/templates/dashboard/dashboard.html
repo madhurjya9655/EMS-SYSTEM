@@ -1,3 +1,4 @@
+{# dashboard/templates/dashboard/dashboard.html #}
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
 
@@ -94,7 +95,7 @@
   </div>
 </div>
 
-<!-- Include the right partial (all of which are already scoped to request.user) -->
+<!-- Include the right partial -->
 {% if selected == 'delegation' %}
   {% include 'dashboard/partials/delegation_tasks.html' %}
 {% elif selected == 'help_ticket' %}
@@ -106,10 +107,12 @@
 <script>
   function onTodayToggle(){
     const params = new URLSearchParams(window.location.search);
-    if (document.getElementById('todayOnlySwitch').checked) {
+    const checked = document.getElementById('todayOnlySwitch').checked;
+    if (checked) {
       params.set('today','1');
     } else {
       params.delete('today');
+      params.delete('today_only');
     }
     window.location.search = params.toString();
   }

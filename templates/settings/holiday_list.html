@@ -4,17 +4,36 @@
 <div class="page-header mb-4"><h2>Holiday List</h2></div>
 <div class="card mb-5">
   <div class="card-body">
-    <form method="post" class="row g-3 mb-4">{% csrf_token %}
-      {{ add_form.management_form }}
-      <div class="col-md-4">{{ add_form.date.label_tag }}{{ add_form.date }}</div>
-      <div class="col-md-4">{{ add_form.name.label_tag }}{{ add_form.name }}</div>
-      <div class="col-auto"><button name="add-date" class="btn btn-primary">Add</button></div>
+    <form method="post" class="row g-3 mb-4">
+      {% csrf_token %}
+      {{ add_form.non_field_errors }}
+      <div class="col-md-4">
+        {{ add_form.date.label_tag }}
+        {{ add_form.date }}
+        <div class="text-danger small">{{ add_form.date.errors }}</div>
+      </div>
+      <div class="col-md-4">
+        {{ add_form.name.label_tag }}
+        {{ add_form.name }}
+        <div class="text-danger small">{{ add_form.name.errors }}</div>
+      </div>
+      <div class="col-auto">
+        <button name="do_add" value="1" class="btn btn-primary">Add</button>
+      </div>
     </form>
 
-    <form method="post" enctype="multipart/form-data" class="row g-3 mb-4">{% csrf_token %}
-      {{ upload_form.management_form }}
-      <div class="col-md-6">{{ upload_form.file.label_tag }}{{ upload_form.file }}</div>
-      <div class="col-auto"><button class="btn btn-secondary">Upload</button></div>
+    <form method="post" enctype="multipart/form-data" class="row g-3 mb-4">
+      {% csrf_token %}
+      {{ upload_form.non_field_errors }}
+      <div class="col-md-6">
+        {{ upload_form.file.label_tag }}
+        {{ upload_form.file }}
+        <div class="text-danger small">{{ upload_form.file.errors }}</div>
+        <div class="form-text">CSV or Excel with columns: <code>date</code> (YYYY-MM-DD) and <code>name</code>. Sundays are ignored.</div>
+      </div>
+      <div class="col-auto">
+        <button name="do_upload" value="1" class="btn btn-secondary">Upload</button>
+      </div>
     </form>
 
     <table class="table">
@@ -25,9 +44,10 @@
           <td>{{ h.date }}</td>
           <td>{{ h.name }}</td>
           <td>
-            <a href="{% url 'settings:holiday_delete' h.pk %}" class="btn btn-sm btn-danger">
-              Delete
-            </a>
+            <form method="post" action="{% url 'settings:holiday_delete' h.pk %}" onsubmit="return confirm('Delete this holiday?');" style="display:inline;">
+              {% csrf_token %}
+              <button class="btn btn-sm btn-danger">Delete</button>
+            </form>
           </td>
         </tr>
         {% empty %}

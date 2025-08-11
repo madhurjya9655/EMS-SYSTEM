@@ -1,5 +1,59 @@
-{% extends "tasks/tasks_base.html" %}
-{% block title %}List Delegations{% endblock %}
-{% block tab_content %}
-{% include "tasks/partial_list_delegation.html" %}
+{# templates/tasks/list_delegation.html #}
+{% extends "base.html" %}
+{% block title %}Delegations{% endblock %}
+
+{% block content %}
+<div class="page-header mb-4">
+  <h2>Delegations</h2>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-3 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label">Keyword</label>
+        <input type="text" class="form-control" name="keyword" value="{{ request.GET.keyword }}">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Today Only</label>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="today_only" value="1" id="todayOnly" {% if request.GET.today_only %}checked{% endif %}>
+          <label class="form-check-label" for="todayOnly">
+            Show tasks planned for today
+          </label>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <button class="btn btn-primary">Apply</button>
+        <a class="btn btn-outline-secondary ms-2" href="{% url 'tasks:list_delegation' %}">Reset</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-6">
+    <div class="card h-100">
+      <div class="card-body">
+        <div class="d-flex justify-content-between">
+          <div>
+            <div class="text-muted small">Assigned Time (mins)</div>
+            <div class="fs-4 fw-semibold">{{ assign_time|default:0 }}</div>
+          </div>
+          <div class="text-end">
+            <div class="text-muted small">Actual Time (mins)</div>
+            <div class="fs-4 fw-semibold">{{ actual_time|default:0 }}</div>
+          </div>
+        </div>
+        <div class="text-muted small mt-2">Up to today</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    {% include "tasks/partial_list_delegation.html" %}
+  </div>
+</div>
 {% endblock %}

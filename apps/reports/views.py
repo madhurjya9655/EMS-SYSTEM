@@ -11,93 +11,161 @@ from django.contrib.auth import get_user_model
 
 User = get_user_model()
 
+
+# ---------- Small utilities ----------
+
 def get_week_dates(frm, to):
-    """Return Monday-Sunday week if not given, else the provided range."""
+    """
+    If a range is provided, use it. Otherwise return the current Mon–Sun week.
+    """
     if frm and to:
         return frm, to
     today = date.today()
-    start = today - timedelta(days=today.weekday())
-    return start, start + timedelta(days=6)
+    start = today - timedelta(days=today.weekday())  # Monday
+    return start, start + timedelta(days=6)          # Monday..Sunday
+
 
 def calculate_checklist_total_time(qs):
+    """
+    Sum of actual_duration_minutes for Checklist queryset.
+    (qs has planned_date as datetime)
+    """
     return sum(task.actual_duration_minutes or 0 for task in qs)
 
+
 def calculate_delegation_total_time(qs):
+    """
+    Sum of actual_duration_minutes for Delegation queryset (DB aggregate).
+    (qs has planned_date as date)
+    """
     return qs.aggregate(total=Sum('actual_duration_minutes'))['total'] or 0
+
 
 def minutes_to_hhmm(minutes):
     h = minutes // 60
     m = minutes % 60
     return f"{int(h):02d}:{int(m):02d}"
 
+
 def percent_not_completed(planned, completed):
+    """
+    % NOT completed = ((planned - completed) / planned) * 100
+    (Return 0.0 if planned is 0)
+    """
     if planned == 0:
         return 0.0
-    return round(((completed - planned) / planned) * 100, 2)
+    return round(((planned - completed) / planned) * 100, 2)
+
+
+# ---------- Reports ----------
 
 @login_required
 def list_doer_tasks(request):
+    """
+    Doer Task list: show **all** tasks, including every occurrence of recurring items.
+    (No 'first occurrence only' filter here.)
+    """
     form = PCReportFilterForm(request.GET or None, user=request.user)
-    items = Checklist.objects.select_related('assign_by', 'assign_to')
+
+    items = (
+        Checklist.objects
+        .select_related('assign_by', 'assign_to')
+        .order_by('planned_date', 'id')  # show chronologically
+    )
+
     if form.is_valid():
         d = form.cleaned_data
-        if d['doer']:
+        if d.get('doer'):
             items = items.filter(assign_to=d['doer'])
-        if d['department']:
-            items = items.filter(assign_to__groups__name=d['department'])
-        if d['date_from']:
+        if d.get('department'):
+            # distinct to avoid duplicates due to M2M group membership
+            items = (
+                items.filter(assign_to__groups__name=d['department'])
+                     .distinct()
+            )
+        if d.get('date_from'):
             items = items.filter(planned_date__date__gte=d['date_from'])
-        if d['date_to']:
+        if d.get('date_to'):
             items = items.filter(planned_date__date__lte=d['date_to'])
+
     return render(request, 'reports/list_doer_tasks.html', {
-        'form': form,
+        'form':  form,
         'items': items,
     })
+
 
 @login_required
 def list_fms_tasks(request):
+    """
+    FMS/Delegation task list (all occurrences).
+    """
     form = PCReportFilterForm(request.GET or None, user=request.user)
-    items = Delegation.objects.select_related('assign_by', 'assign_to')
+
+    items = (
+        Delegation.objects
+        .select_related('assign_by', 'assign_to')
+        .order_by('planned_date', 'id')
+    )
+
     if form.is_valid():
         d = form.cleaned_data
-        if d['doer']:
+        if d.get('doer'):
             items = items.filter(assign_to=d['doer'])
-        if d['department']:
-            items = items.filter(assign_by__groups__name__icontains=d['department'])
-        if d['date_from']:
+        if d.get('department'):
+            items = (
+                items.filter(assign_by__groups__name__icontains=d['department'])
+                     .distinct()
+            )
+        if d.get('date_from'):
             items = items.filter(planned_date__gte=d['date_from'])
-        if d['date_to']:
+        if d.get('date_to'):
             items = items.filter(planned_date__lte=d['date_to'])
+
     return render(request, 'reports/list_fms_tasks.html', {
-        'form': form,
+        'form':  form,
         'items': items,
     })
 
+
 @login_required
 def weekly_mis_score(request):
+    """
+    Weekly MIS with commitments for a selected doer and week (Mon–Sun).
+    Uses:
+      - Checklist planned_date as DATETIME (filter via __date)
+      - Delegation planned_date as DATE
+    """
     form = PCReportFilterForm(request.GET or None, user=request.user)
     commitment_form = None
     commitment_message = ''
+
     rows = []
     header = ''
     total_hours = ''
     week_start = None
     avg_scores = None
-    pending_checklist = pending_delegation = delayed_checklist = delayed_delegation = 0
+
+    pending_checklist = pending_delegation = 0
+    delayed_checklist = delayed_delegation = 0
+
     time_checklist = "00:00"
     time_delegation = "00:00"
     actual_time_checklist = "00:00"
     actual_time_delegation = "00:00"
+
     this_week_commitment = None
     last_week_commitment = None
 
     if form.is_valid() and form.cleaned_data.get('doer'):
         doer = form.cleaned_data['doer']
+
+        # Week window
         frm, to = get_week_dates(form.cleaned_data['date_from'], form.cleaned_data['date_to'])
         week_start = frm
         prev_frm = frm - timedelta(days=7)
         prev_to = frm - timedelta(days=1)
 
+        # Commitments
         this_week_commitment = WeeklyCommitment.objects.filter(user=doer, week_start=frm).first()
         last_week_commitment = WeeklyCommitment.objects.filter(user=doer, week_start=prev_frm).first()
 
@@ -121,6 +189,7 @@ def weekly_mis_score(request):
                 this_week_commitment.audit_desc = cleaned.get("audit_desc") or ""
                 this_week_commitment.save()
                 commitment_message = "Commitment updated successfully."
+                # Keep current filters after POST:
                 return redirect(request.path + "?" + request.META.get('QUERY_STRING', ''))
         else:
             initial = {}
@@ -141,10 +210,13 @@ def weekly_mis_score(request):
                 }
             commitment_form = WeeklyMISCommitmentForm(initial=initial)
 
+        # Build weekly rows for Checklist & Delegation
         for Model, label in [(Checklist, 'Checklist'), (Delegation, 'Delegation')]:
+            # Picker: Checklist has datetime, Delegation has date
             date_kw = 'planned_date__date' if Model is Checklist else 'planned_date'
+
             look_this = {f"{date_kw}__range": (frm, to)}
-            look_last = {f"{date_kw}__range": (prev_frm, prev_to)}
+            look_last = {f"{date_kw}__range": (frm - timedelta(days=7), frm - timedelta(days=1))}
 
             planned = Model.objects.filter(assign_to=doer, **look_this).count()
             planned_last = Model.objects.filter(assign_to=doer, **look_last).count()
@@ -152,6 +224,7 @@ def weekly_mis_score(request):
             completed = Model.objects.filter(assign_to=doer, **look_this, status='Completed').count()
             completed_last = Model.objects.filter(assign_to=doer, **look_last, status='Completed').count()
 
+            # Now correct “not completed” %
             pct = percent_not_completed(planned, completed)
             pct_last = percent_not_completed(planned_last, completed_last)
 
@@ -163,11 +236,13 @@ def weekly_mis_score(request):
                 'percent': pct,
             })
 
-        checklist_qs = Checklist.objects.filter(assign_to=doer, planned_date__date__range=(frm, to))
-        delegation_qs = Delegation.objects.filter(assign_to=doer, planned_date__range=(frm, to))
+        # Time totals (actual)
+        checklist_qs = Checklist.objects.filter(assign_to=doer, planned_date__date__range=(frm, to)).select_related('assign_to')
+        delegation_qs = Delegation.objects.filter(assign_to=doer, planned_date__range=(frm, to)).select_related('assign_to')
 
         total_checklist_minutes = calculate_checklist_total_time(checklist_qs)
         total_delegation_minutes = calculate_delegation_total_time(delegation_qs)
+
         time_checklist = minutes_to_hhmm(total_checklist_minutes)
         time_delegation = minutes_to_hhmm(total_delegation_minutes)
         total_hours = minutes_to_hhmm(total_checklist_minutes + total_delegation_minutes)
@@ -175,15 +250,26 @@ def weekly_mis_score(request):
         actual_time_checklist = time_checklist
         actual_time_delegation = time_delegation
 
+        # Score block
         checklist_planned = rows[0]['planned']
         checklist_completed = rows[0]['completed']
-        checklist_ontime = Checklist.objects.filter(assign_to=doer, planned_date__date__range=(frm, to), status='Completed', completed_at__lte=F('planned_date')).count()
+        checklist_ontime = Checklist.objects.filter(
+            assign_to=doer,
+            planned_date__date__range=(frm, to),
+            status='Completed',
+            completed_at__lte=F('planned_date')
+        ).count()
         checklist_pct = percent_not_completed(checklist_planned, checklist_completed)
         checklist_ontime_pct = percent_not_completed(checklist_planned, checklist_ontime)
 
         delegation_planned = rows[1]['planned']
         delegation_completed = rows[1]['completed']
-        delegation_ontime = Delegation.objects.filter(assign_to=doer, planned_date__range=(frm, to), status='Completed', completed_at__lte=F('planned_date')).count()
+        delegation_ontime = Delegation.objects.filter(
+            assign_to=doer,
+            planned_date__range=(frm, to),
+            status='Completed',
+            completed_at__lte=F('planned_date')
+        ).count()
         delegation_pct = percent_not_completed(delegation_planned, delegation_completed)
         delegation_ontime_pct = percent_not_completed(delegation_planned, delegation_ontime)
 
@@ -196,8 +282,13 @@ def weekly_mis_score(request):
             'average_ontime': round((checklist_ontime_pct + delegation_ontime_pct) / 2, 2)
         }
 
-        pending_checklist = Checklist.objects.filter(assign_to=doer, planned_date__date__lt=frm, status='Pending').count()
-        pending_delegation = Delegation.objects.filter(assign_to=doer, planned_date__lt=frm, status='Pending').count()
+        # Pending/delayed
+        pending_checklist = Checklist.objects.filter(
+            assign_to=doer, planned_date__date__lt=frm, status='Pending'
+        ).count()
+        pending_delegation = Delegation.objects.filter(
+            assign_to=doer, planned_date__lt=frm, status='Pending'
+        ).count()
         delayed_checklist = Checklist.objects.filter(
             assign_to=doer,
             completed_at__date__range=(frm, to),
@@ -209,41 +300,48 @@ def weekly_mis_score(request):
             completed_at__gt=F('planned_date')
         ).count()
 
+        # Header (safe fallbacks)
+        full_name = (doer.get_full_name() or doer.username or '').upper()
         try:
-            phone = doer.profile.phone or ''
+            phone = getattr(getattr(doer, 'profile', None), 'phone', '') or ''
         except ObjectDoesNotExist:
             phone = ''
         try:
-            dept = doer.profile.department or ''
+            dept = getattr(getattr(doer, 'profile', None), 'department', '') or ''
         except ObjectDoesNotExist:
             dept = ''
-
-        header = f"{doer.get_full_name().upper()} ({phone}) – {frm:%d %b, %Y} to {to:%d %b, %Y} [{dept}]"
+        header = f"{full_name} ({phone}) – {frm:%d %b, %Y} to {to:%d %b, %Y} [{dept}]"
 
     return render(request, 'reports/weekly_mis_score.html', {
-        'form':               form,
-        'commitment_form':    commitment_form,
-        'commitment_message': commitment_message,
-        'rows':               rows,
-        'header':             header,
-        'total_hours':        total_hours,
-        'week_start':         week_start,
-        'pending_checklist':  pending_checklist,
-        'pending_delegation': pending_delegation,
-        'delayed_checklist':  delayed_checklist,
-        'delayed_delegation': delayed_delegation,
+        'form':                 form,
+        'commitment_form':      commitment_form,
+        'commitment_message':   commitment_message,
+        'rows':                 rows,
+        'header':               header,
+        'total_hours':          total_hours,
+        'week_start':           week_start,
+        'pending_checklist':    pending_checklist,
+        'pending_delegation':   pending_delegation,
+        'delayed_checklist':    delayed_checklist,
+        'delayed_delegation':   delayed_delegation,
         'this_week_commitment': this_week_commitment if form.is_valid() and form.cleaned_data.get('doer') else None,
         'last_week_commitment': last_week_commitment if form.is_valid() and form.cleaned_data.get('doer') else None,
-        'avg_scores':         avg_scores,
-        'time_checklist':     time_checklist,
-        'time_delegation':    time_delegation,
+        'avg_scores':           avg_scores,
+        'time_checklist':       time_checklist,
+        'time_delegation':      time_delegation,
         'actual_time_checklist': actual_time_checklist,
         'actual_time_delegation': actual_time_delegation,
     })
 
+
 @login_required
 def performance_score(request):
+    """
+    Per-user weekly performance score (Mon–Sun).
+    Shows ALL tasks (no series-collapsing).
+    """
     form = PCReportFilterForm(request.GET or None, user=request.user)
+
     header = ''
     checklist_data = []
     delegation_data = []
@@ -254,39 +352,50 @@ def performance_score(request):
     week_start = None
     pending_checklist = pending_delegation = delayed_checklist = delayed_delegation = 0
 
+    # Allow non-staff to self-view; staff may pick a doer
     if form.is_valid() and (form.cleaned_data.get('doer') or not request.user.is_staff):
         doer = form.cleaned_data.get('doer') or request.user
         frm, to = get_week_dates(form.cleaned_data.get('date_from'), form.cleaned_data.get('date_to'))
         week_start = frm
 
-        checklist_qs = Checklist.objects.filter(assign_to=doer, planned_date__date__range=(frm, to))
-        delegation_qs = Delegation.objects.filter(assign_to=doer, planned_date__range=(frm, to))
+        checklist_qs = (
+            Checklist.objects
+            .filter(assign_to=doer, planned_date__date__range=(frm, to))
+            .select_related('assign_to')
+        )
+        delegation_qs = (
+            Delegation.objects
+            .filter(assign_to=doer, planned_date__range=(frm, to))
+            .select_related('assign_to')
+        )
 
+        # Time totals (actual)
         total_checklist_minutes = calculate_checklist_total_time(checklist_qs)
         total_delegation_minutes = calculate_delegation_total_time(delegation_qs)
         time_checklist = minutes_to_hhmm(total_checklist_minutes)
         time_delegation = minutes_to_hhmm(total_delegation_minutes)
-        total = total_checklist_minutes + total_delegation_minutes
-        total_hours = minutes_to_hhmm(total)
+        total_hours = minutes_to_hhmm(total_checklist_minutes + total_delegation_minutes)
 
+        # Checklist KPI
         p = checklist_qs.count()
         completed = checklist_qs.filter(status='Completed').count()
         score_not = percent_not_completed(p, completed)
         on_time = checklist_qs.filter(status='Completed', completed_at__lte=F('planned_date')).count()
         score_on = percent_not_completed(p, on_time)
         checklist_data = [
-            {'task_type': 'All work should be done',       'planned': p, 'completed': completed, 'pct': score_not, 'actual_minutes': total_checklist_minutes},
-            {'task_type': 'All work should be done ontime','planned': p, 'completed': on_time,   'pct': score_on,  'actual_minutes': total_checklist_minutes},
+            {'task_type': 'All work should be done',        'planned': p,  'completed': completed, 'pct': score_not, 'actual_minutes': total_checklist_minutes},
+            {'task_type': 'All work should be done on time','planned': p,  'completed': on_time,   'pct': score_on,  'actual_minutes': total_checklist_minutes},
         ]
 
+        # Delegation KPI
         p2 = delegation_qs.count()
         completed2 = delegation_qs.filter(status='Completed').count()
         score2_not = percent_not_completed(p2, completed2)
         on_time2 = delegation_qs.filter(status='Completed', completed_at__lte=F('planned_date')).count()
         score2_on = percent_not_completed(p2, on_time2)
         delegation_data = [
-            {'task_type': 'All work should be done',       'planned': p2, 'completed': completed2, 'pct': score2_not, 'actual_minutes': total_delegation_minutes},
-            {'task_type': 'All work should be done ontime','planned': p2, 'completed': on_time2,   'pct': score2_on,  'actual_minutes': total_delegation_minutes},
+            {'task_type': 'All work should be done',        'planned': p2, 'completed': completed2, 'pct': score2_not, 'actual_minutes': total_delegation_minutes},
+            {'task_type': 'All work should be done on time','planned': p2, 'completed': on_time2,   'pct': score2_on,  'actual_minutes': total_delegation_minutes},
         ]
 
         summary = {
@@ -298,8 +407,13 @@ def performance_score(request):
             'overall_ontime':    round((score_on  + score2_on)  / 2, 2),
         }
 
-        pending_checklist = Checklist.objects.filter(assign_to=doer, planned_date__date__lt=frm, status='Pending').count()
-        pending_delegation = Delegation.objects.filter(assign_to=doer, planned_date__lt=frm, status='Pending').count()
+        # Pending & delayed
+        pending_checklist = Checklist.objects.filter(
+            assign_to=doer, planned_date__date__lt=frm, status='Pending'
+        ).count()
+        pending_delegation = Delegation.objects.filter(
+            assign_to=doer, planned_date__lt=frm, status='Pending'
+        ).count()
         delayed_checklist = Checklist.objects.filter(
             assign_to=doer,
             completed_at__date__range=(frm, to),
@@ -311,29 +425,30 @@ def performance_score(request):
             completed_at__gt=F('planned_date')
         ).count()
 
+        # Header
+        full_name = (doer.get_full_name() or doer.username or '').upper()
         try:
-            phone = doer.profile.phone or ''
+            phone = getattr(getattr(doer, 'profile', None), 'phone', '') or ''
         except ObjectDoesNotExist:
             phone = ''
         try:
-            dept = doer.profile.department or ''
+            dept = getattr(getattr(doer, 'profile', None), 'department', '') or ''
         except ObjectDoesNotExist:
             dept = ''
-
-        header = f"{doer.get_full_name().upper()} ({phone}) – {frm:%d %b, %Y} to {to:%d %b, %Y} [{dept}]"
+        header = f"{full_name} ({phone}) – {frm:%d %b, %Y} to {to:%d %b, %Y} [{dept}]"
 
     return render(request, 'reports/performance_score.html', {
-        'form':               form,
-        'header':             header,
-        'checklist_data':     checklist_data,
-        'delegation_data':    delegation_data,
-        'time_checklist':     time_checklist,
-        'time_delegation':    time_delegation,
-        'summary':            summary,
-        'total_hours':        total_hours,
-        'week_start':         week_start,
-        'pending_checklist':  pending_checklist,
-        'pending_delegation': pending_delegation,
-        'delayed_checklist':  delayed_checklist,
-        'delayed_delegation': delayed_delegation,
+        'form':                form,
+        'header':              header,
+        'checklist_data':      checklist_data,
+        'delegation_data':     delegation_data,
+        'time_checklist':      time_checklist,
+        'time_delegation':     time_delegation,
+        'summary':             summary,
+        'total_hours':         total_hours,
+        'week_start':          week_start,
+        'pending_checklist':   pending_checklist,
+        'pending_delegation':  pending_delegation,
+        'delayed_checklist':   delayed_checklist,
+        'delayed_delegation':  delayed_delegation,
     })

@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <div class="card shadow">
+    <div class="card-header bg-primary text-white">
+      <h4 class="mb-0">Add Sales Plan</h4>
+    </div>
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label fw-semibold">{{ form.customer.label }}</label>
+            {{ form.customer|add_class:"form-select" }}
+            {% if form.customer.errors %}
+              <div class="text-danger small">{{ form.customer.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold">{{ form.month.label }}</label>
+            {{ form.month|add_class:"form-control" }}
+            {% if form.month.errors %}
+              <div class="text-danger small">{{ form.month.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold">{{ form.week.label }}</label>
+            {{ form.week|add_class:"form-control" }}
+            {% if form.week.errors %}
+              <div class="text-danger small">{{ form.week.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold">{{ form.location.label }}</label>
+            {{ form.location|add_class:"form-control" }}
+            {% if form.location.errors %}
+              <div class="text-danger small">{{ form.location.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold">{{ form.kam.label }}</label>
+            {{ form.kam|add_class:"form-control" }}
+            {% if form.kam.errors %}
+              <div class="text-danger small">{{ form.kam.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold">{{ form.wire_rod.label }}</label>
+            {{ form.wire_rod|add_class:"form-control" }}
+            {% if form.wire_rod.errors %}
+              <div class="text-danger small">{{ form.wire_rod.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold">{{ form.wr_actual.label }}</label>
+            {{ form.wr_actual|add_class:"form-control" }}
+            {% if form.wr_actual.errors %}
+              <div class="text-danger small">{{ form.wr_actual.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold">{{ form.round_bar.label }}</label>
+            {{ form.round_bar|add_class:"form-control" }}
+            {% if form.round_bar.errors %}
+              <div class="text-danger small">{{ form.round_bar.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold">{{ form.total_plan.label }}</label>
+            {{ form.total_plan|add_class:"form-control" }}
+            {% if form.total_plan.errors %}
+              <div class="text-danger small">{{ form.total_plan.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold">{{ form.metric.label }}</label>
+            {{ form.metric|add_class:"form-select" }}
+            {% if form.metric.errors %}
+              <div class="text-danger small">{{ form.metric.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold">{{ form.period_type.label }}</label>
+            {{ form.period_type|add_class:"form-select" }}
+            {% if form.period_type.errors %}
+              <div class="text-danger small">{{ form.period_type.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold">{{ form.period_start.label }}</label>
+            {{ form.period_start|add_class:"form-control" }}
+            {% if form.period_start.errors %}
+              <div class="text-danger small">{{ form.period_start.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold">{{ form.period_end.label }}</label>
+            {{ form.period_end|add_class:"form-control" }}
+            {% if form.period_end.errors %}
+              <div class="text-danger small">{{ form.period_end.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold">{{ form.target.label }}</label>
+            {{ form.target|add_class:"form-control" }}
+            {% if form.target.errors %}
+              <div class="text-danger small">{{ form.target.errors }}</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="card-footer text-end">
+        <button class="btn btn-success" type="submit">Submit</button>
+        <a href="{% url 'sales:sales_plan_list' %}" class="btn btn-secondary ms-2">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

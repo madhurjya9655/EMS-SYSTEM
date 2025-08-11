@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Confirm Delete{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+  <div class="alert alert-danger border shadow-lg mx-auto" style="max-width: 480px;">
+    <h4 class="mb-3">Are you sure?</h4>
+    <p>
+      {% if type %}Delete <strong>{{ type }}</strong>?{% else %}Delete this record?{% endif %}
+    </p>
+    <form method="post" class="mt-4">
+      {% csrf_token %}
+      <a href="javascript:history.back()" class="btn btn-secondary me-2">Cancel</a>
+      <button type="submit" class="btn btn-danger">Yes, Delete</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

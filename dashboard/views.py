@@ -6,10 +6,16 @@ from apps.tasks.models import Checklist, Delegation, HelpTicket
 
 import pytz
 
+
 def create_missing_recurring_checklist_tasks(user):
+    """
+    Ensures any missed recurring checklist occurrences exist up to 'today'.
+    (This preserves each series' original time-of-day from its first item.)
+    """
     ist = pytz.timezone('Asia/Kolkata')
     today = timezone.localdate()
     now = timezone.localtime(timezone.now(), ist)
+
     templates = (
         Checklist.objects.filter(assign_to=user, mode__in=['Daily', 'Weekly', 'Monthly', 'Yearly'])
         .values('task_name', 'mode', 'planned_date', 'frequency')
@@ -29,7 +35,7 @@ def create_missing_recurring_checklist_tasks(user):
             base_date = base_dt
             planned_time = dt_time(10, 0)
 
-        # Get all existing dates for this user/task/mode as date set (ignoring time)
+        # Gather existing dates (ignore time) for this series
         existing_dates = set(
             Checklist.objects.filter(
                 assign_to=user, task_name=task_name, mode=mode
@@ -37,13 +43,13 @@ def create_missing_recurring_checklist_tasks(user):
         )
         existing_date_set = set(d.date() if isinstance(d, datetime) else d for d in existing_dates)
 
-        # Calculate all required due dates (recurrence) up to today
+        # Generate occurrences up to 'today'
         gen_date = base_date
         while gen_date <= today:
             if gen_date not in existing_date_set:
                 planned_dt = datetime.combine(gen_date, planned_time)
                 planned_dt = ist.localize(planned_dt)
-                # Use first matching checklist as template for details
+
                 template_qs = Checklist.objects.filter(assign_to=user, task_name=task_name, mode=mode).order_by('planned_date')
                 if template_qs.exists():
                     template = template_qs.first()
@@ -72,12 +78,14 @@ def create_missing_recurring_checklist_tasks(user):
                         checklist_auto_close_days=template.checklist_auto_close_days,
                         actual_duration_minutes=0,
                     )
-            # Advance to next due date as per recurrence
+
+            # bump by recurrence
             if mode == 'Daily':
                 gen_date += timedelta(days=freq)
             elif mode == 'Weekly':
                 gen_date += timedelta(weeks=freq)
             elif mode == 'Monthly':
+                # simple month step, clamp day to <= 28 to avoid invalid dates
                 year = gen_date.year + ((gen_date.month + freq - 1) // 12)
                 month = (gen_date.month + freq - 1) % 12 + 1
                 day = min(gen_date.day, 28)
@@ -87,6 +95,7 @@ def create_missing_recurring_checklist_tasks(user):
             else:
                 break
 
+
 @login_required
 def dashboard_home(request):
     create_missing_recurring_checklist_tasks(request.user)
@@ -94,10 +103,12 @@ def dashboard_home(request):
     now_dt = timezone.localtime()
     today = now_dt.date()
 
+    # week ranges (Mon..Sun style)
     start_current = today - timedelta(days=today.weekday())
     start_prev = start_current - timedelta(days=7)
     end_prev = start_current - timedelta(days=1)
 
+    # Checklist counts (by date portion)
     curr_chk = Checklist.objects.filter(
         assign_to=request.user,
         planned_date__date__gte=start_current,
@@ -111,17 +122,19 @@ def dashboard_home(request):
         status='Completed'
     ).count()
 
+    # Delegation counts (delegation.planned_date is a DateTimeField now; compare on date)
     curr_del = Delegation.objects.filter(
         assign_to=request.user,
-        planned_date__gte=start_current,
-        planned_date__lte=today
+        planned_date__date__gte=start_current,
+        planned_date__date__lte=today
     ).count()
     prev_del = Delegation.objects.filter(
         assign_to=request.user,
-        planned_date__gte=start_prev,
-        planned_date__lte=end_prev
+        planned_date__date__gte=start_prev,
+        planned_date__date__lte=end_prev
     ).count()
 
+    # Help ticket counts
     curr_help = HelpTicket.objects.filter(
         assign_to=request.user,
         planned_date__date__gte=start_current,
@@ -138,30 +151,36 @@ def dashboard_home(request):
     week_score = {
         'checklist':   {'previous': prev_chk,   'current': curr_chk},
         'delegation':  {'previous': prev_del,   'current': curr_del},
-        'help_ticket': {'previous': prev_help, 'current': curr_help},
+        'help_ticket': {'previous': prev_help,  'current': curr_help},
     }
 
     pending_tasks = {
         'checklist':   Checklist.objects.filter(assign_to=request.user, status='Pending').count(),
-        'delegation':  Delegation.objects.filter(assign_to=request.user).count(),
+        'delegation':  Delegation.objects.filter(assign_to=request.user, status='Pending').count(),
         'help_ticket': HelpTicket.objects.filter(assign_to=request.user).exclude(status='Closed').count(),
     }
 
     selected   = request.GET.get('task_type')
     today_only = (request.GET.get('today') == '1' or request.GET.get('today_only') == '1')
 
+    # Checklist list
     checklist_qs = Checklist.objects.filter(
-        assign_to=request.user, 
+        assign_to=request.user,
         status='Pending'
     ).order_by('planned_date')
-
     if today_only:
         checklist_qs = checklist_qs.filter(planned_date__date=today)
 
+    # Delegation + Help tickets
     all_delegation = Delegation.objects.filter(assign_to=request.user, status='Pending').order_by('planned_date')
+    if today_only:
+        all_delegation = all_delegation.filter(planned_date__date=today)
+
     all_help_ticket = HelpTicket.objects.filter(
         assign_to=request.user
     ).exclude(status='Closed').order_by('planned_date')
+    if today_only:
+        all_help_ticket = all_help_ticket.filter(planned_date__date=today)
 
     delegation_qs = list(all_delegation)
     help_ticket_qs = list(all_help_ticket)
@@ -173,12 +192,15 @@ def dashboard_home(request):
     else:
         tasks = checklist_qs
 
-    # SUNDAY or BEFORE 10AM rule for checklist
+    # Checklist gating: hide before 10:00 or on Sunday
     if (selected == 'checklist' or not selected):
         if now_dt.weekday() == 6 or now_dt.time() < dt_time(hour=10, minute=0):
             tasks = []
 
     def calculate_checklist_assigned_time(qs, date_from, date_to):
+        """
+        Sum up expected minutes for checklist items in [date_from, date_to] by recurrence.
+        """
         total_minutes = 0
         for task in qs:
             mode = getattr(task, 'mode', 'Daily')
@@ -186,12 +208,14 @@ def dashboard_home(request):
             minutes = task.time_per_task_minutes or 0
             start_date = max(date_from, task.planned_date.date())
             end_date = date_to
+
             if mode == 'Daily':
                 days = (end_date - start_date).days
                 if days < 0:
                     continue
                 occur = (days // freq) + 1
                 total_minutes += minutes * occur
+
             elif mode == 'Weekly':
                 occur = 0
                 for i in range((end_date - start_date).days + 1):
@@ -199,6 +223,7 @@ def dashboard_home(request):
                     if d.weekday() == task.planned_date.weekday() and ((d - task.planned_date.date()).days // 7) % freq == 0:
                         occur += 1
                 total_minutes += minutes * occur
+
             elif mode == 'Monthly':
                 occur = 0
                 d = start_date
@@ -211,9 +236,10 @@ def dashboard_home(request):
                     month = d.month % 12 + 1
                     try:
                         d = d.replace(year=year, month=month)
-                    except:
+                    except Exception:
                         d = d.replace(year=year, month=month, day=1)
                 total_minutes += minutes * occur
+
             elif mode == 'Yearly':
                 occur = 0
                 d = start_date
@@ -224,16 +250,26 @@ def dashboard_home(request):
                             occur += 1
                     try:
                         d = d.replace(year=d.year + 1)
-                    except:
+                    except Exception:
                         d = d.replace(year=d.year + 1, day=1)
                 total_minutes += minutes * occur
+
             else:
-                if start_date >= date_from and start_date <= end_date:
+                if start_date <= task.planned_date.date() <= end_date:
                     total_minutes += minutes
+
         return total_minutes
 
     def calculate_delegation_assigned_time(qs, date_from, date_to):
-        return sum(task.time_per_task_minutes or 0 for task in qs if date_from <= task.planned_date <= date_to)
+        """
+        Delegation planned_date is DateTime; compare by date component to the [date_from, date_to] window.
+        """
+        total = 0
+        for task in qs:
+            pd = task.planned_date.date()
+            if date_from <= pd <= date_to:
+                total += (task.time_per_task_minutes or 0)
+        return total
 
     def minutes_to_hhmm(minutes):
         h = minutes // 60
@@ -242,6 +278,7 @@ def dashboard_home(request):
 
     prev_min = calculate_checklist_assigned_time(checklist_qs, start_prev, end_prev)
     curr_min = calculate_checklist_assigned_time(checklist_qs, start_current, today)
+
     prev_min_del = calculate_delegation_assigned_time(
         Delegation.objects.filter(assign_to=request.user), start_prev, end_prev)
     curr_min_del = calculate_delegation_assigned_time(

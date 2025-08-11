@@ -1,3 +1,4 @@
+{# dashboard/templates/dashboard/partials/delegation_tasks.html #}
 <div class="card shadow-sm">
   <div class="card-header bg-white d-flex justify-content-between align-items-center">
     <h5 class="mb-0">Delegation Tasks</h5>
@@ -5,23 +6,24 @@
       <!-- Today Only and Show All buttons -->
       <form method="get" class="d-inline">
         {% for key, value in request.GET.items %}
-          {% if key != 'today_only' %}
+          {% if key != 'today_only' and key != 'today' %}
             <input type="hidden" name="{{ key }}" value="{{ value }}">
           {% endif %}
         {% endfor %}
         <button type="submit" name="today_only" value="1"
-          class="btn btn-sm {% if request.GET.today_only %}btn-primary{% else %}btn-outline-primary{% endif %}">
+          class="btn btn-sm {% if request.GET.today_only or request.GET.today %}btn-primary{% else %}btn-outline-primary{% endif %}">
           Today Only
         </button>
       </form>
       <a href="?" class="btn btn-sm btn-outline-secondary ms-1
-         {% if not request.GET.today_only %}active{% endif %}">
+         {% if not request.GET.today_only and not request.GET.today %}active{% endif %}">
         Show All
       </a>
       <a href="javascript:location.reload()" class="ms-2"><i class="fas fa-sync-alt"></i></a>
       <a href="javascript:location.reload()"><i class="fas fa-redo-alt"></i></a>
     </div>
   </div>
+
   <div class="card-body p-0">
     <table class="table table-hover mb-0">
       <thead class="table-light">
@@ -30,7 +32,7 @@
           <th>Task Title</th>
           <th>Message</th>
           <th>Assigned By</th>
-          <th>Planned Date</th>
+          <th>Planned Date &amp; Time</th>
           <th>Status</th>
           <th>Time/Task</th>
           <th><b>Actual Time</b></th>
@@ -46,7 +48,10 @@
           <td>{{ t.task_name }}</td>
           <td>{{ t.message|default:"—"|truncatechars:30 }}</td>
           <td>{{ t.assign_by.get_full_name|default:t.assign_by.username }}</td>
-          <td>{{ t.planned_date|date:"d M, Y" }}</td>
+
+          {# show date + time, e.g., 12 Aug, 2025 14:30, with ISO tooltip #}
+          <td title="{{ t.planned_date|date:'Y-m-d H:i' }}">{{ t.planned_date|date:"d M, Y H:i" }}</td>
+
           <td>{{ t.status }}</td>
           <td>{{ t.time_per_task_minutes }} min</td>
           <td>
@@ -60,9 +65,10 @@
           <td>{{ t.doer_notes|default:"—" }}</td>
           <td>
             {% if t.status != 'Completed' %}
-            <a href="{% url 'tasks:complete_delegation' t.id %}?next={{ request.get_full_path }}" class="btn btn-sm btn-success">COMPLETE</a>
+              <a href="{% url 'tasks:complete_delegation' t.id %}?next={{ request.get_full_path }}"
+                 class="btn btn-sm btn-success">COMPLETE</a>
             {% else %}
-            <span class="text-muted">Done</span>
+              <span class="text-muted">Done</span>
             {% endif %}
           </td>
         </tr>

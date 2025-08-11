@@ -1,28 +1,136 @@
-{% extends 'base.html' %}
+{% extends "base.html" %}
 {% block title %}Bulk Upload{% endblock %}
 {% block content %}
-<h2>Bulk Upload</h2>
+<div class="page-header mb-4"><h2>Bulk Upload</h2></div>
 
-{% if messages %}
-  <div class="mt-3">
-    {% for message in messages %}
-      <div class="alert alert-{{ message.tags }}">{{ message }}</div>
-    {% endfor %}
+<div class="card mb-5">
+  <div class="card-body">
+    <form method="post" enctype="multipart/form-data" class="row g-3 align-items-end">
+      {% csrf_token %}
+      {{ form.non_field_errors }}
+      <div class="col-md-3">
+        {{ form.form_type.label_tag }}
+        {{ form.form_type }}
+        <div class="text-danger small">{{ form.form_type.errors }}</div>
+      </div>
+      <div class="col-md-6">
+        {{ form.csv_file.label_tag }}
+        {{ form.csv_file }}
+        <div class="text-danger small">{{ form.csv_file.errors }}</div>
+      </div>
+      <div class="col-md-2">
+        <button class="btn btn-primary w-100">Upload</button>
+      </div>
+    </form>
+
+    <hr class="my-4">
+
+    <div class="d-flex flex-wrap gap-2 mb-3">
+      <a href="{% url 'tasks:download_checklist_template' %}" class="btn btn-outline-secondary">Download Checklist Template</a>
+      <a href="{% url 'tasks:download_delegation_template' %}" class="btn btn-outline-secondary">Download Delegation Template</a>
+    </div>
+
+    <div class="accordion" id="bulkHelp">
+      <div class="accordion-item">
+        <h2 class="accordion-header" id="bulkHelpHead">
+          <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#bulkHelpBody" aria-expanded="false" aria-controls="bulkHelpBody">
+            Format &amp; Rules
+          </button>
+        </h2>
+        <div id="bulkHelpBody" class="accordion-collapse collapse" aria-labelledby="bulkHelpHead" data-bs-parent="#bulkHelp">
+          <div class="accordion-body">
+            <div class="row g-4">
+              <div class="col-md-6">
+                <h6 class="mb-2">Accepted files</h6>
+                <ul class="mb-0">
+                  <li>.csv or .xlsx</li>
+                </ul>
+              </div>
+              <div class="col-md-6">
+                <h6 class="mb-2">Date &amp; time</h6>
+                <ul class="mb-0">
+                  <li><strong>Preferred</strong> date: <code>YYYY-MM-DD</code> (ISO)</li>
+                  <li><strong>Checklist “Planned Date”</strong>: <code>YYYY-MM-DD HH:MM</code> (24-hour)
+                      or Excel style <code>M/D/YYYY HH:MM</code> (e.g. <code>8/16/2025 17:00</code>).
+                      If you use slashes without AM/PM, pick a format that’s not ambiguous.</li>
+                  <li><strong>Delegation “Planned Date”</strong>: <code>YYYY-MM-DD HH:MM</code> (24-hour)
+                      or <code>M/D/YYYY HH:MM</code>. We keep your time-of-day and shift to the next working day if it lands on a holiday/Sunday.</li>
+                </ul>
+              </div>
+
+              <div class="col-12">
+                <h6 class="mb-2">Checklist columns</h6>
+                <div class="table-responsive">
+                  <table class="table table-sm table-bordered mb-3">
+                    <thead>
+                      <tr><th>Column</th><th>Required</th><th>Notes</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr><td>Task Name</td><td>Yes</td><td>Task title</td></tr>
+                      <tr><td>Message</td><td>No</td><td>Optional details</td></tr>
+                      <tr><td>Assign To</td><td>Yes</td><td><em>Username</em> of assignee</td></tr>
+                      <tr><td>Planned Date</td><td>Yes</td><td>Datetime as above (keeps your time-of-day, shifts to next working day if holiday/Sunday)</td></tr>
+                      <tr><td>Priority</td><td>No</td><td>Low, Medium, High (default Low)</td></tr>
+                      <tr><td>Mode</td><td>No</td><td>Daily, Weekly, Monthly, Yearly</td></tr>
+                      <tr><td>Frequency</td><td>No</td><td>Integer interval for Mode (blank = 0 / non-recurring)</td></tr>
+                      <tr><td>Time per Task (minutes)</td><td>No</td><td>Integer (blank = 0)</td></tr>
+                      <tr><td>Reminder Before Days</td><td>No</td><td>Integer (blank = 0)</td></tr>
+                      <tr><td>Assign PC</td><td>No</td><td>Username</td></tr>
+                      <tr><td>Group Name</td><td>No</td><td>Text</td></tr>
+                      <tr><td>Notify To</td><td>No</td><td>Username</td></tr>
+                      <tr><td>Auditor</td><td>No</td><td>Username</td></tr>
+                      <tr><td>Set Reminder</td><td>No</td><td>Yes/No</td></tr>
+                      <tr><td>Reminder Mode</td><td>No</td><td>Daily/Weekly/Monthly/Yearly</td></tr>
+                      <tr><td>Reminder Frequency</td><td>No</td><td>Integer (blank defaults to <code>1</code> when Set Reminder is Yes)</td></tr>
+                      <tr><td>Reminder Starting Time</td><td>No</td><td>HH:MM (24-hour)</td></tr>
+                      <tr><td>Checklist Auto Close</td><td>No</td><td>Yes/No</td></tr>
+                      <tr><td>Checklist Auto Close Days</td><td>No</td><td>Integer (blank = 0)</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="col-12">
+                <h6 class="mb-2">Delegation columns</h6>
+                <div class="table-responsive">
+                  <table class="table table-sm table-bordered mb-0">
+                    <thead>
+                      <tr><th>Column</th><th>Required</th><th>Notes</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr><td>Task Name</td><td>Yes</td><td>Delegation title</td></tr>
+                      <tr><td>Assign To</td><td>Yes</td><td><em>Username</em> of assignee</td></tr>
+                      <tr>
+                        <td>Planned Date</td>
+                        <td>Yes</td>
+                        <td>Datetime (<code>YYYY-MM-DD HH:MM</code> or <code>M/D/YYYY HH:MM</code>).
+                            Keeps your time-of-day; shifts to next working day if holiday/Sunday.</td>
+                      </tr>
+                      <tr><td>Priority</td><td>No</td><td>Low, Medium, High (default Low)</td></tr>
+                      <tr><td>Mode</td><td>No</td><td>Daily, Weekly, Monthly, Yearly</td></tr>
+                      <tr><td>Frequency</td><td>No</td><td>Integer interval (blank = 0 / non-recurring)</td></tr>
+                      <tr><td>Time per Task (minutes)</td><td>No</td><td>Integer (blank = 0)</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="col-12">
+                <h6 class="mb-2">Holiday rules</h6>
+                <ul class="mb-0">
+                  <li>Dates added in <em>Settings → Holiday List</em> (incl. monthly Saturday-offs) are treated as non-working.</li>
+                  <li><strong>Checklist:</strong> If the selected/uploaded date is a holiday/Sunday, it moves to the next working day <em>and keeps your chosen time-of-day (IST)</em>.</li>
+                  <li><strong>Delegation:</strong> If the selected/uploaded datetime is a holiday/Sunday, it moves to the next working day <em>and keeps your chosen time-of-day (IST)</em>.</li>
+                  <li>If the shifted date is also a holiday, it continues forward until a working day is found.</li>
+                </ul>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
-{% endif %}
-
-<div class="mb-4">
-  <a href="{% url 'tasks:download_checklist_template' %}" class="btn btn-outline-primary me-2">Download Checklist Template</a>
-  <a href="{% url 'tasks:download_delegation_template' %}" class="btn btn-outline-primary">Download Delegation Template</a>
 </div>
-
-<h2>Upload CSV or Excel</h2>
-<form method="post" enctype="multipart/form-data">
-  {% csrf_token %}
-  <div class="row">
-    <div class="col-md-6">{{ form.form_type.label_tag }}{{ form.form_type }}</div>
-    <div class="col-md-6">{{ form.csv_file.label_tag }}{{ form.csv_file }}</div>
-  </div>
-  <button type="submit" class="btn btn-primary mt-4">Upload</button>
-</form>
 {% endblock %}

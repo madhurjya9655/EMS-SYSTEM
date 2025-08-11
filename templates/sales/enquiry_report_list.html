@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-3">
+  {% include 'sales/_filters.html' %}
+  <div class="card">
+    <div class="card-header">Enquiry Report (Auto Fetched)</div>
+    <div class="card-body">
+      <table class="table table-bordered">
+        <thead class="table-light">
+          <tr>
+            <th>Customer</th>
+            <th>Actual Enquiry (MT)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in enquiries %}
+          <tr>
+            <td>{{ e.customer_name }}</td>
+            <td>{{ e.actual_enquiry_mt }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="2" class="text-center">No data.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

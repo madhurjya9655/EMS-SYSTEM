@@ -58,12 +58,17 @@
   </form>
 
   <script>
-    // Flatpickr on delegation.planned_date: disable Sundays
-    flatpickr("#id_planned_date", {
-      dateFormat: "Y-m-d",
-      disable: [
-        date => date.getDay() === 0
-      ]
+    // Flatpickr on delegation planned_date: DATE ONLY, disable Sundays
+    document.addEventListener('DOMContentLoaded', function() {
+      if (document.getElementById('id_planned_date')) {
+        flatpickr("#id_planned_date", {
+          dateFormat: "Y-m-d",
+          enableTime: false,
+          disable: [
+            date => date.getDay() === 0
+          ]
+        });
+      }
     });
   </script>
 {% endblock %}

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-3">
+  {% include 'sales/_filters.html' %}
+  <form method="post" novalidate>
+    {% csrf_token %}
+    <div class="card">
+      <div class="card-header">Visit Details</div>
+      <div class="card-body row gy-2 gx-3">
+        <div class="col-md-3">
+          <label>Customer Name</label>
+          <select name="customer" class="form-select" required>
+            <option value="">Select</option>
+            {% for c in customers %}
+            <option value="{{ c.id }}" {% if form.customer.value == c.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label>Date of Visit</label>
+          <input name="date" type="date" class="form-control" value="{{ form.date.value }}" required>
+        </div>
+        <div class="col-md-2">
+          <label>Contact Person</label>
+          <input name="contact_person" type="text" class="form-control" value="{{ form.contact_person.value }}" required>
+        </div>
+        <div class="col-md-3">
+          <label>Summary of Discussion</label>
+          <input name="summary" type="text" class="form-control" value="{{ form.summary.value }}" required>
+        </div>
+        <div class="col-md-2">
+          <label>Status of Visit</label>
+          <select name="status" class="form-select" required>
+            <option value="">Select</option>
+            <option value="addressed" {% if form.status.value == "addressed" %}selected{% endif %}>Addressed</option>
+            <option value="pending" {% if form.status.value == "pending" %}selected{% endif %}>Pending</option>
+            <option value="resolved" {% if form.status.value == "resolved" %}selected{% endif %}>Resolved</option>
+            <option value="closed" {% if form.status.value == "closed" %}selected{% endif %}>Closed</option>
+          </select>
+        </div>
+        <div class="col-12 mt-2">
+          <label>Live Location (auto)</label>
+          <input name="location" type="text" class="form-control" value="{{ form.location.value }}" readonly>
+        </div>
+      </div>
+      <div class="card-footer text-end">
+        <button class="btn btn-success" type="submit">Submit</button>
+      </div>
+    </div>
+    {% if messages %}
+    <div class="alert alert-info mt-2">{% for message in messages %}{{ message }}{% endfor %}</div>
+    {% endif %}
+  </form>
+</div>
+{% endblock %}

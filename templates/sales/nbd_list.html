@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% block title %}New Business Development{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">New Business Development</h1>
+</div>
+<form method="get" class="mb-3">
+  <div class="row g-2 align-items-end">
+    <div class="col">
+      <label for="from" class="form-label">From Date</label>
+      <input type="date" class="form-control" name="from" value="{{ request.GET.from }}">
+    </div>
+    <div class="col">
+      <label for="to" class="form-label">To Date</label>
+      <input type="date" class="form-control" name="to" value="{{ request.GET.to }}">
+    </div>
+    <div class="col-auto">
+      <button type="submit" class="btn btn-primary">Filter</button>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-bordered align-middle">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Customer Name</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for nbd in nbds %}
+        <tr>
+          <td>{{ nbd.date }}</td>
+          <td>{{ nbd.customer_name }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="2" class="text-center">No NBD entries found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

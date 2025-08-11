@@ -1,7 +1,31 @@
-{# dashboard/partials/help_ticket_tasks.html #}
+{# dashboard/templates/dashboard/partials/help_ticket_tasks.html #}
 {% load static %}
 
-<div class="card">
+<div class="card shadow-sm">
+  <div class="card-header bg-white d-flex justify-content-between align-items-center">
+    <h5 class="mb-0">Help Ticket Tasks</h5>
+    <div>
+      <!-- Today Only and Show All buttons -->
+      <form method="get" class="d-inline">
+        {% for key, value in request.GET.items %}
+          {% if key != 'today_only' and key != 'today' %}
+            <input type="hidden" name="{{ key }}" value="{{ value }}">
+          {% endif %}
+        {% endfor %}
+        <button type="submit" name="today_only" value="1"
+          class="btn btn-sm {% if request.GET.today_only or request.GET.today %}btn-primary{% else %}btn-outline-primary{% endif %}">
+          Today Only
+        </button>
+      </form>
+      <a href="?" class="btn btn-sm btn-outline-secondary ms-1
+         {% if not request.GET.today_only and not request.GET.today %}active{% endif %}">
+        Show All
+      </a>
+      <a href="javascript:location.reload()" class="ms-2" title="Refresh"><i class="fas fa-sync-alt"></i></a>
+      <a href="javascript:location.reload()" title="Reload"><i class="fas fa-redo-alt"></i></a>
+    </div>
+  </div>
+
   <div class="card-body p-0">
     <div class="table-responsive">
       <table class="table table-striped align-middle mb-0">
@@ -12,7 +36,7 @@
             <th>Subject</th>
             <th>Message</th>
             <th>Assigned Date</th>
-            <th>Planned Date</th>
+            <th>Planned Date &amp; Time</th>
             <th>
               Actual <br>
               Time <span title="Time taken in minutes" class="text-warning">&#x23F0;</span>
@@ -31,11 +55,14 @@
               <td>{{ item.assign_by.get_full_name|default:item.assign_by.username }}</td>
               <td>{{ item.title }}</td>
               <td>{{ item.description|truncatewords:10 }}</td>
-              <td>{{ item.created_at|date:"d M, Y h:i A" }}</td>
-              <td>{{ item.planned_date|date:"d M, Y h:i A" }}</td>
+
+              {# created_at & planned_date with ISO tooltip; 24h in table for consistency #}
+              <td title="{{ item.created_at|date:'Y-m-d H:i' }}">{{ item.created_at|date:"d M, Y H:i" }}</td>
+              <td title="{{ item.planned_date|date:'Y-m-d H:i' }}">{{ item.planned_date|date:"d M, Y H:i" }}</td>
+
               <td>
-                {% if item.actual_time_taken %}
-                  {{ item.actual_time_taken }} min
+                {% if item.actual_duration_minutes %}
+                  {{ item.actual_duration_minutes }} min
                 {% else %}
                   &ndash;
                 {% endif %}
@@ -52,13 +79,13 @@
               </td>
               <td class="d-flex gap-2">
                 <a
-                  href="{% url 'tasks:note_help_ticket' item.id %}?next={{ request.path }}"
+                  href="{% url 'tasks:note_help_ticket' item.id %}?next={{ request.get_full_path }}"
                   class="btn btn-sm btn-primary">
                   NOTE
                 </a>
                 {% if item.status != "Closed" %}
                   <a
-                    href="{% url 'tasks:note_help_ticket' item.id %}?next={{ request.path }}"
+                    href="{% url 'tasks:note_help_ticket' item.id %}?next={{ request.get_full_path }}"
                     class="btn btn-sm btn-success">
                     COMPLETE
                   </a>

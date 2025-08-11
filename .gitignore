@@ -1,3 +1,34 @@
+# Byte-compiled / cache
 __pycache__/
+*.py[cod]
 *.pyc
+
+# Local env & secrets
+.env
+.env.*
+*.env
+
+# Local DBs (never commit)
 db.sqlite3
+*.sqlite3
+*.sqlite3-journal
+
+# Local files generated at runtime
+media/
+bulk_uploads/
+staticfiles/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Node (if ever used)
+node_modules/
+
+# Misc build artifacts
+*.egg-info/
+# Google service account keys
+*.json

@@ -1,3 +1,4 @@
+{# dashboard/templates/dashboard/partials/checklist_tasks.html #}
 <div class="card shadow-sm">
   <div class="card-header bg-white d-flex justify-content-between align-items-center">
     <h5 class="mb-0">Checklist Tasks</h5>
@@ -5,17 +6,17 @@
       <!-- Today Only and Show All buttons -->
       <form method="get" class="d-inline">
         {% for key, value in request.GET.items %}
-          {% if key != 'today_only' %}
+          {% if key != 'today_only' and key != 'today' %}
             <input type="hidden" name="{{ key }}" value="{{ value }}">
           {% endif %}
         {% endfor %}
         <button type="submit" name="today_only" value="1"
-          class="btn btn-sm {% if request.GET.today_only %}btn-primary{% else %}btn-outline-primary{% endif %}">
+          class="btn btn-sm {% if request.GET.today_only or request.GET.today %}btn-primary{% else %}btn-outline-primary{% endif %}">
           Today Only
         </button>
       </form>
       <a href="?" class="btn btn-sm btn-outline-secondary ms-1
-         {% if not request.GET.today_only %}active{% endif %}">
+         {% if not request.GET.today_only and not request.GET.today %}active{% endif %}">
         Show All
       </a>
     </div>

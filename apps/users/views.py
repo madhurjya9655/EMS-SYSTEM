@@ -63,16 +63,21 @@ def add_user(request):
 @user_passes_test(admin_only)
 def edit_user(request, pk):
     user_obj = get_object_or_404(User, pk=pk)
-    profile_obj, _ = Profile.objects.get_or_create(user=user_obj)
+    # NOTE: don't create a Profile on GET — it will violate the unique phone constraint
+    profile_obj = Profile.objects.filter(user=user_obj).first()
+
     if request.method == 'POST':
         uf = UserForm(request.POST, instance=user_obj)
-        pf = ProfileForm(request.POST, instance=profile_obj)
+        pf = ProfileForm(request.POST, instance=profile_obj)  # instance may be None (will create on save)
         if uf.is_valid() and pf.is_valid():
+            # Save user (handle optional password change)
             user = uf.save(commit=False)
             pwd = uf.cleaned_data['password']
             if pwd:
                 user.set_password(pwd)
             user.save()
+
+            # Save/create profile with a valid phone from the form
             profile = pf.save(commit=False)
             profile.user = user
             profile.permissions = pf.cleaned_data['permissions']
@@ -81,6 +86,7 @@ def edit_user(request, pk):
     else:
         uf = UserForm(instance=user_obj, initial={'password': ''})
         pf = ProfileForm(instance=profile_obj)
+
     return render(request, 'users/edit_user.html', {
         'uf': uf,
         'pf': pf,

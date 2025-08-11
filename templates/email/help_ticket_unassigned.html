@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Help Ticket Unassigned</title>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; color:#111827; margin:0; padding:24px; background:#f7f7f7; }
+    .card { background:#fff; border:1px solid #e5e7eb; border-radius:8px; padding:20px; }
+    p { margin:8px 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <p>Hi {{ old_user.get_full_name|default:old_user.username }},</p>
+    <p>The help ticket <strong>{{ ticket.title }}</strong> has been reassigned and you’re no longer responsible for it.</p>
+    <p>
+      <b>New Assignee:</b> {{ ticket.assign_to.get_full_name|default:ticket.assign_to.username }}<br>
+      <b>Planned Date:</b> {{ ticket.planned_date|date:"Y-m-d H:i" }}<br>
+      <b>Priority:</b> {{ ticket.priority }}
+    </p>
+    <p>Thanks for your help so far.</p>
+  </div>
+</body>
+</html>

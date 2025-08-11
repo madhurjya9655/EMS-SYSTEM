@@ -2,16 +2,22 @@
 {% block title %}Upload Holiday List{% endblock %}
 {% block content %}
 <div class="page-header mb-4"><h2>Upload Holiday List</h2></div>
-<form method="post" enctype="multipart/form-data">
+
+<form method="post" enctype="multipart/form-data" class="card p-4">
   {% csrf_token %}
+  {{ form.non_field_errors }}
   <div class="row g-3 align-items-end">
     <div class="col-md-6">
       {{ form.file.label_tag }}
       {{ form.file }}
-      {{ form.file.errors }}
+      <div class="text-danger small">{{ form.file.errors }}</div>
+      <div class="form-text">CSV or Excel with columns: <code>date</code> (YYYY-MM-DD) and <code>name</code>. Sundays are ignored.</div>
     </div>
     <div class="col-md-2">
-      <button class="btn btn-primary">Upload CSV</button>
+      <button name="upload-file" value="1" class="btn btn-primary w-100">Upload</button>
+    </div>
+    <div class="col-md-2">
+      <a href="{% url 'settings:holiday_list' %}" class="btn btn-outline-secondary w-100">Back</a>
     </div>
   </div>
 </form>

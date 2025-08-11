@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html>
+  <body>
+    <p>Hi {{ assign_to.get_full_name|default:assign_to.username }},</p>
+    <p>Your Help Ticket <strong>{{ ticket.title }}</strong> has been <b>closed</b>.</p>
+    <p><b>Closed by:</b> {{ ticket.resolved_by.get_full_name|default:ticket.resolved_by.username }}</p>
+    <p><b>Notes:</b> {{ ticket.resolved_notes }}</p>
+    <p>Regards,<br>EMS System</p>
+  </body>
+</html>

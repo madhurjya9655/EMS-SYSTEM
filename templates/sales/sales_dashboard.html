@@ -1,6 +1,105 @@
-{% extends 'base.html' %}
+{% extends "base.html" %}
+{% load widget_tweaks %}
+
 {% block title %}Sales Dashboard{% endblock %}
+
 {% block content %}
-<h2>Dashboard</h2>
-<p>KPIs and charts here</p>
+<div class="container-fluid px-0">
+
+  <div class="card mb-4">
+    <div class="card-body">
+      <form method="get" class="row gx-3 gy-2 align-items-center mb-4">
+        <div class="col-md-2">
+          <label class="form-label"><i class="fas fa-user me-1"></i>KAM Name</label>
+          {{ form.kam|add_class:"form-select" }}
+        </div>
+        <div class="col-md-2">
+          <label class="form-label"><i class="fas fa-calendar me-1"></i>Month</label>
+          {{ form.month|add_class:"form-select" }}
+        </div>
+        <div class="col-md-2">
+          <label class="form-label"><i class="fas fa-calendar-week me-1"></i>Week</label>
+          {{ form.week|add_class:"form-select" }}
+        </div>
+        <div class="col-md-2">
+          <label class="form-label"><i class="fas fa-calendar-day me-1"></i>Date for the Week</label>
+          <input class="form-control bg-warning text-dark fw-bold" type="text" value="{{ date_range }}" readonly>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label"><i class="fas fa-exclamation-triangle me-1"></i>Total Overdue</label>
+          <input class="form-control bg-warning text-danger fw-bold" type="text" value="{{ total_overdue }}" readonly>
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+          <div class="fs-5 fw-bold">No Of Customers: <span id="numCustomers">{{ num_customers }}</span></div>
+        </div>
+        <div class="col-12 text-end mt-2">
+          <button type="submit" class="btn btn-primary me-2">Submit</button>
+          <button type="button" class="btn btn-success me-2" onclick="exportCSV()">Export CSV</button>
+          <button type="button" class="btn btn-danger" onclick="window.print()">Print</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="table-responsive">
+      <table class="table table-bordered align-middle text-center mb-0">
+        <thead class="table-dark">
+          <tr>
+            <th rowspan="2" class="align-middle">Details</th>
+            <th colspan="3"></th>
+            <th rowspan="2" class="align-middle">Conversion</th>
+            <th rowspan="2" class="align-middle">Total Marks</th>
+            <th rowspan="2" class="align-middle">Bonus Marks</th>
+            <th rowspan="2" class="align-middle">Marks Obtained</th>
+          </tr>
+          <tr>
+            <th>Target</th>
+            <th>Planned</th>
+            <th>Actual</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if error_message %}
+            <tr>
+              <td colspan="8" class="text-center text-danger">{{ error_message }}</td>
+            </tr>
+          {% elif not metrics %}
+            <tr>
+              <td colspan="8" class="text-center">No KPI metrics found.</td>
+            </tr>
+          {% else %}
+            {% for metric in metrics %}
+              <tr>
+                <td class="text-start fw-bold">{{ metric.name }}</td>
+                <td>{{ metric.target }}</td>
+                <td>{{ metric.planned }}</td>
+                <td>{{ metric.actual }}</td>
+                <td>{{ metric.conversion }}{% if metric.conversion %}%{% endif %}</td>
+                <td>{{ metric.total_marks }}</td>
+                <td>{{ metric.bonus_marks }}</td>
+                <td>{{ metric.marks_obtained }}</td>
+              </tr>
+            {% endfor %}
+          {% endif %}
+        </tbody>
+        <tfoot>
+          <tr class="table-primary fw-bold">
+            <td>Total Marks</td>
+            <td colspan="4"></td>
+            <td>{{ total_marks }}</td>
+            <td>{{ total_bonus }}</td>
+            <td>{{ total_obtained }}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+</div>
+<script>
+function exportCSV(){
+  const p = new URLSearchParams(new FormData(document.querySelector('form')));
+  window.location.href = '?' + p.toString() + '&export=csv';
+}
+</script>
 {% endblock %}

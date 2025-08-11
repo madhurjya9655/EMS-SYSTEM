@@ -10,17 +10,19 @@
       <a href="{% url 'tasks:bulk_upload' %}" class="btn btn-sm btn-secondary">Bulk Upload</a>
     </div>
   </div>
+
   <div
     class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
     data-bs-toggle="collapse"
     href="#filterPanel"
     role="button"
     aria-expanded="true"
-    style="cursor: pointer;"
+    style="cursor:pointer;"
   >
     <span>FILTER</span>
     <i class="fas fa-minus" style="color: blue !important;"></i>
   </div>
+
   <div id="filterPanel" class="collapse show">
     <div class="card-body">
       <form method="get">
@@ -78,17 +80,138 @@
 </div>
 
 <div class="table-responsive">
-  {% include "tasks/partial_list_checklist.html" %}
+  <!-- BULK DELETE FORM (only one form for all checkboxes) -->
+  <form method="post" id="bulkForm" action="{% url 'tasks:list_checklist' %}">
+    {% csrf_token %}
+    <table class="table table-bordered table-hover align-middle">
+      <thead class="table-light">
+        <tr>
+          <th style="width:32px;">
+            <input id="selectAll" type="checkbox" onclick="toggleSelectAll(this)">
+          </th>
+          <th>Task Name</th>
+          <th>Message</th>
+          <th>Assign To</th>
+          <th>Frequency</th>
+          <th>Planned Date</th>
+          <th>Remind Before Days</th>
+          <th>Reminder</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if items %}
+          {% for obj in items %}
+          <tr>
+            <td>
+              <input class="row-check" type="checkbox" name="sel" value="{{ obj.id }}">
+            </td>
+            <td>{{ obj.task_name }}</td>
+            <td>{{ obj.message|default:"-" }}</td>
+            <td>{{ obj.assign_to.get_full_name|default:obj.assign_to.username }}</td>
+            <td>{{ obj.frequency }} {{ obj.mode }}</td>
+            <td>{{ obj.planned_date|date:"d M, Y H:i A" }}</td>
+            <td>{{ obj.remind_before_days }}</td>
+            <td>
+              {% if obj.set_reminder %}
+                {{ obj.reminder_mode|default:"" }}({{ obj.reminder_frequency|default:"" }})
+              {% else %}
+                ({{ obj.reminder_frequency|default:"" }})
+              {% endif %}
+            </td>
+            <td class="text-nowrap">
+              <a href="{% url 'tasks:edit_checklist' obj.id %}" class="btn btn-sm btn-outline-secondary" title="Edit">
+                <i class="fas fa-edit"></i>
+              </a>
+
+              <!-- single delete (confirmation page) -->
+              <a href="{% url 'tasks:delete_checklist' obj.id %}" class="btn btn-sm btn-outline-danger" title="Delete">
+                <i class="fas fa-trash-alt"></i>
+              </a>
+
+              <!-- Delete entire series for this row (posts to a separate hidden form) -->
+              <button type="submit"
+                      class="btn btn-sm btn-danger"
+                      form="series-form-{{ obj.id }}"
+                      title="Delete series"
+                      onclick="return confirm('Delete ALL pending occurrences in this series?');">
+                <i class="fas fa-trash"></i> Series
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="9" class="text-center py-3 text-muted">No Checklist tasks found.</td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+
+    <!-- Bulk delete controls -->
+    <div class="d-flex flex-wrap justify-content-between align-items-center mt-2 gap-2">
+      <div class="d-flex align-items-center gap-3">
+        <div class="form-check m-0">
+          <input class="form-check-input" type="checkbox" value="1" id="withSeries" name="with_series">
+          <label class="form-check-label" for="withSeries">
+            Delete whole series for selected rows
+          </label>
+        </div>
+        <small class="text-muted">
+          <span id="selectedCount">0</span> selected
+        </small>
+      </div>
+      <button id="bulkDeleteBtn" type="submit" class="btn btn-danger" disabled
+              onclick="return confirm('Are you sure you want to delete the selected item(s)?');">
+        Delete
+      </button>
+    </div>
+  </form>
+
+  <!-- Hidden forms for per-row "Delete series" (kept OUTSIDE the bulk form) -->
+  {% if items %}
+    {% for obj in items %}
+      <form id="series-form-{{ obj.id }}" method="post" action="{% url 'tasks:list_checklist' %}" class="d-none">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="delete_series">
+        <input type="hidden" name="pk" value="{{ obj.id }}">
+      </form>
+    {% endfor %}
+  {% endif %}
 </div>
 
 <script>
-  document.querySelectorAll('[data-bs-toggle="collapse"]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const icon = btn.querySelector('i');
-      icon.classList.toggle('fa-minus');
-      icon.classList.toggle('fa-plus');
-    });
+function toggleSelectAll(source) {
+  document.querySelectorAll('.row-check').forEach(cb => { cb.checked = source.checked; });
+  updateBulkState();
+}
+function updateBulkState() {
+  const checks = Array.from(document.querySelectorAll('.row-check'));
+  const selected = checks.filter(cb => cb.checked).length;
+  const btn = document.getElementById('bulkDeleteBtn');
+  const count = document.getElementById('selectedCount');
+  if (btn) btn.disabled = selected === 0;
+  if (count) count.textContent = selected.toString();
+  // keep the header checkbox in sync if user manually toggles items
+  const all = document.getElementById('selectAll');
+  if (all) all.checked = selected === checks.length && checks.length > 0;
+}
+// react to individual row checkbox changes
+document.addEventListener('change', (e) => {
+  if (e.target && e.target.classList.contains('row-check')) {
+    updateBulkState();
+  }
+});
+// toggle +/- icon on filter collapse
+document.querySelectorAll('[data-bs-toggle="collapse"]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const icon = btn.querySelector('i');
+    icon.classList.toggle('fa-minus');
+    icon.classList.toggle('fa-plus');
   });
+});
+// initialize state on load
+document.addEventListener('DOMContentLoaded', updateBulkState);
 </script>
 
 {% endblock %}

@@ -1,21 +1,91 @@
-{% extends "base.html" %}
-{% block title %}New Sales Plan{% endblock %}
+{% extends 'base.html' %}
+{% block title %}Add Sales Plan{% endblock %}
+
 {% block content %}
-<div class="card">
-  <div class="card-header">New Sales Plan</div>
-  <div class="card-body">
-    <form method="post">
+<div class="container mt-5">
+  <div class="card">
+    <div class="card-header">
+      <h3>Add Sales Plan</h3>
+    </div>
+    <form method="post" class="card-body">
       {% csrf_token %}
       <div class="row g-3">
-        <div class="col-md-4">{{ form.metric.label_tag }} {{ form.metric }}</div>
-        <div class="col-md-4">{{ form.period_type.label_tag }} {{ form.period_type }}</div>
-        <div class="col-md-4">{{ form.target.label_tag }} {{ form.target }}</div>
+
+        <div class="col-md-6">
+          <label for="{{ form.customer.id_for_label }}" class="form-label">Customer</label>
+          {{ form.customer }}
+        </div>
+
+        <div class="col-md-3">
+          <label for="{{ form.month.id_for_label }}" class="form-label">Month</label>
+          {{ form.month }}
+        </div>
+
+        <div class="col-md-3">
+          <label for="{{ form.week.id_for_label }}" class="form-label">Week</label>
+          {{ form.week }}
+        </div>
+
+        <div class="col-md-4">
+          <label for="{{ form.location.id_for_label }}" class="form-label">Location</label>
+          {{ form.location }}
+        </div>
+
+        <div class="col-md-4">
+          <label for="{{ form.kam.id_for_label }}" class="form-label">KAM</label>
+          {{ form.kam }}
+        </div>
+
+        <div class="col-md-4">
+          <label for="{{ form.wire_rod.id_for_label }}" class="form-label">Wire Rod</label>
+          {{ form.wire_rod }}
+        </div>
+
+        <div class="col-md-4">
+          <label for="{{ form.wr_actual.id_for_label }}" class="form-label">WR Actual</label>
+          {{ form.wr_actual }}
+        </div>
+
+        <div class="col-md-4">
+          <label for="{{ form.round_bar.id_for_label }}" class="form-label">Round Bar</label>
+          {{ form.round_bar }}
+        </div>
+
+        <div class="col-md-4">
+          <label for="{{ form.total_plan.id_for_label }}" class="form-label">Total Plan</label>
+          {{ form.total_plan }}
+        </div>
+
+        <div class="col-md-3">
+          <label for="{{ form.metric.id_for_label }}" class="form-label">Metric</label>
+          {{ form.metric }}
+        </div>
+
+        <div class="col-md-3">
+          <label for="{{ form.period_type.id_for_label }}" class="form-label">Period type</label>
+          {{ form.period_type }}
+        </div>
+
+        <div class="col-md-3">
+          <label for="{{ form.period_start.id_for_label }}" class="form-label">Period start</label>
+          {{ form.period_start }}
+        </div>
+
+        <div class="col-md-3">
+          <label for="{{ form.period_end.id_for_label }}" class="form-label">Period end</label>
+          {{ form.period_end }}
+        </div>
+
+        <div class="col-md-4">
+          <label for="{{ form.target.id_for_label }}" class="form-label">Target</label>
+          {{ form.target }}
+        </div>
+
       </div>
-      <div class="row g-3 mt-3">
-        <div class="col-md-6">{{ form.period_start.label_tag }} {{ form.period_start }}</div>
-        <div class="col-md-6">{{ form.period_end.label_tag }} {{ form.period_end }}</div>
+      <div class="card-footer text-end mt-3">
+        <button type="submit" class="btn btn-success">Submit</button>
+        <a href="{% url 'sales:sales_plan_list' %}" class="btn btn-secondary">Cancel</a>
       </div>
-      <button type="submit" class="btn btn-primary mt-3">Save Plan</button>
     </form>
   </div>
 </div>

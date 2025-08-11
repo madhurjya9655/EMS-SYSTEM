@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-3">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    <div class="card">
+      <div class="card-header">Sales Plan</div>
+      <div class="card-body row gy-2 gx-3">
+        <div class="col-md-3">
+          <label>Month</label>
+          {{ form.month }}
+        </div>
+        <div class="col-md-3">
+          <label>Week</label>
+          {{ form.week }}
+        </div>
+        <div class="col-md-6">
+          <label>Customer Name</label>
+          {{ form.customer_name }}
+        </div>
+        <div class="col-md-3">
+          <label>Location</label>
+          {{ form.location }}
+        </div>
+        <div class="col-md-3">
+          <label>KAM</label>
+          {{ form.kam }}
+        </div>
+        <div class="col-md-2">
+          <label>Wire Rod</label>
+          {{ form.wire_rod }}
+        </div>
+        <div class="col-md-2">
+          <label>WR Actual</label>
+          {{ form.wr_actual }}
+        </div>
+        <div class="col-md-2">
+          <label>Round Bar</label>
+          {{ form.round_bar }}
+        </div>
+        <div class="col-md-2">
+          <label>Total Plan</label>
+          {{ form.total_plan }}
+        </div>
+      </div>
+      <div class="card-footer text-end">
+        <button class="btn btn-success" type="submit">Submit</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}

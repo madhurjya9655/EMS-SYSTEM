@@ -1,0 +1,22 @@
+<!-- templates/sales/_filters.html -->
+<form method="get" class="row g-2 mb-3">
+  <div class="col-auto">
+    <label for="id_from" class="form-label mb-0">From:</label>
+    <input type="date" name="from" id="id_from" class="form-control" value="{{ request.GET.from }}">
+  </div>
+  <div class="col-auto">
+    <label for="id_to" class="form-label mb-0">To:</label>
+    <input type="date" name="to" id="id_to" class="form-control" value="{{ request.GET.to }}">
+  </div>
+  <div class="col-auto">
+    <label for="id_mode" class="form-label mb-0">Mode:</label>
+    <select name="mode" id="id_mode" class="form-select">
+      <option value="">Select Mode</option>
+      <option value="weekly" {% if request.GET.mode == "weekly" %}selected{% endif %}>Weekly</option>
+      <option value="monthly" {% if request.GET.mode == "monthly" %}selected{% endif %}>Monthly</option>
+    </select>
+  </div>
+  <div class="col-auto align-self-end">
+    <button type="submit" class="btn btn-primary">Filter</button>
+  </div>
+</form>

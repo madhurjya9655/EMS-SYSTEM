@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: bos-ems
+    env: python
+
+    buildCommand: |
+      pip install -r requirements.txt
+
+    startCommand: gunicorn employee_management.wsgi:application --workers=1 --timeout=120
+
+    # Run after each deploy. One shell line is safest on Render.
+    postdeploy: |
+      python manage.py migrate --noinput && python manage.py collectstatic --noinput
+
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: employee_management.settings
+
+      # IMPORTANT: keep this path aligned with your Disk mount path
+      - key: SQLITE_PATH
+        value: /opt/render/project/src/db/db.sqlite3
+
+      - key: MEDIA_ROOT
+        value: /opt/render/project/src/db/media
+
+      # Put these in Render > Environment as secrets (do NOT commit values)
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: DEFAULT_FROM_EMAIL
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: DEBUG
+        value: "False"
+
+    # Persisted disk. Do NOT change mountPath if you already have data.
+    disk:
+      name: ems-disk
+      mountPath: /opt/render/project/src/db
+      sizeGB: 10   # keep this equal/greater than your current disk size

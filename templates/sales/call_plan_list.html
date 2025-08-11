@@ -1,0 +1,50 @@
+{% extends 'base.html' %}
+{% block title %}Call Plan{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Call Plan</h1>
+</div>
+<form method="get" class="mb-3">
+  <div class="row g-2 align-items-end">
+    <div class="col">
+      <label for="from" class="form-label">From Date</label>
+      <input type="date" class="form-control" name="from" value="{{ request.GET.from }}">
+    </div>
+    <div class="col">
+      <label for="to" class="form-label">To Date</label>
+      <input type="date" class="form-control" name="to" value="{{ request.GET.to }}">
+    </div>
+    <div class="col-auto">
+      <button type="submit" class="btn btn-primary">Filter</button>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-bordered align-middle">
+      <thead>
+        <tr>
+          <th>Customer Name</th>
+          <th>Person Name</th>
+          <th>Date of Call</th>
+          <th>Summary</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for call in calls %}
+        <tr>
+          <td>{{ call.customer.name }}</td>
+          <td>{{ call.person_name }}</td>
+          <td>{{ call.call_date }}</td>
+          <td>{{ call.summary }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4" class="text-center">No call records found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
