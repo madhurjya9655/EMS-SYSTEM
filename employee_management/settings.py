@@ -97,11 +97,7 @@ Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-<<<<<<< HEAD
-        "NAME": "/opt/render/project/src/db/db.sqlite3",
-=======
         "NAME": DB_PATH,
->>>>>>> 2369fbe (Deploy: fixes + features)
     }
 }
 
