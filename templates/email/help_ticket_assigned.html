@@ -6,7 +6,7 @@
 </head>
 <body>
   <p>Hi <b>{{ assign_to.get_full_name }}</b>,</p>
-  <p>{{ ticket.message|default:"You have a new Help Ticket assigned to you." }}</p>
+  <p>{{ ticket.description|default:"You have a new Help Ticket assigned to you." }}</p>
 
   <p>
     <b>Title:</b> {{ ticket.title }}<br>

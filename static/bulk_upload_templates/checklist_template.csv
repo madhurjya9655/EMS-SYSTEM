@@ -1,3 +1,0 @@
-Task Name	Message	Assign To	Planned Date	Priority	Make Attachment Mandatory	Mode	Frequency	Time per Task (minutes)	Reminder Before Days	Assign PC	Group Name	Notify To	Auditor	Set Reminder	Reminder Mode	Reminder Frequency	Reminder Starting Time	Checklist Auto Close	Checklist Auto Close Days
-Daily Backup	Run database backup	saurabh	8/12/2025 13:00	Low	No	Daily	1	15	1		IT			Yes	Daily	1	10:00	No	0
-Weekly Review	Review system logs	madhurjyabora	8/13/2025 22:00	Medium	No	Weekly	1	20	0					No				No	0
