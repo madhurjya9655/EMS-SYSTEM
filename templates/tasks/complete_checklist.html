@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Complete Checklist{% endblock %}
+{% url 'dashboard:home' as dashboard_home_url %}
 {% block content %}
 
 <div class="page-header mb-4">
@@ -69,7 +70,7 @@
           Submit
         </button>
         <a class="btn btn-secondary"
-           href="{{ request.GET.next|default:reverse('dashboard:home') }}?task_type=checklist">
+           href="{{ request.GET.next|default:dashboard_home_url }}?task_type=checklist">
           Cancel
         </a>
       </div>
