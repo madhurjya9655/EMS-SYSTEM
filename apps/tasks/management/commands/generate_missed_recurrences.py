@@ -7,29 +7,34 @@ from apps.tasks.recurrence import get_next_planned_date
 
 
 class Command(BaseCommand):
-    help = "Generate the next recurring checklist instance per series if missing (one future pending per group)."
+    help = (
+        "Ensure one future 'Pending' checklist per recurring series exists. "
+        "Future recurrences are generated at 10:00 AM IST and skip Sundays/holidays."
+    )
 
     def handle(self, *args, **kwargs):
         now = timezone.now()
 
+        # Identify distinct recurring series (include group_name to avoid collisions)
         groups = (
             Checklist.objects.filter(
                 mode__in=['Daily', 'Weekly', 'Monthly', 'Yearly'],
                 frequency__gte=1,
             )
-            .values('assign_to', 'task_name', 'mode', 'frequency')
+            .values('assign_to', 'task_name', 'mode', 'frequency', 'group_name')
             .distinct()
         )
 
         created = 0
         for g in groups:
-            # Latest item in the series (any status), prefer the most recent planned_date
+            # Latest item in the series (any status), by most recent planned_date
             instance = (
                 Checklist.objects.filter(
                     assign_to=g['assign_to'],
                     task_name=g['task_name'],
                     mode=g['mode'],
                     frequency=g['frequency'],
+                    group_name=g['group_name'],
                 )
                 .order_by('-planned_date', '-id')
                 .first()
@@ -37,14 +42,15 @@ class Command(BaseCommand):
             if not instance:
                 continue
 
-            # If there is already a future pending item, skip
+            # If there is already a future pending item for this series, skip
             qs_future = Checklist.objects.filter(
                 assign_to=instance.assign_to,
                 task_name=instance.task_name,
                 mode=instance.mode,
                 frequency=instance.frequency,
+                group_name=instance.group_name,
                 planned_date__gt=instance.planned_date,
-                status='Pending'
+                status='Pending',
             )
             if qs_future.exists():
                 continue
@@ -53,14 +59,18 @@ class Command(BaseCommand):
             if instance.status == 'Pending' and instance.planned_date > now:
                 continue
 
-            # Compute next planned datetime (preserve IST time, roll only date)
-            next_planned = get_next_planned_date(instance.planned_date, instance.mode, instance.frequency)
+            # Compute next planned datetime.
+            # NOTE: get_next_planned_date now forces 10:00 IST and skips Sun/holidays.
+            next_planned = get_next_planned_date(
+                instance.planned_date, instance.mode, instance.frequency
+            )
+
+            # If next is not in the future, keep stepping until it is (catch up).
             if not next_planned or next_planned <= now:
-                # If next is not in the future, keep stepping until it is
-                # (in case the series has fallen behind significantly)
-                tmp = next_planned
+                tmp = next_planned or instance.planned_date
                 safety = 0
-                while tmp and tmp <= now and safety < 24:
+                # Cap at ~2 years of steps to avoid runaway loops on corrupt data.
+                while tmp and tmp <= now and safety < 730:
                     tmp = get_next_planned_date(tmp, instance.mode, instance.frequency)
                     safety += 1
                 next_planned = tmp
@@ -74,6 +84,7 @@ class Command(BaseCommand):
                 task_name=instance.task_name,
                 mode=instance.mode,
                 frequency=instance.frequency,
+                group_name=instance.group_name,
                 planned_date__gte=next_planned - timedelta(minutes=1),
                 planned_date__lt=next_planned + timedelta(minutes=1),
                 status='Pending',
