@@ -66,7 +66,7 @@ def next_working_day(dt):
     """dt: date -> next working date"""
     while not is_working_day(dt):
         dt += timedelta(days=1)
-    return dt
+        return dt
 
 def normalize_planned_dt(dt):
     """
@@ -128,10 +128,27 @@ def normalize_planned_dt_preserve_time(dt):
     # Store/return in project timezone
     return dt_ist.astimezone(tz)
 
+# ---- NEW: First-occurrence keeper (key change) -------------------------------
+
+def keep_first_occurrence(dt):
+    """
+    FIRST OCCURRENCE ONLY:
+    - keep EXACT date & time provided by admin/bulk file
+    - interpret naive as IST wall-clock
+    - return aware datetime in project timezone
+    - do NOT move off Sundays/holidays (per business rule)
+    """
+    tz = timezone.get_current_timezone()
+    if timezone.is_naive(dt):
+        dt = IST.localize(dt)
+    return dt.astimezone(tz)
+
 def next_recurring_datetime(prev_dt, mode, frequency):
     """
-    Compute next occurrence from prev_dt by mode/frequency, KEEP the same IST wall-clock time
-    as prev_dt, then move to next working day if needed. Return aware dt in project tz.
+    Compute next occurrence from prev_dt by mode/frequency.
+    Force time to ASSIGN_HOUR:ASSIGN_MINUTE (IST).
+    Skip non-working days (Sunday/Holiday/Saturday off via Holiday table).
+    Return aware dt in project tz.
     """
     if (mode or '') not in RECURRING_MODES:
         return None
@@ -143,9 +160,6 @@ def next_recurring_datetime(prev_dt, mode, frequency):
     cur_ist = prev_dt.astimezone(IST)
     step = max(int(frequency or 1), 1)
 
-    # Preserve the time component
-    hh, mm, ss, us = cur_ist.hour, cur_ist.minute, cur_ist.second, cur_ist.microsecond
-
     if mode == 'Daily':
         cur_ist = cur_ist + relativedelta(days=step)
     elif mode == 'Weekly':
@@ -155,13 +169,13 @@ def next_recurring_datetime(prev_dt, mode, frequency):
     elif mode == 'Yearly':
         cur_ist = cur_ist + relativedelta(years=step)
 
-    # Put preserved time back on the new date
-    cur_ist = cur_ist.replace(hour=hh, minute=mm, second=ss, microsecond=us)
+    # Force 10:00 IST
+    cur_ist = cur_ist.replace(hour=ASSIGN_HOUR, minute=ASSIGN_MINUTE, second=0, microsecond=0)
 
-    # If it's a non-working day, roll DATE forward but keep time
+    # Roll forward to next working day keeping 10:00
     while not is_working_day(cur_ist.date()):
         cur_ist = cur_ist + relativedelta(days=1)
-        cur_ist = cur_ist.replace(hour=hh, minute=mm, second=ss, microsecond=us)
+        cur_ist = cur_ist.replace(hour=ASSIGN_HOUR, minute=ASSIGN_MINUTE, second=0, microsecond=0)
 
     return cur_ist.astimezone(tz)
 
@@ -172,6 +186,7 @@ def _series_filter_kwargs(task: Checklist):
         task_name=task.task_name,
         mode=task.mode,
         frequency=task.frequency,
+        group_name=task.group_name,
     )
 
 def create_next_if_recurring(task: Checklist):
@@ -228,7 +243,7 @@ def ensure_next_for_all_recurring():
     now = timezone.now()
     seeds = (Checklist.objects
              .filter(mode__in=RECURRING_MODES)
-             .values('assign_to_id', 'task_name', 'mode', 'frequency')
+             .values('assign_to_id', 'task_name', 'mode', 'frequency', 'group_name')
              .distinct())
     for s in seeds:
         last = (Checklist.objects
@@ -368,6 +383,39 @@ def parse_time_val(val):
 def get_default_time():
     return time(ASSIGN_HOUR, ASSIGN_MINUTE)
 
+# ---- NEW: robust row cleaning for bulk upload --------------------------------
+
+def _clean_row_keys(row: dict) -> dict:
+    """Trim whitespace from header keys like 'Task Name ' -> 'Task Name'."""
+    if not row:
+        return {}
+    out = {}
+    for k, v in row.items():
+        key = k.strip() if isinstance(k, str) else k
+        out[key] = v
+    return out
+
+def _is_blank_cell(v) -> bool:
+    """Treat None/NaN/NaT/''/'  ' as blank."""
+    if v is None:
+        return True
+    try:
+        if pd.isna(v):
+            return True
+    except Exception:
+        pass
+    if isinstance(v, str) and v.strip() == "":
+        return True
+    if isinstance(v, float) and math.isnan(v):
+        return True
+    return False
+
+def _is_empty_row(row: dict) -> bool:
+    """Return True if all cells in the row are blank."""
+    if not row:
+        return True
+    return all(_is_blank_cell(v) for v in row.values())
+
 # ---- Delegation time aggregation --------------------------------------------
 
 def _coerce_date(dtor):
@@ -449,6 +497,7 @@ def list_checklist(request):
             task_name=OuterRef('task_name'),
             mode=OuterRef('mode'),
             frequency=OuterRef('frequency'),
+            group_name=OuterRef('group_name'),
         ).order_by('planned_date', 'id').values('pk')[:1]
     )
 
@@ -503,6 +552,7 @@ def list_checklist(request):
         return render(request, 'tasks/partial_list_checklist.html', ctx)
     return render(request, 'tasks/list_checklist.html', ctx)
 
+
 @has_permission('add_checklist')
 def add_checklist(request):
     if request.method == 'POST':
@@ -510,7 +560,8 @@ def add_checklist(request):
         if form.is_valid():
             planned_date = form.cleaned_data.get('planned_date')
             if planned_date:
-                planned_date = normalize_planned_dt_preserve_time(planned_date)
+                # FIRST occurrence must keep exact date+time
+                planned_date = keep_first_occurrence(planned_date)
             obj = form.save(commit=False)
             obj.planned_date = planned_date
             obj.save()
@@ -535,7 +586,8 @@ def edit_checklist(request, pk):
         if form.is_valid():
             planned_date = form.cleaned_data.get('planned_date')
             if planned_date:
-                planned_date = normalize_planned_dt_preserve_time(planned_date)
+                # FIRST instance edit must keep exact time chosen
+                planned_date = keep_first_occurrence(planned_date)
             obj2 = form.save(commit=False)
             obj2.planned_date = planned_date
             obj2.save()
@@ -641,7 +693,8 @@ def add_delegation(request):
         if form.is_valid():
             planned_dt = form.cleaned_data.get('planned_date')
             if planned_dt:
-                planned_dt = normalize_planned_dt_preserve_time(planned_dt)
+                # FIRST occurrence must keep exact date+time
+                planned_dt = keep_first_occurrence(planned_dt)
             obj = form.save(commit=False)
             obj.planned_date = planned_dt
             obj.save()
@@ -662,7 +715,8 @@ def edit_delegation(request, pk):
         if form.is_valid():
             planned_dt = form.cleaned_data.get('planned_date')
             if planned_dt:
-                planned_dt = normalize_planned_dt_preserve_time(planned_dt)
+                # FIRST instance edit must keep exact time chosen
+                planned_dt = keep_first_occurrence(planned_dt)
             obj2 = form.save(commit=False)
             obj2.planned_date = planned_dt
             obj2.save()
@@ -763,14 +817,24 @@ def bulk_upload(request):
     errors = []
     to_create = []
 
+    # ---------- CHECKLIST BULK ----------
     if form_type == 'checklist':
         required_headers = ['Task Name', 'Assign To', 'Planned Date']
-        missing = [h for h in required_headers if h not in (rows[0].keys() if rows else [])]
+        if rows:
+            # Normalize just the first row's keys for header presence test
+            first_keys = [ (k.strip() if isinstance(k, str) else k) for k in rows[0].keys() ]
+            missing = [h for h in required_headers if h not in first_keys]
+        else:
+            missing = required_headers
         if missing:
             messages.error(request, f"Missing required columns for Checklist: {', '.join(missing)}")
             return render(request, 'tasks/bulk_upload.html', {'form': form})
 
-        for idx, row in enumerate(rows, start=2):
+        for idx, raw_row in enumerate(rows, start=2):  # Excel/CSV: header is row 1
+            row = _clean_row_keys(raw_row)
+            if _is_empty_row(row):
+                continue  # <-- skip completely blank lines (this fixes your 'Row 4' error)
+
             task_name = str(row.get('Task Name', '')).strip()
             uname = str(row.get('Assign To', '')).strip()
             planned_raw = row.get('Planned Date', '')
@@ -815,8 +879,8 @@ def bulk_upload(request):
             if not planned_dt:
                 errors.append(f"Row {idx}: Planned Date is invalid or missing. Use 'YYYY-MM-DD HH:MM' or 'M/D/YYYY HH:MM'."); continue
 
-            # Preserve user-provided wall-clock time, interpret naive as IST
-            planned_dt = normalize_planned_dt_preserve_time(planned_dt)
+            # ---- CHANGE: keep first exactly as provided (IST) ----
+            planned_dt = keep_first_occurrence(planned_dt)
 
             if priority not in dict(Checklist._meta.get_field('priority').choices).keys():
                 errors.append(f"Row {idx}: Priority '{priority}' is invalid. Use Low/Medium/High."); continue
@@ -909,15 +973,23 @@ def bulk_upload(request):
         messages.success(request, f"{len(created_objs)} checklist row(s) imported successfully.")
         return redirect('tasks:bulk_upload')
 
-    # Delegation bulk (now requires DateTime with time)
+    # ---------- DELEGATION BULK ----------
     else:
         required_headers = ['Task Name', 'Assign To', 'Planned Date']
-        missing = [h for h in required_headers if h not in (rows[0].keys() if rows else [])]
+        if rows:
+            first_keys = [ (k.strip() if isinstance(k, str) else k) for k in rows[0].keys() ]
+            missing = [h for h in required_headers if h not in first_keys]
+        else:
+            missing = required_headers
         if missing:
             messages.error(request, f"Missing required columns for Delegation: {', '.join(missing)}")
             return render(request, 'tasks/bulk_upload.html', {'form': form})
 
-        for idx, row in enumerate(rows, start=2):
+        for idx, raw_row in enumerate(rows, start=2):
+            row = _clean_row_keys(raw_row)
+            if _is_empty_row(row):
+                continue  # <-- skip completely blank lines
+
             task_name = str(row.get('Task Name', '')).strip()
             uname = str(row.get('Assign To', '')).strip()
             pd_val = row.get('Planned Date', '')
@@ -951,8 +1023,8 @@ def bulk_upload(request):
             if not planned_dt:
                 errors.append(f"Row {idx}: Planned Date is invalid or missing. Use 'YYYY-MM-DD HH:MM' or 'M/D/YYYY HH:MM'."); continue
 
-            # Shift holidays/Sundays but keep same time (IST)
-            planned_dt = normalize_planned_dt_preserve_time(planned_dt)
+            # ---- CHANGE: keep first exactly as provided (IST) ----
+            planned_dt = keep_first_occurrence(planned_dt)
 
             if priority not in dict(Delegation._meta.get_field('priority').choices).keys():
                 errors.append(f"Row {idx}: Priority '{priority}' is invalid. Use Low/Medium/High."); continue
