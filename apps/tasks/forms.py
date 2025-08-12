@@ -61,8 +61,7 @@ class ChecklistForm(forms.ModelForm):
 
     def clean_planned_date(self):
         planned_date = self.cleaned_data['planned_date']
-        if is_holiday_or_sunday(planned_date):
-            raise ValidationError("This is a holiday date or Sunday, you cannot add a task on this day.")
+        # Do not raise here; views normalize to next working day at 10:00 IST.
         return planned_date
 
     def clean(self):
@@ -127,8 +126,7 @@ class DelegationForm(forms.ModelForm):
 
     def clean_planned_date(self):
         planned_date = self.cleaned_data['planned_date']
-        if is_holiday_or_sunday(planned_date):
-            raise ValidationError("This is a holiday date or Sunday, you cannot add a task on this day.")
+        # Do not raise here; views normalize to next working day at 10:00 IST.
         return planned_date
 
 
@@ -189,6 +187,7 @@ class HelpTicketForm(forms.ModelForm):
 
     def clean_planned_date(self):
         planned_date = self.cleaned_data['planned_date']
+        # Help Tickets remain blocked on non-working days (by requirement/UX).
         if is_holiday_or_sunday(planned_date):
             raise ValidationError("This is a holiday date or Sunday, you cannot add a task on this day.")
         return planned_date
