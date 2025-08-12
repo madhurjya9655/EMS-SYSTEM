@@ -1,4 +1,3 @@
-# apps/tasks/views.py
 import csv
 import io
 import math
@@ -13,11 +12,7 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.staticfiles import finders
-<<<<<<< HEAD
-from django.db.models import Q
-=======
 from django.db.models import Q, F, Subquery, OuterRef
->>>>>>> 2369fbe (Deploy: fixes + features)
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -35,8 +30,6 @@ from .forms import (
 )
 from .models import BulkUpload, Checklist, Delegation, FMS, HelpTicket
 from apps.settings.models import Holiday
-<<<<<<< HEAD
-=======
 
 # NEW: Centralized email helpers
 from .email_utils import (
@@ -49,7 +42,6 @@ from .email_utils import (
     send_help_ticket_unassigned_notice,
     send_admin_bulk_summary,
 )
->>>>>>> 2369fbe (Deploy: fixes + features)
 
 User = get_user_model()
 can_create = lambda u: u.is_superuser or u.groups.filter(
@@ -61,158 +53,6 @@ site_url = "https://ems-system-d26q.onrender.com"
 IST = pytz.timezone('Asia/Kolkata')
 ASSIGN_HOUR = 10
 ASSIGN_MINUTE = 0
-<<<<<<< HEAD
-
-def is_working_day(dt):
-    return dt.weekday() != 6 and not Holiday.objects.filter(date=dt).exists()
-
-def next_working_day(dt):
-    while not is_working_day(dt):
-        dt += timedelta(days=1)
-    return dt
-
-def get_next_planned_datetime(prev_dt, mode, freq, orig_weekday=None, orig_day=None):
-    date_part = prev_dt.date()
-    if mode == "Daily":
-        n = 0
-        d = date_part
-        while n < freq:
-            d += timedelta(days=1)
-            if is_working_day(d):
-                n += 1
-        return IST.localize(datetime.combine(d, time(ASSIGN_HOUR, ASSIGN_MINUTE)))
-    elif mode == "Weekly":
-        weeks = freq
-        base = date_part + timedelta(weeks=weeks)
-        for i in range(7):
-            d = base + timedelta(days=i)
-            if d.weekday() == orig_weekday and is_working_day(d):
-                return IST.localize(datetime.combine(d, time(ASSIGN_HOUR, ASSIGN_MINUTE)))
-    elif mode == "Monthly":
-        y, m = date_part.year, date_part.month
-        total_month = m - 1 + freq
-        y += total_month // 12
-        m = (total_month % 12) + 1
-        d = None
-        for day_try in [orig_day] + list(range(31, 27, -1)):
-            try:
-                d = datetime(y, m, day_try)
-                break
-            except ValueError:
-                continue
-        date_obj = d.date()
-        date_obj = next_working_day(date_obj)
-        return IST.localize(datetime.combine(date_obj, time(ASSIGN_HOUR, ASSIGN_MINUTE)))
-    elif mode == "Yearly":
-        y = date_part.year + freq
-        m = date_part.month
-        d = None
-        for day_try in [orig_day] + list(range(31, 27, -1)):
-            try:
-                d = datetime(y, m, day_try)
-                break
-            except ValueError:
-                continue
-        date_obj = d.date()
-        date_obj = next_working_day(date_obj)
-        return IST.localize(datetime.combine(date_obj, time(ASSIGN_HOUR, ASSIGN_MINUTE)))
-    date_obj = next_working_day(date_part)
-    return IST.localize(datetime.combine(date_obj, time(ASSIGN_HOUR, ASSIGN_MINUTE)))
-
-def create_missing_recurring_checklist_tasks():
-    today = timezone.localtime(timezone.now(), IST).date()
-    qs = Checklist.objects.filter(mode__in=['Daily', 'Weekly', 'Monthly', 'Yearly'])
-    for checklist in qs:
-        freq = checklist.frequency
-        if freq < 1:
-            continue
-        mode = checklist.mode
-        assign_to = checklist.assign_to
-        task_name = checklist.task_name
-
-        orig_weekday = checklist.planned_date.weekday() if mode == 'Weekly' else None
-        orig_day = checklist.planned_date.day if mode in ['Monthly', 'Yearly'] else None
-
-        last_task = Checklist.objects.filter(
-            assign_to=assign_to,
-            task_name=task_name,
-            mode=mode,
-        ).order_by('-planned_date').first()
-        prev_dt = timezone.localtime(last_task.planned_date, IST) if last_task else timezone.localtime(checklist.planned_date, IST)
-        if prev_dt.date() < today or (last_task and last_task.status == 'Completed'):
-            next_dt = get_next_planned_datetime(prev_dt, mode, freq, orig_weekday, orig_day)
-            if not Checklist.objects.filter(
-                assign_to=assign_to,
-                task_name=task_name,
-                planned_date=next_dt
-            ).exists():
-                new_obj = Checklist.objects.create(
-                    assign_by=checklist.assign_by,
-                    task_name=checklist.task_name,
-                    assign_to=assign_to,
-                    planned_date=next_dt,
-                    priority=checklist.priority,
-                    attachment_mandatory=checklist.attachment_mandatory,
-                    mode=mode,
-                    frequency=freq,
-                    time_per_task_minutes=checklist.time_per_task_minutes,
-                    remind_before_days=checklist.remind_before_days,
-                    message=checklist.message,
-                    assign_pc=checklist.assign_pc,
-                    group_name=checklist.group_name,
-                    notify_to=checklist.notify_to,
-                    auditor=checklist.auditor,
-                    set_reminder=checklist.set_reminder,
-                    reminder_mode=checklist.reminder_mode,
-                    reminder_frequency=checklist.reminder_frequency,
-                    reminder_before_days=checklist.reminder_before_days,
-                    reminder_starting_time=checklist.reminder_starting_time,
-                    checklist_auto_close=checklist.checklist_auto_close,
-                    checklist_auto_close_days=checklist.checklist_auto_close_days,
-                    actual_duration_minutes=0
-                )
-                if new_obj.assign_to.email:
-                    complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
-                    subject = f"New Checklist Task Assigned: {new_obj.task_name}"
-                    html_message = render_to_string(
-                        'email/checklist_assigned.html',
-                        {
-                            'task': new_obj,
-                            'assign_by': new_obj.assign_by,
-                            'assign_to': new_obj.assign_to,
-                            'complete_url': complete_url,
-                        }
-                    )
-                    msg = EmailMultiAlternatives(
-                        subject,
-                        html_message,
-                        None,
-                        [new_obj.assign_to.email]
-                    )
-                    msg.attach_alternative(html_message, "text/html")
-                    msg.send(fail_silently=False)
-
-def parse_int(val, default=0):
-    if val is None:
-        return default
-    if isinstance(val, float):
-        return default if math.isnan(val) else int(val)
-    s = str(val).strip()
-    return int(s) if s.isdigit() else default
-
-def parse_time_val(val):
-    if val is None:
-        return None
-    if hasattr(val, 'hour') and hasattr(val, 'minute'):
-        return val
-    if isinstance(val, pd.Timestamp):
-        return val.to_pydatetime().time()
-    s = str(val).strip()
-    return parse_time(s) if s else None
-
-def get_default_time():
-    return time(ASSIGN_HOUR, ASSIGN_MINUTE)
-=======
 
 # ---- Recurrence / Working-day helpers ---------------------------------------
 
@@ -535,7 +375,6 @@ def _coerce_date(dtor):
     if isinstance(dtor, datetime):
         return dtor.date()
     return dtor
->>>>>>> 2369fbe (Deploy: fixes + features)
 
 def calculate_delegation_assigned_time(qs, up_to=None):
     if up_to is None:
@@ -620,7 +459,7 @@ def list_checklist(request):
     qs = Checklist.objects.filter(Q(pk__in=recurring_first_qs) | Q(pk__in=one_time_qs.values('pk')))
 
     # Filters
-    if kw := request.GET.get('keyword', '').strip():
+    if (kw := request.GET.get('keyword', '').strip()):
         qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
     for param, lookup in [
         ('assign_to', 'assign_to_id'),
@@ -629,7 +468,7 @@ def list_checklist(request):
         ('start_date', 'planned_date__date__gte'),
         ('end_date', 'planned_date__date__lte'),
     ]:
-        if v := request.GET.get(param, '').strip():
+        if (v := request.GET.get(param, '').strip()):
             qs = qs.filter(**{lookup: v})
     if request.GET.get('today_only'):
         today = timezone.localdate()
@@ -673,15 +512,7 @@ def add_checklist(request):
             if planned_date:
                 planned_date = normalize_planned_dt_preserve_time(planned_date)
             obj = form.save(commit=False)
-<<<<<<< HEAD
-            dt = obj.planned_date
-            if dt and (dt.time() == time(0, 0) or dt.time() is None):
-                planned_time = get_default_time()
-                planned_dt = datetime.combine(dt.date(), planned_time)
-                obj.planned_date = timezone.make_aware(planned_dt)
-=======
             obj.planned_date = planned_date
->>>>>>> 2369fbe (Deploy: fixes + features)
             obj.save()
             form.save_m2m()
 
@@ -1321,25 +1152,6 @@ def note_help_ticket(request, pk):
             if ticket.assign_by.email and ticket.assign_by.email not in recipients:
                 recipients.append(ticket.assign_by.email)
             if recipients:
-<<<<<<< HEAD
-                subject = f"Help Ticket Closed: {ticket.title}"
-                html_message = render_to_string(
-                    'email/help_ticket_closed.html',
-                    {
-                        'ticket': ticket,
-                        'assign_by': ticket.assign_by,
-                        'assign_to': ticket.assign_to,
-                    }
-                )
-                msg = EmailMultiAlternatives(
-                    subject,
-                    html_message,
-                    None,
-                    recipients
-                )
-                msg.attach_alternative(html_message, "text/html")
-                msg.send(fail_silently=True)
-=======
                 from django.core.mail import EmailMultiAlternatives
                 from django.template.loader import render_to_string
                 subject = f"Help Ticket Closed: {ticket.title}"
@@ -1349,7 +1161,6 @@ def note_help_ticket(request, pk):
                 msg = EmailMultiAlternatives(subject, html_message, getattr(settings, "DEFAULT_FROM_EMAIL", None), recipients)
                 msg.attach_alternative(html_message, "text/html")
                 msg.send(fail_silently=False)
->>>>>>> 2369fbe (Deploy: fixes + features)
         messages.success(request, f"Note saved for HT-{ticket.id}.")
         return redirect(request.GET.get('next', reverse('tasks:assigned_to_me')))
     return render(request, 'tasks/note_help_ticket.html', {
