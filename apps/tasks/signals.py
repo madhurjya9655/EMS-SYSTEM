@@ -14,7 +14,7 @@ from .email_utils import (
 )
 
 IST = pytz.timezone("Asia/Kolkata")
-
+TEN_AM = time(10, 0, 0)
 
 # ---- Working day helpers -----------------------------------------------------
 
@@ -33,13 +33,15 @@ def next_working_day(d):
         d += timedelta(days=1)
     return d
 
-
 # ---- Timezone helpers --------------------------------------------------------
 
 def extract_ist_wallclock(dt):
     """
-    Given an aware datetime, return (IST date, IST time-of-day).
+    Given a datetime (aware or naive), return (IST date, IST time-of-day).
+    Naive inputs are treated as IST.
     """
+    if timezone.is_naive(dt):
+        dt = IST.localize(dt)
     dt_ist = dt.astimezone(IST)
     return dt_ist.date(), time(dt_ist.hour, dt_ist.minute, dt_ist.second, dt_ist.microsecond)
 
@@ -51,44 +53,36 @@ def ist_wallclock_to_project_tz(d, t):
     ist_dt = IST.localize(datetime.combine(d, t))
     return ist_dt.astimezone(timezone.get_current_timezone())
 
-
-# ---- Recurrence calculation (preserve time) ---------------------------------
+# ---- Recurrence calculation (future = 10:00 IST, skip Sun/holidays) ---------
 
 def get_next_planned_datetime(prev_dt, mode, freq):
     """
     Compute the next occurrence:
-      - Add by mode/freq using relativedelta
-      - KEEP the same IST time-of-day as prev_dt
-      - If non-working, roll DATE forward (keep time)
+      - Step by mode/freq using relativedelta
+      - Set TIME to 10:00 AM IST (future normalization)
+      - If non-working, roll DATE forward (keep 10:00)
       - Return aware datetime in the project's timezone
     """
     if not prev_dt or mode not in ("Daily", "Weekly", "Monthly", "Yearly"):
         return None
 
-    # Extract seed wall-clock in IST
-    prev_date_ist, prev_time_ist = extract_ist_wallclock(prev_dt)
-
-    # Start from prev_dt in IST, add frequency
-    cur_ist = IST.localize(datetime.combine(prev_date_ist, prev_time_ist))
+    # Use IST wall-clock date as the stepping seed (ignore prior time)
+    base_date_ist, _ = extract_ist_wallclock(prev_dt)
+    seed_ist = IST.localize(datetime.combine(base_date_ist, TEN_AM))
 
     step = max(int(freq or 1), 1)
     if mode == "Daily":
-        cur_ist = cur_ist + relativedelta(days=step)
+        next_ist = seed_ist + relativedelta(days=step)
     elif mode == "Weekly":
-        cur_ist = cur_ist + relativedelta(weeks=step)
+        next_ist = seed_ist + relativedelta(weeks=step)
     elif mode == "Monthly":
-        cur_ist = cur_ist + relativedelta(months=step)
-    elif mode == "Yearly":
-        cur_ist = cur_ist + relativedelta(years=step)
+        next_ist = seed_ist + relativedelta(months=step)
+    else:  # "Yearly"
+        next_ist = seed_ist + relativedelta(years=step)
 
-    # If resulting date is non-working, roll date forward but keep the time
-    next_date = cur_ist.date()
-    if not is_working_day(next_date):
-        next_date = next_working_day(next_date)
-
-    # Convert to project timezone for storage
-    return ist_wallclock_to_project_tz(next_date, prev_time_ist)
-
+    # Roll forward to next working date (keep 10:00)
+    next_date = next_working_day(next_ist.date())
+    return ist_wallclock_to_project_tz(next_date, TEN_AM)
 
 # ---- Signal: auto-create next recurring checklist ---------------------------
 
@@ -97,27 +91,29 @@ def create_next_recurring_checklist(sender, instance, created, **kwargs):
     """
     When a recurring checklist item is saved and either:
       - it was completed, or
-      - it's in the past/now (not a future pending),
-    ensure there is a future pending item for the same series.
+      - it's at/past due (not a future pending),
+    ensure there is ONE future pending item for the same series.
 
-    This preserves the original IST time-of-day across recurrences and
-    rolls non-working dates forward without changing the time.
+    Future recurrences are normalized to 10:00 AM IST and skip Sundays/holidays.
     """
-    # The model must provide this; if not recurring, stop
+    # Not a recurring series? Stop.
     if not hasattr(instance, "is_recurring") or not instance.is_recurring():
         return
 
+    now = timezone.now()
+
     # Do nothing if it's a future pending task (already scheduled)
-    if instance.status != "Completed" and instance.planned_date > timezone.now():
+    if instance.status != "Completed" and instance.planned_date > now:
         return
 
-    # If there is already a future pending item in this series, stop
+    # If there is already a future pending item for this series, stop
     future_exists = Checklist.objects.filter(
         assign_to=instance.assign_to,
         task_name=instance.task_name,
         mode=instance.mode,
         frequency=instance.frequency,
-        planned_date__gt=instance.planned_date,
+        group_name=getattr(instance, 'group_name', None),
+        planned_date__gt=now,
         status='Pending',
     ).exists()
     if future_exists:
@@ -128,12 +124,21 @@ def create_next_recurring_checklist(sender, instance, created, **kwargs):
     if not next_planned:
         return
 
-    # Double-check no item already exists around that timestamp (±1 minute)
+    # Safety: if next is still not in the future, advance until it is (series catch-up)
+    safety = 0
+    while next_planned and next_planned <= now and safety < 730:
+        next_planned = get_next_planned_datetime(next_planned, instance.mode, instance.frequency)
+        safety += 1
+    if not next_planned:
+        return
+
+    # Dupe guard (±1 minute) within the same series key
     dupe_exists = Checklist.objects.filter(
         assign_to=instance.assign_to,
         task_name=instance.task_name,
         mode=instance.mode,
         frequency=instance.frequency,
+        group_name=getattr(instance, 'group_name', None),
         planned_date__gte=next_planned - timedelta(minutes=1),
         planned_date__lt=next_planned + timedelta(minutes=1),
         status='Pending',
@@ -141,7 +146,7 @@ def create_next_recurring_checklist(sender, instance, created, **kwargs):
     if dupe_exists:
         return
 
-    # Create the next item (copy only existing fields)
+    # Create the next item (copy relevant fields)
     new_obj = Checklist.objects.create(
         assign_by=instance.assign_by,
         task_name=instance.task_name,
