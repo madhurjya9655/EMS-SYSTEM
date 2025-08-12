@@ -2,34 +2,69 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables from .env
+# -----------------------------------------------------------------------------
+# Load .env (works locally; on Render env vars are injected automatically)
+# -----------------------------------------------------------------------------
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# -------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
+def env_list(name: str, default_csv: str = "") -> list[str]:
+    """
+    Read a comma-separated env var into a clean list (no blanks).
+    """
+    raw = os.getenv(name, default_csv) or ""
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, str(default))
+    return str(raw).lower() in ("1", "true", "yes", "on")
+
+
+# -----------------------------------------------------------------------------
 # Core
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-__dev-only-use-this__")
-DEBUG = os.getenv("DEBUG", "True").lower() in ("true", "1", "yes")
+DEBUG = env_bool("DEBUG", True)
 
-ALLOWED_HOSTS = [
-    h.strip() for h in os.getenv(
-        "ALLOWED_HOSTS",
-        "ems-system-v944.onrender.com,ems-system-d26q.onrender.com,localhost,127.0.0.1"
-    ).split(",") if h.strip()
-]
+# Host names the app can serve
+ALLOWED_HOSTS = env_list(
+    "ALLOWED_HOSTS",
+    # Render services + local dev
+    "ems-system-v944.onrender.com,ems-system-d26q.onrender.com,localhost,127.0.0.1",
+)
 
-CSRF_TRUSTED_ORIGINS = [
-    o.strip() for o in os.getenv(
-        "CSRF_TRUSTED_ORIGINS",
-        "https://ems-system-v944.onrender.com,https://ems-system-d26q.onrender.com"
-    ).split(",") if o.strip()
-]
+# CSRF trusted *origins* must include scheme (https:// or http://)
+CSRF_TRUSTED_ORIGINS = env_list(
+    "CSRF_TRUSTED_ORIGINS",
+    "https://ems-system-v944.onrender.com,https://ems-system-d26q.onrender.com",
+)
 
-# -------------------------------------------------------------------
+# Add local dev origins automatically when DEBUG=True
+if DEBUG:
+    for local_origin in ("http://localhost:8000", "http://127.0.0.1:8000"):
+        if local_origin not in CSRF_TRUSTED_ORIGINS:
+            CSRF_TRUSTED_ORIGINS.append(local_origin)
+
+# When running behind Render's proxy, ensure Django treats requests as HTTPS
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Optional: make CSRF/session cookies modern & predictable
+CSRF_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SAMESITE = "Lax"
+
+# Keep slash-appending behavior (avoids some subtle CSRF edge cases on POST)
+APPEND_SLASH = True
+
+
+# -----------------------------------------------------------------------------
 # Apps
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -87,11 +122,11 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "employee_management.wsgi.application"
 
-# -------------------------------------------------------------------
-# Database (SQLite) — robust handling of empty/relative paths
-# -------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Database (SQLite)
+# -----------------------------------------------------------------------------
 DB_PATH = os.getenv("SQLITE_PATH") or str(BASE_DIR / "db.sqlite3")
-# Make sure the parent directory exists (even if relative like ".")
 Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 
 DATABASES = {
@@ -101,9 +136,10 @@ DATABASES = {
     }
 }
 
-# -------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
 # Auth
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -111,67 +147,80 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-# -------------------------------------------------------------------
-# I18N / TZ
-# -------------------------------------------------------------------
-LANGUAGE_CODE = "en-us"
-TIME_ZONE = "Asia/Kolkata"
-USE_I18N = True
-USE_TZ = True
 
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# I18N / TZ
+# -----------------------------------------------------------------------------
+LANGUAGE_CODE = "en-us"
+TIME_ZONE = "Asia/Kolkata"  # IST
+USE_I18N = True
+USE_TZ = True  # store aware datetimes; your code already converts to IST when needed
+
+
+# -----------------------------------------------------------------------------
 # Static & Media
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 STATIC_URL = "/static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# WhiteNoise: efficient static serving on Render
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+WHITENOISE_MAX_AGE = 60 * 60 * 24 * 365  # 1 year for hashed files
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.getenv("MEDIA_ROOT") or str(BASE_DIR / "media")
 Path(MEDIA_ROOT).mkdir(parents=True, exist_ok=True)
 
-# -------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
 # Defaults
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "dashboard:home"
 LOGOUT_REDIRECT_URL = "login"
 
-# -------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
 # Email (Gmail-ready; values come from .env)
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
-EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() in ("true", "1", "yes")
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
-# Default "from" should match authenticated account unless overridden
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "no-reply@example.com")
 
-# -------------------------------------------------------------------
-# Security (when DEBUG=False)
-# -------------------------------------------------------------------
+# If you prefer never crashing on email send in dev, toggle this:
+EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False)
+
+
+# -----------------------------------------------------------------------------
+# Security (stronger defaults when DEBUG=False)
+# -----------------------------------------------------------------------------
 if not DEBUG:
-    SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "3600"))
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_SSL_REDIRECT = True
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "3600"))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", True)
+    SECURE_REFERRER_POLICY = os.getenv("SECURE_REFERRER_POLICY", "strict-origin-when-cross-origin")
 
-# -------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
 # Crispy Forms
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
 CRISPY_TEMPLATE_PACK = "bootstrap5"
 
-# -------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
 # Google API (optional; used elsewhere)
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 GOOGLE_SHEET_SCOPES = os.getenv("GOOGLE_SHEET_SCOPES")
