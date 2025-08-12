@@ -1,3 +1,4 @@
+# apps/tasks/recurrence.py
 import pytz
 from datetime import datetime, timedelta, time
 from dateutil.relativedelta import relativedelta
@@ -5,7 +6,6 @@ from django.utils import timezone
 from apps.settings.models import Holiday
 
 IST = pytz.timezone('Asia/Kolkata')
-
 
 # ---- Working-day helpers -----------------------------------------------------
 
@@ -15,7 +15,6 @@ def is_working_day(d):
         d = d.date()
     return d.weekday() != 6 and not Holiday.objects.filter(date=d).exists()
 
-
 def next_working_day(d):
     """Advance forward until we land on a working date."""
     if hasattr(d, "date"):
@@ -23,7 +22,6 @@ def next_working_day(d):
     while not is_working_day(d):
         d += timedelta(days=1)
     return d
-
 
 # ---- Timezone helpers --------------------------------------------------------
 
@@ -37,7 +35,6 @@ def extract_ist_wallclock(dt):
     dt_ist = dt.astimezone(IST)
     return dt_ist.date(), time(dt_ist.hour, dt_ist.minute, dt_ist.second, dt_ist.microsecond)
 
-
 def ist_wallclock_to_project_tz(d, t):
     """
     Build an aware IST datetime from date+time and convert to the project's timezone.
@@ -45,35 +42,43 @@ def ist_wallclock_to_project_tz(d, t):
     ist_dt = IST.localize(datetime.combine(d, t))
     return ist_dt.astimezone(timezone.get_current_timezone())
 
+# ---- First occurrence helper -------------------------------------------------
 
-# ---- Recurrence calculation (preserve time) ---------------------------------
+def keep_first_occurrence(dt):
+    """
+    FIRST OCCURRENCE ONLY:
+    - Keep EXACT date & time from manual entry or bulk upload.
+    - Make timezone-aware (assume IST if naive).
+    - Store/return in project timezone without Sunday/holiday shift.
+    """
+    if timezone.is_naive(dt):
+        dt = IST.localize(dt)
+    return dt.astimezone(timezone.get_current_timezone())
+
+# ---- Recurrence calculation (future instances at 10:00 AM IST) ---------------
 
 def get_next_planned_date(prev_dt, mode, freq, orig_weekday=None, orig_day=None):
     """
     Compute the next planned datetime for a recurring series:
 
-      - Adds by mode/freq using relativedelta
-      - PRESERVES the IST wall-clock time from prev_dt
-      - If the resulting date is non-working (Sun/Holiday), rolls the DATE
-        forward to the next working day but KEEPS the same time
-      - RETURNS an aware datetime in the project's timezone
-
-    The legacy parameters `orig_weekday` and `orig_day` are accepted for
-    compatibility but are not required under the preserved-time model.
+      - Steps forward by mode/freq.
+      - FUTURE OCCURRENCES always at 10:00 AM IST.
+      - Skips Sundays & holidays for DATE (time stays 10:00).
+      - Returns aware datetime in project timezone.
     """
     if mode not in ("Daily", "Weekly", "Monthly", "Yearly"):
-        # Fallback: keep the same date/time, just ensure working day
-        base_date_ist, base_time_ist = extract_ist_wallclock(prev_dt)
+        # Fallback: just roll to next working day at 10:00
+        base_date_ist, _ = extract_ist_wallclock(prev_dt)
         next_date = next_working_day(base_date_ist)
-        return ist_wallclock_to_project_tz(next_date, base_time_ist)
+        return ist_wallclock_to_project_tz(next_date, time(10, 0))
 
-    # 1) Extract IST date + time from seed (preserve this time across recurrences)
-    base_date_ist, base_time_ist = extract_ist_wallclock(prev_dt)
+    # Step 1: Extract IST date from previous occurrence (ignore its time)
+    base_date_ist, _ = extract_ist_wallclock(prev_dt)
 
-    # 2) Build seed IST datetime
-    seed_ist = IST.localize(datetime.combine(base_date_ist, base_time_ist))
+    # Step 2: Build seed IST datetime at 10:00
+    seed_ist = IST.localize(datetime.combine(base_date_ist, time(10, 0)))
 
-    # 3) Step forward by frequency using relativedelta
+    # Step 3: Step forward by frequency
     step = max(int(freq or 1), 1)
     if mode == "Daily":
         next_ist = seed_ist + relativedelta(days=step)
@@ -81,11 +86,11 @@ def get_next_planned_date(prev_dt, mode, freq, orig_weekday=None, orig_day=None)
         next_ist = seed_ist + relativedelta(weeks=step)
     elif mode == "Monthly":
         next_ist = seed_ist + relativedelta(months=step)
-    else:  # "Yearly"
+    else:  # Yearly
         next_ist = seed_ist + relativedelta(years=step)
 
-    # 4) If non-working, roll DATE forward but keep the same time
+    # Step 4: Skip Sundays/holidays (keep 10:00)
     next_date = next_working_day(next_ist.date())
 
-    # 5) Convert to project timezone for storage/return
-    return ist_wallclock_to_project_tz(next_date, base_time_ist)
+    # Step 5: Return in project timezone
+    return ist_wallclock_to_project_tz(next_date, time(10, 0))
