@@ -9,16 +9,19 @@ RECURRING_MODES = ['Daily', 'Weekly', 'Monthly', 'Yearly']
 
 
 class Command(BaseCommand):
-    help = "Ensure each recurring series has exactly one future pending occurrence."
+    help = (
+        "Ensure each recurring series has exactly one future pending occurrence. "
+        "Future recurrences are generated at 10:00 AM IST and skip Sundays/holidays."
+    )
 
     def handle(self, *args, **opts):
         now = timezone.now()
 
-        # Identify series by (assignee, task_name, mode, frequency)
+        # Identify series by (assignee, task_name, mode, frequency, group_name)
         seeds = (
             Checklist.objects
             .filter(mode__in=RECURRING_MODES)
-            .values('assign_to_id', 'task_name', 'mode', 'frequency')
+            .values('assign_to_id', 'task_name', 'mode', 'frequency', 'group_name')
             .distinct()
         )
 
@@ -34,21 +37,23 @@ class Command(BaseCommand):
             if not last:
                 continue
 
-            # If there is already a future pending item, skip
+            # If there is already a future pending item for this series, skip
             if Checklist.objects.filter(status='Pending', planned_date__gt=now, **s).exists():
                 continue
 
-            # Compute the next planned datetime (preserve IST time, roll only date)
+            # Compute the next planned datetime.
+            # NOTE: get_next_planned_date sets time to 10:00 AM IST and skips Sundays/holidays.
             next_planned = get_next_planned_date(last.planned_date, last.mode, last.frequency)
             if not next_planned:
                 continue
 
-            # De-dupe guard (±1 minute)
+            # De-dupe guard (±1 minute) for this series key
             dupe = Checklist.objects.filter(
                 assign_to_id=s['assign_to_id'],
                 task_name=s['task_name'],
                 mode=s['mode'],
                 frequency=s['frequency'],
+                group_name=s['group_name'],
                 planned_date__gte=next_planned - timedelta(minutes=1),
                 planned_date__lt=next_planned + timedelta(minutes=1),
                 status='Pending',
