@@ -1,19 +1,92 @@
 {% extends "base.html" %}
 {% block title %}Complete Checklist{% endblock %}
 {% block content %}
-<div class="page-header mb-4"><h2>Complete Checklist</h2></div>
-<form method="post" enctype="multipart/form-data">
-  {% csrf_token %}
-  <div class="mb-3">
-    <label class="form-label">Task</label>
-    <input type="text" class="form-control" value="{{ object.task_name }}" readonly>
+
+<div class="page-header mb-4">
+  <h2 class="page-title">Complete Checklist</h2>
+  <p class="text-muted mb-0">Mark this checklist item as completed and (optionally) attach proof.</p>
+</div>
+
+{% if messages %}
+  {% for m in messages %}
+    <div class="alert alert-{{ m.tags|default:'info' }} shadow-sm">{{ m }}</div>
+  {% endfor %}
+{% endif %}
+
+{% if form.non_field_errors %}
+  <div class="alert alert-danger shadow-sm">
+    {% for err in form.non_field_errors %}<div>{{ err }}</div>{% endfor %}
   </div>
-  <div class="mb-3">
-    {{ form.doer_file.label_tag }}{{ form.doer_file }}
+{% endif %}
+
+<div class="card shadow-sm">
+  <div class="card-body">
+    <div class="row g-3 mb-3">
+      <div class="col-md-6">
+        <label class="form-label">Task</label>
+        <input class="form-control" value="{{ object.task_name }}" readonly>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Planned</label>
+        <input class="form-control" value="{{ object.planned_date|date:'Y-m-d H:i' }}" readonly>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Priority</label>
+        <input class="form-control" value="{{ object.priority }}" readonly>
+      </div>
+    </div>
+
+    <form method="post" enctype="multipart/form-data" id="complete-checklist-form" novalidate>
+      {% csrf_token %}
+
+      <div class="mb-3">
+        <label class="form-label">
+          {{ form.doer_file.label }} 
+          {% if object.attachment_mandatory %}<span class="text-danger">*</span>{% endif %}
+        </label>
+        {{ form.doer_file }}
+        {% if form.doer_file.errors %}
+          <div class="text-danger small mt-1">
+            {% for e in form.doer_file.errors %}<div>{{ e }}</div>{% endfor %}
+          </div>
+        {% endif %}
+        <div class="form-text">Attach supporting file (PDF / image / doc). Max size per your server settings.</div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">{{ form.doer_notes.label }}</label>
+        {{ form.doer_notes }}
+        {% if form.doer_notes.errors %}
+          <div class="text-danger small mt-1">
+            {% for e in form.doer_notes.errors %}<div>{{ e }}</div>{% endfor %}
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary" id="btn-submit-checklist">
+          <span class="spinner-border spinner-border-sm me-2 d-none" role="status" aria-hidden="true"></span>
+          Submit
+        </button>
+        <a class="btn btn-secondary"
+           href="{{ request.GET.next|default:reverse('dashboard:home') }}?task_type=checklist">
+          Cancel
+        </a>
+      </div>
+    </form>
   </div>
-  <div class="mb-3">
-    {{ form.doer_notes.label_tag }}{{ form.doer_notes }}
-  </div>
-  <button type="submit" class="btn btn-primary">Submit</button>
-</form>
+</div>
+
+<script>
+  (function () {
+    const form = document.getElementById('complete-checklist-form');
+    const btn = document.getElementById('btn-submit-checklist');
+    const spin = btn.querySelector('.spinner-border');
+    form.addEventListener('submit', function(){
+      btn.disabled = true;
+      spin.classList.remove('d-none');
+    });
+  })();
+</script>
+
 {% endblock %}
