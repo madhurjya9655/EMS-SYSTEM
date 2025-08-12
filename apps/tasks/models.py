@@ -95,9 +95,14 @@ class Checklist(models.Model):
         return timesince(self.planned_date, end)
 
     def clean(self):
+        """
+        Intentionally DO NOT block Sundays/holidays here.
+        Business rule: first occurrence must be exactly as entered.
+        Future recurrences are handled by the recurrence generator
+        which skips Sundays/holidays at 10:00 AM IST.
+        """
         from django.core.exceptions import ValidationError
-        if is_holiday_or_sunday(self.planned_date):
-            raise ValidationError("This is a holiday date or Sunday, you cannot add a task on this day.")
+        # You may keep other field-level validations here if needed.
         super().clean()
 
     def save(self, *args, **kwargs):
@@ -113,7 +118,7 @@ class Delegation(models.Model):
     task_name = models.CharField(max_length=200)
     assign_to = models.ForeignKey(User, on_delete=models.CASCADE, related_name='delegations')
 
-    # ✔ CHANGED: Date -> DateTime (time is mandatory now)
+    # DateTime (time is mandatory now)
     planned_date = models.DateTimeField()
 
     STATUS_CHOICES = [('Pending', 'Pending'), ('Completed', 'Completed')]
@@ -153,9 +158,12 @@ class Delegation(models.Model):
         )
 
     def clean(self):
+        """
+        Intentionally DO NOT block Sundays/holidays here.
+        Business rule: first occurrence must be exactly as entered.
+        Future recurrences are handled by the recurrence generator.
+        """
         from django.core.exceptions import ValidationError
-        if is_holiday_or_sunday(self.planned_date):
-            raise ValidationError("This is a holiday date or Sunday, you cannot add a task on this day.")
         super().clean()
 
     def save(self, *args, **kwargs):
@@ -227,6 +235,10 @@ class HelpTicket(models.Model):
         return timesince(self.planned_date, end)
 
     def clean(self):
+        """
+        Help Tickets remain restricted: do not allow Sundays/holidays.
+        (Your views also enforce this check.)
+        """
         from django.core.exceptions import ValidationError
         if is_holiday_or_sunday(self.planned_date):
             raise ValidationError("This is a holiday date or Sunday, you cannot add a task on this day.")
