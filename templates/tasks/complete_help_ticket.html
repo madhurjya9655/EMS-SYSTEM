@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% load static %}
 {% block title %}Complete Help Ticket{% endblock %}
+{% url 'dashboard:home' as dashboard_home_url %}
 {% block content %}
 
 <div class="page-header mb-4">
@@ -56,7 +57,7 @@
           Submit &amp; Close
         </button>
         <a class="btn btn-secondary"
-           href="{{ request.GET.next|default:reverse('dashboard:home') }}?task_type=help_ticket">
+           href="{{ request.GET.next|default:dashboard_home_url }}?task_type=help_ticket">
           Cancel
         </a>
       </div>
