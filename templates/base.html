@@ -79,6 +79,7 @@
         </form>
       </div>
     </div>
+
     <nav class="sidebar" id="sidebar">
       <div class="nav-section">
         <a href="{% url 'dashboard:home' %}"
@@ -94,7 +95,8 @@
         {% endif %}
 
         {% if user|has_permission:"leave_list" or user|has_permission:"leave_apply" or user|has_group:"Manager" or user|has_group:"HR" %}
-        <button class="nav-item" onclick="toggleSubmenu('leaveSubmenu')">
+        <button type="button" class="nav-item" onclick="toggleSubmenu('leaveSubmenu')"
+                aria-expanded="false" aria-controls="leaveSubmenu">
           <i class="fas fa-calendar-day"></i> Leave Register <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="leaveSubmenu" style="display:none;">
@@ -120,7 +122,8 @@
         {% endif %}
 
         {% if user|has_permission:"add_checklist" or user|has_permission:"list_checklist" %}
-        <button class="nav-item" onclick="toggleSubmenu('checklistSubmenu')">
+        <button type="button" class="nav-item" onclick="toggleSubmenu('checklistSubmenu')"
+                aria-expanded="false" aria-controls="checklistSubmenu">
           <i class="fas fa-clipboard-list"></i> Checklist <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="checklistSubmenu" style="display:none;">
@@ -138,23 +141,17 @@
           {% endif %}
         </div>
         {% endif %}
-<<<<<<< HEAD
-        <!-- Bulk Upload -->
-=======
 
->>>>>>> 2369fbe (Deploy: fixes + features)
         {% if user|has_permission:"add_checklist" or user|has_permission:"add_delegation" %}
-        <a href="{% url 'tasks:bulk_upload' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'bulk_upload' %}active{% endif %}">
+        <a href="{% url 'tasks:bulk_upload' %}"
+           class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'bulk_upload' %}active{% endif %}">
           <i class="fas fa-upload"></i> Bulk Upload
         </a>
         {% endif %}
-<<<<<<< HEAD
-        <!-- Delegation -->
-=======
 
->>>>>>> 2369fbe (Deploy: fixes + features)
         {% if user|has_permission:"add_delegation" or user|has_permission:"list_delegation" %}
-        <button class="nav-item" onclick="toggleSubmenu('delegationSubmenu')">
+        <button type="button" class="nav-item" onclick="toggleSubmenu('delegationSubmenu')"
+                aria-expanded="false" aria-controls="delegationSubmenu">
           <i class="fas fa-users-cog"></i> Delegation <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="delegationSubmenu" style="display:none;">
@@ -174,7 +171,8 @@
         {% endif %}
 
         {% if user|has_permission:"add_ticket" or user|has_permission:"list_all_tickets" or user|has_permission:"assigned_to_me" or user|has_permission:"assigned_by_me" %}
-        <button class="nav-item" onclick="toggleSubmenu('ticketsSubmenu')">
+        <button type="button" class="nav-item" onclick="toggleSubmenu('ticketsSubmenu')"
+                aria-expanded="false" aria-controls="ticketsSubmenu">
           <i class="fas fa-ticket-alt"></i> Tickets <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="ticketsSubmenu" style="display:none;">
@@ -206,7 +204,8 @@
         {% endif %}
 
         {% if user|has_permission:"petty_cash_list" or user|has_permission:"petty_cash_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
-        <button class="nav-item" onclick="toggleSubmenu('pettyCashSubmenu')">
+        <button type="button" class="nav-item" onclick="toggleSubmenu('pettyCashSubmenu')"
+                aria-expanded="false" aria-controls="pettyCashSubmenu">
           <i class="fas fa-wallet"></i> Petty Cash <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="pettyCashSubmenu" style="display:none;">
@@ -236,13 +235,10 @@
           {% endif %}
         </div>
         {% endif %}
-<<<<<<< HEAD
-        <!-- Reimbursement -->
-=======
 
->>>>>>> 2369fbe (Deploy: fixes + features)
         {% if user|has_permission:"reimbursement_list" or user|has_permission:"reimbursement_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
-        <button class="nav-item" onclick="toggleSubmenu('reimbursementSubmenu')">
+        <button type="button" class="nav-item" onclick="toggleSubmenu('reimbursementSubmenu')"
+                aria-expanded="false" aria-controls="reimbursementSubmenu">
           <i class="fas fa-receipt"></i> Reimbursement <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="reimbursementSubmenu" style="display:none;">
@@ -268,7 +264,8 @@
         {% endif %}
 
         {% if user|has_permission:"doer_tasks" or user|has_permission:"weekly_mis_score" or user|has_permission:"performance_score" %}
-        <button class="nav-item" onclick="toggleSubmenu('reportsSubmenu')">
+        <button type="button" class="nav-item" onclick="toggleSubmenu('reportsSubmenu')"
+                aria-expanded="false" aria-controls="reportsSubmenu">
           <i class="fas fa-chart-pie"></i> Reports <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="reportsSubmenu" style="display:none;">
@@ -292,13 +289,10 @@
           {% endif %}
         </div>
         {% endif %}
-<<<<<<< HEAD
-        <!-- Users -->
-=======
 
->>>>>>> 2369fbe (Deploy: fixes + features)
         {% if user|has_permission:"list_users" or user|has_permission:"add_user" or user.is_superuser %}
-        <button class="nav-item" onclick="toggleSubmenu('usersSubmenu')">
+        <button type="button" class="nav-item" onclick="toggleSubmenu('usersSubmenu')"
+                aria-expanded="false" aria-controls="usersSubmenu">
           <i class="fas fa-user-friends"></i> Users <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="usersSubmenu" style="display:none;">
@@ -318,7 +312,8 @@
         {% endif %}
 
         {% if user|has_permission:"authorized_numbers" or user|has_permission:"system_settings" %}
-        <button class="nav-item" onclick="toggleSubmenu('settingsSubmenu')">
+        <button type="button" class="nav-item" onclick="toggleSubmenu('settingsSubmenu')"
+                aria-expanded="false" aria-controls="settingsSubmenu">
           <i class="fas fa-cog"></i> Settings <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="settingsSubmenu" style="display:none;">
@@ -380,13 +375,11 @@
         const submenu=document.getElementById(id),
               btn=submenu.previousElementSibling,
               chev=btn.querySelector('.chevron');
-        if(!submenu.style.display||submenu.style.display==='none'){
-          submenu.style.display='block';
-          chev.style.transform='rotate(180deg)';
-        }else{
-          submenu.style.display='none';
-          chev.style.transform='rotate(0deg)';
-        }
+        const isOpen = submenu.style.display==='block';
+        submenu.style.display = isOpen ? 'none' : 'block';
+        if(chev) chev.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
+        // a11y
+        if (btn) btn.setAttribute('aria-expanded', String(!isOpen));
       }
       window.addEventListener('resize',()=>{
         const sidebar=document.getElementById('sidebar'),
@@ -403,20 +396,11 @@
         }
       });
       document.addEventListener('DOMContentLoaded',()=>{
-        const path=window.location.pathname,
-              items=document.querySelectorAll('.nav-item[href]');
-        items.forEach(item=>{
-          if(item.getAttribute('href')===path){
+        const path=window.location.pathname;
+        document.querySelectorAll('.nav-item[href]').forEach(item=>{
+          const href=item.getAttribute('href');
+          if(href===path || path.startsWith(href + '/')){
             item.classList.add('active');
-<<<<<<< HEAD
-            const submenu = item.closest('.submenu');
-            if (submenu) {
-              submenu.style.display = 'block';
-              const parentBtn = submenu.previousElementSibling;
-              if (parentBtn) {
-                const chev = parentBtn.querySelector('.chevron');
-                if (chev) chev.style.transform = 'rotate(180deg)';
-=======
             const submenu=item.closest('.submenu');
             if(submenu){
               submenu.style.display='block';
@@ -424,7 +408,7 @@
               if(parentBtn){
                 const chev=parentBtn.querySelector('.chevron');
                 if(chev) chev.style.transform='rotate(180deg)';
->>>>>>> 2369fbe (Deploy: fixes + features)
+                parentBtn.setAttribute('aria-expanded','true');
               }
             }
           }
