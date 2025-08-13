@@ -12,86 +12,86 @@
 
   <div class="card">
     <div class="card-body p-0">
-      <div class="table-responsive">
-        <table class="table table-striped align-middle mb-0">
-          <thead>
-            <tr>
-              <th>Ticket ID</th>
-              <th>Problem Solver</th>
-              <th>Subject</th>
-              <th>Assigned Date</th>
-              <th>Planned Date</th>
-              <th>Resolved Date</th>
-              <th>Delay</th>
-              <th>Resolved By</th>
-              <th>Resolved Notes</th>
-              <th>Attachment</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for ticket in items %}
+      <form method="post" id="bulkHelpTicketForm" action="{% url 'tasks:list_help_ticket_assigned_by' %}">
+        {% csrf_token %}
+        <div class="table-responsive">
+          <table class="table table-striped align-middle mb-0">
+            <thead>
               <tr>
-                <td>HT-{{ ticket.id }}</td>
-                <td>
-                  {% if ticket.assign_to %}
-                    {{ ticket.assign_to.get_full_name|default:ticket.assign_to.username }}
-                  {% else %}
-                    &ndash;
-                  {% endif %}
-                </td>
-                <td>{{ ticket.title }}</td>
-                <td>
-                  {% if ticket.created_at %}
-                    {{ ticket.created_at|date:"d M, Y h:i A" }}
-                  {% else %}
-                    &ndash;
-                  {% endif %}
-                </td>
-                <td>
-                  {% if ticket.planned_date %}
-                    {{ ticket.planned_date|date:"d M, Y h:i A" }}
-                  {% else %}
-                    &ndash;
-                  {% endif %}
-                </td>
-                <td>
-                  {% if ticket.resolved_at %}
-                    {{ ticket.resolved_at|date:"d M, Y h:i A" }}
-                  {% else %}
-                    &ndash;
-                  {% endif %}
-                </td>
-                <td>{{ ticket.delay|default:"-" }}</td>
-                <td>
-                  {% if ticket.resolved_by %}
-                    {{ ticket.resolved_by.get_full_name|default:ticket.resolved_by.username }}
-                  {% else %}
-                    &ndash;
-                  {% endif %}
-                </td>
-                <td class="text-wrap">
-                  {{ ticket.resolved_notes|default:"-" }}
-                </td>
-                <td>
-                  {% if ticket.media_upload %}
-                    <a href="{{ ticket.media_upload.url }}" download>Download</a>
-                  {% else %}
-                    &ndash;
-                  {% endif %}
-                </td>
-                <td>{{ ticket.status }}</td>
+                <th style="width:32px;"><input id="selectAllTickets" type="checkbox" onclick="toggleSelectAllTickets(this)"></th>
+                <th>Ticket ID</th>
+                <th>Problem Solver</th>
+                <th>Subject</th>
+                <th>Assigned Date</th>
+                <th>Planned Date</th>
+                <th>Resolved Date</th>
+                <th>Delay</th>
+                <th>Resolved By</th>
+                <th>Resolved Notes</th>
+                <th>Attachment</th>
+                <th>Status</th>
+                <th>Action</th>
               </tr>
-            {% empty %}
-              <tr>
-                <td colspan="11" class="text-center py-4 text-muted">
-                  No tickets assigned by you.
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {% for ticket in items %}
+                <tr>
+                  <td><input class="row-check-ticket" type="checkbox" name="sel" value="{{ ticket.id }}"></td>
+                  <td>HT-{{ ticket.id }}</td>
+                  <td>{{ ticket.assign_to.get_full_name|default:ticket.assign_to.username|default:"—" }}</td>
+                  <td>{{ ticket.title }}</td>
+                  <td>{{ ticket.created_at|date:"d M, Y h:i A"|default:"—" }}</td>
+                  <td>{{ ticket.planned_date|date:"d M, Y h:i A"|default:"—" }}</td>
+                  <td>{{ ticket.resolved_at|date:"d M, Y h:i A"|default:"—" }}</td>
+                  <td>{{ ticket.delay|default:"—" }}</td>
+                  <td>{{ ticket.resolved_by.get_full_name|default:ticket.resolved_by.username|default:"—" }}</td>
+                  <td class="text-wrap">{{ ticket.resolved_notes|default:"—" }}</td>
+                  <td>{% if ticket.media_upload %}<a href="{{ ticket.media_upload.url }}" download>Download</a>{% else %}—{% endif %}</td>
+                  <td>{{ ticket.status }}</td>
+                  <td>
+                    <a href="{% url 'tasks:delete_help_ticket' ticket.id %}" class="text-danger" onclick="return confirm('Delete this help ticket?');">
+                      <i class="fas fa-trash"></i>
+                    </a>
+                  </td>
+                </tr>
+              {% empty %}
+                <tr>
+                  <td colspan="13" class="text-center py-4 text-muted">
+                    No tickets assigned by you.
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        {% if items %}
+        <div class="d-flex justify-content-between align-items-center p-2">
+          <small class="text-muted"><span id="selectedTicketCount">0</span> selected</small>
+          <button id="bulkDeleteTicketBtn" type="submit" class="btn btn-danger btn-sm" disabled
+            onclick="return confirm('Delete selected help tickets?');">Delete Selected</button>
+        </div>
+        {% endif %}
+      </form>
     </div>
   </div>
+
+<script>
+function toggleSelectAllTickets(source) {
+  document.querySelectorAll('.row-check-ticket').forEach(cb => cb.checked = source.checked);
+  updateTicketBulkState();
+}
+function updateTicketBulkState() {
+  const checks = [...document.querySelectorAll('.row-check-ticket')];
+  const selected = checks.filter(cb => cb.checked).length;
+  document.getElementById('bulkDeleteTicketBtn').disabled = selected === 0;
+  document.getElementById('selectedTicketCount').textContent = selected;
+  document.getElementById('selectAllTickets').checked = selected === checks.length && checks.length > 0;
+}
+document.addEventListener('change', (e) => {
+  if (e.target.classList.contains('row-check-ticket')) {
+    updateTicketBulkState();
+  }
+});
+</script>
 {% endblock %}
