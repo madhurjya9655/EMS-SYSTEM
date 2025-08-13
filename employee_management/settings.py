@@ -3,7 +3,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # -----------------------------------------------------------------------------
-# Load .env (works locally; on Render env vars are injected automatically)
+# Load .env (locally); on Render, env vars are provided automatically
 # -----------------------------------------------------------------------------
 load_dotenv()
 
@@ -154,7 +154,7 @@ AUTH_PASSWORD_VALIDATORS = [
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "Asia/Kolkata"  # IST
 USE_I18N = True
-USE_TZ = True  # store aware datetimes; your code already converts to IST when needed
+USE_TZ = True  # store aware datetimes; your code converts to IST when needed
 
 
 # -----------------------------------------------------------------------------
@@ -194,8 +194,12 @@ EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "no-reply@example.com")
 
-# If you prefer never crashing on email send in dev, toggle this:
+# Safety: never block requests on slow SMTP
+EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "10"))
 EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False)
+
+# Feature flag: send emails when auto-generating recurring tasks?
+SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", False)
 
 
 # -----------------------------------------------------------------------------
