@@ -1,19 +1,48 @@
+# dashboard/views.py
 from datetime import timedelta, datetime, time as dt_time
 from django.shortcuts import render
 from django.contrib.auth.decorators import login_required
 from django.utils import timezone
 
 from apps.tasks.models import Checklist, Delegation, HelpTicket
-from apps.tasks.recurrence import get_next_planned_date  # same helper used by tasks app
-
+from apps.tasks.recurrence import get_next_planned_date  # keep using your shared helper
 
 RECURRING_MODES = ['Daily', 'Weekly', 'Monthly', 'Yearly']
 
 
+# -----------------------------
+# Time helpers (UDF-safe)
+# -----------------------------
+def day_bounds(d):
+    """
+    Given a date `d`, return timezone-aware [start, end) datetimes:
+      start = d 00:00:00
+      end   = (d + 1 day) 00:00:00
+    """
+    tz = timezone.get_current_timezone()
+    start = timezone.make_aware(datetime.combine(d, dt_time.min), tz)
+    end = start + timedelta(days=1)
+    return start, end
+
+
+def span_bounds(d_from, d_to_inclusive):
+    """
+    Convert an inclusive date span [d_from, d_to_inclusive] into
+    timezone-aware datetime bounds [start, end) suitable for filtering:
+      planned_date__gte=start, planned_date__lt=end
+    """
+    start, _ = day_bounds(d_from)
+    _, end = day_bounds(d_to_inclusive)
+    return start, end
+
+
+# -----------------------------
+# Recurring checklist guard
+# -----------------------------
 def create_missing_recurring_checklist_tasks(user):
     """
     Ensure each recurring checklist *series* for this user has exactly ONE future
-    'Pending' item. This mirrors the logic used in the tasks app.
+    'Pending' item. Mirrors the logic used in the tasks app.
     """
     now = timezone.now()
 
@@ -25,7 +54,7 @@ def create_missing_recurring_checklist_tasks(user):
     )
 
     for s in seeds:
-        # The latest item in the series (any status)
+        # Latest item in the series (any status)
         last = (
             Checklist.objects
             .filter(**s)
@@ -39,13 +68,13 @@ def create_missing_recurring_checklist_tasks(user):
         if Checklist.objects.filter(status='Pending', planned_date__gt=now, **s).exists():
             continue
 
-        # Compute the next planned datetime (10:00 IST, skip Sun/holidays)
+        # Compute the next planned datetime (your shared helper)
         next_planned = get_next_planned_date(last.planned_date, last.mode, last.frequency)
         if not next_planned:
             continue
 
         # De-dupe guard (±1 minute) for this series key
-        dupe = Checklist.objects.filter(
+        is_dupe = Checklist.objects.filter(
             assign_to_id=s['assign_to_id'],
             task_name=s['task_name'],
             mode=s['mode'],
@@ -55,7 +84,7 @@ def create_missing_recurring_checklist_tasks(user):
             planned_date__lt=next_planned + timedelta(minutes=1),
             status='Pending',
         ).exists()
-        if dupe:
+        if is_dupe:
             continue
 
         Checklist.objects.create(
@@ -84,6 +113,9 @@ def create_missing_recurring_checklist_tasks(user):
         )
 
 
+# -----------------------------
+# Dashboard
+# -----------------------------
 @login_required
 def dashboard_home(request):
     # Keep series healthy for this user (one future item per series)
@@ -92,49 +124,54 @@ def dashboard_home(request):
     now_dt = timezone.localtime()
     today = now_dt.date()
 
-    # week ranges (Mon..Sun style)
-    start_current = today - timedelta(days=today.weekday())
-    start_prev = start_current - timedelta(days=7)
-    end_prev = start_current - timedelta(days=1)
+    # Week ranges (Mon..Sun)
+    start_current = today - timedelta(days=today.weekday())  # this Monday
+    start_prev = start_current - timedelta(days=7)           # previous Monday
+    end_prev = start_current - timedelta(days=1)             # last Sunday
 
-    # Checklist counts (by date portion)
+    # Convert inclusive date spans to datetime bounds (UDF-safe)
+    curr_start_dt, curr_end_dt = span_bounds(start_current, today)
+    prev_start_dt, prev_end_dt = span_bounds(start_prev, end_prev)
+
+    # ---------- Weekly scores (counts) ----------
+    # Checklist: Completed this week vs previous week
     curr_chk = Checklist.objects.filter(
         assign_to=request.user,
-        planned_date__date__gte=start_current,
-        planned_date__date__lte=today,
-        status='Completed'
+        planned_date__gte=curr_start_dt,
+        planned_date__lt=curr_end_dt,
+        status='Completed',
     ).count()
     prev_chk = Checklist.objects.filter(
         assign_to=request.user,
-        planned_date__date__gte=start_prev,
-        planned_date__date__lte=end_prev,
-        status='Completed'
+        planned_date__gte=prev_start_dt,
+        planned_date__lt=prev_end_dt,
+        status='Completed',
     ).count()
 
-    # Delegation counts (planned_date is DateTime; compare on date)
+    # Delegation: count planned items (status-agnostic, as in your code)
     curr_del = Delegation.objects.filter(
         assign_to=request.user,
-        planned_date__date__gte=start_current,
-        planned_date__date__lte=today
+        planned_date__gte=curr_start_dt,
+        planned_date__lt=curr_end_dt,
     ).count()
     prev_del = Delegation.objects.filter(
         assign_to=request.user,
-        planned_date__date__gte=start_prev,
-        planned_date__date__lte=end_prev
+        planned_date__gte=prev_start_dt,
+        planned_date__lt=prev_end_dt,
     ).count()
 
-    # Help ticket counts
+    # Help tickets: Closed this week vs previous week
     curr_help = HelpTicket.objects.filter(
         assign_to=request.user,
-        planned_date__date__gte=start_current,
-        planned_date__date__lte=today,
-        status='Closed'
+        planned_date__gte=curr_start_dt,
+        planned_date__lt=curr_end_dt,
+        status='Closed',
     ).count()
     prev_help = HelpTicket.objects.filter(
         assign_to=request.user,
-        planned_date__date__gte=start_prev,
-        planned_date__date__lte=end_prev,
-        status='Closed'
+        planned_date__gte=prev_start_dt,
+        planned_date__lt=prev_end_dt,
+        status='Closed',
     ).count()
 
     week_score = {
@@ -143,33 +180,41 @@ def dashboard_home(request):
         'help_ticket': {'previous': prev_help,  'current': curr_help},
     }
 
+    # ---------- Pending counts ----------
     pending_tasks = {
         'checklist':   Checklist.objects.filter(assign_to=request.user, status='Pending').count(),
         'delegation':  Delegation.objects.filter(assign_to=request.user, status='Pending').count(),
         'help_ticket': HelpTicket.objects.filter(assign_to=request.user).exclude(status='Closed').count(),
     }
 
+    # ---------- Lists (with optional "today only") ----------
     selected   = request.GET.get('task_type')
     today_only = (request.GET.get('today') == '1' or request.GET.get('today_only') == '1')
 
-    # Checklist list
+    if today_only:
+        t_start, t_end = day_bounds(today)
+
+    # Checklist list (Pending)
     checklist_qs = Checklist.objects.filter(
         assign_to=request.user,
         status='Pending'
     ).order_by('planned_date')
     if today_only:
-        checklist_qs = checklist_qs.filter(planned_date__date=today)
+        checklist_qs = checklist_qs.filter(planned_date__gte=t_start, planned_date__lt=t_end)
 
-    # Delegation + Help tickets
-    all_delegation = Delegation.objects.filter(assign_to=request.user, status='Pending').order_by('planned_date')
+    # Delegation list (Pending)
+    all_delegation = Delegation.objects.filter(
+        assign_to=request.user, status='Pending'
+    ).order_by('planned_date')
     if today_only:
-        all_delegation = all_delegation.filter(planned_date__date=today)
+        all_delegation = all_delegation.filter(planned_date__gte=t_start, planned_date__lt=t_end)
 
+    # Help tickets list (not Closed)
     all_help_ticket = HelpTicket.objects.filter(
         assign_to=request.user
     ).exclude(status='Closed').order_by('planned_date')
     if today_only:
-        all_help_ticket = all_help_ticket.filter(planned_date__date=today)
+        all_help_ticket = all_help_ticket.filter(planned_date__gte=t_start, planned_date__lt=t_end)
 
     if selected == 'delegation':
         tasks = list(all_delegation)
@@ -183,6 +228,7 @@ def dashboard_home(request):
         if now_dt.weekday() == 6 or now_dt.time() < dt_time(hour=10, minute=0):
             tasks = []
 
+    # ---------- Time aggregations (unchanged logic; uses Python dates) ----------
     def calculate_checklist_assigned_time(qs, date_from, date_to):
         """Sum expected minutes for checklist items in [date_from, date_to] by their recurrence."""
         total_minutes = 0
