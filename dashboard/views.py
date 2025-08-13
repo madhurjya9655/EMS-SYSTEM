@@ -1,11 +1,13 @@
-# dashboard/views.py
 from datetime import timedelta, datetime, time as dt_time
 from django.shortcuts import render
 from django.contrib.auth.decorators import login_required
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
+from django.db.models.functions import Cast
+from django.db.models import CharField
 
 from apps.tasks.models import Checklist, Delegation, HelpTicket
-from apps.tasks.recurrence import get_next_planned_date  # keep using your shared helper
+from apps.tasks.recurrence import get_next_planned_date  # shared helper
 
 RECURRING_MODES = ['Daily', 'Weekly', 'Monthly', 'Yearly']
 
@@ -46,7 +48,6 @@ def create_missing_recurring_checklist_tasks(user):
     """
     now = timezone.now()
 
-    # Identify series by (assignee, task_name, mode, frequency, group_name)
     seeds = (
         Checklist.objects.filter(assign_to=user, mode__in=RECURRING_MODES)
         .values('assign_to_id', 'task_name', 'mode', 'frequency', 'group_name')
@@ -54,7 +55,6 @@ def create_missing_recurring_checklist_tasks(user):
     )
 
     for s in seeds:
-        # Latest item in the series (any status)
         last = (
             Checklist.objects
             .filter(**s)
@@ -64,16 +64,14 @@ def create_missing_recurring_checklist_tasks(user):
         if not last:
             continue
 
-        # If there is already a future pending item for this series, skip
         if Checklist.objects.filter(status='Pending', planned_date__gt=now, **s).exists():
             continue
 
-        # Compute the next planned datetime (your shared helper)
         next_planned = get_next_planned_date(last.planned_date, last.mode, last.frequency)
         if not next_planned:
             continue
 
-        # De-dupe guard (±1 minute) for this series key
+        # De-dupe guard (±1 minute)
         is_dupe = Checklist.objects.filter(
             assign_to_id=s['assign_to_id'],
             task_name=s['task_name'],
@@ -148,7 +146,7 @@ def dashboard_home(request):
         status='Completed',
     ).count()
 
-    # Delegation: count planned items (status-agnostic, as in your code)
+    # Delegation: count planned items (status-agnostic, as before)
     curr_del = Delegation.objects.filter(
         assign_to=request.user,
         planned_date__gte=curr_start_dt,
@@ -228,7 +226,7 @@ def dashboard_home(request):
         if now_dt.weekday() == 6 or now_dt.time() < dt_time(hour=10, minute=0):
             tasks = []
 
-    # ---------- Time aggregations (unchanged logic; uses Python dates) ----------
+    # ---------- Time aggregations ----------
     def calculate_checklist_assigned_time(qs, date_from, date_to):
         """Sum expected minutes for checklist items in [date_from, date_to] by their recurrence."""
         total_minutes = 0
@@ -262,7 +260,6 @@ def dashboard_home(request):
                         months = (d.year - task.planned_date.year) * 12 + (d.month - task.planned_date.month)
                         if months % freq == 0:
                             occur += 1
-                    # step month (safe)
                     year = d.year + (d.month // 12)
                     month = (d.month % 12) + 1
                     try:
@@ -291,19 +288,34 @@ def dashboard_home(request):
 
         return total_minutes
 
-    def calculate_delegation_assigned_time(qs, date_from, date_to):
-        """Delegation planned_date is DateTime; compare by date component within [date_from, date_to]."""
-        total = 0
-        for task in qs:
-            pd = task.planned_date.date()
-            if date_from <= pd <= date_to:
-                total += (task.time_per_task_minutes or 0)
-        return total
+    def calculate_delegation_assigned_time(assign_to_user, date_from, date_to):
+        """
+        SQLite-safe: cast planned_date to TEXT in SQL, then parse in Python.
+        Sum minutes for rows whose planned_date (date part) lies in [date_from, date_to].
+        """
+        start_dt, end_dt = span_bounds(date_from, date_to)
 
-    def minutes_to_hhmm(minutes):
-        h = int(minutes) // 60
-        m = int(minutes) % 60
-        return f"{h:02d}:{m:02d}"
+        rows = (
+            Delegation.objects
+            .filter(assign_to=assign_to_user, planned_date__gte=start_dt, planned_date__lt=end_dt)
+            .annotate(pd_txt=Cast('planned_date', output_field=CharField()))
+            .values_list('pd_txt', 'time_per_task_minutes')
+        )
+
+        total = 0
+        for pd_txt, minutes in rows:
+            pd_dt = None
+            if isinstance(pd_txt, str):
+                pd_dt = parse_datetime(pd_txt)
+            elif hasattr(pd_txt, 'date'):  # paranoid: if backend returns a datetime already
+                pd_dt = pd_txt
+
+            if not pd_dt:
+                continue
+
+            if date_from <= pd_dt.date() <= date_to:
+                total += int(minutes or 0)
+        return total
 
     prev_min = calculate_checklist_assigned_time(
         Checklist.objects.filter(assign_to=request.user, status='Pending'), start_prev, end_prev
@@ -312,12 +324,14 @@ def dashboard_home(request):
         Checklist.objects.filter(assign_to=request.user, status='Pending'), start_current, today
     )
 
-    prev_min_del = calculate_delegation_assigned_time(
-        Delegation.objects.filter(assign_to=request.user), start_prev, end_prev
-    )
-    curr_min_del = calculate_delegation_assigned_time(
-        Delegation.objects.filter(assign_to=request.user), start_current, today
-    )
+    # Use the SQLite-safe variant for delegation minutes
+    prev_min_del = calculate_delegation_assigned_time(request.user, start_prev, end_prev)
+    curr_min_del = calculate_delegation_assigned_time(request.user, start_current, today)
+
+    def minutes_to_hhmm(minutes):
+        h = int(minutes) // 60
+        m = int(minutes) % 60
+        return f"{h:02d}:{m:02d}"
 
     return render(request, 'dashboard/dashboard.html', {
         'week_score':    week_score,
