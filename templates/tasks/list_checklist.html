@@ -20,7 +20,7 @@
     style="cursor:pointer;"
   >
     <span>FILTER</span>
-    <i class="fas fa-minus" style="color: blue !important;"></i>
+    <i class="fas fa-minus"></i>
   </div>
 
   <div id="filterPanel" class="collapse show">
@@ -36,9 +36,9 @@
             <select name="assign_to" class="form-select">
               <option value="">All</option>
               {% for user in users %}
-              <option value="{{ user.id }}"{% if request.GET.assign_to == user.id|stringformat:"s" %} selected{% endif %}>
-                {{ user.get_full_name|default:user.username }}
-              </option>
+                <option value="{{ user.id }}"{% if request.GET.assign_to == user.id|stringformat:"s" %} selected{% endif %}>
+                  {{ user.get_full_name|default:user.username }}
+                </option>
               {% endfor %}
             </select>
           </div>
@@ -47,7 +47,7 @@
             <select name="priority" class="form-select">
               <option value="">All</option>
               {% for code,label in priority_choices %}
-              <option value="{{ code }}"{% if request.GET.priority == code %} selected{% endif %}>{{ label }}</option>
+                <option value="{{ code }}"{% if request.GET.priority == code %} selected{% endif %}>{{ label }}</option>
               {% endfor %}
             </select>
           </div>
@@ -56,7 +56,7 @@
             <select name="group_name" class="form-select">
               <option value="">All</option>
               {% for g in group_names %}
-              <option value="{{ g }}"{% if request.GET.group_name == g %} selected{% endif %}>{{ g }}</option>
+                <option value="{{ g }}"{% if request.GET.group_name == g %} selected{% endif %}>{{ g }}</option>
               {% endfor %}
             </select>
           </div>
@@ -80,7 +80,7 @@
 </div>
 
 <div class="table-responsive">
-  <!-- BULK DELETE FORM (only one form for all checkboxes) -->
+  <!-- BULK DELETE FORM (wraps all row checkboxes) -->
   <form method="post" id="bulkForm" action="{% url 'tasks:list_checklist' %}">
     {% csrf_token %}
     <table class="table table-bordered table-hover align-middle">
@@ -96,49 +96,61 @@
           <th>Planned Date</th>
           <th>Remind Before Days</th>
           <th>Reminder</th>
-          <th>Action</th>
+          <th style="width:210px;">Action</th>
         </tr>
       </thead>
       <tbody>
         {% if items %}
           {% for obj in items %}
-          <tr>
-            <td>
-              <input class="row-check" type="checkbox" name="sel" value="{{ obj.id }}">
-            </td>
-            <td>{{ obj.task_name }}</td>
-            <td>{{ obj.message|default:"-" }}</td>
-            <td>{{ obj.assign_to.get_full_name|default:obj.assign_to.username }}</td>
-            <td>{{ obj.frequency }} {{ obj.mode }}</td>
-            <td>{{ obj.planned_date|date:"d M, Y H:i A" }}</td>
-            <td>{{ obj.remind_before_days }}</td>
-            <td>
-              {% if obj.set_reminder %}
-                {{ obj.reminder_mode|default:"" }}({{ obj.reminder_frequency|default:"" }})
-              {% else %}
-                ({{ obj.reminder_frequency|default:"" }})
-              {% endif %}
-            </td>
-            <td class="text-nowrap">
-              <a href="{% url 'tasks:edit_checklist' obj.id %}" class="btn btn-sm btn-outline-secondary" title="Edit">
-                <i class="fas fa-edit"></i>
-              </a>
+            <tr>
+              <td>
+                <input class="row-check" type="checkbox" name="sel" value="{{ obj.id }}">
+              </td>
+              <td>{{ obj.task_name }}</td>
+              <td style="max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
+                  title="{{ obj.message|default:'-' }}">
+                {{ obj.message|default:"—"|truncatechars:80 }}
+              </td>
+              <td>{{ obj.assign_to.get_full_name|default:obj.assign_to.username }}</td>
+              <td>
+                {% if obj.mode and obj.frequency %}
+                  Every {{ obj.frequency }} {{ obj.mode }}
+                {% else %}
+                  — <!-- one-time -->
+                {% endif %}
+              </td>
+              <td title="{{ obj.planned_date|date:'Y-m-d H:i' }}">
+                {{ obj.planned_date|date:"d M, Y h:i A" }}
+              </td>
+              <td>{{ obj.remind_before_days|default:"0" }}</td>
+              <td>
+                {% if obj.set_reminder %}
+                  {{ obj.reminder_mode|default:"" }}{% if obj.reminder_frequency %} ({{ obj.reminder_frequency }}){% endif %}
+                  {% if obj.reminder_starting_time %}@ {{ obj.reminder_starting_time|time:"h:i A" }}{% endif %}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td class="text-nowrap">
+                <a href="{% url 'tasks:edit_checklist' obj.id %}" class="btn btn-sm btn-outline-secondary" title="Edit">
+                  <i class="fas fa-edit"></i>
+                </a>
 
-              <!-- single delete (confirmation page) -->
-              <a href="{% url 'tasks:delete_checklist' obj.id %}" class="btn btn-sm btn-outline-danger" title="Delete">
-                <i class="fas fa-trash-alt"></i>
-              </a>
+                <!-- single delete (goes to confirmation page) -->
+                <a href="{% url 'tasks:delete_checklist' obj.id %}" class="btn btn-sm btn-outline-danger" title="Delete">
+                  <i class="fas fa-trash-alt"></i>
+                </a>
 
-              <!-- Delete entire series for this row (posts to a separate hidden form) -->
-              <button type="submit"
-                      class="btn btn-sm btn-danger"
-                      form="series-form-{{ obj.id }}"
-                      title="Delete series"
-                      onclick="return confirm('Delete ALL pending occurrences in this series?');">
-                <i class="fas fa-trash"></i> Series
-              </button>
-            </td>
-          </tr>
+                <!-- Delete ENTIRE SERIES for this row (posts to dedicated hidden form) -->
+                <button type="submit"
+                        class="btn btn-sm btn-danger"
+                        form="series-form-{{ obj.id }}"
+                        title="Delete series"
+                        onclick="return confirm('Delete ALL pending occurrences in this series?');">
+                  <i class="fas fa-trash"></i> Series
+                </button>
+              </td>
+            </tr>
           {% endfor %}
         {% else %}
           <tr>
@@ -148,7 +160,7 @@
       </tbody>
     </table>
 
-    <!-- Bulk delete controls -->
+    <!-- Bulk delete footer -->
     <div class="d-flex flex-wrap justify-content-between align-items-center mt-2 gap-2">
       <div class="d-flex align-items-center gap-3">
         <div class="form-check m-0">
@@ -168,7 +180,7 @@
     </div>
   </form>
 
-  <!-- Hidden forms for per-row "Delete series" (kept OUTSIDE the bulk form) -->
+  <!-- Hidden forms for per-row "Delete series" -->
   {% if items %}
     {% for obj in items %}
       <form id="series-form-{{ obj.id }}" method="post" action="{% url 'tasks:list_checklist' %}" class="d-none">
@@ -192,11 +204,9 @@ function updateBulkState() {
   const count = document.getElementById('selectedCount');
   if (btn) btn.disabled = selected === 0;
   if (count) count.textContent = selected.toString();
-  // keep the header checkbox in sync if user manually toggles items
   const all = document.getElementById('selectAll');
-  if (all) all.checked = selected === checks.length && checks.length > 0;
+  if (all) all.checked = (selected === checks.length && checks.length > 0);
 }
-// react to individual row checkbox changes
 document.addEventListener('change', (e) => {
   if (e.target && e.target.classList.contains('row-check')) {
     updateBulkState();
@@ -210,7 +220,7 @@ document.querySelectorAll('[data-bs-toggle="collapse"]').forEach(btn => {
     icon.classList.toggle('fa-plus');
   });
 });
-// initialize state on load
+// init
 document.addEventListener('DOMContentLoaded', updateBulkState);
 </script>
 
