@@ -45,31 +45,39 @@ from .email_utils import (
 )
 
 User = get_user_model()
+
+# Who can create special items
 can_create = lambda u: u.is_superuser or u.groups.filter(
     name__in=['Admin', 'Manager', 'EA', 'CEO']
 ).exists()
 
-site_url = "https://ems-system-d26q.onrender.com"
+# Base URL (prefer settings.SITE_URL if present)
+site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
+# IST and default assignment time
 IST = pytz.timezone('Asia/Kolkata')
 ASSIGN_HOUR = 10
 ASSIGN_MINUTE = 0
+
+# Feature flags (avoid email-induced request blocking in production)
+SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", False)
+SEND_EMAILS_ON_BULK = getattr(settings, "SEND_EMAILS_ON_BULK", False)
 
 # ---- Recurrence / Working-day helpers ---------------------------------------
 
 RECURRING_MODES = ['Daily', 'Weekly', 'Monthly', 'Yearly']
 
-def is_working_day(dt):
-    """dt: date"""
+def is_working_day(dt: date) -> bool:
+    """True if the given date is not Sunday and not a Holiday."""
     return dt.weekday() != 6 and not Holiday.objects.filter(date=dt).exists()
 
-def next_working_day(dt):
-    """dt: date -> next working date (loop until working)."""
+def next_working_day(dt: date) -> date:
+    """Return the next working date on/after dt."""
     while not is_working_day(dt):
         dt += timedelta(days=1)
     return dt
 
-def normalize_planned_dt(dt):
+def normalize_planned_dt(dt: datetime) -> datetime:
     """
     Given a datetime (naive or aware):
       - snap to 10:00 IST
@@ -91,7 +99,7 @@ def normalize_planned_dt(dt):
 
 # ---- Time-zone safe helpers (preserve user-chosen time) ---------------------
 
-def make_aware_assuming_ist(dt):
+def make_aware_assuming_ist(dt: datetime) -> datetime:
     """
     If naive -> interpret as IST; return aware in project tz.
     """
@@ -100,7 +108,7 @@ def make_aware_assuming_ist(dt):
         dt = IST.localize(dt)
     return dt.astimezone(tz)
 
-def normalize_planned_dt_preserve_time(dt):
+def normalize_planned_dt_preserve_time(dt: datetime) -> datetime:
     """
     Keep original time; if non-working date, roll DATE forward (time unchanged).
     """
@@ -120,7 +128,7 @@ def normalize_planned_dt_preserve_time(dt):
 
 # ---- First-occurrence keeper -------------------------------------------------
 
-def keep_first_occurrence(dt):
+def keep_first_occurrence(dt: datetime) -> datetime:
     """
     First occurrence keeps EXACT date+time; naive interpreted as IST.
     """
@@ -129,7 +137,7 @@ def keep_first_occurrence(dt):
         dt = IST.localize(dt)
     return dt.astimezone(tz)
 
-def next_recurring_datetime(prev_dt, mode, frequency):
+def next_recurring_datetime(prev_dt: datetime, mode: str, frequency: int | None) -> datetime | None:
     """
     Step by mode/freq; set time to 10:00 IST; skip Sundays/holidays.
     Return aware in project tz.
@@ -161,7 +169,7 @@ def next_recurring_datetime(prev_dt, mode, frequency):
 
     return cur_ist.astimezone(tz)
 
-def _series_filter_kwargs(task: Checklist):
+def _series_filter_kwargs(task: Checklist) -> dict:
     """Identify a 'series' of a recurring checklist task."""
     return dict(
         assign_to_id=task.assign_to_id,
@@ -171,9 +179,10 @@ def _series_filter_kwargs(task: Checklist):
         group_name=task.group_name,
     )
 
-def create_next_if_recurring(task: Checklist):
+def create_next_if_recurring(task: Checklist) -> None:
     """
-    Create next pending checklist (idempotent) and email notifications.
+    Create next pending checklist (idempotent).
+    Sends emails only when SEND_EMAILS_FOR_AUTO_RECUR is True.
     """
     if (task.mode or '') not in RECURRING_MODES:
         return
@@ -182,7 +191,11 @@ def create_next_if_recurring(task: Checklist):
     if not nxt_dt:
         return
 
-    if Checklist.objects.filter(status='Pending', planned_date__gte=nxt_dt - timedelta(minutes=1), **_series_filter_kwargs(task)).exists():
+    if Checklist.objects.filter(
+        status='Pending',
+        planned_date__gte=nxt_dt - timedelta(minutes=1),
+        **_series_filter_kwargs(task)
+    ).exists():
         return
 
     new_obj = Checklist.objects.create(
@@ -210,11 +223,24 @@ def create_next_if_recurring(task: Checklist):
         status='Pending',
     )
 
-    complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
-    send_checklist_assignment_to_user(task=new_obj, complete_url=complete_url, subject_prefix="Recurring Checklist Generated")
-    send_checklist_admin_confirmation(task=new_obj, subject_prefix="Recurring Checklist Generated")
+    # Avoid SMTP blocking on the request path unless explicitly enabled.
+    if SEND_EMAILS_FOR_AUTO_RECUR:
+        complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
+        try:
+            send_checklist_assignment_to_user(
+                task=new_obj,
+                complete_url=complete_url,
+                subject_prefix="Recurring Checklist Generated"
+            )
+            send_checklist_admin_confirmation(
+                task=new_obj,
+                subject_prefix="Recurring Checklist Generated"
+            )
+        except Exception:
+            # Swallow email errors so web requests never 500 here
+            pass
 
-def ensure_next_for_all_recurring():
+def ensure_next_for_all_recurring() -> None:
     """
     If latest item in a series is not future-pending, create the next one.
     """
@@ -432,6 +458,7 @@ def calculate_delegation_actual_time(qs, up_to=None):
 
 @has_permission('list_checklist')
 def list_checklist(request):
+    # Only check/generate next occurrences on GET
     if request.method == 'GET':
         ensure_next_for_all_recurring()
 
@@ -522,8 +549,11 @@ def add_checklist(request):
             form.save_m2m()
 
             complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
-            send_checklist_assignment_to_user(task=obj, complete_url=complete_url, subject_prefix="New Checklist Task Assigned")
-            send_checklist_admin_confirmation(task=obj, subject_prefix="Checklist Task Assignment")
+            try:
+                send_checklist_assignment_to_user(task=obj, complete_url=complete_url, subject_prefix="New Checklist Task Assigned")
+                send_checklist_admin_confirmation(task=obj, subject_prefix="Checklist Task Assignment")
+            except Exception:
+                pass
 
             return redirect('tasks:list_checklist')
     else:
@@ -546,13 +576,16 @@ def edit_checklist(request, pk):
             form.save_m2m()
 
             complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj2.id])}"
-            if old_assignee and obj2.assign_to_id != old_assignee.id:
-                send_checklist_unassigned_notice(task=obj2, old_user=old_assignee)
-                send_checklist_assignment_to_user(task=obj2, complete_url=complete_url, subject_prefix="Checklist Task Reassigned")
-                send_checklist_admin_confirmation(task=obj2, subject_prefix="Checklist Task Reassigned")
-            else:
-                send_checklist_assignment_to_user(task=obj2, complete_url=complete_url, subject_prefix="Checklist Task Updated")
-                send_checklist_admin_confirmation(task=obj2, subject_prefix="Checklist Task Updated")
+            try:
+                if old_assignee and obj2.assign_to_id != old_assignee.id:
+                    send_checklist_unassigned_notice(task=obj2, old_user=old_assignee)
+                    send_checklist_assignment_to_user(task=obj2, complete_url=complete_url, subject_prefix="Checklist Task Reassigned")
+                    send_checklist_admin_confirmation(task=obj2, subject_prefix="Checklist Task Reassigned")
+                else:
+                    send_checklist_assignment_to_user(task=obj2, complete_url=complete_url, subject_prefix="Checklist Task Updated")
+                    send_checklist_admin_confirmation(task=obj2, subject_prefix="Checklist Task Updated")
+            except Exception:
+                pass
 
             return redirect('tasks:list_checklist')
     else:
@@ -577,10 +610,13 @@ def reassign_checklist(request, pk):
             obj.save()
 
             complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
-            send_checklist_assignment_to_user(task=obj, complete_url=complete_url, subject_prefix="Checklist Task Reassigned")
-            if old_assignee and old_assignee.id != obj.assign_to_id:
-                send_checklist_unassigned_notice(task=obj, old_user=old_assignee)
-            send_checklist_admin_confirmation(task=obj, subject_prefix="Checklist Task Reassigned")
+            try:
+                send_checklist_assignment_to_user(task=obj, complete_url=complete_url, subject_prefix="Checklist Task Reassigned")
+                if old_assignee and old_assignee.id != obj.assign_to_id:
+                    send_checklist_unassigned_notice(task=obj, old_user=old_assignee)
+                send_checklist_admin_confirmation(task=obj, subject_prefix="Checklist Task Reassigned")
+            except Exception:
+                pass
 
             return redirect('tasks:list_checklist')
     return render(request, 'tasks/reassign_checklist.html', {
@@ -648,7 +684,10 @@ def add_delegation(request):
             obj.save()
 
             complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[obj.id])}"
-            send_delegation_assignment_to_user(delegation=obj, complete_url=complete_url, subject_prefix="New Delegation Task Assigned")
+            try:
+                send_delegation_assignment_to_user(delegation=obj, complete_url=complete_url, subject_prefix="New Delegation Task Assigned")
+            except Exception:
+                pass
 
             return redirect('tasks:list_delegation')
     else:
@@ -669,7 +708,10 @@ def edit_delegation(request, pk):
             obj2.save()
 
             complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[obj2.id])}"
-            send_delegation_assignment_to_user(delegation=obj2, complete_url=complete_url, subject_prefix="Delegation Task Updated")
+            try:
+                send_delegation_assignment_to_user(delegation=obj2, complete_url=complete_url, subject_prefix="Delegation Task Updated")
+            except Exception:
+                pass
 
             return redirect('tasks:list_delegation')
     else:
@@ -692,7 +734,10 @@ def reassign_delegation(request, pk):
             obj.assign_to = User.objects.get(pk=uid)
             obj.save()
             complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[obj.id])}"
-            send_delegation_assignment_to_user(delegation=obj, complete_url=complete_url, subject_prefix="Delegation Task Reassigned")
+            try:
+                send_delegation_assignment_to_user(delegation=obj, complete_url=complete_url, subject_prefix="Delegation Task Reassigned")
+            except Exception:
+                pass
             return redirect('tasks:list_delegation')
     return render(request, 'tasks/reassign_delegation.html', {
         'object': obj,
@@ -903,17 +948,25 @@ def bulk_upload(request):
             for obj in to_create:
                 obj.save()
                 created_objs.append(obj)
-                complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
-                send_checklist_assignment_to_user(task=obj, complete_url=complete_url, subject_prefix="New Checklist Task Assigned (Bulk)")
-        send_admin_bulk_summary(
-            title=f"{len(created_objs)} Checklist task(s) imported via Bulk Upload",
-            rows=[{
-                "Task": o.task_name,
-                "Assignee": o.assign_to.get_full_name() or o.assign_to.username,
-                "Planned Date": o.planned_date,
-                "Priority": o.priority,
-            } for o in created_objs]
-        )
+                if SEND_EMAILS_ON_BULK:
+                    complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
+                    try:
+                        send_checklist_assignment_to_user(task=obj, complete_url=complete_url, subject_prefix="New Checklist Task Assigned (Bulk)")
+                    except Exception:
+                        pass
+        # Always send admin summary (lightweight single email)
+        try:
+            send_admin_bulk_summary(
+                title=f"{len(created_objs)} Checklist task(s) imported via Bulk Upload",
+                rows=[{
+                    "Task": o.task_name,
+                    "Assignee": o.assign_to.get_full_name() or o.assign_to.username,
+                    "Planned Date": o.planned_date,
+                    "Priority": o.priority,
+                } for o in created_objs]
+            )
+        except Exception:
+            pass
         messages.success(request, f"{len(created_objs)} checklist row(s) imported successfully.")
         return redirect('tasks:bulk_upload')
 
@@ -1006,18 +1059,25 @@ def bulk_upload(request):
             for obj in to_create:
                 obj.save()
                 created_objs.append(obj)
-                complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[obj.id])}"
-                send_delegation_assignment_to_user(delegation=obj, complete_url=complete_url, subject_prefix="New Delegation Task Assigned (Bulk)")
+                if SEND_EMAILS_ON_BULK:
+                    complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[obj.id])}"
+                    try:
+                        send_delegation_assignment_to_user(delegation=obj, complete_url=complete_url, subject_prefix="New Delegation Task Assigned (Bulk)")
+                    except Exception:
+                        pass
 
-        send_admin_bulk_summary(
-            title=f"{len(created_objs)} Delegation task(s) imported via Bulk Upload",
-            rows=[{
-                "Task": o.task_name,
-                "Assignee": o.assign_to.get_full_name() or o.assign_to.username,
-                "Planned Date": o.planned_date,
-                "Priority": o.priority,
-            } for o in created_objs]
-        )
+        try:
+            send_admin_bulk_summary(
+                title=f"{len(created_objs)} Delegation task(s) imported via Bulk Upload",
+                rows=[{
+                    "Task": o.task_name,
+                    "Assignee": o.assign_to.get_full_name() or o.assign_to.username,
+                    "Planned Date": o.planned_date,
+                    "Priority": o.priority,
+                } for o in created_objs]
+            )
+        except Exception:
+            pass
 
         messages.success(request, f"{len(created_objs)} delegation row(s) imported successfully.")
         return redirect('tasks:bulk_upload')
@@ -1098,8 +1158,11 @@ def add_help_ticket(request):
             ticket.save()
 
             complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
-            send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="New Help Ticket Assigned")
-            send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Assignment")
+            try:
+                send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="New Help Ticket Assigned")
+                send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Assignment")
+            except Exception:
+                pass
 
             return redirect('tasks:list_help_ticket')
     else:
@@ -1125,13 +1188,16 @@ def edit_help_ticket(request, pk):
             ticket = form.save()
 
             complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
-            if old_assignee and ticket.assign_to_id != old_assignee.id:
-                send_help_ticket_unassigned_notice(ticket=ticket, old_user=old_assignee)
-                send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Reassigned")
-                send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Reassigned")
-            else:
-                send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Updated")
-                send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Updated")
+            try:
+                if old_assignee and ticket.assign_to_id != old_assignee.id:
+                    send_help_ticket_unassigned_notice(ticket=ticket, old_user=old_assignee)
+                    send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Reassigned")
+                    send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Reassigned")
+                else:
+                    send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Updated")
+                    send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Updated")
+            except Exception:
+                pass
 
             return redirect('tasks:list_help_ticket')
     else:
@@ -1173,9 +1239,12 @@ def note_help_ticket(request, pk):
                 html_message = render_to_string('email/help_ticket_closed.html', {
                     'ticket': ticket, 'assign_by': ticket.assign_by, 'assign_to': ticket.assign_to,
                 })
-                msg = EmailMultiAlternatives(subject, html_message, getattr(settings, "DEFAULT_FROM_EMAIL", None), recipients)
-                msg.attach_alternative(html_message, "text/html")
-                msg.send(fail_silently=False)
+                try:
+                    msg = EmailMultiAlternatives(subject, html_message, getattr(settings, "DEFAULT_FROM_EMAIL", None), recipients)
+                    msg.attach_alternative(html_message, "text/html")
+                    msg.send(fail_silently=True)  # never block user flow on close-notification
+                except Exception:
+                    pass
         messages.success(request, f"Note saved for HT-{ticket.id}.")
         return redirect(request.GET.get('next', reverse('tasks:assigned_to_me')))
     return render(request, 'tasks/note_help_ticket.html', {
