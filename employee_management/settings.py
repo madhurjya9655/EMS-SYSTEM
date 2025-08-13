@@ -74,18 +74,20 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.humanize",
 
+    # Your apps
     "apps.recruitment",
     "apps.leave",
     "apps.core",
     "apps.sales",
     "apps.reimbursement",
-    "apps.petty_cash",
-    "apps.tasks",
+    "apps.petty_cash",                 # ✅ restored (fixes RuntimeError)
+    "apps.tasks.apps.TasksConfig",     # ensure signals load
     "apps.reports",
     "apps.users",
     "dashboard",
     "apps.settings.apps.SettingsConfig",  # ensure AppConfig is used
 
+    # 3rd-party
     "widget_tweaks",
     "crispy_forms",
     "crispy_bootstrap5",
@@ -124,17 +126,53 @@ WSGI_APPLICATION = "employee_management.wsgi.application"
 
 
 # -----------------------------------------------------------------------------
-# Database (SQLite)
+# Database (SQLite) + safe converters (avoid TypeError on datetime)
 # -----------------------------------------------------------------------------
 DB_PATH = os.getenv("SQLITE_PATH") or str(BASE_DIR / "db.sqlite3")
 Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+
+import sqlite3  # noqa: E402
 
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": DB_PATH,
+        # converters get applied on declared types and colname hints
+        "OPTIONS": {
+            "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+        },
     }
 }
+
+# Global SQLite converters: always return str for timestamp/date-ish columns.
+def _decode_to_str(val):
+    if val is None:
+        return None
+    if isinstance(val, bytes):
+        try:
+            return val.decode("utf-8")
+        except Exception:
+            return val.decode("latin-1", "ignore")
+    return str(val)
+
+try:
+    sqlite3.register_converter("timestamp", _decode_to_str)
+    sqlite3.register_converter("datetime", _decode_to_str)
+    sqlite3.register_converter("timestamptz", _decode_to_str)
+    sqlite3.register_converter("timestamp with time zone", _decode_to_str)
+    sqlite3.register_converter("date", _decode_to_str)
+except Exception:
+    # best-effort; safe to continue if this fails
+    pass
+
+from django.db.backends.signals import connection_created  # noqa: E402
+def _sqlite_force_text(sender, connection, **kwargs):
+    if connection.vendor == "sqlite":
+        try:
+            connection.connection.text_factory = str
+        except Exception:
+            pass
+connection_created.connect(_sqlite_force_text)
 
 
 # -----------------------------------------------------------------------------
