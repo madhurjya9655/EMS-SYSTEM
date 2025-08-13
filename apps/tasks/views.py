@@ -456,16 +456,76 @@ def calculate_delegation_actual_time(qs, up_to=None):
 
 # ---- Checklist pages ---------------------------------------------------------
 
+def _delete_series_for(instance: Checklist) -> int:
+    """
+    Delete ALL pending items in the same recurring series as `instance`.
+    Returns number of rows deleted.
+    """
+    if not instance:
+        return 0
+    filters = _series_filter_kwargs(instance)
+    deleted, _ = Checklist.objects.filter(status='Pending', **filters).delete()
+    return deleted
+
 @has_permission('list_checklist')
 def list_checklist(request):
-    # Only check/generate next occurrences on GET
+    # Only check/generate next occurrences on GET,
+    # and *skip once* immediately after a delete so the list doesn't repopulate.
     if request.method == 'GET':
-        ensure_next_for_all_recurring()
+        if not request.session.pop('suppress_auto_recur', False):
+            ensure_next_for_all_recurring()
 
     if request.method == 'POST':
+        # 1) Per-row "Delete series" button (hidden mini-form)
+        if request.POST.get('action') == 'delete_series' and request.POST.get('pk'):
+            try:
+                obj = Checklist.objects.get(pk=int(request.POST['pk']))
+            except (Checklist.DoesNotExist, ValueError, TypeError):
+                messages.warning(request, "The selected series no longer exists.")
+                return redirect('tasks:list_checklist')
+            deleted = _delete_series_for(obj)
+            if deleted:
+                messages.success(request, f"Deleted {deleted} occurrence(s) from the series “{obj.task_name}”.")
+            else:
+                messages.info(request, "No pending occurrences found to delete for that series.")
+            request.session['suppress_auto_recur'] = True
+            return redirect('tasks:list_checklist')
+
+        # 2) Bulk delete (optionally expand to whole series)
         ids = request.POST.getlist('sel')
+        with_series = bool(request.POST.get('with_series'))
+        total_deleted = 0
+
         if ids:
-            Checklist.objects.filter(pk__in=ids).delete()
+            if with_series:
+                # Expand each selected row to its series and delete all pending in each
+                series_seen = set()
+                for sid in ids:
+                    try:
+                        obj = Checklist.objects.get(pk=int(sid))
+                    except (Checklist.DoesNotExist, ValueError, TypeError):
+                        continue
+                    key = tuple(sorted(_series_filter_kwargs(obj).items()))
+                    if key in series_seen:
+                        continue
+                    series_seen.add(key)
+                    total_deleted += _delete_series_for(obj)
+                if total_deleted:
+                    messages.success(request, f"Deleted {total_deleted} pending occurrence(s) across selected series.")
+                else:
+                    messages.info(request, "Nothing to delete – no pending occurrences in selected series.")
+            else:
+                # Only delete the selected occurrences
+                deleted, _ = Checklist.objects.filter(pk__in=ids).delete()
+                total_deleted += deleted
+                if deleted:
+                    messages.success(request, f"Deleted {deleted} selected task(s).")
+                else:
+                    messages.info(request, "Nothing was deleted. The selected tasks may have already been removed.")
+
+            # prevent auto-recreate on redirect
+            request.session['suppress_auto_recur'] = True
+
         return redirect('tasks:list_checklist')
 
     # Show 1st of each recurring series + all one-time
@@ -597,6 +657,9 @@ def delete_checklist(request, pk):
     obj = get_object_or_404(Checklist, pk=pk)
     if request.method == 'POST':
         obj.delete()
+        # prevent immediate auto-regeneration on redirect
+        request.session['suppress_auto_recur'] = True
+        messages.success(request, f"Deleted checklist task “{obj.task_name}”.")
         return redirect('tasks:list_checklist')
     return render(request, 'tasks/confirm_delete.html', {'object': obj, 'type': 'Checklist'})
 
