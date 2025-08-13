@@ -1,3 +1,4 @@
+# apps/tasks/views.py
 import csv
 import io
 import math
@@ -31,7 +32,7 @@ from .forms import (
 from .models import BulkUpload, Checklist, Delegation, FMS, HelpTicket
 from apps.settings.models import Holiday
 
-# NEW: Centralized email helpers
+# Centralized email helpers
 from .email_utils import (
     send_checklist_assignment_to_user,
     send_checklist_admin_confirmation,
@@ -63,10 +64,10 @@ def is_working_day(dt):
     return dt.weekday() != 6 and not Holiday.objects.filter(date=dt).exists()
 
 def next_working_day(dt):
-    """dt: date -> next working date"""
+    """dt: date -> next working date (loop until working)."""
     while not is_working_day(dt):
         dt += timedelta(days=1)
-        return dt
+    return dt
 
 def normalize_planned_dt(dt):
     """
@@ -88,14 +89,11 @@ def normalize_planned_dt(dt):
 
     return dt_ist.astimezone(tz)
 
-# ---- NEW: time-zone safe helpers (preserve user-chosen time) ----------------
+# ---- Time-zone safe helpers (preserve user-chosen time) ---------------------
 
 def make_aware_assuming_ist(dt):
     """
-    Ensure dt is timezone-aware.
-    - If naive, interpret it as IST (what users see/enter).
-    - If aware, leave it as-is.
-    Returns aware dt in the current project timezone.
+    If naive -> interpret as IST; return aware in project tz.
     """
     tz = timezone.get_current_timezone()
     if timezone.is_naive(dt):
@@ -104,19 +102,12 @@ def make_aware_assuming_ist(dt):
 
 def normalize_planned_dt_preserve_time(dt):
     """
-    Given a datetime (naive or aware):
-      - KEEP the original hour/min/sec as entered by the user,
-      - If the date is a non-working day (Sun/Holiday), move to the next working DATE
-        but KEEP the same wall-clock time,
-      - Return as aware datetime in project's current timezone.
+    Keep original time; if non-working date, roll DATE forward (time unchanged).
     """
     tz = timezone.get_current_timezone()
-
-    # Interpret naive inputs as IST (user-facing calendar/time)
     if timezone.is_naive(dt):
         dt = IST.localize(dt)
 
-    # Work in IST to decide working/non-working dates
     dt_ist = dt.astimezone(IST)
     d = dt_ist.date()
     hh, mm, ss, us = dt_ist.hour, dt_ist.minute, dt_ist.second, dt_ist.microsecond
@@ -125,18 +116,13 @@ def normalize_planned_dt_preserve_time(dt):
         d = next_working_day(d)
         dt_ist = IST.localize(datetime(d.year, d.month, d.day, hh, mm, ss, us))
 
-    # Store/return in project timezone
     return dt_ist.astimezone(tz)
 
-# ---- NEW: First-occurrence keeper (key change) -------------------------------
+# ---- First-occurrence keeper -------------------------------------------------
 
 def keep_first_occurrence(dt):
     """
-    FIRST OCCURRENCE ONLY:
-    - keep EXACT date & time provided by admin/bulk file
-    - interpret naive as IST wall-clock
-    - return aware datetime in project timezone
-    - do NOT move off Sundays/holidays (per business rule)
+    First occurrence keeps EXACT date+time; naive interpreted as IST.
     """
     tz = timezone.get_current_timezone()
     if timezone.is_naive(dt):
@@ -145,10 +131,8 @@ def keep_first_occurrence(dt):
 
 def next_recurring_datetime(prev_dt, mode, frequency):
     """
-    Compute next occurrence from prev_dt by mode/frequency.
-    Force time to ASSIGN_HOUR:ASSIGN_MINUTE (IST).
-    Skip non-working days (Sunday/Holiday/Saturday off via Holiday table).
-    Return aware dt in project tz.
+    Step by mode/freq; set time to 10:00 IST; skip Sundays/holidays.
+    Return aware in project tz.
     """
     if (mode or '') not in RECURRING_MODES:
         return None
@@ -169,10 +153,8 @@ def next_recurring_datetime(prev_dt, mode, frequency):
     elif mode == 'Yearly':
         cur_ist = cur_ist + relativedelta(years=step)
 
-    # Force 10:00 IST
     cur_ist = cur_ist.replace(hour=ASSIGN_HOUR, minute=ASSIGN_MINUTE, second=0, microsecond=0)
 
-    # Roll forward to next working day keeping 10:00
     while not is_working_day(cur_ist.date()):
         cur_ist = cur_ist + relativedelta(days=1)
         cur_ist = cur_ist.replace(hour=ASSIGN_HOUR, minute=ASSIGN_MINUTE, second=0, microsecond=0)
@@ -191,10 +173,7 @@ def _series_filter_kwargs(task: Checklist):
 
 def create_next_if_recurring(task: Checklist):
     """
-    Create next pending checklist row for a recurring series (idempotent),
-    and send emails:
-      - Assigned user with the same time of day as the series seed (IST)
-      - Admin summary/confirmation
+    Create next pending checklist (idempotent) and email notifications.
     """
     if (task.mode or '') not in RECURRING_MODES:
         return
@@ -231,14 +210,13 @@ def create_next_if_recurring(task: Checklist):
         status='Pending',
     )
 
-    # Emails for auto-generated recurrence
     complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
     send_checklist_assignment_to_user(task=new_obj, complete_url=complete_url, subject_prefix="Recurring Checklist Generated")
     send_checklist_admin_confirmation(task=new_obj, subject_prefix="Recurring Checklist Generated")
 
 def ensure_next_for_all_recurring():
     """
-    Catch-up: If latest item in a series is not in the future, create the next one.
+    If latest item in a series is not future-pending, create the next one.
     """
     now = timezone.now()
     seeds = (Checklist.objects
@@ -257,7 +235,7 @@ def ensure_next_for_all_recurring():
         if last.planned_date <= now:
             create_next_if_recurring(last)
 
-# ---- Parsing helpers (robust, unambiguous; default MDY for Excel) -----------
+# ---- Parsing helpers (default MDY for slash dates like Excel) ----------------
 
 def _try_dt(s, fmt):
     try:
@@ -270,19 +248,10 @@ _SLASH_DT_WITH_TIME = re.compile(
 )
 
 def parse_planned_datetime_str(s: str):
-    """
-    Parse a datetime string safely.
-    Accepts:
-      - ISO: YYYY-MM-DD HH:MM (seconds optional; AM/PM optional)
-      - Slash or dash versions for DMY/MDY
-    IMPORTANT: If a slash-date could be both D/M/Y and M/D/Y, we **default to MDY**
-    to match Excel's usual export (e.g., '8/16/2025 17:00').
-    """
     s = re.sub(r"\s+", " ", (s or "").strip())
     if not s:
         return None
 
-    # ISO and dash formats first
     fmts = [
         "%Y-%m-%d %H:%M",
         "%Y-%m-%d %H:%M:%S",
@@ -306,7 +275,6 @@ def parse_planned_datetime_str(s: str):
         if dt:
             return dt
 
-    # Classic slash date with time -> prefer MDY
     m = _SLASH_DT_WITH_TIME.match(s)
     if m:
         mdy = (_try_dt(s, "%m/%d/%Y %H:%M") or _try_dt(s, "%m/%d/%Y %I:%M %p") or _try_dt(s, "%m/%d/%Y %H:%M:%S"))
@@ -315,7 +283,6 @@ def parse_planned_datetime_str(s: str):
         dmy = (_try_dt(s, "%d/%m/%Y %H:%M") or _try_dt(s, "%d/%m/%Y %I:%M %p") or _try_dt(s, "%d/%m/%Y %H:%M:%S"))
         return dmy
 
-    # Fallback preference: MDY then DMY
     mdy = (_try_dt(s, "%m/%d/%Y %H:%M") or _try_dt(s, "%m/%d/%Y %I:%M %p") or _try_dt(s, "%m/%d/%Y %H:%M:%S"))
     if mdy:
         return mdy
@@ -323,10 +290,6 @@ def parse_planned_datetime_str(s: str):
     return dmy
 
 def parse_date_only_str(s: str):
-    """
-    Parse a date string safely (no time).
-    Default to MDY for slash dates to match Excel.
-    """
     s = re.sub(r"\s+", " ", (s or "").strip())
     if not s:
         return None
@@ -353,10 +316,7 @@ def parse_int(val, default=0):
 
 def parse_int_loose(val, default=None):
     """
-    More tolerant int parser:
-    - accepts floats like 1.0
-    - extracts digits from strings like '1 ' or '1x'
-    - None/NaN -> default
+    Accepts floats like 1.0; pulls digits out of strings; None/NaN -> default.
     """
     if val is None:
         return default
@@ -383,10 +343,9 @@ def parse_time_val(val):
 def get_default_time():
     return time(ASSIGN_HOUR, ASSIGN_MINUTE)
 
-# ---- NEW: robust row cleaning for bulk upload --------------------------------
+# ---- Row cleaning for bulk upload -------------------------------------------
 
 def _clean_row_keys(row: dict) -> dict:
-    """Trim whitespace from header keys like 'Task Name ' -> 'Task Name'."""
     if not row:
         return {}
     out = {}
@@ -396,7 +355,6 @@ def _clean_row_keys(row: dict) -> dict:
     return out
 
 def _is_blank_cell(v) -> bool:
-    """Treat None/NaN/NaT/''/'  ' as blank."""
     if v is None:
         return True
     try:
@@ -411,7 +369,6 @@ def _is_blank_cell(v) -> bool:
     return False
 
 def _is_empty_row(row: dict) -> bool:
-    """Return True if all cells in the row are blank."""
     if not row:
         return True
     return all(_is_blank_cell(v) for v in row.values())
@@ -419,7 +376,6 @@ def _is_empty_row(row: dict) -> bool:
 # ---- Delegation time aggregation --------------------------------------------
 
 def _coerce_date(dtor):
-    """Accept date or datetime; return date."""
     if isinstance(dtor, datetime):
         return dtor.date()
     return dtor
@@ -476,7 +432,6 @@ def calculate_delegation_actual_time(qs, up_to=None):
 
 @has_permission('list_checklist')
 def list_checklist(request):
-    # Ensure missed recurring series have a "next" item ready
     if request.method == 'GET':
         ensure_next_for_all_recurring()
 
@@ -560,14 +515,12 @@ def add_checklist(request):
         if form.is_valid():
             planned_date = form.cleaned_data.get('planned_date')
             if planned_date:
-                # FIRST occurrence must keep exact date+time
                 planned_date = keep_first_occurrence(planned_date)
             obj = form.save(commit=False)
             obj.planned_date = planned_date
             obj.save()
             form.save_m2m()
 
-            # Email: to assignee + admin confirm
             complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
             send_checklist_assignment_to_user(task=obj, complete_url=complete_url, subject_prefix="New Checklist Task Assigned")
             send_checklist_admin_confirmation(task=obj, subject_prefix="Checklist Task Assignment")
@@ -580,20 +533,18 @@ def add_checklist(request):
 @has_permission('add_checklist')
 def edit_checklist(request, pk):
     obj = get_object_or_404(Checklist, pk=pk)
-    old_assignee = obj.assign_to  # track for potential reassignment
+    old_assignee = obj.assign_to
     if request.method == 'POST':
         form = ChecklistForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
             planned_date = form.cleaned_data.get('planned_date')
             if planned_date:
-                # FIRST instance edit must keep exact time chosen
                 planned_date = keep_first_occurrence(planned_date)
             obj2 = form.save(commit=False)
             obj2.planned_date = planned_date
             obj2.save()
             form.save_m2m()
 
-            # Emails
             complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj2.id])}"
             if old_assignee and obj2.assign_to_id != old_assignee.id:
                 send_checklist_unassigned_notice(task=obj2, old_user=old_assignee)
@@ -626,7 +577,6 @@ def reassign_checklist(request, pk):
             obj.save()
 
             complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
-            # Notify new and old + admin confirmation
             send_checklist_assignment_to_user(task=obj, complete_url=complete_url, subject_prefix="Checklist Task Reassigned")
             if old_assignee and old_assignee.id != obj.assign_to_id:
                 send_checklist_unassigned_notice(task=obj, old_user=old_assignee)
@@ -651,7 +601,6 @@ def complete_checklist(request, pk):
             mins = int((now - obj.planned_date).total_seconds() // 60)
             obj.actual_duration_minutes = max(mins, 0)
             obj.save()
-            # Auto-create next for recurring (will email in create_next_if_recurring)
             create_next_if_recurring(obj)
             return redirect(request.GET.get('next', 'dashboard:home'))
     else:
@@ -693,7 +642,6 @@ def add_delegation(request):
         if form.is_valid():
             planned_dt = form.cleaned_data.get('planned_date')
             if planned_dt:
-                # FIRST occurrence must keep exact date+time
                 planned_dt = keep_first_occurrence(planned_dt)
             obj = form.save(commit=False)
             obj.planned_date = planned_dt
@@ -715,7 +663,6 @@ def edit_delegation(request, pk):
         if form.is_valid():
             planned_dt = form.cleaned_data.get('planned_date')
             if planned_dt:
-                # FIRST instance edit must keep exact time chosen
                 planned_dt = keep_first_occurrence(planned_dt)
             obj2 = form.save(commit=False)
             obj2.planned_date = planned_dt
@@ -821,8 +768,7 @@ def bulk_upload(request):
     if form_type == 'checklist':
         required_headers = ['Task Name', 'Assign To', 'Planned Date']
         if rows:
-            # Normalize just the first row's keys for header presence test
-            first_keys = [ (k.strip() if isinstance(k, str) else k) for k in rows[0].keys() ]
+            first_keys = [(k.strip() if isinstance(k, str) else k) for k in rows[0].keys()]
             missing = [h for h in required_headers if h not in first_keys]
         else:
             missing = required_headers
@@ -830,10 +776,10 @@ def bulk_upload(request):
             messages.error(request, f"Missing required columns for Checklist: {', '.join(missing)}")
             return render(request, 'tasks/bulk_upload.html', {'form': form})
 
-        for idx, raw_row in enumerate(rows, start=2):  # Excel/CSV: header is row 1
+        for idx, raw_row in enumerate(rows, start=2):  # header = row 1
             row = _clean_row_keys(raw_row)
             if _is_empty_row(row):
-                continue  # <-- skip completely blank lines (this fixes your 'Row 4' error)
+                continue
 
             task_name = str(row.get('Task Name', '')).strip()
             uname = str(row.get('Assign To', '')).strip()
@@ -845,14 +791,14 @@ def bulk_upload(request):
             remind_before_days = row.get('Reminder Before Days', 0)
             assign_pc_u = str(row.get('Assign PC', '')).strip()
             notify_to_u = str(row.get('Notify To', '')).strip()
-            set_reminder = str(row.get('Set Reminder', '')).strip().lower() in ['yes','true','1']
+            set_reminder = str(row.get('Set Reminder', '')).strip().lower() in ['yes', 'true', '1']
             reminder_mode = str(row.get('Reminder Mode', '')).strip()
             reminder_frequency = row.get('Reminder Frequency', '')
             reminder_starting_time_raw = row.get('Reminder Starting Time', '')
-            checklist_auto_close = str(row.get('Checklist Auto Close', '')).strip().lower() in ['yes','true','1']
+            checklist_auto_close = str(row.get('Checklist Auto Close', '')).strip().lower() in ['yes', 'true', '1']
             checklist_auto_close_days = row.get('Checklist Auto Close Days', 0)
             message_txt = str(row.get('Message', '')).strip()
-            attach_mand = str(row.get('Make Attachment Mandatory', '')).strip().lower() in ['yes','true','1']
+            attach_mand = str(row.get('Make Attachment Mandatory', '')).strip().lower() in ['yes', 'true', '1']
             group_name = str(row.get('Group Name', '')).strip()
 
             if not task_name:
@@ -879,7 +825,6 @@ def bulk_upload(request):
             if not planned_dt:
                 errors.append(f"Row {idx}: Planned Date is invalid or missing. Use 'YYYY-MM-DD HH:MM' or 'M/D/YYYY HH:MM'."); continue
 
-            # ---- CHANGE: keep first exactly as provided (IST) ----
             planned_dt = keep_first_occurrence(planned_dt)
 
             if priority not in dict(Checklist._meta.get_field('priority').choices).keys():
@@ -903,7 +848,6 @@ def bulk_upload(request):
             except Exception:
                 errors.append(f"Row {idx}: Reminder Before Days must be an integer."); continue
 
-            # Reminder frequency (lenient)
             rfreq_default = 1 if set_reminder else 0
             rfreq = parse_int_loose(reminder_frequency, default=rfreq_default)
 
@@ -977,7 +921,7 @@ def bulk_upload(request):
     else:
         required_headers = ['Task Name', 'Assign To', 'Planned Date']
         if rows:
-            first_keys = [ (k.strip() if isinstance(k, str) else k) for k in rows[0].keys() ]
+            first_keys = [(k.strip() if isinstance(k, str) else k) for k in rows[0].keys()]
             missing = [h for h in required_headers if h not in first_keys]
         else:
             missing = required_headers
@@ -988,13 +932,13 @@ def bulk_upload(request):
         for idx, raw_row in enumerate(rows, start=2):
             row = _clean_row_keys(raw_row)
             if _is_empty_row(row):
-                continue  # <-- skip completely blank lines
+                continue
 
             task_name = str(row.get('Task Name', '')).strip()
             uname = str(row.get('Assign To', '')).strip()
             pd_val = row.get('Planned Date', '')
             priority = str(row.get('Priority', 'Low')).strip() or 'Low'
-            attach_mand = str(row.get('Make Attachment Mandatory', '')).strip().lower() in ['yes','true','1']
+            attach_mand = str(row.get('Make Attachment Mandatory', '')).strip().lower() in ['yes', 'true', '1']
             time_per = row.get('Time per Task (minutes)', 0)
             mode_val = str(row.get('Mode', '')).strip()
             freq_val = row.get('Frequency', '') if row.get('Frequency', '') is not None else ''
@@ -1023,7 +967,6 @@ def bulk_upload(request):
             if not planned_dt:
                 errors.append(f"Row {idx}: Planned Date is invalid or missing. Use 'YYYY-MM-DD HH:MM' or 'M/D/YYYY HH:MM'."); continue
 
-            # ---- CHANGE: keep first exactly as provided (IST) ----
             planned_dt = keep_first_occurrence(planned_dt)
 
             if priority not in dict(Delegation._meta.get_field('priority').choices).keys():
@@ -1045,7 +988,7 @@ def bulk_upload(request):
                 assign_by=request.user,
                 task_name=task_name,
                 assign_to=atou,
-                planned_date=planned_dt,          # DateTime now
+                planned_date=planned_dt,
                 priority=priority,
                 attachment_mandatory=attach_mand,
                 time_per_task_minutes=time_per_minutes,

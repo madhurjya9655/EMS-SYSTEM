@@ -102,7 +102,6 @@ class Checklist(models.Model):
         which skips Sundays/holidays at 10:00 AM IST.
         """
         from django.core.exceptions import ValidationError
-        # You may keep other field-level validations here if needed.
         super().clean()
 
     def save(self, *args, **kwargs):

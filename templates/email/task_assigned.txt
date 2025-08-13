@@ -1,0 +1,13 @@
+Hi {{ assignee_name }},
+
+You have a new {{ kind }} assigned to you.
+
+Task Title: {{ task_title }}
+Task code: {{ task_code }}
+Planned Date: {{ planned_date_display }}
+Priority: {{ priority_display }}
+
+Assigned by: {{ assign_by_display }}
+
+{{ cta_text }}
+Click this link to complete the task with form: {{ complete_url }}

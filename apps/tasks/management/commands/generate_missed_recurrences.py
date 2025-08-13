@@ -1,9 +1,17 @@
-from django.core.management.base import BaseCommand
-from django.utils import timezone
+# apps/tasks/management/commands/generate_missed_recurrences.py
 from datetime import timedelta
+
+from django.conf import settings
+from django.core.management.base import BaseCommand
+from django.urls import reverse
+from django.utils import timezone
 
 from apps.tasks.models import Checklist
 from apps.tasks.recurrence import get_next_planned_date
+from apps.tasks.email_utils import (
+    send_checklist_assignment_to_user,
+    send_checklist_admin_confirmation,
+)
 
 
 class Command(BaseCommand):
@@ -14,6 +22,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **kwargs):
         now = timezone.now()
+        site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
         # Identify distinct recurring series (include group_name to avoid collisions)
         groups = (
@@ -60,7 +69,7 @@ class Command(BaseCommand):
                 continue
 
             # Compute next planned datetime.
-            # NOTE: get_next_planned_date now forces 10:00 IST and skips Sun/holidays.
+            # NOTE: get_next_planned_date forces 10:00 IST and skips Sun/holidays.
             next_planned = get_next_planned_date(
                 instance.planned_date, instance.mode, instance.frequency
             )
@@ -92,7 +101,7 @@ class Command(BaseCommand):
             if dupe:
                 continue
 
-            Checklist.objects.create(
+            new_obj = Checklist.objects.create(
                 assign_by=instance.assign_by,
                 task_name=instance.task_name,
                 assign_to=instance.assign_to,
@@ -119,8 +128,21 @@ class Command(BaseCommand):
                 status='Pending',
             )
             created += 1
+
+            # Send the same emails we send elsewhere
+            complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
+            send_checklist_assignment_to_user(
+                task=new_obj,
+                complete_url=complete_url,
+                subject_prefix="Recurring Checklist Generated",
+            )
+            send_checklist_admin_confirmation(
+                task=new_obj,
+                subject_prefix="Recurring Checklist Generated",
+            )
+
             self.stdout.write(self.style.SUCCESS(
-                f"Created next instance: {instance.task_name} for {instance.assign_to} at {next_planned}"
+                f"Created next instance: {new_obj.task_name} for {new_obj.assign_to} at {next_planned}"
             ))
 
         if created == 0:

@@ -1,9 +1,17 @@
-from django.core.management.base import BaseCommand
-from django.utils import timezone
+# apps/tasks/management/commands/roll_recurrences.py
 from datetime import timedelta
+
+from django.conf import settings
+from django.core.management.base import BaseCommand
+from django.urls import reverse
+from django.utils import timezone
 
 from apps.tasks.models import Checklist
 from apps.tasks.recurrence import get_next_planned_date
+from apps.tasks.email_utils import (
+    send_checklist_assignment_to_user,
+    send_checklist_admin_confirmation,
+)
 
 RECURRING_MODES = ['Daily', 'Weekly', 'Monthly', 'Yearly']
 
@@ -16,6 +24,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **opts):
         now = timezone.now()
+        site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
         # Identify series by (assignee, task_name, mode, frequency, group_name)
         seeds = (
@@ -61,7 +70,7 @@ class Command(BaseCommand):
             if dupe:
                 continue
 
-            Checklist.objects.create(
+            new_obj = Checklist.objects.create(
                 assign_by=last.assign_by,
                 task_name=last.task_name,
                 message=last.message,
@@ -86,5 +95,17 @@ class Command(BaseCommand):
                 status='Pending',
             )
             created += 1
+
+            # Send the same emails we send elsewhere
+            complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
+            send_checklist_assignment_to_user(
+                task=new_obj,
+                complete_url=complete_url,
+                subject_prefix="Recurring Checklist Generated",
+            )
+            send_checklist_admin_confirmation(
+                task=new_obj,
+                subject_prefix="Recurring Checklist Generated",
+            )
 
         self.stdout.write(self.style.SUCCESS(f"Created {created} next occurrences"))

@@ -5,7 +5,6 @@
   <div class="card-header bg-white d-flex justify-content-between align-items-center">
     <h5 class="mb-0">Help Ticket Tasks</h5>
     <div>
-      <!-- Today Only and Show All buttons -->
       <form method="get" class="d-inline">
         {% for key, value in request.GET.items %}
           {% if key != 'today_only' and key != 'today' %}
@@ -13,7 +12,7 @@
           {% endif %}
         {% endfor %}
         <button type="submit" name="today_only" value="1"
-          class="btn btn-sm {% if request.GET.today_only or request.GET.today %}btn-primary{% else %}btn-outline-primary{% endif %}">
+                class="btn btn-sm {% if request.GET.today_only or request.GET.today %}btn-primary{% else %}btn-outline-primary{% endif %}">
           Today Only
         </button>
       </form>
@@ -21,8 +20,6 @@
          {% if not request.GET.today_only and not request.GET.today %}active{% endif %}">
         Show All
       </a>
-      <a href="javascript:location.reload()" class="ms-2" title="Refresh"><i class="fas fa-sync-alt"></i></a>
-      <a href="javascript:location.reload()" title="Reload"><i class="fas fa-redo-alt"></i></a>
     </div>
   </div>
 
@@ -37,10 +34,7 @@
             <th>Message</th>
             <th>Assigned Date</th>
             <th>Planned Date &amp; Time</th>
-            <th>
-              Actual <br>
-              Time <span title="Time taken in minutes" class="text-warning">&#x23F0;</span>
-            </th>
+            <th>Actual Time</th>
             <th>Delay</th>
             <th>Priority</th>
             <th>Status</th>
@@ -50,54 +44,47 @@
         </thead>
         <tbody>
           {% for item in tasks %}
-            <tr>
-              <td>HT-{{ item.id }}</td>
-              <td>{{ item.assign_by.get_full_name|default:item.assign_by.username }}</td>
-              <td>{{ item.title }}</td>
-              <td>{{ item.description|truncatewords:10 }}</td>
-
-              {# created_at & planned_date with ISO tooltip; 24h in table for consistency #}
-              <td title="{{ item.created_at|date:'Y-m-d H:i' }}">{{ item.created_at|date:"d M, Y H:i" }}</td>
-              <td title="{{ item.planned_date|date:'Y-m-d H:i' }}">{{ item.planned_date|date:"d M, Y H:i" }}</td>
-
-              <td>
-                {% if item.actual_duration_minutes %}
-                  {{ item.actual_duration_minutes }} min
-                {% else %}
-                  &ndash;
-                {% endif %}
-              </td>
-              <td>{{ item.delay }}</td>
-              <td>{{ item.priority }}</td>
-              <td>{{ item.status }}</td>
-              <td>
-                {% if item.media_upload %}
-                  <a href="{{ item.media_upload.url }}" download>Download</a>
-                {% else %}
-                  &ndash;
-                {% endif %}
-              </td>
-              <td class="d-flex gap-2">
-                <a
-                  href="{% url 'tasks:note_help_ticket' item.id %}?next={{ request.get_full_path }}"
-                  class="btn btn-sm btn-primary">
-                  NOTE
-                </a>
-                {% if item.status != "Closed" %}
-                  <a
-                    href="{% url 'tasks:note_help_ticket' item.id %}?next={{ request.get_full_path }}"
-                    class="btn btn-sm btn-success">
-                    COMPLETE
-                  </a>
-                {% endif %}
-              </td>
-            </tr>
+          <tr>
+            <td>HT-{{ item.id }}</td>
+            <td>{{ item.assign_by.get_full_name|default:item.assign_by.username }}</td>
+            <td>{{ item.title }}</td>
+            <td>{{ item.description|truncatewords:10 }}</td>
+            <td title="{{ item.created_at|date:'Y-m-d H:i' }}">{{ item.created_at|date:"d M, Y H:i" }}</td>
+            <td title="{{ item.planned_date|date:'Y-m-d H:i' }}">{{ item.planned_date|date:"d M, Y H:i" }}</td>
+            <td>
+              {% if item.actual_duration_minutes %}
+                {{ item.actual_duration_minutes }} min
+              {% else %}
+                &ndash;
+              {% endif %}
+            </td>
+            <td>{{ item.delay|default:"-" }}</td>
+            <td>{{ item.priority }}</td>
+            <td>{{ item.status }}</td>
+            <td>
+              {% if item.media_upload %}
+                <a href="{{ item.media_upload.url }}" download>Download</a>
+              {% else %}
+                &ndash;
+              {% endif %}
+            </td>
+            <td class="d-flex gap-2">
+              <a href="{% url 'tasks:note_help_ticket' item.id %}?next={{ request.get_full_path }}"
+                 class="btn btn-sm btn-primary">
+                NOTE
+              </a>
+              {% if item.status != "Closed" %}
+              <a href="{% url 'tasks:note_help_ticket' item.id %}?next={{ request.get_full_path }}"
+                 class="btn btn-sm btn-success">
+                COMPLETE
+              </a>
+              {% endif %}
+            </td>
+          </tr>
           {% empty %}
-            <tr>
-              <td colspan="12" class="text-center text-muted py-4">
-                No tickets to show.
-              </td>
-            </tr>
+          <tr>
+            <td colspan="12" class="text-center text-muted py-4">No tickets to show.</td>
+          </tr>
           {% endfor %}
         </tbody>
       </table>

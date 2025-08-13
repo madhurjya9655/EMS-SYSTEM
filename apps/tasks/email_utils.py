@@ -6,6 +6,8 @@ from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from django.utils import timezone
 from datetime import datetime
+import pytz
+from datetime import time as _time
 
 User = get_user_model()
 
@@ -57,7 +59,6 @@ def _fmt_value(v: Any) -> Any:
         return aware.astimezone(tz).strftime("%Y-%m-%d %H:%M")
     if hasattr(v, "get_full_name") or hasattr(v, "username"):
         try:
-            # Prefer full name; fallback to username
             name = getattr(v, "get_full_name", lambda: "")() or getattr(v, "username", "")
             return name
         except Exception:
@@ -87,6 +88,56 @@ def _fmt_rows(rows: Sequence[Dict[str, Any]]) -> Sequence[Dict[str, Any]]:
     return out
 
 
+# -------- New helpers for unified user-facing templates ---------------------- #
+
+IST = pytz.timezone("Asia/Kolkata")
+_DEFAULT_ASSIGN_T = _time(10, 0)  # project default planning time
+
+def _display_name(user) -> str:
+    """Full name if available; else username; else 'System'."""
+    if not user:
+        return "System"
+    try:
+        full = getattr(user, "get_full_name", lambda: "")() or ""
+        if str(full).strip():
+            return str(full).strip()
+        uname = getattr(user, "username", "") or ""
+        return uname if uname else "System"
+    except Exception:
+        return "System"
+
+def _fmt_dt_date(dt: Any) -> str:
+    """
+    IST string as 'YYYY-MM-DD' and add ' HH:MM' if time is meaningful
+    (not 00:00 and not the default 10:00).
+    """
+    if not dt:
+        return ""
+    tz = timezone.get_current_timezone()
+    aware = dt if timezone.is_aware(dt) else timezone.make_aware(dt, tz)
+    ist = aware.astimezone(IST)
+    base = ist.strftime("%Y-%m-%d")
+    t = ist.timetz().replace(tzinfo=None)
+    if t != _DEFAULT_ASSIGN_T and t != _time(0, 0):
+        return f"{base} {ist.strftime('%H:%M')}"
+    return base
+
+def _send_unified_assignment_email(*, subject: str, to_email: str, context: Dict[str, Any]) -> None:
+    """Render standardized TXT + HTML and send."""
+    if not (to_email or "").strip():
+        return
+    text_body = render_to_string("email/task_assigned.txt", context)
+    html_body = render_to_string("email/task_assigned.html", context)
+    msg = EmailMultiAlternatives(
+        subject=subject,
+        body=text_body,
+        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None),
+        to=[to_email],
+    )
+    msg.attach_alternative(html_body, "text/html")
+    msg.send(fail_silently=(getattr(settings, "EMAIL_FAIL_SILENTLY", False) or getattr(settings, "DEBUG", False)))
+
+
 # ----------------------------- core sender ----------------------------------- #
 
 def send_html_email(
@@ -112,7 +163,6 @@ def send_html_email(
     if not to_list:
         return
 
-    # Honor project settings: don't blow up in development
     effective_fail_silently = (
         fail_silently
         or getattr(settings, "EMAIL_FAIL_SILENTLY", False)
@@ -144,24 +194,78 @@ def send_html_email(
 def send_checklist_assignment_to_user(
     *, task, complete_url: str, subject_prefix: str = "New Checklist Task Assigned"
 ) -> None:
+    """Standardized user-facing email for Checklist."""
     if not task.assign_to or not (getattr(task.assign_to, "email", "") or "").strip():
         return
-    send_html_email(
+    ctx = {
+        "kind": "Checklist",
+        "task_title": task.task_name,
+        "task_code": task.id,
+        "planned_date_display": _fmt_dt_date(getattr(task, "planned_date", None)),
+        "priority_display": getattr(task, "priority", "") or "",
+        "assign_by_display": _display_name(getattr(task, "assign_by", None)),
+        "assignee_name": _display_name(task.assign_to),
+        "complete_url": complete_url,
+        "cta_text": "Press the button to mark the task as completed.",
+    }
+    _send_unified_assignment_email(
         subject=f"{subject_prefix}: {task.task_name}",
-        template_name="email/checklist_assigned.html",
-        context={
-            "task": task,
-            "assign_by": task.assign_by,
-            "assign_to": task.assign_to,
-            "complete_url": complete_url,
-        },
-        to=[task.assign_to.email],
+        to_email=task.assign_to.email,
+        context=ctx,
     )
 
 
-def send_checklist_admin_confirmation(
-    *, task, subject_prefix: str = "Checklist Task Assignment"
+def send_delegation_assignment_to_user(
+    *, delegation, complete_url: str, subject_prefix: str = "New Delegation Task Assigned"
 ) -> None:
+    """Standardized user-facing email for Delegation."""
+    if not delegation.assign_to or not (getattr(delegation.assign_to, "email", "") or "").strip():
+        return
+    ctx = {
+        "kind": "Delegation",
+        "task_title": delegation.task_name,
+        "task_code": delegation.id,
+        "planned_date_display": _fmt_dt_date(getattr(delegation, "planned_date", None)),
+        "priority_display": getattr(delegation, "priority", "") or "",
+        "assign_by_display": _display_name(getattr(delegation, "assign_by", None)),
+        "assignee_name": _display_name(delegation.assign_to),
+        "complete_url": complete_url,
+        "cta_text": "Press the button to mark the task as completed.",
+    }
+    _send_unified_assignment_email(
+        subject=f"{subject_prefix}: {delegation.task_name}",
+        to_email=delegation.assign_to.email,
+        context=ctx,
+    )
+
+
+def send_help_ticket_assignment_to_user(
+    *, ticket, complete_url: str, subject_prefix: str = "New Help Ticket Assigned"
+) -> None:
+    """Standardized user-facing email for Help Ticket."""
+    if not ticket.assign_to or not (getattr(ticket.assign_to, "email", "") or "").strip():
+        return
+    ctx = {
+        "kind": "Help Ticket",
+        "task_title": ticket.title,
+        "task_code": ticket.id,
+        "planned_date_display": _fmt_dt_date(getattr(ticket, "planned_date", None)),
+        "priority_display": getattr(ticket, "priority", "") or "",
+        "assign_by_display": _display_name(getattr(ticket, "assign_by", None)),
+        "assignee_name": _display_name(ticket.assign_to),
+        "complete_url": complete_url,
+        "cta_text": "Press the button to mark the ticket as closed / add notes.",
+    }
+    _send_unified_assignment_email(
+        subject=f"{subject_prefix}: {ticket.title}",
+        to_email=ticket.assign_to.email,
+        context=ctx,
+    )
+
+
+# ---------------- Admin confirmations / summaries (unchanged) ---------------- #
+
+def send_checklist_admin_confirmation(*, task, subject_prefix: str = "Checklist Task Assignment") -> None:
     admin_emails = get_admin_emails()
     if not admin_emails:
         return
@@ -181,56 +285,7 @@ def send_checklist_admin_confirmation(
     )
 
 
-def send_checklist_unassigned_notice(*, task, old_user) -> None:
-    if not old_user or not (getattr(old_user, "email", "") or "").strip():
-        return
-    send_html_email(
-        subject=f"Checklist Task Unassigned: {task.task_name}",
-        template_name="email/checklist_unassigned.html",
-        context={"task": task, "old_user": old_user},
-        to=[old_user.email],
-    )
-
-
-def send_delegation_assignment_to_user(
-    *, delegation, complete_url: str, subject_prefix: str = "New Delegation Task Assigned"
-) -> None:
-    if not delegation.assign_to or not (getattr(delegation.assign_to, "email", "") or "").strip():
-        return
-    send_html_email(
-        subject=f"{subject_prefix}: {delegation.task_name}",
-        template_name="email/delegation_assigned.html",
-        context={
-            "delegation": delegation,
-            "assign_by": delegation.assign_by,
-            "assign_to": delegation.assign_to,
-            "complete_url": complete_url,
-        },
-        to=[delegation.assign_to.email],
-    )
-
-
-def send_help_ticket_assignment_to_user(
-    *, ticket, complete_url: str, subject_prefix: str = "New Help Ticket Assigned"
-) -> None:
-    if not ticket.assign_to or not (getattr(ticket.assign_to, "email", "") or "").strip():
-        return
-    send_html_email(
-        subject=f"{subject_prefix}: {ticket.title}",
-        template_name="email/help_ticket_assigned.html",
-        context={
-            "ticket": ticket,
-            "assign_by": ticket.assign_by,
-            "assign_to": ticket.assign_to,
-            "complete_url": complete_url,
-        },
-        to=[ticket.assign_to.email],
-    )
-
-
-def send_help_ticket_admin_confirmation(
-    *, ticket, subject_prefix: str = "Help Ticket Assignment"
-) -> None:
+def send_help_ticket_admin_confirmation(*, ticket, subject_prefix: str = "Help Ticket Assignment") -> None:
     admin_emails = get_admin_emails()
     if not admin_emails:
         return
@@ -250,17 +305,6 @@ def send_help_ticket_admin_confirmation(
     )
 
 
-def send_help_ticket_unassigned_notice(*, ticket, old_user) -> None:
-    if not old_user or not (getattr(old_user, "email", "") or "").strip():
-        return
-    send_html_email(
-        subject=f"Help Ticket Unassigned: {ticket.title}",
-        template_name="email/help_ticket_unassigned.html",
-        context={"ticket": ticket, "old_user": old_user},
-        to=[old_user.email],
-    )
-
-
 def send_admin_bulk_summary(*, title: str, rows: Sequence[dict]) -> None:
     admin_emails = get_admin_emails()
     if not admin_emails or not rows:
@@ -270,4 +314,28 @@ def send_admin_bulk_summary(*, title: str, rows: Sequence[dict]) -> None:
         template_name="email/admin_assignment_summary.html",
         context={"title": title, "items_table": rows},
         to=admin_emails,
+    )
+
+
+# -------------------------- Unassigned notices (unchanged) ------------------- #
+
+def send_checklist_unassigned_notice(*, task, old_user) -> None:
+    if not old_user or not (getattr(old_user, "email", "") or "").strip():
+        return
+    send_html_email(
+        subject=f"Checklist Task Unassigned: {task.task_name}",
+        template_name="email/checklist_unassigned.html",
+        context={"task": task, "old_user": old_user},
+        to=[old_user.email],
+    )
+
+
+def send_help_ticket_unassigned_notice(*, ticket, old_user) -> None:
+    if not old_user or not (getattr(old_user, "email", "") or "").strip():
+        return
+    send_html_email(
+        subject=f"Help Ticket Unassigned: {ticket.title}",
+        template_name="email/help_ticket_unassigned.html",
+        context={"ticket": ticket, "old_user": old_user},
+        to=[old_user.email],
     )

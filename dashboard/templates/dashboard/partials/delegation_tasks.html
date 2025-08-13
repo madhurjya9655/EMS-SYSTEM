@@ -3,7 +3,6 @@
   <div class="card-header bg-white d-flex justify-content-between align-items-center">
     <h5 class="mb-0">Delegation Tasks</h5>
     <div>
-      <!-- Today Only and Show All buttons -->
       <form method="get" class="d-inline">
         {% for key, value in request.GET.items %}
           {% if key != 'today_only' and key != 'today' %}
@@ -11,7 +10,7 @@
           {% endif %}
         {% endfor %}
         <button type="submit" name="today_only" value="1"
-          class="btn btn-sm {% if request.GET.today_only or request.GET.today %}btn-primary{% else %}btn-outline-primary{% endif %}">
+                class="btn btn-sm {% if request.GET.today_only or request.GET.today %}btn-primary{% else %}btn-outline-primary{% endif %}">
           Today Only
         </button>
       </form>
@@ -19,65 +18,62 @@
          {% if not request.GET.today_only and not request.GET.today %}active{% endif %}">
         Show All
       </a>
-      <a href="javascript:location.reload()" class="ms-2"><i class="fas fa-sync-alt"></i></a>
-      <a href="javascript:location.reload()"><i class="fas fa-redo-alt"></i></a>
     </div>
   </div>
 
   <div class="card-body p-0">
-    <table class="table table-hover mb-0">
-      <thead class="table-light">
-        <tr>
-          <th>Task Code</th>
-          <th>Task Title</th>
-          <th>Message</th>
-          <th>Assigned By</th>
-          <th>Planned Date &amp; Time</th>
-          <th>Status</th>
-          <th>Time/Task</th>
-          <th><b>Actual Time</b></th>
-          <th>Delay</th>
-          <th>Doer Notes</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for t in tasks %}
-        <tr>
-          <td>DEG{{ t.id }}</td>
-          <td>{{ t.task_name }}</td>
-          <td>{{ t.message|default:"—"|truncatechars:30 }}</td>
-          <td>{{ t.assign_by.get_full_name|default:t.assign_by.username }}</td>
-
-          {# show date + time, e.g., 12 Aug, 2025 14:30, with ISO tooltip #}
-          <td title="{{ t.planned_date|date:'Y-m-d H:i' }}">{{ t.planned_date|date:"d M, Y H:i" }}</td>
-
-          <td>{{ t.status }}</td>
-          <td>{{ t.time_per_task_minutes }} min</td>
-          <td>
-            {% if t.actual_time_taken is not None %}
-              {{ t.actual_time_taken }} min
-            {% else %}
-              —
-            {% endif %}
-          </td>
-          <td>{{ t.delay }}</td>
-          <td>{{ t.doer_notes|default:"—" }}</td>
-          <td>
-            {% if t.status != 'Completed' %}
-              <a href="{% url 'tasks:complete_delegation' t.id %}?next={{ request.get_full_path }}"
-                 class="btn btn-sm btn-success">COMPLETE</a>
-            {% else %}
-              <span class="text-muted">Done</span>
-            {% endif %}
-          </td>
-        </tr>
-        {% empty %}
-        <tr>
-          <td colspan="11" class="text-center text-muted">No record found.</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Task Code</th>
+            <th>Task Title</th>
+            <th>Message</th>
+            <th>Assigned By</th>
+            <th>Planned Date &amp; Time</th>
+            <th>Status</th>
+            <th>Time/Task</th>
+            <th><b>Actual Time</b></th>
+            <th>Delay</th>
+            <th>Doer Notes</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in tasks %}
+          <tr>
+            <td>DEG{{ t.id }}</td>
+            <td>{{ t.task_name }}</td>
+            <td>{{ t.message|default:"—"|truncatechars:30 }}</td>
+            <td>{{ t.assign_by.get_full_name|default:t.assign_by.username }}</td>
+            <td title="{{ t.planned_date|date:'Y-m-d H:i' }}">{{ t.planned_date|date:"d M, Y H:i" }}</td>
+            <td>{{ t.status }}</td>
+            <td>{{ t.time_per_task_minutes|default:0 }} min</td>
+            <td>
+              {% if t.actual_duration_minutes %}
+                {{ t.actual_duration_minutes }} min
+              {% else %}
+                —
+              {% endif %}
+            </td>
+            <td>{{ t.delay|default:"-" }}</td>
+            <td>{{ t.doer_notes|default:"—" }}</td>
+            <td>
+              {% if t.status != 'Completed' %}
+                <a href="{% url 'tasks:complete_delegation' t.id %}?next={{ request.get_full_path }}"
+                   class="btn btn-sm btn-success">COMPLETE</a>
+              {% else %}
+                <span class="text-muted">Done</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="11" class="text-center text-muted">No record found.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>

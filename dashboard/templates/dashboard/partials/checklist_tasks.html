@@ -3,15 +3,15 @@
   <div class="card-header bg-white d-flex justify-content-between align-items-center">
     <h5 class="mb-0">Checklist Tasks</h5>
     <div>
-      <!-- Today Only and Show All buttons -->
       <form method="get" class="d-inline">
+        {# preserve other query params #}
         {% for key, value in request.GET.items %}
           {% if key != 'today_only' and key != 'today' %}
             <input type="hidden" name="{{ key }}" value="{{ value }}">
           {% endif %}
         {% endfor %}
         <button type="submit" name="today_only" value="1"
-          class="btn btn-sm {% if request.GET.today_only or request.GET.today %}btn-primary{% else %}btn-outline-primary{% endif %}">
+                class="btn btn-sm {% if request.GET.today_only or request.GET.today %}btn-primary{% else %}btn-outline-primary{% endif %}">
           Today Only
         </button>
       </form>
@@ -21,56 +21,56 @@
       </a>
     </div>
   </div>
+
   <div class="card-body p-0">
-    <table class="table table-hover mb-0">
-      <thead class="table-light">
-        <tr>
-          <th>ID</th>
-          <th>Task Name</th>
-          <th>Message</th>
-          <th>Planned Date</th>
-          <th>Status</th>
-          <th>Time/Task</th>
-          <th><b>Actual Time</b></th>
-          <th>Delay</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for t in tasks %}
-        <tr>
-          <td>{% if t.id %}{{ t.id }}{% else %}-{% endif %}</td>
-          <td>{{ t.task_name }}</td>
-          <td>{{ t.message|truncatechars:30 }}</td>
-          <td>{{ t.planned_date|date:"Y-m-d H:i" }}</td>
-          <td>{{ t.status }}</td>
-          <td>{{ t.time_per_task_minutes }} min</td>
-          <td>
-            {% if t.actual_time_taken is not None %}
-              {{ t.actual_time_taken }} min
-            {% else %}
-              —
-            {% endif %}
-          </td>
-          <td>{% if t.delay %}{{ t.delay }}{% else %}-{% endif %}</td>
-          <td>
-            {% if t.status == 'Pending' %}
-              {% if not t.is_virtual %}
-                <a href="{% url 'tasks:complete_checklist' t.id %}?next={{ request.get_full_path }}" class="btn btn-sm btn-success">COMPLETE</a>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>ID</th>
+            <th>Task Name</th>
+            <th>Message</th>
+            <th>Planned Date</th>
+            <th>Status</th>
+            <th>Time/Task</th>
+            <th><b>Actual Time</b></th>
+            <th>Delay</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in tasks %}
+          <tr>
+            <td>{{ t.id }}</td>
+            <td>{{ t.task_name }}</td>
+            <td>{{ t.message|default:"—"|truncatechars:30 }}</td>
+            <td title="{{ t.planned_date|date:'Y-m-d H:i' }}">{{ t.planned_date|date:"d M, Y H:i" }}</td>
+            <td>{{ t.status }}</td>
+            <td>{{ t.time_per_task_minutes|default:0 }} min</td>
+            <td>
+              {% if t.actual_duration_minutes %}
+                {{ t.actual_duration_minutes }} min
               {% else %}
-                <span class="text-warning">Missed Occurrence</span>
+                —
               {% endif %}
-            {% else %}
-              <span class="text-muted">Done</span>
-            {% endif %}
-          </td>
-        </tr>
-        {% empty %}
-        <tr>
-          <td colspan="9" class="text-center text-muted">No record found.</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+            </td>
+            <td>{{ t.delay|default:"-" }}</td>
+            <td>
+              {% if t.status == 'Pending' %}
+                <a href="{% url 'tasks:complete_checklist' t.id %}?next={{ request.get_full_path }}"
+                   class="btn btn-sm btn-success">COMPLETE</a>
+              {% else %}
+                <span class="text-muted">Done</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="9" class="text-center text-muted">No record found.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>

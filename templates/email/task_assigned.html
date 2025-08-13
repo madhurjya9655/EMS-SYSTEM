@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+  <body style="margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;background:#f6f6f6;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f6f6;padding:24px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #e5e5e5;border-radius:6px;padding:24px;">
+            <tr>
+              <td style="font-size:16px;line-height:24px;color:#111;">
+                <p style="margin:0 0 16px 0;">Hi {{ assignee_name }},</p>
+
+                <p style="margin:0 0 16px 0;">You have a new {{ kind }} assigned to you.</p>
+
+                <p style="margin:0 0 8px 0;"><strong>Task Title:</strong> {{ task_title }}</p>
+                <p style="margin:0 0 8px 0;"><strong>Task code:</strong> {{ task_code }}</p>
+                <p style="margin:0 0 8px 0;"><strong>Planned Date:</strong> {{ planned_date_display }}</p>
+                <p style="margin:0 0 8px 0;"><strong>Priority:</strong> {{ priority_display }}</p>
+
+                <p style="margin:0 0 16px 0;"><strong>Assigned by:</strong> {{ assign_by_display }}</p>
+
+                <p style="margin:0 0 16px 0;">{{ cta_text }}</p>
+
+                <p style="margin:0 0 16px 0;">
+                  <a href="{{ complete_url }}"
+                     style="display:inline-block;padding:12px 18px;text-decoration:none;background:#1a73e8;color:#ffffff;border-radius:4px;font-weight:bold;">
+                    Go to {{ kind }}
+                  </a>
+                </p>
+
+                <p style="margin:16px 0 0 0; font-size:14px; color:#333;">
+                  Click this link to complete the task with form: <br>
+                  <a href="{{ complete_url }}" style="color:#1a73e8;word-break:break-all;">{{ complete_url }}</a>
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
