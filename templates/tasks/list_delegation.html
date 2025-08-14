@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 {% block title %}Delegations{% endblock %}
 
 {% block content %}
@@ -52,12 +53,15 @@
 
 <div class="card">
   <div class="card-body p-0">
-    <form method="post" id="bulkDelegationForm" action="{% url 'tasks:list_delegation' %}">
+    <!-- Single BULK form -->
+    <form method="post" action="{% url 'tasks:list_delegation' %}" data-bulk>
       {% csrf_token %}
+      <input type="hidden" name="action" value="bulk_delete">
+
       <table class="table table-hover mb-0 align-middle">
         <thead class="table-light">
           <tr>
-            <th style="width:32px;"><input id="selectAllDelegations" type="checkbox" onclick="toggleSelectAllDelegations(this)"></th>
+            <th style="width:32px;"><input type="checkbox" aria-label="Select all" data-select-all></th>
             <th>Task Name</th>
             <th>Assign By</th>
             <th>Assign To</th>
@@ -69,7 +73,7 @@
         <tbody>
           {% for d in items %}
           <tr>
-            <td><input class="row-check-delegation" type="checkbox" name="sel" value="{{ d.id }}"></td>
+            <td><input type="checkbox" name="sel" value="{{ d.id }}" class="form-check-input" data-row-check aria-label="Select row"></td>
             <td>{{ d.task_name }}</td>
             <td>{{ d.assign_by.get_full_name|default:d.assign_by.username }}</td>
             <td>{{ d.assign_to.get_full_name|default:d.assign_to.username }}</td>
@@ -90,31 +94,21 @@
 
       {% if items %}
       <div class="d-flex justify-content-between align-items-center p-2">
-        <small class="text-muted"><span id="selectedDelegationCount">0</span> selected</small>
-        <button id="bulkDeleteDelegationBtn" type="submit" class="btn btn-danger btn-sm" disabled
-          onclick="return confirm('Delete selected delegations?');">Delete Selected</button>
+        <small class="text-muted"><span data-selected-count>0</span> selected</small>
+        <button type="submit"
+                class="btn btn-danger btn-sm"
+                data-bulk-submit
+                data-confirm="Delete selected delegations?"
+                disabled>
+          Delete Selected
+        </button>
       </div>
       {% endif %}
     </form>
   </div>
 </div>
+{% endblock %}
 
-<script>
-function toggleSelectAllDelegations(source) {
-  document.querySelectorAll('.row-check-delegation').forEach(cb => cb.checked = source.checked);
-  updateDelegationBulkState();
-}
-function updateDelegationBulkState() {
-  const checks = [...document.querySelectorAll('.row-check-delegation')];
-  const selected = checks.filter(cb => cb.checked).length;
-  document.getElementById('bulkDeleteDelegationBtn').disabled = selected === 0;
-  document.getElementById('selectedDelegationCount').textContent = selected;
-  document.getElementById('selectAllDelegations').checked = selected === checks.length && checks.length > 0;
-}
-document.addEventListener('change', (e) => {
-  if (e.target.classList.contains('row-check-delegation')) {
-    updateDelegationBulkState();
-  }
-});
-</script>
+{% block extra_js %}
+  <script src="{% static 'js/tasks-bulk.js' %}" defer></script>
 {% endblock %}
