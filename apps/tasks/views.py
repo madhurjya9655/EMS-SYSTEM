@@ -242,24 +242,32 @@ def create_next_if_recurring(task: Checklist) -> None:
 
 def ensure_next_for_all_recurring() -> None:
     """
-    If latest item in a series is not future-pending, create the next one.
+    Idempotently ensure there's exactly one 'next' occurrence **per active (pending) series**.
+    We DO NOT resurrect deleted series. Series only advance from completions,
+    or if a pending occurrence is already due (<= now).
     """
     now = timezone.now()
-    seeds = (Checklist.objects
-             .filter(mode__in=RECURRING_MODES)
-             .values('assign_to_id', 'task_name', 'mode', 'frequency', 'group_name')
-             .distinct())
+    seeds = (
+        Checklist.objects
+        .filter(status='Pending', mode__in=RECURRING_MODES)
+        .values('assign_to_id', 'task_name', 'mode', 'frequency', 'group_name')
+        .distinct()
+    )
     for s in seeds:
-        last = (Checklist.objects
-                .filter(**s)
-                .order_by('-planned_date', '-id')
-                .first())
-        if not last:
+        last_pending = (
+            Checklist.objects
+            .filter(status='Pending', **s)
+            .order_by('-planned_date', '-id')
+            .first()
+        )
+        if not last_pending:
             continue
+        # If a future pending already exists, nothing to do.
         if Checklist.objects.filter(status='Pending', planned_date__gt=now, **s).exists():
             continue
-        if last.planned_date <= now:
-            create_next_if_recurring(last)
+        # If the latest pending is due/past, create the following one.
+        if last_pending.planned_date <= now:
+            create_next_if_recurring(last_pending)
 
 # ---- Parsing helpers (default MDY for slash dates like Excel) ----------------
 
@@ -1463,159 +1471,3 @@ def download_delegation_template(request):
 def list_fms(request):
     items = FMS.objects.all().order_by('-planned_date')
     return render(request, 'tasks/list_fms.html', {'items': items})
-
-@login_required
-def list_help_ticket(request):
-    qs = HelpTicket.objects.select_related('assign_by', 'assign_to')
-    if not can_create(request.user):
-        qs = qs.filter(assign_to=request.user)
-    for param, lookup in [
-        ('from_date', 'planned_date__date__gte'),
-        ('to_date',   'planned_date__date__lte'),
-    ]:
-        if v := request.GET.get(param, '').strip():
-            qs = qs.filter(**{lookup: v})
-    for param, lookup in [
-        ('assign_by', 'assign_by_id'),
-        ('assign_to', 'assign_to_id'),
-        ('status',    'status'),
-    ]:
-        v = request.GET.get(param, 'all')
-        if v != 'all':
-            qs = qs.filter(**{lookup: v})
-    items = qs.order_by('-planned_date')
-    return render(request, 'tasks/list_help_ticket.html', {
-        'items': items,
-        'current_tab': 'all',
-        'can_create': can_create(request.user),
-        'users': User.objects.order_by('username'),
-        'status_choices': HelpTicket.STATUS_CHOICES,
-    })
-
-@login_required
-def assigned_to_me(request):
-    items = HelpTicket.objects.filter(assign_to=request.user).exclude(status='Closed').order_by('-planned_date')
-    return render(request, 'tasks/list_help_ticket_assigned_to.html', {'items': items, 'current_tab': 'assigned_to'})
-
-@login_required
-def assigned_by_me(request):
-    items = HelpTicket.objects.filter(assign_by=request.user).order_by('-planned_date')
-    return render(request, 'tasks/list_help_ticket_assigned_by.html', {'items': items, 'current_tab': 'assigned_by'})
-
-@login_required
-def add_help_ticket(request):
-    if request.method == 'POST':
-        form = HelpTicketForm(request.POST, request.FILES)
-        if form.is_valid():
-            planned_date = form.cleaned_data.get('planned_date')
-            planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
-            if planned_date_local and not is_working_day(planned_date_local):
-                messages.error(request, "This is holiday date, you can not add on this day.")
-                return render(request, 'tasks/add_help_ticket.html', {
-                    'form': form, 'current_tab': 'add', 'can_create': can_create(request.user)
-                })
-            ticket = form.save(commit=False)
-            ticket.assign_by = request.user
-            ticket.save()
-
-            complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
-            try:
-                send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="New Help Ticket Assigned")
-                send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Assignment")
-            except Exception:
-                pass
-
-            return redirect('tasks:list_help_ticket')
-    else:
-        form = HelpTicketForm()
-    return render(request, 'tasks/add_help_ticket.html', {
-        'form': form, 'current_tab': 'add', 'can_create': can_create(request.user)
-    })
-
-@login_required
-def edit_help_ticket(request, pk):
-    obj = get_object_or_404(HelpTicket, pk=pk)
-    old_assignee = obj.assign_to
-    if request.method == 'POST':
-        form = HelpTicketForm(request.POST, request.FILES, instance=obj)
-        if form.is_valid():
-            planned_date = form.cleaned_data.get('planned_date')
-            planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
-            if planned_date_local and not is_working_day(planned_date_local):
-                messages.error(request, "This is holiday date, you can not add on this day.")
-                return render(request, 'tasks/add_help_ticket.html', {
-                    'form': form, 'current_tab': 'edit', 'can_create': can_create(request.user)
-                })
-            ticket = form.save()
-
-            complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
-            try:
-                if old_assignee and ticket.assign_to_id != old_assignee.id:
-                    send_help_ticket_unassigned_notice(ticket=ticket, old_user=old_assignee)
-                    send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Reassigned")
-                    send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Reassigned")
-                else:
-                    send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Updated")
-                    send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Updated")
-            except Exception:
-                pass
-
-            return redirect('tasks:list_help_ticket')
-    else:
-        form = HelpTicketForm(instance=obj)
-    return render(request, 'tasks/add_help_ticket.html', {
-        'form': form, 'current_tab': 'edit', 'can_create': can_create(request.user)
-    })
-
-@login_required
-def complete_help_ticket(request, pk):
-    return redirect('tasks:note_help_ticket', pk=pk)
-
-@login_required
-def note_help_ticket(request, pk):
-    ticket = get_object_or_404(HelpTicket, pk=pk, assign_to=request.user)
-    if request.method == 'POST':
-        notes = request.POST.get('resolved_notes', '').strip()
-        ticket.resolved_notes = notes
-        if 'media_upload' in request.FILES:
-            ticket.media_upload = request.FILES['media_upload']
-        if ticket.status != 'Closed':
-            ticket.status = 'Closed'
-            ticket.resolved_at = timezone.now()
-            ticket.resolved_by = request.user
-            if ticket.resolved_at and ticket.planned_date:
-                mins = int((ticket.resolved_at - ticket.planned_date).total_seconds() // 60)
-                ticket.actual_duration_minutes = max(mins, 0)
-        ticket.save()
-        if ticket.status == 'Closed':
-            recipients = []
-            if ticket.assign_to.email:
-                recipients.append(ticket.assign_to.email)
-            if ticket.assign_by.email and ticket.assign_by.email not in recipients:
-                recipients.append(ticket.assign_by.email)
-            if recipients:
-                from django.core.mail import EmailMultiAlternatives
-                from django.template.loader import render_to_string
-                subject = f"Help Ticket Closed: {ticket.title}"
-                html_message = render_to_string('email/help_ticket_closed.html', {
-                    'ticket': ticket, 'assign_by': ticket.assign_by, 'assign_to': ticket.assign_to,
-                })
-                try:
-                    msg = EmailMultiAlternatives(subject, html_message, getattr(settings, "DEFAULT_FROM_EMAIL", None), recipients)
-                    msg.attach_alternative(html_message, "text/html")
-                    msg.send(fail_silently=True)  # never block user flow on close-notification
-                except Exception:
-                    pass
-        messages.success(request, f"Note saved for HT-{ticket.id}.")
-        return redirect(request.GET.get('next', reverse('tasks:assigned_to_me')))
-    return render(request, 'tasks/note_help_ticket.html', {
-        'ticket': ticket, 'next': request.GET.get('next', reverse('tasks:assigned_to_me'))
-    })
-
-@login_required
-def delete_help_ticket(request, pk):
-    obj = get_object_or_404(HelpTicket, pk=pk)
-    if request.method == 'POST':
-        obj.delete()
-        return redirect('tasks:list_help_ticket')
-    return render(request, 'tasks/confirm_delete.html', {'object': obj, 'type': 'HelpTicket'})
