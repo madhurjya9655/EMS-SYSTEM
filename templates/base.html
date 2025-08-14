@@ -11,9 +11,7 @@
 
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-
   <link href="{% static 'css/custom.css' %}" rel="stylesheet">
 
   <style>
@@ -42,7 +40,7 @@
     .nav-item.active { background:linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); color:var(--primary); border-right:3px solid var(--primary); }
     .nav-item i { width:20px; margin-right:.8rem; font-size:1rem; }
     .nav-item .chevron { float:right; font-size:.75rem; transition:transform .2s; }
-    .submenu { background:#f8fafc; border-left:2px solid #e2e8f0; margin-left:1rem; }
+    .submenu { background:#f8fafc; border-left:2px solid #e2e8f0; margin-left:1rem; display:none; }
     .submenu .nav-item { padding:.6rem 2.5rem; font-size:.85rem; color:#64748b; }
 
     .main-content { margin-left:var(--sidebar-width); margin-top:var(--header-height); padding:2rem; min-height:calc(100vh - var(--header-height)); transition:margin-left .3s ease; }
@@ -70,13 +68,15 @@
   {% if user.is_authenticated %}
     <div class="header">
       <div class="logo">
-        <button class="mobile-toggle" onclick="toggleSidebar()"><i class="fas fa-bars"></i></button>
+        <button class="mobile-toggle" type="button" aria-label="Toggle sidebar" data-sidebar-toggle>
+          <i class="fas fa-bars"></i>
+        </button>
         <div class="logo-icon"><img src="{% static 'images/bos logo.png' %}" alt="EMS Logo"></div>
         <span class="logo-text">BOS EMS</span>
       </div>
 
       <div class="header-actions">
-        <select class="branch-select">
+        <select class="branch-select" aria-label="Select branch">
           <option>All Branches</option>
           <option>Branch 1</option>
           <option>Branch 2</option>
@@ -109,10 +109,10 @@
         {% endif %}
 
         {% if user|has_permission:"leave_list" or user|has_permission:"leave_apply" or user|has_group:"Manager" or user|has_group:"HR" %}
-        <button type="button" class="nav-item" onclick="toggleSubmenu('leaveSubmenu')" aria-expanded="false" aria-controls="leaveSubmenu">
+        <button type="button" class="nav-item" aria-expanded="false" aria-controls="leaveSubmenu" data-submenu-toggle>
           <i class="fas fa-calendar-day"></i> Leave Register <i class="fas fa-chevron-down chevron"></i>
         </button>
-        <div class="submenu" id="leaveSubmenu" style="display:none;">
+        <div class="submenu" id="leaveSubmenu">
           {% if user|has_permission:"leave_list" or user|has_permission:"leave_apply" %}
           <a href="{% url 'leave:my_leaves' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'my_leaves' %}active{% endif %}">
             <i class="fas fa-file-alt"></i> My Leaves
@@ -132,10 +132,10 @@
         {% endif %}
 
         {% if user|has_permission:"add_checklist" or user|has_permission:"list_checklist" %}
-        <button type="button" class="nav-item" onclick="toggleSubmenu('checklistSubmenu')" aria-expanded="false" aria-controls="checklistSubmenu">
+        <button type="button" class="nav-item" aria-expanded="false" aria-controls="checklistSubmenu" data-submenu-toggle>
           <i class="fas fa-clipboard-list"></i> Checklist <i class="fas fa-chevron-down chevron"></i>
         </button>
-        <div class="submenu" id="checklistSubmenu" style="display:none;">
+        <div class="submenu" id="checklistSubmenu">
           {% if user|has_permission:"add_checklist" %}
           <a href="{% url 'tasks:add_checklist' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_checklist' %}active{% endif %}">
             <i class="fas fa-clipboard-plus"></i> Add Checklist
@@ -156,10 +156,10 @@
         {% endif %}
 
         {% if user|has_permission:"add_delegation" or user|has_permission:"list_delegation" %}
-        <button type="button" class="nav-item" onclick="toggleSubmenu('delegationSubmenu')" aria-expanded="false" aria-controls="delegationSubmenu">
+        <button type="button" class="nav-item" aria-expanded="false" aria-controls="delegationSubmenu" data-submenu-toggle>
           <i class="fas fa-users-cog"></i> Delegation <i class="fas fa-chevron-down chevron"></i>
         </button>
-        <div class="submenu" id="delegationSubmenu" style="display:none;">
+        <div class="submenu" id="delegationSubmenu">
           {% if user|has_permission:"add_delegation" %}
           <a href="{% url 'tasks:add_delegation' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_delegation' %}active{% endif %}">
             <i class="fas fa-user-plus"></i> Add Delegation
@@ -174,10 +174,10 @@
         {% endif %}
 
         {% if user|has_permission:"add_ticket" or user|has_permission:"list_all_tickets" or user|has_permission:"assigned_to_me" or user|has_permission:"assigned_by_me" %}
-        <button type="button" class="nav-item" onclick="toggleSubmenu('ticketsSubmenu')" aria-expanded="false" aria-controls="ticketsSubmenu">
+        <button type="button" class="nav-item" aria-expanded="false" aria-controls="ticketsSubmenu" data-submenu-toggle>
           <i class="fas fa-ticket-alt"></i> Tickets <i class="fas fa-chevron-down chevron"></i>
         </button>
-        <div class="submenu" id="ticketsSubmenu" style="display:none;">
+        <div class="submenu" id="ticketsSubmenu">
           {% if user|has_permission:"add_ticket" %}
           <a href="{% url 'tasks:add_help_ticket' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_help_ticket' %}active{% endif %}">
             <i class="fas fa-plus-circle"></i> Add Ticket
@@ -202,10 +202,10 @@
         {% endif %}
 
         {% if user|has_permission:"petty_cash_list" or user|has_permission:"petty_cash_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
-        <button type="button" class="nav-item" onclick="toggleSubmenu('pettyCashSubmenu')" aria-expanded="false" aria-controls="pettyCashSubmenu">
+        <button type="button" class="nav-item" aria-expanded="false" aria-controls="pettyCashSubmenu" data-submenu-toggle>
           <i class="fas fa-wallet"></i> Petty Cash <i class="fas fa-chevron-down chevron"></i>
         </button>
-        <div class="submenu" id="pettyCashSubmenu" style="display:none;">
+        <div class="submenu" id="pettyCashSubmenu">
           {% if user|has_permission:"petty_cash_list" %}
           <a href="{% url 'petty_cash:list_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'list_requests' %}active{% endif %}">
             <i class="fas fa-file-invoice-dollar"></i> My Requests
@@ -230,10 +230,10 @@
         {% endif %}
 
         {% if user|has_permission:"reimbursement_list" or user|has_permission:"reimbursement_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
-        <button type="button" class="nav-item" onclick="toggleSubmenu('reimbursementSubmenu')" aria-expanded="false" aria-controls="reimbursementSubmenu">
+        <button type="button" class="nav-item" aria-expanded="false" aria-controls="reimbursementSubmenu" data-submenu-toggle>
           <i class="fas fa-receipt"></i> Reimbursement <i class="fas fa-chevron-down chevron"></i>
         </button>
-        <div class="submenu" id="reimbursementSubmenu" style="display:none;">
+        <div class="submenu" id="reimbursementSubmenu">
           {% if user|has_permission:"reimbursement_list" or user|has_permission:"reimbursement_apply" %}
           <a href="{% url 'reimbursement:my_reimbursements' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'my_reimbursements' %}active{% endif %}">
             <i class="fas fa-file-medical"></i> My Requests
@@ -246,17 +246,17 @@
           {% endif %}
           {% if user|has_group:"Finance" %}
           <a href="{% url 'reimbursement:finance_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}active{% endif %}">
-            <i class="fas a-wallet"></i> Finance Approvals
+            <i class="fas fa-wallet"></i> Finance Approvals
           </a>
           {% endif %}
         </div>
         {% endif %}
 
         {% if user|has_permission:"doer_tasks" or user|has_permission:"weekly_mis_score" or user|has_permission:"performance_score" %}
-        <button type="button" class="nav-item" onclick="toggleSubmenu('reportsSubmenu')" aria-expanded="false" aria-controls="reportsSubmenu">
+        <button type="button" class="nav-item" aria-expanded="false" aria-controls="reportsSubmenu" data-submenu-toggle>
           <i class="fas fa-chart-pie"></i> Reports <i class="fas fa-chevron-down chevron"></i>
         </button>
-        <div class="submenu" id="reportsSubmenu" style="display:none;">
+        <div class="submenu" id="reportsSubmenu">
           {% if user|has_permission:"doer_tasks" %}
           <a href="{% url 'reports:doer_tasks' %}" class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'doer_tasks' %}active{% endif %}">
             <i class="fas fa-tasks-alt"></i> Doer Tasks
@@ -276,10 +276,10 @@
         {% endif %}
 
         {% if user|has_permission:"list_users" or user|has_permission:"add_user" or user.is_superuser %}
-        <button type="button" class="nav-item" onclick="toggleSubmenu('usersSubmenu')" aria-expanded="false" aria-controls="usersSubmenu">
+        <button type="button" class="nav-item" aria-expanded="false" aria-controls="usersSubmenu" data-submenu-toggle>
           <i class="fas fa-user-friends"></i> Users <i class="fas fa-chevron-down chevron"></i>
         </button>
-        <div class="submenu" id="usersSubmenu" style="display:none;">
+        <div class="submenu" id="usersSubmenu">
           {% if user|has_permission:"list_users" or user.is_superuser %}
           <a href="{% url 'users:list_users' %}" class="nav-item {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'list_users' %}active{% endif %}">
             <i class="fas fa-list"></i> List Users
@@ -294,10 +294,10 @@
         {% endif %}
 
         {% if user|has_permission:"authorized_numbers" or user|has_permission:"system_settings" %}
-        <button type="button" class="nav-item" onclick="toggleSubmenu('settingsSubmenu')" aria-expanded="false" aria-controls="settingsSubmenu">
+        <button type="button" class="nav-item" aria-expanded="false" aria-controls="settingsSubmenu" data-submenu-toggle>
           <i class="fas fa-cog"></i> Settings <i class="fas fa-chevron-down chevron"></i>
         </button>
-        <div class="submenu" id="settingsSubmenu" style="display:none;">
+        <div class="submenu" id="settingsSubmenu">
           {% if user|has_permission:"authorized_numbers" %}
           <a href="{% url 'settings:authorized_list' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}active{% endif %}">
             <i class="fas fa-phone"></i> Authorized Numbers
@@ -315,7 +315,7 @@
         {% endif %}
       </div>
     </nav>
-    <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+    <div class="sidebar-overlay" data-sidebar-overlay></div>
   {% endif %}
 
   <main class="{% if user.is_authenticated %}main-content{% else %}container mt-5{% endif %}" id="mainContent">
@@ -340,6 +340,7 @@
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
   <script>
+    // --- CSRF helpers (auto-inject into POST forms & AJAX) ---
     function getCookie(name){
       const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
       return m ? decodeURIComponent(m.pop()) : null;
@@ -368,7 +369,7 @@
         try{
           const url = (typeof input === 'string') ? input : input.url;
           const sameOrigin = !/^https?:\/\//i.test(url) || url.startsWith(window.location.origin);
-          const method = (init && (init.method || init.headers && init.headers['X-HTTP-Method-Override'])) || 'GET';
+          const method = (init && (init.method || (init.headers && init.headers['X-HTTP-Method-Override']))) || 'GET';
           const safe = /^(GET|HEAD|OPTIONS|TRACE)$/i.test(method);
           if (sameOrigin && !safe){
             init = init || {};
@@ -403,42 +404,64 @@
       };
     })();
 
+    // --- Sidebar & submenu (unobtrusive) ---
     function toggleSidebar(){
       const sidebar=document.getElementById('sidebar'),
-            overlay=document.querySelector('.sidebar-overlay'),
+            overlay=document.querySelector('[data-sidebar-overlay]'),
             main=document.getElementById('mainContent');
+      if(!sidebar || !main) return;
       if(window.innerWidth<=768){
         sidebar.classList.toggle('show');
-        overlay.classList.toggle('show');
+        if(overlay) overlay.classList.toggle('show');
       }else{
         sidebar.classList.toggle('collapsed');
         main.classList.toggle('expanded');
       }
     }
-    function toggleSubmenu(id){
-      const submenu=document.getElementById(id),
-            btn=submenu.previousElementSibling,
-            chev=btn.querySelector('.chevron');
+
+    function toggleSubmenu(btn){
+      const id = btn.getAttribute('aria-controls');
+      const submenu = id && document.getElementById(id);
+      const chev = btn.querySelector('.chevron');
+      if(!submenu) return;
       const isOpen = submenu.style.display==='block';
       submenu.style.display = isOpen ? 'none' : 'block';
       if(chev) chev.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
-      if (btn) btn.setAttribute('aria-expanded', String(!isOpen));
+      btn.setAttribute('aria-expanded', String(!isOpen));
     }
-    window.addEventListener('resize',()=>{
-      const sidebar=document.getElementById('sidebar'),
-            overlay=document.querySelector('.sidebar-overlay'),
-            main=document.getElementById('mainContent');
-      if(window.innerWidth>768){
-        sidebar.classList.remove('show');
-        overlay.classList.remove('show');
-        if(sidebar.classList.contains('collapsed')) main.classList.add('expanded');
-        else main.classList.remove('expanded');
-      }else{
-        sidebar.classList.remove('collapsed');
-        main.classList.remove('expanded');
-      }
-    });
-    document.addEventListener('DOMContentLoaded',()=>{
+
+    document.addEventListener('DOMContentLoaded', () => {
+      // Bind sidebar toggle
+      document.querySelectorAll('[data-sidebar-toggle]').forEach(el=>{
+        el.addEventListener('click', toggleSidebar);
+      });
+      document.querySelectorAll('[data-sidebar-overlay]').forEach(el=>{
+        el.addEventListener('click', toggleSidebar);
+      });
+
+      // Bind submenu toggles
+      document.querySelectorAll('[data-submenu-toggle]').forEach(btn=>{
+        btn.addEventListener('click', () => toggleSubmenu(btn));
+      });
+
+      // Ensure correct classes on resize
+      window.addEventListener('resize',()=>{
+        const sidebar=document.getElementById('sidebar'),
+              overlay=document.querySelector('[data-sidebar-overlay]'),
+              main=document.getElementById('mainContent');
+        if(!sidebar || !main) return;
+        if(window.innerWidth>768){
+          sidebar.classList.remove('show');
+          if(overlay) overlay.classList.remove('show');
+          if(sidebar.classList.contains('collapsed')) main.classList.add('expanded');
+          else main.classList.remove('expanded');
+        }else{
+          sidebar.classList.remove('collapsed');
+          main.classList.remove('expanded');
+        }
+      });
+
+      // Auto-open submenu for active nav link
       const path = window.location.pathname.replace(/\/+$/,'');
       document.querySelectorAll('.nav-item[href]').forEach(item=>{
         const href = item.getAttribute('href').replace(/\/+$/,'');
@@ -456,7 +479,19 @@
           }
         }
       });
+
+      // Optional: handle filter header +/- icon wherever used
+      document.querySelectorAll('[data-filter-toggle]').forEach(btn=>{
+        btn.addEventListener('click', ()=>{
+          const icon = btn.querySelector('[data-filter-toggle-icon]');
+          if(!icon) return;
+          icon.classList.toggle('fa-minus');
+          icon.classList.toggle('fa-plus');
+        });
+      });
     });
   </script>
+
+  {% block extra_js %}{% endblock %}
 </body>
 </html>
