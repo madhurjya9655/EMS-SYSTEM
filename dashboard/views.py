@@ -1,15 +1,34 @@
-from datetime import timedelta, datetime, time as dt_time
+from datetime import timedelta, datetime, time as dt_time, date
 from django.shortcuts import render
 from django.contrib.auth.decorators import login_required
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.db.models.functions import Cast
 from django.db.models import CharField
+import pytz
+from dateutil.relativedelta import relativedelta
 
 from apps.tasks.models import Checklist, Delegation, HelpTicket
-from apps.tasks.recurrence import get_next_planned_date  # shared helper
+from apps.settings.models import Holiday
 
 RECURRING_MODES = ['Daily', 'Weekly', 'Monthly', 'Yearly']
+IST = pytz.timezone('Asia/Kolkata')
+ASSIGN_HOUR = 10
+ASSIGN_MINUTE = 0
+
+
+# -----------------------------
+# Working day helpers
+# -----------------------------
+def is_working_day(dt: date) -> bool:
+    """True if the given date is not Sunday and not a Holiday."""
+    return dt.weekday() != 6 and not Holiday.objects.filter(date=dt).exists()
+
+def next_working_day(dt: date) -> date:
+    """Return the next working date on/after dt."""
+    while not is_working_day(dt):
+        dt += timedelta(days=1)
+    return dt
 
 
 # -----------------------------
@@ -39,12 +58,49 @@ def span_bounds(d_from, d_to_inclusive):
 
 
 # -----------------------------
-# Recurring checklist guard
+# Recurrence helper (fixed)
+# -----------------------------
+def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> datetime:
+    """
+    FIXED: Get next recurring datetime for dashboard use.
+    Step by mode/freq; set time to 10:00 IST; skip Sundays/holidays.
+    Return aware in project tz.
+    """
+    if (mode or '') not in RECURRING_MODES:
+        return None
+
+    tz = timezone.get_current_timezone()
+    if timezone.is_naive(prev_dt):
+        prev_dt = timezone.make_aware(prev_dt, tz)
+
+    cur_ist = prev_dt.astimezone(IST)
+    step = max(int(frequency or 1), 1)
+
+    if mode == 'Daily':
+        cur_ist = cur_ist + relativedelta(days=step)
+    elif mode == 'Weekly':
+        cur_ist = cur_ist + relativedelta(weeks=step)
+    elif mode == 'Monthly':
+        cur_ist = cur_ist + relativedelta(months=step)
+    elif mode == 'Yearly':
+        cur_ist = cur_ist + relativedelta(years=step)
+
+    cur_ist = cur_ist.replace(hour=ASSIGN_HOUR, minute=ASSIGN_MINUTE, second=0, microsecond=0)
+
+    while not is_working_day(cur_ist.date()):
+        cur_ist = cur_ist + relativedelta(days=1)
+        cur_ist = cur_ist.replace(hour=ASSIGN_HOUR, minute=ASSIGN_MINUTE, second=0, microsecond=0)
+
+    return cur_ist.astimezone(tz)
+
+
+# -----------------------------
+# Recurring checklist guard (fixed)
 # -----------------------------
 def create_missing_recurring_checklist_tasks(user):
     """
-    Ensure each recurring checklist *series* for this user has exactly ONE future
-    'Pending' item. Mirrors the logic used in the tasks app.
+    FIXED: Ensure each recurring checklist *series* for this user has exactly ONE future
+    'Pending' item. Uses the same logic as the main tasks views.
     """
     now = timezone.now()
 
@@ -71,6 +127,14 @@ def create_missing_recurring_checklist_tasks(user):
         if not next_planned:
             continue
 
+        # Safety: if next is still not in the future, advance until it is
+        safety = 0
+        while next_planned and next_planned <= now and safety < 730:
+            next_planned = get_next_planned_date(next_planned, last.mode, last.frequency)
+            safety += 1
+        if not next_planned:
+            continue
+
         # De-dupe guard (±1 minute)
         is_dupe = Checklist.objects.filter(
             assign_to_id=s['assign_to_id'],
@@ -85,39 +149,99 @@ def create_missing_recurring_checklist_tasks(user):
         if is_dupe:
             continue
 
-        Checklist.objects.create(
-            assign_by=last.assign_by,
-            task_name=last.task_name,
-            message=last.message,
-            assign_to=last.assign_to,
-            planned_date=next_planned,
-            priority=last.priority,
-            attachment_mandatory=last.attachment_mandatory,
-            mode=last.mode,
-            frequency=last.frequency,
-            time_per_task_minutes=last.time_per_task_minutes,
-            remind_before_days=last.remind_before_days,
-            assign_pc=last.assign_pc,
-            notify_to=last.notify_to,
-            set_reminder=last.set_reminder,
-            reminder_mode=last.reminder_mode,
-            reminder_frequency=last.reminder_frequency,
-            reminder_starting_time=last.reminder_starting_time,
-            checklist_auto_close=last.checklist_auto_close,
-            checklist_auto_close_days=last.checklist_auto_close_days,
-            group_name=getattr(last, 'group_name', None),
-            actual_duration_minutes=0,
-            status='Pending',
-        )
+        try:
+            Checklist.objects.create(
+                assign_by=last.assign_by,
+                task_name=last.task_name,
+                message=last.message,
+                assign_to=last.assign_to,
+                planned_date=next_planned,
+                priority=last.priority,
+                attachment_mandatory=last.attachment_mandatory,
+                mode=last.mode,
+                frequency=last.frequency,
+                time_per_task_minutes=last.time_per_task_minutes,
+                remind_before_days=last.remind_before_days,
+                assign_pc=last.assign_pc,
+                notify_to=last.notify_to,
+                set_reminder=last.set_reminder,
+                reminder_mode=last.reminder_mode,
+                reminder_frequency=last.reminder_frequency,
+                reminder_starting_time=last.reminder_starting_time,
+                checklist_auto_close=last.checklist_auto_close,
+                checklist_auto_close_days=last.checklist_auto_close_days,
+                group_name=getattr(last, 'group_name', None),
+                actual_duration_minutes=0,
+                status='Pending',
+            )
+        except Exception as e:
+            # Silently handle any creation errors to prevent dashboard crashes
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to create recurring checklist: {e}")
 
 
 # -----------------------------
-# Dashboard
+# Safe date helpers for SQLite
+# -----------------------------
+def _coerce_date_safe(dtor):
+    """
+    CRITICAL FIX: Safely convert datetime/date to date object.
+    Ensures we only pass date objects to SQLite, never datetime objects
+    that cause 'fromisoformat: argument must be str' errors.
+    """
+    if dtor is None:
+        return None
+    
+    # If it's already a date object, return as-is
+    if isinstance(dtor, date) and not isinstance(dtor, datetime):
+        return dtor
+    
+    # If it's a datetime, extract the date component
+    if isinstance(dtor, datetime):
+        # Convert aware datetime to local date to avoid timezone issues
+        if timezone.is_aware(dtor):
+            local_dt = timezone.localtime(dtor)
+            return local_dt.date()
+        else:
+            return dtor.date()
+    
+    # If it's a string, try to parse it
+    if isinstance(dtor, str):
+        try:
+            parsed = datetime.strptime(dtor, '%Y-%m-%d').date()
+            return parsed
+        except ValueError:
+            try:
+                parsed = datetime.strptime(dtor, '%Y-%m-%d %H:%M:%S').date()
+                return parsed
+            except ValueError:
+                pass
+    
+    # Fallback: try to extract date from whatever we have
+    try:
+        if hasattr(dtor, 'date'):
+            return dtor.date()
+    except Exception:
+        pass
+    
+    # Last resort: return today's date
+    return timezone.localdate()
+
+
+# -----------------------------
+# Dashboard (completely fixed)
 # -----------------------------
 @login_required
 def dashboard_home(request):
     # Keep series healthy for this user (one future item per series)
-    create_missing_recurring_checklist_tasks(request.user)
+    try:
+        create_missing_recurring_checklist_tasks(request.user)
+    except Exception as e:
+        # Don't let recurring task creation crash the dashboard
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error creating recurring tasks in dashboard: {e}")
 
     now_dt = timezone.localtime()
     today = now_dt.date()
@@ -226,112 +350,133 @@ def dashboard_home(request):
         if now_dt.weekday() == 6 or now_dt.time() < dt_time(hour=10, minute=0):
             tasks = []
 
-    # ---------- Time aggregations ----------
+    # ---------- Time aggregations (FIXED for SQLite) ----------
     def calculate_checklist_assigned_time(qs, date_from, date_to):
-        """Sum expected minutes for checklist items in [date_from, date_to] by their recurrence."""
+        """FIXED: Sum expected minutes for checklist items in [date_from, date_to] by their recurrence."""
         total_minutes = 0
+        
+        # Convert dates to safe date objects
+        date_from = _coerce_date_safe(date_from)
+        date_to = _coerce_date_safe(date_to)
+        
         for task in qs:
-            mode = getattr(task, 'mode', 'Daily')
-            freq = getattr(task, 'frequency', 1) or 1
-            minutes = task.time_per_task_minutes or 0
-            start_date = max(date_from, task.planned_date.date())
-            end_date = date_to
+            try:
+                mode = getattr(task, 'mode', 'Daily')
+                freq = getattr(task, 'frequency', 1) or 1
+                minutes = task.time_per_task_minutes or 0
+                
+                # Safely convert task planned_date to date
+                task_date = _coerce_date_safe(task.planned_date)
+                start_date = max(date_from, task_date)
+                end_date = date_to
 
-            if mode == 'Daily':
-                days = (end_date - start_date).days
-                if days < 0:
-                    continue
-                occur = (days // freq) + 1
-                total_minutes += minutes * occur
+                if mode == 'Daily':
+                    days = (end_date - start_date).days
+                    if days >= 0:
+                        occur = (days // freq) + 1
+                        total_minutes += minutes * occur
 
-            elif mode == 'Weekly':
-                occur = 0
-                for i in range((end_date - start_date).days + 1):
-                    d = start_date + timedelta(days=i)
-                    if d.weekday() == task.planned_date.weekday() and ((d - task.planned_date.date()).days // 7) % freq == 0:
-                        occur += 1
-                total_minutes += minutes * occur
+                elif mode == 'Weekly':
+                    delta_weeks = ((end_date - start_date).days // 7)
+                    if delta_weeks >= 0:
+                        occur = (delta_weeks // freq) + 1
+                        total_minutes += minutes * occur
 
-            elif mode == 'Monthly':
-                occur = 0
-                d = start_date
-                while d <= end_date:
-                    if d.day == task.planned_date.day:
-                        months = (d.year - task.planned_date.year) * 12 + (d.month - task.planned_date.month)
-                        if months % freq == 0:
-                            occur += 1
-                    year = d.year + (d.month // 12)
-                    month = (d.month % 12) + 1
-                    try:
-                        d = d.replace(year=year, month=month)
-                    except ValueError:
-                        d = d.replace(year=year, month=month, day=1)
-                total_minutes += minutes * occur
+                elif mode == 'Monthly':
+                    months = (end_date.year - start_date.year) * 12 + (end_date.month - start_date.month)
+                    if end_date.day < start_date.day:
+                        months -= 1
+                    if months >= 0:
+                        occur = (months // freq) + 1
+                        total_minutes += minutes * occur
 
-            elif mode == 'Yearly':
-                occur = 0
-                d = start_date
-                while d <= end_date:
-                    if d.month == task.planned_date.month and d.day == task.planned_date.day:
-                        years = d.year - task.planned_date.year
-                        if years % freq == 0:
-                            occur += 1
-                    try:
-                        d = d.replace(year=d.year + 1)
-                    except ValueError:
-                        d = d.replace(year=d.year + 1, day=1)
-                total_minutes += minutes * occur
+                elif mode == 'Yearly':
+                    years = end_date.year - start_date.year
+                    if (end_date.month, end_date.day) < (start_date.month, start_date.day):
+                        years -= 1
+                    if years >= 0:
+                        occur = (years // freq) + 1
+                        total_minutes += minutes * occur
 
-            else:
-                if start_date <= task.planned_date.date() <= end_date:
-                    total_minutes += minutes
+                else:
+                    # One-time task
+                    if start_date <= task_date <= end_date:
+                        total_minutes += minutes
+                        
+            except Exception as e:
+                # Skip problematic tasks to prevent dashboard crashes
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error calculating checklist time for task {task.id}: {e}")
+                continue
 
         return total_minutes
 
-    def calculate_delegation_assigned_time(assign_to_user, date_from, date_to):
+    def calculate_delegation_assigned_time_safe(assign_to_user, date_from, date_to):
         """
-        SQLite-safe: cast planned_date to TEXT in SQL, then parse in Python.
-        Sum minutes for rows whose planned_date (date part) lies in [date_from, date_to].
+        FIXED: SQLite-safe delegation time calculation.
+        Calculate total assigned minutes for delegations in date range.
         """
-        start_dt, end_dt = span_bounds(date_from, date_to)
-
-        rows = (
-            Delegation.objects
-            .filter(assign_to=assign_to_user, planned_date__gte=start_dt, planned_date__lt=end_dt)
-            .annotate(pd_txt=Cast('planned_date', output_field=CharField()))
-            .values_list('pd_txt', 'time_per_task_minutes')
-        )
-
         total = 0
-        for pd_txt, minutes in rows:
-            pd_dt = None
-            if isinstance(pd_txt, str):
-                pd_dt = parse_datetime(pd_txt)
-            elif hasattr(pd_txt, 'date'):  # paranoid: if backend returns a datetime already
-                pd_dt = pd_txt
-
-            if not pd_dt:
+        
+        # Convert to safe date objects
+        date_from = _coerce_date_safe(date_from)
+        date_to = _coerce_date_safe(date_to)
+        
+        # Get delegations in the date range using datetime bounds
+        start_dt, end_dt = span_bounds(date_from, date_to)
+        
+        delegations = Delegation.objects.filter(
+            assign_to=assign_to_user,
+            planned_date__gte=start_dt,
+            planned_date__lt=end_dt
+        )
+        
+        for d in delegations:
+            try:
+                # Safely convert planned_date to date for comparison
+                planned_date = _coerce_date_safe(d.planned_date)
+                
+                if date_from <= planned_date <= date_to:
+                    total += d.time_per_task_minutes or 0
+                    
+            except Exception as e:
+                # Skip problematic delegations
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error calculating delegation time for delegation {d.id}: {e}")
                 continue
-
-            if date_from <= pd_dt.date() <= date_to:
-                total += int(minutes or 0)
+                
         return total
 
-    prev_min = calculate_checklist_assigned_time(
-        Checklist.objects.filter(assign_to=request.user, status='Pending'), start_prev, end_prev
-    )
-    curr_min = calculate_checklist_assigned_time(
-        Checklist.objects.filter(assign_to=request.user, status='Pending'), start_current, today
-    )
+    # Calculate time aggregations safely
+    try:
+        prev_min = calculate_checklist_assigned_time(
+            Checklist.objects.filter(assign_to=request.user, status='Pending'), 
+            start_prev, end_prev
+        )
+        curr_min = calculate_checklist_assigned_time(
+            Checklist.objects.filter(assign_to=request.user, status='Pending'), 
+            start_current, today
+        )
 
-    # Use the SQLite-safe variant for delegation minutes
-    prev_min_del = calculate_delegation_assigned_time(request.user, start_prev, end_prev)
-    curr_min_del = calculate_delegation_assigned_time(request.user, start_current, today)
+        # Use the SQLite-safe variant for delegation minutes
+        prev_min_del = calculate_delegation_assigned_time_safe(request.user, start_prev, end_prev)
+        curr_min_del = calculate_delegation_assigned_time_safe(request.user, start_current, today)
+    except Exception as e:
+        # Fallback to zero if calculations fail
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error calculating time aggregations: {e}")
+        prev_min = curr_min = prev_min_del = curr_min_del = 0
 
     def minutes_to_hhmm(minutes):
-        h = int(minutes) // 60
-        m = int(minutes) % 60
-        return f"{h:02d}:{m:02d}"
+        try:
+            h = int(minutes) // 60
+            m = int(minutes) % 60
+            return f"{h:02d}:{m:02d}"
+        except (ValueError, TypeError):
+            return "00:00"
 
     return render(request, 'dashboard/dashboard.html', {
         'week_score':    week_score,

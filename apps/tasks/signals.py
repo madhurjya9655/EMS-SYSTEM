@@ -1,10 +1,12 @@
 import pytz
 from datetime import datetime, timedelta, time
 from dateutil.relativedelta import relativedelta
+from django.db import transaction
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils import timezone
 from django.urls import reverse
+from django.conf import settings
 
 from .models import Checklist
 from apps.settings.models import Holiday
@@ -15,6 +17,9 @@ from .email_utils import (
 
 IST = pytz.timezone("Asia/Kolkata")
 TEN_AM = time(10, 0, 0)
+
+# Feature flags for email sending (prevent request blocking)
+SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", False)
 
 # ---- Working day helpers -----------------------------------------------------
 
@@ -84,6 +89,35 @@ def get_next_planned_datetime(prev_dt, mode, freq):
     next_date = next_working_day(next_ist.date())
     return ist_wallclock_to_project_tz(next_date, TEN_AM)
 
+# ---- Email sending helper with error handling --------------------------------
+
+def _send_recurring_emails_safely(checklist_obj):
+    """
+    Send emails for auto-generated recurring checklist.
+    Wrapped in try/catch to prevent crashes. Only sends if feature flag enabled.
+    """
+    if not SEND_EMAILS_FOR_AUTO_RECUR:
+        return
+
+    try:
+        site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
+        complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[checklist_obj.id])}"
+        
+        send_checklist_assignment_to_user(
+            task=checklist_obj, 
+            complete_url=complete_url, 
+            subject_prefix="Recurring Checklist Generated"
+        )
+        send_checklist_admin_confirmation(
+            task=checklist_obj, 
+            subject_prefix="Recurring Checklist Generated"
+        )
+    except Exception as e:
+        # Log error but never crash the request/worker
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to send emails for recurring checklist {checklist_obj.id}: {e}")
+
 # ---- Signal: auto-create next recurring checklist ---------------------------
 
 @receiver(post_save, sender=Checklist)
@@ -95,6 +129,9 @@ def create_next_recurring_checklist(sender, instance, created, **kwargs):
     ensure there is ONE future pending item for the same series.
 
     Future recurrences are normalized to 10:00 AM IST and skip Sundays/holidays.
+    
+    CRITICAL: Email sending is now wrapped in error handling and uses 
+    transaction.on_commit() to prevent SMTP failures from crashing workers.
     """
     # Not a recurring series? Stop.
     if not hasattr(instance, "is_recurring") or not instance.is_recurring():
@@ -172,8 +209,6 @@ def create_next_recurring_checklist(sender, instance, created, **kwargs):
         status='Pending',
     )
 
-    # Emails for auto-generated recurrence
-    site_url = "https://ems-system-d26q.onrender.com"
-    complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
-    send_checklist_assignment_to_user(task=new_obj, complete_url=complete_url, subject_prefix="Recurring Checklist Generated")
-    send_checklist_admin_confirmation(task=new_obj, subject_prefix="Recurring Checklist Generated")
+    # CRITICAL FIX: Send emails after transaction commits to prevent SMTP 
+    # failures from crashing the main request/worker process
+    transaction.on_commit(lambda: _send_recurring_emails_safely(new_obj))

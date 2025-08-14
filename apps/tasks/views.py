@@ -399,24 +399,74 @@ def _is_empty_row(row: dict) -> bool:
         return True
     return all(_is_blank_cell(v) for v in row.values())
 
-# ---- Delegation time aggregation --------------------------------------------
+# ---- Delegation time aggregation (FIXED for SQLite datetime issue) ---------
 
-def _coerce_date(dtor):
+def _coerce_date_safe(dtor):
+    """
+    CRITICAL FIX: Safely convert datetime/date to date object.
+    Ensures we only pass date objects to SQLite, never datetime objects
+    that cause 'fromisoformat: argument must be str' errors.
+    """
+    if dtor is None:
+        return None
+    
+    # If it's already a date object, return as-is
+    if isinstance(dtor, date) and not isinstance(dtor, datetime):
+        return dtor
+    
+    # If it's a datetime, extract the date component
     if isinstance(dtor, datetime):
-        return dtor.date()
-    return dtor
+        # Convert aware datetime to local date to avoid timezone issues
+        if timezone.is_aware(dtor):
+            local_dt = timezone.localtime(dtor)
+            return local_dt.date()
+        else:
+            return dtor.date()
+    
+    # If it's a string, try to parse it
+    if isinstance(dtor, str):
+        try:
+            parsed = timezone.datetime.strptime(dtor, '%Y-%m-%d').date()
+            return parsed
+        except ValueError:
+            try:
+                parsed = timezone.datetime.strptime(dtor, '%Y-%m-%d %H:%M:%S').date()
+                return parsed
+            except ValueError:
+                pass
+    
+    # Fallback: try to extract date from whatever we have
+    try:
+        if hasattr(dtor, 'date'):
+            return dtor.date()
+    except Exception:
+        pass
+    
+    # Last resort: return today's date
+    return timezone.localdate()
 
 def calculate_delegation_assigned_time(qs, up_to=None):
+    """
+    FIXED: Properly handle date conversions to prevent SQLite datetime errors.
+    """
     if up_to is None:
         up_to = timezone.localdate()
+    
+    # Ensure up_to is a date object, not datetime
+    up_to = _coerce_date_safe(up_to)
+    
     total = 0
     for d in qs:
         freq = d.frequency or 1
         minutes = d.time_per_task_minutes or 0
         mode = getattr(d, 'mode', 'Daily')
-        start_date = _coerce_date(d.planned_date)
+        
+        # CRITICAL: Safely convert planned_date to date
+        start_date = _coerce_date_safe(d.planned_date)
+        
         if start_date > up_to:
             continue
+            
         occur = 0
         if mode == 'Daily':
             days = (up_to - start_date).days
@@ -444,12 +494,20 @@ def calculate_delegation_assigned_time(qs, up_to=None):
     return total
 
 def calculate_delegation_actual_time(qs, up_to=None):
+    """
+    FIXED: Properly handle date conversions to prevent SQLite datetime errors.
+    """
     if up_to is None:
         up_to = timezone.localdate()
+    
+    # Ensure up_to is a date object
+    up_to = _coerce_date_safe(up_to)
+    
     total = 0
     for d in qs.filter(status='Completed'):
         if d.completed_at:
-            comp_date = d.completed_at.date() if hasattr(d.completed_at, 'date') else d.completed_at
+            # CRITICAL: Safely convert completed_at to date
+            comp_date = _coerce_date_safe(d.completed_at)
             if comp_date <= up_to:
                 total += d.actual_duration_minutes or 0
     return total
@@ -549,9 +607,10 @@ def list_checklist(request):
 
     qs = Checklist.objects.filter(Q(pk__in=recurring_first_qs) | Q(pk__in=one_time_qs.values('pk')))
 
-    # Filters
+    # Apply filters
     if (kw := request.GET.get('keyword', '').strip()):
         qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
+    
     for param, lookup in [
         ('assign_to', 'assign_to_id'),
         ('priority', 'priority'),
@@ -561,12 +620,14 @@ def list_checklist(request):
     ]:
         if (v := request.GET.get(param, '').strip()):
             qs = qs.filter(**{lookup: v})
+    
     if request.GET.get('today_only'):
         today = timezone.localdate()
         qs = qs.filter(planned_date__date=today)
 
     items = qs.order_by('-planned_date', '-id')
 
+    # Handle CSV download
     if request.GET.get('download'):
         resp = HttpResponse(content_type='text/csv')
         resp['Content-Disposition'] = 'attachment; filename="checklist.csv"'
@@ -590,8 +651,10 @@ def list_checklist(request):
         'group_names': Checklist.objects.order_by('group_name').values_list('group_name', flat=True).distinct(),
         'current_tab': 'checklist',
     }
+    
     if request.GET.get('partial'):
         return render(request, 'tasks/partial_list_checklist.html', ctx)
+    
     return render(request, 'tasks/list_checklist.html', ctx)
 
 
@@ -711,15 +774,36 @@ def complete_checklist(request, pk):
 @has_permission('list_delegation')
 def list_delegation(request):
     if request.method == 'POST':
-        if ids := request.POST.getlist('sel'):
-            Delegation.objects.filter(pk__in=ids).delete()
+        action = request.POST.get('action', '')
+        
+        # Handle bulk delete for delegation
+        if action == 'bulk_delete':
+            ids = request.POST.getlist('sel')
+            if ids:
+                try:
+                    deleted, _ = Delegation.objects.filter(pk__in=ids).delete()
+                    if deleted:
+                        messages.success(request, f"Successfully deleted {deleted} delegation task(s).")
+                    else:
+                        messages.info(request, "No delegation tasks were deleted. The selected tasks may have already been removed.")
+                except Exception as e:
+                    messages.error(request, f"Error during bulk delete: {str(e)}")
+            else:
+                messages.warning(request, "No delegation tasks were selected for deletion.")
+        else:
+            messages.warning(request, "Invalid action specified.")
+            
         return redirect('tasks:list_delegation')
+    
+    # GET request - show the list
     items = Delegation.objects.all().order_by('-planned_date')
 
+    # Apply filters
     if request.GET.get('today_only'):
         today = timezone.localdate()
         items = items.filter(planned_date__date=today)
 
+    # Calculate time statistics
     up_to = timezone.localdate()
     assign_time = calculate_delegation_assigned_time(items, up_to)
     actual_time = calculate_delegation_actual_time(items, up_to)
@@ -730,8 +814,10 @@ def list_delegation(request):
         'assign_time': assign_time,
         'actual_time': actual_time,
     }
+    
     if request.GET.get('partial'):
         return render(request, 'tasks/partial_list_delegation.html', ctx)
+    
     return render(request, 'tasks/list_delegation.html', ctx)
 
 @has_permission('add_delegation')
@@ -786,6 +872,7 @@ def delete_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
     if request.method == 'POST':
         obj.delete()
+        messages.success(request, f"Deleted delegation task '{obj.task_name}'.")
         return redirect('tasks:list_delegation')
     return render(request, 'tasks/confirm_delete.html', {'object': obj, 'type': 'Delegation'})
 
@@ -824,6 +911,217 @@ def complete_delegation(request, pk):
     else:
         form = CompleteDelegationForm(instance=obj)
     return render(request, 'tasks/complete_delegation.html', {'form': form, 'object': obj})
+
+# ---- Help Ticket pages -------------------------------------------------------
+
+@login_required
+def list_help_ticket(request):
+    if request.method == 'POST':
+        action = request.POST.get('action', '')
+        
+        # Handle bulk delete for help tickets
+        if action == 'bulk_delete':
+            ids = request.POST.getlist('sel')
+            if ids:
+                try:
+                    deleted, _ = HelpTicket.objects.filter(pk__in=ids).delete()
+                    if deleted:
+                        messages.success(request, f"Successfully deleted {deleted} help ticket(s).")
+                    else:
+                        messages.info(request, "No help tickets were deleted. The selected tickets may have already been removed.")
+                except Exception as e:
+                    messages.error(request, f"Error during bulk delete: {str(e)}")
+            else:
+                messages.warning(request, "No help tickets were selected for deletion.")
+        else:
+            messages.warning(request, "Invalid action specified.")
+            
+        return redirect('tasks:list_help_ticket')
+    
+    # GET request - show the list
+    qs = HelpTicket.objects.select_related('assign_by', 'assign_to')
+    if not can_create(request.user):
+        qs = qs.filter(assign_to=request.user)
+    
+    # Apply filters
+    for param, lookup in [
+        ('from_date', 'planned_date__date__gte'),
+        ('to_date',   'planned_date__date__lte'),
+    ]:
+        if v := request.GET.get(param, '').strip():
+            qs = qs.filter(**{lookup: v})
+    
+    for param, lookup in [
+        ('assign_by', 'assign_by_id'),
+        ('assign_to', 'assign_to_id'),
+        ('status',    'status'),
+    ]:
+        v = request.GET.get(param, 'all')
+        if v != 'all':
+            qs = qs.filter(**{lookup: v})
+    
+    items = qs.order_by('-planned_date')
+    
+    return render(request, 'tasks/list_help_ticket.html', {
+        'items': items,
+        'current_tab': 'all',
+        'can_create': can_create(request.user),
+        'users': User.objects.order_by('username'),
+        'status_choices': HelpTicket.STATUS_CHOICES,
+    })
+
+@login_required
+def assigned_to_me(request):
+    items = HelpTicket.objects.filter(assign_to=request.user).exclude(status='Closed').order_by('-planned_date')
+    return render(request, 'tasks/list_help_ticket_assigned_to.html', {'items': items, 'current_tab': 'assigned_to'})
+
+@login_required
+def assigned_by_me(request):
+    if request.method == 'POST':
+        action = request.POST.get('action', '')
+        
+        # Handle bulk delete for help tickets assigned by me
+        if action == 'bulk_delete':
+            ids = request.POST.getlist('sel')
+            if ids:
+                try:
+                    # Only allow deletion of tickets assigned by the current user
+                    deleted, _ = HelpTicket.objects.filter(pk__in=ids, assign_by=request.user).delete()
+                    if deleted:
+                        messages.success(request, f"Successfully deleted {deleted} help ticket(s).")
+                    else:
+                        messages.info(request, "No help tickets were deleted. You can only delete tickets you assigned.")
+                except Exception as e:
+                    messages.error(request, f"Error during bulk delete: {str(e)}")
+            else:
+                messages.warning(request, "No help tickets were selected for deletion.")
+        else:
+            messages.warning(request, "Invalid action specified.")
+            
+        return redirect('tasks:assigned_by_me')
+    
+    # GET request - show the list
+    items = HelpTicket.objects.filter(assign_by=request.user).order_by('-planned_date')
+    return render(request, 'tasks/list_help_ticket_assigned_by.html', {'items': items, 'current_tab': 'assigned_by'})
+
+@login_required
+def add_help_ticket(request):
+    if request.method == 'POST':
+        form = HelpTicketForm(request.POST, request.FILES)
+        if form.is_valid():
+            planned_date = form.cleaned_data.get('planned_date')
+            planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
+            if planned_date_local and not is_working_day(planned_date_local):
+                messages.error(request, "This is holiday date, you can not add on this day.")
+                return render(request, 'tasks/add_help_ticket.html', {
+                    'form': form, 'current_tab': 'add', 'can_create': can_create(request.user)
+                })
+            ticket = form.save(commit=False)
+            ticket.assign_by = request.user
+            ticket.save()
+
+            complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
+            try:
+                send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="New Help Ticket Assigned")
+                send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Assignment")
+            except Exception:
+                pass
+
+            return redirect('tasks:list_help_ticket')
+    else:
+        form = HelpTicketForm()
+    return render(request, 'tasks/add_help_ticket.html', {
+        'form': form, 'current_tab': 'add', 'can_create': can_create(request.user)
+    })
+
+@login_required
+def edit_help_ticket(request, pk):
+    obj = get_object_or_404(HelpTicket, pk=pk)
+    old_assignee = obj.assign_to
+    if request.method == 'POST':
+        form = HelpTicketForm(request.POST, request.FILES, instance=obj)
+        if form.is_valid():
+            planned_date = form.cleaned_data.get('planned_date')
+            planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
+            if planned_date_local and not is_working_day(planned_date_local):
+                messages.error(request, "This is holiday date, you can not add on this day.")
+                return render(request, 'tasks/add_help_ticket.html', {
+                    'form': form, 'current_tab': 'edit', 'can_create': can_create(request.user)
+                })
+            ticket = form.save()
+
+            complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
+            try:
+                if old_assignee and ticket.assign_to_id != old_assignee.id:
+                    send_help_ticket_unassigned_notice(ticket=ticket, old_user=old_assignee)
+                    send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Reassigned")
+                    send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Reassigned")
+                else:
+                    send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Updated")
+                    send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Updated")
+            except Exception:
+                pass
+
+            return redirect('tasks:list_help_ticket')
+    else:
+        form = HelpTicketForm(instance=obj)
+    return render(request, 'tasks/add_help_ticket.html', {
+        'form': form, 'current_tab': 'edit', 'can_create': can_create(request.user)
+    })
+
+@login_required
+def complete_help_ticket(request, pk):
+    return redirect('tasks:note_help_ticket', pk=pk)
+
+@login_required
+def note_help_ticket(request, pk):
+    ticket = get_object_or_404(HelpTicket, pk=pk, assign_to=request.user)
+    if request.method == 'POST':
+        notes = request.POST.get('resolved_notes', '').strip()
+        ticket.resolved_notes = notes
+        if 'media_upload' in request.FILES:
+            ticket.media_upload = request.FILES['media_upload']
+        if ticket.status != 'Closed':
+            ticket.status = 'Closed'
+            ticket.resolved_at = timezone.now()
+            ticket.resolved_by = request.user
+            if ticket.resolved_at and ticket.planned_date:
+                mins = int((ticket.resolved_at - ticket.planned_date).total_seconds() // 60)
+                ticket.actual_duration_minutes = max(mins, 0)
+        ticket.save()
+        if ticket.status == 'Closed':
+            recipients = []
+            if ticket.assign_to.email:
+                recipients.append(ticket.assign_to.email)
+            if ticket.assign_by.email and ticket.assign_by.email not in recipients:
+                recipients.append(ticket.assign_by.email)
+            if recipients:
+                from django.core.mail import EmailMultiAlternatives
+                from django.template.loader import render_to_string
+                subject = f"Help Ticket Closed: {ticket.title}"
+                html_message = render_to_string('email/help_ticket_closed.html', {
+                    'ticket': ticket, 'assign_by': ticket.assign_by, 'assign_to': ticket.assign_to,
+                })
+                try:
+                    msg = EmailMultiAlternatives(subject, html_message, getattr(settings, "DEFAULT_FROM_EMAIL", None), recipients)
+                    msg.attach_alternative(html_message, "text/html")
+                    msg.send(fail_silently=True)  # never block user flow on close-notification
+                except Exception:
+                    pass
+        messages.success(request, f"Note saved for HT-{ticket.id}.")
+        return redirect(request.GET.get('next', reverse('tasks:assigned_to_me')))
+    return render(request, 'tasks/note_help_ticket.html', {
+        'ticket': ticket, 'next': request.GET.get('next', reverse('tasks:assigned_to_me'))
+    })
+
+@login_required
+def delete_help_ticket(request, pk):
+    obj = get_object_or_404(HelpTicket, pk=pk)
+    if request.method == 'POST':
+        obj.delete()
+        messages.success(request, f"Deleted help ticket '{obj.title}'.")
+        return redirect('tasks:list_help_ticket')
+    return render(request, 'tasks/confirm_delete.html', {'object': obj, 'type': 'HelpTicket'})
 
 # ---- Bulk upload (emails & admin summary) -----------------------------------
 
@@ -1145,7 +1443,7 @@ def bulk_upload(request):
         messages.success(request, f"{len(created_objs)} delegation row(s) imported successfully.")
         return redirect('tasks:bulk_upload')
 
-# ---- Downloads, tickets, FMS -------------------------------------------------
+# ---- Downloads, FMS -------------------------------------------------
 
 @has_permission('bulk_upload')
 def download_checklist_template(request):
