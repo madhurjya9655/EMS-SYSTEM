@@ -75,9 +75,27 @@
           <tr>
             <td><input type="checkbox" name="sel" value="{{ d.id }}" class="form-check-input" data-row-check aria-label="Select row"></td>
             <td>{{ d.task_name }}</td>
-            <td>{{ d.assign_by.get_full_name|default:d.assign_by.username }}</td>
-            <td>{{ d.assign_to.get_full_name|default:d.assign_to.username }}</td>
-            <td>{{ d.planned_date|date:"d M, Y H:i" }}</td>
+            <td>
+              {% if d.assign_by %}
+                {{ d.assign_by.get_full_name|default:d.assign_by.username }}
+              {% else %}
+                &mdash;
+              {% endif %}
+            </td>
+            <td>
+              {% if d.assign_to %}
+                {{ d.assign_to.get_full_name|default:d.assign_to.username }}
+              {% else %}
+                &mdash;
+              {% endif %}
+            </td>
+            <td>
+              {% if d.planned_date %}
+                {{ d.planned_date|date:"d M, Y H:i" }}
+              {% else %}
+                &mdash;
+              {% endif %}
+            </td>
             <td>{{ d.priority }}</td>
             <td class="text-nowrap">
               <a href="#" title="View"><i class="fas fa-eye"></i></a>

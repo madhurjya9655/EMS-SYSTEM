@@ -478,19 +478,29 @@ def _coerce_dt_val(val):
                 dt = timezone.make_aware(dt, tz)
             return dt
         return s
+    if isinstance(val, str):
+        dt = parse_datetime(val)
+        if dt is not None:
+            tz = timezone.get_current_timezone()
+            if timezone.is_naive(dt):
+                dt = timezone.make_aware(dt, tz)
+            return dt
     return val
 
 
 # ---------------------------------------------------------------------------
 # Safe SQLite datetime querying helpers
 # ---------------------------------------------------------------------------
-def get_delegations_safely():
+def get_delegations_safely(keyword: str | None = None, today_only: bool = False):
     """
-    Fetch all delegations using raw SQL with CAST to force string conversion,
-    avoiding SQLite datetime converter issues with BLOB values.
+    Fetch delegations using raw SQL with CAST to force string conversion,
+    then attach real User objects and normalized datetimes so templates
+    can use d.assign_by.get_full_name, d.assign_to.username, d.pk, etc.
     """
+    # 1) Pull raw rows
     with connection.cursor() as cursor:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT 
                 id,
                 assign_by_id,
@@ -508,42 +518,76 @@ def get_delegations_safely():
                 doer_file,
                 doer_notes
             FROM tasks_delegation 
-            ORDER BY planned_date DESC
-        """)
-        
+            ORDER BY planned_date DESC, id DESC
+            """
+        )
         columns = [col[0] for col in cursor.description]
-        delegations = []
-        
-        for row in cursor.fetchall():
-            data = dict(zip(columns, row))
-            
-            # Safely parse datetime strings
-            if data['planned_date_str']:
-                data['planned_date'] = _coerce_dt_val(data['planned_date_str'])
-            else:
-                data['planned_date'] = None
-                
-            if data['completed_at_str']:
-                data['completed_at'] = _coerce_dt_val(data['completed_at_str'])
-            else:
-                data['completed_at'] = None
-                
-            # Clean up string fields
-            del data['planned_date_str']
-            del data['completed_at_str']
-            
-            delegations.append(data)
-            
-    return delegations
+        raw_rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    # 2) Parse datetimes & collect user_ids
+    user_ids = set()
+    for d in raw_rows:
+        if d.get("assign_by_id"):
+            user_ids.add(d["assign_by_id"])
+        if d.get("assign_to_id"):
+            user_ids.add(d["assign_to_id"])
+
+        # planned_date
+        s = d.get("planned_date_str")
+        d["planned_date"] = _coerce_dt_val(s) if s else None
+
+        # completed_at
+        s2 = d.get("completed_at_str")
+        d["completed_at"] = _coerce_dt_val(s2) if s2 else None
+
+        d.pop("planned_date_str", None)
+        d.pop("completed_at_str", None)
+
+    # 3) Attach user objects
+    users = {u.id: u for u in User.objects.filter(id__in=user_ids)}
+    items = []
+    for d in raw_rows:
+        d["assign_by"] = users.get(d.get("assign_by_id"))
+        d["assign_to"] = users.get(d.get("assign_to_id"))
+        d["pk"] = d["id"]  # allow {{ d.pk }} in templates
+        items.append(d)
+
+    # 4) Optional filters
+    if today_only:
+        today = timezone.localdate()
+        items = [
+            x for x in items
+            if x.get("planned_date") and _coerce_date_safe(x["planned_date"]) == today
+        ]
+
+    if keyword:
+        kw = keyword.strip().lower()
+        if kw:
+            def _uname(u):
+                if not u:
+                    return ""
+                nm = (getattr(u, "get_full_name", lambda: "")() or "").lower()
+                un = (getattr(u, "username", "") or "").lower()
+                return nm + " " + un
+
+            items = [
+                x for x in items
+                if kw in (x.get("task_name") or "").lower()
+                or kw in _uname(x.get("assign_by"))
+                or kw in _uname(x.get("assign_to"))
+            ]
+
+    return items
 
 
-def get_delegation_objects_for_metrics():
+def get_delegation_objects_for_metrics(today_only: bool = False):
     """
     Get delegation data optimized for metrics calculation.
     Returns list of dict objects with safely parsed datetime fields.
     """
     with connection.cursor() as cursor:
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT 
                 id,
                 CAST(planned_date AS TEXT) as planned_date_str,
@@ -554,52 +598,36 @@ def get_delegation_objects_for_metrics():
                 frequency,
                 status
             FROM tasks_delegation
-        """)
-        
+            """
+        )
+
         results = []
         for row in cursor.fetchall():
-            planned_str, completed_str = row[1], row[2]
-            
+            id_, planned_str, completed_str, tmin, actmin, mode, freq, status = row
+
             # Parse dates safely
-            planned_date = None
-            if planned_str:
-                parsed = _coerce_dt_val(planned_str)
-                if isinstance(parsed, datetime):
-                    planned_date = parsed
-                elif isinstance(parsed, str):
-                    try:
-                        planned_date = parse_datetime(parsed)
-                        if planned_date and timezone.is_naive(planned_date):
-                            planned_date = timezone.make_aware(planned_date)
-                    except Exception:
-                        planned_date = timezone.now()  # fallback
-                        
-            completed_at = None
-            if completed_str:
-                parsed = _coerce_dt_val(completed_str)
-                if isinstance(parsed, datetime):
-                    completed_at = parsed
-                elif isinstance(parsed, str):
-                    try:
-                        completed_at = parse_datetime(parsed)
-                        if completed_at and timezone.is_naive(completed_at):
-                            completed_at = timezone.make_aware(completed_at)
-                    except Exception:
-                        pass
-            
-            # Create dict object that mimics model attributes
+            planned_date = _coerce_dt_val(planned_str) if planned_str else None
+            completed_at = _coerce_dt_val(completed_str) if completed_str else None
+
             obj = {
-                'id': row[0],
-                'planned_date': planned_date,
-                'completed_at': completed_at,
-                'time_per_task_minutes': row[3] or 0,
-                'actual_duration_minutes': row[4] or 0,
-                'mode': row[5] or 'Daily',
-                'frequency': row[6] or 1,
-                'status': row[7] or 'Pending',
+                "id": id_,
+                "planned_date": planned_date,
+                "completed_at": completed_at,
+                "time_per_task_minutes": tmin or 0,
+                "actual_duration_minutes": actmin or 0,
+                "mode": mode or "Daily",
+                "frequency": freq or 1,
+                "status": status or "Pending",
             }
             results.append(obj)
-            
+
+    if today_only:
+        today = timezone.localdate()
+        results = [
+            d for d in results
+            if d.get("planned_date") and _coerce_date_safe(d["planned_date"]) == today
+        ]
+
     return results
 
 
@@ -614,20 +642,20 @@ def calculate_delegation_assigned_time_safe(delegation_data, up_to=None):
         up_to = timezone.localdate()
     up_to = _coerce_date_safe(up_to)
     total = 0
-    
+
     for d in delegation_data:
-        freq = d.get('frequency') or 1
-        minutes = d.get('time_per_task_minutes') or 0
-        mode = d.get('mode', 'Daily')
-        planned_date = d.get('planned_date')
-        
+        freq = d.get("frequency") or 1
+        minutes = d.get("time_per_task_minutes") or 0
+        mode = d.get("mode", "Daily")
+        planned_date = d.get("planned_date")
+
         if not planned_date:
             continue
-            
+
         start_date = _coerce_date_safe(planned_date)
         if start_date > up_to:
             continue
-            
+
         occur = 0
         if mode == "Daily":
             days = (up_to - start_date).days
@@ -651,9 +679,9 @@ def calculate_delegation_assigned_time_safe(delegation_data, up_to=None):
                 occur = (years // freq) + 1
         else:
             occur = 1 if start_date <= up_to else 0
-            
+
         total += occur * minutes
-        
+
     return total
 
 
@@ -665,19 +693,19 @@ def calculate_delegation_actual_time_safe(delegation_data, up_to=None):
         up_to = timezone.localdate()
     up_to = _coerce_date_safe(up_to)
     total = 0
-    
+
     for d in delegation_data:
-        if d.get('status') != 'Completed':
+        if d.get("status") != "Completed":
             continue
-            
-        completed_at = d.get('completed_at')
+
+        completed_at = d.get("completed_at")
         if not completed_at:
             continue
-            
+
         comp_date = _coerce_date_safe(completed_at)
         if comp_date <= up_to:
-            total += d.get('actual_duration_minutes') or 0
-            
+            total += d.get("actual_duration_minutes") or 0
+
     return total
 
 
@@ -1039,51 +1067,25 @@ def list_delegation(request):
             messages.warning(request, "Invalid action specified.")
         return redirect("tasks:list_delegation")
 
-    # Use safe delegation fetching to avoid SQLite datetime conversion issues
-    try:
-        # Get raw delegation data safely
-        delegation_data = get_delegation_objects_for_metrics()
-        
-        # Filter by today if requested
-        if request.GET.get("today_only"):
-            today = timezone.localdate()
-            delegation_data = [
-                d for d in delegation_data 
-                if d.get('planned_date') and _coerce_date_safe(d['planned_date']) == today
-            ]
+    # Filters
+    keyword = request.GET.get("keyword", "").strip()
+    today_only = bool(request.GET.get("today_only"))
 
-        # Calculate metrics safely
-        up_to = timezone.localdate()
-        assign_time = calculate_delegation_assigned_time_safe(delegation_data, up_to)
-        actual_time = calculate_delegation_actual_time_safe(delegation_data, up_to)
-        
-        # Get display items safely
-        items = get_delegations_safely()
-        
-        # Apply today filter to display items if needed
-        if request.GET.get("today_only"):
-            today = timezone.localdate()
-            items = [
-                item for item in items 
-                if item.get('planned_date') and _coerce_date_safe(item['planned_date']) == today
-            ]
+    # Safe metrics (limit by today_only like before; keyword doesn't affect metrics)
+    delegation_data = get_delegation_objects_for_metrics(today_only=today_only)
+    up_to = timezone.localdate()
+    assign_time = calculate_delegation_assigned_time_safe(delegation_data, up_to)
+    actual_time = calculate_delegation_actual_time_safe(delegation_data, up_to)
 
-        ctx = {
-            "items": items,
-            "current_tab": "delegation",
-            "assign_time": assign_time,
-            "actual_time": actual_time,
-        }
-        
-    except Exception as e:
-        # Fallback: if safe querying fails, try traditional approach with error handling
-        messages.error(request, f"Error loading delegation data: {str(e)}")
-        ctx = {
-            "items": [],
-            "current_tab": "delegation", 
-            "assign_time": 0,
-            "actual_time": 0,
-        }
+    # Safe items for display (apply both filters)
+    items = get_delegations_safely(keyword=keyword, today_only=today_only)
+
+    ctx = {
+        "items": items,
+        "current_tab": "delegation",
+        "assign_time": assign_time,
+        "actual_time": actual_time,
+    }
 
     if request.GET.get("partial"):
         return render(request, "tasks/partial_list_delegation.html", ctx)
@@ -1894,7 +1896,8 @@ def list_fms(request):
     # Use safe querying for FMS as well
     try:
         with connection.cursor() as cursor:
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT 
                     id,
                     assign_by_id,
@@ -1908,27 +1911,32 @@ def list_fms(request):
                     priority,
                     estimated_minutes
                 FROM tasks_fms 
-                ORDER BY planned_date DESC
-            """)
-            
+                ORDER BY planned_date DESC, id DESC
+                """
+            )
+
             columns = [col[0] for col in cursor.description]
-            items = []
-            
-            for row in cursor.fetchall():
-                data = dict(zip(columns, row))
-                
-                # Safely parse datetime string
-                if data['planned_date_str']:
-                    data['planned_date'] = _coerce_dt_val(data['planned_date_str'])
-                else:
-                    data['planned_date'] = None
-                    
-                # Clean up string fields
-                del data['planned_date_str']
-                items.append(data)
-                
-    except Exception:
-        # Fallback if safe querying fails
+            raw_rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+        # attach users + parse dt
+        user_ids = set()
+        for d in raw_rows:
+            if d.get("assign_by_id"):
+                user_ids.add(d["assign_by_id"])
+            if d.get("assign_to_id"):
+                user_ids.add(d["assign_to_id"])
+            s = d.get("planned_date_str")
+            d["planned_date"] = _coerce_dt_val(s) if s else None
+            d.pop("planned_date_str", None)
+
+        users = {u.id: u for u in User.objects.filter(id__in=user_ids)}
         items = []
-        
+        for d in raw_rows:
+            d["assign_by"] = users.get(d.get("assign_by_id"))
+            d["assign_to"] = users.get(d.get("assign_to_id"))
+            d["pk"] = d["id"]
+            items.append(d)
+    except Exception:
+        items = []
+
     return render(request, "tasks/list_fms.html", {"items": items})
