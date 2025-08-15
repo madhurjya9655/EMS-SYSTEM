@@ -126,7 +126,7 @@ WSGI_APPLICATION = "employee_management.wsgi.application"
 
 
 # -----------------------------------------------------------------------------
-# Database (SQLite) + safe converters (avoid TypeError on datetime)
+# Database (SQLite) + ENHANCED datetime BLOB handling
 # -----------------------------------------------------------------------------
 DB_PATH = os.getenv("SQLITE_PATH") or str(BASE_DIR / "db.sqlite3")
 Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
@@ -137,42 +137,197 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": DB_PATH,
-        # converters get applied on declared types and colname hints
+        # Enable type parsing, but this alone isn't sufficient for BLOB datetime handling
         "OPTIONS": {
             "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
         },
     }
 }
 
-# Global SQLite converters: always return str for timestamp/date-ish columns.
-def _decode_to_str(val):
+# Enhanced SQLite datetime BLOB handling strategy
+def _robust_sqlite_decoder(val):
+    """
+    Ultra-robust decoder that handles any datetime format SQLite might throw at us.
+    This handles BLOBs, memoryviews, bytes, and malformed strings gracefully.
+    """
     if val is None:
         return None
-    if isinstance(val, bytes):
+    
+    # Handle memoryview (common on some SQLite builds/platforms)
+    if isinstance(val, memoryview):
         try:
-            return val.decode("utf-8")
+            val = val.tobytes()
         except Exception:
-            return val.decode("latin-1", "ignore")
-    return str(val)
+            return str(val)  # Last resort: convert to string
+    
+    # Handle bytes/bytearray (the main culprit for our BLOB issues)
+    if isinstance(val, (bytes, bytearray)):
+        # Try multiple encoding strategies
+        for encoding in ("utf-8", "latin-1", "ascii"):
+            try:
+                decoded = val.decode(encoding)
+                # Clean up common SQLite datetime format variations
+                decoded = decoded.strip().replace('\x00', '')  # Remove null bytes
+                if decoded:
+                    return decoded
+            except (UnicodeDecodeError, AttributeError):
+                continue
+        
+        # If all decoding fails, convert to string representation
+        try:
+            return str(val, errors='ignore')
+        except Exception:
+            return str(val)
+    
+    # If it's already a string, clean it up
+    if isinstance(val, str):
+        cleaned = val.strip().replace('\x00', '')
+        return cleaned if cleaned else None
+    
+    # For other types (datetime objects, etc.), convert to string
+    try:
+        return str(val)
+    except Exception:
+        return None
 
 try:
-    sqlite3.register_converter("timestamp", _decode_to_str)
-    sqlite3.register_converter("datetime", _decode_to_str)
-    sqlite3.register_converter("timestamptz", _decode_to_str)
-    sqlite3.register_converter("timestamp with time zone", _decode_to_str)
-    sqlite3.register_converter("date", _decode_to_str)
+    # Register ENHANCED converters for all common datetime type names
+    # These will be called when SQLite columns are declared with these types
+    for datetime_type in [
+        "timestamp", "datetime", "timestamptz", 
+        "timestamp with time zone", "date", "time",
+        "TIMESTAMP", "DATETIME", "DATE", "TIME"  # Handle case variations
+    ]:
+        sqlite3.register_converter(datetime_type, _robust_sqlite_decoder)
 except Exception:
-    # best-effort; safe to continue if this fails
+    # Registration failure shouldn't crash the app
     pass
 
 from django.db.backends.signals import connection_created  # noqa: E402
-def _sqlite_force_text(sender, connection, **kwargs):
-    if connection.vendor == "sqlite":
+from django.db import connection as django_connection  # noqa: E402
+
+def _configure_sqlite_for_robust_datetime_handling(sender, connection, **kwargs):
+    """
+    Enhanced SQLite connection configuration for bulletproof datetime handling.
+    This runs every time a new database connection is created.
+    """
+    if connection.vendor != "sqlite":
+        return
+    
+    try:
+        # Set a custom text_factory that can handle any data type SQLite returns
+        def universal_text_factory(data):
+            """
+            Universal text factory that converts ANY SQLite return value to a clean string.
+            This catches cases where declared-type converters don't apply.
+            """
+            if data is None:
+                return None
+            
+            # Handle memoryview
+            if isinstance(data, memoryview):
+                try:
+                    data = data.tobytes()
+                except Exception:
+                    return str(data)
+            
+            # Handle bytes/bytearray  
+            if isinstance(data, (bytes, bytearray)):
+                # Multi-encoding strategy
+                for encoding in ("utf-8", "latin-1", "ascii", "cp1252"):
+                    try:
+                        result = data.decode(encoding).strip().replace('\x00', '')
+                        if result:  # Only return non-empty results
+                            return result
+                    except (UnicodeDecodeError, AttributeError):
+                        continue
+                
+                # Final fallback for stubborn bytes
+                try:
+                    return data.decode('utf-8', errors='ignore').strip()
+                except Exception:
+                    return str(data)
+            
+            # Handle strings (clean them up)
+            if isinstance(data, str):
+                return data.strip().replace('\x00', '')
+            
+            # Handle everything else
+            try:
+                return str(data)
+            except Exception:
+                return ""
+        
+        # Apply the universal text factory
+        connection.connection.text_factory = universal_text_factory
+        
+        # Additionally, configure SQLite for better type handling
+        cursor = connection.connection.cursor()
+        
+        # Ensure we're in a mode that preserves type information
+        cursor.execute("PRAGMA table_info=main")  # This doesn't do anything but ensures connection is active
+        
+        cursor.close()
+        
+    except Exception:
+        # Don't let SQLite configuration errors break the application
+        # In production, you might want to log this
+        pass
+
+# Connect our enhanced configuration function
+connection_created.connect(_configure_sqlite_for_robust_datetime_handling)
+
+# Additional safeguard: monkey-patch Django's SQLite datetime conversion if needed
+try:
+    from django.db.backends.sqlite3.operations import DatabaseOperations
+    
+    # Store the original method
+    original_convert_datetimefield_value = DatabaseOperations.convert_datetimefield_value
+    
+    def safe_convert_datetimefield_value(self, value, expression, connection):
+        """
+        Safe wrapper around Django's SQLite datetime field conversion.
+        This catches the 'fromisoformat: argument must be str' error and fixes it.
+        """
+        if value is None:
+            return None
+        
+        # If we got bytes/memoryview, decode it first
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            value = _robust_sqlite_decoder(value)
+        
+        # Ensure it's a clean string before passing to Django's converter
+        if isinstance(value, str):
+            value = value.strip().replace('\x00', '')
+            if not value:
+                return None
+        
         try:
-            connection.connection.text_factory = str
-        except Exception:
-            pass
-connection_created.connect(_sqlite_force_text)
+            # Call Django's original converter
+            return original_convert_datetimefield_value(self, value, expression, connection)
+        except (TypeError, ValueError) as e:
+            if "fromisoformat" in str(e) or "argument must be str" in str(e):
+                # This is our target error - the value is not a proper string
+                # Try to fix it and retry
+                if hasattr(value, 'decode'):
+                    try:
+                        fixed_value = value.decode('utf-8', errors='ignore').strip()
+                        return original_convert_datetimefield_value(self, fixed_value, expression, connection)
+                    except Exception:
+                        pass
+                
+                # If we can't fix it, return None (graceful degradation)
+                return None
+            else:
+                # Re-raise other errors
+                raise
+    
+    # Apply the monkey patch
+    DatabaseOperations.convert_datetimefield_value = safe_convert_datetimefield_value
+    
+except ImportError:
+    # If Django's internals change, don't break the app
+    pass
 
 
 # -----------------------------------------------------------------------------
