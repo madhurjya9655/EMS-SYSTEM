@@ -126,7 +126,11 @@ WSGI_APPLICATION = "employee_management.wsgi.application"
 
 
 # -----------------------------------------------------------------------------
+<<<<<<< HEAD
 # Database (SQLite) + ENHANCED datetime BLOB handling
+=======
+# Database (SQLite) + robust decoders so datetimes never come back as bytes
+>>>>>>> f5bfa4738d524482734051d34ab5fb579937fdc0
 # -----------------------------------------------------------------------------
 DB_PATH = os.getenv("SQLITE_PATH") or str(BASE_DIR / "db.sqlite3")
 Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
@@ -137,13 +141,18 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": DB_PATH,
+<<<<<<< HEAD
         # Enable type parsing, but this alone isn't sufficient for BLOB datetime handling
+=======
+        # Enable declared-type and "AS <type>" column-name converters.
+>>>>>>> f5bfa4738d524482734051d34ab5fb579937fdc0
         "OPTIONS": {
             "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
         },
     }
 }
 
+<<<<<<< HEAD
 # Enhanced SQLite datetime BLOB handling strategy
 def _robust_sqlite_decoder(val):
     """
@@ -328,6 +337,61 @@ try:
 except ImportError:
     # If Django's internals change, don't break the app
     pass
+=======
+# Always coerce SQLite date/time-ish blobs to clean text for Django to parse.
+def _decode_to_str(val):
+    if val is None:
+        return None
+    # Some SQLite builds hand back memoryview for text-ish fields.
+    if isinstance(val, memoryview):
+        val = val.tobytes()
+    if isinstance(val, (bytes, bytearray)):
+        for enc in ("utf-8", "latin-1"):
+            try:
+                return val.decode(enc)
+            except Exception:
+                continue
+        # Last resort: ignore errors but guarantee a str
+        try:
+            return val.decode("utf-8", "ignore")
+        except Exception:
+            return str(val)
+    # If it's already a str or datetime, Django will handle it later.
+    return str(val)
+
+try:
+    # Apply to common datetime-ish declared types
+    sqlite3.register_converter("timestamp", _decode_to_str)
+    sqlite3.register_converter("datetime", _decode_to_str)
+    sqlite3.register_converter("timestamptz", _decode_to_str)
+    sqlite3.register_converter("timestamp with time zone", _decode_to_str)
+    sqlite3.register_converter("date", _decode_to_str)
+except Exception:
+    # Best-effort; safe to continue if this fails
+    pass
+
+from django.db.backends.signals import connection_created  # noqa: E402
+
+def _sqlite_force_text(sender, connection, **kwargs):
+    if connection.vendor != "sqlite":
+        return
+    # Text factory used for TEXT columns; make it resilient to bytes/memoryview
+    def _tf(x):
+        if isinstance(x, memoryview):
+            x = x.tobytes()
+        if isinstance(x, (bytes, bytearray)):
+            try:
+                return x.decode("utf-8")
+            except Exception:
+                return x.decode("latin-1", "ignore")
+        return str(x)
+    try:
+        connection.connection.text_factory = _tf
+    except Exception:
+        pass
+
+connection_created.connect(_sqlite_force_text)
+>>>>>>> f5bfa4738d524482734051d34ab5fb579937fdc0
 
 
 # -----------------------------------------------------------------------------
