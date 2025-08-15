@@ -482,7 +482,6 @@ def _coerce_dt_val(val):
 
 
 # ---------------------------------------------------------------------------
-<<<<<<< HEAD
 # Safe SQLite datetime querying helpers
 # ---------------------------------------------------------------------------
 def get_delegations_safely():
@@ -684,9 +683,6 @@ def calculate_delegation_actual_time_safe(delegation_data, up_to=None):
 
 # ---------------------------------------------------------------------------
 # Original delegation metrics (kept for compatibility)
-=======
-# Delegation metrics
->>>>>>> f5bfa4738d524482734051d34ab5fb579937fdc0
 # ---------------------------------------------------------------------------
 def calculate_delegation_assigned_time(qs, up_to=None):
     if up_to is None:
@@ -1043,7 +1039,6 @@ def list_delegation(request):
             messages.warning(request, "Invalid action specified.")
         return redirect("tasks:list_delegation")
 
-<<<<<<< HEAD
     # Use safe delegation fetching to avoid SQLite datetime conversion issues
     try:
         # Get raw delegation data safely
@@ -1089,21 +1084,6 @@ def list_delegation(request):
             "assign_time": 0,
             "actual_time": 0,
         }
-=======
-    items_qs = Delegation.objects.all().order_by("-planned_date")
-    if request.GET.get("today_only"):
-        today = timezone.localdate()
-        items_qs = items_qs.filter(planned_date__date=today)
-
-    up_to = timezone.localdate()
-    assign_time = calculate_delegation_assigned_time(items_qs, up_to)
-    actual_time = calculate_delegation_actual_time(items_qs, up_to)
-
-    items = list(items_qs)
-    for d in items:
-        d.planned_date = _coerce_dt_val(d.planned_date)
-        d.completed_at = _coerce_dt_val(d.completed_at)
->>>>>>> f5bfa4738d524482734051d34ab5fb579937fdc0
 
     if request.GET.get("partial"):
         return render(request, "tasks/partial_list_delegation.html", ctx)
@@ -1911,7 +1891,6 @@ def download_delegation_template(request):
 # ---------------------------------------------------------------------------
 @login_required
 def list_fms(request):
-<<<<<<< HEAD
     # Use safe querying for FMS as well
     try:
         with connection.cursor() as cursor:
@@ -1953,10 +1932,3 @@ def list_fms(request):
         items = []
         
     return render(request, "tasks/list_fms.html", {"items": items})
-=======
-    items = FMS.objects.all().order_by("-planned_date")
-    items = list(items)
-    for o in items:
-        o.planned_date = _coerce_dt_val(o.planned_date)
-    return render(request, "tasks/list_fms.html", {"items": items})
->>>>>>> f5bfa4738d524482734051d34ab5fb579937fdc0
