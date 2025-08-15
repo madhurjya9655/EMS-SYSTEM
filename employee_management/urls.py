@@ -1,8 +1,14 @@
+# employee_management/urls.py
+import os
 from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from django.http import HttpResponse
 from apps.users.views import CustomLoginView
+
+def healthcheck(_):
+    return HttpResponse("ok", content_type="text/plain")
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -20,9 +26,17 @@ urlpatterns = [
     path("reports/",       include(("apps.reports.urls",       "reports"),       namespace="reports")),
     path("users/",         include(("apps.users.urls",         "users"),         namespace="users")),
     path("dashboard/",     include(("dashboard.urls",          "dashboard"),     namespace="dashboard")),
-    path("",               include(("apps.recruitment.urls",   "recruitment"),   namespace="recruitment")),
-    path("settings/",      include(("apps.settings.urls",      "settings"),      namespace="settings")),
+
+    # Settings app (namespace comes from apps/settings/urls.py -> app_name = "settings")
+    path("settings/", include("apps.settings.urls")),
+
+    # Root
+    path("", include(("apps.recruitment.urls", "recruitment"), namespace="recruitment")),
+
+    # Healthcheck
+    path("up", healthcheck),
 ]
 
-if settings.DEBUG:
+# Serve media in DEBUG; optionally in prod if SERVE_MEDIA=1 (useful on Render)
+if settings.DEBUG or os.getenv("SERVE_MEDIA") == "1":
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

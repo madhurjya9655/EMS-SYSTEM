@@ -1,4 +1,4 @@
-{% load static group_tags permission_tags custom_filters %}
+{% load static group_tags permission_tags %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -415,7 +415,11 @@
         if(overlay) overlay.classList.toggle('show');
       }else{
         sidebar.classList.toggle('collapsed');
-        main.classList.toggle('expanded');
+        if (sidebar.classList.contains('collapsed')) {
+          main.classList.add('expanded');
+        } else {
+          main.classList.remove('expanded');
+        }
       }
     }
 
@@ -424,7 +428,7 @@
       const submenu = id && document.getElementById(id);
       const chev = btn.querySelector('.chevron');
       if(!submenu) return;
-      const isOpen = submenu.style.display==='block';
+      const isOpen = submenu.style.display === 'block';
       submenu.style.display = isOpen ? 'none' : 'block';
       if(chev) chev.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
       btn.setAttribute('aria-expanded', String(!isOpen));
@@ -453,8 +457,11 @@
         if(window.innerWidth>768){
           sidebar.classList.remove('show');
           if(overlay) overlay.classList.remove('show');
-          if(sidebar.classList.contains('collapsed')) main.classList.add('expanded');
-          else main.classList.remove('expanded');
+          if (sidebar.classList.contains('collapsed')) {
+            main.classList.add('expanded');
+          } else {
+            main.classList.remove('expanded');
+          }
         }else{
           sidebar.classList.remove('collapsed');
           main.classList.remove('expanded');
@@ -480,7 +487,7 @@
         }
       });
 
-      // Optional: handle filter header +/- icon wherever used
+      // Optional: filter header +/- icon wherever used
       document.querySelectorAll('[data-filter-toggle]').forEach(btn=>{
         btn.addEventListener('click', ()=>{
           const icon = btn.querySelector('[data-filter-toggle-icon]');

@@ -1,93 +1,88 @@
 {% extends "base.html" %}
-{% block title %}Complete Delegation{% endblock %}
-{% url 'dashboard:home' as dashboard_home_url %}
+{% load static %}
+
+{% block title %}Complete Delegation | BOS EMS{% endblock %}
+
 {% block content %}
-
-<div class="page-header mb-4">
-  <h2 class="page-title">Complete Delegation</h2>
-  <p class="text-muted mb-0">Upload evidence and notes to complete this delegation.</p>
-</div>
-
-{% if messages %}
-  {% for m in messages %}
-    <div class="alert alert-{{ m.tags|default:'info' }} shadow-sm">{{ m }}</div>
-  {% endfor %}
-{% endif %}
-
-{% if form.non_field_errors %}
-  <div class="alert alert-danger shadow-sm">
-    {% for err in form.non_field_errors %}<div>{{ err }}</div>{% endfor %}
+<div class="container" style="max-width: 900px;">
+  <div class="page-header mb-3">
+    <h2 class="page-title">Complete Delegation Task</h2>
+    <p class="text-muted mb-0">
+      Upload proof (if required) and leave notes, then mark this task as completed.
+    </p>
   </div>
-{% endif %}
 
-<div class="card shadow-sm">
-  <div class="card-body">
-    <div class="row g-3 mb-3">
-      <div class="col-md-6">
-        <label class="form-label">Task</label>
-        <input class="form-control" value="{{ object.task_name }}" readonly>
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <div class="mb-4">
+        <div class="d-flex align-items-center justify-content-between flex-wrap">
+          <div>
+            <h5 class="mb-1">{{ object.task_name }}</h5>
+            <div class="small text-muted">
+              <span class="me-3"><i class="fa-regular fa-clock me-1"></i>
+                Planned: {% if object.planned_date %}{{ object.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}
+              </span>
+              <span class="me-3"><i class="fa-solid fa-bolt me-1"></i>
+                Priority: {{ object.get_priority_display }}
+              </span>
+              <span class="me-3"><i class="fa-regular fa-user me-1"></i>
+                Assigned to: {{ object.assign_to.get_full_name|default:object.assign_to.username }}
+              </span>
+              <span><i class="fa-regular fa-circle-dot me-1"></i>
+                Current Status: <strong>{{ object.status }}</strong>
+              </span>
+            </div>
+          </div>
+          <div class="text-end mt-3 mt-md-0">
+            {% if object.time_per_task_minutes %}
+              <div class="small text-muted">Time/Task</div>
+              <div class="fw-semibold">{{ object.time_per_task_minutes }} min</div>
+            {% endif %}
+          </div>
+        </div>
       </div>
-      <div class="col-md-3">
-        <label class="form-label">Planned</label>
-        <input class="form-control" value="{{ object.planned_date|date:'Y-m-d H:i' }}" readonly>
-      </div>
-      <div class="col-md-3">
-        <label class="form-label">Priority</label>
-        <input class="form-control" value="{{ object.priority }}" readonly>
-      </div>
+
+      <form method="post" enctype="multipart/form-data" novalidate>
+        {% csrf_token %}
+        {% if form.non_field_errors %}
+          <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+        {% endif %}
+
+        <div class="row g-3">
+          {% for field in form.visible_fields %}
+            <div class="col-12">
+              <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+              {{ field }}
+              {% if field.help_text %}
+                <div class="form-text">{{ field.help_text }}</div>
+              {% endif %}
+              {% for err in field.errors %}
+                <div class="text-danger small">{{ err }}</div>
+              {% endfor %}
+            </div>
+          {% endfor %}
+        </div>
+
+        <div class="d-flex justify-content-between align-items-center mt-4">
+          <div class="text-muted small">
+            After submit, the task status will be set to <strong>Completed</strong>
+            and time will be recorded automatically.
+          </div>
+          <div class="d-flex gap-2">
+            {% url 'dashboard:home' as dashboard_home_url %}
+            {% with next_url=request.GET.next|default:dashboard_home_url %}
+            <a class="btn btn-outline-secondary"
+               href="{{ next_url }}">
+              Cancel
+            </a>
+            {% endwith %}
+            <button type="submit" class="btn btn-success">
+              <i class="fa-solid fa-check me-1"></i> Mark Completed
+            </button>
+          </div>
+        </div>
+      </form>
     </div>
-
-    <form method="post" enctype="multipart/form-data" id="complete-delegation-form" novalidate>
-      {% csrf_token %}
-
-      <div class="mb-3">
-        <label class="form-label">
-          {{ form.doer_file.label }}
-          {% if object.attachment_mandatory %}<span class="text-danger">*</span>{% endif %}
-        </label>
-        {{ form.doer_file }}
-        {% if form.doer_file.errors %}
-          <div class="text-danger small mt-1">
-            {% for e in form.doer_file.errors %}<div>{{ e }}</div>{% endfor %}
-          </div>
-        {% endif %}
-        <div class="form-text">Attach supporting file if required by the assigner.</div>
-      </div>
-
-      <div class="mb-3">
-        <label class="form-label">{{ form.doer_notes.label }}</label>
-        {{ form.doer_notes }}
-        {% if form.doer_notes.errors %}
-          <div class="text-danger small mt-1">
-            {% for e in form.doer_notes.errors %}<div>{{ e }}</div>{% endfor %}
-          </div>
-        {% endif %}
-      </div>
-
-      <div class="d-flex gap-2">
-        <button type="submit" class="btn btn-primary" id="btn-submit-delegation">
-          <span class="spinner-border spinner-border-sm me-2 d-none" role="status" aria-hidden="true"></span>
-          Submit
-        </button>
-        <a class="btn btn-secondary"
-           href="{{ request.GET.next|default:dashboard_home_url }}?task_type=delegation">
-          Cancel
-        </a>
-      </div>
-    </form>
   </div>
 </div>
-
-<script>
-  (function () {
-    const form = document.getElementById('complete-delegation-form');
-    const btn = document.getElementById('btn-submit-delegation');
-    const spin = btn.querySelector('.spinner-border');
-    form.addEventListener('submit', function(){
-      btn.disabled = true;
-      spin.classList.remove('d-none');
-    });
-  })();
-</script>
-
 {% endblock %}

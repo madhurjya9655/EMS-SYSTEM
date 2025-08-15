@@ -1,4 +1,6 @@
 {# dashboard/templates/dashboard/partials/checklist_tasks.html #}
+{% load static custom_filters %}
+
 <div class="card shadow-sm">
   <div class="card-header bg-white d-flex justify-content-between align-items-center">
     <h5 class="mb-0">Checklist Tasks</h5>
@@ -54,10 +56,10 @@
                 —
               {% endif %}
             </td>
-            <td>{{ t.delay|default:"-" }}</td>
+            <td>{{ t.planned_date|delay_since }}</td>
             <td>
               {% if t.status == 'Pending' %}
-                <a href="{% url 'tasks:complete_checklist' t.id %}?next={{ request.get_full_path }}"
+                <a href="{% url 'tasks:complete_checklist' t.id %}?next={{ request.get_full_path|urlencode }}"
                    class="btn btn-sm btn-success">COMPLETE</a>
               {% else %}
                 <span class="text-muted">Done</span>

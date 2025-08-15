@@ -1,13 +1,22 @@
-Hi {{ assignee_name }},
+BOS EMS - {{ kind }} Assignment
 
-You have a new {{ kind }} assigned to you.
+Hello {{ assignee_name }},
 
-Task Title: {{ task_title }}
-Task code: {{ task_code }}
-Planned Date: {{ planned_date_display }}
-Priority: {{ priority_display }}
+You have been assigned a new {{ kind|lower }} task that requires your attention.
 
-Assigned by: {{ assign_by_display }}
+TASK DETAILS:
+- Title: {{ task_title }}
+- Task Code: #{{ task_code }}
+- Planned Date: {{ planned_date_display }}
+- Priority: {{ priority_display }}
+- Assigned By: {{ assign_by_display }}
 
 {{ cta_text }}
-Click this link to complete the task with form: {{ complete_url }}
+
+To complete this task, please visit:
+{{ complete_url }}
+
+This is an automated notification from the BOS Employee Management System.
+If you have any questions, please contact your supervisor or system administrator.
+
+© {% now "Y" %} BOS Employee Management System
