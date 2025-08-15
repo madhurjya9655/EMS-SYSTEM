@@ -12,8 +12,9 @@
 
   <div class="card">
     <div class="card-body p-0">
-      <form method="post" id="bulkHelpTicketForm" action="{% url 'tasks:list_help_ticket_assigned_by' %}">
+      <form method="post" id="bulkHelpTicketForm" action="{% url 'tasks:assigned_by_me' %}">
         {% csrf_token %}
+        <input type="hidden" name="action" value="bulk_delete">
         <div class="table-responsive">
           <table class="table table-striped align-middle mb-0">
             <thead>

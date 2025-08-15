@@ -1,10 +1,8 @@
-# apps/users/permissions.py
-
 from functools import wraps
 from django.core.exceptions import PermissionDenied
 from django import template
-
-# --- PERMISSION STRUCTURE ---
+from django.contrib.auth.views import redirect_to_login
+import json
 
 PERMISSIONS_STRUCTURE = {
     "Leave": [
@@ -101,61 +99,59 @@ PERMISSIONS_STRUCTURE = {
 ALL_PERMISSION_CODES = [code for perms in PERMISSIONS_STRUCTURE.values() for code, _ in perms]
 
 def get_permission_label(code):
-    """
-    Returns the human-readable group + label for a given code.
-    """
     for group, perms in PERMISSIONS_STRUCTURE.items():
         for c, label in perms:
             if c == code:
                 return f"{group} – {label}"
     return code
 
+def _extract_perms(user):
+    profile = getattr(user, "profile", None)
+    perms = getattr(profile, "permissions", []) if profile else []
+    if isinstance(perms, (list, tuple, set)):
+        return set(perms)
+    if isinstance(perms, str):
+        s = perms.strip()
+        try:
+            data = json.loads(s)
+            if isinstance(data, list):
+                return set(str(x) for x in data)
+        except Exception:
+            pass
+        return set([p.strip() for p in s.split(",") if p.strip()])
+    return set()
+
 def has_permission(code):
-    """
-    Decorator for views. Checks user or user.profile.permissions for the code.
-    """
     def decorator(view_func):
         @wraps(view_func)
         def _wrapped(request, *args, **kwargs):
+            if not request.user.is_authenticated:
+                return redirect_to_login(request.get_full_path())
             if request.user.is_superuser:
                 return view_func(request, *args, **kwargs)
-            profile = getattr(request.user, 'profile', None)
-            perms = getattr(profile, 'permissions', []) if profile else []
-            if code in perms:
+            if code in _extract_perms(request.user):
                 return view_func(request, *args, **kwargs)
             raise PermissionDenied
         return _wrapped
     return decorator
 
 class PermissionRequiredMixin:
-    """
-    CBV mixin for class-based views.
-    """
     permission_code = None
-
     def dispatch(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return redirect_to_login(request.get_full_path())
         if request.user.is_superuser:
             return super().dispatch(request, *args, **kwargs)
-        profile = getattr(request.user, 'profile', None)
-        perms = getattr(profile, 'permissions', []) if profile else []
-        if self.permission_code and self.permission_code not in perms:
+        if self.permission_code and self.permission_code not in _extract_perms(request.user):
             raise PermissionDenied
         return super().dispatch(request, *args, **kwargs)
-
-# --- Template Filter for use in templates ---
 
 register = template.Library()
 
 @register.filter(name='has_permission')
 def user_has_permission(user, code):
-    """
-    Template usage:
-    {% if user|has_permission:"some_perm_code" %}
-    """
-    if not user.is_authenticated:
+    if not getattr(user, "is_authenticated", False):
         return False
-    if user.is_superuser:
+    if getattr(user, "is_superuser", False):
         return True
-    profile = getattr(user, 'profile', None)
-    perms = getattr(profile, 'permissions', []) if profile else []
-    return code in perms
+    return code in _extract_perms(user)
