@@ -18,7 +18,7 @@ from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.dateparse import parse_time
+from django.utils.dateparse import parse_time, parse_datetime
 
 from apps.users.permissions import has_permission
 from apps.settings.models import Holiday
@@ -31,7 +31,7 @@ from .forms import (
 )
 from .models import BulkUpload, Checklist, Delegation, FMS, HelpTicket
 
-# Use the helpers provided in utils.py (they sanitize email contexts, etc.)
+# Use helpers that wrap/sanitize email contexts, etc.
 from .utils import (
     send_checklist_assignment_to_user,
     send_checklist_admin_confirmation,
@@ -457,6 +457,31 @@ def _coerce_date_safe(dtor):
 
 
 # ---------------------------------------------------------------------------
+# Defensive decoder for DB datetime blobs -> datetime/str
+# ---------------------------------------------------------------------------
+def _coerce_dt_val(val):
+    """
+    Some SQLite/driver combos can return memoryview/bytes for DateTimeField.
+    Convert those to a timezone-aware datetime if possible (else, leave as str).
+    """
+    if isinstance(val, memoryview):
+        val = val.tobytes()
+    if isinstance(val, (bytes, bytearray)):
+        try:
+            s = val.decode("utf-8")
+        except Exception:
+            s = val.decode("latin-1", "ignore")
+        dt = parse_datetime(s)
+        if dt is not None:
+            tz = timezone.get_current_timezone()
+            if timezone.is_naive(dt):
+                dt = timezone.make_aware(dt, tz)
+            return dt
+        return s
+    return val
+
+
+# ---------------------------------------------------------------------------
 # Delegation metrics
 # ---------------------------------------------------------------------------
 def calculate_delegation_assigned_time(qs, up_to=None):
@@ -527,13 +552,11 @@ def _delete_series_for(instance: Checklist) -> int:
 # ---------------------------------------------------------------------------
 @has_permission("list_checklist")
 def list_checklist(request):
-    # Generate next recurrences on GET (unless suppressed by earlier POST)
     if request.method == "GET":
         if not request.session.pop("suppress_auto_recur", False):
             ensure_next_for_all_recurring()
 
     if request.method == "POST":
-        # Single-series delete (from action button on a row)
         if request.POST.get("action") == "delete_series" and request.POST.get("pk"):
             try:
                 obj = Checklist.objects.get(pk=int(request.POST["pk"]))
@@ -547,11 +570,9 @@ def list_checklist(request):
             else:
                 messages.info(request, "No pending occurrences found to delete for that series.")
 
-            # Avoid immediately regenerating on the same refresh
             request.session["suppress_auto_recur"] = True
             return redirect("tasks:list_checklist")
 
-        # Bulk delete handler
         ids = request.POST.getlist("sel")
         with_series = bool(request.POST.get("with_series"))
         total_deleted = 0
@@ -586,7 +607,6 @@ def list_checklist(request):
 
         return redirect("tasks:list_checklist")
 
-    # Compose list: 1) all one-time pending; 2) first pending in each recurring series
     one_time_qs = Checklist.objects.exclude(mode__in=RECURRING_MODES).filter(status="Pending")
     base_rec = Checklist.objects.filter(status="Pending", mode__in=RECURRING_MODES)
 
@@ -606,7 +626,6 @@ def list_checklist(request):
 
     qs = Checklist.objects.filter(Q(pk__in=recurring_first_qs) | Q(pk__in=one_time_qs.values("pk")))
 
-    # Filters
     if (kw := request.GET.get("keyword", "").strip()):
         qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
 
@@ -626,7 +645,6 @@ def list_checklist(request):
 
     items = qs.order_by("-planned_date", "-id")
 
-    # CSV export
     if request.GET.get("download"):
         resp = HttpResponse(content_type="text/csv")
         resp["Content-Disposition"] = 'attachment; filename="checklist.csv"'
@@ -789,7 +807,6 @@ def complete_checklist(request, pk):
             obj.actual_duration_minutes = max(mins, 0)
             obj.save()
 
-            # Auto-create next in series if applicable
             create_next_if_recurring(obj)
             return redirect(request.GET.get("next", "dashboard:home"))
     else:
@@ -822,14 +839,19 @@ def list_delegation(request):
             messages.warning(request, "Invalid action specified.")
         return redirect("tasks:list_delegation")
 
-    items = Delegation.objects.all().order_by("-planned_date")
+    items_qs = Delegation.objects.all().order_by("-planned_date")
     if request.GET.get("today_only"):
         today = timezone.localdate()
-        items = items.filter(planned_date__date=today)
+        items_qs = items_qs.filter(planned_date__date=today)
 
     up_to = timezone.localdate()
-    assign_time = calculate_delegation_assigned_time(items, up_to)
-    actual_time = calculate_delegation_actual_time(items, up_to)
+    assign_time = calculate_delegation_assigned_time(items_qs, up_to)
+    actual_time = calculate_delegation_actual_time(items_qs, up_to)
+
+    items = list(items_qs)
+    for d in items:
+        d.planned_date = _coerce_dt_val(d.planned_date)
+        d.completed_at = _coerce_dt_val(d.completed_at)
 
     ctx = {
         "items": items,
@@ -985,7 +1007,6 @@ def list_help_ticket(request):
     if not can_create(request.user):
         qs = qs.filter(assign_to=request.user)
 
-    # Filters
     for param, lookup in [
         ("from_date", "planned_date__date__gte"),
         ("to_date", "planned_date__date__lte"),
@@ -1183,7 +1204,6 @@ def note_help_ticket(request, pk):
 
         ticket.save()
 
-        # Notify both parties when closed
         if ticket.status == "Closed":
             recipients = []
             if ticket.assign_to.email:
@@ -1246,7 +1266,7 @@ def delete_help_ticket(request, pk):
 # ---------------------------------------------------------------------------
 # Bulk Upload
 # ---------------------------------------------------------------------------
-@has_permission("mt_bulk_upload")  # aligned with your PERMISSIONS_STRUCTURE
+@has_permission("mt_bulk_upload")
 def bulk_upload(request):
     if request.method != "POST":
         form = BulkUploadForm()
@@ -1256,7 +1276,7 @@ def bulk_upload(request):
     if not form.is_valid():
         return render(request, "tasks/bulk_upload.html", {"form": form})
 
-    upload = form.save(commit=False)  # noqa: F841  (kept for audit/logging if needed)
+    upload = form.save(commit=False)  # noqa: F841
     f = request.FILES.get("csv_file")
     form_type = form.cleaned_data["form_type"]
 
@@ -1267,7 +1287,6 @@ def bulk_upload(request):
     ext = f.name.rsplit(".", 1)[-1].lower()
     rows = []
 
-    # Read rows from CSV/XLSX
     try:
         if ext in ("xls", "xlsx"):
             xl = pd.read_excel(f, sheet_name=None)
@@ -1349,7 +1368,6 @@ def bulk_upload(request):
                 errors.append(f"Row {idx}: Assign To username '{uname}' not found.")
                 continue
 
-            # Planned datetime
             planned_dt = None
             try:
                 if isinstance(planned_raw, pd.Timestamp):
@@ -1471,7 +1489,6 @@ def bulk_upload(request):
                     except Exception:
                         pass
 
-        # Admin summary
         try:
             send_admin_bulk_summary(
                 title=f"{len(created_objs)} Checklist task(s) imported via Bulk Upload",
@@ -1491,7 +1508,6 @@ def bulk_upload(request):
         messages.success(request, f"{len(created_objs)} checklist row(s) imported successfully.")
         return redirect("tasks:bulk_upload")
 
-    # Delegation bulk
     else:
         required_headers = ["Task Name", "Assign To", "Planned Date"]
         if rows:
@@ -1589,7 +1605,6 @@ def bulk_upload(request):
             messages.error(
                 request,
                 "<ul class='mb-0'>" + "".join([f"<li>{e}</li>" for e in errors]) + "</ul>",
-                # safe=True  # messages framework will escape by default; template can mark safe if desired
             )
             return render(request, "tasks/bulk_upload.html", {"form": BulkUploadForm()})
 
@@ -1651,4 +1666,7 @@ def download_delegation_template(request):
 @login_required
 def list_fms(request):
     items = FMS.objects.all().order_by("-planned_date")
+    items = list(items)
+    for o in items:
+        o.planned_date = _coerce_dt_val(o.planned_date)
     return render(request, "tasks/list_fms.html", {"items": items})
