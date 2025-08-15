@@ -126,7 +126,7 @@ WSGI_APPLICATION = "employee_management.wsgi.application"
 
 
 # -----------------------------------------------------------------------------
-# Database (SQLite) + safe converters (avoid TypeError on datetime)
+# Database (SQLite) + robust decoders so datetimes never come back as bytes
 # -----------------------------------------------------------------------------
 DB_PATH = os.getenv("SQLITE_PATH") or str(BASE_DIR / "db.sqlite3")
 Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
@@ -137,41 +137,65 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": DB_PATH,
-        # converters get applied on declared types and colname hints
+        # Enable declared-type and "AS <type>" column-name converters.
         "OPTIONS": {
             "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
         },
     }
 }
 
-# Global SQLite converters: always return str for timestamp/date-ish columns.
+# Always coerce SQLite date/time-ish blobs to clean text for Django to parse.
 def _decode_to_str(val):
     if val is None:
         return None
-    if isinstance(val, bytes):
+    # Some SQLite builds hand back memoryview for text-ish fields.
+    if isinstance(val, memoryview):
+        val = val.tobytes()
+    if isinstance(val, (bytes, bytearray)):
+        for enc in ("utf-8", "latin-1"):
+            try:
+                return val.decode(enc)
+            except Exception:
+                continue
+        # Last resort: ignore errors but guarantee a str
         try:
-            return val.decode("utf-8")
+            return val.decode("utf-8", "ignore")
         except Exception:
-            return val.decode("latin-1", "ignore")
+            return str(val)
+    # If it's already a str or datetime, Django will handle it later.
     return str(val)
 
 try:
+    # Apply to common datetime-ish declared types
     sqlite3.register_converter("timestamp", _decode_to_str)
     sqlite3.register_converter("datetime", _decode_to_str)
     sqlite3.register_converter("timestamptz", _decode_to_str)
     sqlite3.register_converter("timestamp with time zone", _decode_to_str)
     sqlite3.register_converter("date", _decode_to_str)
 except Exception:
-    # best-effort; safe to continue if this fails
+    # Best-effort; safe to continue if this fails
     pass
 
 from django.db.backends.signals import connection_created  # noqa: E402
+
 def _sqlite_force_text(sender, connection, **kwargs):
-    if connection.vendor == "sqlite":
-        try:
-            connection.connection.text_factory = str
-        except Exception:
-            pass
+    if connection.vendor != "sqlite":
+        return
+    # Text factory used for TEXT columns; make it resilient to bytes/memoryview
+    def _tf(x):
+        if isinstance(x, memoryview):
+            x = x.tobytes()
+        if isinstance(x, (bytes, bytearray)):
+            try:
+                return x.decode("utf-8")
+            except Exception:
+                return x.decode("latin-1", "ignore")
+        return str(x)
+    try:
+        connection.connection.text_factory = _tf
+    except Exception:
+        pass
+
 connection_created.connect(_sqlite_force_text)
 
 
