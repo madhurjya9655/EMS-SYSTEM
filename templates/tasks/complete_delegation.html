@@ -5,84 +5,262 @@
 
 {% block content %}
 <div class="container" style="max-width: 900px;">
-  <div class="page-header mb-3">
-    <h2 class="page-title">Complete Delegation Task</h2>
+  <div class="page-header mb-4">
+    <h2 class="page-title">
+      <i class="fas fa-tasks text-primary me-2"></i>
+      Complete Delegation Task
+    </h2>
     <p class="text-muted mb-0">
       Upload proof (if required) and leave notes, then mark this task as completed.
     </p>
   </div>
 
-  <div class="card shadow-sm">
+  <div class="card shadow-sm border-0">
+    <div class="card-header bg-gradient-info text-white">
+      <h5 class="mb-0">
+        <i class="fas fa-handshake me-2"></i>
+        Delegation Details
+      </h5>
+    </div>
     <div class="card-body">
-      <div class="mb-4">
-        <div class="d-flex align-items-center justify-content-between flex-wrap">
-          <div>
-            <h5 class="mb-1">{{ object.task_name }}</h5>
-            <div class="small text-muted">
-              <span class="me-3"><i class="fa-regular fa-clock me-1"></i>
-                Planned: {% if object.planned_date %}{{ object.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}
-              </span>
-              <span class="me-3"><i class="fa-solid fa-bolt me-1"></i>
-                Priority: {{ object.get_priority_display }}
-              </span>
-              <span class="me-3"><i class="fa-regular fa-user me-1"></i>
-                Assigned to: {{ object.assign_to.get_full_name|default:object.assign_to.username }}
-              </span>
-              <span><i class="fa-regular fa-circle-dot me-1"></i>
-                Current Status: <strong>{{ object.status }}</strong>
-              </span>
+      <div class="row mb-4">
+        <div class="col-md-8">
+          <h4 class="mb-3 text-primary">{{ object.task_name }}</h4>
+          
+          <div class="row g-3">
+            <div class="col-sm-6">
+              <div class="d-flex align-items-center">
+                <i class="fas fa-calendar-alt text-primary me-2"></i>
+                <div>
+                  <small class="text-muted d-block">Planned Date</small>
+                  <strong>{% if object.planned_date %}{{ object.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}</strong>
+                </div>
+              </div>
             </div>
-          </div>
-          <div class="text-end mt-3 mt-md-0">
-            {% if object.time_per_task_minutes %}
-              <div class="small text-muted">Time/Task</div>
-              <div class="fw-semibold">{{ object.time_per_task_minutes }} min</div>
+            
+            <div class="col-sm-6">
+              <div class="d-flex align-items-center">
+                <i class="fas fa-flag text-warning me-2"></i>
+                <div>
+                  <small class="text-muted d-block">Priority</small>
+                  <span class="badge bg-{% if object.priority == 'High' %}danger{% elif object.priority == 'Medium' %}warning{% else %}success{% endif %}">
+                    {{ object.get_priority_display }}
+                  </span>
+                </div>
+              </div>
+            </div>
+            
+            <div class="col-sm-6">
+              <div class="d-flex align-items-center">
+                <i class="fas fa-user text-info me-2"></i>
+                <div>
+                  <small class="text-muted d-block">Assigned By</small>
+                  <strong>{{ object.assign_by.get_full_name|default:object.assign_by.username }}</strong>
+                </div>
+              </div>
+            </div>
+            
+            <div class="col-sm-6">
+              <div class="d-flex align-items-center">
+                <i class="fas fa-user-tag text-success me-2"></i>
+                <div>
+                  <small class="text-muted d-block">Assigned To</small>
+                  <strong>{{ object.assign_to.get_full_name|default:object.assign_to.username }}</strong>
+                </div>
+              </div>
+            </div>
+            
+            <div class="col-sm-6">
+              <div class="d-flex align-items-center">
+                <i class="fas fa-circle text-warning me-2"></i>
+                <div>
+                  <small class="text-muted d-block">Current Status</small>
+                  <span class="badge bg-{% if object.status == 'Pending' %}warning{% else %}success{% endif %}">
+                    {{ object.status }}
+                  </span>
+                </div>
+              </div>
+            </div>
+            
+            {% if object.attachment_mandatory %}
+            <div class="col-sm-6">
+              <div class="d-flex align-items-center">
+                <i class="fas fa-paperclip text-danger me-2"></i>
+                <div>
+                  <small class="text-muted d-block">Attachment Required</small>
+                  <span class="badge bg-danger">Mandatory</span>
+                </div>
+              </div>
+            </div>
             {% endif %}
+          </div>
+        </div>
+        
+        <div class="col-md-4">
+          <div class="card bg-light border-0">
+            <div class="card-body text-center">
+              {% if object.time_per_task_minutes %}
+                <h6 class="text-muted mb-2">Estimated Time</h6>
+                <h3 class="text-primary mb-0">
+                  <i class="fas fa-clock me-1"></i>
+                  {{ object.time_per_task_minutes }} min
+                </h3>
+              {% else %}
+                <h6 class="text-muted mb-2">Time Tracking</h6>
+                <p class="text-muted mb-0">No estimate provided</p>
+              {% endif %}
+              
+              {% if object.is_recurring %}
+              <hr>
+              <small class="text-info">
+                <i class="fas fa-redo-alt me-1"></i>
+                Recurring: {{ object.mode }} ({{ object.frequency }})
+              </small>
+              {% endif %}
+            </div>
           </div>
         </div>
       </div>
 
-      <form method="post" enctype="multipart/form-data" novalidate>
+      <form method="post" enctype="multipart/form-data" id="complete-form">
         {% csrf_token %}
+        
         {% if form.non_field_errors %}
-          <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+          <div class="alert alert-danger">
+            <i class="fas fa-exclamation-triangle me-2"></i>
+            {{ form.non_field_errors }}
+          </div>
         {% endif %}
 
-        <div class="row g-3">
-          {% for field in form.visible_fields %}
-            <div class="col-12">
-              <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
-              {{ field }}
-              {% if field.help_text %}
-                <div class="form-text">{{ field.help_text }}</div>
-              {% endif %}
-              {% for err in field.errors %}
-                <div class="text-danger small">{{ err }}</div>
+        <div class="card border-0 bg-light">
+          <div class="card-header bg-secondary text-white">
+            <h6 class="mb-0">
+              <i class="fas fa-edit me-2"></i>
+              Completion Details
+            </h6>
+          </div>
+          <div class="card-body">
+            <div class="row g-3">
+              {% for field in form.visible_fields %}
+                <div class="col-12">
+                  <label class="form-label fw-bold" for="{{ field.id_for_label }}">
+                    {% if field.name == 'doer_notes' %}
+                      <i class="fas fa-sticky-note me-1"></i>
+                    {% elif field.name == 'doer_file' %}
+                      <i class="fas fa-paperclip me-1"></i>
+                    {% endif %}
+                    {{ field.label }}
+                    {% if field.field.required %}
+                      <span class="text-danger">*</span>
+                    {% endif %}
+                  </label>
+                  
+                  {{ field }}
+                  
+                  {% if field.help_text %}
+                    <div class="form-text">
+                      <i class="fas fa-info-circle me-1"></i>
+                      {{ field.help_text }}
+                    </div>
+                  {% endif %}
+                  
+                  {% for err in field.errors %}
+                    <div class="text-danger small mt-1">
+                      <i class="fas fa-exclamation-circle me-1"></i>
+                      {{ err }}
+                    </div>
+                  {% endfor %}
+                </div>
               {% endfor %}
             </div>
-          {% endfor %}
+          </div>
         </div>
 
-        <div class="d-flex justify-content-between align-items-center mt-4">
-          <div class="text-muted small">
-            After submit, the task status will be set to <strong>Completed</strong>
-            and time will be recorded automatically.
+        <div class="row mt-4">
+          <div class="col-md-8">
+            <div class="alert alert-info border-0">
+              <h6 class="alert-heading">
+                <i class="fas fa-info-circle me-2"></i>
+                What happens after completion?
+              </h6>
+              <ul class="mb-0 ps-3">
+                <li>Task status will be set to <strong>Completed</strong></li>
+                <li>Actual time will be recorded automatically</li>
+                <li>You'll be redirected back to the dashboard</li>
+              </ul>
+            </div>
           </div>
-          <div class="d-flex gap-2">
-            {% url 'dashboard:home' as dashboard_home_url %}
-            {% with next_url=request.GET.next|default:dashboard_home_url %}
-            <a class="btn btn-outline-secondary"
-               href="{{ next_url }}">
-              Cancel
-            </a>
-            {% endwith %}
-            <button type="submit" class="btn btn-success">
-              <i class="fa-solid fa-check me-1"></i> Mark Completed
-            </button>
+          
+          <div class="col-md-4">
+            <div class="d-grid gap-2">
+              {% url 'dashboard:home' as dashboard_home_url %}
+              {% with next_url=request.GET.next|default:dashboard_home_url %}
+              <a class="btn btn-outline-secondary btn-lg"
+                 href="{{ next_url }}">
+                <i class="fas fa-times me-2"></i>
+                Cancel
+              </a>
+              {% endwith %}
+              
+              <button type="submit" class="btn btn-primary btn-lg shadow" id="submit-btn">
+                <span class="spinner-border spinner-border-sm me-2 d-none" role="status"></span>
+                <i class="fas fa-check me-2"></i>
+                <strong>Mark Completed</strong>
+              </button>
+            </div>
           </div>
         </div>
       </form>
     </div>
   </div>
 </div>
+
+<style>
+.bg-gradient-info {
+  background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
+}
+
+.card {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.card-header {
+  border: none;
+}
+
+.form-control:focus {
+  border-color: #17a2b8;
+  box-shadow: 0 0 0 0.2rem rgba(23, 162, 184, 0.25);
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+  border: none;
+}
+
+.btn-primary:hover {
+  background: linear-gradient(135deg, #0056b3 0%, #004085 100%);
+  transform: translateY(-1px);
+}
+
+.alert-info {
+  background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);
+  border: 1px solid #17a2b8;
+  color: #0c5460;
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('complete-form');
+    const submitBtn = document.getElementById('submit-btn');
+    const spinner = submitBtn.querySelector('.spinner-border');
+    
+    form.addEventListener('submit', function() {
+        submitBtn.disabled = true;
+        spinner.classList.remove('d-none');
+    });
+});
+</script>
 {% endblock %}

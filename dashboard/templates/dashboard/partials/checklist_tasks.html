@@ -1,4 +1,3 @@
-{# dashboard/templates/dashboard/partials/checklist_tasks.html #}
 {% load static custom_filters %}
 
 <div class="card shadow-sm">
@@ -6,7 +5,6 @@
     <h5 class="mb-0">Checklist Tasks</h5>
     <div>
       <form method="get" class="d-inline">
-        {# preserve other query params #}
         {% for key, value in request.GET.items %}
           {% if key != 'today_only' and key != 'today' %}
             <input type="hidden" name="{{ key }}" value="{{ value }}">
@@ -35,19 +33,28 @@
             <th>Planned Date</th>
             <th>Status</th>
             <th>Time/Task</th>
-            <th><b>Actual Time</b></th>
+            <th>Actual Time</th>
             <th>Delay</th>
             <th>Action</th>
           </tr>
         </thead>
         <tbody>
           {% for t in tasks %}
-          <tr>
+          <tr {% if t.status == 'Completed' %}class="table-success opacity-75"{% endif %}>
             <td>{{ t.id }}</td>
-            <td>{{ t.task_name }}</td>
+            <td>
+              {{ t.task_name }}
+              {% if t.is_recurring %}
+                <small class="badge bg-info ms-1">{{ t.mode }} ({{ t.frequency }})</small>
+              {% endif %}
+            </td>
             <td>{{ t.message|default:"—"|truncatechars:30 }}</td>
             <td title="{{ t.planned_date|date:'Y-m-d H:i' }}">{{ t.planned_date|date:"d M, Y H:i" }}</td>
-            <td>{{ t.status }}</td>
+            <td>
+              <span class="badge bg-{% if t.status == 'Pending' %}warning{% else %}success{% endif %}">
+                {{ t.status }}
+              </span>
+            </td>
             <td>{{ t.time_per_task_minutes|default:0 }} min</td>
             <td>
               {% if t.actual_duration_minutes %}
@@ -60,19 +67,41 @@
             <td>
               {% if t.status == 'Pending' %}
                 <a href="{% url 'tasks:complete_checklist' t.id %}?next={{ request.get_full_path|urlencode }}"
-                   class="btn btn-sm btn-success">COMPLETE</a>
+                   class="btn btn-sm btn-success">
+                   <i class="fas fa-check"></i> COMPLETE
+                </a>
               {% else %}
-                <span class="text-muted">Done</span>
+                <span class="text-success">
+                  <i class="fas fa-check-circle"></i> Completed
+                </span>
               {% endif %}
             </td>
           </tr>
           {% empty %}
           <tr>
-            <td colspan="9" class="text-center text-muted">No record found.</td>
+            <td colspan="9" class="text-center text-muted py-4">
+              {% if request.GET.today_only or request.GET.today %}
+                No checklist tasks for today.
+              {% else %}
+                No pending checklist tasks.
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   </div>
+  
+  {% if tasks %}
+  <div class="card-footer bg-light">
+    <small class="text-muted">
+      <i class="fas fa-info-circle"></i>
+      Showing {{ tasks|length }} pending task{{ tasks|length|pluralize }}.
+      {% if not request.GET.today_only and not request.GET.today %}
+        Completed tasks are automatically hidden from this view.
+      {% endif %}
+    </small>
+  </div>
+  {% endif %}
 </div>

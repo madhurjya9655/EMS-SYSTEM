@@ -1,80 +1,255 @@
 {% extends "base.html" %}
 {% load static %}
-{% block title %}Complete Help Ticket{% endblock %}
-{% url 'dashboard:home' as dashboard_home_url %}
+
+{% block title %}Complete Help Ticket | BOS EMS{% endblock %}
+
 {% block content %}
-
-<div class="page-header mb-4">
-  <h2 class="page-title">Complete Help Ticket HT-{{ ticket.id }}</h2>
-  <p class="text-muted mb-0">Add a resolution note and optional attachment, then close the ticket.</p>
-</div>
-
-{% if messages %}
-  {% for m in messages %}
-    <div class="alert alert-{{ m.tags|default:'info' }} shadow-sm">{{ m }}</div>
-  {% endfor %}
-{% endif %}
-
-{% if form and form.non_field_errors %}
-  <div class="alert alert-danger shadow-sm">
-    {% for err in form.non_field_errors %}<div>{{ err }}</div>{% endfor %}
+<div class="container" style="max-width: 900px;">
+  <div class="page-header mb-4">
+    <h2 class="page-title">
+      <i class="fas fa-ticket-alt text-warning me-2"></i>
+      Complete Help Ticket HT-{{ ticket.id }}
+    </h2>
+    <p class="text-muted mb-0">
+      Add a resolution note and optional attachment, then close the ticket.
+    </p>
   </div>
-{% endif %}
 
-<div class="card shadow-sm">
-  <div class="card-body">
-    <div class="row g-3 mb-3">
-      <div class="col-md-6">
-        <label class="form-label">Title</label>
-        <input class="form-control" value="{{ ticket.title }}" readonly>
+  {% if messages %}
+    {% for m in messages %}
+      <div class="alert alert-{{ m.tags|default:'info' }} shadow-sm alert-dismissible fade show">
+        <i class="fas fa-info-circle me-2"></i>
+        {{ m }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
       </div>
-      <div class="col-md-3">
-        <label class="form-label">Planned</label>
-        <input class="form-control" value="{{ ticket.planned_date|date:'Y-m-d H:i' }}" readonly>
-      </div>
-      <div class="col-md-3">
-        <label class="form-label">Priority</label>
-        <input class="form-control" value="{{ ticket.priority }}" readonly>
-      </div>
+    {% endfor %}
+  {% endif %}
+
+  <div class="card shadow-sm border-0">
+    <div class="card-header bg-gradient-warning text-dark">
+      <h5 class="mb-0">
+        <i class="fas fa-life-ring me-2"></i>
+        Ticket Details
+      </h5>
     </div>
-
-    <form method="post" enctype="multipart/form-data" id="complete-ticket-form" novalidate>
-      {% csrf_token %}
-
-      <div class="mb-3">
-        <label class="form-label">Your Note <span class="text-danger">*</span></label>
-        <textarea name="resolved_notes" class="form-control" rows="4" required>{{ ticket.resolved_notes }}</textarea>
+    <div class="card-body">
+      <div class="row mb-4">
+        <div class="col-md-8">
+          <h4 class="mb-3 text-primary">{{ ticket.title }}</h4>
+          
+          {% if ticket.description %}
+          <div class="alert alert-light border-left-warning">
+            <h6 class="text-dark mb-2">
+              <i class="fas fa-align-left me-1"></i>Description:
+            </h6>
+            <p class="mb-0">{{ ticket.description|linebreaks }}</p>
+          </div>
+          {% endif %}
+          
+          <div class="row g-3">
+            <div class="col-sm-6">
+              <div class="d-flex align-items-center">
+                <i class="fas fa-calendar-alt text-primary me-2"></i>
+                <div>
+                  <small class="text-muted d-block">Planned Date</small>
+                  <strong>{{ ticket.planned_date|date:"d M, Y H:i" }}</strong>
+                </div>
+              </div>
+            </div>
+            
+            <div class="col-sm-6">
+              <div class="d-flex align-items-center">
+                <i class="fas fa-flag text-warning me-2"></i>
+                <div>
+                  <small class="text-muted d-block">Priority</small>
+                  <span class="badge bg-{% if ticket.priority == 'High' %}danger{% elif ticket.priority == 'Medium' %}warning{% else %}success{% endif %}">
+                    {{ ticket.priority }}
+                  </span>
+                </div>
+              </div>
+            </div>
+            
+            <div class="col-sm-6">
+              <div class="d-flex align-items-center">
+                <i class="fas fa-user text-info me-2"></i>
+                <div>
+                  <small class="text-muted d-block">Assigned By</small>
+                  <strong>{{ ticket.assign_by.get_full_name|default:ticket.assign_by.username }}</strong>
+                </div>
+              </div>
+            </div>
+            
+            <div class="col-sm-6">
+              <div class="d-flex align-items-center">
+                <i class="fas fa-circle text-info me-2"></i>
+                <div>
+                  <small class="text-muted d-block">Current Status</small>
+                  <span class="badge bg-{% if ticket.status == 'Open' %}primary{% elif ticket.status == 'In Progress' %}warning{% else %}success{% endif %}">
+                    {{ ticket.status }}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="col-md-4">
+          <div class="card bg-light border-0">
+            <div class="card-body text-center">
+              {% if ticket.estimated_minutes %}
+                <h6 class="text-muted mb-2">Estimated Time</h6>
+                <h3 class="text-primary mb-0">
+                  <i class="fas fa-clock me-1"></i>
+                  {{ ticket.estimated_minutes }} min
+                </h3>
+              {% else %}
+                <h6 class="text-muted mb-2">Time Tracking</h6>
+                <p class="text-muted mb-0">No estimate provided</p>
+              {% endif %}
+            </div>
+          </div>
+        </div>
       </div>
 
-      <div class="mb-3">
-        <label class="form-label">Attachment (optional)</label>
-        <input type="file" name="media_upload" class="form-control">
-      </div>
+      <form method="post" enctype="multipart/form-data" id="complete-ticket-form">
+        {% csrf_token %}
+        
+        <div class="card border-0 bg-light">
+          <div class="card-header bg-secondary text-white">
+            <h6 class="mb-0">
+              <i class="fas fa-edit me-2"></i>
+              Resolution Details
+            </h6>
+          </div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-12">
+                <label class="form-label fw-bold" for="id_resolved_notes">
+                  <i class="fas fa-sticky-note me-1"></i>
+                  Your Resolution Note
+                  <span class="text-danger">*</span>
+                </label>
+                <textarea name="resolved_notes" 
+                          class="form-control" 
+                          rows="4" 
+                          id="id_resolved_notes"
+                          placeholder="Describe how you resolved this issue or what actions were taken..."
+                          required>{{ ticket.resolved_notes }}</textarea>
+                <div class="form-text">
+                  <i class="fas fa-info-circle me-1"></i>
+                  Please provide detailed information about the resolution for future reference.
+                </div>
+              </div>
+              
+              <div class="col-12">
+                <label class="form-label fw-bold" for="id_media_upload">
+                  <i class="fas fa-paperclip me-1"></i>
+                  Attachment (optional)
+                </label>
+                <input type="file" 
+                       name="media_upload" 
+                       class="form-control"
+                       id="id_media_upload"
+                       accept="image/*,.pdf,.doc,.docx,.txt">
+                <div class="form-text">
+                  <i class="fas fa-info-circle me-1"></i>
+                  Upload screenshots, documents, or other relevant files.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
 
-      <div class="d-flex gap-2">
-        <button type="submit" class="btn btn-success" id="btn-submit-ticket">
-          <span class="spinner-border spinner-border-sm me-2 d-none" role="status" aria-hidden="true"></span>
-          Submit &amp; Close
-        </button>
-        <a class="btn btn-secondary"
-           href="{{ request.GET.next|default:dashboard_home_url }}?task_type=help_ticket">
-          Cancel
-        </a>
-      </div>
-    </form>
+        <div class="row mt-4">
+          <div class="col-md-8">
+            <div class="alert alert-warning border-0">
+              <h6 class="alert-heading">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                What happens after completion?
+              </h6>
+              <ul class="mb-0 ps-3">
+                <li>Ticket status will be set to <strong>Closed</strong></li>
+                <li>Resolution time will be recorded automatically</li>
+                <li>Email notifications will be sent to relevant parties</li>
+                <li>You'll be redirected back to your assigned tickets</li>
+              </ul>
+            </div>
+          </div>
+          
+          <div class="col-md-4">
+            <div class="d-grid gap-2">
+              {% url 'dashboard:home' as dashboard_home_url %}
+              <a class="btn btn-outline-secondary btn-lg"
+                 href="{{ request.GET.next|default:dashboard_home_url }}?task_type=help_ticket">
+                <i class="fas fa-times me-2"></i>
+                Cancel
+              </a>
+              
+              <button type="submit" class="btn btn-warning btn-lg shadow text-dark" id="btn-submit-ticket">
+                <span class="spinner-border spinner-border-sm me-2 d-none" role="status"></span>
+                <i class="fas fa-check-circle me-2"></i>
+                <strong>Submit &amp; Close</strong>
+              </button>
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
   </div>
 </div>
+
+<style>
+.bg-gradient-warning {
+  background: linear-gradient(135deg, #ffc107 0%, #e0a800 100%);
+}
+
+.border-left-warning {
+  border-left: 4px solid #ffc107;
+}
+
+.card {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.card-header {
+  border: none;
+}
+
+.form-control:focus {
+  border-color: #ffc107;
+  box-shadow: 0 0 0 0.2rem rgba(255, 193, 7, 0.25);
+}
+
+.btn-warning {
+  background: linear-gradient(135deg, #ffc107 0%, #e0a800 100%);
+  border: none;
+  color: #212529;
+}
+
+.btn-warning:hover {
+  background: linear-gradient(135deg, #e0a800 0%, #d39e00 100%);
+  transform: translateY(-1px);
+  color: #212529;
+}
+
+.alert-warning {
+  background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+  border: 1px solid #ffc107;
+  color: #856404;
+}
+</style>
 
 <script>
-  (function () {
+document.addEventListener('DOMContentLoaded', function() {
     const form = document.getElementById('complete-ticket-form');
     const btn = document.getElementById('btn-submit-ticket');
-    const spin = btn.querySelector('.spinner-border');
-    form.addEventListener('submit', function(){
-      btn.disabled = true;
-      spin.classList.remove('d-none');
+    const spinner = btn.querySelector('.spinner-border');
+    
+    form.addEventListener('submit', function() {
+        btn.disabled = true;
+        spinner.classList.remove('d-none');
     });
-  })();
+});
 </script>
-
 {% endblock %}

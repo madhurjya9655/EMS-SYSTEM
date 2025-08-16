@@ -1,10 +1,6 @@
 import csv
-import io
-import math
-import re
 import pytz
-from datetime import datetime, timedelta, time, date
-import pandas as pd
+from datetime import datetime, timedelta, date
 from dateutil.relativedelta import relativedelta
 
 from django.conf import settings
@@ -12,13 +8,12 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.staticfiles import finders
-from django.db import transaction, connection
+from django.db import transaction
 from django.db.models import Q, F, Subquery, OuterRef
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.dateparse import parse_time, parse_datetime
 
 from apps.users.permissions import has_permission
 from apps.settings.models import Holiday
@@ -29,7 +24,7 @@ from .forms import (
     DelegationForm, CompleteDelegationForm,
     HelpTicketForm,
 )
-from .models import BulkUpload, Checklist, Delegation, FMS, HelpTicket
+from .models import Checklist, Delegation, FMS, HelpTicket
 from .utils import (
     send_checklist_assignment_to_user,
     send_checklist_admin_confirmation,
@@ -38,35 +33,24 @@ from .utils import (
     send_help_ticket_assignment_to_user,
     send_help_ticket_admin_confirmation,
     send_help_ticket_unassigned_notice,
-    send_admin_bulk_summary,
 )
 from .recurrence import get_next_planned_date, keep_first_occurrence
 
 User = get_user_model()
 
-# Who can create Help Tickets (and see "All" by default)
 can_create = lambda u: u.is_superuser or u.groups.filter(name__in=["Admin", "Manager", "EA", "CEO"]).exists()
 
-# Base site URL used inside emails for "Complete" links
 site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
-# Timezone / assignment constants
 IST = pytz.timezone("Asia/Kolkata")
 ASSIGN_HOUR = 10
 ASSIGN_MINUTE = 0
 
-# Feature flags (emails)
 SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
-SEND_EMAILS_ON_BULK = getattr(settings, "SEND_EMAILS_ON_BULK", True)
-
 RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
 
 
-# ---------------------------------------------------------------------------
-# Small helpers
-# ---------------------------------------------------------------------------
 def _minutes_between(now_dt: datetime, planned_dt: datetime) -> int:
-    """Return non-negative minutes between two datetimes (timezone-safe)."""
     if not planned_dt:
         return 0
     try:
@@ -81,22 +65,16 @@ def _minutes_between(now_dt: datetime, planned_dt: datetime) -> int:
     return max(mins, 0)
 
 
-# ---------------------------------------------------------------------------
-# Working-day helpers
-# ---------------------------------------------------------------------------
-def is_working_day(dt: date) -> bool:
-    return dt.weekday() != 6 and not Holiday.objects.filter(date=dt).exists()
+def is_working_day(d: date) -> bool:
+    return d.weekday() != 6 and not Holiday.objects.filter(date=d).exists()
 
 
-def next_working_day(dt: date) -> date:
-    while not is_working_day(dt):
-        dt += timedelta(days=1)
-    return dt
+def next_working_day(d: date) -> date:
+    while not is_working_day(d):
+        d += timedelta(days=1)
+    return d
 
 
-# ---------------------------------------------------------------------------
-# Checklist recurrence helpers
-# ---------------------------------------------------------------------------
 def _series_filter_kwargs(task: Checklist) -> dict:
     return dict(
         assign_to_id=task.assign_to_id,
@@ -108,18 +86,11 @@ def _series_filter_kwargs(task: Checklist) -> dict:
 
 
 def create_next_if_recurring(task: Checklist) -> None:
-    """
-    Generate the next pending occurrence for a recurring checklist task,
-    if not already present. Always creates at 10:00 AM IST on working days.
-    """
     if (task.mode or "") not in RECURRING_MODES:
         return
-
     nxt_dt = get_next_planned_date(task.planned_date, task.mode, task.frequency)
     if not nxt_dt:
         return
-
-    # Prevent duplicates for the same series
     if Checklist.objects.filter(
         status="Pending",
         planned_date__gte=nxt_dt - timedelta(minutes=1),
@@ -127,7 +98,6 @@ def create_next_if_recurring(task: Checklist) -> None:
         **_series_filter_kwargs(task),
     ).exists():
         return
-
     new_obj = Checklist.objects.create(
         assign_by=task.assign_by,
         task_name=task.task_name,
@@ -152,7 +122,6 @@ def create_next_if_recurring(task: Checklist) -> None:
         actual_duration_minutes=0,
         status="Pending",
     )
-
     if SEND_EMAILS_FOR_AUTO_RECUR:
         complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
         try:
@@ -166,21 +135,16 @@ def create_next_if_recurring(task: Checklist) -> None:
                 subject_prefix="Recurring Checklist Generated",
             )
         except Exception:
-            # Email issues shouldn't block creation
             pass
 
 
 def ensure_next_for_all_recurring() -> None:
-    """
-    For each series that has no future pending occurrence, create the next one.
-    """
     now = timezone.now()
     seeds = (
         Checklist.objects.filter(status="Pending", mode__in=RECURRING_MODES)
         .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
         .distinct()
     )
-
     for s in seeds:
         last_pending = (
             Checklist.objects.filter(status="Pending", **s)
@@ -189,19 +153,12 @@ def ensure_next_for_all_recurring() -> None:
         )
         if not last_pending:
             continue
-
-        # Already have something scheduled in the future? skip
         if Checklist.objects.filter(status="Pending", planned_date__gt=now, **s).exists():
             continue
-
-        # If the most-recent planned is now/past, create the next
         if last_pending.planned_date <= now:
             create_next_if_recurring(last_pending)
 
 
-# ---------------------------------------------------------------------------
-# Series deletion helper
-# ---------------------------------------------------------------------------
 def _delete_series_for(instance: Checklist) -> int:
     if not instance:
         return 0
@@ -210,15 +167,11 @@ def _delete_series_for(instance: Checklist) -> int:
     return deleted
 
 
-# ---------------------------------------------------------------------------
-# Checklist views
-# ---------------------------------------------------------------------------
 @has_permission("list_checklist")
 def list_checklist(request):
     if request.method == "GET":
         if not request.session.pop("suppress_auto_recur", False):
             ensure_next_for_all_recurring()
-
     if request.method == "POST":
         if request.POST.get("action") == "delete_series" and request.POST.get("pk"):
             try:
@@ -226,20 +179,16 @@ def list_checklist(request):
             except (Checklist.DoesNotExist, ValueError, TypeError):
                 messages.warning(request, "The selected series no longer exists.")
                 return redirect("tasks:list_checklist")
-
             deleted = _delete_series_for(obj)
             if deleted:
                 messages.success(request, f"Deleted {deleted} occurrence(s) from the series '{obj.task_name}'.")
             else:
                 messages.info(request, "No pending occurrences found to delete for that series.")
-
             request.session["suppress_auto_recur"] = True
             return redirect("tasks:list_checklist")
-
         ids = request.POST.getlist("sel")
         with_series = bool(request.POST.get("with_series"))
         total_deleted = 0
-
         if ids:
             if with_series:
                 series_seen = set()
@@ -253,7 +202,6 @@ def list_checklist(request):
                         continue
                     series_seen.add(key)
                     total_deleted += _delete_series_for(obj)
-
                 if total_deleted:
                     messages.success(request, f"Deleted {total_deleted} pending occurrence(s) across selected series.")
                 else:
@@ -265,14 +213,10 @@ def list_checklist(request):
                     messages.success(request, f"Deleted {deleted} selected task(s).")
                 else:
                     messages.info(request, "Nothing was deleted. The selected tasks may have already been removed.")
-
             request.session["suppress_auto_recur"] = True
-
         return redirect("tasks:list_checklist")
-
     one_time_qs = Checklist.objects.exclude(mode__in=RECURRING_MODES).filter(status="Pending")
     base_rec = Checklist.objects.filter(status="Pending", mode__in=RECURRING_MODES)
-
     first_recurring_pk = Subquery(
         Checklist.objects.filter(
             status="Pending",
@@ -286,12 +230,9 @@ def list_checklist(request):
         .values("pk")[:1]
     )
     recurring_first_qs = base_rec.annotate(first_pk=first_recurring_pk).filter(pk=F("first_pk")).values("pk")
-
     qs = Checklist.objects.filter(Q(pk__in=recurring_first_qs) | Q(pk__in=one_time_qs.values("pk")))
-
     if (kw := request.GET.get("keyword", "").strip()):
         qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
-
     for param, lookup in [
         ("assign_to", "assign_to_id"),
         ("priority", "priority"),
@@ -301,13 +242,10 @@ def list_checklist(request):
     ]:
         if (v := request.GET.get(param, "").strip()):
             qs = qs.filter(**{lookup: v})
-
     if request.GET.get("today_only"):
         today = timezone.localdate()
         qs = qs.filter(planned_date__date=today)
-
-    items = qs.order_by("-planned_date", "-id")
-
+    items = qs.select_related("assign_by", "assign_to").order_by("-planned_date", "-id")
     if request.GET.get("download"):
         resp = HttpResponse(content_type="text/csv")
         resp["Content-Disposition"] = 'attachment; filename="checklist.csv"'
@@ -325,7 +263,6 @@ def list_checklist(request):
                 ]
             )
         return resp
-
     ctx = {
         "items": items,
         "users": User.objects.order_by("username"),
@@ -333,7 +270,6 @@ def list_checklist(request):
         "group_names": Checklist.objects.order_by("group_name").values_list("group_name", flat=True).distinct(),
         "current_tab": "checklist",
     }
-
     if request.GET.get("partial"):
         return render(request, "tasks/partial_list_checklist.html", ctx)
     return render(request, "tasks/list_checklist.html", ctx)
@@ -344,14 +280,11 @@ def add_checklist(request):
     if request.method == "POST":
         form = ChecklistForm(request.POST, request.FILES)
         if form.is_valid():
-            planned_date = form.cleaned_data.get("planned_date")
-            if planned_date:
-                planned_date = keep_first_occurrence(planned_date)
+            planned_date = keep_first_occurrence(form.cleaned_data.get("planned_date"))
             obj = form.save(commit=False)
             obj.planned_date = planned_date
             obj.save()
             form.save_m2m()
-
             complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
             try:
                 send_checklist_assignment_to_user(
@@ -362,7 +295,6 @@ def add_checklist(request):
                 send_checklist_admin_confirmation(task=obj, subject_prefix="Checklist Task Assignment")
             except Exception:
                 pass
-
             return redirect("tasks:list_checklist")
     else:
         form = ChecklistForm(initial={"assign_by": request.user})
@@ -373,19 +305,14 @@ def add_checklist(request):
 def edit_checklist(request, pk):
     obj = get_object_or_404(Checklist, pk=pk)
     old_assignee = obj.assign_to
-
     if request.method == "POST":
         form = ChecklistForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
-            planned_date = form.cleaned_data.get("planned_date")
-            if planned_date:
-                planned_date = keep_first_occurrence(planned_date)
-
+            planned_date = keep_first_occurrence(form.cleaned_data.get("planned_date"))
             obj2 = form.save(commit=False)
             obj2.planned_date = planned_date
             obj2.save()
             form.save_m2m()
-
             complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj2.id])}"
             try:
                 if old_assignee and obj2.assign_to_id != old_assignee.id:
@@ -405,11 +332,9 @@ def edit_checklist(request, pk):
                     send_checklist_admin_confirmation(task=obj2, subject_prefix="Checklist Task Updated")
             except Exception:
                 pass
-
             return redirect("tasks:list_checklist")
     else:
         form = ChecklistForm(instance=obj)
-
     return render(request, "tasks/add_checklist.html", {"form": form})
 
 
@@ -432,7 +357,6 @@ def reassign_checklist(request, pk):
         if uid := request.POST.get("assign_to"):
             obj.assign_to = User.objects.get(pk=uid)
             obj.save()
-
             complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
             try:
                 send_checklist_assignment_to_user(
@@ -445,9 +369,7 @@ def reassign_checklist(request, pk):
                 send_checklist_admin_confirmation(task=obj, subject_prefix="Checklist Task Reassigned")
             except Exception:
                 pass
-
             return redirect("tasks:list_checklist")
-
     return render(
         request,
         "tasks/reassign_checklist.html",
@@ -457,66 +379,32 @@ def reassign_checklist(request, pk):
 
 @login_required
 def complete_checklist(request, pk):
-    """
-    COMPLETELY FIXED: Robust completion endpoint that actually saves the status and handles recurring tasks.
-    """
     obj = get_object_or_404(Checklist, pk=pk)
-
-    # Basic permission: assignee, staff, or superuser
     if obj.assign_to_id and obj.assign_to_id != request.user.id and not (request.user.is_staff or request.user.is_superuser):
         messages.error(request, "You are not the assignee of this task.")
         return redirect(request.GET.get("next", "dashboard:home"))
-
     if request.method == "GET":
         form = CompleteChecklistForm(instance=obj)
         return render(request, "tasks/complete_checklist.html", {"form": form, "object": obj})
-
-    # POST - Handle form submission and completion
     with transaction.atomic():
-        # Refresh object to avoid race conditions
         obj = Checklist.objects.select_for_update().get(pk=pk)
-        
-        # Skip if already completed
-        if obj.status == "Completed":
-            messages.info(request, "Task was already completed.")
-            return redirect(request.GET.get("next", "dashboard:home"))
-        
-        now = timezone.now()
-        
-        # Process the form (doer_notes and doer_file)
         form = CompleteChecklistForm(request.POST, request.FILES, instance=obj)
-        
-        # Calculate actual duration
-        actual_minutes = 0
-        if obj.planned_date:
-            actual_minutes = _minutes_between(now, obj.planned_date)
-        
-        # Update the object with completion data
-        obj.status = "Completed"
-        obj.completed_at = now
-        obj.actual_duration_minutes = actual_minutes
-        
-        # Save form data if valid (doer_notes, doer_file)
-        if form.is_valid():
-            if form.cleaned_data.get('doer_notes'):
-                obj.doer_notes = form.cleaned_data['doer_notes']
-            if form.cleaned_data.get('doer_file'):
-                obj.doer_file = form.cleaned_data['doer_file']
-        
-        # Save the object
-        obj.save()
-
-        # Try to create next recurring task (outside of this transaction)
-        transaction.on_commit(lambda: create_next_if_recurring(obj))
-
+        if obj.attachment_mandatory and not request.FILES.get("doer_file") and not obj.doer_file:
+            form.add_error("doer_file", "Attachment is required for this task.")
+        if not form.is_valid():
+            return render(request, "tasks/complete_checklist.html", {"form": form, "object": obj})
+        now = timezone.now()
+        actual_minutes = _minutes_between(now, obj.planned_date) if obj.planned_date else 0
+        inst = form.save(commit=False)
+        inst.status = "Completed"
+        inst.completed_at = now
+        inst.actual_duration_minutes = actual_minutes
+        inst.save()
+        transaction.on_commit(lambda: create_next_if_recurring(inst))
     messages.success(request, f"Task '{obj.task_name}' marked as completed successfully!")
-    next_url = request.GET.get("next", "dashboard:home")
-    return redirect(next_url)
+    return redirect(request.GET.get("next", "dashboard:home"))
 
 
-# ---------------------------------------------------------------------------
-# Delegation views
-# ---------------------------------------------------------------------------
 @has_permission("list_delegation")
 def list_delegation(request):
     if request.method == "POST":
@@ -537,13 +425,9 @@ def list_delegation(request):
         else:
             messages.warning(request, "Invalid action specified.")
         return redirect("tasks:list_delegation")
-
-    qs = Delegation.objects.select_related("assign_by", "assign_to").order_by("-planned_date", "-id")
-
-    # Apply filters
+    qs = Delegation.objects.filter(status="Pending").select_related("assign_by", "assign_to").order_by("-planned_date", "-id")
     if (kw := request.GET.get("keyword", "").strip()):
         qs = qs.filter(Q(task_name__icontains=kw))
-
     for param, lookup in [
         ("assign_to", "assign_to_id"),
         ("priority", "priority"),
@@ -552,18 +436,20 @@ def list_delegation(request):
     ]:
         if (v := request.GET.get(param, "").strip()):
             qs = qs.filter(**{lookup: v})
-
+    status_param = request.GET.get("status", "").strip()
+    if status_param == "all":
+        qs = Delegation.objects.all()
+    elif status_param and status_param != "Pending":
+        qs = Delegation.objects.filter(status=status_param)
     if request.GET.get("today_only"):
         today = timezone.localdate()
         qs = qs.filter(planned_date__date=today)
-
     ctx = {
         "items": qs,
         "current_tab": "delegation",
         "users": User.objects.order_by("username"),
         "priority_choices": Delegation._meta.get_field("priority").choices,
     }
-
     if request.GET.get("partial"):
         return render(request, "tasks/partial_list_delegation.html", ctx)
     return render(request, "tasks/list_delegation.html", ctx)
@@ -574,24 +460,10 @@ def add_delegation(request):
     if request.method == "POST":
         form = DelegationForm(request.POST, request.FILES)
         if form.is_valid():
-            planned_dt = form.cleaned_data.get("planned_date")
-            if planned_dt:
-                planned_dt = keep_first_occurrence(planned_dt)
-
+            planned_dt = keep_first_occurrence(form.cleaned_data.get("planned_date"))
             obj = form.save(commit=False)
             obj.planned_date = planned_dt
             obj.save()
-
-            complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[obj.id])}"
-            try:
-                send_delegation_assignment_to_user(
-                    delegation=obj,
-                    complete_url=complete_url,
-                    subject_prefix="New Delegation Task Assigned",
-                )
-            except Exception:
-                pass
-
             return redirect("tasks:list_delegation")
     else:
         form = DelegationForm(initial={"assign_by": request.user})
@@ -604,24 +476,10 @@ def edit_delegation(request, pk):
     if request.method == "POST":
         form = DelegationForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
-            planned_dt = form.cleaned_data.get("planned_date")
-            if planned_dt:
-                planned_dt = keep_first_occurrence(planned_dt)
-
+            planned_dt = keep_first_occurrence(form.cleaned_data.get("planned_date"))
             obj2 = form.save(commit=False)
             obj2.planned_date = planned_dt
             obj2.save()
-
-            complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[obj2.id])}"
-            try:
-                send_delegation_assignment_to_user(
-                    delegation=obj2,
-                    complete_url=complete_url,
-                    subject_prefix="Delegation Task Updated",
-                )
-            except Exception:
-                pass
-
             return redirect("tasks:list_delegation")
     else:
         form = DelegationForm(instance=obj)
@@ -645,19 +503,7 @@ def reassign_delegation(request, pk):
         if uid := request.POST.get("assign_to"):
             obj.assign_to = User.objects.get(pk=uid)
             obj.save()
-
-            complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[obj.id])}"
-            try:
-                send_delegation_assignment_to_user(
-                    delegation=obj,
-                    complete_url=complete_url,
-                    subject_prefix="Delegation Task Reassigned",
-                )
-            except Exception:
-                pass
-
             return redirect("tasks:list_delegation")
-
     return render(
         request,
         "tasks/reassign_delegation.html",
@@ -667,63 +513,31 @@ def reassign_delegation(request, pk):
 
 @login_required
 def complete_delegation(request, pk):
-    """
-    FIXED: Robust completion for Delegation (mirrors checklist completion).
-    """
     obj = get_object_or_404(Delegation, pk=pk)
-
-    # Basic permission: assignee, staff, or superuser
     if obj.assign_to_id and obj.assign_to_id != request.user.id and not (request.user.is_staff or request.user.is_superuser):
         messages.error(request, "You are not the assignee of this task.")
         return redirect(request.GET.get("next", "dashboard:home") + "?task_type=delegation")
-
     if request.method == "GET":
         form = CompleteDelegationForm(instance=obj)
         return render(request, "tasks/complete_delegation.html", {"form": form, "object": obj})
-
-    # POST - Handle completion
     with transaction.atomic():
-        # Refresh object to avoid race conditions
         obj = Delegation.objects.select_for_update().get(pk=pk)
-        
-        # Skip if already completed
-        if obj.status == "Completed":
-            messages.info(request, "Task was already completed.")
-            return redirect(request.GET.get("next", "dashboard:home") + "?task_type=delegation")
-        
-        now = timezone.now()
-        
-        # Process the form (doer_notes and doer_file)
         form = CompleteDelegationForm(request.POST, request.FILES, instance=obj)
-        
-        # Calculate actual duration
-        actual_minutes = 0
-        if obj.planned_date:
-            actual_minutes = _minutes_between(now, obj.planned_date)
-        
-        # Update the object with completion data
-        obj.status = "Completed"
-        obj.completed_at = now
-        obj.actual_duration_minutes = actual_minutes
-        
-        # Save form data if valid (doer_notes, doer_file)
-        if form.is_valid():
-            if form.cleaned_data.get('doer_notes'):
-                obj.doer_notes = form.cleaned_data['doer_notes']
-            if form.cleaned_data.get('doer_file'):
-                obj.doer_file = form.cleaned_data['doer_file']
-        
-        # Save the object
-        obj.save()
-
+        if obj.attachment_mandatory and not request.FILES.get("doer_file") and not obj.doer_file:
+            form.add_error("doer_file", "Attachment is required for this task.")
+        if not form.is_valid():
+            return render(request, "tasks/complete_delegation.html", {"form": form, "object": obj})
+        now = timezone.now()
+        actual_minutes = _minutes_between(now, obj.planned_date) if obj.planned_date else 0
+        inst = form.save(commit=False)
+        inst.status = "Completed"
+        inst.completed_at = now
+        inst.actual_duration_minutes = actual_minutes
+        inst.save()
     messages.success(request, f"Delegation task '{obj.task_name}' marked as completed successfully!")
-    next_url = request.GET.get("next", "dashboard:home") + "?task_type=delegation"
-    return redirect(next_url)
+    return redirect(request.GET.get("next", "dashboard:home") + "?task_type=delegation")
 
 
-# ---------------------------------------------------------------------------
-# Help Ticket views
-# ---------------------------------------------------------------------------
 @login_required
 def list_help_ticket(request):
     if request.method == "POST":
@@ -744,27 +558,27 @@ def list_help_ticket(request):
         else:
             messages.warning(request, "Invalid action specified.")
         return redirect("tasks:list_help_ticket")
-
-    qs = HelpTicket.objects.select_related("assign_by", "assign_to")
+    qs = HelpTicket.objects.select_related("assign_by", "assign_to").exclude(status="Closed")
     if not can_create(request.user):
         qs = qs.filter(assign_to=request.user)
-
     for param, lookup in [
         ("from_date", "planned_date__date__gte"),
         ("to_date", "planned_date__date__lte"),
     ]:
         if v := request.GET.get(param, "").strip():
             qs = qs.filter(**{lookup: v})
-
-    for param, lookup in [
-        ("assign_by", "assign_by_id"),
-        ("assign_to", "assign_to_id"),
-        ("status", "status"),
-    ]:
-        v = request.GET.get(param, "all")
-        if v != "all":
-            qs = qs.filter(**{lookup: v})
-
+    v_assign_by = request.GET.get("assign_by", "all")
+    v_assign_to = request.GET.get("assign_to", "all")
+    v_status = request.GET.get("status", "open")
+    if v_assign_by != "all":
+        qs = qs.filter(assign_by_id=v_assign_by)
+    if v_assign_to != "all":
+        qs = qs.filter(assign_to_id=v_assign_to)
+    if v_status and v_status != "all":
+        if v_status == "open":
+            qs = qs.exclude(status="Closed")
+        else:
+            qs = qs.filter(status=v_status)
     items = qs.order_by("-planned_date")
     return render(
         request,
@@ -803,7 +617,7 @@ def assigned_by_me(request):
                 try:
                     deleted, _ = HelpTicket.objects.filter(pk__in=ids, assign_by=request.user).delete()
                     if deleted:
-                        messages.success(request, f"Successfully deleted {deleted} help ticket(s).")
+                        messages.success(request, f"Successfully deleted {deleted} help tickets(s).")
                     else:
                         messages.info(request, "No help tickets were deleted. You can only delete tickets you assigned.")
                 except Exception as e:
@@ -813,7 +627,6 @@ def assigned_by_me(request):
         else:
             messages.warning(request, "Invalid action specified.")
         return redirect("tasks:assigned_by_me")
-
     items = HelpTicket.objects.filter(assign_by=request.user).order_by("-planned_date")
     return render(
         request,
@@ -836,11 +649,9 @@ def add_help_ticket(request):
                     "tasks/add_help_ticket.html",
                     {"form": form, "current_tab": "add", "can_create": can_create(request.user)},
                 )
-
             ticket = form.save(commit=False)
             ticket.assign_by = request.user
             ticket.save()
-
             complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
             try:
                 send_help_ticket_assignment_to_user(
@@ -854,11 +665,9 @@ def add_help_ticket(request):
                 )
             except Exception:
                 pass
-
             return redirect("tasks:list_help_ticket")
     else:
         form = HelpTicketForm()
-
     return render(
         request,
         "tasks/add_help_ticket.html",
@@ -870,7 +679,6 @@ def add_help_ticket(request):
 def edit_help_ticket(request, pk):
     obj = get_object_or_404(HelpTicket, pk=pk)
     old_assignee = obj.assign_to
-
     if request.method == "POST":
         form = HelpTicketForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
@@ -883,9 +691,7 @@ def edit_help_ticket(request, pk):
                     "tasks/add_help_ticket.html",
                     {"form": form, "current_tab": "edit", "can_create": can_create(request.user)},
                 )
-
             ticket = form.save()
-
             complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
             try:
                 if old_assignee and ticket.assign_to_id != old_assignee.id:
@@ -905,11 +711,9 @@ def edit_help_ticket(request, pk):
                     send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Updated")
             except Exception:
                 pass
-
             return redirect("tasks:list_help_ticket")
     else:
         form = HelpTicketForm(instance=obj)
-
     return render(
         request,
         "tasks/add_help_ticket.html",
@@ -919,9 +723,6 @@ def edit_help_ticket(request, pk):
 
 @login_required
 def complete_help_ticket(request, pk):
-    """
-    For compatibility with existing links: route 'complete' to the 'note' screen.
-    """
     return redirect("tasks:note_help_ticket", pk=pk)
 
 
@@ -931,21 +732,16 @@ def note_help_ticket(request, pk):
     if request.method == "POST":
         notes = request.POST.get("resolved_notes", "").strip()
         ticket.resolved_notes = notes
-
         if "media_upload" in request.FILES:
             ticket.media_upload = request.FILES["media_upload"]
-
         if ticket.status != "Closed":
             ticket.status = "Closed"
             ticket.resolved_at = timezone.now()
             ticket.resolved_by = request.user
-
             if ticket.resolved_at and ticket.planned_date:
                 mins = int((ticket.resolved_at - ticket.planned_date).total_seconds() // 60)
                 ticket.actual_duration_minutes = max(mins, 0)
-
         ticket.save()
-
         if ticket.status == "Closed":
             recipients = []
             if ticket.assign_to.email:
@@ -955,7 +751,6 @@ def note_help_ticket(request, pk):
             if recipients:
                 from django.core.mail import EmailMultiAlternatives
                 from django.template.loader import render_to_string
-
                 subject = f"Help Ticket Closed: {ticket.title}"
                 html_message = render_to_string(
                     "email/help_ticket_closed.html",
@@ -972,10 +767,8 @@ def note_help_ticket(request, pk):
                     msg.send(fail_silently=True)
                 except Exception:
                     pass
-
         messages.success(request, f"Note saved for HT-{ticket.id}.")
         return redirect(request.GET.get("next", reverse("tasks:assigned_to_me")))
-
     return render(
         request,
         "tasks/note_help_ticket.html",
@@ -985,36 +778,23 @@ def note_help_ticket(request, pk):
 
 @login_required
 def delete_help_ticket(request, pk):
-    """
-    Delete a Help Ticket.
-
-    Only the assigner (or a superuser) can delete to avoid surprises for others.
-    """
     ticket = get_object_or_404(HelpTicket, pk=pk)
-
     if not (request.user.is_superuser or ticket.assign_by_id == request.user.id):
         messages.error(request, "You can only delete help tickets you assigned.")
         return redirect("tasks:assigned_by_me")
-
     if request.method == "POST":
         title = ticket.title
         ticket.delete()
         messages.success(request, f'Deleted help ticket "{title}".')
         return redirect(request.GET.get("next", "tasks:assigned_by_me"))
-
     return render(request, "tasks/confirm_delete.html", {"object": ticket, "type": "Help Ticket"})
 
 
-# ---------------------------------------------------------------------------
-# Bulk Upload - Placeholder (keeping existing functionality)
-# ---------------------------------------------------------------------------
 @has_permission("mt_bulk_upload")
 def bulk_upload(request):
     if request.method != "POST":
         form = BulkUploadForm()
         return render(request, "tasks/bulk_upload.html", {"form": form})
-    
-    # Implementation would go here - keeping existing bulk upload logic
     messages.info(request, "Bulk upload functionality maintained as-is")
     return render(request, "tasks/bulk_upload.html", {"form": BulkUploadForm()})
 
@@ -1035,9 +815,6 @@ def download_delegation_template(request):
     return FileResponse(open(path, "rb"), as_attachment=True, filename="delegation_template.csv")
 
 
-# ---------------------------------------------------------------------------
-# FMS (simple list)
-# ---------------------------------------------------------------------------
 @login_required
 def list_fms(request):
     items = FMS.objects.select_related("assign_by", "assign_to").order_by("-planned_date", "-id")

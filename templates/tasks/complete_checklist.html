@@ -1,3 +1,5 @@
+<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\tasks\complete_checklist.html -->
+
 {% extends "base.html" %}
 {% load static %}
 
@@ -109,7 +111,7 @@
         </div>
       </div>
 
-      <form method="post" enctype="multipart/form-data" novalidate class="needs-validation">
+      <form method="post" enctype="multipart/form-data" id="complete-form">
         {% csrf_token %}
         
         {% if form.non_field_errors %}
@@ -193,7 +195,8 @@
                 Cancel
               </a>
               
-              <button type="submit" class="btn btn-success btn-lg shadow">
+              <button type="submit" class="btn btn-success btn-lg shadow" id="submit-btn">
+                <span class="spinner-border spinner-border-sm me-2 d-none" role="status"></span>
                 <i class="fas fa-check-circle me-2"></i>
                 <strong>Mark as Completed</strong>
               </button>
@@ -244,4 +247,17 @@
   color: #065f46;
 }
 </style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('complete-form');
+    const submitBtn = document.getElementById('submit-btn');
+    const spinner = submitBtn.querySelector('.spinner-border');
+    
+    form.addEventListener('submit', function() {
+        submitBtn.disabled = true;
+        spinner.classList.remove('d-none');
+    });
+});
+</script>
 {% endblock %}

@@ -1,4 +1,3 @@
-{# dashboard/templates/dashboard/partials/delegation_tasks.html #}
 {% load custom_filters %}
 
 <div class="card shadow-sm">
@@ -30,12 +29,11 @@
           <tr>
             <th>Task Code</th>
             <th>Task Title</th>
-            <th>Message</th>
             <th>Assigned By</th>
             <th>Planned Date &amp; Time</th>
             <th>Status</th>
             <th>Time/Task</th>
-            <th><b>Actual Time</b></th>
+            <th>Actual Time</th>
             <th>Delay</th>
             <th>Doer Notes</th>
             <th>Action</th>
@@ -43,31 +41,56 @@
         </thead>
         <tbody>
           {% for t in tasks %}
-          <tr>
+          <tr {% if t.status == 'Completed' %}class="table-success opacity-75"{% endif %}>
             <td>DEG{{ t.id }}</td>
             <td>{{ t.task_name }}</td>
-            <td>{{ t.message|default:"—"|truncatechars:30 }}</td>
             <td>{{ t.assign_by.get_full_name|default:t.assign_by.username }}</td>
             <td title="{{ t.planned_date|date:'Y-m-d H:i' }}">{{ t.planned_date|date:"d M, Y H:i" }}</td>
-            <td>{{ t.status }}</td>
+            <td>
+              <span class="badge bg-{% if t.status == 'Pending' %}warning{% else %}success{% endif %}">
+                {{ t.status }}
+              </span>
+            </td>
             <td>{{ t.time_per_task_minutes|default:0 }} min</td>
             <td>{% if t.actual_duration_minutes %}{{ t.actual_duration_minutes }} min{% else %}—{% endif %}</td>
             <td>{{ t.planned_date|delay_since }}</td>
-            <td>{{ t.doer_notes|default:"—" }}</td>
+            <td>{{ t.doer_notes|default:"—"|truncatechars:20 }}</td>
             <td>
-              {% if t.status != 'Completed' %}
+              {% if t.status == 'Pending' %}
                 <a href="{% url 'tasks:complete_delegation' t.id %}?next={{ request.get_full_path|urlencode }}"
-                   class="btn btn-sm btn-success">COMPLETE</a>
+                   class="btn btn-sm btn-success">
+                   <i class="fas fa-check"></i> COMPLETE
+                </a>
               {% else %}
-                <span class="text-muted">Done</span>
+                <span class="text-success">
+                  <i class="fas fa-check-circle"></i> Completed
+                </span>
               {% endif %}
             </td>
           </tr>
           {% empty %}
-          <tr><td colspan="11" class="text-center text-muted">No record found.</td></tr>
+          <tr>
+            <td colspan="10" class="text-center text-muted py-4">
+              {% if request.GET.today_only or request.GET.today %}
+                No delegation tasks for today.
+              {% else %}
+                No pending delegation tasks.
+              {% endif %}
+            </td>
+          </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   </div>
+  
+  {% if tasks %}
+  <div class="card-footer bg-light">
+    <small class="text-muted">
+      <i class="fas fa-info-circle"></i>
+      Showing {{ tasks|length }} pending task{{ tasks|length|pluralize }}.
+      Completed tasks are automatically hidden from this view.
+    </small>
+  </div>
+  {% endif %}
 </div>

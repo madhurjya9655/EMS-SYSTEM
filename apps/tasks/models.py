@@ -1,3 +1,5 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\models.py
+
 from datetime import timedelta
 from django.db import models
 from django.contrib.auth import get_user_model
@@ -9,10 +11,6 @@ User = get_user_model()
 
 
 def is_holiday_or_sunday(date_val):
-    """
-    Treat Sundays and dates present in Holiday table as non-working.
-    Accepts a date or datetime; if datetime, compare by its date component.
-    """
     if hasattr(date_val, "date"):
         date_val = date_val.date()
     return date_val.weekday() == 6 or Holiday.objects.filter(date=date_val).exists()
@@ -31,7 +29,6 @@ class Checklist(models.Model):
     priority = models.CharField(max_length=10, choices=[('Low', 'Low'), ('Medium', 'Medium'), ('High', 'High')])
     attachment_mandatory = models.BooleanField(default=False)
 
-    # Recurrence
     mode = models.CharField(
         max_length=10,
         choices=[
@@ -45,7 +42,6 @@ class Checklist(models.Model):
     )
     frequency = models.PositiveIntegerField(default=1, blank=True, null=True)
 
-    # Estimates & reminders
     time_per_task_minutes = models.PositiveIntegerField(default=0, blank=True, null=True)
     remind_before_days = models.PositiveIntegerField(default=0, blank=True, null=True)
 
@@ -95,12 +91,6 @@ class Checklist(models.Model):
         return timesince(self.planned_date, end)
 
     def clean(self):
-        """
-        Intentionally DO NOT block Sundays/holidays here.
-        Business rule: first occurrence must be exactly as entered.
-        Future recurrences are handled by the recurrence generator
-        which skips Sundays/holidays at 10:00 AM IST.
-        """
         from django.core.exceptions import ValidationError
         super().clean()
 
@@ -117,7 +107,6 @@ class Delegation(models.Model):
     task_name = models.CharField(max_length=200)
     assign_to = models.ForeignKey(User, on_delete=models.CASCADE, related_name='delegations')
 
-    # DateTime (time is mandatory now)
     planned_date = models.DateTimeField()
 
     STATUS_CHOICES = [('Pending', 'Pending'), ('Completed', 'Completed')]
@@ -157,11 +146,6 @@ class Delegation(models.Model):
         )
 
     def clean(self):
-        """
-        Intentionally DO NOT block Sundays/holidays here.
-        Business rule: first occurrence must be exactly as entered.
-        Future recurrences are handled by the recurrence generator.
-        """
         from django.core.exceptions import ValidationError
         super().clean()
 
@@ -234,10 +218,6 @@ class HelpTicket(models.Model):
         return timesince(self.planned_date, end)
 
     def clean(self):
-        """
-        Help Tickets remain restricted: do not allow Sundays/holidays.
-        (Your views also enforce this check.)
-        """
         from django.core.exceptions import ValidationError
         if is_holiday_or_sunday(self.planned_date):
             raise ValidationError("This is a holiday date or Sunday, you cannot add a task on this day.")

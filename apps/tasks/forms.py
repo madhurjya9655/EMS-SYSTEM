@@ -1,3 +1,5 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\forms.py
+
 from django import forms
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
@@ -9,10 +11,6 @@ User = get_user_model()
 
 
 def is_holiday_or_sunday(date_val):
-    """
-    Treat Sundays and dates present in Holiday table as non-working.
-    Accepts a date or datetime; if datetime, compare by its date component.
-    """
     if isinstance(date_val, datetime.datetime):
         date_val = date_val.date()
     return date_val.weekday() == 6 or Holiday.objects.filter(date=date_val).exists()
@@ -67,7 +65,6 @@ class ChecklistForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        # Populate user dropdowns with active users only
         active_users = User.objects.filter(is_active=True).order_by('username')
         self.fields['assign_by'].queryset = active_users
         self.fields['assign_to'].queryset = active_users
@@ -75,7 +72,6 @@ class ChecklistForm(forms.ModelForm):
         self.fields['notify_to'].queryset = active_users
         self.fields['auditor'].queryset = active_users
         
-        # Make optional fields truly optional
         optional_fields = ['assign_pc', 'notify_to', 'auditor', 'media_upload', 'group_name', 'message']
         for field in optional_fields:
             if field in self.fields:
@@ -83,8 +79,6 @@ class ChecklistForm(forms.ModelForm):
 
     def clean_planned_date(self):
         planned_date = self.cleaned_data['planned_date']
-        # Do not raise here; views normalize to next working day at 10:00 IST.
-        # First occurrence keeps exact date+time as entered by user.
         return planned_date
 
     def clean(self):
@@ -92,11 +86,9 @@ class ChecklistForm(forms.ModelForm):
         mode = cleaned.get('mode')
         freq = cleaned.get('frequency')
         
-        # Validate recurrence settings
         if mode and mode != '' and (not freq or int(freq) < 1):
             self.add_error('frequency', "Frequency must be at least 1 when a recurrence mode is selected.")
         
-        # Validate non-negative numbers
         numeric_fields = [
             'time_per_task_minutes', 'remind_before_days', 'reminder_frequency', 
             'reminder_before_days', 'checklist_auto_close_days'
@@ -106,7 +98,6 @@ class ChecklistForm(forms.ModelForm):
             if val is not None and int(val) < 0:
                 self.add_error(field_name, "Must be a non-negative number.")
         
-        # Validate reminder settings
         set_reminder = cleaned.get('set_reminder')
         if set_reminder:
             reminder_mode = cleaned.get('reminder_mode')
@@ -134,7 +125,6 @@ class CompleteChecklistForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Make file upload mandatory only if attachment is required
         if self.instance and hasattr(self.instance, 'attachment_mandatory'):
             self.fields['doer_file'].required = self.instance.attachment_mandatory
         else:
@@ -180,12 +170,10 @@ class DelegationForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        # Populate user dropdowns with active users only
         active_users = User.objects.filter(is_active=True).order_by('username')
         self.fields['assign_by'].queryset = active_users
         self.fields['assign_to'].queryset = active_users
         
-        # Make optional fields truly optional
         optional_fields = ['audio_recording', 'mode', 'frequency']
         for field in optional_fields:
             if field in self.fields:
@@ -193,8 +181,6 @@ class DelegationForm(forms.ModelForm):
 
     def clean_planned_date(self):
         planned_date = self.cleaned_data['planned_date']
-        # Do not raise here; views normalize to next working day at 10:00 IST.
-        # First occurrence keeps exact date+time as entered by user.
         return planned_date
 
     def clean(self):
@@ -202,11 +188,9 @@ class DelegationForm(forms.ModelForm):
         mode = cleaned.get('mode')
         freq = cleaned.get('frequency')
         
-        # Validate recurrence settings
         if mode and mode != '' and (not freq or int(freq) < 1):
             self.add_error('frequency', "Frequency must be at least 1 when a recurrence mode is selected.")
         
-        # Validate time per task
         time_per_task = cleaned.get('time_per_task_minutes')
         if time_per_task is not None and int(time_per_task) < 0:
             self.add_error('time_per_task_minutes', "Time per task must be non-negative.")
@@ -229,7 +213,6 @@ class CompleteDelegationForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Make file upload mandatory only if attachment is required
         if self.instance and hasattr(self.instance, 'attachment_mandatory'):
             self.fields['doer_file'].required = self.instance.attachment_mandatory
         else:
@@ -256,7 +239,6 @@ class BulkUploadForm(forms.ModelForm):
     def clean_csv_file(self):
         csv_file = self.cleaned_data.get('csv_file')
         if csv_file:
-            # Check file extension
             allowed_extensions = ['.csv', '.xlsx', '.xls']
             file_extension = '.' + csv_file.name.split('.')[-1].lower()
             if file_extension not in allowed_extensions:
@@ -264,7 +246,6 @@ class BulkUploadForm(forms.ModelForm):
                     f"Invalid file type. Please upload a CSV or Excel file ({', '.join(allowed_extensions)})"
                 )
             
-            # Check file size (limit to 10MB)
             if csv_file.size > 10 * 1024 * 1024:
                 raise ValidationError("File size must be under 10MB")
                 
@@ -314,11 +295,9 @@ class HelpTicketForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        # Populate user dropdown with active users only
         active_users = User.objects.filter(is_active=True).order_by('username')
         self.fields['assign_to'].queryset = active_users
         
-        # Make optional fields truly optional
         optional_fields = ['media_upload', 'estimated_minutes']
         for field in optional_fields:
             if field in self.fields:
@@ -326,7 +305,6 @@ class HelpTicketForm(forms.ModelForm):
 
     def clean_planned_date(self):
         planned_date = self.cleaned_data['planned_date']
-        # Help Tickets remain blocked on non-working days (by requirement/UX).
         if is_holiday_or_sunday(planned_date):
             raise ValidationError("This is a holiday date or Sunday, you cannot add a task on this day.")
         return planned_date
@@ -340,7 +318,6 @@ class HelpTicketForm(forms.ModelForm):
     def clean(self):
         cleaned = super().clean()
         
-        # Additional validation can be added here
         title = cleaned.get('title')
         description = cleaned.get('description')
         
@@ -353,9 +330,7 @@ class HelpTicketForm(forms.ModelForm):
         return cleaned
 
 
-# Additional utility forms for advanced features
 class ChecklistFilterForm(forms.Form):
-    """Form for filtering checklist items"""
     keyword = forms.CharField(
         required=False,
         widget=forms.TextInput(attrs={

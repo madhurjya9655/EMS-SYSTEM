@@ -1,10 +1,182 @@
-{% extends 'base.html' %}
-{% block title %}Confirm Delete{% endblock %}
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Confirm Delete | BOS EMS{% endblock %}
+
 {% block content %}
-<h2>Confirm Delete {{ type }}</h2>
-<p>Are you sure you want to delete “{{ object.task_name }}”?</p>
-<form method="post">{% csrf_token %}
-  <button type="submit" class="btn btn-danger">Yes, Delete</button>
-  <a href="{% if type == 'Checklist' %}{% url 'tasks:list_checklist' %}{% else %}{% url 'tasks:list_delegation' %}{% endif %}" class="btn btn-secondary">Cancel</a>
-</form>
+<div class="container" style="max-width: 600px;">
+  <div class="page-header mb-4">
+    <h2 class="page-title text-danger">
+      <i class="fas fa-exclamation-triangle me-2"></i>
+      Confirm Delete {{ type }}
+    </h2>
+    <p class="text-muted mb-0">
+      This action cannot be undone. Please confirm your decision.
+    </p>
+  </div>
+
+  <div class="card shadow-sm border-danger">
+    <div class="card-header bg-danger text-white">
+      <h5 class="mb-0">
+        <i class="fas fa-trash-alt me-2"></i>
+        Delete Confirmation
+      </h5>
+    </div>
+    <div class="card-body">
+      <div class="alert alert-warning border-0 mb-4">
+        <div class="d-flex align-items-start">
+          <i class="fas fa-exclamation-triangle text-warning me-3 mt-1"></i>
+          <div>
+            <h6 class="alert-heading mb-2">Warning!</h6>
+            <p class="mb-0">
+              You are about to permanently delete this {{ type|lower }}. 
+              This action cannot be undone and all associated data will be lost.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card bg-light border-0 mb-4">
+        <div class="card-body">
+          <h6 class="card-title text-primary mb-3">
+            <i class="fas fa-info-circle me-2"></i>
+            {{ type }} Details
+          </h6>
+          
+          <div class="row g-2">
+            <div class="col-sm-4">
+              <small class="text-muted">Name:</small>
+            </div>
+            <div class="col-sm-8">
+              <strong>
+                {% if object.task_name %}
+                  {{ object.task_name }}
+                {% elif object.title %}
+                  {{ object.title }}
+                {% else %}
+                  {{ object }}
+                {% endif %}
+              </strong>
+            </div>
+            
+            {% if object.assign_to %}
+            <div class="col-sm-4">
+              <small class="text-muted">Assigned To:</small>
+            </div>
+            <div class="col-sm-8">
+              <span class="badge bg-info">
+                {{ object.assign_to.get_full_name|default:object.assign_to.username }}
+              </span>
+            </div>
+            {% endif %}
+            
+            {% if object.priority %}
+            <div class="col-sm-4">
+              <small class="text-muted">Priority:</small>
+            </div>
+            <div class="col-sm-8">
+              <span class="badge bg-{% if object.priority == 'High' %}danger{% elif object.priority == 'Medium' %}warning{% else %}success{% endif %}">
+                {{ object.priority }}
+              </span>
+            </div>
+            {% endif %}
+            
+            {% if object.status %}
+            <div class="col-sm-4">
+              <small class="text-muted">Status:</small>
+            </div>
+            <div class="col-sm-8">
+              <span class="badge bg-secondary">{{ object.status }}</span>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col-12">
+          <p class="text-danger mb-4">
+            <i class="fas fa-question-circle me-2"></i>
+            <strong>Are you sure you want to delete "
+            {% if object.task_name %}
+              {{ object.task_name }}
+            {% elif object.title %}
+              {{ object.title }}
+            {% else %}
+              {{ object }}
+            {% endif %}
+            "?</strong>
+          </p>
+        </div>
+      </div>
+
+      <form method="post" id="delete-form">
+        {% csrf_token %}
+        <div class="d-flex justify-content-end gap-3">
+          <a href="{% if type == 'Checklist' %}{% url 'tasks:list_checklist' %}{% elif type == 'Delegation' %}{% url 'tasks:list_delegation' %}{% elif type == 'Help Ticket' %}{% url 'tasks:list_help_ticket' %}{% else %}{% url 'dashboard:home' %}{% endif %}" 
+             class="btn btn-outline-secondary btn-lg">
+            <i class="fas fa-times me-2"></i>
+            Cancel
+          </a>
+          
+          <button type="submit" class="btn btn-danger btn-lg" id="confirm-delete-btn">
+            <span class="spinner-border spinner-border-sm me-2 d-none" role="status"></span>
+            <i class="fas fa-trash-alt me-2"></i>
+            <strong>Yes, Delete {{ type }}</strong>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<style>
+.card {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.card-header {
+  border: none;
+}
+
+.btn-danger {
+  background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+  border: none;
+}
+
+.btn-danger:hover {
+  background: linear-gradient(135deg, #c82333 0%, #bd2130 100%);
+  transform: translateY(-1px);
+}
+
+.alert-warning {
+  background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+  border: 1px solid #ffc107;
+  color: #856404;
+}
+
+.bg-light {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%) !important;
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('delete-form');
+    const deleteBtn = document.getElementById('confirm-delete-btn');
+    const spinner = deleteBtn.querySelector('.spinner-border');
+    
+    form.addEventListener('submit', function(e) {
+        // Double confirmation for critical action
+        if (!confirm('This action cannot be undone. Are you absolutely sure?')) {
+            e.preventDefault();
+            return false;
+        }
+        
+        deleteBtn.disabled = true;
+        spinner.classList.remove('d-none');
+    });
+});
+</script>
 {% endblock %}
