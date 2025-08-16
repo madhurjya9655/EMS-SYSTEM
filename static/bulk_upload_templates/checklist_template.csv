@@ -1,3 +1,4 @@
-Task Name,Message,Assign To,Planned Date,Priority,Make Attachment Mandatory,Mode,Frequency,Time per Task (minutes),Reminder Before Days,Assign PC,Group Name,Notify To,Auditor,Set Reminder,Reminder Mode,Reminder Frequency,Reminder Starting Time,Checklist Auto Close,Checklist Auto Close Days
-Daily Backup,Run database backup,saurabh,8/12/2025 13:00,Low,No,Daily,1,15,1,,IT,,,Yes,Daily,1,10:00,No,0
-Weekly Review,Review system logs,madhurjyabora,8/13/2025 22:00,Medium,No,Weekly,1,20,0,,,,,No,,,,No,0
+Task Name,Message,Assign To,Planned Date,Priority,Mode,Frequency,Time per Task (minutes),Reminder Before Days,Assign PC,Group Name,Notify To,Auditor,Set Reminder,Reminder Mode,Reminder Frequency,Reminder Starting Time,Checklist Auto Close,Checklist Auto Close Days
+Weekly Report Submission,Submit weekly progress report,john_doe,8/18/2025 15:30,Medium,Weekly,1,30,1,jane_manager,Operations,admin_user,audit_user,Yes,Daily,1,9:00,No,0
+Monthly Budget Review,Review department budget,jane_manager,8/25/2025 10:00,High,Monthly,1,60,2,,,admin_user,,No,,,,,
+Daily Standup Meeting,Attend daily team standup,team_lead,8/17/2025 9:15,Low,Daily,1,15,0,,,,,No,,,,,

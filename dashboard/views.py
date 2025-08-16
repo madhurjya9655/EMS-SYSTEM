@@ -109,7 +109,7 @@ def create_missing_recurring_checklist_tasks(user):
     now = timezone.now()
 
     seeds = (
-        Checklist.objects.filter(assign_to=user, mode__in=RECURRING_MODES)
+        Checklist.objects.filter(assign_to=user, mode__in=RECURRING_MODES, status='Pending')
         .values('assign_to_id', 'task_name', 'mode', 'frequency', 'group_name')
         .distinct()
     )
@@ -118,7 +118,7 @@ def create_missing_recurring_checklist_tasks(user):
         try:
             last = (
                 Checklist.objects
-                .filter(**s)
+                .filter(status='Pending', **s)
                 .order_by('-planned_date', '-id')
                 .first()
             )
@@ -252,7 +252,8 @@ def calculate_delegation_assigned_time_safe(assign_to_user, date_from, date_to):
         delegations = Delegation.objects.filter(
             assign_to=assign_to_user,
             planned_date__gte=start_dt,
-            planned_date__lt=end_dt
+            planned_date__lt=end_dt,
+            status='Pending'
         )
         
         for d in delegations:
@@ -367,19 +368,20 @@ def dashboard_home(request):
         checklist_qs = Checklist.objects.filter(
             assign_to=request.user,
             status='Pending'
-        ).order_by('planned_date')
+        ).select_related('assign_by').order_by('planned_date')
         if today_only:
             checklist_qs = checklist_qs.filter(planned_date__gte=t_start, planned_date__lt=t_end)
 
         all_delegation = Delegation.objects.filter(
-            assign_to=request.user, status='Pending'
-        ).order_by('planned_date')
+            assign_to=request.user, 
+            status='Pending'
+        ).select_related('assign_by').order_by('planned_date')
         if today_only:
             all_delegation = all_delegation.filter(planned_date__gte=t_start, planned_date__lt=t_end)
 
         all_help_ticket = HelpTicket.objects.filter(
             assign_to=request.user
-        ).exclude(status='Closed').order_by('planned_date')
+        ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
         if today_only:
             all_help_ticket = all_help_ticket.filter(planned_date__gte=t_start, planned_date__lt=t_end)
     except Exception as e:
@@ -393,7 +395,7 @@ def dashboard_home(request):
     elif selected == 'help_ticket':
         tasks = list(all_help_ticket)
     else:
-        tasks = checklist_qs
+        tasks = list(checklist_qs)
 
     if (selected == 'checklist' or not selected):
         if now_dt.weekday() == 6 or now_dt.time() < dt_time(hour=10, minute=0):
