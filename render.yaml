@@ -6,7 +6,8 @@ services:
     buildCommand: |
       pip install -r requirements.txt
 
-    startCommand: gunicorn employee_management.wsgi:application --workers=1 --timeout=120
+    # CRITICAL: Use only 1 worker to prevent SQLite locks
+    startCommand: gunicorn employee_management.wsgi:application --workers=1 --timeout=120 --max-requests=1000 --max-requests-jitter=100
 
     # Run after each deploy. One shell line is safest on Render.
     postdeploy: |
@@ -22,6 +23,10 @@ services:
 
       - key: MEDIA_ROOT
         value: /opt/render/project/src/db/media
+
+      # Force single worker to prevent SQLite database locks
+      - key: WEB_CONCURRENCY
+        value: "1"
 
       # Put these in Render > Environment as secrets (do NOT commit values)
       - key: EMAIL_HOST_USER

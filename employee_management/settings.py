@@ -133,7 +133,7 @@ WSGI_APPLICATION = "employee_management.wsgi.application"
 
 
 # -----------------------------------------------------------------------------
-# Database (SQLite) + enhanced datetime BLOB handling
+# Database (SQLite) - Enhanced for Production Stability
 # -----------------------------------------------------------------------------
 DB_PATH = os.getenv("SQLITE_PATH") or str(BASE_DIR / "db.sqlite3")
 Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
@@ -146,9 +146,68 @@ DATABASES = {
         "NAME": DB_PATH,
         "OPTIONS": {
             "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+            "timeout": 30,  # Increased timeout for production
+            "init_command": """
+                PRAGMA journal_mode=WAL;
+                PRAGMA synchronous=NORMAL;
+                PRAGMA cache_size=20000;
+                PRAGMA temp_store=MEMORY;
+                PRAGMA mmap_size=268435456;
+                PRAGMA foreign_keys=ON;
+                PRAGMA busy_timeout=30000;
+            """,
         },
     }
 }
+
+# Enhanced logging configuration for debugging database issues
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'file': {
+            'level': 'INFO',
+            'class': 'logging.FileHandler',
+            'filename': '/tmp/django.log' if os.environ.get('RENDER') else 'django.log',
+            'formatter': 'verbose',
+        },
+        'console': {
+            'level': 'INFO',
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'django.db.backends': {
+            'handlers': ['file'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'apps.tasks': {
+            'handlers': ['file', 'console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
+
+# Database connection settings for SQLite optimization
+DATABASE_CONNECTION_POOLING = False  # Disable for SQLite
+CONN_MAX_AGE = 0  # Disable persistent connections for SQLite
 
 # Robust SQLite datetime conversion helpers
 def _robust_sqlite_decoder(val):
@@ -311,7 +370,7 @@ LOGOUT_REDIRECT_URL = "login"
 
 
 # -----------------------------------------------------------------------------
-# Email (Gmail-ready; values come from env)
+# Email (Gmail-ready; values come from env) - Enhanced for Production
 # -----------------------------------------------------------------------------
 EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
@@ -321,7 +380,7 @@ EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "no-reply@example.com")
 EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "10"))
-EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False)
+EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", True)  # Prevent crashes in production
 
 # Feature flag: send emails when auto-generating recurring tasks?
 SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", False)
@@ -353,3 +412,35 @@ CRISPY_TEMPLATE_PACK = "bootstrap5"
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 GOOGLE_SHEET_SCOPES = os.getenv("GOOGLE_SHEET_SCOPES")
+
+
+# -----------------------------------------------------------------------------
+# Render-specific Production Optimizations
+# -----------------------------------------------------------------------------
+if os.environ.get('RENDER'):
+    # Force single worker process to prevent SQLite lock conflicts
+    WEB_CONCURRENCY = 1
+    
+    # Additional production optimizations
+    SESSION_ENGINE = 'django.contrib.sessions.backends.cache'  # Use cache for sessions
+    MESSAGE_STORAGE = 'django.contrib.messages.storage.session.SessionStorage'
+    
+    # Optimize file uploads for production
+    FILE_UPLOAD_MAX_MEMORY_SIZE = 5242880  # 5MB
+    DATA_UPLOAD_MAX_MEMORY_SIZE = 5242880  # 5MB
+
+
+# -----------------------------------------------------------------------------
+# Task-specific Performance Settings
+# -----------------------------------------------------------------------------
+# Bulk upload batch sizes for optimal performance
+BULK_UPLOAD_BATCH_SIZE = 20  # Process 20 rows at a time
+BULK_UPLOAD_MAX_ROWS = 1000  # Maximum rows allowed in bulk upload
+
+# Email sending optimization
+EMAIL_BATCH_SIZE = 10  # Send emails in batches
+EMAIL_SEND_DELAY = 0.1  # Small delay between email batches
+
+# Task processing settings
+TASK_PROCESSING_TIMEOUT = 300  # 5 minutes timeout for task processing
+RECURRING_TASK_BATCH_SIZE = 50  # Process recurring tasks in batches

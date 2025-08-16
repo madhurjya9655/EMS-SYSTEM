@@ -1,69 +1,125 @@
+<!-- templates/email/admin_assignment_summary.html -->
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>{{ title|default:"Assignment Summary" }}</title>
-  <style>
-    body { font-family: Arial, sans-serif; color: #222; }
-    .wrap { max-width: 720px; margin: 0 auto; padding: 12px 16px; }
-    h1 { font-size: 18px; margin: 0 0 12px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    th, td { border: 1px solid #e5e5e5; padding: 8px; font-size: 14px; vertical-align: top; }
-    th { background: #f7f7f7; text-align: left; }
-    .small { color: #666; font-size: 12px; }
-  </style>
+    <meta charset="utf-8">
+    <title>{{ title|default:"Assignment Summary" }}</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            color: #333; 
+            margin: 0; 
+            padding: 20px; 
+            background: #f9f9f9; 
+        }
+        .container { 
+            max-width: 600px; 
+            margin: 0 auto; 
+            background: #fff; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header { 
+            background: #007bff; 
+            color: white; 
+            padding: 20px; 
+            text-align: center; 
+        }
+        .header h1 { 
+            margin: 0; 
+            font-size: 20px; 
+            font-weight: normal; 
+        }
+        .content { 
+            padding: 30px; 
+        }
+        .task-item {
+            background: #f8f9fa;
+            border-left: 4px solid #007bff;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .task-name {
+            font-weight: bold;
+            color: #007bff;
+            font-size: 16px;
+            margin-bottom: 8px;
+        }
+        .task-details {
+            font-size: 14px;
+            color: #555;
+            margin: 5px 0;
+        }
+        .complete-button {
+            display: inline-block;
+            background: #28a745;
+            color: white;
+            padding: 8px 16px;
+            text-decoration: none;
+            border-radius: 4px;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        .complete-button:hover {
+            background: #218838;
+        }
+        .footer { 
+            background: #f8f9fa; 
+            padding: 15px; 
+            text-align: center; 
+            border-top: 1px solid #e9ecef; 
+            font-size: 12px; 
+            color: #6c757d; 
+        }
+        .summary-info {
+            background: #e9ecef;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+    </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>{{ title|default:"Assignment Summary" }}</h1>
-
-    {% if items %}
-      <table role="presentation">
-        <tbody>
-          {% for row in items %}
-            <tr>
-              <th style="width:30%">{{ row.label }}</th>
-              <td>
-                {% if row.value|date:"" %}
-                  {{ row.value|date:"Y-m-d H:i" }}
-                {% else %}
-                  {{ row.value }}
-                {% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% endif %}
-
-    {% if items_table %}
-      <table role="presentation" style="margin-top:16px;">
-        <thead>
-          <tr>
-            {% for h,v in items_table.0.items %}
-              <th>{{ h }}</th>
-            {% endfor %}
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in items_table %}
-            <tr>
-              {% for h,v in r.items %}
-                <td>
-                  {% if v|date:"" %}
-                    {{ v|date:"Y-m-d H:i" }}
-                  {% else %}
-                    {{ v }}
-                  {% endif %}
-                </td>
-              {% endfor %}
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% endif %}
-
-    <p class="small">This is an automated message.</p>
-  </div>
+    <div class="container">
+        <div class="header">
+            <h1>{{ title|default:"Task Assignment Summary" }}</h1>
+        </div>
+        
+        <div class="content">
+            {% if items_table %}
+                <div class="summary-info">
+                    <strong>{{ items_table|length }} task(s) have been assigned</strong>
+                </div>
+                
+                {% for task in items_table %}
+                <div class="task-item">
+                    <div class="task-name">{{ task.Task Name }}</div>
+                    <div class="task-details">
+                        <strong>Assigned to:</strong> {{ task.Assign To }}<br>
+                        <strong>Planned Date:</strong> {{ task.Planned Date }}<br>
+                        <strong>Priority:</strong> {{ task.Priority }}
+                    </div>
+                    {% if task.complete_url %}
+                        <a href="{{ task.complete_url }}" class="complete-button">Complete Task</a>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            {% elif items %}
+                {% for item in items %}
+                <div class="task-item">
+                    <div class="task-name">{{ item.label }}</div>
+                    <div class="task-details">{{ item.value }}</div>
+                </div>
+                {% endfor %}
+            {% endif %}
+        </div>
+        
+        <div class="footer">
+            This is an automated message from the Employee Management System.
+        </div>
+    </div>
 </body>
 </html>

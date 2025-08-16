@@ -1,14 +1,4 @@
-# apps/tasks/utils.py
-"""
-Backwards-compatible task utilities.
-
-- Re-exports email helpers so existing imports from `.utils` keep working.
-- Adds a helper to preserve the FIRST occurrence datetime exactly as entered
-  (manual or bulk), interpreting naive datetimes as IST and returning an
-  aware datetime in the project's timezone.
-
-If you already import directly from `.email_utils`, that continues to work.
-"""
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\utils.py
 
 from typing import Iterable, List, Sequence, Optional, Dict, Any
 from django.conf import settings
@@ -16,8 +6,17 @@ from django.contrib.auth import get_user_model
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from django.utils import timezone
+from django.urls import reverse
+from datetime import datetime
+import pytz
+from datetime import time as dt_time
 
 User = get_user_model()
+IST = pytz.timezone("Asia/Kolkata")
+_DEFAULT_ASSIGN_T = dt_time(10, 0)  # project default planning time
+
+# Get site URL for complete URLs
+site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
 
 def _dedupe_emails(emails: Iterable[str]) -> List[str]:
@@ -43,14 +42,7 @@ def get_admin_emails() -> List[str]:
 
 
 def _fmt_value(v: Any) -> Any:
-    """
-    Sanitize/format values before sending into templates:
-      - datetimes -> 'YYYY-MM-DD HH:MM' in local tz
-      - users -> full name or username
-      - everything else -> as-is (stringified by template)
-    Avoids templates trying to introspect Python attributes.
-    """
-    from datetime import datetime
+    """Sanitize/format values before sending into templates"""
     if isinstance(v, datetime):
         tz = timezone.get_current_timezone()
         aware = v if timezone.is_aware(v) else timezone.make_aware(v, tz)
@@ -81,6 +73,56 @@ def _fmt_rows(rows: Sequence[Dict[str, Any]]) -> Sequence[Dict[str, Any]]:
             new_row[str(k)] = _fmt_value(v)
         out.append(new_row)
     return out
+
+
+def _display_name(user) -> str:
+    """Full name if available; else username; else 'System'."""
+    if not user:
+        return "System"
+    try:
+        full = getattr(user, "get_full_name", lambda: "")() or ""
+        if str(full).strip():
+            return str(full).strip()
+        uname = getattr(user, "username", "") or ""
+        return uname if uname else "System"
+    except Exception:
+        return "System"
+
+
+def _fmt_dt_date(dt: Any) -> str:
+    """Format datetime for display"""
+    if not dt:
+        return ""
+    tz = timezone.get_current_timezone()
+    aware = dt if timezone.is_aware(dt) else timezone.make_aware(dt, tz)
+    ist = aware.astimezone(IST)
+    base = ist.strftime("%Y-%m-%d")
+    t = ist.timetz().replace(tzinfo=None)
+    if t != _DEFAULT_ASSIGN_T and t != dt_time(0, 0):
+        return f"{base} {ist.strftime('%H:%M')}"
+    return base
+
+
+def _send_unified_assignment_email(*, subject: str, to_email: str, context: Dict[str, Any]) -> None:
+    """Render standardized TXT + HTML and send."""
+    if not (to_email or "").strip():
+        return
+    
+    # Render both text and HTML versions
+    text_body = render_to_string("email/task_assigned.txt", context)
+    html_body = render_to_string("email/task_assigned.html", context)
+    
+    msg = EmailMultiAlternatives(
+        subject=subject,
+        body=text_body,
+        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None),
+        to=[to_email],
+    )
+    msg.attach_alternative(html_body, "text/html")
+    msg.send(fail_silently=(
+        getattr(settings, "EMAIL_FAIL_SILENTLY", False) or 
+        getattr(settings, "DEBUG", False)
+    ))
 
 
 def send_html_email(
@@ -129,18 +171,26 @@ def send_html_email(
 # -------- Specific helpers (Checklist, Delegation, Help Ticket) ---------------
 
 def send_checklist_assignment_to_user(*, task, complete_url: str, subject_prefix: str = "New Checklist Task Assigned"):
+    """Send user-facing email for Checklist assignment"""
     if not task.assign_to or not (getattr(task.assign_to, "email", "") or "").strip():
         return
-    send_html_email(
+    
+    ctx = {
+        "kind": "Checklist",
+        "task_title": task.task_name,
+        "task_code": task.id,
+        "planned_date_display": _fmt_dt_date(getattr(task, "planned_date", None)),
+        "priority_display": getattr(task, "priority", "") or "",
+        "assign_by_display": _display_name(getattr(task, "assign_by", None)),
+        "assignee_name": _display_name(task.assign_to),
+        "complete_url": complete_url,
+        "cta_text": "Click the button below to mark this task as completed.",
+    }
+    
+    _send_unified_assignment_email(
         subject=f"{subject_prefix}: {task.task_name}",
-        template_name="email/checklist_assigned.html",
-        context={
-            "task": task,
-            "assign_by": task.assign_by,
-            "assign_to": task.assign_to,
-            "complete_url": complete_url,
-        },
-        to=[task.assign_to.email],
+        to_email=task.assign_to.email,
+        context=ctx,
     )
 
 
@@ -186,34 +236,50 @@ def send_checklist_unassigned_notice(*, task, old_user):
 
 
 def send_delegation_assignment_to_user(*, delegation, complete_url: str, subject_prefix: str = "New Delegation Task Assigned"):
+    """Send user-facing email for Delegation assignment"""
     if not delegation.assign_to or not (getattr(delegation.assign_to, "email", "") or "").strip():
         return
-    send_html_email(
+    
+    ctx = {
+        "kind": "Delegation",
+        "task_title": delegation.task_name,
+        "task_code": delegation.id,
+        "planned_date_display": _fmt_dt_date(getattr(delegation, "planned_date", None)),
+        "priority_display": getattr(delegation, "priority", "") or "",
+        "assign_by_display": _display_name(getattr(delegation, "assign_by", None)),
+        "assignee_name": _display_name(delegation.assign_to),
+        "complete_url": complete_url,
+        "cta_text": "Click the button below to mark this task as completed.",
+    }
+    
+    _send_unified_assignment_email(
         subject=f"{subject_prefix}: {delegation.task_name}",
-        template_name="email/delegation_assigned.html",
-        context={
-            "delegation": delegation,
-            "assign_by": delegation.assign_by,
-            "assign_to": delegation.assign_to,
-            "complete_url": complete_url,
-        },
-        to=[delegation.assign_to.email],
+        to_email=delegation.assign_to.email,
+        context=ctx,
     )
 
 
 def send_help_ticket_assignment_to_user(*, ticket, complete_url: str, subject_prefix: str = "New Help Ticket Assigned"):
+    """Send user-facing email for Help Ticket assignment"""
     if not ticket.assign_to or not (getattr(ticket.assign_to, "email", "") or "").strip():
         return
-    send_html_email(
+    
+    ctx = {
+        "kind": "Help Ticket",
+        "task_title": ticket.title,
+        "task_code": ticket.id,
+        "planned_date_display": _fmt_dt_date(getattr(ticket, "planned_date", None)),
+        "priority_display": getattr(ticket, "priority", "") or "",
+        "assign_by_display": _display_name(getattr(ticket, "assign_by", None)),
+        "assignee_name": _display_name(ticket.assign_to),
+        "complete_url": complete_url,
+        "cta_text": "Click the button below to add notes or close this ticket.",
+    }
+    
+    _send_unified_assignment_email(
         subject=f"{subject_prefix}: {ticket.title}",
-        template_name="email/help_ticket_assigned.html",
-        context={
-            "ticket": ticket,
-            "assign_by": ticket.assign_by,
-            "assign_to": ticket.assign_to,
-            "complete_url": complete_url,
-        },
-        to=[ticket.assign_to.email],
+        to_email=ticket.assign_to.email,
+        context=ctx,
     )
 
 
@@ -259,12 +325,35 @@ def send_help_ticket_unassigned_notice(*, ticket, old_user):
 
 
 def send_admin_bulk_summary(*, title: str, rows: Sequence[dict]):
+    """Send clean admin bulk summary without emojis"""
     admin_emails = get_admin_emails()
     if not admin_emails or not rows:
         return
+    
+    # Clean up title - remove emojis and timing info for cleaner look
+    clean_title = title.replace("⚡", "").replace("Fast Bulk Upload:", "Bulk Upload Summary:")
+    if "in " in clean_title and "s" in clean_title:
+        # Remove timing information from title
+        clean_title = clean_title.split(" in ")[0]
+    
+    # Add complete URLs to each task
+    enhanced_rows = []
+    for row in rows:
+        enhanced_row = dict(row)
+        # Try to determine task type and add complete URL
+        try:
+            # This is a simple approach - you might need to adjust based on your data structure
+            enhanced_row['complete_url'] = f"{site_url}/tasks/complete/"  # Generic URL
+        except:
+            enhanced_row['complete_url'] = None
+        enhanced_rows.append(enhanced_row)
+    
     send_html_email(
-        subject=title,
+        subject=clean_title,
         template_name="email/admin_assignment_summary.html",
-        context={"title": title, "items_table": rows},
+        context={
+            "title": clean_title,
+            "items_table": enhanced_rows
+        },
         to=admin_emails,
     )
