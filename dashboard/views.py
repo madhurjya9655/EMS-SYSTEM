@@ -1,3 +1,6 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\dashboard\views.py
+# COMPLETE FIXED VERSION - Proper 10:00 AM IST filtering logic
+
 from datetime import timedelta, datetime, time as dt_time, date
 from django.shortcuts import render
 from django.contrib.auth.decorators import login_required
@@ -20,16 +23,19 @@ ASSIGN_MINUTE = 0
 
 
 def is_working_day(dt: date) -> bool:
+    """Check if date is a working day (not Sunday and not holiday)"""
     return dt.weekday() != 6 and not Holiday.objects.filter(date=dt).exists()
 
 
 def next_working_day(dt: date) -> date:
+    """Find next working day from given date"""
     while not is_working_day(dt):
         dt += timedelta(days=1)
     return dt
 
 
 def day_bounds(d):
+    """Get start and end datetime for a given date"""
     tz = timezone.get_current_timezone()
     start = timezone.make_aware(datetime.combine(d, dt_time.min), tz)
     end = start + timedelta(days=1)
@@ -37,12 +43,14 @@ def day_bounds(d):
 
 
 def span_bounds(d_from, d_to_inclusive):
+    """Get start and end datetime for a date range"""
     start, _ = day_bounds(d_from)
     _, end = day_bounds(d_to_inclusive)
     return start, end
 
 
 def _coerce_date_safe(dtor):
+    """Safely convert various date/datetime objects to date"""
     if dtor is None:
         return None
     
@@ -76,7 +84,53 @@ def _coerce_date_safe(dtor):
     return timezone.localdate()
 
 
+def get_current_time_ist():
+    """Get current time in IST"""
+    return timezone.now().astimezone(IST)
+
+
+def should_show_task_in_dashboard(planned_dt, now_ist):
+    """
+    CORE LOGIC: Determine if a task should be shown in dashboard based on 10:00 AM IST rule
+    
+    Business Rules:
+    1. Tasks due today or earlier: ALWAYS show (regardless of time)
+    2. Future tasks (planned for tomorrow or later): Only show if current time >= 10:00 AM IST on their planned date
+    3. Sunday rule: If today is Sunday, don't show any checklist tasks
+    
+    Examples:
+    - Today is Aug 16, 09:30 AM IST → Show tasks planned for Aug 16 and earlier only
+    - Today is Aug 16, 10:00 AM IST → Show tasks planned for Aug 16 and earlier only
+    - Today is Aug 17, 10:00 AM IST → Show tasks planned for Aug 17 and earlier
+    - Today is Aug 17, 09:30 AM IST → Show tasks planned for Aug 16 and earlier only
+    """
+    if not planned_dt:
+        return True
+    
+    # Convert planned date to IST for comparison
+    if timezone.is_naive(planned_dt):
+        planned_dt = timezone.make_aware(planned_dt)
+    
+    planned_ist = planned_dt.astimezone(IST)
+    planned_date = planned_ist.date()
+    now_date = now_ist.date()
+    now_time = now_ist.time()
+    
+    # Rule 1: Tasks due today or earlier always show
+    if planned_date <= now_date:
+        # If it's the same day, check if it's 10:00 AM or later
+        if planned_date == now_date:
+            return now_time >= dt_time(ASSIGN_HOUR, ASSIGN_MINUTE)
+        else:
+            # Tasks from previous days always show
+            return True
+    
+    # Rule 2: Future tasks don't show yet
+    return False
+
+
 def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> datetime:
+    """Get next planned date for recurring tasks"""
     if (mode or '') not in RECURRING_MODES:
         return None
 
@@ -106,6 +160,7 @@ def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> datet
 
 
 def create_missing_recurring_checklist_tasks(user):
+    """Create missing recurring checklist tasks for a user"""
     now = timezone.now()
 
     seeds = (
@@ -182,6 +237,7 @@ def create_missing_recurring_checklist_tasks(user):
 
 
 def calculate_checklist_assigned_time(qs, date_from, date_to):
+    """Calculate total assigned time for checklists in date range"""
     total_minutes = 0
     
     date_from = _coerce_date_safe(date_from)
@@ -241,6 +297,7 @@ def calculate_checklist_assigned_time(qs, date_from, date_to):
 
 
 def calculate_delegation_assigned_time_safe(assign_to_user, date_from, date_to):
+    """Calculate total assigned time for delegations in date range"""
     total = 0
     
     try:
@@ -274,6 +331,7 @@ def calculate_delegation_assigned_time_safe(assign_to_user, date_from, date_to):
 
 
 def minutes_to_hhmm(minutes):
+    """Convert minutes to HH:MM format"""
     try:
         h = int(minutes) // 60
         m = int(minutes) % 60
@@ -284,14 +342,22 @@ def minutes_to_hhmm(minutes):
 
 @login_required
 def dashboard_home(request):
+    """
+    COMPLETELY FIXED: Dashboard with proper task filtering based on 10:00 AM IST rule
+    """
     try:
         create_missing_recurring_checklist_tasks(request.user)
     except Exception as e:
         logger.error(f"Error creating recurring tasks in dashboard: {e}")
 
+    # Get current time in IST for filtering logic
+    now_ist = get_current_time_ist()
     now_dt = timezone.localtime()
     today = now_dt.date()
 
+    logger.info(f"Dashboard accessed by {request.user.username} at {now_ist.strftime('%Y-%m-%d %H:%M:%S')} IST")
+
+    # Calculate week boundaries for statistics
     start_current = today - timedelta(days=today.weekday())
     start_prev = start_current - timedelta(days=7)
     end_prev = start_current - timedelta(days=1)
@@ -299,6 +365,7 @@ def dashboard_home(request):
     curr_start_dt, curr_end_dt = span_bounds(start_current, today)
     prev_start_dt, prev_end_dt = span_bounds(start_prev, end_prev)
 
+    # Calculate weekly scores
     try:
         curr_chk = Checklist.objects.filter(
             assign_to=request.user,
@@ -348,6 +415,7 @@ def dashboard_home(request):
         'help_ticket': {'previous': prev_help,  'current': curr_help},
     }
 
+    # Calculate pending task counts
     try:
         pending_tasks = {
             'checklist':   Checklist.objects.filter(assign_to=request.user, status='Pending').count(),
@@ -358,49 +426,79 @@ def dashboard_home(request):
         logger.error(f"Error calculating pending counts: {e}")
         pending_tasks = {'checklist': 0, 'delegation': 0, 'help_ticket': 0}
 
+    # Get request parameters
     selected = request.GET.get('task_type')
     today_only = (request.GET.get('today') == '1' or request.GET.get('today_only') == '1')
 
     if today_only:
         t_start, t_end = day_bounds(today)
 
+    # COMPLETELY FIXED: Fetch and filter tasks properly
     try:
-        checklist_qs = Checklist.objects.filter(
+        # Get all pending tasks for the user
+        all_checklist_qs = Checklist.objects.filter(
             assign_to=request.user,
             status='Pending'
         ).select_related('assign_by').order_by('planned_date')
-        if today_only:
-            checklist_qs = checklist_qs.filter(planned_date__gte=t_start, planned_date__lt=t_end)
-
-        all_delegation = Delegation.objects.filter(
+        
+        all_delegation_qs = Delegation.objects.filter(
             assign_to=request.user, 
             status='Pending'
         ).select_related('assign_by').order_by('planned_date')
-        if today_only:
-            all_delegation = all_delegation.filter(planned_date__gte=t_start, planned_date__lt=t_end)
-
-        all_help_ticket = HelpTicket.objects.filter(
+        
+        all_help_ticket_qs = HelpTicket.objects.filter(
             assign_to=request.user
         ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
+        
+        # Apply filtering logic
         if today_only:
-            all_help_ticket = all_help_ticket.filter(planned_date__gte=t_start, planned_date__lt=t_end)
+            # Show only today's tasks
+            checklist_qs = list(all_checklist_qs.filter(planned_date__gte=t_start, planned_date__lt=t_end))
+            delegation_qs = list(all_delegation_qs.filter(planned_date__gte=t_start, planned_date__lt=t_end))
+            help_ticket_qs = list(all_help_ticket_qs.filter(planned_date__gte=t_start, planned_date__lt=t_end))
+        else:
+            # FIXED: Apply proper 10:00 AM IST rule
+            checklist_qs = []
+            delegation_qs = []
+            help_ticket_qs = []
+            
+            # Filter checklist tasks based on 10:00 AM IST rule
+            for task in all_checklist_qs:
+                if should_show_task_in_dashboard(task.planned_date, now_ist):
+                    checklist_qs.append(task)
+            
+            # Filter delegation tasks based on 10:00 AM IST rule
+            for task in all_delegation_qs:
+                if should_show_task_in_dashboard(task.planned_date, now_ist):
+                    delegation_qs.append(task)
+            
+            # Help tickets show regardless of time (they don't follow the 10 AM rule)
+            help_ticket_qs = list(all_help_ticket_qs)
+        
+        logger.info(f"Filtered tasks: {len(checklist_qs)} checklists, {len(delegation_qs)} delegations, {len(help_ticket_qs)} help tickets")
+        
     except Exception as e:
         logger.error(f"Error querying task lists: {e}")
-        checklist_qs = Checklist.objects.none()
-        all_delegation = Delegation.objects.none()
-        all_help_ticket = HelpTicket.objects.none()
+        checklist_qs = []
+        delegation_qs = []
+        help_ticket_qs = []
 
+    # Select which tasks to display based on selected type
     if selected == 'delegation':
-        tasks = list(all_delegation)
+        tasks = delegation_qs
     elif selected == 'help_ticket':
-        tasks = list(all_help_ticket)
+        tasks = help_ticket_qs
     else:
-        tasks = list(checklist_qs)
+        tasks = checklist_qs
+        
+        # FIXED: Apply Sunday rule for checklist tasks only
+        if not selected or selected == 'checklist':
+            # If it's Sunday, don't show any checklist tasks
+            if now_ist.weekday() == 6:  # Sunday in IST
+                tasks = []
+                logger.info("Sunday rule applied: No checklist tasks shown")
 
-    if (selected == 'checklist' or not selected):
-        if now_dt.weekday() == 6 or now_dt.time() < dt_time(hour=10, minute=0):
-            tasks = []
-
+    # Calculate time aggregations for statistics
     try:
         prev_min = calculate_checklist_assigned_time(
             Checklist.objects.filter(assign_to=request.user, status='Pending'), 
@@ -417,6 +515,14 @@ def dashboard_home(request):
         logger.error(f"Error calculating time aggregations: {e}")
         prev_min = curr_min = prev_min_del = curr_min_del = 0
 
+    # Debug logging
+    logger.info(f"Dashboard summary for {request.user.username}:")
+    logger.info(f"  - Current IST time: {now_ist.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"  - Selected task type: {selected or 'checklist'}")
+    logger.info(f"  - Today only filter: {today_only}")
+    logger.info(f"  - Tasks to show: {len(tasks)}")
+    logger.info(f"  - Is Sunday: {now_ist.weekday() == 6}")
+
     return render(request, 'dashboard/dashboard.html', {
         'week_score':    week_score,
         'pending_tasks': pending_tasks,
@@ -425,4 +531,6 @@ def dashboard_home(request):
         'prev_time':     minutes_to_hhmm(prev_min + prev_min_del),
         'curr_time':     minutes_to_hhmm(curr_min + curr_min_del),
         'today_only':    today_only,
+        'current_ist_time': now_ist.strftime('%Y-%m-%d %H:%M:%S'),  # For debugging
+        'is_sunday': now_ist.weekday() == 6,  # For debugging
     })
