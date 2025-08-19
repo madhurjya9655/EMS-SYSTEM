@@ -1,40 +1,52 @@
+<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\tasks\list_checklist.html -->
 {% extends "tasks/tasks_base.html" %}
 {% load static %}
 {% block title %}Checklist Tasks{% endblock %}
+
 {% block tab_content %}
 
 <div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center border-0">
     <h5 class="mb-0">Checklist Tasks</h5>
-    <div>
-      <a href="{% url 'tasks:add_checklist' %}" class="btn btn-sm btn-primary">Add Checklist</a>
-      <a href="{% url 'tasks:bulk_upload' %}" class="btn btn-sm btn-secondary">Bulk Upload</a>
+    <div class="d-flex gap-2">
+      <a href="{% url 'tasks:add_checklist' %}" class="btn btn-sm btn-primary">
+        <i class="fas fa-plus me-1" aria-hidden="true"></i> Add Checklist
+      </a>
+      <a href="{% url 'tasks:bulk_upload' %}" class="btn btn-sm btn-secondary">
+        <i class="fas fa-file-upload me-1" aria-hidden="true"></i> Bulk Upload
+      </a>
     </div>
   </div>
 
+  <!-- Filter toggle -->
   <div
     class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
     data-bs-toggle="collapse"
     href="#filterPanel"
     role="button"
     aria-expanded="true"
+    aria-controls="filterPanel"
     style="cursor:pointer;"
     data-filter-toggle
   >
-    <span>FILTER</span>
-    <i class="fas fa-minus" data-filter-toggle-icon></i>
+    <span class="fw-semibold">
+      <i class="fas fa-filter me-2" aria-hidden="true"></i> FILTER
+    </span>
+    <i class="fas fa-minus" data-filter-toggle-icon aria-hidden="true"></i>
   </div>
 
+  <!-- Filters -->
   <div id="filterPanel" class="collapse show">
     <div class="card-body">
-      <form method="get" class="row g-3 align-items-end">
+      <form method="get" class="row g-3 align-items-end" role="search" aria-label="Checklist Filters">
         <div class="col-md-2">
-          <label class="form-label">Keyword</label>
-          <input type="text" name="keyword" class="form-control" value="{{ request.GET.keyword }}">
+          <label for="fltKeyword" class="form-label">Keyword</label>
+          <input id="fltKeyword" type="text" name="keyword" class="form-control" value="{{ request.GET.keyword }}">
         </div>
+
         <div class="col-md-2">
-          <label class="form-label">Assign To</label>
-          <select name="assign_to" class="form-select">
+          <label for="fltAssignTo" class="form-label">Assign To</label>
+          <select id="fltAssignTo" name="assign_to" class="form-select">
             <option value="">All</option>
             {% for user in users %}
               <option value="{{ user.id }}"{% if request.GET.assign_to == user.id|stringformat:"s" %} selected{% endif %}>
@@ -43,36 +55,47 @@
             {% endfor %}
           </select>
         </div>
+
         <div class="col-md-2">
-          <label class="form-label">Priority</label>
-          <select name="priority" class="form-select">
+          <label for="fltPriority" class="form-label">Priority</label>
+          <select id="fltPriority" name="priority" class="form-select">
             <option value="">All</option>
             {% for code,label in priority_choices %}
               <option value="{{ code }}"{% if request.GET.priority == code %} selected{% endif %}>{{ label }}</option>
             {% endfor %}
           </select>
         </div>
+
         <div class="col-md-2">
-          <label class="form-label">Group Name</label>
-          <select name="group_name" class="form-select">
+          <label for="fltGroup" class="form-label">Group Name</label>
+          <select id="fltGroup" name="group_name" class="form-select">
             <option value="">All</option>
             {% for g in group_names %}
               <option value="{{ g }}"{% if request.GET.group_name == g %} selected{% endif %}>{{ g }}</option>
             {% endfor %}
           </select>
         </div>
+
         <div class="col-md-2">
-          <label class="form-label">Start Date</label>
-          <input type="date" name="start_date" class="form-control" value="{{ request.GET.start_date }}">
+          <label for="fltStart" class="form-label">Start Date</label>
+          <input id="fltStart" type="date" name="start_date" class="form-control" value="{{ request.GET.start_date }}">
         </div>
+
         <div class="col-md-2">
-          <label class="form-label">End Date</label>
-          <input type="date" name="end_date" class="form-control" value="{{ request.GET.end_date }}">
+          <label for="fltEnd" class="form-label">End Date</label>
+          <input id="fltEnd" type="date" name="end_date" class="form-control" value="{{ request.GET.end_date }}">
         </div>
+
         <div class="col-12 text-end">
-          <button type="submit" class="btn btn-primary">FILTER</button>
-          <a href="{% url 'tasks:list_checklist' %}" class="btn btn-warning">RESET FILTER</a>
-          <button type="submit" name="download" value="1" class="btn btn-success">DOWNLOAD CSV</button>
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-filter me-1" aria-hidden="true"></i> FILTER
+          </button>
+          <a href="{% url 'tasks:list_checklist' %}" class="btn btn-warning">
+            <i class="fas fa-undo me-1" aria-hidden="true"></i> RESET FILTER
+          </a>
+          <button type="submit" name="download" value="1" class="btn btn-success">
+            <i class="fas fa-file-csv me-1" aria-hidden="true"></i> DOWNLOAD CSV
+          </button>
         </div>
       </form>
     </div>
@@ -86,19 +109,20 @@
     <input type="hidden" name="action" value="bulk_delete">
 
     <table class="table table-bordered table-hover align-middle">
+      <caption class="visually-hidden">Checklist task list with bulk actions</caption>
       <thead class="table-light">
         <tr>
-          <th style="width:32px;">
+          <th scope="col" style="width:32px;">
             <input type="checkbox" aria-label="Select all" data-select-all>
           </th>
-          <th>Task Name</th>
-          <th>Message</th>
-          <th>Assign To</th>
-          <th>Frequency</th>
-          <th>Planned Date</th>
-          <th>Remind Before Days</th>
-          <th>Reminder</th>
-          <th style="width:210px;">Action</th>
+          <th scope="col">Task Name</th>
+          <th scope="col">Message</th>
+          <th scope="col">Assign To</th>
+          <th scope="col">Frequency</th>
+          <th scope="col">Planned Date</th>
+          <th scope="col">Remind Before Days</th>
+          <th scope="col">Reminder</th>
+          <th scope="col" style="width:280px;">Action</th>
         </tr>
       </thead>
       <tbody>
@@ -106,14 +130,20 @@
           {% for obj in items %}
             <tr>
               <td>
-                <input type="checkbox" name="sel" value="{{ obj.id }}" class="form-check-input" data-row-check aria-label="Select row">
+                <input type="checkbox" name="sel" value="{{ obj.id }}" class="form-check-input" data-row-check aria-label="Select row {{ obj.id }}">
               </td>
+
               <td>{{ obj.task_name }}</td>
-              <td style="max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
-                  title="{{ obj.message|default:'-' }}">
+
+              <td
+                style="max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
+                title="{{ obj.message|default:'-' }}"
+              >
                 {{ obj.message|default:"—"|truncatechars:80 }}
               </td>
+
               <td>{{ obj.assign_to.get_full_name|default:obj.assign_to.username }}</td>
+
               <td>
                 {% if obj.mode and obj.frequency %}
                   Every {{ obj.frequency }} {{ obj.mode }}
@@ -121,8 +151,13 @@
                   —
                 {% endif %}
               </td>
-              <td title="{{ obj.planned_date|date:'Y-m-d H:i' }}">{{ obj.planned_date|date:"d M, Y h:i A" }}</td>
+
+              <td title="{{ obj.planned_date|date:'Y-m-d H:i' }}">
+                {{ obj.planned_date|date:"d M, Y h:i A" }}
+              </td>
+
               <td>{{ obj.remind_before_days|default:"0" }}</td>
+
               <td>
                 {% if obj.set_reminder %}
                   {{ obj.reminder_mode|default:"" }}{% if obj.reminder_frequency %} ({{ obj.reminder_frequency }}){% endif %}
@@ -131,22 +166,40 @@
                   —
                 {% endif %}
               </td>
+
               <td class="text-nowrap">
-                <a href="{% url 'tasks:edit_checklist' obj.id %}" class="btn btn-sm btn-outline-secondary" title="Edit">
-                  <i class="fas fa-edit"></i>
+                <!-- Details Button -->
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-info"
+                  data-bs-toggle="modal"
+                  data-bs-target="#checklistDetailsModal{{ obj.id }}"
+                  title="View Details"
+                  aria-label="View details for {{ obj.task_name }}"
+                >
+                  <i class="fas fa-eye" aria-hidden="true"></i>
+                  <span class="visually-hidden">Details</span>
+                </button>
+
+                <a href="{% url 'tasks:edit_checklist' obj.id %}" class="btn btn-sm btn-outline-secondary" title="Edit {{ obj.task_name }}">
+                  <i class="fas fa-edit" aria-hidden="true"></i>
+                  <span class="visually-hidden">Edit</span>
                 </a>
 
-                <a href="{% url 'tasks:delete_checklist' obj.id %}" class="btn btn-sm btn-outline-danger" title="Delete">
-                  <i class="fas fa-trash-alt"></i>
+                <a href="{% url 'tasks:delete_checklist' obj.id %}" class="btn btn-sm btn-outline-danger" title="Delete {{ obj.task_name }}">
+                  <i class="fas fa-trash-alt" aria-hidden="true"></i>
+                  <span class="visually-hidden">Delete</span>
                 </a>
 
                 <!-- Delete ENTIRE SERIES for this row -->
-                <button type="submit"
-                        class="btn btn-sm btn-danger"
-                        form="series-form-{{ obj.id }}"
-                        title="Delete series"
-                        data-confirm="Delete ALL pending occurrences in this series?">
-                  <i class="fas fa-trash"></i> Series
+                <button
+                  type="submit"
+                  class="btn btn-sm btn-danger"
+                  form="series-form-{{ obj.id }}"
+                  title="Delete entire series for {{ obj.task_name }}"
+                  data-confirm="Delete ALL pending occurrences in this series?"
+                >
+                  <i class="fas fa-trash" aria-hidden="true"></i> Series
                 </button>
               </td>
             </tr>
@@ -168,11 +221,13 @@
         </div>
         <small class="text-muted"><span data-selected-count>0</span> selected</small>
       </div>
-      <button type="submit"
-              class="btn btn-danger"
-              data-bulk-submit
-              data-confirm="Are you sure you want to delete the selected item(s)?"
-              disabled>
+      <button
+        type="submit"
+        class="btn btn-danger"
+        data-bulk-submit
+        data-confirm="Are you sure you want to delete the selected item(s)?"
+        disabled
+      >
         Delete
       </button>
     </div>
@@ -189,6 +244,208 @@
     {% endfor %}
   {% endif %}
 </div>
+
+<!-- Details Modals for checklist tasks -->
+{% if items %}
+  {% for obj in items %}
+    <div
+      class="modal fade"
+      id="checklistDetailsModal{{ obj.id }}"
+      tabindex="-1"
+      aria-labelledby="checklistDetailsModalLabel{{ obj.id }}"
+      aria-hidden="true"
+    >
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="checklistDetailsModalLabel{{ obj.id }}">
+              <i class="fas fa-list-check me-1" aria-hidden="true"></i>
+              Checklist Task Details: {{ obj.task_name }}
+            </h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close dialog"></button>
+          </div>
+
+          <div class="modal-body">
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label class="fw-bold">Task ID:</label>
+                <p>{{ obj.id }}</p>
+              </div>
+
+              <div class="col-md-6">
+                <label class="fw-bold">Status:</label>
+                <p>
+                  <span class="badge bg-{% if obj.status == 'Pending' %}warning{% else %}success{% endif %}">
+                    {{ obj.status }}
+                  </span>
+                </p>
+              </div>
+
+              <div class="col-12">
+                <label class="fw-bold">Task Name:</label>
+                <p>{{ obj.task_name }}</p>
+              </div>
+
+              <div class="col-12">
+                <label class="fw-bold">Message/Description:</label>
+                <p>{{ obj.message|default:"No description provided"|linebreaks }}</p>
+              </div>
+
+              <div class="col-md-6">
+                <label class="fw-bold">Assigned By:</label>
+                <p>{{ obj.assign_by.get_full_name|default:obj.assign_by.username }}</p>
+              </div>
+
+              <div class="col-md-6">
+                <label class="fw-bold">Assigned To:</label>
+                <p>{{ obj.assign_to.get_full_name|default:obj.assign_to.username }}</p>
+              </div>
+
+              <div class="col-md-6">
+                <label class="fw-bold">Planned Date:</label>
+                <p>{{ obj.planned_date|date:"d M, Y H:i" }}</p>
+              </div>
+
+              <div class="col-md-6">
+                <label class="fw-bold">Priority:</label>
+                <p>
+                  <span class="badge bg-{% if obj.priority == 'High' %}danger{% elif obj.priority == 'Medium' %}warning{% else %}success{% endif %}">
+                    {{ obj.priority }}
+                  </span>
+                </p>
+              </div>
+
+              {% if obj.frequency %}
+              <div class="col-md-6">
+                <label class="fw-bold">Recurrence:</label>
+                <p>{{ obj.mode }} (Every {{ obj.frequency }} {{ obj.mode|lower }}{{ obj.frequency|pluralize }})</p>
+              </div>
+              {% endif %}
+
+              {% if obj.group_name %}
+              <div class="col-md-6">
+                <label class="fw-bold">Group Name:</label>
+                <p>{{ obj.group_name }}</p>
+              </div>
+              {% endif %}
+
+              <div class="col-md-6">
+                <label class="fw-bold">Time per Task:</label>
+                <p>{{ obj.time_per_task_minutes|default:0 }} minutes</p>
+              </div>
+
+              <div class="col-md-6">
+                <label class="fw-bold">Remind Before Days:</label>
+                <p>{{ obj.remind_before_days|default:0 }} days</p>
+              </div>
+
+              {% if obj.actual_duration_minutes %}
+              <div class="col-md-6">
+                <label class="fw-bold">Actual Duration:</label>
+                <p>{{ obj.actual_duration_minutes }} minutes</p>
+              </div>
+              {% endif %}
+
+              {% if obj.attachment_mandatory %}
+              <div class="col-md-6">
+                <label class="fw-bold">Attachment:</label>
+                <p><span class="badge bg-warning">Required</span></p>
+              </div>
+              {% endif %}
+
+              {% if obj.assign_pc %}
+              <div class="col-md-6">
+                <label class="fw-bold">PC Assignee:</label>
+                <p>{{ obj.assign_pc.get_full_name|default:obj.assign_pc.username }}</p>
+              </div>
+              {% endif %}
+
+              {% if obj.notify_to %}
+              <div class="col-md-6">
+                <label class="fw-bold">Notify To:</label>
+                <p>{{ obj.notify_to.get_full_name|default:obj.notify_to.username }}</p>
+              </div>
+              {% endif %}
+
+              {% if obj.auditor %}
+              <div class="col-md-6">
+                <label class="fw-bold">Auditor:</label>
+                <p>{{ obj.auditor.get_full_name|default:obj.auditor.username }}</p>
+              </div>
+              {% endif %}
+
+              {% if obj.set_reminder %}
+              <div class="col-md-6">
+                <label class="fw-bold">Reminder Settings:</label>
+                <p>
+                  {{ obj.reminder_mode }}{% if obj.reminder_frequency %} ({{ obj.reminder_frequency }}){% endif %}
+                  {% if obj.reminder_starting_time %} @ {{ obj.reminder_starting_time|time:"h:i A" }}{% endif %}
+                </p>
+              </div>
+              {% endif %}
+
+              {% if obj.checklist_auto_close %}
+              <div class="col-md-6">
+                <label class="fw-bold">Auto Close:</label>
+                <p>After {{ obj.checklist_auto_close_days }} days</p>
+              </div>
+              {% endif %}
+
+              {% if obj.completed_at %}
+              <div class="col-md-6">
+                <label class="fw-bold">Completed At:</label>
+                <p>{{ obj.completed_at|date:"d M, Y H:i" }}</p>
+              </div>
+              {% endif %}
+
+              {% if obj.doer_notes %}
+              <div class="col-12">
+                <label class="fw-bold">Completion Notes:</label>
+                <p>{{ obj.doer_notes|linebreaks }}</p>
+              </div>
+              {% endif %}
+
+              {% if obj.media_upload %}
+              <div class="col-12">
+                <label class="fw-bold">Attachment:</label>
+                <p>
+                  <a href="{{ obj.media_upload.url }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                    <i class="fas fa-download me-1" aria-hidden="true"></i> Download Attachment
+                  </a>
+                </p>
+              </div>
+              {% endif %}
+
+              {% if obj.doer_file %}
+              <div class="col-12">
+                <label class="fw-bold">Completion File:</label>
+                <p>
+                  <a href="{{ obj.doer_file.url }}" target="_blank" class="btn btn-sm btn-outline-success">
+                    <i class="fas fa-download me-1" aria-hidden="true"></i> Download Completion File
+                  </a>
+                </p>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            {% if obj.status == 'Pending' %}
+            <a href="{% url 'tasks:complete_checklist' obj.id %}" class="btn btn-success">
+              <i class="fas fa-check me-1" aria-hidden="true"></i> Complete Task
+            </a>
+            {% endif %}
+            <a href="{% url 'tasks:edit_checklist' obj.id %}" class="btn btn-primary">
+              <i class="fas fa-edit me-1" aria-hidden="true"></i> Edit Task
+            </a>
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+{% endif %}
 
 {% endblock %}
 

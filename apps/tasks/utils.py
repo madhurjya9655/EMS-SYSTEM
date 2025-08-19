@@ -1,359 +1,606 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\utils.py
+import logging
+import sys
+from datetime import timedelta
+from typing import Iterable, List, Optional, Sequence
 
-from typing import Iterable, List, Sequence, Optional, Dict, Any
+import pytz
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.mail import EmailMultiAlternatives
-from django.template.loader import render_to_string
-from django.utils import timezone
+from django.db import transaction
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from django.template.loader import render_to_string  # kept for future use
 from django.urls import reverse
-from datetime import datetime
-import pytz
-from datetime import time as dt_time
+from django.utils import timezone
 
+from apps.settings.models import Holiday
+from .models import Checklist, Delegation, HelpTicket
+from .recurrence import get_next_planned_date, schedule_recurring_at_10am, RECURRING_MODES
+
+logger = logging.getLogger(__name__)
 User = get_user_model()
+
+# ---- Constants ----
 IST = pytz.timezone("Asia/Kolkata")
-_DEFAULT_ASSIGN_T = dt_time(10, 0)  # project default planning time
-
-# Get site URL for complete URLs
-site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
-
-
-def _dedupe_emails(emails: Iterable[str]) -> List[str]:
-    seen = set()
-    out = []
-    for e in emails:
-        e = (e or "").strip()
-        if e and e not in seen:
-            seen.add(e)
-            out.append(e)
-    return out
+SITE_URL: str = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
+DEFAULT_FROM_EMAIL: Optional[str] = getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(
+    settings, "EMAIL_HOST_USER", None
+)
+SEND_EMAILS_FOR_AUTO_RECUR: bool = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
+# Gate automatic recurring emails to the 10:00 IST window (prevents off-hour duplicates)
+SEND_RECUR_EMAILS_ONLY_AT_10AM: bool = getattr(settings, "SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
+EMAIL_FAIL_SILENTLY: bool = bool(getattr(settings, "EMAIL_FAIL_SILENTLY", False) or getattr(settings, "DEBUG", False))
 
 
-def get_admin_emails() -> List[str]:
-    qs = User.objects.filter(is_active=True, is_superuser=True).values_list("email", flat=True)
-    admins = list(qs)
-    admins += list(
-        User.objects.filter(is_active=True, groups__name__in=["Admin", "Manager"])
-        .values_list("email", flat=True)
-        .distinct()
-    )
-    return _dedupe_emails(admins)
+# ======================================================================
+#                    LOGGING / ENCODING SAFETY HELPERS
+# ======================================================================
 
-
-def _fmt_value(v: Any) -> Any:
-    """Sanitize/format values before sending into templates"""
-    if isinstance(v, datetime):
-        tz = timezone.get_current_timezone()
-        aware = v if timezone.is_aware(v) else timezone.make_aware(v, tz)
-        return aware.astimezone(tz).strftime("%Y-%m-%d %H:%M")
-    if hasattr(v, "get_full_name") or hasattr(v, "username"):
-        try:
-            return v.get_full_name() or v.username
-        except Exception:
-            pass
-    return v
-
-
-def _fmt_items(items: Sequence[Dict[str, Any]]) -> Sequence[Dict[str, Any]]:
-    out = []
-    for row in items or []:
-        out.append({
-            "label": str(row.get("label", "")),
-            "value": _fmt_value(row.get("value")),
-        })
-    return out
-
-
-def _fmt_rows(rows: Sequence[Dict[str, Any]]) -> Sequence[Dict[str, Any]]:
-    out = []
-    for r in rows or []:
-        new_row = {}
-        for k, v in r.items():
-            new_row[str(k)] = _fmt_value(v)
-        out.append(new_row)
-    return out
-
-
-def _display_name(user) -> str:
-    """Full name if available; else username; else 'System'."""
-    if not user:
-        return "System"
+def _safe_console_text(s: object) -> str:
+    """
+    Return a version of `s` that can be safely written to the current console stream
+    (e.g., Windows CP1252) without raising UnicodeEncodeError.
+    """
     try:
-        full = getattr(user, "get_full_name", lambda: "")() or ""
-        if str(full).strip():
-            return str(full).strip()
-        uname = getattr(user, "username", "") or ""
-        return uname if uname else "System"
+        text = "" if s is None else str(s)
     except Exception:
-        return "System"
+        text = repr(s)
+    enc = getattr(sys.stderr, "encoding", None) or getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        return text.encode(enc, errors="replace").decode(enc, errors="replace")
+    except Exception:
+        # Ultimate fallback to pure ASCII with replacements
+        return text.encode("ascii", errors="replace").decode("ascii", errors="replace")
 
 
-def _fmt_dt_date(dt: Any) -> str:
-    """Format datetime for display"""
-    if not dt:
-        return ""
-    tz = timezone.get_current_timezone()
-    aware = dt if timezone.is_aware(dt) else timezone.make_aware(dt, tz)
-    ist = aware.astimezone(IST)
-    base = ist.strftime("%Y-%m-%d")
-    t = ist.timetz().replace(tzinfo=None)
-    if t != _DEFAULT_ASSIGN_T and t != dt_time(0, 0):
-        return f"{base} {ist.strftime('%H:%M')}"
-    return base
+def _within_10am_ist_window(leeway_minutes: int = 5) -> bool:
+    """
+    Return True if now (IST) is within [10:00 - leeway, 10:00 + leeway].
+    Default window: 09:55 to 10:05 IST.
+    """
+    now_ist = timezone.now().astimezone(IST)
+    start = now_ist.replace(hour=10, minute=0, second=0, microsecond=0) - timedelta(minutes=leeway_minutes)
+    end = now_ist.replace(hour=10, minute=0, second=0, microsecond=0) + timedelta(minutes=leeway_minutes)
+    return start <= now_ist <= end
 
 
-def _send_unified_assignment_email(*, subject: str, to_email: str, context: Dict[str, Any]) -> None:
-    """Render standardized TXT + HTML and send."""
-    if not (to_email or "").strip():
-        return
-    
-    # Render both text and HTML versions
-    text_body = render_to_string("email/task_assigned.txt", context)
-    html_body = render_to_string("email/task_assigned.html", context)
-    
-    msg = EmailMultiAlternatives(
-        subject=subject,
-        body=text_body,
-        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None),
-        to=[to_email],
-    )
-    msg.attach_alternative(html_body, "text/html")
-    msg.send(fail_silently=(
-        getattr(settings, "EMAIL_FAIL_SILENTLY", False) or 
-        getattr(settings, "DEBUG", False)
-    ))
+# ======================================================================
+#                            UTILITY HELPERS
+# ======================================================================
+
+def _safe_list(items: Iterable[Optional[str]]) -> List[str]:
+    """Deduplicate + drop blanks while preserving order."""
+    seen = set()
+    out: List[str] = []
+    for it in items:
+        if not it:
+            continue
+        s = str(it).strip()
+        if not s or s.lower() == "none":
+            continue
+        key = s.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+    return out
 
 
-def send_html_email(
-    *,
+def _send_email(
     subject: str,
-    template_name: str,
-    context: Dict[str, Any],
-    to: Sequence[str],
-    cc: Optional[Sequence[str]] = None,
-    bcc: Optional[Sequence[str]] = None,
-    fail_silently: bool = False,
-):
-    to_list = _dedupe_emails(to or [])
-    cc_list = _dedupe_emails(cc or [])
-    bcc_list = _dedupe_emails(bcc or [])
-    if not to_list:
+    recipients: Sequence[str],
+    html_body: str,
+    text_body: Optional[str] = None,
+    fail_silently: Optional[bool] = None,
+) -> None:
+    """
+    Small wrapper around EmailMultiAlternatives with logging.
+    Uses console-safe logging to avoid UnicodeEncodeError on Windows terminals.
+    """
+    rcpts = _safe_list(recipients)
+    if not rcpts:
+        logger.info(_safe_console_text(f"Skipped email '{subject}': no recipients"))
         return
 
-    # In DEBUG or if EMAIL_FAIL_SILENTLY is set, never crash on email send
-    effective_fail_silently = (
-        fail_silently
-        or getattr(settings, "EMAIL_FAIL_SILENTLY", False)
-        or getattr(settings, "DEBUG", False)
+    if fail_silently is None:
+        fail_silently = EMAIL_FAIL_SILENTLY
+
+    try:
+        msg = EmailMultiAlternatives(
+            subject=subject,
+            body=(text_body or " "),
+            from_email=DEFAULT_FROM_EMAIL,
+            to=rcpts,
+        )
+        msg.attach_alternative(html_body, "text/html")
+        msg.send(fail_silently=fail_silently)
+        # Console-safe log line (subject may contain emoji)
+        logger.debug(_safe_console_text(f"Sent email '{subject}' to {', '.join(rcpts)}"))
+    except Exception as e:
+        logger.error(_safe_console_text(f"Email send failed for '{subject}': {e}"))
+
+
+def _cta_button(url: str, label: str = "Open / Complete") -> str:
+    return f"""
+      <div style="margin:24px 0">
+        <a href="{url}" style="
+            background:#4f46e5;color:#fff;text-decoration:none;
+            padding:12px 18px;border-radius:8px;display:inline-block;
+            font-weight:600;">
+          {label}
+        </a>
+      </div>
+    """
+
+
+def _shell_html(title: str, heading: str, body_html: str) -> str:
+    """Simple, inline-styled shell suitable for most mailbox clients."""
+    return f"""<!doctype html>
+<html><body style="font-family:Inter,Arial,Helvetica,sans-serif;background:#f6f8fb;margin:0;padding:0">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f8fb">
+    <tr><td align="center" style="padding:24px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.05);overflow:hidden">
+        <tr>
+          <td style="background:linear-gradient(135deg,#4f46e5,#6366f1);padding:18px 22px;color:#fff;font-weight:700;font-size:18px">
+            {title}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:22px 22px 8px 22px;color:#0f172a;font-size:18px;font-weight:700">
+            {heading}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 22px 22px 22px;color:#334155;font-size:14px;line-height:1.6">
+            {body_html}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:16px 22px;color:#64748b;font-size:12px;border-top:1px solid #e2e8f0">
+            <div>Sent by BOS EMS</div>
+            <div><a href="{SITE_URL}" style="color:#4f46e5;text-decoration:none">{SITE_URL}</a></div>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
+
+
+def _assignment_html(
+    task_title: str,
+    task_name: str,
+    assigner: Optional[User],
+    planned_dt: Optional[timezone.datetime],
+    complete_url: Optional[str],
+    extra_lines: Optional[List[str]] = None,
+    cta_label: str = "Open / Complete",
+) -> str:
+    planned_str = (
+        timezone.localtime(planned_dt, IST).strftime("%a, %d %b %Y • %I:%M %p IST")
+        if planned_dt else "Not specified"
     )
-
-    # Sanitize context payloads to keep templates simple/safe
-    ctx = dict(context or {})
-    if "items" in ctx and isinstance(ctx["items"], (list, tuple)):
-        ctx["items"] = _fmt_items(ctx["items"])
-    if "items_table" in ctx and isinstance(ctx["items_table"], (list, tuple)):
-        ctx["items_table"] = _fmt_rows(ctx["items_table"])
-
-    html_message = render_to_string(template_name, ctx)
-    msg = EmailMultiAlternatives(
-        subject=subject,
-        body=html_message,
-        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None),
-        to=to_list,
-        cc=cc_list or None,
-        bcc=bcc_list or None,
-    )
-    msg.attach_alternative(html_message, "text/html")
-    msg.send(fail_silently=effective_fail_silently)
+    who = (assigner.get_full_name() or assigner.username) if assigner else "System"
+    lines = [
+        f"<strong>Task:</strong> {task_name}",
+        f"<strong>Planned:</strong> {planned_str}",
+        f"<strong>Assigned by:</strong> {who}",
+    ]
+    if extra_lines:
+        lines.extend(extra_lines)
+    body = "<p>" + "<br/>".join(lines) + "</p>"
+    if complete_url:
+        body += _cta_button(complete_url, cta_label)
+    return _shell_html(task_title, "You have a new assignment", body)
 
 
-# -------- Specific helpers (Checklist, Delegation, Help Ticket) ---------------
-
-def send_checklist_assignment_to_user(*, task, complete_url: str, subject_prefix: str = "New Checklist Task Assigned"):
-    """Send user-facing email for Checklist assignment"""
-    if not task.assign_to or not (getattr(task.assign_to, "email", "") or "").strip():
-        return
-    
-    ctx = {
-        "kind": "Checklist",
-        "task_title": task.task_name,
-        "task_code": task.id,
-        "planned_date_display": _fmt_dt_date(getattr(task, "planned_date", None)),
-        "priority_display": getattr(task, "priority", "") or "",
-        "assign_by_display": _display_name(getattr(task, "assign_by", None)),
-        "assignee_name": _display_name(task.assign_to),
-        "complete_url": complete_url,
-        "cta_text": "Click the button below to mark this task as completed.",
-    }
-    
-    _send_unified_assignment_email(
-        subject=f"{subject_prefix}: {task.task_name}",
-        to_email=task.assign_to.email,
-        context=ctx,
-    )
+def _info_html(title: str, heading: str, lines: List[str]) -> str:
+    body = "<p>" + "<br/>".join(lines) + "</p>"
+    return _shell_html(title, heading, body)
 
 
-def send_checklist_admin_confirmation(*, task, subject_prefix: str = "Checklist Task Assignment"):
-    admin_emails = get_admin_emails()
-    if not admin_emails:
-        return
-    send_html_email(
-        subject=f"{subject_prefix}: {task.task_name}",
-        template_name="email/admin_assignment_summary.html",
-        context={
-            "title": f"{subject_prefix}",
-            "items": [{
-                "label": "Task",
-                "value": task.task_name,
-            }, {
-                "label": "Assignee",
-                "value": task.assign_to,
-            }, {
-                "label": "Planned Date",
-                "value": task.planned_date,
-            }, {
-                "label": "Priority",
-                "value": task.priority,
-            }],
-        },
-        to=admin_emails,
-    )
-
-
-def send_checklist_unassigned_notice(*, task, old_user):
-    if not old_user or not (getattr(old_user, "email", "") or "").strip():
-        return
-    send_html_email(
-        subject=f"Checklist Task Unassigned: {task.task_name}",
-        template_name="email/checklist_unassigned.html",
-        context={
-            "task": task,
-            "old_user": old_user,
-        },
-        to=[old_user.email],
-    )
-
-
-def send_delegation_assignment_to_user(*, delegation, complete_url: str, subject_prefix: str = "New Delegation Task Assigned"):
-    """Send user-facing email for Delegation assignment"""
-    if not delegation.assign_to or not (getattr(delegation.assign_to, "email", "") or "").strip():
-        return
-    
-    ctx = {
-        "kind": "Delegation",
-        "task_title": delegation.task_name,
-        "task_code": delegation.id,
-        "planned_date_display": _fmt_dt_date(getattr(delegation, "planned_date", None)),
-        "priority_display": getattr(delegation, "priority", "") or "",
-        "assign_by_display": _display_name(getattr(delegation, "assign_by", None)),
-        "assignee_name": _display_name(delegation.assign_to),
-        "complete_url": complete_url,
-        "cta_text": "Click the button below to mark this task as completed.",
-    }
-    
-    _send_unified_assignment_email(
-        subject=f"{subject_prefix}: {delegation.task_name}",
-        to_email=delegation.assign_to.email,
-        context=ctx,
-    )
-
-
-def send_help_ticket_assignment_to_user(*, ticket, complete_url: str, subject_prefix: str = "New Help Ticket Assigned"):
-    """Send user-facing email for Help Ticket assignment"""
-    if not ticket.assign_to or not (getattr(ticket.assign_to, "email", "") or "").strip():
-        return
-    
-    ctx = {
-        "kind": "Help Ticket",
-        "task_title": ticket.title,
-        "task_code": ticket.id,
-        "planned_date_display": _fmt_dt_date(getattr(ticket, "planned_date", None)),
-        "priority_display": getattr(ticket, "priority", "") or "",
-        "assign_by_display": _display_name(getattr(ticket, "assign_by", None)),
-        "assignee_name": _display_name(ticket.assign_to),
-        "complete_url": complete_url,
-        "cta_text": "Click the button below to add notes or close this ticket.",
-    }
-    
-    _send_unified_assignment_email(
-        subject=f"{subject_prefix}: {ticket.title}",
-        to_email=ticket.assign_to.email,
-        context=ctx,
-    )
-
-
-def send_help_ticket_admin_confirmation(*, ticket, subject_prefix: str = "Help Ticket Assignment"):
-    admin_emails = get_admin_emails()
-    if not admin_emails:
-        return
-    send_html_email(
-        subject=f"{subject_prefix}: {ticket.title}",
-        template_name="email/admin_assignment_summary.html",
-        context={
-            "title": f"{subject_prefix}",
-            "items": [{
-                "label": "Title",
-                "value": ticket.title,
-            }, {
-                "label": "Assignee",
-                "value": ticket.assign_to,
-            }, {
-                "label": "Planned Date",
-                "value": ticket.planned_date,
-            }, {
-                "label": "Priority",
-                "value": ticket.priority,
-            }],
-        },
-        to=admin_emails,
-    )
-
-
-def send_help_ticket_unassigned_notice(*, ticket, old_user):
-    if not old_user or not (getattr(old_user, "email", "") or "").strip():
-        return
-    send_html_email(
-        subject=f"Help Ticket Unassigned: {ticket.title}",
-        template_name="email/help_ticket_unassigned.html",
-        context={
-            "ticket": ticket,
-            "old_user": old_user,
-        },
-        to=[old_user.email],
-    )
-
-
-def send_admin_bulk_summary(*, title: str, rows: Sequence[dict]):
-    """Send clean admin bulk summary without emojis"""
-    admin_emails = get_admin_emails()
-    if not admin_emails or not rows:
-        return
-    
-    # Clean up title - remove emojis and timing info for cleaner look
-    clean_title = title.replace("⚡", "").replace("Fast Bulk Upload:", "Bulk Upload Summary:")
-    if "in " in clean_title and "s" in clean_title:
-        # Remove timing information from title
-        clean_title = clean_title.split(" in ")[0]
-    
-    # Add complete URLs to each task
-    enhanced_rows = []
-    for row in rows:
-        enhanced_row = dict(row)
-        # Try to determine task type and add complete URL
+def _on_commit(fn):
+    """Run callable after successful DB commit; if not in a transaction, run immediately."""
+    try:
+        transaction.on_commit(fn)
+    except Exception:
+        # outside atomic block
         try:
-            # This is a simple approach - you might need to adjust based on your data structure
-            enhanced_row['complete_url'] = f"{site_url}/tasks/complete/"  # Generic URL
-        except:
-            enhanced_row['complete_url'] = None
-        enhanced_rows.append(enhanced_row)
-    
-    send_html_email(
-        subject=clean_title,
-        template_name="email/admin_assignment_summary.html",
-        context={
-            "title": clean_title,
-            "items_table": enhanced_rows
-        },
-        to=admin_emails,
+            fn()
+        except Exception as e:
+            logger.error(_safe_console_text(f"Deferred email send failed: {e}"))
+
+
+def is_working_day(d) -> bool:
+    if hasattr(d, "date"):
+        d = d.date()
+    # Sunday = 6 in Python datetime.weekday()
+    return d.weekday() != 6 and not Holiday.objects.filter(date=d).exists()
+
+
+# ======================================================================
+#                         OUTBOUND EMAIL FUNCTIONS
+# ======================================================================
+
+def send_checklist_assignment_to_user(
+    *,
+    task: Checklist,
+    complete_url: Optional[str],
+    subject_prefix: str = "Checklist Assigned",
+) -> None:
+    """Notify assignee for a Checklist task."""
+    if not task or not task.assign_to:
+        return
+    subject = f"{subject_prefix}: {task.task_name}"
+    html = _assignment_html(
+        task_title="Checklist Task",
+        task_name=task.task_name,
+        assigner=task.assign_by,
+        planned_dt=task.planned_date,
+        complete_url=complete_url,
+        cta_label="Open Checklist",
     )
+    recipients = [task.assign_to.email]
+    _on_commit(lambda: _send_email(subject, recipients, html))
+
+
+def send_delegation_assignment_to_user(
+    *,
+    delegation: Delegation,
+    complete_url: Optional[str],
+    subject_prefix: str = "Delegation Assigned",
+) -> None:
+    """Notify assignee for a Delegation task."""
+    if not delegation or not delegation.assign_to:
+        return
+    subject = f"{subject_prefix}: {delegation.task_name}"
+    html = _assignment_html(
+        task_title="Delegation Task",
+        task_name=delegation.task_name,
+        assigner=delegation.assign_by,
+        planned_dt=delegation.planned_date,
+        complete_url=complete_url,
+        cta_label="Open Delegation",
+    )
+    recipients = [delegation.assign_to.email]
+    _on_commit(lambda: _send_email(subject, recipients, html))
+
+
+def send_help_ticket_assignment_to_user(
+    *,
+    ticket: HelpTicket,
+    complete_url: Optional[str],
+    subject_prefix: str = "Help Ticket Assigned",
+) -> None:
+    """Notify assignee for a Help Ticket."""
+    if not ticket or not ticket.assign_to:
+        return
+    subject = f"{subject_prefix}: {ticket.title}"
+    planned = ticket.planned_date
+    html = _assignment_html(
+        task_title="Help Ticket",
+        task_name=ticket.title,
+        assigner=ticket.assign_by,
+        planned_dt=planned,
+        complete_url=complete_url,
+        cta_label="Open Ticket",
+        extra_lines=[f"<strong>Ticket ID:</strong> HT-{ticket.id}"],
+    )
+    recipients = [ticket.assign_to.email]
+    _on_commit(lambda: _send_email(subject, recipients, html))
+
+
+def send_recurring_assignment_to_user(
+    *,
+    task: Checklist,
+    complete_url: Optional[str],
+    subject_prefix: str = "Recurring Checklist Generated",
+) -> None:
+    """Explicit function for recurring checklist emails (alias of checklist assignment)."""
+    send_checklist_assignment_to_user(task=task, complete_url=complete_url, subject_prefix=subject_prefix)
+
+
+def send_checklist_admin_confirmation(
+    *,
+    task: Checklist,
+    subject_prefix: str = "Checklist Task Assignment",
+) -> None:
+    """Confirmation to assigner / notify emails."""
+    subject = f"{subject_prefix}: {task.task_name}"
+    planned_str = (
+        timezone.localtime(task.planned_date, IST).strftime("%a, %d %b %Y • %I:%M %p IST")
+        if task.planned_date else "Not specified"
+    )
+    assignee_name = task.assign_to.get_full_name() or task.assign_to.username
+    who = task.assign_by.get_full_name() or task.assign_by.username if task.assign_by else "System"
+    lines = [
+        f"<strong>Task:</strong> {task.task_name}",
+        f"<strong>Planned:</strong> {planned_str}",
+        f"<strong>Assigned to:</strong> {assignee_name}",
+        f"<strong>Assigned by:</strong> {who}",
+    ]
+    html = _info_html("Checklist Assignment - Admin Copy", "Assignment Confirmation", lines)
+    recipients = _safe_list([
+        getattr(task.assign_by, "email", ""),
+        getattr(getattr(task, "notify_to", None), "email", ""),
+    ])
+    if not recipients:
+        # fallback to ADMINS if configured
+        recipients = [email for _, email in getattr(settings, "ADMINS", [])]
+    if recipients:
+        _on_commit(lambda: _send_email(subject, recipients, html))
+
+
+def send_checklist_unassigned_notice(
+    *,
+    task: Checklist,
+    old_user: User,
+) -> None:
+    """Notify previous assignee that a task was reassigned away from them."""
+    if not old_user or not getattr(old_user, "email", None):
+        return
+    subject = f"Checklist Reassigned: {task.task_name}"
+    now_assignee = task.assign_to.get_full_name() or task.assign_to.username
+    lines = [
+        f"The task <strong>{task.task_name}</strong> is no longer assigned to you.",
+        f"It is now assigned to <strong>{now_assignee}</strong>.",
+    ]
+    html = _info_html("Checklist Reassigned", "You are unassigned from a task", lines)
+    _on_commit(lambda: _send_email(subject, [old_user.email], html))
+
+
+def send_help_ticket_admin_confirmation(
+    *,
+    ticket: HelpTicket,
+    subject_prefix: str = "Help Ticket Assignment",
+) -> None:
+    subject = f"{subject_prefix}: {ticket.title}"
+    planned_str = (
+        timezone.localtime(ticket.planned_date, IST).strftime("%a, %d %b %Y • %I:%M %p IST")
+        if ticket.planned_date else "Not specified"
+    )
+    assignee_name = ticket.assign_to.get_full_name() or ticket.assign_to.username
+    who = ticket.assign_by.get_full_name() or ticket.assign_by.username if ticket.assign_by else "System"
+    lines = [
+        f"<strong>Ticket:</strong> {ticket.title} (HT-{ticket.id})",
+        f"<strong>Planned:</strong> {planned_str}",
+        f"<strong>Assigned to:</strong> {assignee_name}",
+        f"<strong>Assigned by:</strong> {who}",
+    ]
+    html = _info_html("Help Ticket - Admin Copy", "Assignment Confirmation", lines)
+    recipients = _safe_list([
+        getattr(ticket.assign_by, "email", ""),
+        getattr(getattr(ticket, "notify_to", None), "email", ""),
+    ])
+    if not recipients:
+        recipients = [email for _, email in getattr(settings, "ADMINS", [])]
+    if recipients:
+        _on_commit(lambda: _send_email(subject, recipients, html))
+
+
+def send_help_ticket_unassigned_notice(
+    *,
+    ticket: HelpTicket,
+    old_user: User,
+) -> None:
+    if not old_user or not getattr(old_user, "email", None):
+        return
+    subject = f"Help Ticket Reassigned: {ticket.title} (HT-{ticket.id})"
+    now_assignee = ticket.assign_to.get_full_name() or ticket.assign_to.username
+    lines = [
+        f"The help ticket <strong>{ticket.title}</strong> (HT-{ticket.id}) is no longer assigned to you.",
+        f"It is now assigned to <strong>{now_assignee}</strong>.",
+    ]
+    html = _info_html("Help Ticket Reassigned", "You are unassigned from a ticket", lines)
+    _on_commit(lambda: _send_email(subject, [old_user.email], html))
+
+
+def send_admin_bulk_summary(
+    *,
+    title: str,
+    rows: List[dict],
+) -> None:
+    """
+    Send a compact summary to admins after bulk upload.
+    rows: dicts like {"Task Name": ..., "Assign To": ..., "Planned Date": ..., "Priority": ..., "complete_url": ...}
+    """
+    subject = title or "Bulk Upload Summary"
+
+    def _table() -> str:
+        if not rows:
+            return "<p>No rows.</p>"
+        headers = ["Task Name", "Assign To", "Planned Date", "Priority"]
+
+        # build rows safely (avoid XSS via simple escaping)
+        def esc(s: object) -> str:
+            from django.utils.html import escape
+            return escape("" if s is None else str(s))
+
+        trs = []
+        for r in rows:
+            name = esc(r.get("Task Name", ""))
+            if r.get("complete_url"):
+                name = f'<a href="{esc(r.get("complete_url"))}">{name}</a>'
+            assign_to = esc(r.get("Assign To", ""))
+            planned = esc(r.get("Planned Date", ""))
+            priority = esc(r.get("Priority", ""))
+            trs.append(f"<tr><td>{name}</td><td>{assign_to}</td><td>{planned}</td><td>{priority}</td></tr>")
+        head = "<tr>" + "".join(
+            f"<th style='text-align:left;padding:8px 10px;border-bottom:1px solid #e5e7eb'>{h}</th>" for h in headers
+        ) + "</tr>"
+        body = "".join(trs)
+        return f"""
+          <table role="presentation" cellpadding="0" cellspacing="0" width="100%"
+                 style="border-collapse:collapse;font-size:13px">
+            {head}
+            {body}
+          </table>
+        """
+
+    html = _shell_html("Bulk Upload Summary", "Tasks Created (preview of first few)", _table())
+
+    # recipients: ADMINS + active superusers/staff with emails
+    rcpts = [email for _, email in getattr(settings, "ADMINS", [])]
+    staff = User.objects.filter(is_active=True).filter(is_superuser=True)[:50]
+    rcpts.extend([u.email for u in staff if u.email])
+    rcpts = _safe_list(rcpts)
+    if rcpts:
+        _on_commit(lambda: _send_email(subject, rcpts, html))
+
+
+# ======================================================================
+#                         SIGNALS / RECURRING LOGIC
+# ======================================================================
+
+def _send_recurring_emails_safely(checklist_obj: Checklist) -> None:
+    """
+    Helper to send emails when a new recurring checklist is generated.
+
+    Policy:
+      - Respect SEND_EMAILS_FOR_AUTO_RECUR
+      - If SEND_RECUR_EMAILS_ONLY_AT_10AM is True, only send within 10:00 IST window.
+        Otherwise, send immediately.
+    """
+    if not SEND_EMAILS_FOR_AUTO_RECUR:
+        return
+
+    if SEND_RECUR_EMAILS_ONLY_AT_10AM and not _within_10am_ist_window():
+        logger.info(
+            _safe_console_text(
+                f"Skipping immediate recurring email for {checklist_obj.id}; will be sent at 10:00 IST by daily job."
+            )
+        )
+        return
+
+    try:
+        complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[checklist_obj.id])}"
+        send_checklist_assignment_to_user(
+            task=checklist_obj,
+            complete_url=complete_url,
+            subject_prefix="Recurring Checklist Generated",
+        )
+        send_checklist_admin_confirmation(
+            task=checklist_obj,
+            subject_prefix="Recurring Checklist Generated",
+        )
+        logger.info(_safe_console_text(f"Sent emails for recurring checklist {checklist_obj.id}"))
+    except Exception as e:
+        logger.error(_safe_console_text(f"Failed to send emails for recurring checklist {checklist_obj.id}: {e}"))
+
+
+@receiver(post_save, sender=Checklist)
+def create_next_recurring_checklist(sender, instance: Checklist, created: bool, **kwargs):
+    """
+    Create next recurring checklist occurrence at 10:00 AM IST when current one is completed.
+    Rules:
+      - Only for modes in RECURRING_MODES
+      - Trigger on update to 'Completed' (not on fresh create)
+      - Avoid Sundays/holidays (handled by schedule_recurring_at_10am)
+      - Prevent duplicates within 1 minute window
+    """
+    # Must be recurring
+    if (instance.mode or "") not in RECURRING_MODES:
+        return
+    # Only when completed
+    if instance.status != "Completed":
+        return
+    # Ignore create events; only react to updates to Completed
+    if created:
+        return
+
+    now = timezone.now()
+    # If there is already a future pending in this series, stop
+    series_filter = dict(
+        assign_to=instance.assign_to,
+        task_name=instance.task_name,
+        mode=instance.mode,
+        frequency=instance.frequency,
+        group_name=getattr(instance, "group_name", None),
+    )
+    if Checklist.objects.filter(status="Pending", planned_date__gt=now, **series_filter).exists():
+        return
+
+    next_dt = get_next_planned_date(instance.planned_date, instance.mode, instance.frequency)
+    if not next_dt:
+        logger.warning(_safe_console_text(f"No next date for recurring checklist {instance.id}"))
+        return
+
+    # force to 10:00 AM IST and to a working day
+    next_dt = schedule_recurring_at_10am(next_dt)
+
+    # prevent duplicates within 1-minute window
+    dupe_exists = Checklist.objects.filter(
+        status="Pending",
+        planned_date__gte=next_dt - timedelta(minutes=1),
+        planned_date__lt=next_dt + timedelta(minutes=1),
+        **series_filter,
+    ).exists()
+    if dupe_exists:
+        logger.info(_safe_console_text(f"Duplicate prevented for series '{instance.task_name}' at {next_dt}"))
+        return
+
+    try:
+        with transaction.atomic():
+            new_obj = Checklist.objects.create(
+                assign_by=instance.assign_by,
+                task_name=instance.task_name,
+                message=instance.message,
+                assign_to=instance.assign_to,
+                planned_date=next_dt,
+                priority=instance.priority,
+                attachment_mandatory=instance.attachment_mandatory,
+                mode=instance.mode,
+                frequency=instance.frequency,
+                time_per_task_minutes=instance.time_per_task_minutes,
+                remind_before_days=instance.remind_before_days,
+                assign_pc=instance.assign_pc,
+                notify_to=instance.notify_to,
+                set_reminder=instance.set_reminder,
+                reminder_mode=instance.reminder_mode,
+                reminder_frequency=instance.reminder_frequency,
+                reminder_starting_time=instance.reminder_starting_time,
+                checklist_auto_close=instance.checklist_auto_close,
+                checklist_auto_close_days=instance.checklist_auto_close_days,
+                group_name=getattr(instance, "group_name", None),
+                actual_duration_minutes=0,
+                status="Pending",
+            )
+            transaction.on_commit(lambda: _send_recurring_emails_safely(new_obj))
+            logger.info(
+                _safe_console_text(
+                    f"Created next recurring checklist {new_obj.id} '{new_obj.task_name}' at {new_obj.planned_date}"
+                )
+            )
+    except Exception as e:
+        logger.error(_safe_console_text(f"Failed to create next recurring checklist for {instance.id}: {e}"))
+
+
+@receiver(post_save, sender=Checklist)
+def log_checklist_completion(sender, instance, created, **kwargs):
+    if not created and instance.status == "Completed":
+        logger.info(_safe_console_text(f"Checklist {instance.id} '{instance.task_name}' completed by {instance.assign_to}"))
+
+
+@receiver(post_save, sender=Delegation)
+def log_delegation_completion(sender, instance, created, **kwargs):
+    if not created and instance.status == "Completed":
+        logger.info(_safe_console_text(f"Delegation {instance.id} '{instance.task_name}' completed by {instance.assign_to}"))
+
+
+@receiver(post_save, sender=HelpTicket)
+def log_helpticket_completion(sender, instance, created, **kwargs):
+    if not created and instance.status == "Closed":
+        logger.info(_safe_console_text(f"Help Ticket {instance.id} '{instance.title}' closed by {instance.assign_to}"))
+
+
+@receiver(post_save, sender=Checklist)
+def log_checklist_creation(sender, instance, created, **kwargs):
+    if created:
+        logger.debug(_safe_console_text(f"Created checklist {instance.id} '{instance.task_name}' for {instance.assign_to} at {instance.planned_date}"))
+
+
+@receiver(post_save, sender=Delegation)
+def log_delegation_creation(sender, instance, created, **kwargs):
+    if created:
+        logger.debug(_safe_console_text(f"Created delegation {instance.id} '{instance.task_name}' for {instance.assign_to} at {instance.planned_date}"))

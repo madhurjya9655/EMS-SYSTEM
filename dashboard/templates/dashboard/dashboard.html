@@ -1,3 +1,4 @@
+<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\dashboard\templates\dashboard\dashboard.html -->
 {# dashboard/templates/dashboard/dashboard.html #}
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
@@ -7,37 +8,46 @@
   <!-- Week Score -->
   <div class="col-md-6">
     <div class="card shadow-sm h-100">
-      <div class="card-header bg-white"><h5 class="mb-0">Week Score</h5></div>
+      <div class="card-header bg-white">
+        <h5 class="mb-0">Week Score</h5>
+      </div>
       <div class="card-body p-0">
         <div class="table-responsive">
-          <table class="table mb-0">
+          <table class="table mb-0 align-middle">
             <thead class="table-light">
-              <tr><th></th><th>Previous</th><th>Current</th></tr>
+              <tr>
+                <th scope="col"></th>
+                <th scope="col">Previous</th>
+                <th scope="col">Current</th>
+              </tr>
             </thead>
             <tbody>
               {% if not selected or selected == 'checklist' %}
               <tr>
-                <td>Checklist</td>
+                <th scope="row">Checklist</th>
                 <td>{{ week_score.checklist.previous|default_if_none:0 }}</td>
                 <td>{{ week_score.checklist.current|default_if_none:0 }}</td>
               </tr>
               {% endif %}
+
               {% if not selected or selected == 'delegation' %}
               <tr>
-                <td>Delegation</td>
+                <th scope="row">Delegation</th>
                 <td>{{ week_score.delegation.previous|default_if_none:0 }}</td>
                 <td>{{ week_score.delegation.current|default_if_none:0 }}</td>
               </tr>
               {% endif %}
+
               {% if not selected or selected == 'help_ticket' %}
               <tr>
-                <td>Help Ticket</td>
+                <th scope="row">Help Ticket</th>
                 <td>{{ week_score.help_ticket.previous|default_if_none:0 }}</td>
                 <td>{{ week_score.help_ticket.current|default_if_none:0 }}</td>
               </tr>
               {% endif %}
+
               <tr class="table-light">
-                <td><strong>Time Spent</strong></td>
+                <th scope="row"><strong>Time Spent</strong></th>
                 <td>{{ prev_time }}</td>
                 <td>{{ curr_time }}</td>
               </tr>
@@ -51,19 +61,32 @@
   <!-- Pending Tasks -->
   <div class="col-md-6">
     <div class="card shadow-sm h-100">
-      <div class="card-header bg-white"><h5 class="mb-0">Pending Tasks</h5></div>
+      <div class="card-header bg-white">
+        <h5 class="mb-0">Pending Tasks</h5>
+      </div>
       <div class="card-body p-0">
         <div class="table-responsive">
-          <table class="table mb-0">
+          <table class="table mb-0 align-middle">
             <tbody>
               {% if not selected or selected == 'checklist' %}
-              <tr><td>Checklist</td><td>{{ pending_tasks.checklist|default_if_none:0 }}</td></tr>
+              <tr>
+                <th scope="row" class="fw-normal">Checklist</th>
+                <td class="text-end">{{ pending_tasks.checklist|default_if_none:0 }}</td>
+              </tr>
               {% endif %}
+
               {% if not selected or selected == 'delegation' %}
-              <tr><td>Delegation</td><td>{{ pending_tasks.delegation|default_if_none:0 }}</td></tr>
+              <tr>
+                <th scope="row" class="fw-normal">Delegation</th>
+                <td class="text-end">{{ pending_tasks.delegation|default_if_none:0 }}</td>
+              </tr>
               {% endif %}
+
               {% if not selected or selected == 'help_ticket' %}
-              <tr><td>Help Ticket</td><td>{{ pending_tasks.help_ticket|default_if_none:0 }}</td></tr>
+              <tr>
+                <th scope="row" class="fw-normal">Help Ticket</th>
+                <td class="text-end">{{ pending_tasks.help_ticket|default_if_none:0 }}</td>
+              </tr>
               {% endif %}
             </tbody>
           </table>
@@ -74,18 +97,23 @@
 </div>
 
 <!-- Task Switcher + Today Toggle -->
-<div class="row mb-4 align-items-center">
-  <div class="col d-flex gap-2 flex-wrap">
+<div class="row mb-4 align-items-center gy-2">
+  <div class="col d-flex flex-wrap gap-2">
     <a href="?task_type=checklist{% if today_only %}&today=1{% endif %}"
-       class="btn btn-primary {% if selected == 'checklist' or not selected %}active{% endif %}">
+       class="btn btn-primary {% if selected == 'checklist' or not selected %}active{% endif %}"
+       aria-current="{% if selected == 'checklist' or not selected %}true{% else %}false{% endif %}">
       Checklist Tasks
     </a>
+
     <a href="?task_type=delegation{% if today_only %}&today=1{% endif %}"
-       class="btn btn-primary {% if selected == 'delegation' %}active{% endif %}">
+       class="btn btn-primary {% if selected == 'delegation' %}active{% endif %}"
+       aria-current="{% if selected == 'delegation' %}true{% else %}false{% endif %}">
       Delegation Tasks
     </a>
+
     <a href="?task_type=help_ticket{% if today_only %}&today=1{% endif %}"
-       class="btn btn-primary {% if selected == 'help_ticket' %}active{% endif %}">
+       class="btn btn-primary {% if selected == 'help_ticket' %}active{% endif %}"
+       aria-current="{% if selected == 'help_ticket' %}true{% else %}false{% endif %}">
       Help Ticket Tasks
     </a>
   </div>
@@ -93,8 +121,13 @@
   <div class="col-auto d-flex align-items-center">
     <label for="todayOnlySwitch" class="me-2 mb-0">All</label>
     <div class="form-check form-switch m-0">
-      <input class="form-check-input" type="checkbox" id="todayOnlySwitch"
-             {% if today_only %}checked{% endif %} onchange="onTodayToggle()" aria-label="Show today only">
+      <input
+        class="form-check-input"
+        type="checkbox"
+        id="todayOnlySwitch"
+        {% if today_only %}checked{% endif %}
+        onchange="onTodayToggle()"
+        aria-label="Toggle to show only today's items">
     </div>
     <label for="todayOnlySwitch" class="ms-2 mb-0">Today Only</label>
   </div>
@@ -110,16 +143,23 @@
 {% endif %}
 
 <script>
+  // Preserve existing query params while toggling today's filter
   function onTodayToggle(){
     const params = new URLSearchParams(window.location.search);
     const checked = document.getElementById('todayOnlySwitch').checked;
+
     if (checked) {
+      // support both keys used elsewhere
       params.set('today','1');
+      params.set('today_only','1');
     } else {
       params.delete('today');
       params.delete('today_only');
     }
-    window.location.search = params.toString();
+
+    // Prevent empty query string like "?"
+    const next = params.toString();
+    window.location.search = next;
   }
 </script>
 {% endblock %}

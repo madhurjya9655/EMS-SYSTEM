@@ -1,13 +1,15 @@
-// static/js/tasks-bulk.js
-// Unobtrusive bulk-selection + confirm handlers for Tasks pages (Bootstrap 5, vanilla JS)
+// E:\CLIENT PROJECT\employee management system bos\employee_management_system\static\js\tasks-bulk.js
+// Unobtrusive bulk selection + counters + confirmations (Bootstrap 5, vanilla JS)
 
 (function () {
   "use strict";
 
-  function qs(sel, root = document) { return root.querySelector(sel); }
-  function qsa(sel, root = document) { return Array.from(root.querySelectorAll(sel)); }
+  const qs  = (sel, root = document) => root.querySelector(sel);
+  const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-  // Attach a generic [data-confirm] click guard (works for buttons/links, incl. form="" targets)
+  // ---------------------------------------------------------------------------
+  // 1) Global [data-confirm] guard (works for links/buttons, incl. external form targets)
+  // ---------------------------------------------------------------------------
   document.addEventListener("click", function (e) {
     const el = e.target.closest("[data-confirm]");
     if (!el) return;
@@ -15,14 +17,9 @@
     const msg = el.getAttribute("data-confirm");
     if (!msg) return;
 
-    // If element is inside a [data-bulk] form and is the submit button,
-    // we'll handle confirmation on 'submit'. For others, confirm here.
-    const isBulkSubmit =
-      el.matches("[data-bulk-submit]") &&
-      el.form &&
-      el.form.matches("[data-bulk]");
-
-    if (isBulkSubmit) return; // defer to 'submit' handler
+    // If this is the primary bulk submit inside a [data-bulk] form, let the form's submit handler confirm.
+    const isBulkSubmit = el.matches("[data-bulk-submit]") && el.form && el.form.matches("[data-bulk]");
+    if (isBulkSubmit) return;
 
     if (!window.confirm(msg)) {
       e.preventDefault();
@@ -30,93 +27,113 @@
     }
   });
 
-  // Initialize each bulk form independently
-  function initBulkForm(form) {
-    const selectAll = qs("[data-select-all]", form);
-    const submitBtn = qs("[data-bulk-submit]", form);
-    const selectedCountEl = qs("[data-selected-count]", form);
+  // ---------------------------------------------------------------------------
+  // 2) FILTER panel chevron (+ / -) toggle (only if the page provides it)
+  // ---------------------------------------------------------------------------
+  document.addEventListener("DOMContentLoaded", function () {
+    const panel = qs("#filterPanel");
+    const icon  = qs("[data-filter-toggle-icon]");
+    if (!panel || !icon) return;
 
-    const getRowChecks = () => qsa("[data-row-check]", form).filter(cb => !cb.closest("tr")?.classList.contains("d-none"));
+    const toMinus = () => { icon.classList.remove("fa-plus");  icon.classList.add("fa-minus"); };
+    const toPlus  = () => { icon.classList.remove("fa-minus"); icon.classList.add("fa-plus");  };
+
+    // Initial
+    if (panel.classList.contains("show")) toMinus(); else toPlus();
+
+    panel.addEventListener("shown.bs.collapse", toMinus);
+    panel.addEventListener("hidden.bs.collapse", toPlus);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 3) Bulk-form initializer (supports multiple forms per page)
+  // ---------------------------------------------------------------------------
+  function initBulkForm(form) {
+    const selectAll        = qs("[data-select-all]", form);
+    const submitBtn        = qs("[data-bulk-submit]", form);
+    let   selectedCountEl  = qs("[data-selected-count]", form) || qs("[data-selected-count]");
+
+    // Only consider visible & enabled row checkboxes within this form.
+    const getRowChecks = () =>
+      qsa("[data-row-check]", form).filter(cb => {
+        const row = cb.closest("tr");
+        return !cb.disabled && (!row || !row.classList.contains("d-none"));
+      });
 
     function updateState() {
-      const checks = getRowChecks();
-      const enabled = checks.filter(cb => !cb.disabled);
-      const selected = enabled.filter(cb => cb.checked).length;
-      const total = enabled.length;
+      const checks   = getRowChecks();
+      const selected = checks.filter(cb => cb.checked).length;
+      const total    = checks.length;
 
       if (submitBtn) submitBtn.disabled = selected === 0;
       if (selectedCountEl) selectedCountEl.textContent = String(selected);
 
       if (selectAll) {
         selectAll.indeterminate = selected > 0 && selected < total;
-        selectAll.checked = total > 0 && selected === total;
+        selectAll.checked       = total > 0 && selected === total;
       }
     }
 
-    // Select-all toggles only checkboxes in this form
+    // Select-all toggles all row checks in THIS form
     if (selectAll) {
       selectAll.addEventListener("change", () => {
-        const checks = getRowChecks();
-        checks.forEach(cb => { if (!cb.disabled) cb.checked = selectAll.checked; });
+        getRowChecks().forEach(cb => { cb.checked = selectAll.checked; });
         updateState();
       });
     }
 
-    // Row checkbox changed
+    // Per-row change updates state
     form.addEventListener("change", (e) => {
       if (e.target && e.target.matches("[data-row-check]")) {
         updateState();
       }
     });
 
-    // Optional: shift-click range selection
+    // Shift-click range selection
     (function enableShiftRange() {
-      let lastClicked = null;
+      let last = null;
       form.addEventListener("click", (e) => {
-        const target = e.target;
-        if (!target || !target.matches("[data-row-check]")) return;
+        const cb = e.target && e.target.matches("[data-row-check]") ? e.target : null;
+        if (!cb) return;
 
         const checks = getRowChecks();
-        if (e.shiftKey && lastClicked && lastClicked !== target) {
-          const start = checks.indexOf(lastClicked);
-          const end = checks.indexOf(target);
+        if (e.shiftKey && last && last !== cb) {
+          const start = checks.indexOf(last);
+          const end   = checks.indexOf(cb);
           if (start !== -1 && end !== -1) {
             const [lo, hi] = start < end ? [start, end] : [end, start];
-            const value = target.checked;
-            for (let i = lo; i <= hi; i++) {
-              if (!checks[i].disabled) checks[i].checked = value;
-            }
+            const value = cb.checked;
+            for (let i = lo; i <= hi; i++) checks[i].checked = value;
           }
         }
-        lastClicked = target;
+        last = cb;
         updateState();
       });
     })();
 
     // Confirm on submit + prevent double submit
     form.addEventListener("submit", (e) => {
-      // Guard: require at least one selection for bulk actions
-      const selected = getRowChecks().some(cb => cb.checked && !cb.disabled);
-      if (!selected) {
+      const anySelected = getRowChecks().some(cb => cb.checked);
+      if (!anySelected) {
         e.preventDefault();
         return;
       }
 
-      const trigger = submitBtn; // primary bulk submit
-      const msg = trigger && trigger.getAttribute("data-confirm");
+      const msg = submitBtn && submitBtn.getAttribute("data-confirm");
       if (msg && !window.confirm(msg)) {
         e.preventDefault();
         return;
       }
 
-      // Disable to avoid double-submits
+      // Avoid double submits
       if (submitBtn) submitBtn.disabled = true;
     });
 
-    // Initial state
+    // Initial paint
     updateState();
   }
 
+  // Boot
   document.addEventListener("DOMContentLoaded", function () {
     qsa("form[data-bulk]").forEach(initBulkForm);
   });

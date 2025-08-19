@@ -1,3 +1,4 @@
+<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\dashboard\templates\dashboard\partials\checklist_tasks.html -->
 {% load static custom_filters %}
 
 <div class="card shadow-sm">
@@ -24,10 +25,10 @@
 
   <div class="card-body p-0">
     <div class="table-responsive">
-      <table class="table table-hover mb-0">
+      <table class="table table-hover mb-0 align-middle">
         <thead class="table-light">
           <tr>
-            <th>ID</th>
+            <th style="width:80px;">ID</th>
             <th>Task Name</th>
             <th>Message</th>
             <th>Planned Date</th>
@@ -35,7 +36,7 @@
             <th>Time/Task</th>
             <th>Actual Time</th>
             <th>Delay</th>
-            <th>Action</th>
+            <th style="width:340px;">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -45,7 +46,10 @@
             <td>
               {{ t.task_name }}
               {% if t.is_recurring %}
-                <small class="badge bg-info ms-1">{{ t.mode }} ({{ t.frequency }})</small>
+                <small class="badge bg-info ms-1">{{ t.mode }}{% if t.frequency %} ({{ t.frequency }}){% endif %}</small>
+              {% endif %}
+              {% if t.group_name %}
+                <small class="badge bg-secondary ms-1">{{ t.group_name }}</small>
               {% endif %}
             </td>
             <td>{{ t.message|default:"—"|truncatechars:30 }}</td>
@@ -64,17 +68,112 @@
               {% endif %}
             </td>
             <td>{{ t.planned_date|delay_since }}</td>
-            <td>
+            <td class="text-nowrap">
+              <!-- DETAILS button -->
+              <button class="btn btn-sm btn-outline-info me-1"
+                      type="button"
+                      data-bs-toggle="collapse"
+                      data-bs-target="#dash-row-detail-{{ t.id }}"
+                      aria-expanded="false"
+                      aria-controls="dash-row-detail-{{ t.id }}">
+                <i class="fas fa-eye"></i> Details
+              </button>
+
               {% if t.status == 'Pending' %}
                 <a href="{% url 'tasks:complete_checklist' t.id %}?next={{ request.get_full_path|urlencode }}"
-                   class="btn btn-sm btn-success">
-                   <i class="fas fa-check"></i> COMPLETE
+                   class="btn btn-sm btn-success me-1">
+                   <i class="fas fa-check"></i> Complete
                 </a>
               {% else %}
-                <span class="text-success">
+                <span class="text-success me-2">
                   <i class="fas fa-check-circle"></i> Completed
                 </span>
               {% endif %}
+            </td>
+          </tr>
+
+          <!-- Collapsible Details Row -->
+          <tr class="collapse bg-light" id="dash-row-detail-{{ t.id }}">
+            <td colspan="9" class="p-3">
+              <div class="row g-3">
+                <div class="col-md-4">
+                  <div class="border rounded p-3 h-100">
+                    <h6 class="mb-2 text-primary">Task</h6>
+                    <dl class="mb-0">
+                      <dt class="small text-muted">Task Name</dt>
+                      <dd class="mb-2">{{ t.task_name }}</dd>
+
+                      <dt class="small text-muted">Message</dt>
+                      <dd class="mb-2">{{ t.message|default:"—" }}</dd>
+
+                      <dt class="small text-muted">Group</dt>
+                      <dd class="mb-0">{{ t.group_name|default:"—" }}</dd>
+                    </dl>
+                  </div>
+                </div>
+
+                <div class="col-md-4">
+                  <div class="border rounded p-3 h-100">
+                    <h6 class="mb-2 text-primary">Schedule</h6>
+                    <dl class="mb-0">
+                      <dt class="small text-muted">Planned Date</dt>
+                      <dd class="mb-2">{{ t.planned_date|date:"d M, Y H:i" }}</dd>
+
+                      <dt class="small text-muted">Frequency</dt>
+                      <dd class="mb-2">
+                        {% if t.mode %}{{ t.mode }}{% else %}—{% endif %}
+                        {% if t.frequency %} every {{ t.frequency }}{% endif %}
+                      </dd>
+
+                      <dt class="small text-muted">Reminder</dt>
+                      <dd class="mb-0">
+                        {% if t.set_reminder %}
+                          {{ t.reminder_mode|default:"Daily" }}{% if t.reminder_frequency %} (x{{ t.reminder_frequency }}){% endif %}
+                          {% if t.reminder_starting_time %} @ {{ t.reminder_starting_time|time:"H:i" }}{% endif %}
+                        {% else %}
+                          —
+                        {% endif %}
+                      </dd>
+                    </dl>
+                  </div>
+                </div>
+
+                <div class="col-md-4">
+                  <div class="border rounded p-3 h-100">
+                    <h6 class="mb-2 text-primary">Meta</h6>
+                    <dl class="mb-0">
+                      <dt class="small text-muted">Assigned By</dt>
+                      <dd class="mb-2">{{ t.assign_by.get_full_name|default:t.assign_by.username }}</dd>
+
+                      <dt class="small text-muted">Priority</dt>
+                      <dd class="mb-2">
+                        <span class="badge bg-{% if t.priority == 'High' %}danger{% elif t.priority == 'Medium' %}warning{% else %}success{% endif %}">
+                          {{ t.priority|default:"Low" }}
+                        </span>
+                      </dd>
+
+                      <dt class="small text-muted">Attachment Mandatory</dt>
+                      <dd class="mb-2">{{ t.attachment_mandatory|yesno:"Yes,No" }}</dd>
+
+                      <dt class="small text-muted">Status</dt>
+                      <dd class="mb-0">{{ t.status }}</dd>
+                    </dl>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-3 d-flex gap-2">
+                {% if t.status == 'Pending' %}
+                  <a href="{% url 'tasks:complete_checklist' t.id %}?next={{ request.get_full_path|urlencode }}"
+                     class="btn btn-success">
+                    <i class="fas fa-check"></i> Complete Task
+                  </a>
+                {% endif %}
+                <a href="#" class="btn btn-outline-secondary"
+                   data-bs-toggle="collapse" data-bs-target="#dash-row-detail-{{ t.id }}">
+                  Close
+                </a>
+              </div>
             </td>
           </tr>
           {% empty %}

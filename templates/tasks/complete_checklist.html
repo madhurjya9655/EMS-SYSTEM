@@ -166,27 +166,7 @@
         </div>
 
         <div class="row mt-4">
-          <div class="col-md-8">
-            <div class="alert alert-success border-0">
-              <h6 class="alert-heading">
-                <i class="fas fa-check me-2"></i>
-                What happens after completion?
-              </h6>
-              <ul class="mb-0 ps-3">
-                <li>Task status will be set to <strong>Completed</strong></li>
-                <li>Actual time will be recorded automatically</li>
-                {% if object.is_recurring %}
-                <li class="text-info">
-                  <i class="fas fa-redo-alt me-1"></i>
-                  Next occurrence will be created at <strong>10:00 AM IST</strong> on the next working day
-                </li>
-                {% endif %}
-                <li>You'll be redirected back to the dashboard</li>
-              </ul>
-            </div>
-          </div>
-          
-          <div class="col-md-4">
+          <div class="col-md-4 ms-auto">
             <div class="d-grid gap-2">
               {% url 'dashboard:home' as dashboard_home_url %}
               <a class="btn btn-outline-secondary btn-lg"
@@ -239,12 +219,6 @@
 .btn-success:hover {
   background: linear-gradient(135deg, #059669 0%, #047857 100%);
   transform: translateY(-1px);
-}
-
-.alert-success {
-  background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
-  border: 1px solid #10b981;
-  color: #065f46;
 }
 </style>
 

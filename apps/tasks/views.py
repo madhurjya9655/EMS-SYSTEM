@@ -1,30 +1,27 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
-# COMPLETE FIXED VERSION - All issues resolved
-
 import csv
 import pytz
+import re
 import time
 import logging
+import unicodedata
 from datetime import datetime, timedelta, date, time as dt_time
-from dateutil.relativedelta import relativedelta
-import pandas as pd
-from io import TextIOWrapper
 from functools import wraps
-from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
+from threading import Lock, Thread
+
+import pandas as pd
+from dateutil.relativedelta import relativedelta
 
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.staticfiles import finders
-from django.db import transaction, OperationalError, connections
-from django.db.models import Q, F, Subquery, OuterRef
-from django.http import FileResponse, Http404, HttpResponse, JsonResponse
+from django.db import transaction, OperationalError, connection, close_old_connections
+from django.db.models import Q
+from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.core.cache import cache
 
 from apps.users.permissions import has_permission
 from apps.settings.models import Holiday
@@ -46,19 +43,11 @@ from .utils import (
     send_help_ticket_unassigned_notice,
     send_admin_bulk_summary,
 )
-from .recurrence import get_next_planned_date
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
-# Global locks for thread safety
-user_cache_lock = Lock()
-db_operation_lock = Lock()
-
-can_create = lambda u: u.is_superuser or u.groups.filter(name__in=["Admin", "Manager", "EA", "CEO"]).exists()
-
-site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
-
+# ---------- CONSTANTS ----------
 IST = pytz.timezone("Asia/Kolkata")
 ASSIGN_HOUR = 10
 ASSIGN_MINUTE = 0
@@ -66,151 +55,120 @@ ASSIGN_MINUTE = 0
 SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
 RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
 
-# Performance settings
-BULK_BATCH_SIZE = getattr(settings, "BULK_UPLOAD_BATCH_SIZE", 20)
-EMAIL_BATCH_SIZE = getattr(settings, "EMAIL_BATCH_SIZE", 10)
-EMAIL_SEND_DELAY = getattr(settings, "EMAIL_SEND_DELAY", 0.1)
+# Tuned for speed
+BULK_BATCH_SIZE = 500
+
+site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
 
-def robust_db_operation(max_retries=5, base_delay=0.1):
-    """Enhanced decorator for robust database operations with exponential backoff"""
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            last_exception = None
+# ---------- FAST BACKGROUND EXECUTOR (post-response) ----------
+def _background(target, /, *args, **kwargs):
+    """
+    Run `target(*args, **kwargs)` in a detached daemon thread.
+    Ensures DB connections are fresh for the new thread.
+    """
+    def _runner():
+        try:
+            close_old_connections()
+            target(*args, **kwargs)
+        except Exception as e:
+            logger.exception("Background task failed: %s", e)
+        finally:
+            try:
+                close_old_connections()
+            except Exception:
+                pass
+
+    t = Thread(target=_runner, daemon=True, name=kwargs.pop("thread_name", "bulk-bg"))
+    t.start()
+
+
+# ---------- HELPERS ----------
+def clean_unicode_string(text):
+    if not text:
+        return text
+    text = str(text).replace("\x96", "-").replace("\u2013", "-").replace("\u2014", "-")
+    return unicodedata.normalize("NFKD", text)
+
+def robust_db_operation(max_retries=3, base_delay=0.05):
+    def deco(fn):
+        @wraps(fn)
+        def inner(*args, **kwargs):
+            last = None
             for attempt in range(max_retries):
                 try:
-                    return func(*args, **kwargs)
+                    return fn(*args, **kwargs)
                 except OperationalError as e:
-                    last_exception = e
-                    if "database is locked" in str(e).lower() or "database table is locked" in str(e).lower():
+                    txt = str(e).lower()
+                    last = e
+                    if "locked" in txt:
                         if attempt < max_retries - 1:
-                            delay = base_delay * (2 ** attempt)  # Exponential backoff
-                            logger.warning(f"Database locked, retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                            delay = base_delay * (2 ** attempt)
+                            logger.warning("DB locked; retrying %s/%s in %.3fs", attempt + 1, max_retries, delay)
                             time.sleep(delay)
                             continue
                     raise
-                except Exception as e:
-                    logger.error(f"Unexpected error in {func.__name__}: {str(e)}")
-                    raise
-            raise last_exception
-        return wrapper
-    return decorator
+            raise last
+        return inner
+    return deco
 
-
-class UserCache:
-    """Thread-safe user caching for bulk operations"""
-    def __init__(self):
-        self._cache = {}
-        self._lock = Lock()
-    
-    def get_user(self, username):
-        with self._lock:
-            if username not in self._cache:
-                try:
-                    user = User.objects.get(username=username, is_active=True)
-                    self._cache[username] = user
-                except User.DoesNotExist:
-                    self._cache[username] = None
-            return self._cache[username]
-    
-    def clear(self):
-        with self._lock:
-            self._cache.clear()
-
-# Global user cache instance
-user_cache = UserCache()
-
+def optimal_batch_size() -> int:
+    try:
+        if connection.vendor == "sqlite":
+            return 250
+        return min(BULK_BATCH_SIZE, 500)
+    except Exception:
+        return 250
 
 def _minutes_between(now_dt: datetime, planned_dt: datetime) -> int:
     if not planned_dt:
         return 0
     try:
         now_dt = timezone.localtime(now_dt)
-    except Exception:
-        pass
-    try:
         planned_dt = timezone.localtime(planned_dt)
     except Exception:
         pass
-    mins = int((now_dt - planned_dt).total_seconds() // 60)
-    return max(mins, 0)
-
+    return max(int((now_dt - planned_dt).total_seconds() // 60), 0)
 
 def is_working_day(d: date) -> bool:
-    """Check if date is working day (not Sunday and not holiday) - with caching"""
-    cache_key = f"is_working_day_{d.isoformat()}"
-    result = cache.get(cache_key)
-    if result is None:
-        result = d.weekday() != 6 and not Holiday.objects.filter(date=d).exists()
-        cache.set(cache_key, result, 86400)  # Cache for 24 hours
-    return result
-
+    if d.weekday() == 6:
+        return False
+    return not Holiday.objects.filter(date=d).exists()
 
 def next_working_day(d: date) -> date:
-    """Find next working day from given date"""
     while not is_working_day(d):
         d += timedelta(days=1)
     return d
 
+def schedule_recurring_at_10am(planned_dt: datetime) -> datetime:
+    """
+    For *recurrences*, force to next working day (if needed) and set time to 10:00 AM IST.
+    First occurrences are NOT modified here.
+    """
+    if not planned_dt:
+        return planned_dt
+    if timezone.is_naive(planned_dt):
+        planned_dt = timezone.make_aware(planned_dt)
+
+    ist_date = planned_dt.astimezone(IST).date()
+    if not is_working_day(ist_date):
+        ist_date = next_working_day(ist_date)
+
+    recur_ist = IST.localize(datetime.combine(ist_date, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE)))
+    return recur_ist.astimezone(timezone.get_current_timezone())
 
 def preserve_first_occurrence_time(planned_dt: datetime) -> datetime:
     """
-    For FIRST occurrence (manual add or bulk upload):
-    - Preserve the exact datetime as given by user
-    - If naive, interpret as IST and make timezone-aware
-    - If falls on holiday/Sunday, shift to next working day but keep the TIME
+    ✅ Keep the user's *first* planned date/time exactly as provided.
+    - Make it aware in the current TZ (IST-based) if naive.
+    - Do NOT shift off Sundays/holidays for the first occurrence.
     """
     if not planned_dt:
         return planned_dt
-    
-    # Make timezone-aware if naive (interpret as IST)
     if timezone.is_naive(planned_dt):
-        planned_dt = IST.localize(planned_dt)
-    
-    # Convert to IST for date checking
-    planned_ist = planned_dt.astimezone(IST)
-    planned_date = planned_ist.date()
-    planned_time = planned_ist.time()
-    
-    # If it's a working day, return as-is
-    if is_working_day(planned_date):
-        return planned_dt
-    
-    # Find next working day and preserve the time
-    next_work_date = next_working_day(planned_date)
-    next_work_dt = IST.localize(datetime.combine(next_work_date, planned_time))
-    
-    # Convert back to project timezone
-    return next_work_dt.astimezone(timezone.get_current_timezone())
-
-
-def schedule_recurring_at_10am(planned_dt: datetime) -> datetime:
-    """
-    For RECURRING occurrences (after first):
-    - Always schedule at 10:00 AM IST
-    - Skip Sundays and holidays
-    """
-    if not planned_dt:
-        return planned_dt
-    
-    # Get the date in IST
-    if timezone.is_naive(planned_dt):
-        planned_dt = timezone.make_aware(planned_dt)
-    
-    planned_ist = planned_dt.astimezone(IST)
-    planned_date = planned_ist.date()
-    
-    # Find next working day if needed
-    if not is_working_day(planned_date):
-        planned_date = next_working_day(planned_date)
-    
-    # Set to 10:00 AM IST
-    recur_dt = IST.localize(datetime.combine(planned_date, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE)))
-    
-    # Convert back to project timezone
-    return recur_dt.astimezone(timezone.get_current_timezone())
-
+        # Treat naive input as IST and convert to current timezone if needed
+        planned_dt = IST.localize(planned_dt).astimezone(timezone.get_current_timezone())
+    return planned_dt
 
 def _series_filter_kwargs(task: Checklist) -> dict:
     return dict(
@@ -221,386 +179,285 @@ def _series_filter_kwargs(task: Checklist) -> dict:
         group_name=task.group_name,
     )
 
-
-@robust_db_operation(max_retries=5, base_delay=0.1)
-def create_next_if_recurring(task: Checklist) -> None:
-    """Create next recurring occurrence at 10:00 AM IST on working days - IMPROVED"""
-    if (task.mode or "") not in RECURRING_MODES:
-        return
-    
-    nxt_dt = get_next_planned_date(task.planned_date, task.mode, task.frequency)
-    if not nxt_dt:
-        return
-    
-    # Schedule recurring at 10:00 AM IST on working days
-    nxt_dt = schedule_recurring_at_10am(nxt_dt)
-    
-    # Use a separate, shorter transaction just for the creation
-    try:
-        with transaction.atomic():
-            # Check for existing task with select_for_update to prevent race conditions
-            existing = Checklist.objects.select_for_update().filter(
-                status="Pending",
-                planned_date__gte=nxt_dt - timedelta(minutes=1),
-                planned_date__lte=nxt_dt + timedelta(minutes=1),
-                **_series_filter_kwargs(task),
-            ).exists()
-            
-            if existing:
-                logger.info(f"Next occurrence for {task.task_name} already exists")
-                return
-            
-            new_obj = Checklist.objects.create(
-                assign_by=task.assign_by,
-                task_name=task.task_name,
-                message=task.message,
-                assign_to=task.assign_to,
-                planned_date=nxt_dt,
-                priority=task.priority,
-                attachment_mandatory=task.attachment_mandatory,
-                mode=task.mode,
-                frequency=task.frequency,
-                time_per_task_minutes=task.time_per_task_minutes,
-                remind_before_days=task.remind_before_days,
-                assign_pc=task.assign_pc,
-                notify_to=task.notify_to,
-                set_reminder=task.set_reminder,
-                reminder_mode=task.reminder_mode,
-                reminder_frequency=task.reminder_frequency,
-                reminder_starting_time=task.reminder_starting_time,
-                checklist_auto_close=task.checklist_auto_close,
-                checklist_auto_close_days=task.checklist_auto_close_days,
-                group_name=task.group_name,
-                actual_duration_minutes=0,
-                status="Pending",
-            )
-            logger.info(f"Created next recurring task: {new_obj.task_name} for {new_obj.assign_to} at {new_obj.planned_date}")
-            
-    except Exception as e:
-        logger.error(f"Failed to create next recurring task: {str(e)}")
-        return
-    
-    # Send emails outside of transaction (don't let email failures block task creation)
-    if SEND_EMAILS_FOR_AUTO_RECUR:
-        try:
-            complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
-            send_checklist_assignment_to_user(
-                task=new_obj,
-                complete_url=complete_url,
-                subject_prefix="Recurring Checklist Generated",
-            )
-            send_checklist_admin_confirmation(
-                task=new_obj,
-                subject_prefix="Recurring Checklist Generated",
-            )
-        except Exception as e:
-            logger.error(f"Failed to send recurring task emails: {str(e)}")
-
-
-def ensure_next_for_all_recurring() -> None:
-    now = timezone.now()
-    seeds = (
-        Checklist.objects.filter(status="Pending", mode__in=RECURRING_MODES)
-        .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
-        .distinct()
-    )
-    for s in seeds:
-        last_pending = (
-            Checklist.objects.filter(status="Pending", **s)
-            .order_by("-planned_date", "-id")
-            .first()
-        )
-        if not last_pending:
-            continue
-        if Checklist.objects.filter(status="Pending", planned_date__gt=now, **s).exists():
-            continue
-        if last_pending.planned_date <= now:
-            create_next_if_recurring(last_pending)
-
-
-def _delete_series_for(instance: Checklist) -> int:
-    if not instance:
-        return 0
-    filters = _series_filter_kwargs(instance)
-    deleted, _ = Checklist.objects.filter(status="Pending", **filters).delete()
-    return deleted
-
-
-# ===== EXCEL-OPTIMIZED BULK UPLOAD FUNCTIONS =====
-
-def parse_datetime_flexible(date_str):
-    """Parse various datetime formats flexibly - Excel compatible"""
-    if not date_str or pd.isna(date_str):
+# ---------- BULK: parsing ----------
+def parse_datetime_flexible(value):
+    if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
-    
-    date_str = str(date_str).strip()
-    if not date_str:
+    if isinstance(value, (pd.Timestamp,)):
+        dt = value.to_pydatetime()
+        if dt.hour == 0 and dt.minute == 0:
+            dt = dt.replace(hour=10, minute=0)
+        return dt
+    s = str(value).strip()
+    if not s:
         return None
-    
-    # Cache parsed dates for better performance
-    cache_key = f"parsed_date_{hash(date_str)}"
-    cached_result = cache.get(cache_key)
-    if cached_result is not None:
-        return cached_result
-    
-    # Excel-friendly datetime formats to try
-    formats = [
-        "%Y-%m-%d %H:%M",      # 2025-08-16 17:00
-        "%Y-%m-%d %H:%M:%S",   # 2025-08-16 17:00:00
-        "%m/%d/%Y %H:%M",      # 8/16/2025 17:00 (US Excel format)
-        "%d/%m/%Y %H:%M",      # 16/8/2025 17:00 (EU Excel format)
-        "%Y-%m-%d",            # 2025-08-16 (date only)
-        "%m/%d/%Y",            # 8/16/2025 (US Excel date)
-        "%d/%m/%Y",            # 16/8/2025 (EU Excel date)
-        "%d-%m-%Y",            # 16-08-2025
-        "%d.%m.%Y",            # 16.08.2025
+    fmts = [
+        "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S",
+        "%d/%m/%Y %H:%M", "%m/%d/%Y %H:%M",
+        "%d-%m-%Y %H:%M",
+        "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%d.%m.%Y",
     ]
-    
-    for fmt in formats:
+    for f in fmts:
         try:
-            dt = datetime.strptime(date_str, fmt)
-            # If date-only format, add default time (10:00 AM)
-            if fmt in ["%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"]:
+            dt = datetime.strptime(s, f)
+            if f in {"%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%d.%m.%Y"}:
                 dt = dt.replace(hour=10, minute=0)
-            cache.set(cache_key, dt, 3600)
             return dt
         except ValueError:
             continue
-    
-    # Try pandas parsing as fallback (excellent for Excel formats)
     try:
-        dt = pd.to_datetime(date_str, dayfirst=True)  # European format first
+        dt = pd.to_datetime(s, dayfirst=True, errors="coerce")
         if pd.isna(dt):
-            dt = pd.to_datetime(date_str, dayfirst=False)  # US format
+            dt = pd.to_datetime(s, dayfirst=False, errors="coerce")
         if pd.isna(dt):
-            cache.set(cache_key, None, 3600)
             return None
-        result = dt.to_pydatetime()
-        # Add default time if it's midnight
-        if result.hour == 0 and result.minute == 0:
-            result = result.replace(hour=10, minute=0)
-        cache.set(cache_key, result, 3600)
-        return result
-    except:
-        cache.set(cache_key, None, 3600)
+        dt = dt.to_pydatetime()
+        if dt.hour == 0 and dt.minute == 0:
+            dt = dt.replace(hour=10, minute=0)
+        return dt
+    except Exception:
         return None
 
+_SYN_MODE = {
+    "day": "Daily", "daily": "Daily",
+    "week": "Weekly", "weekly": "Weekly",
+    "month": "Monthly", "monthly": "Monthly",
+    "year": "Yearly", "yearly": "Yearly",
+}
+
+_RECURRENCE_RE = re.compile(r"(?i)\b(?:every|evry)?\s*(\d+)?\s*(day|daily|week|weekly|month|monthly|year|yearly)\b")
+
+def _clean_str(val): return clean_unicode_string("" if val is None else str(val).strip())
+
+def parse_mode_frequency_from_row(row):
+    raw_mode = _clean_str(row.get("Mode"))
+    raw_freq = _clean_str(row.get("Frequency"))
+    if raw_mode:
+        mode = _SYN_MODE.get(raw_mode.lower(), raw_mode.title())
+        if mode not in RECURRING_MODES:
+            mode = ""
+        freq = None
+        if raw_freq:
+            try:
+                freq = max(1, int(float(raw_freq)))
+            except Exception:
+                m = _RECURRENCE_RE.search(raw_freq)
+                if m:
+                    n = m.group(1)
+                    freq = max(1, int(n)) if n else 1
+        if mode:
+            return mode, (freq or 1)
+
+    for key in ["Recurrence", "Repeat", "Frequency", "Every"]:
+        text = _clean_str(row.get(key))
+        if not text:
+            continue
+        m = _RECURRENCE_RE.search(text)
+        if m:
+            n = m.group(1)
+            unit = m.group(2).lower()
+            mode = _SYN_MODE.get(unit, "")
+            if mode in RECURRING_MODES:
+                return mode, (max(1, int(n)) if n else 1)
+        unit = text.lower()
+        if unit in _SYN_MODE:
+            mode = _SYN_MODE[unit]
+            return mode, 1
+    return "", None
+
+def parse_bool(val) -> bool: return _clean_str(val).lower() in {"1", "true", "yes", "y", "on"}
+def parse_int(val, default=0) -> int:
+    s = _clean_str(val)
+    if not s: return default
+    m = re.search(r"(-?\d+)", s)
+    if not m: return default
+    try: return int(float(m.group(1)))
+    except Exception: return default
 
 def parse_excel_file_optimized(file):
-    """Parse uploaded Excel/CSV file with Excel optimization"""
     file.seek(0)
-    
-    if file.name.endswith('.csv'):
-        # Enhanced CSV reading for Excel exports
-        return pd.read_csv(
-            file,
-            dtype=str,
-            na_filter=False,
-            engine='c',
-            encoding='utf-8-sig',  # Handle Excel UTF-8 BOM
-            skipinitialspace=True,
-        )
-    elif file.name.endswith(('.xlsx', '.xls')):
-        # Optimized Excel reading
+    name = (file.name or "").lower()
+    if name.endswith(".csv"):
+        return pd.read_csv(file, dtype=str, na_filter=False, engine="c", encoding="utf-8-sig", skipinitialspace=True)
+    if name.endswith((".xlsx", ".xls")):
         return pd.read_excel(
             file,
             dtype=str,
             na_filter=False,
-            engine='openpyxl' if file.name.endswith('.xlsx') else 'xlrd',
-            keep_default_na=False,  # Don't convert strings to NaN
+            engine="openpyxl" if name.endswith(".xlsx") else "xlrd",
+            keep_default_na=False,
         )
-    else:
-        raise ValueError("Unsupported file format. Please upload .xlsx, .xls, or .csv files")
-
+    raise ValueError("Unsupported file format. Please upload .xlsx, .xls, or .csv")
 
 def validate_and_prepare_excel_data(df, task_type="checklist"):
-    """Pre-validate and prepare Excel data for processing"""
-    # Strip whitespace from column names and handle Excel quirks
-    df.columns = df.columns.str.strip().str.replace('\n', ' ').str.replace('\r', '')
-    
-    # Map common Excel column variations
-    column_mapping = {
-        'task name': 'Task Name',
-        'taskname': 'Task Name',
-        'task_name': 'Task Name',
-        'assign to': 'Assign To',
-        'assignto': 'Assign To',
-        'assign_to': 'Assign To',
-        'assigned to': 'Assign To',
-        'planned date': 'Planned Date',
-        'planneddate': 'Planned Date',
-        'planned_date': 'Planned Date',
-        'due date': 'Planned Date',
-        'date': 'Planned Date',
+    df.columns = (
+        df.columns.str.strip()
+        .str.replace(r"\s+", " ", regex=True)
+        .str.replace("\n", " ").str.replace("\r", " ")
+    )
+    cmap = {
+        "task name": "Task Name", "taskname": "Task Name", "task_name": "Task Name",
+        "assign to": "Assign To", "assignto": "Assign To", "assign_to": "Assign To", "assigned to": "Assign To",
+        "planned date": "Planned Date", "planned_date": "Planned Date", "due date": "Planned Date", "date": "Planned Date",
+        "reminder before days": "Remind Before Days", "remind before days": "Remind Before Days",
+        "remind days": "Remind Before Days", "remind before": "Remind Before Days",
+        "time per task (minutes)": "Time per Task (minutes)", "time per task": "Time per Task (minutes)",
+        "mode": "Mode", "frequency": "Frequency", "recurrence": "Recurrence", "repeat": "Recurrence", "every": "Recurrence",
     }
-    
-    # Apply column mapping (case insensitive)
-    df.columns = [column_mapping.get(col.lower(), col) for col in df.columns]
-    
-    # Required columns based on task type
-    if task_type == "checklist":
-        required_cols = ['Task Name', 'Assign To', 'Planned Date']
-    else:  # delegation
-        required_cols = ['Task Name', 'Assign To', 'Planned Date']
-    
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    if missing_cols:
-        return None, [f"Missing required columns: {', '.join(missing_cols)}. Available columns: {', '.join(df.columns)}"]
-    
-    # Clean data: remove empty rows and Excel artifacts
-    df = df.replace('', pd.NA).dropna(subset=['Task Name'])
-    df = df[df['Task Name'].astype(str).str.strip().astype(bool)]
-    
+    df.columns = [cmap.get(col.lower(), col) for col in df.columns]
+
+    required = ["Task Name", "Assign To", "Planned Date"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        return None, [f"Missing required columns: {', '.join(missing)}. Available: {', '.join(df.columns)}"]
+
+    df = df.replace("", pd.NA).dropna(subset=["Task Name"])
+    df = df[df["Task Name"].astype(str).str.strip().astype(bool)]
     if len(df) == 0:
         return None, ["No valid rows found in the file"]
-    
-    # Pre-validate users in bulk
-    unique_usernames = set()
-    for col in ['Assign To', 'Assign PC', 'Notify To', 'Auditor']:
+
+    # warm user cache
+    usernames = set()
+    for col in ["Assign To", "Assign PC", "Notify To", "Auditor"]:
         if col in df.columns:
-            valid_usernames = df[col].dropna().astype(str).str.strip()
-            valid_usernames = valid_usernames[valid_usernames != '']
-            unique_usernames.update(valid_usernames.unique())
-    
-    # Bulk load all users into cache
-    valid_users = User.objects.filter(username__in=unique_usernames, is_active=True)
-    user_lookup = {user.username: user for user in valid_users}
-    
-    # Update user cache
-    with user_cache_lock:
-        user_cache._cache.update(user_lookup)
-    
+            ser = df[col].astype(str).str.strip()
+            ser = ser[(ser != "") & ser.notna()]
+            usernames.update(ser.unique().tolist())
+    user_cache.preload_usernames(list(usernames))
+
     return df, []
 
+# ---------- user cache ----------
+class UserCache:
+    def __init__(self):
+        self._cache = {}
+        self._lock = Lock()
+    def get_user(self, username_or_email):
+        key = (username_or_email or "").strip()
+        if not key:
+            return None
+        with self._lock:
+            if key in self._cache:
+                return self._cache[key]
+        u = None
+        try:
+            u = User.objects.get(username=key, is_active=True)
+        except User.DoesNotExist:
+            try:
+                u = User.objects.get(email__iexact=key, is_active=True)
+            except User.DoesNotExist:
+                u = None
+        with self._lock:
+            self._cache[key] = u
+        return u
+    def preload_usernames(self, usernames):
+        if not usernames:
+            return
+        qs = User.objects.filter(is_active=True).filter(Q(username__in=usernames) | Q(email__in=usernames))
+        with self._lock:
+            for u in qs:
+                self._cache[u.username] = u
+                if u.email:
+                    self._cache[u.email] = u
+    def clear(self):
+        with self._lock:
+            self._cache.clear()
 
-@robust_db_operation(max_retries=5, base_delay=0.1)
-def process_checklist_batch_excel_optimized(batch_df, assign_by_user, start_idx):
-    """Excel-optimized checklist batch processing"""
-    task_objects = []
-    errors = []
-    
+user_cache = UserCache()
+can_create = lambda u: u.is_superuser or u.groups.filter(name__in=["Admin", "Manager", "EA", "CEO"]).exists()
+
+# ---------- NATURAL KEY (DEDUP PER UPLOAD) ----------
+def _ist_key(dt: datetime) -> str:
+    if not dt:
+        return ""
+    aware = timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+    return aware.astimezone(IST).strftime("%Y-%m-%d %H:%M")
+
+def _ck_key(assign_to, task_name: str, planned_dt: datetime, mode: str, frequency) -> tuple:
+    return (
+        getattr(assign_to, "id", None),
+        (task_name or "").strip().lower(),
+        _ist_key(planned_dt),
+        (mode or "").strip(),
+        str(frequency or ""),
+    )
+
+def _dg_key(assign_to, task_name: str, planned_dt: datetime, mode: str, frequency) -> tuple:
+    return _ck_key(assign_to, task_name, planned_dt, mode, frequency)
+
+# ---------- Batch processors ----------
+@robust_db_operation()
+def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, start_idx, *, seen_keys: set):
+    task_objects, errors = [], []
     for idx, row in batch_df.iterrows():
         try:
-            # Skip empty rows
-            task_name = str(row.get('Task Name', '')).strip()
+            task_name = _clean_str(row.get("Task Name"))
             if not task_name:
                 continue
-            
-            assign_to_username = str(row.get('Assign To', '')).strip()
+            assign_to_username = _clean_str(row.get("Assign To"))
             if not assign_to_username:
-                errors.append(f"Row {idx+1}: Missing 'Assign To' field")
+                errors.append(f"Row {idx+1}: Missing 'Assign To'")
                 continue
-            
-            # Get user from cache
             assign_to = user_cache.get_user(assign_to_username)
             if not assign_to:
                 errors.append(f"Row {idx+1}: User '{assign_to_username}' not found")
                 continue
-            
-            # Parse planned date with Excel compatibility
-            planned_dt = parse_datetime_flexible(row.get('Planned Date'))
+
+            planned_dt = parse_datetime_flexible(row.get("Planned Date"))
             if not planned_dt:
                 errors.append(f"Row {idx+1}: Invalid or missing planned date")
                 continue
-            
-            planned_dt = preserve_first_occurrence_time(planned_dt)
-            
-            # Parse optional fields with Excel null handling
-            message = str(row.get('Message', '')).strip() if pd.notna(row.get('Message')) else ''
-            priority = str(row.get('Priority', 'Low')).strip()
-            if priority not in ['Low', 'Medium', 'High']:
-                priority = 'Low'
-            
-            mode = str(row.get('Mode', '')).strip() if pd.notna(row.get('Mode')) else ''
-            if mode not in RECURRING_MODES:
-                mode = ''
-            
-            # Handle numeric fields from Excel
-            frequency = 1
-            if pd.notna(row.get('Frequency')):
-                try:
-                    frequency = max(1, int(float(str(row.get('Frequency')))))
-                except (ValueError, TypeError):
-                    frequency = 1
-            
-            time_per_task = 0
-            if pd.notna(row.get('Time per Task (minutes)')):
-                try:
-                    time_per_task = max(0, int(float(str(row.get('Time per Task (minutes)')))))
-                except (ValueError, TypeError):
-                    time_per_task = 0
-            
-            remind_before_days = 0
-            if pd.notna(row.get('Reminder Before Days')):
-                try:
-                    remind_before_days = max(0, int(float(str(row.get('Reminder Before Days')))))
-                except (ValueError, TypeError):
-                    remind_before_days = 0
-            
-            # Handle optional user fields
-            assign_pc = None
-            if pd.notna(row.get('Assign PC')):
-                assign_pc = user_cache.get_user(str(row.get('Assign PC')).strip())
-            
-            notify_to = None
-            if pd.notna(row.get('Notify To')):
-                notify_to = user_cache.get_user(str(row.get('Notify To')).strip())
-            
-            auditor = None
-            if pd.notna(row.get('Auditor')):
-                auditor = user_cache.get_user(str(row.get('Auditor')).strip())
-            
-            group_name = str(row.get('Group Name', '')).strip() if pd.notna(row.get('Group Name')) else ''
-            
-            # Handle Excel boolean fields (Yes/No, True/False, 1/0)
-            set_reminder = False
-            if pd.notna(row.get('Set Reminder')):
-                reminder_val = str(row.get('Set Reminder')).strip().lower()
-                set_reminder = reminder_val in ['yes', 'true', '1', 'y', 'on']
-            
-            reminder_mode = ''
-            if set_reminder and pd.notna(row.get('Reminder Mode')):
-                reminder_mode = str(row.get('Reminder Mode')).strip()
-                if reminder_mode not in RECURRING_MODES:
-                    reminder_mode = 'Daily'
-            
-            reminder_frequency = 1
-            if set_reminder and pd.notna(row.get('Reminder Frequency')):
-                try:
-                    reminder_frequency = max(1, int(float(str(row.get('Reminder Frequency')))))
-                except (ValueError, TypeError):
-                    reminder_frequency = 1
-            
+            planned_dt = preserve_first_occurrence_time(planned_dt)  # do NOT shift first
+
+            message = _clean_str(row.get("Message"))
+            priority = (_clean_str(row.get("Priority")) or "Low").title()
+            if priority not in ["Low", "Medium", "High"]:
+                priority = "Low"
+
+            mode, frequency = parse_mode_frequency_from_row(row)
+            time_per_task = parse_int(row.get("Time per Task (minutes)"), default=0)
+            remind_before_days = parse_int(
+                row.get("Remind Before Days") or row.get("Reminder Before Days") or
+                row.get("Remind days") or row.get("Remind Before"), default=0
+            )
+            if remind_before_days < 0:
+                remind_before_days = 0
+
+            assign_pc = user_cache.get_user(_clean_str(row.get("Assign PC")))
+            notify_to = user_cache.get_user(_clean_str(row.get("Notify To")))
+            auditor = user_cache.get_user(_clean_str(row.get("Auditor")))
+            group_name = _clean_str(row.get("Group Name"))
+
+            set_reminder = parse_bool(row.get("Set Reminder"))
+            reminder_mode = None
+            reminder_frequency = None
             reminder_starting_time = None
-            if pd.notna(row.get('Reminder Starting Time')):
-                time_str = str(row.get('Reminder Starting Time')).strip()
-                try:
-                    # Handle Excel time formats
-                    if ':' in time_str:
-                        reminder_starting_time = datetime.strptime(time_str, '%H:%M').time()
-                    else:
-                        # Handle Excel decimal time (e.g., 0.416667 for 10:00)
-                        time_decimal = float(time_str)
-                        hours = int(time_decimal * 24)
-                        minutes = int((time_decimal * 24 * 60) % 60)
-                        reminder_starting_time = dt_time(hours, minutes)
-                except (ValueError, TypeError):
-                    pass
-            
-            # Handle auto close
-            checklist_auto_close = False
-            if pd.notna(row.get('Checklist Auto Close')):
-                auto_close_val = str(row.get('Checklist Auto Close')).strip().lower()
-                checklist_auto_close = auto_close_val in ['yes', 'true', '1', 'y', 'on']
-            
-            checklist_auto_close_days = 0
-            if checklist_auto_close and pd.notna(row.get('Checklist Auto Close Days')):
-                try:
-                    checklist_auto_close_days = max(0, int(float(str(row.get('Checklist Auto Close Days')))))
-                except (ValueError, TypeError):
-                    checklist_auto_close_days = 0
-            
-            # Create checklist object
+            if set_reminder:
+                rmode = _clean_str(row.get("Reminder Mode"))
+                rmode = _SYN_MODE.get(rmode.lower(), rmode.title()) if rmode else "Daily"
+                reminder_mode = rmode if rmode in RECURRING_MODES else "Daily"
+                reminder_frequency = parse_int(row.get("Reminder Frequency"), default=1)
+                tval = row.get("Reminder Starting Time")
+                if tval:
+                    ts = _clean_str(tval)
+                    try:
+                        if ":" in ts:
+                            reminder_starting_time = datetime.strptime(ts, "%H:%M").time()
+                        else:
+                            f = float(ts)
+                            h = int(f * 24) % 24
+                            m = int(round(f * 24 * 60)) % 60
+                            reminder_starting_time = dt_time(h, m)
+                    except Exception:
+                        reminder_starting_time = None
+
+            # ---- DEDUPE within this upload (exact same assignee, name, datetime, mode, frequency)
+            key = _ck_key(assign_to, task_name, planned_dt, mode, frequency)
+            if key in seen_keys:
+                errors.append(f"Row {idx+1}: Duplicate row in this upload skipped (Task='{task_name}', {assign_to_username}, {planned_dt})")
+                continue
+            seen_keys.add(key)
+
             checklist = Checklist(
                 assign_by=assign_by_user,
                 task_name=task_name,
@@ -618,95 +475,76 @@ def process_checklist_batch_excel_optimized(batch_df, assign_by_user, start_idx)
                 notify_to=notify_to,
                 auditor=auditor,
                 set_reminder=set_reminder,
-                reminder_mode=reminder_mode if set_reminder else None,
-                reminder_frequency=reminder_frequency if set_reminder else None,
+                reminder_mode=reminder_mode,
+                reminder_frequency=reminder_frequency,
                 reminder_starting_time=reminder_starting_time,
-                checklist_auto_close=checklist_auto_close,
-                checklist_auto_close_days=checklist_auto_close_days,
+                checklist_auto_close=parse_bool(row.get("Checklist Auto Close")),
+                checklist_auto_close_days=parse_int(row.get("Checklist Auto Close Days"), default=0),
                 actual_duration_minutes=0,
                 status="Pending",
             )
-            
             task_objects.append(checklist)
-            
         except Exception as e:
             errors.append(f"Row {idx+1}: {str(e)}")
-    
-    # Bulk create with smaller batches for SQLite
-    created_tasks = []
+
+    created = []
     if task_objects:
         try:
             with transaction.atomic():
-                created_tasks = Checklist.objects.bulk_create(task_objects, batch_size=25)
+                bs = min(len(task_objects), optimal_batch_size())
+                created = Checklist.objects.bulk_create(task_objects, batch_size=bs, ignore_conflicts=False)
         except Exception as e:
-            logger.error(f"Bulk create failed: {str(e)}")
-            # Fallback: create one by one
-            for task_obj in task_objects:
+            logger.error("bulk_create failed; falling back: %s", e)
+            for i in range(0, len(task_objects), 50):
+                batch = task_objects[i:i+50]
                 try:
-                    task_obj.save()
-                    created_tasks.append(task_obj)
-                except Exception as individual_error:
-                    errors.append(f"Failed to save task '{task_obj.task_name}': {str(individual_error)}")
-    
-    return created_tasks, errors
+                    created.extend(Checklist.objects.bulk_create(batch, batch_size=50))
+                except Exception:
+                    for obj in batch:
+                        try:
+                            obj.save()
+                            created.append(obj)
+                        except Exception as save_err:
+                            errors.append(f"Failed to save '{clean_unicode_string(obj.task_name)}': {save_err}")
+    return created, errors
 
-
-@robust_db_operation(max_retries=5, base_delay=0.1)
-def process_delegation_batch_excel_optimized(batch_df, assign_by_user, start_idx):
-    """Excel-optimized delegation batch processing"""
-    task_objects = []
-    errors = []
-    
+@robust_db_operation()
+def process_delegation_batch_excel_ultra_optimized(batch_df, assign_by_user, start_idx, *, seen_keys: set):
+    task_objects, errors = [], []
     for idx, row in batch_df.iterrows():
         try:
-            # Skip empty rows
-            task_name = str(row.get('Task Name', '')).strip()
+            task_name = _clean_str(row.get("Task Name"))
             if not task_name:
                 continue
-            
-            assign_to_username = str(row.get('Assign To', '')).strip()
+            assign_to_username = _clean_str(row.get("Assign To"))
             if not assign_to_username:
-                errors.append(f"Row {idx+1}: Missing 'Assign To' field")
+                errors.append(f"Row {idx+1}: Missing 'Assign To'")
                 continue
-            
-            # Get user from cache
             assign_to = user_cache.get_user(assign_to_username)
             if not assign_to:
                 errors.append(f"Row {idx+1}: User '{assign_to_username}' not found")
                 continue
-            
-            # Parse planned date
-            planned_dt = parse_datetime_flexible(row.get('Planned Date'))
+
+            planned_dt = parse_datetime_flexible(row.get("Planned Date"))
             if not planned_dt:
                 errors.append(f"Row {idx+1}: Invalid or missing planned date")
                 continue
-            
-            planned_dt = preserve_first_occurrence_time(planned_dt)
-            
-            # Parse optional fields
-            priority = str(row.get('Priority', 'Low')).strip()
-            if priority not in ['Low', 'Medium', 'High']:
-                priority = 'Low'
-            
-            mode = str(row.get('Mode', '')).strip() if pd.notna(row.get('Mode')) else ''
-            if mode not in RECURRING_MODES:
-                mode = ''
-            
-            frequency = 1
-            if pd.notna(row.get('Frequency')):
-                try:
-                    frequency = max(1, int(float(str(row.get('Frequency')))))
-                except (ValueError, TypeError):
-                    frequency = 1
-            
-            time_per_task = 0
-            if pd.notna(row.get('Time per Task (minutes)')):
-                try:
-                    time_per_task = max(0, int(float(str(row.get('Time per Task (minutes)')))))
-                except (ValueError, TypeError):
-                    time_per_task = 0
-            
-            # Create delegation object
+            planned_dt = preserve_first_occurrence_time(planned_dt)  # do NOT shift first
+
+            priority = (_clean_str(row.get("Priority")) or "Low").title()
+            if priority not in ["Low", "Medium", "High"]:
+                priority = "Low"
+
+            mode, frequency = parse_mode_frequency_from_row(row)
+            time_per_task = parse_int(row.get("Time per Task (minutes)"), default=0)
+
+            # ---- DEDUPE within this upload
+            key = _dg_key(assign_to, task_name, planned_dt, mode, frequency)
+            if key in seen_keys:
+                errors.append(f"Row {idx+1}: Duplicate row in this upload skipped (Task='{task_name}', {assign_to_username}, {planned_dt})")
+                continue
+            seen_keys.add(key)
+
             delegation = Delegation(
                 assign_by=assign_by_user,
                 task_name=task_name,
@@ -720,152 +558,150 @@ def process_delegation_batch_excel_optimized(batch_df, assign_by_user, start_idx
                 actual_duration_minutes=0,
                 status="Pending",
             )
-            
             task_objects.append(delegation)
-            
         except Exception as e:
             errors.append(f"Row {idx+1}: {str(e)}")
-    
-    # Bulk create with error handling
-    created_tasks = []
+
+    created = []
     if task_objects:
         try:
             with transaction.atomic():
-                created_tasks = Delegation.objects.bulk_create(task_objects, batch_size=25)
+                bs = min(len(task_objects), optimal_batch_size())
+                created = Delegation.objects.bulk_create(task_objects, batch_size=bs)
         except Exception as e:
-            logger.error(f"Bulk create failed: {str(e)}")
-            # Fallback: create one by one
-            for task_obj in task_objects:
+            logger.error("Delegation bulk_create fallback: %s", e)
+            for i in range(0, len(task_objects), 50):
+                batch = task_objects[i:i+50]
                 try:
-                    task_obj.save()
-                    created_tasks.append(task_obj)
-                except Exception as individual_error:
-                    errors.append(f"Failed to save task '{task_obj.task_name}': {str(individual_error)}")
-    
-    return created_tasks, errors
-
+                    created.extend(Delegation.objects.bulk_create(batch, batch_size=50))
+                except Exception:
+                    for obj in batch:
+                        try:
+                            obj.save()
+                            created.append(obj)
+                        except Exception as save_err:
+                            errors.append(f"Failed to save delegation '{clean_unicode_string(obj.task_name)}': {save_err}")
+    return created, errors
 
 def process_checklist_bulk_upload_excel_friendly(file, assign_by_user):
-    """Excel-friendly checklist bulk upload with robust error handling"""
     try:
         df = parse_excel_file_optimized(file)
     except Exception as e:
-        return [], [f"Error reading file: {str(e)}. Please ensure the file is a valid Excel (.xlsx, .xls) or CSV file."]
-    
-    # Pre-validate and prepare data
-    df, validation_errors = validate_and_prepare_excel_data(df, "checklist")
-    if validation_errors:
-        return [], validation_errors
-    
-    created_tasks = []
-    errors = []
-    
-    # Clear user cache before processing
-    user_cache.clear()
-    
-    # Process in smaller batches for SQLite stability
-    total_rows = len(df)
-    batch_size = min(BULK_BATCH_SIZE, 15)  # Smaller batches for SQLite
-    
-    logger.info(f"Processing {total_rows} checklist rows in batches of {batch_size}")
-    
-    for start_idx in range(0, total_rows, batch_size):
-        end_idx = min(start_idx + batch_size, total_rows)
-        batch_df = df.iloc[start_idx:end_idx]
-        
-        logger.info(f"Processing batch {start_idx//batch_size + 1}: rows {start_idx+1} to {end_idx}")
-        
-        batch_tasks, batch_errors = process_checklist_batch_excel_optimized(batch_df, assign_by_user, start_idx)
-        created_tasks.extend(batch_tasks)
-        errors.extend(batch_errors)
-        
-        # Small delay between batches to prevent SQLite locks
-        time.sleep(0.1)
-    
-    return created_tasks, errors
+        return [], [f"Error reading file: {e}. Please upload .xlsx, .xls or .csv"]
 
+    df, v_errors = validate_and_prepare_excel_data(df, "checklist")
+    if v_errors:
+        return [], v_errors
+
+    created, errors = [], []
+    user_cache.clear()
+    seen_keys = set()  # cross-batch dedupe per upload
+
+    total = len(df)
+    bs = optimal_batch_size()
+    for start_idx in range(0, total, bs):
+        end_idx = min(start_idx + bs, total)
+        batch_df = df.iloc[start_idx:end_idx]
+        batch_created, batch_errors = process_checklist_batch_excel_ultra_optimized(
+            batch_df, assign_by_user, start_idx, seen_keys=seen_keys
+        )
+        created.extend(batch_created)
+        errors.extend(batch_errors)
+        if connection.vendor == "sqlite":
+            time.sleep(0.01)
+    return created, errors
 
 def process_delegation_bulk_upload_excel_friendly(file, assign_by_user):
-    """Excel-friendly delegation bulk upload with robust error handling"""
     try:
         df = parse_excel_file_optimized(file)
     except Exception as e:
-        return [], [f"Error reading file: {str(e)}. Please ensure the file is a valid Excel (.xlsx, .xls) or CSV file."]
-    
-    # Pre-validate and prepare data
-    df, validation_errors = validate_and_prepare_excel_data(df, "delegation")
-    if validation_errors:
-        return [], validation_errors
-    
-    created_tasks = []
-    errors = []
-    
-    # Clear user cache before processing
+        return [], [f"Error reading file: {e}. Please upload .xlsx, .xls or .csv"]
+
+    df, v_errors = validate_and_prepare_excel_data(df, "delegation")
+    if v_errors:
+        return [], v_errors
+
+    created, errors = [], []
     user_cache.clear()
-    
-    # Process in smaller batches for SQLite stability
-    total_rows = len(df)
-    batch_size = min(BULK_BATCH_SIZE, 15)  # Smaller batches for SQLite
-    
-    logger.info(f"Processing {total_rows} delegation rows in batches of {batch_size}")
-    
-    for start_idx in range(0, total_rows, batch_size):
-        end_idx = min(start_idx + batch_size, total_rows)
+    seen_keys = set()  # cross-batch dedupe per upload
+
+    total = len(df)
+    bs = optimal_batch_size()
+    for start_idx in range(0, total, bs):
+        end_idx = min(start_idx + bs, total)
         batch_df = df.iloc[start_idx:end_idx]
-        
-        logger.info(f"Processing batch {start_idx//batch_size + 1}: rows {start_idx+1} to {end_idx}")
-        
-        batch_tasks, batch_errors = process_delegation_batch_excel_optimized(batch_df, assign_by_user, start_idx)
-        created_tasks.extend(batch_tasks)
+        batch_created, batch_errors = process_delegation_batch_excel_ultra_optimized(
+            batch_df, assign_by_user, start_idx, seen_keys=seen_keys
+        )
+        created.extend(batch_created)
         errors.extend(batch_errors)
-        
-        # Small delay between batches to prevent SQLite locks
-        time.sleep(0.1)
-    
-    return created_tasks, errors
+        if connection.vendor == "sqlite":
+            time.sleep(0.01)
+    return created, errors
 
 
-def send_bulk_emails_optimized(created_tasks, task_type="Checklist"):
-    """Send emails in optimized batches with proper error handling"""
-    if not created_tasks:
-        return
-    
-    def send_email_batch(task_batch):
-        for task in task_batch:
+# ----------- ASYNC EMAIL DISPATCH (non-blocking for the request) -----------
+def _send_bulk_emails_by_ids(task_ids, *, task_type: str):
+    """
+    Runs in a background thread. Fetches tasks by ID (fresh DB connection)
+    and sends emails without blocking the original HTTP request.
+    """
+    Model = Checklist if task_type == "Checklist" else Delegation
+    # Mild batching to avoid huge memory spikes; each send_* already handles commit safety
+    CHUNK = 100
+    for i in range(0, len(task_ids), CHUNK):
+        ids_chunk = task_ids[i:i+CHUNK]
+        qs = (
+            Model.objects.filter(id__in=ids_chunk)
+            .select_related("assign_by", "assign_to")
+            .order_by("id")
+        )
+        for task in qs:
             try:
                 if task_type == "Checklist":
                     complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[task.id])}"
                     send_checklist_assignment_to_user(
                         task=task,
                         complete_url=complete_url,
-                        subject_prefix="Bulk Upload Checklist Assigned",
+                        subject_prefix="Bulk Upload - Checklist Assigned",
                     )
-                elif task_type == "Delegation":
+                else:
                     complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[task.id])}"
                     send_delegation_assignment_to_user(
                         delegation=task,
                         complete_url=complete_url,
-                        subject_prefix="Bulk Upload Delegation Assigned",
+                        subject_prefix="Bulk Upload - Delegation Assigned",
                     )
             except Exception as e:
-                logger.error(f"Failed to send email for task {task.id}: {str(e)}")
-    
-    # Send emails in batches using threading
-    email_batch_size = min(EMAIL_BATCH_SIZE, 5)  # Smaller batches for stability
-    with ThreadPoolExecutor(max_workers=2) as executor:  # Reduced workers
-        for i in range(0, len(created_tasks), email_batch_size):
-            batch = created_tasks[i:i + email_batch_size]
-            executor.submit(send_email_batch, batch)
-            time.sleep(EMAIL_SEND_DELAY * 2)  # Longer delay
+                logger.error("Failed to send email for %s %s: %s", task_type, getattr(task, "id", "?"), e)
 
 
-# ===== VIEW FUNCTIONS =====
+def kick_off_bulk_emails_async(created_tasks, task_type="Checklist"):
+    """
+    Schedule email sending *after response* by spawning a daemon thread
+    that refetches tasks by ID and sends emails.
+    """
+    if not created_tasks:
+        return
+    task_ids = [t.id for t in created_tasks if getattr(t, "id", None)]
+    if not task_ids:
+        return
+    _background(_send_bulk_emails_by_ids, task_ids, task_type=task_type, thread_name="bulk-emails")
+
+
+def send_admin_bulk_summary_async(*, title: str, rows):
+    _background(send_admin_bulk_summary, title=title, rows=rows, thread_name="bulk-admin-summary")
+
+
+# ---------- VIEWS ----------
 
 @has_permission("list_checklist")
 def list_checklist(request):
-    if request.method == "GET":
-        if not request.session.pop("suppress_auto_recur", False):
-            ensure_next_for_all_recurring()
+    """
+    List all *Pending* checklist tasks (filters + CSV).
+    IMPORTANT: We do NOT pre-create future recurrences here. The next instance is created
+    ONLY after completion by signals — ensuring future tasks appear only on the valid date at 10:00 IST.
+    """
     if request.method == "POST":
         if request.POST.get("action") == "delete_series" and request.POST.get("pk"):
             try:
@@ -873,13 +709,12 @@ def list_checklist(request):
             except (Checklist.DoesNotExist, ValueError, TypeError):
                 messages.warning(request, "The selected series no longer exists.")
                 return redirect("tasks:list_checklist")
-            deleted = _delete_series_for(obj)
-            if deleted:
-                messages.success(request, f"Deleted {deleted} occurrence(s) from the series '{obj.task_name}'.")
-            else:
-                messages.info(request, "No pending occurrences found to delete for that series.")
+            filters = _series_filter_kwargs(obj)
+            deleted, _ = Checklist.objects.filter(status="Pending", **filters).delete()
+            messages.success(request, f"Deleted {deleted} pending occurrence(s) from the series '{obj.task_name}'.")
             request.session["suppress_auto_recur"] = True
             return redirect("tasks:list_checklist")
+
         ids = request.POST.getlist("sel")
         with_series = bool(request.POST.get("with_series"))
         total_deleted = 0
@@ -895,71 +730,66 @@ def list_checklist(request):
                     if key in series_seen:
                         continue
                     series_seen.add(key)
-                    total_deleted += _delete_series_for(obj)
-                if total_deleted:
-                    messages.success(request, f"Deleted {total_deleted} pending occurrence(s) across selected series.")
-                else:
-                    messages.info(request, "Nothing to delete – no pending occurrences in selected series.")
+                    deleted, _ = Checklist.objects.filter(status="Pending", **_series_filter_kwargs(obj)).delete()
+                    total_deleted += deleted
+                messages.success(request, f"Deleted {total_deleted} pending occurrence(s) across selected series.")
             else:
                 deleted, _ = Checklist.objects.filter(pk__in=ids).delete()
                 total_deleted += deleted
                 if deleted:
                     messages.success(request, f"Deleted {deleted} selected task(s).")
                 else:
-                    messages.info(request, "Nothing was deleted. The selected tasks may have already been removed.")
+                    messages.info(request, "Nothing was deleted.")
             request.session["suppress_auto_recur"] = True
         return redirect("tasks:list_checklist")
-    one_time_qs = Checklist.objects.exclude(mode__in=RECURRING_MODES).filter(status="Pending")
-    base_rec = Checklist.objects.filter(status="Pending", mode__in=RECURRING_MODES)
-    first_recurring_pk = Subquery(
-        Checklist.objects.filter(
-            status="Pending",
-            assign_to=OuterRef("assign_to"),
-            task_name=OuterRef("task_name"),
-            mode=OuterRef("mode"),
-            frequency=OuterRef("frequency"),
-            group_name=OuterRef("group_name"),
-        )
-        .order_by("planned_date", "id")
-        .values("pk")[:1]
-    )
-    recurring_first_qs = base_rec.annotate(first_pk=first_recurring_pk).filter(pk=F("first_pk")).values("pk")
-    qs = Checklist.objects.filter(Q(pk__in=recurring_first_qs) | Q(pk__in=one_time_qs.values("pk")))
-    if (kw := request.GET.get("keyword", "").strip()):
+
+    # Only Pending items by default (dashboard-friendly)
+    qs = Checklist.objects.filter(status="Pending").select_related("assign_by", "assign_to")
+
+    kw = request.GET.get("keyword", "").strip()
+    if kw:
         qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
-    for param, lookup in [
-        ("assign_to", "assign_to_id"),
-        ("priority", "priority"),
-        ("group_name", "group_name__icontains"),
-        ("start_date", "planned_date__date__gte"),
-        ("end_date", "planned_date__date__lte"),
-    ]:
-        if (v := request.GET.get(param, "").strip()):
-            qs = qs.filter(**{lookup: v})
+
+    if request.GET.get("assign_to", "").strip():
+        qs = qs.filter(assign_to_id=request.GET.get("assign_to").strip())
+
+    if request.GET.get("priority", "").strip():
+        qs = qs.filter(priority=request.GET.get("priority").strip())
+
+    if request.GET.get("group_name", "").strip():
+        qs = qs.filter(group_name__icontains=request.GET.get("group_name").strip())
+
+    if request.GET.get("start_date", "").strip():
+        qs = qs.filter(planned_date__date__gte=request.GET.get("start_date").strip())
+
+    if request.GET.get("end_date", "").strip():
+        qs = qs.filter(planned_date__date__lte=request.GET.get("end_date").strip())
+
     if request.GET.get("today_only"):
         today = timezone.localdate()
         qs = qs.filter(planned_date__date=today)
-    items = qs.select_related("assign_by", "assign_to").order_by("-planned_date", "-id")
+
+    items = qs.order_by("-planned_date", "-id")
+
     if request.GET.get("download"):
         resp = HttpResponse(content_type="text/csv")
         resp["Content-Disposition"] = 'attachment; filename="checklist.csv"'
         w = csv.writer(resp)
         w.writerow(["Task Name", "Assign To", "Planned Date", "Priority", "Group Name", "Status"])
         for itm in items:
-            w.writerow(
-                [
-                    itm.task_name,
-                    itm.assign_to.get_full_name() or itm.assign_to.username,
-                    itm.planned_date.strftime("%Y-%m-%d %H:%M"),
-                    itm.priority,
-                    itm.group_name,
-                    itm.status,
-                ]
-            )
+            w.writerow([
+                clean_unicode_string(itm.task_name),
+                itm.assign_to.get_full_name() or itm.assign_to.username,
+                itm.planned_date.strftime("%Y-%m-%d %H:%M") if itm.planned_date else "",
+                itm.priority,
+                itm.group_name,
+                itm.status,
+            ])
         return resp
+
     ctx = {
         "items": items,
-        "users": User.objects.order_by("username"),
+        "users": User.objects.filter(is_active=True).order_by("username"),
         "priority_choices": Checklist._meta.get_field("priority").choices,
         "group_names": Checklist.objects.order_by("group_name").values_list("group_name", flat=True).distinct(),
         "current_tab": "checklist",
@@ -968,37 +798,29 @@ def list_checklist(request):
         return render(request, "tasks/partial_list_checklist.html", ctx)
     return render(request, "tasks/list_checklist.html", ctx)
 
-
 @has_permission("add_checklist")
 def add_checklist(request):
     if request.method == "POST":
         form = ChecklistForm(request.POST, request.FILES)
         if form.is_valid():
-            # For manual add, preserve exact datetime as entered
             planned_date = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
             obj = form.save(commit=False)
             obj.planned_date = planned_date
             obj.save()
             form.save_m2m()
-            
-            # ALWAYS SEND EMAIL for manual assignments
+
             complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
             try:
-                send_checklist_assignment_to_user(
-                    task=obj,
-                    complete_url=complete_url,
-                    subject_prefix="New Checklist Task Assigned",
-                )
+                send_checklist_assignment_to_user(task=obj, complete_url=complete_url, subject_prefix="New Checklist Task Assigned")
                 send_checklist_admin_confirmation(task=obj, subject_prefix="Checklist Task Assignment")
             except Exception as e:
-                logger.error(f"Failed to send assignment emails: {str(e)}")
-                
+                logger.error("Assignment emails failed: %s", e)
+
             messages.success(request, f"Checklist task '{obj.task_name}' created and assigned successfully!")
             return redirect("tasks:list_checklist")
     else:
         form = ChecklistForm(initial={"assign_by": request.user})
     return render(request, "tasks/add_checklist.html", {"form": form})
-
 
 @has_permission("add_checklist")
 def edit_checklist(request, pk):
@@ -1007,40 +829,29 @@ def edit_checklist(request, pk):
     if request.method == "POST":
         form = ChecklistForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
-            # For manual edit, preserve exact datetime as entered
             planned_date = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
             obj2 = form.save(commit=False)
             obj2.planned_date = planned_date
             obj2.save()
             form.save_m2m()
-            
-            # ALWAYS SEND EMAIL for edits
+
             complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj2.id])}"
             try:
                 if old_assignee and obj2.assign_to_id != old_assignee.id:
                     send_checklist_unassigned_notice(task=obj2, old_user=old_assignee)
-                    send_checklist_assignment_to_user(
-                        task=obj2,
-                        complete_url=complete_url,
-                        subject_prefix="Checklist Task Reassigned",
-                    )
+                    send_checklist_assignment_to_user(task=obj2, complete_url=complete_url, subject_prefix="Checklist Task Reassigned")
                     send_checklist_admin_confirmation(task=obj2, subject_prefix="Checklist Task Reassigned")
                 else:
-                    send_checklist_assignment_to_user(
-                        task=obj2,
-                        complete_url=complete_url,
-                        subject_prefix="Checklist Task Updated",
-                    )
+                    send_checklist_assignment_to_user(task=obj2, complete_url=complete_url, subject_prefix="Checklist Task Updated")
                     send_checklist_admin_confirmation(task=obj2, subject_prefix="Checklist Task Updated")
             except Exception as e:
-                logger.error(f"Failed to send update emails: {str(e)}")
-                
+                logger.error("Update emails failed: %s", e)
+
             messages.success(request, f"Checklist task '{obj2.task_name}' updated successfully!")
             return redirect("tasks:list_checklist")
     else:
         form = ChecklistForm(instance=obj)
     return render(request, "tasks/add_checklist.html", {"form": form})
-
 
 @has_permission("list_checklist")
 def delete_checklist(request, pk):
@@ -1052,122 +863,80 @@ def delete_checklist(request, pk):
         return redirect("tasks:list_checklist")
     return render(request, "tasks/confirm_delete.html", {"object": obj, "type": "Checklist"})
 
-
 @has_permission("list_checklist")
 def reassign_checklist(request, pk):
     obj = get_object_or_404(Checklist, pk=pk)
     if request.method == "POST":
         old_assignee = obj.assign_to
-        if uid := request.POST.get("assign_to"):
+        uid = request.POST.get("assign_to")
+        if uid:
             obj.assign_to = User.objects.get(pk=uid)
             obj.save()
-            
-            # ALWAYS SEND EMAIL for reassignments
+
             complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
             try:
-                send_checklist_assignment_to_user(
-                    task=obj,
-                    complete_url=complete_url,
-                    subject_prefix="Checklist Task Reassigned",
-                )
+                send_checklist_assignment_to_user(task=obj, complete_url=complete_url, subject_prefix="Checklist Task Reassigned")
                 if old_assignee and old_assignee.id != obj.assign_to_id:
                     send_checklist_unassigned_notice(task=obj, old_user=old_assignee)
                 send_checklist_admin_confirmation(task=obj, subject_prefix="Checklist Task Reassigned")
             except Exception as e:
-                logger.error(f"Failed to send reassignment emails: {str(e)}")
-                
+                logger.error("Reassignment emails failed: %s", e)
+
             messages.success(request, f"Task reassigned to {obj.assign_to.get_full_name() or obj.assign_to.username}")
             return redirect("tasks:list_checklist")
-    return render(
-        request,
-        "tasks/reassign_checklist.html",
-        {"object": obj, "all_users": User.objects.order_by("username")},
-    )
-
+    return render(request, "tasks/reassign_checklist.html", {"object": obj, "all_users": User.objects.filter(is_active=True).order_by("username")})
 
 @login_required
 def complete_checklist(request, pk):
-    """COMPLETELY FIXED: Robust task completion that works for ALL users"""
+    """Mark checklist completed. Next occurrence is created by signals (10:00 IST; skip Sun/holidays)."""
     obj = get_object_or_404(Checklist, pk=pk)
     if obj.assign_to_id and obj.assign_to_id != request.user.id and not (request.user.is_staff or request.user.is_superuser):
         messages.error(request, "You are not the assignee of this task.")
         return redirect(request.GET.get("next", "dashboard:home"))
-    
+
     if request.method == "GET":
         form = CompleteChecklistForm(instance=obj)
         return render(request, "tasks/complete_checklist.html", {"form": form, "object": obj})
-    
-    # COMPLETELY SEPARATED: Task completion and recurring creation
-    def complete_task_safely():
-        """Complete the task in the shortest possible transaction"""
+
+    def _complete_once():
+        with transaction.atomic():
+            current = Checklist.objects.select_for_update(nowait=True).get(pk=pk)
+            form = CompleteChecklistForm(request.POST, request.FILES, instance=current)
+            if current.attachment_mandatory and not request.FILES.get("doer_file") and not current.doer_file:
+                form.add_error("doer_file", "Attachment is required for this task.")
+            if not form.is_valid():
+                return form, None
+            now = timezone.now()
+            actual_minutes = _minutes_between(now, current.planned_date) if current.planned_date else 0
+            inst = form.save(commit=False)
+            inst.status = "Completed"
+            inst.completed_at = now
+            inst.actual_duration_minutes = actual_minutes
+            inst.save()
+            return None, inst
+
+    for attempt in range(3):
         try:
-            with transaction.atomic():
-                current_obj = Checklist.objects.select_for_update(nowait=True).get(pk=pk)
-                form = CompleteChecklistForm(request.POST, request.FILES, instance=current_obj)
-                
-                # Validate attachment requirement
-                if current_obj.attachment_mandatory and not request.FILES.get("doer_file") and not current_obj.doer_file:
-                    form.add_error("doer_file", "Attachment is required for this task.")
-                
-                if not form.is_valid():
-                    return form, None
-                
-                # Calculate actual duration
-                now = timezone.now()
-                actual_minutes = _minutes_between(now, current_obj.planned_date) if current_obj.planned_date else 0
-                
-                # Complete the task immediately
-                completed_task = form.save(commit=False)
-                completed_task.status = "Completed"
-                completed_task.completed_at = now
-                completed_task.actual_duration_minutes = actual_minutes
-                completed_task.save()
-                
-                logger.info(f"Task {pk} completed successfully by user {request.user.username}")
-                return None, completed_task
-                
+            invalid_form, completed = _complete_once()
+            if invalid_form:
+                return render(request, "tasks/complete_checklist.html", {"form": invalid_form, "object": obj})
+            break
         except OperationalError as e:
-            if "database is locked" in str(e).lower():
-                logger.warning(f"Database locked during completion attempt, retrying...")
-                time.sleep(0.2)
-                raise
-            else:
-                raise
-    
-    # Try to complete the task with retries
-    form_result = None
-    completed_task = None
-    
-    for attempt in range(5):  # Max 5 attempts
-        try:
-            form_result, completed_task = complete_task_safely()
-            if form_result:  # Form validation error
-                return render(request, "tasks/complete_checklist.html", {"form": form_result, "object": obj})
-            if completed_task:
-                break
-        except OperationalError as e:
-            if attempt == 4:  # Last attempt
-                logger.error(f"Failed to complete task {pk} after 5 attempts: {str(e)}")
-                messages.error(request, "The task completion is taking longer than expected. Please try again in a moment.")
-                return redirect(request.GET.get("next", "dashboard:home"))
-            time.sleep(0.1 * (2 ** attempt))  # Exponential backoff
+            if "locked" in str(e).lower() and attempt < 2:
+                time.sleep(0.1 * (2 ** attempt))
+                continue
+            logger.error("complete_checklist failed after retries: %s", e)
+            messages.error(request, "The task completion is taking longer than expected. Please try again.")
+            return redirect(request.GET.get("next", "dashboard:home"))
         except Exception as e:
-            logger.error(f"Unexpected error completing task {pk}: {str(e)}")
+            logger.error("Unexpected completion error: %s", e)
             messages.error(request, "An unexpected error occurred. Please try again.")
             return redirect(request.GET.get("next", "dashboard:home"))
-    
-    # SEPARATE OPERATION: Create next recurring task (if needed)
-    if completed_task:
-        try:
-            # This runs completely separately to avoid any conflicts
-            create_next_if_recurring(completed_task)
-        except Exception as e:
-            # Log but don't fail the completion
-            logger.error(f"Failed to create next recurring task for {completed_task.id}: {str(e)}")
-    
-    messages.success(request, f"✅ Task '{completed_task.task_name}' completed successfully!")
+
+    messages.success(request, f"✅ Task '{completed.task_name}' completed successfully!")
     return redirect(request.GET.get("next", "dashboard:home"))
 
+# ----- Delegation -----
 
 @has_permission("add_delegation")
 def add_delegation(request):
@@ -1178,158 +947,18 @@ def add_delegation(request):
             obj = form.save(commit=False)
             obj.planned_date = planned_dt
             obj.save()
-            
-            # ALWAYS SEND EMAIL for delegation assignments
+
             complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[obj.id])}"
             try:
-                send_delegation_assignment_to_user(
-                    delegation=obj,
-                    complete_url=complete_url,
-                    subject_prefix="New Delegation Task Assigned",
-                )
+                send_delegation_assignment_to_user(delegation=obj, complete_url=complete_url, subject_prefix="New Delegation Task Assigned")
             except Exception as e:
-                logger.error(f"Failed to send delegation assignment email: {str(e)}")
-                
+                logger.error("Delegation assignment email failed: %s", e)
+
             messages.success(request, f"Delegation task '{obj.task_name}' created and assigned successfully!")
             return redirect("tasks:list_delegation")
     else:
         form = DelegationForm(initial={"assign_by": request.user})
     return render(request, "tasks/add_delegation.html", {"form": form})
-
-
-@login_required
-def add_help_ticket(request):
-    if request.method == "POST":
-        form = HelpTicketForm(request.POST, request.FILES)
-        if form.is_valid():
-            planned_date = form.cleaned_data.get("planned_date")
-            planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
-            if planned_date_local and not is_working_day(planned_date_local):
-                messages.error(request, "This is holiday date, you can not add on this day.")
-                return render(
-                    request,
-                    "tasks/add_help_ticket.html",
-                    {"form": form, "current_tab": "add", "can_create": can_create(request.user)},
-                )
-            ticket = form.save(commit=False)
-            ticket.assign_by = request.user
-            ticket.save()
-            
-            # ALWAYS SEND EMAIL for help ticket assignments
-            complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
-            try:
-                send_help_ticket_assignment_to_user(
-                    ticket=ticket,
-                    complete_url=complete_url,
-                    subject_prefix="New Help Ticket Assigned",
-                )
-                send_help_ticket_admin_confirmation(
-                    ticket=ticket,
-                    subject_prefix="Help Ticket Assignment",
-                )
-            except Exception as e:
-                logger.error(f"Failed to send help ticket assignment emails: {str(e)}")
-                
-            messages.success(request, f"Help ticket '{ticket.title}' created and assigned successfully!")
-            return redirect("tasks:list_help_ticket")
-    else:
-        form = HelpTicketForm()
-    return render(
-        request,
-        "tasks/add_help_ticket.html",
-        {"form": form, "current_tab": "add", "can_create": can_create(request.user)},
-    )
-
-
-# ===== ULTRA-FAST EXCEL-FRIENDLY BULK UPLOAD =====
-
-@has_permission("mt_bulk_upload")
-def bulk_upload(request):
-    if request.method != "POST":
-        form = BulkUploadForm()
-        return render(request, "tasks/bulk_upload.html", {"form": form})
-    
-    form = BulkUploadForm(request.POST, request.FILES)
-    if not form.is_valid():
-        return render(request, "tasks/bulk_upload.html", {"form": form})
-    
-    form_type = form.cleaned_data['form_type']
-    csv_file = form.cleaned_data['csv_file']
-    
-    # Start timing for performance measurement
-    start_time = time.time()
-    
-    try:
-        logger.info(f"Starting bulk upload: {form_type} from file {csv_file.name}")
-        
-        if form_type == 'checklist':
-            created_tasks, errors = process_checklist_bulk_upload_excel_friendly(csv_file, request.user)
-            task_type_name = "Checklist"
-        elif form_type == 'delegation':
-            created_tasks, errors = process_delegation_bulk_upload_excel_friendly(csv_file, request.user)
-            task_type_name = "Delegation"
-        else:
-            messages.error(request, "Invalid form type selected.")
-            return render(request, "tasks/bulk_upload.html", {"form": form})
-        
-        # Show results with performance metrics
-        processing_time = round(time.time() - start_time, 2)
-        
-        if created_tasks:
-            messages.success(
-                request, 
-                f"✅ Successfully uploaded {len(created_tasks)} {task_type_name} task(s) in {processing_time}s"
-            )
-            
-            # Send emails asynchronously AFTER success message
-            try:
-                send_bulk_emails_optimized(created_tasks, task_type_name)
-                logger.info(f"Email notifications queued for {len(created_tasks)} tasks")
-            except Exception as e:
-                logger.error(f"Failed to queue email notifications: {str(e)}")
-            
-            # Send clean admin summary email
-            try:
-                summary_rows = []
-                for task in created_tasks[:10]:  # Limit to first 10 for email
-                    if task_type_name == "Checklist":
-                        complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[task.id])}"
-                    else:
-                        complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[task.id])}"
-                    
-                    summary_rows.append({
-                        "Task Name": task.task_name,
-                        "Assign To": task.assign_to.get_full_name() or task.assign_to.username,
-                        "Planned Date": task.planned_date.strftime("%Y-%m-%d %H:%M") if task.planned_date else "N/A",
-                        "Priority": task.priority,
-                        "complete_url": complete_url,
-                    })
-                
-                send_admin_bulk_summary(
-                    title=f"Bulk Upload Complete: {len(created_tasks)} {task_type_name} Tasks Created",
-                    rows=summary_rows
-                )
-            except Exception as e:
-                logger.error(f"Failed to send admin summary: {str(e)}")
-        
-        if errors:
-            for error in errors[:10]:  # Limit displayed errors
-                messages.error(request, error)
-            if len(errors) > 10:
-                messages.warning(request, f"... and {len(errors) - 10} more errors. Check the logs for details.")
-        
-        if not created_tasks and not errors:
-            messages.warning(request, "No tasks were created. Please check your file format and data.")
-            
-    except Exception as e:
-        processing_time = round(time.time() - start_time, 2)
-        logger.error(f"Bulk upload error after {processing_time}s: {str(e)}")
-        messages.error(request, f"An error occurred during bulk upload: {str(e)}")
-    
-    return render(request, "tasks/bulk_upload.html", {"form": BulkUploadForm()})
-
-
-# ===== Keep all other existing view functions unchanged =====
 
 @has_permission("list_delegation")
 def list_delegation(request):
@@ -1343,43 +972,52 @@ def list_delegation(request):
                     if deleted:
                         messages.success(request, f"Successfully deleted {deleted} delegation task(s).")
                     else:
-                        messages.info(request, "No delegation tasks were deleted. The selected tasks may have already been removed.")
+                        messages.info(request, "No delegation tasks were deleted.")
                 except Exception as e:
-                    messages.error(request, f"Error during bulk delete: {str(e)}")
+                    messages.error(request, f"Error during bulk delete: {e}")
             else:
                 messages.warning(request, "No delegation tasks were selected for deletion.")
         else:
             messages.warning(request, "Invalid action specified.")
         return redirect("tasks:list_delegation")
+
     qs = Delegation.objects.filter(status="Pending").select_related("assign_by", "assign_to").order_by("-planned_date", "-id")
-    if (kw := request.GET.get("keyword", "").strip()):
+
+    kw = request.GET.get("keyword", "").strip()
+    if kw:
         qs = qs.filter(Q(task_name__icontains=kw))
-    for param, lookup in [
-        ("assign_to", "assign_to_id"),
-        ("priority", "priority"),
-        ("start_date", "planned_date__date__gte"),
-        ("end_date", "planned_date__date__lte"),
-    ]:
-        if (v := request.GET.get(param, "").strip()):
-            qs = qs.filter(**{lookup: v})
+
+    if request.GET.get("assign_to", "").strip():
+        qs = qs.filter(assign_to_id=request.GET.get("assign_to").strip())
+
+    if request.GET.get("priority", "").strip():
+        qs = qs.filter(priority=request.GET.get("priority").strip())
+
+    if request.GET.get("start_date", "").strip():
+        qs = qs.filter(planned_date__date__gte=request.GET.get("start_date").strip())
+
+    if request.GET.get("end_date", "").strip():
+        qs = qs.filter(planned_date__date__lte=request.GET.get("end_date").strip())
+
     status_param = request.GET.get("status", "").strip()
     if status_param == "all":
         qs = Delegation.objects.all().select_related("assign_by", "assign_to")
     elif status_param and status_param != "Pending":
         qs = Delegation.objects.filter(status=status_param).select_related("assign_by", "assign_to")
+
     if request.GET.get("today_only"):
         today = timezone.localdate()
         qs = qs.filter(planned_date__date=today)
+
     ctx = {
         "items": qs,
         "current_tab": "delegation",
-        "users": User.objects.order_by("username"),
+        "users": User.objects.filter(is_active=True).order_by("username"),
         "priority_choices": Delegation._meta.get_field("priority").choices,
     }
     if request.GET.get("partial"):
         return render(request, "tasks/partial_list_delegation.html", ctx)
     return render(request, "tasks/list_delegation.html", ctx)
-
 
 @has_permission("add_delegation")
 def edit_delegation(request, pk):
@@ -1397,7 +1035,6 @@ def edit_delegation(request, pk):
         form = DelegationForm(instance=obj)
     return render(request, "tasks/add_delegation.html", {"form": form})
 
-
 @has_permission("list_delegation")
 def delete_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
@@ -1407,22 +1044,17 @@ def delete_delegation(request, pk):
         return redirect("tasks:list_delegation")
     return render(request, "tasks/confirm_delete.html", {"object": obj, "type": "Delegation"})
 
-
 @has_permission("list_delegation")
 def reassign_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
     if request.method == "POST":
-        if uid := request.POST.get("assign_to"):
+        uid = request.POST.get("assign_to")
+        if uid:
             obj.assign_to = User.objects.get(pk=uid)
             obj.save()
-            messages.success(request, f"Delegation task reassigned successfully!")
+            messages.success(request, "Delegation task reassigned successfully!")
             return redirect("tasks:list_delegation")
-    return render(
-        request,
-        "tasks/reassign_delegation.html",
-        {"object": obj, "all_users": User.objects.order_by("username")},
-    )
-
+    return render(request, "tasks/reassign_delegation.html", {"object": obj, "all_users": User.objects.filter(is_active=True).order_by("username")})
 
 @login_required
 def complete_delegation(request, pk):
@@ -1430,10 +1062,11 @@ def complete_delegation(request, pk):
     if obj.assign_to_id and obj.assign_to_id != request.user.id and not (request.user.is_staff or request.user.is_superuser):
         messages.error(request, "You are not the assignee of this task.")
         return redirect(request.GET.get("next", "dashboard:home") + "?task_type=delegation")
+
     if request.method == "GET":
         form = CompleteDelegationForm(instance=obj)
         return render(request, "tasks/complete_delegation.html", {"form": form, "object": obj})
-    
+
     try:
         with transaction.atomic():
             obj = Delegation.objects.select_for_update().get(pk=pk)
@@ -1451,11 +1084,70 @@ def complete_delegation(request, pk):
             inst.save()
         messages.success(request, f"Delegation task '{obj.task_name}' marked as completed successfully!")
     except Exception as e:
-        logger.error(f"Error completing delegation {pk}: {str(e)}")
+        logger.error("Error completing delegation %s: %s", pk, e)
         messages.error(request, "An error occurred while completing the task. Please try again.")
-    
     return redirect(request.GET.get("next", "dashboard:home") + "?task_type=delegation")
 
+# ---------------- Help Tickets ----------------
+
+@login_required
+def add_help_ticket(request):
+    if request.method == "POST":
+        form = HelpTicketForm(request.POST, request.FILES)
+        if form.is_valid():
+            planned_date = form.cleaned_data.get("planned_date")
+            planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
+            if planned_date_local and not is_working_day(planned_date_local):
+                messages.error(request, "This is holiday date, you can not add on this day.")
+                return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "add", "can_create": can_create(request.user)})
+            ticket = form.save(commit=False)
+            ticket.assign_by = request.user
+            ticket.save()
+
+            complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
+            try:
+                send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="New Help Ticket Assigned")
+                send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Assignment")
+            except Exception as e:
+                logger.error("Help-ticket assignment emails failed: %s", e)
+
+            messages.success(request, f"Help ticket '{ticket.title}' created and assigned successfully!")
+            return redirect("tasks:list_help_ticket")
+    else:
+        form = HelpTicketForm()
+    return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "add", "can_create": can_create(request.user)})
+
+@login_required
+def edit_help_ticket(request, pk):
+    obj = get_object_or_404(HelpTicket, pk=pk)
+    old_assignee = obj.assign_to
+    if request.method == "POST":
+        form = HelpTicketForm(request.POST, request.FILES, instance=obj)
+        if form.is_valid():
+            planned_date = form.cleaned_data.get("planned_date")
+            planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
+            if planned_date_local and not is_working_day(planned_date_local):
+                messages.error(request, "This is holiday date, you can not add on this day.")
+                return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "edit", "can_create": can_create(request.user)})
+
+            ticket = form.save()
+            complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
+            try:
+                if old_assignee and ticket.assign_to_id != old_assignee.id:
+                    send_help_ticket_unassigned_notice(ticket=ticket, old_user=old_assignee)
+                    send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Reassigned")
+                    send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Reassigned")
+                else:
+                    send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Updated")
+                    send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Updated")
+            except Exception as e:
+                logger.error("Help-ticket update emails failed: %s", e)
+
+            messages.success(request, f"Help ticket '{ticket.title}' updated successfully!")
+            return redirect("tasks:list_help_ticket")
+    else:
+        form = HelpTicketForm(instance=obj)
+    return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "edit", "can_create": can_create(request.user)})
 
 @login_required
 def list_help_ticket(request):
@@ -1469,26 +1161,28 @@ def list_help_ticket(request):
                     if deleted:
                         messages.success(request, f"Successfully deleted {deleted} help ticket(s).")
                     else:
-                        messages.info(request, "No help tickets were deleted. The selected tickets may have already been removed.")
+                        messages.info(request, "No help tickets were deleted.")
                 except Exception as e:
-                    messages.error(request, f"Error during bulk delete: {str(e)}")
+                    messages.error(request, f"Error during bulk delete: {e}")
             else:
                 messages.warning(request, "No help tickets were selected for deletion.")
         else:
             messages.warning(request, "Invalid action specified.")
         return redirect("tasks:list_help_ticket")
+
     qs = HelpTicket.objects.select_related("assign_by", "assign_to").exclude(status="Closed")
     if not can_create(request.user):
         qs = qs.filter(assign_to=request.user)
-    for param, lookup in [
-        ("from_date", "planned_date__date__gte"),
-        ("to_date", "planned_date__date__lte"),
-    ]:
-        if v := request.GET.get(param, "").strip():
-            qs = qs.filter(**{lookup: v})
+
+    if request.GET.get("from_date", "").strip():
+        qs = qs.filter(planned_date__date__gte=request.GET.get("from_date").strip())
+    if request.GET.get("to_date", "").strip():
+        qs = qs.filter(planned_date__date__lte=request.GET.get("to_date").strip())
+
     v_assign_by = request.GET.get("assign_by", "all")
     v_assign_to = request.GET.get("assign_to", "all")
     v_status = request.GET.get("status", "open")
+
     if v_assign_by != "all":
         qs = qs.filter(assign_by_id=v_assign_by)
     if v_assign_to != "all":
@@ -1498,6 +1192,7 @@ def list_help_ticket(request):
             qs = qs.exclude(status="Closed")
         else:
             qs = qs.filter(status=v_status)
+
     items = qs.order_by("-planned_date")
     return render(
         request,
@@ -1506,11 +1201,10 @@ def list_help_ticket(request):
             "items": items,
             "current_tab": "all",
             "can_create": can_create(request.user),
-            "users": User.objects.order_by("username"),
+            "users": User.objects.filter(is_active=True).order_by("username"),
             "status_choices": HelpTicket.STATUS_CHOICES,
         },
     )
-
 
 @login_required
 def assigned_to_me(request):
@@ -1520,12 +1214,7 @@ def assigned_to_me(request):
         .select_related("assign_by", "assign_to")
         .order_by("-planned_date")
     )
-    return render(
-        request,
-        "tasks/list_help_ticket_assigned_to.html",
-        {"items": items, "current_tab": "assigned_to"},
-    )
-
+    return render(request, "tasks/list_help_ticket_assigned_to.html", {"items": items, "current_tab": "assigned_to"})
 
 @login_required
 def assigned_by_me(request):
@@ -1541,74 +1230,19 @@ def assigned_by_me(request):
                     else:
                         messages.info(request, "No help tickets were deleted. You can only delete tickets you assigned.")
                 except Exception as e:
-                    messages.error(request, f"Error during bulk delete: {str(e)}")
+                    messages.error(request, f"Error during bulk delete: {e}")
             else:
                 messages.warning(request, "No help tickets were selected for deletion.")
         else:
             messages.warning(request, "Invalid action specified.")
         return redirect("tasks:assigned_by_me")
+
     items = HelpTicket.objects.filter(assign_by=request.user).select_related("assign_by", "assign_to").order_by("-planned_date")
-    return render(
-        request,
-        "tasks/list_help_ticket_assigned_by.html",
-        {"items": items, "current_tab": "assigned_by"},
-    )
-
-
-@login_required
-def edit_help_ticket(request, pk):
-    obj = get_object_or_404(HelpTicket, pk=pk)
-    old_assignee = obj.assign_to
-    if request.method == "POST":
-        form = HelpTicketForm(request.POST, request.FILES, instance=obj)
-        if form.is_valid():
-            planned_date = form.cleaned_data.get("planned_date")
-            planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
-            if planned_date_local and not is_working_day(planned_date_local):
-                messages.error(request, "This is holiday date, you can not add on this day.")
-                return render(
-                    request,
-                    "tasks/add_help_ticket.html",
-                    {"form": form, "current_tab": "edit", "can_create": can_create(request.user)},
-                )
-            ticket = form.save()
-            
-            # ALWAYS SEND EMAIL for help ticket edits
-            complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
-            try:
-                if old_assignee and ticket.assign_to_id != old_assignee.id:
-                    send_help_ticket_unassigned_notice(ticket=ticket, old_user=old_assignee)
-                    send_help_ticket_assignment_to_user(
-                        ticket=ticket,
-                        complete_url=complete_url,
-                        subject_prefix="Help Ticket Reassigned",
-                    )
-                    send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Reassigned")
-                else:
-                    send_help_ticket_assignment_to_user(
-                        ticket=ticket,
-                        complete_url=complete_url,
-                        subject_prefix="Help Ticket Updated",
-                    )
-                    send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Updated")
-            except Exception as e:
-                logger.error(f"Failed to send help ticket update emails: {str(e)}")
-                
-            messages.success(request, f"Help ticket '{ticket.title}' updated successfully!")
-            return redirect("tasks:list_help_ticket")
-    else:
-        form = HelpTicketForm(instance=obj)
-    return render(
-        request,
-        "tasks/add_help_ticket.html",
-        {"form": form, "current_tab": "edit", "can_create": can_create(request.user)},
-    )
-
+    return render(request, "tasks/list_help_ticket_assigned_by.html", {"items": items, "current_tab": "assigned_by"})
 
 @login_required
 def complete_help_ticket(request, pk):
     return redirect("tasks:note_help_ticket", pk=pk)
-
 
 @login_required
 def note_help_ticket(request, pk):
@@ -1626,7 +1260,7 @@ def note_help_ticket(request, pk):
                 mins = int((ticket.resolved_at - ticket.planned_date).total_seconds() // 60)
                 ticket.actual_duration_minutes = max(mins, 0)
         ticket.save()
-        
+
         if ticket.status == "Closed":
             recipients = []
             if ticket.assign_to.email:
@@ -1637,32 +1271,21 @@ def note_help_ticket(request, pk):
                 from django.core.mail import EmailMultiAlternatives
                 from django.template.loader import render_to_string
                 subject = f"Help Ticket Closed: {ticket.title}"
-                html_message = render_to_string(
-                    "email/help_ticket_closed.html",
-                    {"ticket": ticket, "assign_by": ticket.assign_by, "assign_to": ticket.assign_to},
-                )
+                html_message = render_to_string("email/help_ticket_closed.html", {"ticket": ticket, "assign_by": ticket.assign_by, "assign_to": ticket.assign_to})
                 try:
-                    msg = EmailMultiAlternatives(
-                        subject,
-                        html_message,
-                        getattr(settings, "DEFAULT_FROM_EMAIL", None),
-                        recipients,
-                    )
+                    msg = EmailMultiAlternatives(subject, html_message, getattr(settings, "DEFAULT_FROM_EMAIL", None), recipients)
                     msg.attach_alternative(html_message, "text/html")
                     msg.send(fail_silently=True)
                 except Exception:
                     pass
+
         messages.success(request, f"Note saved for HT-{ticket.id}.")
         return redirect(request.GET.get("next", reverse("tasks:assigned_to_me")))
-    return render(
-        request,
-        "tasks/note_help_ticket.html",
-        {"ticket": ticket, "next": request.GET.get("next", reverse("tasks:assigned_to_me"))},
-    )
-
+    return render(request, "tasks/note_help_ticket.html", {"ticket": ticket, "next": request.GET.get("next", reverse("tasks:assigned_to_me"))})
 
 @login_required
 def delete_help_ticket(request, pk):
+    """Delete help ticket (present and importable for urls.py)."""
     ticket = get_object_or_404(HelpTicket, pk=pk)
     if not (request.user.is_superuser or ticket.assign_by_id == request.user.id):
         messages.error(request, "You can only delete help tickets you assigned.")
@@ -1674,6 +1297,7 @@ def delete_help_ticket(request, pk):
         return redirect(request.GET.get("next", "tasks:assigned_by_me"))
     return render(request, "tasks/confirm_delete.html", {"object": ticket, "type": "Help Ticket"})
 
+# ---------- Files / FMS / Details ----------
 
 @has_permission("mt_bulk_upload")
 def download_checklist_template(request):
@@ -1682,7 +1306,6 @@ def download_checklist_template(request):
         raise Http404
     return FileResponse(open(path, "rb"), as_attachment=True, filename="checklist_template.csv")
 
-
 @has_permission("mt_bulk_upload")
 def download_delegation_template(request):
     path = finders.find("bulk_upload_templates/delegation_template.csv")
@@ -1690,8 +1313,99 @@ def download_delegation_template(request):
         raise Http404
     return FileResponse(open(path, "rb"), as_attachment=True, filename="delegation_template.csv")
 
-
 @login_required
 def list_fms(request):
     items = FMS.objects.select_related("assign_by", "assign_to").order_by("-planned_date", "-id")
     return render(request, "tasks/list_fms.html", {"items": items})
+
+@login_required
+def checklist_details(request, pk: int):
+    obj = get_object_or_404(Checklist.objects.select_related("assign_by", "assign_to"), pk=pk)
+    return render(request, "tasks/partials/checklist_detail.html", {"obj": obj})
+
+@login_required
+def delegation_details(request, pk: int):
+    obj = get_object_or_404(Delegation.objects.select_related("assign_by", "assign_to"), pk=pk)
+    return render(request, "tasks/partials/delegation_detail.html", {"obj": obj})
+
+@login_required
+def help_ticket_details(request, pk: int):
+    obj = get_object_or_404(HelpTicket.objects.select_related("assign_by", "assign_to"), pk=pk)
+    return render(request, "tasks/partials/help_ticket_detail.html", {"obj": obj})
+
+@has_permission("mt_bulk_upload")
+def bulk_upload(request):
+    if request.method != "POST":
+        return render(request, "tasks/bulk_upload.html", {"form": BulkUploadForm()})
+
+    # PRG pattern to avoid re-submits on refresh:
+    form = BulkUploadForm(request.POST, request.FILES)
+    if not form.is_valid():
+        return render(request, "tasks/bulk_upload.html", {"form": form})
+
+    form_type = form.cleaned_data["form_type"]
+    csv_file = form.cleaned_data["csv_file"]
+    start_time = time.time()
+
+    try:
+        if form_type == "checklist":
+            created_tasks, errors = process_checklist_bulk_upload_excel_friendly(csv_file, request.user)
+            task_type_name = "Checklist"
+        elif form_type == "delegation":
+            created_tasks, errors = process_delegation_bulk_upload_excel_friendly(csv_file, request.user)
+            task_type_name = "Delegation"
+        else:
+            messages.error(request, "Invalid form type selected.")
+            return redirect("tasks:bulk_upload")
+
+        processing_time = round(time.time() - start_time, 2)
+
+        # Always queue emails/admin summary AFTER the response to keep UI snappy
+        if created_tasks:
+            messages.success(
+                request,
+                f"⚡ Upload Complete! Created {len(created_tasks)} {task_type_name} task(s) in {processing_time}s. "
+                f"Emails are being sent in the background."
+            )
+
+            # Kick off assignee emails in background (non-blocking)
+            kick_off_bulk_emails_async(created_tasks, task_type_name)
+
+            # Prepare quick admin preview (first 10) and send summary asynchronously
+            try:
+                preview = []
+                for t in created_tasks[:10]:
+                    complete_url = (
+                        f"{site_url}{reverse('tasks:complete_checklist', args=[t.id])}"
+                        if task_type_name == "Checklist"
+                        else f"{site_url}{reverse('tasks:complete_delegation', args=[t.id])}"
+                    )
+                    preview.append({
+                        "Task Name": t.task_name,
+                        "Assign To": t.assign_to.get_full_name() or t.assign_to.username,
+                        "Planned Date": t.planned_date.strftime("%Y-%m-%d %H:%M") if t.planned_date else "N/A",
+                        "Priority": t.priority,
+                        "complete_url": complete_url,
+                    })
+                send_admin_bulk_summary_async(
+                    title=f"⚡ Fast Bulk Upload: {len(created_tasks)} {task_type_name} Tasks Created in {processing_time}s",
+                    rows=preview,
+                )
+            except Exception as e:
+                logger.error("Admin summary schedule failed: %s", e)
+
+        if errors:
+            for err in errors[:10]:
+                messages.error(request, err)
+            if len(errors) > 10:
+                messages.warning(request, f"... and {len(errors) - 10} more errors. Check logs for details.")
+
+        if not created_tasks and not errors:
+            messages.warning(request, "No tasks were created. Please check your file format and data.")
+
+    except Exception as e:
+        messages.error(request, f"An error occurred during bulk upload: {e}")
+        logger.error("Bulk upload error: %s", e)
+
+    # Redirect so the browser shows the message immediately and the background work continues
+    return redirect("tasks:bulk_upload")

@@ -1,22 +1,29 @@
+<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\dashboard\templates\dashboard\partials\help_ticket_tasks.html -->
 {% load static custom_filters %}
 
 <div class="card shadow-sm">
   <div class="card-header bg-white d-flex justify-content-between align-items-center">
     <h5 class="mb-0">Help Ticket Tasks</h5>
-    <div>
+
+    <!-- Today filter controls (preserve other query params) -->
+    <div class="d-flex align-items-center">
       <form method="get" class="d-inline">
         {% for key, value in request.GET.items %}
           {% if key != 'today_only' and key != 'today' %}
             <input type="hidden" name="{{ key }}" value="{{ value }}">
           {% endif %}
         {% endfor %}
-        <button type="submit" name="today_only" value="1"
-                class="btn btn-sm {% if request.GET.today_only or request.GET.today %}btn-primary{% else %}btn-outline-primary{% endif %}">
+        <button
+          type="submit"
+          name="today_only"
+          value="1"
+          class="btn btn-sm {% if request.GET.today_only or request.GET.today %}btn-primary{% else %}btn-outline-primary{% endif %}">
           Today Only
         </button>
       </form>
-      <a href="?" class="btn btn-sm btn-outline-secondary ms-1
-         {% if not request.GET.today_only and not request.GET.today %}active{% endif %}">
+
+      <a href="?"
+         class="btn btn-sm btn-outline-secondary ms-1 {% if not request.GET.today_only and not request.GET.today %}active{% endif %}">
         Show All
       </a>
     </div>
@@ -24,33 +31,35 @@
 
   <div class="card-body p-0">
     <div class="table-responsive">
-      <table class="table table-striped align-middle mb-0">
+      <table class="table table-striped table-hover align-middle mb-0">
         <thead class="table-light">
           <tr>
-            <th>Ticket ID</th>
-            <th>Assigned By</th>
-            <th>Subject</th>
-            <th>Message</th>
-            <th>Assigned Date</th>
-            <th>Planned Date &amp; Time</th>
-            <th>Actual Time</th>
-            <th>Delay</th>
-            <th>Priority</th>
-            <th>Status</th>
-            <th>Attachment</th>
-            <th>Action</th>
+            <th scope="col">Ticket ID</th>
+            <th scope="col">Assigned By</th>
+            <th scope="col">Subject</th>
+            <th scope="col">Message</th>
+            <th scope="col">Assigned Date</th>
+            <th scope="col">Planned Date &amp; Time</th>
+            <th scope="col">Actual Time</th>
+            <th scope="col">Delay</th>
+            <th scope="col">Priority</th>
+            <th scope="col">Status</th>
+            <th scope="col">Attachment</th>
+            <th scope="col" style="width:260px;">Action</th>
           </tr>
         </thead>
         <tbody>
           {% for item in tasks %}
           <tr {% if item.status == 'Closed' %}class="table-success opacity-75"{% endif %}>
-            <td>HT-{{ item.id }}</td>
+            <td><code>HT-{{ item.id }}</code></td>
             <td>{{ item.assign_by.get_full_name|default:item.assign_by.username }}</td>
-            <td>{{ item.title }}</td>
-            <td>{{ item.description|truncatewords:10 }}</td>
+            <td class="text-truncate" style="max-width: 220px;" title="{{ item.title }}">{{ item.title }}</td>
+            <td class="text-truncate" style="max-width: 320px;" title="{{ item.description }}">
+              {{ item.description|truncatewords:12 }}
+            </td>
             <td title="{{ item.created_at|date:'Y-m-d H:i' }}">{{ item.created_at|date:"d M, Y H:i" }}</td>
             <td title="{{ item.planned_date|date:'Y-m-d H:i' }}">{{ item.planned_date|date:"d M, Y H:i" }}</td>
-            <td>{% if item.actual_duration_minutes %}{{ item.actual_duration_minutes }} min{% else %}&ndash;{% endif %}</td>
+            <td>{% if item.actual_duration_minutes %}{{ item.actual_duration_minutes }} min{% else %}&mdash;{% endif %}</td>
             <td>{{ item.planned_date|delay_since }}</td>
             <td>
               <span class="badge bg-{% if item.priority == 'High' %}danger{% elif item.priority == 'Medium' %}warning{% else %}success{% endif %}">
@@ -62,32 +71,41 @@
                 {{ item.status }}
               </span>
             </td>
-            <td>
+            <td class="text-center">
               {% if item.media_upload %}
-                <a href="{{ item.media_upload.url }}" download class="btn btn-sm btn-outline-primary">
+                <a href="{{ item.media_upload.url }}" download class="btn btn-sm btn-outline-primary" title="Download attachment">
                   <i class="fas fa-download"></i>
                 </a>
               {% else %}
-                &ndash;
+                &mdash;
               {% endif %}
             </td>
-            <td>
-              {% if item.status != 'Closed' %}
-                <div class="d-flex gap-1">
+            <td class="text-nowrap">
+              <div class="btn-group" role="group" aria-label="Help ticket actions">
+                <!-- Details -->
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-info"
+                  data-bs-toggle="modal"
+                  data-bs-target="#helpTicketDetailsModal{{ item.id }}">
+                  <i class="fas fa-eye"></i> Details
+                </button>
+
+                {% if item.status != 'Closed' %}
                   <a href="{% url 'tasks:note_help_ticket' item.id %}?next={{ request.get_full_path|urlencode }}"
                      class="btn btn-sm btn-primary">
-                     <i class="fas fa-sticky-note"></i> NOTE
+                    <i class="fas fa-sticky-note"></i> Note
                   </a>
                   <a href="{% url 'tasks:note_help_ticket' item.id %}?next={{ request.get_full_path|urlencode }}"
                      class="btn btn-sm btn-success">
-                     <i class="fas fa-check"></i> CLOSE
+                    <i class="fas fa-check"></i> Close
                   </a>
-                </div>
-              {% else %}
-                <span class="text-success">
-                  <i class="fas fa-check-circle"></i> Closed
-                </span>
-              {% endif %}
+                {% else %}
+                  <span class="ms-2 text-success">
+                    <i class="fas fa-check-circle"></i> Closed
+                  </span>
+                {% endif %}
+              </div>
             </td>
           </tr>
           {% empty %}
@@ -105,7 +123,7 @@
       </table>
     </div>
   </div>
-  
+
   {% if tasks %}
   <div class="card-footer bg-light">
     <small class="text-muted">
@@ -116,3 +134,130 @@
   </div>
   {% endif %}
 </div>
+
+<!-- Details Modals for help tickets -->
+{% for item in tasks %}
+<div class="modal fade" id="helpTicketDetailsModal{{ item.id }}" tabindex="-1"
+     aria-labelledby="helpTicketDetailsModalLabel{{ item.id }}" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+
+      <div class="modal-header">
+        <h5 class="modal-title" id="helpTicketDetailsModalLabel{{ item.id }}">
+          <i class="fas fa-ticket-alt"></i> Help Ticket Details
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="fw-bold">Ticket ID:</label>
+            <p class="mb-0"><code>HT-{{ item.id }}</code></p>
+          </div>
+          <div class="col-md-6">
+            <label class="fw-bold">Status:</label>
+            <p class="mb-0">
+              <span class="badge bg-{% if item.status == 'Open' %}primary{% elif item.status == 'In Progress' %}warning{% else %}success{% endif %}">
+                {{ item.status }}
+              </span>
+            </p>
+          </div>
+
+          <div class="col-12">
+            <label class="fw-bold">Title:</label>
+            <p class="mb-0">{{ item.title }}</p>
+          </div>
+
+          <div class="col-12">
+            <label class="fw-bold">Description:</label>
+            <p class="mb-0">{{ item.description|linebreaks }}</p>
+          </div>
+
+          <div class="col-md-6">
+            <label class="fw-bold">Assigned By:</label>
+            <p class="mb-0">{{ item.assign_by.get_full_name|default:item.assign_by.username }}</p>
+          </div>
+          <div class="col-md-6">
+            <label class="fw-bold">Assigned To:</label>
+            <p class="mb-0">{{ item.assign_to.get_full_name|default:item.assign_to.username }}</p>
+          </div>
+
+          <div class="col-md-6">
+            <label class="fw-bold">Created Date:</label>
+            <p class="mb-0">{{ item.created_at|date:"d M, Y H:i" }}</p>
+          </div>
+          <div class="col-md-6">
+            <label class="fw-bold">Planned Date:</label>
+            <p class="mb-0">{{ item.planned_date|date:"d M, Y H:i" }}</p>
+          </div>
+
+          <div class="col-md-6">
+            <label class="fw-bold">Priority:</label>
+            <p class="mb-0">
+              <span class="badge bg-{% if item.priority == 'High' %}danger{% elif item.priority == 'Medium' %}warning{% else %}success{% endif %}">
+                {{ item.priority|default:"Low" }}
+              </span>
+            </p>
+          </div>
+
+          <div class="col-md-6">
+            <label class="fw-bold">Estimated Minutes:</label>
+            <p class="mb-0">{{ item.estimated_minutes|default:0 }} minutes</p>
+          </div>
+
+          {% if item.actual_duration_minutes %}
+          <div class="col-md-6">
+            <label class="fw-bold">Actual Duration:</label>
+            <p class="mb-0">{{ item.actual_duration_minutes }} minutes</p>
+          </div>
+          {% endif %}
+
+          {% if item.resolved_at %}
+          <div class="col-md-6">
+            <label class="fw-bold">Resolved At:</label>
+            <p class="mb-0">{{ item.resolved_at|date:"d M, Y H:i" }}</p>
+          </div>
+          {% endif %}
+
+          {% if item.resolved_by %}
+          <div class="col-md-6">
+            <label class="fw-bold">Resolved By:</label>
+            <p class="mb-0">{{ item.resolved_by.get_full_name|default:item.resolved_by.username }}</p>
+          </div>
+          {% endif %}
+
+          {% if item.resolved_notes %}
+          <div class="col-12">
+            <label class="fw-bold">Resolution Notes:</label>
+            <p class="mb-0">{{ item.resolved_notes|linebreaks }}</p>
+          </div>
+          {% endif %}
+
+          {% if item.media_upload %}
+          <div class="col-12">
+            <label class="fw-bold">Attachment:</label>
+            <p class="mb-0">
+              <a href="{{ item.media_upload.url }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                <i class="fas fa-download"></i> Download Attachment
+              </a>
+            </p>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        {% if item.status != 'Closed' %}
+        <a href="{% url 'tasks:note_help_ticket' item.id %}?next={{ request.get_full_path|urlencode }}"
+           class="btn btn-success">
+          <i class="fas fa-check"></i> Close Ticket
+        </a>
+        {% endif %}
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endfor %}

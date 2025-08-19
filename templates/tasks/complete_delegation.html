@@ -1,3 +1,5 @@
+<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\tasks\complete_delegation.html -->
+
 {% extends "base.html" %}
 {% load static %}
 
@@ -177,21 +179,7 @@
         </div>
 
         <div class="row mt-4">
-          <div class="col-md-8">
-            <div class="alert alert-info border-0">
-              <h6 class="alert-heading">
-                <i class="fas fa-info-circle me-2"></i>
-                What happens after completion?
-              </h6>
-              <ul class="mb-0 ps-3">
-                <li>Task status will be set to <strong>Completed</strong></li>
-                <li>Actual time will be recorded automatically</li>
-                <li>You'll be redirected back to the dashboard</li>
-              </ul>
-            </div>
-          </div>
-          
-          <div class="col-md-4">
+          <div class="col-md-4 ms-auto">
             <div class="d-grid gap-2">
               {% url 'dashboard:home' as dashboard_home_url %}
               {% with next_url=request.GET.next|default:dashboard_home_url %}
@@ -242,12 +230,6 @@
 .btn-primary:hover {
   background: linear-gradient(135deg, #0056b3 0%, #004085 100%);
   transform: translateY(-1px);
-}
-
-.alert-info {
-  background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);
-  border: 1px solid #17a2b8;
-  color: #0c5460;
 }
 </style>
 

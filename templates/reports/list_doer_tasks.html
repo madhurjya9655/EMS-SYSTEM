@@ -50,9 +50,11 @@
           <tr>
             <th>Doer</th>
             <th>Task Name</th>
+            <th>Task Type</th>
             <th>Assigned By</th>
             <th>Planned Date</th>
             <th>Status</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -60,19 +62,193 @@
           <tr>
             <td>{{ item.assign_to.get_full_name|default:item.assign_to.username }}</td>
             <td>{{ item.task_name }}</td>
+            <td>
+              {% if item.mode %}
+                <span class="badge bg-info">Checklist</span>
+              {% else %}
+                <span class="badge bg-secondary">One-time</span>
+              {% endif %}
+            </td>
             <td>{{ item.assign_by.get_full_name|default:item.assign_by.username }}</td>
-            <td>{{ item.planned_date|date:"Y-m-d" }}</td>
-            <td>{{ item.status }}</td>
+            <td>{{ item.planned_date|date:"Y-m-d H:i" }}</td>
+            <td>
+              <span class="badge bg-{% if item.status == 'Pending' %}warning{% elif item.status == 'Completed' %}success{% else %}primary{% endif %}">
+                {{ item.status }}
+              </span>
+            </td>
+            <td>
+              <!-- Details Button -->
+              <button type="button" class="btn btn-sm btn-outline-info" 
+                      data-bs-toggle="modal" data-bs-target="#doerTaskDetailsModal{{ item.id }}"
+                      title="View Details">
+                <i class="fas fa-eye"></i> Details
+              </button>
+            </td>
           </tr>
           {% empty %}
           <tr>
-            <td colspan="5" class="text-center text-muted">No tasks found for these criteria.</td>
+            <td colspan="7" class="text-center text-muted">No tasks found for these criteria.</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   </div>
+
+  <!-- Details Modals for doer tasks -->
+  {% for item in items %}
+  <div class="modal fade" id="doerTaskDetailsModal{{ item.id }}" tabindex="-1" aria-labelledby="doerTaskDetailsModalLabel{{ item.id }}" aria-hidden="true">
+      <div class="modal-dialog modal-lg">
+          <div class="modal-content">
+              <div class="modal-header">
+                  <h5 class="modal-title" id="doerTaskDetailsModalLabel{{ item.id }}">
+                      <i class="fas fa-user-check"></i> Task Details: {{ item.task_name }}
+                  </h5>
+                  <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+              <div class="modal-body">
+                  <div class="row g-3">
+                      <div class="col-md-6">
+                          <label class="fw-bold">Task ID:</label>
+                          <p>{{ item.id }}</p>
+                      </div>
+                      <div class="col-md-6">
+                          <label class="fw-bold">Task Type:</label>
+                          <p>
+                              {% if item.mode %}
+                                  <span class="badge bg-info">Checklist</span>
+                              {% else %}
+                                  <span class="badge bg-secondary">One-time Task</span>
+                              {% endif %}
+                          </p>
+                      </div>
+                      <div class="col-md-6">
+                          <label class="fw-bold">Status:</label>
+                          <p>
+                              <span class="badge bg-{% if item.status == 'Pending' %}warning{% elif item.status == 'Completed' %}success{% else %}primary{% endif %}">
+                                  {{ item.status }}
+                              </span>
+                          </p>
+                      </div>
+                      <div class="col-12">
+                          <label class="fw-bold">Task Name:</label>
+                          <p>{{ item.task_name }}</p>
+                      </div>
+                      {% if item.message %}
+                      <div class="col-12">
+                          <label class="fw-bold">Message/Description:</label>
+                          <p>{{ item.message|linebreaks }}</p>
+                      </div>
+                      {% endif %}
+                      <div class="col-md-6">
+                          <label class="fw-bold">Assigned By:</label>
+                          <p>{{ item.assign_by.get_full_name|default:item.assign_by.username }}</p>
+                      </div>
+                      <div class="col-md-6">
+                          <label class="fw-bold">Assigned To (Doer):</label>
+                          <p>{{ item.assign_to.get_full_name|default:item.assign_to.username }}</p>
+                      </div>
+                      <div class="col-md-6">
+                          <label class="fw-bold">Planned Date:</label>
+                          <p>{{ item.planned_date|date:"d M, Y H:i" }}</p>
+                      </div>
+                      {% if item.priority %}
+                      <div class="col-md-6">
+                          <label class="fw-bold">Priority:</label>
+                          <p>
+                              <span class="badge bg-{% if item.priority == 'High' %}danger{% elif item.priority == 'Medium' %}warning{% else %}success{% endif %}">
+                                  {{ item.priority }}
+                              </span>
+                          </p>
+                      </div>
+                      {% endif %}
+                      {% if item.time_per_task_minutes %}
+                      <div class="col-md-6">
+                          <label class="fw-bold">Time per Task:</label>
+                          <p>{{ item.time_per_task_minutes }} minutes</p>
+                      </div>
+                      {% endif %}
+                      {% if item.actual_duration_minutes %}
+                      <div class="col-md-6">
+                          <label class="fw-bold">Actual Duration:</label>
+                          <p>{{ item.actual_duration_minutes }} minutes</p>
+                      </div>
+                      {% endif %}
+                      {% if item.completed_at %}
+                      <div class="col-md-6">
+                          <label class="fw-bold">Completed At:</label>
+                          <p>{{ item.completed_at|date:"d M, Y H:i" }}</p>
+                      </div>
+                      {% endif %}
+                      {% if item.created_at %}
+                      <div class="col-md-6">
+                          <label class="fw-bold">Created At:</label>
+                          <p>{{ item.created_at|date:"d M, Y H:i" }}</p>
+                      </div>
+                      {% endif %}
+                      {% if item.group_name %}
+                      <div class="col-md-6">
+                          <label class="fw-bold">Group Name:</label>
+                          <p>{{ item.group_name }}</p>
+                      </div>
+                      {% endif %}
+                      {% if item.frequency %}
+                      <div class="col-md-6">
+                          <label class="fw-bold">Recurrence:</label>
+                          <p>{{ item.mode }} (Every {{ item.frequency }} {{ item.mode|lower }}{{ item.frequency|pluralize }})</p>
+                      </div>
+                      {% endif %}
+                      {% if item.doer_notes %}
+                      <div class="col-12">
+                          <label class="fw-bold">Completion Notes:</label>
+                          <p>{{ item.doer_notes|linebreaks }}</p>
+                      </div>
+                      {% endif %}
+                      {% if item.media_upload %}
+                      <div class="col-12">
+                          <label class="fw-bold">Attachment:</label>
+                          <p>
+                              <a href="{{ item.media_upload.url }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                                  <i class="fas fa-download"></i> Download Attachment
+                              </a>
+                          </p>
+                      </div>
+                      {% endif %}
+                      {% if item.doer_file %}
+                      <div class="col-12">
+                          <label class="fw-bold">Completion File:</label>
+                          <p>
+                              <a href="{{ item.doer_file.url }}" target="_blank" class="btn btn-sm btn-outline-success">
+                                  <i class="fas fa-download"></i> Download Completion File
+                              </a>
+                          </p>
+                      </div>
+                      {% endif %}
+                      {% if item.audio_recording %}
+                      <div class="col-12">
+                          <label class="fw-bold">Audio Recording:</label>
+                          <p>
+                              <audio controls class="w-100">
+                                  <source src="{{ item.audio_recording.url }}" type="audio/mpeg">
+                                  Your browser does not support the audio element.
+                              </audio>
+                          </p>
+                      </div>
+                      {% endif %}
+                  </div>
+              </div>
+              <div class="modal-footer">
+                  {% if item.status == 'Pending' %}
+                      <a href="{% url 'tasks:complete_checklist' item.id %}" class="btn btn-success">
+                          <i class="fas fa-check"></i> Complete Task
+                      </a>
+                  {% endif %}
+                  <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+              </div>
+          </div>
+      </div>
+  </div>
+  {% endfor %}
 
   <script>
     document.querySelectorAll('[data-bs-toggle="collapse"]').forEach(btn => {

@@ -1,4 +1,4 @@
-<!-- templates/email/task_assigned.html -->
+<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\email\task_assigned.html -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -147,25 +147,3 @@
     </div>
 </body>
 </html>
-
-<!-- templates/email/task_assigned.txt -->
-{{ kind }} Task Assigned
-
-Hi {{ assignee_name }},
-
-You have been assigned a new {{ kind|lower }} task:
-
-Task: {{ task_title }}
-Task ID: #{{ task_code }}
-{% if planned_date_display %}Planned Date: {{ planned_date_display }}{% endif %}
-{% if priority_display %}Priority: {{ priority_display }}{% endif %}
-{% if assign_by_display %}Assigned by: {{ assign_by_display }}{% endif %}
-
-{{ cta_text|default:"Please complete this task by the planned date." }}
-
-Complete Task: {{ complete_url }}
-
-If you have any questions about this task, please contact {{ assign_by_display|default:"your manager" }}.
-
----
-This is an automated message from the Employee Management System.

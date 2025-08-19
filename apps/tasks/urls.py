@@ -24,7 +24,7 @@ urlpatterns = [
     path("fms/",                          views.list_fms,            name="list_fms"),
 
     # Bulk Upload
-    path("bulkupload/",                   views.bulk_upload,         name="bulk_upload"),
+    path("bulkupload/",                     views.bulk_upload,                  name="bulk_upload"),
     path("bulkupload/checklist-template/",  views.download_checklist_template,  name="download_checklist_template"),
     path("bulkupload/delegation-template/", views.download_delegation_template, name="download_delegation_template"),
 

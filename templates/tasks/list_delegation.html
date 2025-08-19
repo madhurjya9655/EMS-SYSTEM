@@ -1,41 +1,50 @@
+<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\tasks\list_delegation.html -->
 {% extends "base.html" %}
 {% load static %}
 {% block title %}Delegations{% endblock %}
 
 {% block content %}
 <div class="page-header mb-4">
-  <h2>Delegations</h2>
+  <h2 class="mb-0">Delegations</h2>
 </div>
 
+<!-- Filters -->
 <div class="card mb-3">
   <div class="card-body">
-    <form method="get" class="row g-3 align-items-end">
-      <div class="col-md-3">
-        <label class="form-label">Keyword</label>
-        <input type="text" class="form-control" name="keyword" value="{{ request.GET.keyword }}">
+    <form method="get" class="row g-3 align-items-end" role="search" aria-label="Delegation Filters">
+      <div class="col-md-4">
+        <label for="fltKeyword" class="form-label">Keyword</label>
+        <input id="fltKeyword" type="text" class="form-control" name="keyword" value="{{ request.GET.keyword }}">
       </div>
-      <div class="col-md-3">
-        <label class="form-label">Today Only</label>
-        <div class="form-check">
-          <input class="form-check-input" type="checkbox" name="today_only" value="1" id="todayOnly" {% if request.GET.today_only %}checked{% endif %}>
+
+      <div class="col-md-4">
+        <div class="form-check mt-4 pt-1">
+          <input class="form-check-input" type="checkbox" name="today_only" value="1" id="todayOnly"
+                 {% if request.GET.today_only %}checked{% endif %}>
           <label class="form-check-label" for="todayOnly">
-            Show tasks planned for today
+            Today only (show tasks planned for today)
           </label>
         </div>
       </div>
-      <div class="col-md-3">
-        <button class="btn btn-primary">Apply</button>
-        <a class="btn btn-outline-secondary ms-2" href="{% url 'tasks:list_delegation' %}">Reset</a>
+
+      <div class="col-md-4 text-md-end">
+        <button class="btn btn-primary">
+          <i class="fas fa-filter me-1" aria-hidden="true"></i> Apply
+        </button>
+        <a class="btn btn-outline-secondary ms-2" href="{% url 'tasks:list_delegation' %}">
+          <i class="fas fa-undo me-1" aria-hidden="true"></i> Reset
+        </a>
       </div>
     </form>
   </div>
 </div>
 
+<!-- Summary cards -->
 <div class="row g-3 mb-3">
   <div class="col-md-6">
-    <div class="card h-100">
+    <div class="card h-100 shadow-sm">
       <div class="card-body">
-        <div class="d-flex justify-content-between">
+        <div class="d-flex justify-content-between align-items-start">
           <div>
             <div class="text-muted small">Assigned Time (mins)</div>
             <div class="fs-4 fw-semibold">{{ assign_time|default:0 }}</div>
@@ -51,6 +60,7 @@
   </div>
 </div>
 
+<!-- List + bulk actions -->
 <div class="card">
   <div class="card-body p-0">
     <!-- Single BULK form -->
@@ -59,22 +69,34 @@
       <input type="hidden" name="action" value="bulk_delete">
 
       <table class="table table-hover mb-0 align-middle">
+        <caption class="visually-hidden">Delegation list with bulk delete and per-row actions</caption>
         <thead class="table-light">
           <tr>
-            <th style="width:32px;"><input type="checkbox" aria-label="Select all" data-select-all></th>
-            <th>Task Name</th>
-            <th>Assign By</th>
-            <th>Assign To</th>
-            <th>Planned Date &amp; Time</th>
-            <th>Priority</th>
-            <th style="width:140px;">Action</th>
+            <th scope="col" style="width:32px;">
+              <input type="checkbox" aria-label="Select all" data-select-all>
+            </th>
+            <th scope="col">Task Name</th>
+            <th scope="col">Assign By</th>
+            <th scope="col">Assign To</th>
+            <th scope="col">Planned Date &amp; Time</th>
+            <th scope="col">Priority</th>
+            <th scope="col" style="width:260px;">Action</th>
           </tr>
         </thead>
         <tbody>
           {% for d in items %}
           <tr>
-            <td><input type="checkbox" name="sel" value="{{ d.id }}" class="form-check-input" data-row-check aria-label="Select row"></td>
+            <td>
+              <input type="checkbox"
+                     name="sel"
+                     value="{{ d.id }}"
+                     class="form-check-input"
+                     data-row-check
+                     aria-label="Select row DEG{{ d.id }}">
+            </td>
+
             <td>{{ d.task_name }}</td>
+
             <td>
               {% if d.assign_by %}
                 {{ d.assign_by.get_full_name|default:d.assign_by.username }}
@@ -82,6 +104,7 @@
                 &mdash;
               {% endif %}
             </td>
+
             <td>
               {% if d.assign_to %}
                 {{ d.assign_to.get_full_name|default:d.assign_to.username }}
@@ -89,42 +112,254 @@
                 &mdash;
               {% endif %}
             </td>
-            <td>
+
+            <td title="{{ d.planned_date|date:'Y-m-d H:i' }}">
               {% if d.planned_date %}
                 {{ d.planned_date|date:"d M, Y H:i" }}
               {% else %}
                 &mdash;
               {% endif %}
             </td>
-            <td>{{ d.priority }}</td>
+
+            <td>
+              <span class="badge bg-{% if d.priority == 'High' %}danger{% elif d.priority == 'Medium' %}warning{% else %}success{% endif %}">
+                {{ d.priority|default:"Normal" }}
+              </span>
+            </td>
+
             <td class="text-nowrap">
-              <a href="#" title="View"><i class="fas fa-eye"></i></a>
-              <a href="{% url 'tasks:edit_delegation' d.pk %}" title="Edit" class="ms-2"><i class="fas fa-edit"></i></a>
-              <a href="{% url 'tasks:reassign_delegation' d.pk %}" title="Reassign" class="ms-2"><i class="fas fa-user-edit"></i></a>
-              <a href="{% url 'tasks:delete_delegation' d.pk %}" title="Delete" class="ms-2 text-danger"><i class="fas fa-trash"></i></a>
+              <!-- Details Button -->
+              <button
+                type="button"
+                class="btn btn-sm btn-outline-info"
+                data-bs-toggle="modal"
+                data-bs-target="#delegationListDetailsModal{{ d.id }}"
+                title="View details"
+                aria-label="View details for {{ d.task_name }}"
+              >
+                <i class="fas fa-eye" aria-hidden="true"></i>
+                <span class="visually-hidden">Details</span>
+              </button>
+
+              <a href="{% url 'tasks:edit_delegation' d.pk %}"
+                 title="Edit"
+                 class="btn btn-sm btn-outline-secondary ms-1"
+                 aria-label="Edit {{ d.task_name }}">
+                <i class="fas fa-edit" aria-hidden="true"></i>
+              </a>
+
+              <a href="{% url 'tasks:reassign_delegation' d.pk %}"
+                 title="Reassign"
+                 class="btn btn-sm btn-outline-warning ms-1"
+                 aria-label="Reassign {{ d.task_name }}">
+                <i class="fas fa-user-edit" aria-hidden="true"></i>
+              </a>
+
+              <a href="{% url 'tasks:delete_delegation' d.pk %}"
+                 title="Delete"
+                 class="btn btn-sm btn-outline-danger ms-1"
+                 aria-label="Delete {{ d.task_name }}">
+                <i class="fas fa-trash" aria-hidden="true"></i>
+              </a>
             </td>
           </tr>
           {% empty %}
-          <tr><td colspan="7" class="text-center text-muted">No record found.</td></tr>
+          <tr>
+            <td colspan="7" class="text-center text-muted py-4">No record found.</td>
+          </tr>
           {% endfor %}
         </tbody>
       </table>
 
       {% if items %}
       <div class="d-flex justify-content-between align-items-center p-2">
-        <small class="text-muted"><span data-selected-count>0</span> selected</small>
-        <button type="submit"
-                class="btn btn-danger btn-sm"
-                data-bulk-submit
-                data-confirm="Delete selected delegations?"
-                disabled>
-          Delete Selected
+        <small class="text-muted">
+          <span data-selected-count>0</span> selected
+        </small>
+        <button
+          type="submit"
+          class="btn btn-danger btn-sm"
+          data-bulk-submit
+          data-confirm="Delete selected delegations?"
+          disabled
+        >
+          <i class="fas fa-trash-alt me-1" aria-hidden="true"></i> Delete Selected
         </button>
       </div>
       {% endif %}
     </form>
   </div>
 </div>
+
+<!-- Details Modals for delegation tasks -->
+{% for d in items %}
+<div class="modal fade"
+     id="delegationListDetailsModal{{ d.id }}"
+     tabindex="-1"
+     aria-labelledby="delegationListDetailsModalLabel{{ d.id }}"
+     aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="delegationListDetailsModalLabel{{ d.id }}">
+          <i class="fas fa-tasks me-1" aria-hidden="true"></i>
+          Delegation Task Details: {{ d.task_name }}
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close dialog"></button>
+      </div>
+
+      <div class="modal-body">
+        <div class="row g-3">
+
+          <div class="col-md-6">
+            <label class="fw-bold">Task ID:</label>
+            <p>DEG{{ d.id }}</p>
+          </div>
+
+          <div class="col-md-6">
+            <label class="fw-bold">Status:</label>
+            <p>
+              <span class="badge bg-{% if d.status == 'Pending' %}warning{% else %}success{% endif %}">
+                {{ d.status }}
+              </span>
+            </p>
+          </div>
+
+          <div class="col-12">
+            <label class="fw-bold">Task Name:</label>
+            <p>{{ d.task_name }}</p>
+          </div>
+
+          <div class="col-md-6">
+            <label class="fw-bold">Assigned By:</label>
+            <p>
+              {% if d.assign_by %}
+                {{ d.assign_by.get_full_name|default:d.assign_by.username }}
+              {% else %}
+                —
+              {% endif %}
+            </p>
+          </div>
+
+          <div class="col-md-6">
+            <label class="fw-bold">Assigned To:</label>
+            <p>
+              {% if d.assign_to %}
+                {{ d.assign_to.get_full_name|default:d.assign_to.username }}
+              {% else %}
+                —
+              {% endif %}
+            </p>
+          </div>
+
+          <div class="col-md-6">
+            <label class="fw-bold">Planned Date:</label>
+            <p>
+              {% if d.planned_date %}
+                {{ d.planned_date|date:"d M, Y H:i" }}
+              {% else %}
+                —
+              {% endif %}
+            </p>
+          </div>
+
+          <div class="col-md-6">
+            <label class="fw-bold">Priority:</label>
+            <p>
+              <span class="badge bg-{% if d.priority == 'High' %}danger{% elif d.priority == 'Medium' %}warning{% else %}success{% endif %}">
+                {{ d.priority|default:"Normal" }}
+              </span>
+            </p>
+          </div>
+
+          <div class="col-md-6">
+            <label class="fw-bold">Created At:</label>
+            <p>{{ d.created_at|date:"d M, Y H:i" }}</p>
+          </div>
+
+          {% if d.frequency %}
+          <div class="col-md-6">
+            <label class="fw-bold">Recurrence:</label>
+            <p>{{ d.mode }} (Every {{ d.frequency }} {{ d.mode|lower }}{{ d.frequency|pluralize }})</p>
+          </div>
+          {% endif %}
+
+          <div class="col-md-6">
+            <label class="fw-bold">Time per Task:</label>
+            <p>{{ d.time_per_task_minutes|default:0 }} minutes</p>
+          </div>
+
+          {% if d.actual_duration_minutes %}
+          <div class="col-md-6">
+            <label class="fw-bold">Actual Duration:</label>
+            <p>{{ d.actual_duration_minutes }} minutes</p>
+          </div>
+          {% endif %}
+
+          {% if d.attachment_mandatory %}
+          <div class="col-md-6">
+            <label class="fw-bold">Attachment:</label>
+            <p><span class="badge bg-warning">Required</span></p>
+          </div>
+          {% endif %}
+
+          {% if d.completed_at %}
+          <div class="col-md-6">
+            <label class="fw-bold">Completed At:</label>
+            <p>{{ d.completed_at|date:"d M, Y H:i" }}</p>
+          </div>
+          {% endif %}
+
+          {% if d.doer_notes %}
+          <div class="col-12">
+            <label class="fw-bold">Completion Notes:</label>
+            <p>{{ d.doer_notes|linebreaks }}</p>
+          </div>
+          {% endif %}
+
+          {% if d.audio_recording %}
+          <div class="col-12">
+            <label class="fw-bold">Audio Recording:</label>
+            <p>
+              <audio controls class="w-100">
+                <source src="{{ d.audio_recording.url }}" type="audio/mpeg">
+                Your browser does not support the audio element.
+              </audio>
+            </p>
+          </div>
+          {% endif %}
+
+          {% if d.doer_file %}
+          <div class="col-12">
+            <label class="fw-bold">Completion File:</label>
+            <p>
+              <a href="{{ d.doer_file.url }}" target="_blank" class="btn btn-sm btn-outline-success">
+                <i class="fas fa-download me-1" aria-hidden="true"></i> Download Completion File
+              </a>
+            </p>
+          </div>
+          {% endif %}
+
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        {% if d.status == 'Pending' %}
+        <a href="{% url 'tasks:complete_delegation' d.id %}" class="btn btn-success">
+          <i class="fas fa-check me-1" aria-hidden="true"></i> Complete Task
+        </a>
+        {% endif %}
+        <a href="{% url 'tasks:edit_delegation' d.id %}" class="btn btn-primary">
+          <i class="fas fa-edit me-1" aria-hidden="true"></i> Edit Task
+        </a>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endfor %}
+
 {% endblock %}
 
 {% block extra_js %}

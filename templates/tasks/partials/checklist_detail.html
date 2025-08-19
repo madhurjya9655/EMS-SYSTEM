@@ -1,0 +1,41 @@
+<!-- templates/tasks/partials/checklist_detail.html -->
+<div class="card">
+    <div class="card-header">
+        <h5 class="card-title">{{ obj.task_name }}</h5>
+        <span class="badge badge-{{ obj.priority|lower }}">{{ obj.priority }}</span>
+    </div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-6">
+                <p><strong>Assigned To:</strong> {{ obj.assign_to.get_full_name|default:obj.assign_to.username }}</p>
+                <p><strong>Assigned By:</strong> {{ obj.assign_by.get_full_name|default:obj.assign_by.username }}</p>
+                <p><strong>Planned Date:</strong> {{ obj.planned_date|date:"Y-m-d H:i" }}</p>
+                <p><strong>Status:</strong> {{ obj.status }}</p>
+            </div>
+            <div class="col-md-6">
+                {% if obj.mode %}
+                <p><strong>Recurrence:</strong> {{ obj.mode }} (Every {{ obj.frequency|default:1 }})</p>
+                {% endif %}
+                {% if obj.time_per_task_minutes %}
+                <p><strong>Estimated Time:</strong> {{ obj.time_per_task_minutes }} minutes</p>
+                {% endif %}
+                {% if obj.group_name %}
+                <p><strong>Group:</strong> {{ obj.group_name }}</p>
+                {% endif %}
+            </div>
+        </div>
+        {% if obj.message %}
+        <div class="mt-3">
+            <p><strong>Description:</strong></p>
+            <p>{{ obj.message|linebreaks }}</p>
+        </div>
+        {% endif %}
+        {% if obj.status == "Pending" and obj.assign_to == request.user %}
+        <div class="mt-3">
+            <a href="{% url 'tasks:complete_checklist' obj.pk %}" class="btn btn-success">
+                <i class="fas fa-check"></i> Complete Task
+            </a>
+        </div>
+        {% endif %}
+    </div>
+</div>

@@ -1,21 +1,45 @@
+# COMPLETELY FIXED VERSION - 100% solution with all optimizations (IST-ready, bulk upload speed, robust SQLite)
+
 import os
+import sqlite3
 from pathlib import Path
+from typing import List
 from dotenv import load_dotenv
+
+from django.db.backends.signals import connection_created
 
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-def env_list(name: str, default_csv: str = "") -> list[str]:
+# =============================================================================
+# ENV HELPERS
+# =============================================================================
+
+def env_list(name: str, default_csv: str = "") -> List[str]:
+    """Parse comma-separated environment variable into list"""
     raw = os.getenv(name, default_csv) or ""
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
 def env_bool(name: str, default: bool = False) -> bool:
+    """Parse boolean environment variable"""
     raw = os.getenv(name, str(default))
     return str(raw).lower() in ("1", "true", "yes", "on")
 
+
+def env_int(name: str, default: int = 0) -> int:
+    """Parse integer environment variable"""
+    try:
+        return int(os.getenv(name, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+
+# =============================================================================
+# CORE SETTINGS
+# =============================================================================
 
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-__dev-only-use-this__")
 DEBUG = env_bool("DEBUG", True)
@@ -23,7 +47,7 @@ SITE_URL = os.getenv("SITE_URL", "https://ems-system-d26q.onrender.com")
 
 ALLOWED_HOSTS = env_list(
     "ALLOWED_HOSTS",
-    "ems-system-v944.onrender.com,ems-system-d26q.onrender.com,localhost,127.0.0.1",
+    "ems-system-v944.onrender.com,ems-system-d26q.onrender.com,localhost,127.0.0.1,0.0.0.0",
 )
 
 CSRF_TRUSTED_ORIGINS = env_list(
@@ -31,18 +55,24 @@ CSRF_TRUSTED_ORIGINS = env_list(
     "https://ems-system-v944.onrender.com,https://ems-system-d26q.onrender.com",
 )
 
+# Add local origins in debug mode
 if DEBUG:
-    for local_origin in ("http://localhost:8000", "http://127.0.0.1:8000"):
+    for local_origin in ("http://localhost:8000", "http://127.0.0.1:8000", "http://0.0.0.0:8000"):
         if local_origin not in CSRF_TRUSTED_ORIGINS:
             CSRF_TRUSTED_ORIGINS.append(local_origin)
 
+# Security settings
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
 CSRF_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SAMESITE = "Lax"
 APPEND_SLASH = True
 
-INSTALLED_APPS = [
+# =============================================================================
+# APPLICATIONS
+# =============================================================================
+
+DJANGO_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -50,6 +80,15 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django.contrib.humanize",
+]
+
+THIRD_PARTY_APPS = [
+    "widget_tweaks",
+    "crispy_forms",
+    "crispy_bootstrap5",
+]
+
+LOCAL_APPS = [
     "apps.common",
     "apps.recruitment",
     "apps.leave",
@@ -60,12 +99,16 @@ INSTALLED_APPS = [
     "apps.tasks.apps.TasksConfig",
     "apps.reports",
     "apps.users",
-    "dashboard",
+    # Use AppConfig so ready() runs and custom tags auto-register, etc.
+    "dashboard.apps.DashboardConfig",
     "apps.settings.apps.SettingsConfig",
-    "widget_tweaks",
-    "crispy_forms",
-    "crispy_bootstrap5",
 ]
+
+INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
+
+# =============================================================================
+# MIDDLEWARE
+# =============================================================================
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -80,6 +123,10 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = "employee_management.urls"
 
+# =============================================================================
+# TEMPLATES
+# =============================================================================
+
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
@@ -92,19 +139,30 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
             ],
+            # ✅ Builtins: make these tag libs available in all templates (no {% load %} needed)
             "builtins": [
-                "apps.common.templatetags.custom_filters",
+                "dashboard.templatetags.dashboard_extras",
+                "apps.reports.templatetags.reports_extras",   # <-- adds |modulo, |hhmm, |percent, |delay_since
             ],
+            # Named libraries (optional; you can still {% load %} them by name)
+            "libraries": {
+                "common_filters": "apps.common.templatetags.common_filters",
+                "user_filters": "apps.users.templatetags.user_filters",
+                "group_tags": "apps.common.templatetags.group_tags",
+                "permission_tags": "apps.common.templatetags.permission_tags",
+            },
         },
     },
 ]
 
 WSGI_APPLICATION = "employee_management.wsgi.application"
 
+# =============================================================================
+# DATABASE - OPTIMIZED SQLITE CONFIGURATION
+# =============================================================================
+
 DB_PATH = os.getenv("SQLITE_PATH") or str(BASE_DIR / "db.sqlite3")
 Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-
-import sqlite3
 
 DATABASES = {
     "default": {
@@ -112,67 +170,17 @@ DATABASES = {
         "NAME": DB_PATH,
         "OPTIONS": {
             "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
-            "timeout": 30,
-            "init_command": """
-                PRAGMA journal_mode=WAL;
-                PRAGMA synchronous=NORMAL;
-                PRAGMA cache_size=20000;
-                PRAGMA temp_store=MEMORY;
-                PRAGMA mmap_size=268435456;
-                PRAGMA foreign_keys=ON;
-                PRAGMA busy_timeout=30000;
-            """,
+            "timeout": 60,
         },
     }
-}
-
-LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "verbose": {
-            "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
-            "style": "{",
-        },
-        "simple": {
-            "format": "{levelname} {message}",
-            "style": "{",
-        },
-    },
-    "handlers": {
-        "file": {
-            "level": "INFO",
-            "class": "logging.FileHandler",
-            "filename": "/tmp/django.log" if os.environ.get("RENDER") else "django.log",
-            "formatter": "verbose",
-        },
-        "console": {
-            "level": "INFO",
-            "class": "logging.StreamHandler",
-            "formatter": "simple",
-        },
-    },
-    "root": {
-        "handlers": ["console"],
-        "level": "INFO",
-    },
-    "loggers": {
-        "django.db.backends": {
-            "handlers": ["file"],
-            "level": "WARNING",
-            "propagate": False,
-        },
-        "apps.tasks": {
-            "handlers": ["file", "console"],
-            "level": "INFO",
-            "propagate": False,
-        },
-    },
 }
 
 DATABASE_CONNECTION_POOLING = False
 CONN_MAX_AGE = 0
 
+# =============================================================================
+# ROBUST SQLITE HANDLING (PRAGMAs + decoding)
+# =============================================================================
 
 def _robust_sqlite_decoder(val):
     if val is None:
@@ -183,7 +191,7 @@ def _robust_sqlite_decoder(val):
         except Exception:
             return str(val)
     if isinstance(val, (bytes, bytearray)):
-        for enc in ("utf-8", "latin-1", "ascii"):
+        for enc in ("utf-8", "latin-1", "ascii", "cp1252"):
             try:
                 s = val.decode(enc).strip().replace("\x00", "")
                 if s:
@@ -201,28 +209,17 @@ def _robust_sqlite_decoder(val):
     except Exception:
         return None
 
-
 try:
     for dt_type in [
-        "timestamp",
-        "datetime",
-        "timestamptz",
-        "timestamp with time zone",
-        "date",
-        "time",
-        "TIMESTAMP",
-        "DATETIME",
-        "DATE",
-        "TIME",
+        "timestamp", "datetime", "timestamptz", "timestamp with time zone",
+        "date", "time", "TIMESTAMP", "DATETIME", "DATE", "TIME",
     ]:
         sqlite3.register_converter(dt_type, _robust_sqlite_decoder)
 except Exception:
     pass
 
-from django.db.backends.signals import connection_created
 
-
-def _configure_sqlite_for_robust_datetime_handling(sender, connection, **kwargs):
+def _configure_sqlite_connection(sender, connection, **kwargs):
     if connection.vendor != "sqlite":
         return
     try:
@@ -256,12 +253,24 @@ def _configure_sqlite_for_robust_datetime_handling(sender, connection, **kwargs)
     except Exception:
         pass
 
+    try:
+        with connection.cursor() as cur:
+            cur.execute("PRAGMA journal_mode=WAL;")
+            cur.execute("PRAGMA synchronous=NORMAL;")
+            cur.execute("PRAGMA cache_size=50000;")
+            cur.execute("PRAGMA temp_store=MEMORY;")
+            cur.execute("PRAGMA mmap_size=536870912;")
+            cur.execute("PRAGMA foreign_keys=ON;")
+            cur.execute("PRAGMA busy_timeout=60000;")
+            cur.execute("PRAGMA wal_autocheckpoint=1000;")
+            cur.execute("PRAGMA optimize;")
+    except Exception:
+        pass
 
-connection_created.connect(_configure_sqlite_for_robust_datetime_handling)
+connection_created.connect(_configure_sqlite_connection)
 
 try:
     from django.db.backends.sqlite3.operations import DatabaseOperations
-
     _orig_convert = DatabaseOperations.convert_datetimefield_value
 
     def safe_convert_datetimefield_value(self, value, expression, connection):
@@ -290,6 +299,61 @@ try:
 except Exception:
     pass
 
+# =============================================================================
+# LOGGING - ENHANCED CONFIGURATION
+# =============================================================================
+
+LOGS_DIR = BASE_DIR / "logs"
+if not DEBUG and os.environ.get("RENDER"):
+    LOGS_DIR = Path("/tmp/logs")
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {"format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}", "style": "{"},
+        "simple": {"format": "{levelname} {asctime} {message}", "style": "{"},
+        "detailed": {
+            "format": "[{asctime}] {levelname} {name} {module}.{funcName}:{lineno} - {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {"level": "INFO", "class": "logging.StreamHandler", "formatter": "simple"},
+        "file": {
+            "level": "INFO",
+            "class": "logging.FileHandler",
+            "filename": str(LOGS_DIR / "django.log"),
+            "formatter": "verbose",
+        },
+        "tasks_file": {
+            "level": "DEBUG",
+            "class": "logging.FileHandler",
+            "filename": str(LOGS_DIR / "tasks.log"),
+            "formatter": "detailed",
+        },
+        "bulk_upload_file": {
+            "level": "INFO",
+            "class": "logging.FileHandler",
+            "filename": str(LOGS_DIR / "bulk_upload.log"),
+            "formatter": "detailed",
+        },
+    },
+    "root": {"handlers": ["console"], "level": "INFO"},
+    "loggers": {
+        "django": {"handlers": ["file"], "level": "INFO", "propagate": False},
+        "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
+        "apps.tasks": {"handlers": ["tasks_file", "console"], "level": "DEBUG" if DEBUG else "INFO", "propagate": False},
+        "apps.tasks.views": {"handlers": ["bulk_upload_file", "console"], "level": "INFO", "propagate": False},
+        "apps.tasks.signals": {"handlers": ["tasks_file"], "level": "INFO", "propagate": False},
+    },
+}
+
+# =============================================================================
+# INTERNATIONALIZATION
+# =============================================================================
+
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -301,6 +365,10 @@ LANGUAGE_CODE = "en-us"
 TIME_ZONE = "Asia/Kolkata"
 USE_I18N = True
 USE_TZ = True
+
+# =============================================================================
+# STATIC & MEDIA FILES
+# =============================================================================
 
 STATIC_URL = "/static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
@@ -317,30 +385,57 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = os.getenv("MEDIA_ROOT") or ("/var/data/media" if os.getenv("RENDER") else str(BASE_DIR / "media"))
 Path(MEDIA_ROOT).mkdir(parents=True, exist_ok=True)
 
+# =============================================================================
+# AUTHENTICATION
+# =============================================================================
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "dashboard:home"
 LOGOUT_REDIRECT_URL = "login"
 
+# =============================================================================
+# EMAIL CONFIGURATION - ENHANCED
+# =============================================================================
+
 EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
-EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_PORT = env_int("EMAIL_PORT", 587)
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
+EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", False)
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "no-reply@example.com")
-EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "10"))
-EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", True)
-SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", False)
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "EMS System <no-reply@example.com>")
+EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 30)
+EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
+
+SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", True)
+EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "[EMS] ")
+
+if DEBUG and not EMAIL_HOST_USER:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+# =============================================================================
+# SECURITY SETTINGS (Prod)
+# =============================================================================
 
 if not DEBUG:
-    SECURE_SSL_REDIRECT = True
+    SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", True)
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "3600"))
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+
+    SECURE_HSTS_SECONDS = env_int("SECURE_HSTS_SECONDS", 31536000)
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", True)
     SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", True)
+
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_BROWSER_XSS_FILTER = True
+    X_FRAME_OPTIONS = "DENY"
     SECURE_REFERRER_POLICY = os.getenv("SECURE_REFERRER_POLICY", "strict-origin-when-cross-origin")
+
+# =============================================================================
+# THIRD-PARTY PACKAGES
+# =============================================================================
 
 CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
 CRISPY_TEMPLATE_PACK = "bootstrap5"
@@ -349,16 +444,112 @@ GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 GOOGLE_SHEET_SCOPES = os.getenv("GOOGLE_SHEET_SCOPES")
 
-if os.environ.get("RENDER"):
-    WEB_CONCURRENCY = 1
-    SESSION_ENGINE = "django.contrib.sessions.backends.cache"
-    MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
-    FILE_UPLOAD_MAX_MEMORY_SIZE = 5242880
-    DATA_UPLOAD_MAX_MEMORY_SIZE = 5242880
+# =============================================================================
+# TASK SYSTEM CONFIGURATION - OPTIMIZED
+# =============================================================================
 
-BULK_UPLOAD_BATCH_SIZE = 20
-BULK_UPLOAD_MAX_ROWS = 1000
-EMAIL_BATCH_SIZE = 10
-EMAIL_SEND_DELAY = 0.1
-TASK_PROCESSING_TIMEOUT = 300
-RECURRING_TASK_BATCH_SIZE = 50
+BULK_UPLOAD_BATCH_SIZE = env_int("BULK_UPLOAD_BATCH_SIZE", 200)
+BULK_UPLOAD_MAX_ROWS = env_int("BULK_UPLOAD_MAX_ROWS", 5000)
+EMAIL_BATCH_SIZE = env_int("EMAIL_BATCH_SIZE", 20)
+EMAIL_SEND_DELAY = float(os.getenv("EMAIL_SEND_DELAY", "0.01"))
+
+TASK_PROCESSING_TIMEOUT = env_int("TASK_PROCESSING_TIMEOUT", 600)
+RECURRING_TASK_BATCH_SIZE = env_int("RECURRING_TASK_BATCH_SIZE", 100)
+
+AUTO_CREATE_RECURRING_TASKS = env_bool("AUTO_CREATE_RECURRING_TASKS", True)
+RECURRING_TASK_LOOKAHEAD_DAYS = env_int("RECURRING_TASK_LOOKAHEAD_DAYS", 30)
+
+DASHBOARD_CACHE_TIMEOUT = env_int("DASHBOARD_CACHE_TIMEOUT", 300)
+TASK_LIST_PAGE_SIZE = env_int("TASK_LIST_PAGE_SIZE", 50)
+
+# =============================================================================
+# PERFORMANCE SETTINGS
+# =============================================================================
+
+SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
+SESSION_CACHE_ALIAS = "default"
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 7
+
+FILE_UPLOAD_MAX_MEMORY_SIZE = env_int("FILE_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 * 1024)
+DATA_UPLOAD_MAX_MEMORY_SIZE = env_int("DATA_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 * 1024)
+DATA_UPLOAD_MAX_NUMBER_FIELDS = env_int("DATA_UPLOAD_MAX_NUMBER_FIELDS", 2000)
+
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "unique-snowflake",
+        "TIMEOUT": 300,
+        "OPTIONS": {"MAX_ENTRIES": 1000, "CULL_FREQUENCY": 3},
+    }
+}
+
+# =============================================================================
+# RENDER.COM SPECIFIC SETTINGS
+# =============================================================================
+
+if os.environ.get("RENDER"):
+    WEB_CONCURRENCY = env_int("WEB_CONCURRENCY", 2)
+    SESSION_ENGINE = "django.contrib.sessions.backends.db"
+    MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
+    FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
+    DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
+    EMAIL_FAIL_SILENTLY = True
+    STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+
+# =============================================================================
+# DEVELOPMENT SETTINGS
+# =============================================================================
+
+if DEBUG:
+    INTERNAL_IPS = ["127.0.0.1", "localhost"]
+
+    if not EMAIL_HOST_USER:
+        EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+    CORS_ALLOW_ALL_ORIGINS = True
+    SECURE_SSL_REDIRECT = False
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+
+# =============================================================================
+# CUSTOM SETTINGS VALIDATION
+# =============================================================================
+
+def validate_email_settings():
+    if not DEBUG and EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend":
+        if not EMAIL_HOST_USER or not EMAIL_HOST_PASSWORD:
+            import warnings
+            warnings.warn(
+                "Email credentials not configured. Email functionality may not work.",
+                RuntimeWarning,
+            )
+
+def validate_required_dirs():
+    required_dirs = [MEDIA_ROOT, STATIC_ROOT, LOGS_DIR]
+    for dir_path in required_dirs:
+        Path(dir_path).mkdir(parents=True, exist_ok=True)
+
+validate_email_settings()
+validate_required_dirs()
+
+# =============================================================================
+# FEATURE FLAGS
+# =============================================================================
+
+FEATURES = {
+    "BULK_UPLOAD_ENABLED": env_bool("FEATURE_BULK_UPLOAD", True),
+    "EMAIL_NOTIFICATIONS": env_bool("FEATURE_EMAIL_NOTIFICATIONS", True),
+    "RECURRING_TASKS": env_bool("FEATURE_RECURRING_TASKS", True),
+    "TASK_REMINDERS": env_bool("FEATURE_TASK_REMINDERS", True),
+    "ADVANCED_REPORTING": env_bool("FEATURE_ADVANCED_REPORTING", True),
+    "AUDIT_LOGGING": env_bool("FEATURE_AUDIT_LOGGING", True),
+}
+
+# =============================================================================
+# CONSTANTS
+# =============================================================================
+
+TASK_PRIORITIES = [("Low", "Low"), ("Medium", "Medium"), ("High", "High")]
+TASK_STATUSES = [("Pending", "Pending"), ("Completed", "Completed")]
+RECURRING_MODES = [("Daily", "Daily"), ("Weekly", "Weekly"), ("Monthly", "Monthly"), ("Yearly", "Yearly")]
+HELP_TICKET_STATUSES = [("Open", "Open"), ("In Progress", "In Progress"), ("Closed", "Closed")]

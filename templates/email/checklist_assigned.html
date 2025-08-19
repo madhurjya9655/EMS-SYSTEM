@@ -1,1 +1,60 @@
-{% include "email/task_assigned.html" %}
+{% load static %}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>New Checklist Assigned</title>
+  </head>
+  <body style="font-family: Arial, Helvetica, sans-serif; color:#111; line-height:1.5;">
+    <h2 style="margin:0 0 12px 0;">New Checklist Assigned</h2>
+    <p style="margin:0 0 16px 0;">You have a new checklist task.</p>
+
+    <table cellpadding="6" cellspacing="0" border="0" style="border-collapse:collapse; max-width:640px;">
+      <tr>
+        <td style="font-weight:bold; white-space:nowrap;">Task</td>
+        <td>{{ task.task_name }}</td>
+      </tr>
+      <tr>
+        <td style="font-weight:bold; white-space:nowrap;">Assigned By</td>
+        <td>{{ task.assign_by.get_full_name|default:task.assign_by.username }}</td>
+      </tr>
+      <tr>
+        <td style="font-weight:bold; white-space:nowrap;">Assigned To</td>
+        <td>{{ task.assign_to.get_full_name|default:task.assign_to.username }}</td>
+      </tr>
+      <tr>
+        <td style="font-weight:bold; white-space:nowrap;">Planned Date</td>
+        <td>{% if task.planned_date %}{{ task.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}</td>
+      </tr>
+      <tr>
+        <td style="font-weight:bold; white-space:nowrap;">Priority</td>
+        <td>{{ task.get_priority_display|default:task.priority }}</td>
+      </tr>
+      {% if task.time_per_task_minutes %}
+      <tr>
+        <td style="font-weight:bold; white-space:nowrap;">Estimated Time</td>
+        <td>{{ task.time_per_task_minutes }} min</td>
+      </tr>
+      {% endif %}
+      {% if task.group_name %}
+      <tr>
+        <td style="font-weight:bold; white-space:nowrap;">Group</td>
+        <td>{{ task.group_name }}</td>
+      </tr>
+      {% endif %}
+    </table>
+
+    {% if task.message %}
+    <div style="margin-top:16px;">
+      <div style="font-weight:bold; margin-bottom:6px;">Description</div>
+      <div>{{ task.message|linebreaksbr }}</div>
+    </div>
+    {% endif %}
+
+    {% if task.is_recurring %}
+    <p style="margin-top:16px; color:#0a58ca;">
+      <strong>Recurring:</strong> {{ task.mode }}{% if task.frequency %} (Every {{ task.frequency }} {{ task.mode|lower }}{{ task.frequency|pluralize }}){% endif %}
+    </p>
+    {% endif %}
+  </body>
+</html>
