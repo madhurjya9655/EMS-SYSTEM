@@ -108,7 +108,9 @@ def holiday_delete(request, pk):
     obj = get_object_or_404(Holiday, pk=pk)
     if request.method == "POST":
         obj.delete()
+        messages.success(request, "Holiday deleted.")
         return redirect("settings:holiday_list")
+    # If you ever link here via GET, show a confirmation page
     return render(request, "settings/confirm_delete.html", {"object": obj, "type": "Holiday"})
 
 

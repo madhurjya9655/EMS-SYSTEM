@@ -1,5 +1,3 @@
-# COMPLETELY FIXED VERSION - 100% solution with all optimizations (IST-ready, bulk upload speed, robust SQLite)
-
 import os
 import sqlite3
 from pathlib import Path
@@ -142,7 +140,7 @@ TEMPLATES = [
             # ✅ Builtins: make these tag libs available in all templates (no {% load %} needed)
             "builtins": [
                 "dashboard.templatetags.dashboard_extras",
-                "apps.reports.templatetags.reports_extras",   # <-- adds |modulo, |hhmm, |percent, |delay_since
+                "apps.reports.templatetags.reports_extras",
             ],
             # Named libraries (optional; you can still {% load %} them by name)
             "libraries": {
