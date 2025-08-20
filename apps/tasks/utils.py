@@ -1,6 +1,6 @@
+# apps/tasks/utils.py
 import logging
 import sys
-from datetime import timedelta
 from typing import Iterable, List, Optional, Sequence
 
 import pytz
@@ -8,15 +8,10 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.mail import EmailMultiAlternatives
 from django.db import transaction
-from django.db.models.signals import post_save
-from django.dispatch import receiver
-from django.template.loader import render_to_string  # kept for future use
-from django.urls import reverse
 from django.utils import timezone
 
 from apps.settings.models import Holiday
 from .models import Checklist, Delegation, HelpTicket
-from .recurrence import get_next_planned_date, schedule_recurring_at_10am, RECURRING_MODES
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -27,9 +22,6 @@ SITE_URL: str = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.
 DEFAULT_FROM_EMAIL: Optional[str] = getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(
     settings, "EMAIL_HOST_USER", None
 )
-SEND_EMAILS_FOR_AUTO_RECUR: bool = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
-# Gate automatic recurring emails to the 10:00 IST window (prevents off-hour duplicates)
-SEND_RECUR_EMAILS_ONLY_AT_10AM: bool = getattr(settings, "SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
 EMAIL_FAIL_SILENTLY: bool = bool(getattr(settings, "EMAIL_FAIL_SILENTLY", False) or getattr(settings, "DEBUG", False))
 
 
@@ -52,17 +44,6 @@ def _safe_console_text(s: object) -> str:
     except Exception:
         # Ultimate fallback to pure ASCII with replacements
         return text.encode("ascii", errors="replace").decode("ascii", errors="replace")
-
-
-def _within_10am_ist_window(leeway_minutes: int = 5) -> bool:
-    """
-    Return True if now (IST) is within [10:00 - leeway, 10:00 + leeway].
-    Default window: 09:55 to 10:05 IST.
-    """
-    now_ist = timezone.now().astimezone(IST)
-    start = now_ist.replace(hour=10, minute=0, second=0, microsecond=0) - timedelta(minutes=leeway_minutes)
-    end = now_ist.replace(hour=10, minute=0, second=0, microsecond=0) + timedelta(minutes=leeway_minutes)
-    return start <= now_ist <= end
 
 
 # ======================================================================
@@ -115,7 +96,6 @@ def _send_email(
         )
         msg.attach_alternative(html_body, "text/html")
         msg.send(fail_silently=fail_silently)
-        # Console-safe log line (subject may contain emoji)
         logger.debug(_safe_console_text(f"Sent email '{subject}' to {', '.join(rcpts)}"))
     except Exception as e:
         logger.error(_safe_console_text(f"Email send failed for '{subject}': {e}"))
@@ -213,9 +193,9 @@ def _on_commit(fn):
 
 
 def is_working_day(d) -> bool:
+    """Shared helper: Mon–Sat, excluding configured holidays (Sunday = 6)."""
     if hasattr(d, "date"):
         d = d.date()
-    # Sunday = 6 in Python datetime.weekday()
     return d.weekday() != 6 and not Holiday.objects.filter(date=d).exists()
 
 
@@ -440,167 +420,10 @@ def send_admin_bulk_summary(
 
     html = _shell_html("Bulk Upload Summary", "Tasks Created (preview of first few)", _table())
 
-    # recipients: ADMINS + active superusers/staff with emails
+    # recipients: ADMINS + active superusers with emails
     rcpts = [email for _, email in getattr(settings, "ADMINS", [])]
-    staff = User.objects.filter(is_active=True).filter(is_superuser=True)[:50]
+    staff = User.objects.filter(is_active=True, is_superuser=True)[:50]
     rcpts.extend([u.email for u in staff if u.email])
     rcpts = _safe_list(rcpts)
     if rcpts:
         _on_commit(lambda: _send_email(subject, rcpts, html))
-
-
-# ======================================================================
-#                         SIGNALS / RECURRING LOGIC
-# ======================================================================
-
-def _send_recurring_emails_safely(checklist_obj: Checklist) -> None:
-    """
-    Helper to send emails when a new recurring checklist is generated.
-
-    Policy:
-      - Respect SEND_EMAILS_FOR_AUTO_RECUR
-      - If SEND_RECUR_EMAILS_ONLY_AT_10AM is True, only send within 10:00 IST window.
-        Otherwise, send immediately.
-    """
-    if not SEND_EMAILS_FOR_AUTO_RECUR:
-        return
-
-    if SEND_RECUR_EMAILS_ONLY_AT_10AM and not _within_10am_ist_window():
-        logger.info(
-            _safe_console_text(
-                f"Skipping immediate recurring email for {checklist_obj.id}; will be sent at 10:00 IST by daily job."
-            )
-        )
-        return
-
-    try:
-        complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[checklist_obj.id])}"
-        send_checklist_assignment_to_user(
-            task=checklist_obj,
-            complete_url=complete_url,
-            subject_prefix="Recurring Checklist Generated",
-        )
-        send_checklist_admin_confirmation(
-            task=checklist_obj,
-            subject_prefix="Recurring Checklist Generated",
-        )
-        logger.info(_safe_console_text(f"Sent emails for recurring checklist {checklist_obj.id}"))
-    except Exception as e:
-        logger.error(_safe_console_text(f"Failed to send emails for recurring checklist {checklist_obj.id}: {e}"))
-
-
-@receiver(post_save, sender=Checklist)
-def create_next_recurring_checklist(sender, instance: Checklist, created: bool, **kwargs):
-    """
-    Create next recurring checklist occurrence at 10:00 AM IST when current one is completed.
-    Rules:
-      - Only for modes in RECURRING_MODES
-      - Trigger on update to 'Completed' (not on fresh create)
-      - Avoid Sundays/holidays (handled by schedule_recurring_at_10am)
-      - Prevent duplicates within 1 minute window
-    """
-    # Must be recurring
-    if (instance.mode or "") not in RECURRING_MODES:
-        return
-    # Only when completed
-    if instance.status != "Completed":
-        return
-    # Ignore create events; only react to updates to Completed
-    if created:
-        return
-
-    now = timezone.now()
-    # If there is already a future pending in this series, stop
-    series_filter = dict(
-        assign_to=instance.assign_to,
-        task_name=instance.task_name,
-        mode=instance.mode,
-        frequency=instance.frequency,
-        group_name=getattr(instance, "group_name", None),
-    )
-    if Checklist.objects.filter(status="Pending", planned_date__gt=now, **series_filter).exists():
-        return
-
-    next_dt = get_next_planned_date(instance.planned_date, instance.mode, instance.frequency)
-    if not next_dt:
-        logger.warning(_safe_console_text(f"No next date for recurring checklist {instance.id}"))
-        return
-
-    # force to 10:00 AM IST and to a working day
-    next_dt = schedule_recurring_at_10am(next_dt)
-
-    # prevent duplicates within 1-minute window
-    dupe_exists = Checklist.objects.filter(
-        status="Pending",
-        planned_date__gte=next_dt - timedelta(minutes=1),
-        planned_date__lt=next_dt + timedelta(minutes=1),
-        **series_filter,
-    ).exists()
-    if dupe_exists:
-        logger.info(_safe_console_text(f"Duplicate prevented for series '{instance.task_name}' at {next_dt}"))
-        return
-
-    try:
-        with transaction.atomic():
-            new_obj = Checklist.objects.create(
-                assign_by=instance.assign_by,
-                task_name=instance.task_name,
-                message=instance.message,
-                assign_to=instance.assign_to,
-                planned_date=next_dt,
-                priority=instance.priority,
-                attachment_mandatory=instance.attachment_mandatory,
-                mode=instance.mode,
-                frequency=instance.frequency,
-                time_per_task_minutes=instance.time_per_task_minutes,
-                remind_before_days=instance.remind_before_days,
-                assign_pc=instance.assign_pc,
-                notify_to=instance.notify_to,
-                set_reminder=instance.set_reminder,
-                reminder_mode=instance.reminder_mode,
-                reminder_frequency=instance.reminder_frequency,
-                reminder_starting_time=instance.reminder_starting_time,
-                checklist_auto_close=instance.checklist_auto_close,
-                checklist_auto_close_days=instance.checklist_auto_close_days,
-                group_name=getattr(instance, "group_name", None),
-                actual_duration_minutes=0,
-                status="Pending",
-            )
-            transaction.on_commit(lambda: _send_recurring_emails_safely(new_obj))
-            logger.info(
-                _safe_console_text(
-                    f"Created next recurring checklist {new_obj.id} '{new_obj.task_name}' at {new_obj.planned_date}"
-                )
-            )
-    except Exception as e:
-        logger.error(_safe_console_text(f"Failed to create next recurring checklist for {instance.id}: {e}"))
-
-
-@receiver(post_save, sender=Checklist)
-def log_checklist_completion(sender, instance, created, **kwargs):
-    if not created and instance.status == "Completed":
-        logger.info(_safe_console_text(f"Checklist {instance.id} '{instance.task_name}' completed by {instance.assign_to}"))
-
-
-@receiver(post_save, sender=Delegation)
-def log_delegation_completion(sender, instance, created, **kwargs):
-    if not created and instance.status == "Completed":
-        logger.info(_safe_console_text(f"Delegation {instance.id} '{instance.task_name}' completed by {instance.assign_to}"))
-
-
-@receiver(post_save, sender=HelpTicket)
-def log_helpticket_completion(sender, instance, created, **kwargs):
-    if not created and instance.status == "Closed":
-        logger.info(_safe_console_text(f"Help Ticket {instance.id} '{instance.title}' closed by {instance.assign_to}"))
-
-
-@receiver(post_save, sender=Checklist)
-def log_checklist_creation(sender, instance, created, **kwargs):
-    if created:
-        logger.debug(_safe_console_text(f"Created checklist {instance.id} '{instance.task_name}' for {instance.assign_to} at {instance.planned_date}"))
-
-
-@receiver(post_save, sender=Delegation)
-def log_delegation_creation(sender, instance, created, **kwargs):
-    if created:
-        logger.debug(_safe_console_text(f"Created delegation {instance.id} '{instance.task_name}' for {instance.assign_to} at {instance.planned_date}"))

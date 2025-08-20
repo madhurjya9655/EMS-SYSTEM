@@ -1,3 +1,4 @@
+# apps/tasks/management/commands/install_bulk_templates.py
 from __future__ import annotations
 
 import os

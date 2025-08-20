@@ -1,3 +1,4 @@
+# apps/tasks/management/commands/generate_missed_recurrences.py
 from __future__ import annotations
 
 import logging
@@ -10,7 +11,11 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.tasks.models import Checklist
-from apps.tasks.recurrence import get_next_planned_date, schedule_recurring_at_10am, RECURRING_MODES
+from apps.tasks.recurrence import (
+    get_next_planned_date,
+    schedule_recurring_at_10am,
+    RECURRING_MODES,
+)
 from apps.tasks.utils import (
     send_checklist_assignment_to_user,
     send_checklist_admin_confirmation,
@@ -70,7 +75,7 @@ class Command(BaseCommand):
             if not instance:
                 continue
 
-            # if already have future pending, skip
+            # Already have a future pending? skip
             if Checklist.objects.filter(
                 assign_to=instance.assign_to,
                 task_name=instance.task_name,
@@ -84,7 +89,7 @@ class Command(BaseCommand):
 
             next_planned = get_next_planned_date(instance.planned_date, instance.mode, instance.frequency)
 
-            # catch up to the future
+            # Catch up to the future
             safety = 0
             while next_planned and next_planned <= now and safety < 730:  # ~2 years
                 next_planned = get_next_planned_date(next_planned, instance.mode, instance.frequency)
@@ -92,10 +97,10 @@ class Command(BaseCommand):
             if not next_planned:
                 continue
 
-            # normalize to 10:00 IST and skip Sunday/holidays
+            # Normalize to 10:00 IST and skip Sunday/holidays (idempotent)
             next_planned = schedule_recurring_at_10am(next_planned)
 
-            # dupe guard (±1 minute)
+            # Dupe guard (±1 minute)
             dupe = Checklist.objects.filter(
                 assign_to=instance.assign_to,
                 task_name=instance.task_name,
@@ -116,7 +121,7 @@ class Command(BaseCommand):
 
             try:
                 with transaction.atomic():
-                    new_obj = Checklist.objects.create(
+                    kwargs = dict(
                         assign_by=instance.assign_by,
                         task_name=instance.task_name,
                         assign_to=instance.assign_to,
@@ -125,23 +130,29 @@ class Command(BaseCommand):
                         attachment_mandatory=instance.attachment_mandatory,
                         mode=instance.mode,
                         frequency=instance.frequency,
-                        time_per_task_minutes=instance.time_per_task_minutes,
-                        remind_before_days=instance.remind_before_days,
-                        message=instance.message,
-                        assign_pc=instance.assign_pc,
-                        group_name=getattr(instance, "group_name", None),
-                        notify_to=instance.notify_to,
-                        auditor=getattr(instance, "auditor", None),
-                        set_reminder=instance.set_reminder,
-                        reminder_mode=instance.reminder_mode,
-                        reminder_frequency=instance.reminder_frequency,
-                        reminder_before_days=getattr(instance, "reminder_before_days", None),
-                        reminder_starting_time=instance.reminder_starting_time,
-                        checklist_auto_close=instance.checklist_auto_close,
-                        checklist_auto_close_days=instance.checklist_auto_close_days,
-                        actual_duration_minutes=0,
                         status="Pending",
+                        actual_duration_minutes=0,
                     )
+                    # Optional fields that may or may not exist on your model
+                    for opt in (
+                        "message",
+                        "time_per_task_minutes",
+                        "remind_before_days",
+                        "assign_pc",
+                        "notify_to",
+                        "auditor",
+                        "set_reminder",
+                        "reminder_mode",
+                        "reminder_frequency",
+                        "reminder_starting_time",
+                        "checklist_auto_close",
+                        "checklist_auto_close_days",
+                        "group_name",
+                    ):
+                        if hasattr(instance, opt):
+                            kwargs[opt] = getattr(instance, opt)
+                    new_obj = Checklist.objects.create(**kwargs)
+
                 created += 1
 
                 if send_emails:
@@ -159,9 +170,7 @@ class Command(BaseCommand):
                     except Exception as e:
                         logger.exception("Email failure for recurring checklist %s: %s", new_obj.id, e)
 
-                self.stdout.write(
-                    self.style.SUCCESS(f"✅ Created: {new_obj.task_name} at {next_planned}")
-                )
+                self.stdout.write(self.style.SUCCESS(f"✅ Created: {new_obj.task_name} at {next_planned}"))
             except Exception as e:
                 logger.exception("Failed to create recurrence for %s: %s", instance.task_name, e)
                 self.stdout.write(self.style.ERROR(f"❌ Failed: {instance.task_name} - {e}"))

@@ -67,7 +67,13 @@
                 —
               {% endif %}
             </td>
-            <td>{{ t.planned_date|delay_since }}</td>
+            <td>
+              {% if request.GET.today_only or request.GET.today %}
+                {{ t.planned_date|delay_since }}
+              {% else %}
+                {{ t.planned_date|delay_since:"signed" }}
+              {% endif %}
+            </td>
             <td class="text-nowrap">
               <!-- DETAILS button -->
               <button class="btn btn-sm btn-outline-info me-1"

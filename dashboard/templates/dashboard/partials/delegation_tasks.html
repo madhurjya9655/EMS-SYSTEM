@@ -60,7 +60,13 @@
             </td>
             <td>{{ t.time_per_task_minutes|default:0 }} min</td>
             <td>{% if t.actual_duration_minutes %}{{ t.actual_duration_minutes }} min{% else %}&mdash;{% endif %}</td>
-            <td>{{ t.planned_date|delay_since }}</td>
+            <td>
+              {% if request.GET.today_only or request.GET.today %}
+                {{ t.planned_date|delay_since }}
+              {% else %}
+                {{ t.planned_date|delay_since:"signed" }}
+              {% endif %}
+            </td>
             <td class="text-truncate" style="max-width: 220px;" title="{{ t.doer_notes|default:'—' }}">
               {{ t.doer_notes|default:"—"|truncatechars:35 }}
             </td>

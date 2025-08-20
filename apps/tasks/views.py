@@ -1,3 +1,4 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
 import csv
 import pytz
 import re
@@ -9,7 +10,7 @@ from functools import wraps
 from threading import Lock, Thread
 
 import pandas as pd
-from dateutil.relativedelta import relativedelta
+# from dateutil.relativedelta import relativedelta  # not used here
 
 from django.conf import settings
 from django.contrib import messages
@@ -24,7 +25,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.users.permissions import has_permission
-from apps.settings.models import Holiday
+from apps.settings.models import Holiday  # may be used in templates/elsewhere
 
 from .forms import (
     BulkUploadForm,
@@ -43,17 +44,22 @@ from .utils import (
     send_help_ticket_unassigned_notice,
     send_admin_bulk_summary,
 )
+# ✅ Single source of truth for recurrence/working-day logic
+from .recurrence import (
+    preserve_first_occurrence_time,
+    schedule_recurring_at_10am,   # imported for clarity; not directly used here
+    is_working_day,
+    next_working_day,
+    RECURRING_MODES,
+)
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
 # ---------- CONSTANTS ----------
 IST = pytz.timezone("Asia/Kolkata")
-ASSIGN_HOUR = 10
-ASSIGN_MINUTE = 0
 
 SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
-RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
 
 # Tuned for speed
 BULK_BATCH_SIZE = 500
@@ -121,63 +127,31 @@ def optimal_batch_size() -> int:
         return 250
 
 def _minutes_between(now_dt: datetime, planned_dt: datetime) -> int:
+    """
+    Floor minutes between now and planned date, clamped to >=0.
+    Computed explicitly in IST to match dashboard + backfill behavior.
+    """
     if not planned_dt:
         return 0
     try:
-        now_dt = timezone.localtime(now_dt)
-        planned_dt = timezone.localtime(planned_dt)
+        # Make both aware, convert to IST explicitly
+        now_aware = now_dt if timezone.is_aware(now_dt) else timezone.make_aware(now_dt, timezone.get_current_timezone())
+        planned_aware = planned_dt if timezone.is_aware(planned_dt) else timezone.make_aware(planned_dt, timezone.get_current_timezone())
+        now_ist = now_aware.astimezone(IST)
+        planned_ist = planned_aware.astimezone(IST)
     except Exception:
-        pass
-    return max(int((now_dt - planned_dt).total_seconds() // 60), 0)
+        # Conservative fallback
+        now_ist = timezone.localtime(now_dt).astimezone(IST)
+        planned_ist = timezone.localtime(planned_dt).astimezone(IST)
+    return max(int((now_ist - planned_ist).total_seconds() // 60), 0)
 
-def is_working_day(d: date) -> bool:
-    if d.weekday() == 6:
-        return False
-    return not Holiday.objects.filter(date=d).exists()
+# Wrappers for clarity in this module
+def is_working_day_local(d: date) -> bool:
+    return is_working_day(d)
 
-def next_working_day(d: date) -> date:
-    while not is_working_day(d):
-        d += timedelta(days=1)
-    return d
+def next_working_day_local(d: date) -> date:
+    return next_working_day(d)
 
-def schedule_recurring_at_10am(planned_dt: datetime) -> datetime:
-    """
-    For *recurrences*, force to next working day (if needed) and set time to 10:00 AM IST.
-    First occurrences are NOT modified here.
-    """
-    if not planned_dt:
-        return planned_dt
-    if timezone.is_naive(planned_dt):
-        planned_dt = timezone.make_aware(planned_dt)
-
-    ist_date = planned_dt.astimezone(IST).date()
-    if not is_working_day(ist_date):
-        ist_date = next_working_day(ist_date)
-
-    recur_ist = IST.localize(datetime.combine(ist_date, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE)))
-    return recur_ist.astimezone(timezone.get_current_timezone())
-
-def preserve_first_occurrence_time(planned_dt: datetime) -> datetime:
-    """
-    ✅ Keep the user's *first* planned date/time exactly as provided.
-    - Make it aware in the current TZ (IST-based) if naive.
-    - Do NOT shift off Sundays/holidays for the first occurrence.
-    """
-    if not planned_dt:
-        return planned_dt
-    if timezone.is_naive(planned_dt):
-        # Treat naive input as IST and convert to current timezone if needed
-        planned_dt = IST.localize(planned_dt).astimezone(timezone.get_current_timezone())
-    return planned_dt
-
-def _series_filter_kwargs(task: Checklist) -> dict:
-    return dict(
-        assign_to_id=task.assign_to_id,
-        task_name=task.task_name,
-        mode=task.mode,
-        frequency=task.frequency,
-        group_name=task.group_name,
-    )
 
 # ---------- BULK: parsing ----------
 def parse_datetime_flexible(value):
@@ -370,7 +344,7 @@ can_create = lambda u: u.is_superuser or u.groups.filter(name__in=["Admin", "Man
 def _ist_key(dt: datetime) -> str:
     if not dt:
         return ""
-    aware = timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+    aware = dt if timezone.is_aware(dt) else timezone.make_aware(dt, timezone.get_current_timezone())
     return aware.astimezone(IST).strftime("%Y-%m-%d %H:%M")
 
 def _ck_key(assign_to, task_name: str, planned_dt: datetime, mode: str, frequency) -> tuple:
@@ -709,7 +683,13 @@ def list_checklist(request):
             except (Checklist.DoesNotExist, ValueError, TypeError):
                 messages.warning(request, "The selected series no longer exists.")
                 return redirect("tasks:list_checklist")
-            filters = _series_filter_kwargs(obj)
+            filters = dict(
+                assign_to_id=obj.assign_to_id,
+                task_name=obj.task_name,
+                mode=obj.mode,
+                frequency=obj.frequency,
+                group_name=obj.group_name,
+            )
             deleted, _ = Checklist.objects.filter(status="Pending", **filters).delete()
             messages.success(request, f"Deleted {deleted} pending occurrence(s) from the series '{obj.task_name}'.")
             request.session["suppress_auto_recur"] = True
@@ -726,11 +706,17 @@ def list_checklist(request):
                         obj = Checklist.objects.get(pk=int(sid))
                     except (Checklist.DoesNotExist, ValueError, TypeError):
                         continue
-                    key = tuple(sorted(_series_filter_kwargs(obj).items()))
+                    key = tuple(sorted(dict(
+                        assign_to_id=obj.assign_to_id,
+                        task_name=obj.task_name,
+                        mode=obj.mode,
+                        frequency=obj.frequency,
+                        group_name=obj.group_name,
+                    ).items()))
                     if key in series_seen:
                         continue
                     series_seen.add(key)
-                    deleted, _ = Checklist.objects.filter(status="Pending", **_series_filter_kwargs(obj)).delete()
+                    deleted, _ = Checklist.objects.filter(status="Pending", **dict(key)).delete()
                     total_deleted += deleted
                 messages.success(request, f"Deleted {total_deleted} pending occurrence(s) across selected series.")
             else:
@@ -1097,7 +1083,7 @@ def add_help_ticket(request):
         if form.is_valid():
             planned_date = form.cleaned_data.get("planned_date")
             planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
-            if planned_date_local and not is_working_day(planned_date_local):
+            if planned_date_local and not is_working_day_local(planned_date_local):
                 messages.error(request, "This is holiday date, you can not add on this day.")
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "add", "can_create": can_create(request.user)})
             ticket = form.save(commit=False)
@@ -1126,7 +1112,7 @@ def edit_help_ticket(request, pk):
         if form.is_valid():
             planned_date = form.cleaned_data.get("planned_date")
             planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
-            if planned_date_local and not is_working_day(planned_date_local):
+            if planned_date_local and not is_working_day_local(planned_date_local):
                 messages.error(request, "This is holiday date, you can not add on this day.")
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "edit", "can_create": can_create(request.user)})
 
@@ -1257,7 +1243,7 @@ def note_help_ticket(request, pk):
             ticket.resolved_at = timezone.now()
             ticket.resolved_by = request.user
             if ticket.resolved_at and ticket.planned_date:
-                mins = int((ticket.resolved_at - ticket.planned_date).total_seconds() // 60)
+                mins = int((ticket.resolved_at.astimezone(IST) - ticket.planned_date.astimezone(IST)).total_seconds() // 60)
                 ticket.actual_duration_minutes = max(mins, 0)
         ticket.save()
 

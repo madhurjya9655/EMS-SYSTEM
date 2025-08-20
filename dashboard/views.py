@@ -354,6 +354,8 @@ def dashboard_home(request):
     # Current IST and today's date
     now_ist = timezone.now().astimezone(IST)
     today_ist = now_ist.date()
+    project_tz = timezone.get_current_timezone()
+    now_project_tz = now_ist.astimezone(project_tz)
 
     logger.info(_safe_console_text(f"Dashboard accessed by {request.user.username} at {now_ist.strftime('%Y-%m-%d %H:%M:%S IST')}"))
 
@@ -420,31 +422,31 @@ def dashboard_home(request):
     # Task lists (perfect cutoff logic)
     try:
         if today_only:
-            today_start = timezone.make_aware(datetime.combine(today_ist, dt_time.min), IST)\
-                .astimezone(timezone.get_current_timezone())
-            today_end = timezone.make_aware(datetime.combine(today_ist, dt_time.max), IST)\
-                .astimezone(timezone.get_current_timezone())
+            # Lower bound: start of today IST; Upper bound: NOW (IST) -> converted to project TZ
+            today_start = timezone.make_aware(datetime.combine(today_ist, dt_time.min), IST).astimezone(project_tz)
 
             checklist_qs = list(Checklist.objects.filter(
                 assign_to=request.user, status='Pending',
-                planned_date__gte=today_start, planned_date__lte=today_end
+                planned_date__gte=today_start,
+                planned_date__lte=now_project_tz,  # ← show only up to NOW
             ).select_related('assign_by').order_by('planned_date'))
 
             delegation_qs = list(Delegation.objects.filter(
                 assign_to=request.user, status='Pending',
-                planned_date__gte=today_start, planned_date__lte=today_end
+                planned_date__gte=today_start,
+                planned_date__lte=now_project_tz,
             ).select_related('assign_by').order_by('planned_date'))
 
             help_ticket_qs = list(HelpTicket.objects.filter(
                 assign_to=request.user,
-                planned_date__gte=today_start, planned_date__lte=today_end
+                planned_date__gte=today_start,
+                planned_date__lte=now_project_tz,
             ).exclude(status='Closed').select_related('assign_by').order_by('planned_date'))
 
-            cutoff_debug = "today only"
+            cutoff_debug = f"{now_project_tz} (today up to NOW)"
         else:
             # End-of-today IST as cutoff
-            end_of_today_ist = timezone.make_aware(datetime.combine(today_ist, dt_time.max), IST)\
-                .astimezone(timezone.get_current_timezone())
+            end_of_today_ist = timezone.make_aware(datetime.combine(today_ist, dt_time.max), IST).astimezone(project_tz)
 
             checklist_qs = list(Checklist.objects.filter(
                 assign_to=request.user, status='Pending',

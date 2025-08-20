@@ -60,7 +60,13 @@
             <td title="{{ item.created_at|date:'Y-m-d H:i' }}">{{ item.created_at|date:"d M, Y H:i" }}</td>
             <td title="{{ item.planned_date|date:'Y-m-d H:i' }}">{{ item.planned_date|date:"d M, Y H:i" }}</td>
             <td>{% if item.actual_duration_minutes %}{{ item.actual_duration_minutes }} min{% else %}&mdash;{% endif %}</td>
-            <td>{{ item.planned_date|delay_since }}</td>
+            <td>
+              {% if request.GET.today_only or request.GET.today %}
+                {{ item.planned_date|delay_since }}
+              {% else %}
+                {{ item.planned_date|delay_since:"signed" }}
+              {% endif %}
+            </td>
             <td>
               <span class="badge bg-{% if item.priority == 'High' %}danger{% elif item.priority == 'Medium' %}warning{% else %}success{% endif %}">
                 {{ item.priority }}
