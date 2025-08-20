@@ -7,7 +7,7 @@ import pytz
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.mail import EmailMultiAlternatives
-from django.db import transaction
+from django.db import transaction, connection
 from django.utils import timezone
 
 from apps.settings.models import Holiday
@@ -33,12 +33,14 @@ def _safe_console_text(s: object) -> str:
     """
     Return a version of `s` that can be safely written to the current console stream
     (e.g., Windows CP1252) without raising UnicodeEncodeError.
+    Always replaces non-encodable characters.
     """
     try:
         text = "" if s is None else str(s)
     except Exception:
         text = repr(s)
-    enc = getattr(sys.stderr, "encoding", None) or getattr(sys.stdout, "encoding", None) or "utf-8"
+
+    enc = getattr(sys.stdout, "encoding", None) or getattr(sys.stderr, "encoding", None) or "utf-8"
     try:
         return text.encode(enc, errors="replace").decode(enc, errors="replace")
     except Exception:
@@ -181,11 +183,17 @@ def _info_html(title: str, heading: str, lines: List[str]) -> str:
 
 
 def _on_commit(fn):
-    """Run callable after successful DB commit; if not in a transaction, run immediately."""
+    """
+    Run callable after successful DB commit when inside an atomic block; otherwise run immediately.
+    This prevents calling transaction.on_commit() from background threads where no transaction is active.
+    """
     try:
-        transaction.on_commit(fn)
+        if connection.in_atomic_block:
+            transaction.on_commit(fn)
+        else:
+            fn()
     except Exception:
-        # outside atomic block
+        # As a final fallback, run immediately
         try:
             fn()
         except Exception as e:
@@ -383,7 +391,8 @@ def send_admin_bulk_summary(
 ) -> None:
     """
     Send a compact summary to admins after bulk upload.
-    rows: dicts like {"Task Name": ..., "Assign To": ..., "Planned Date": ..., "Priority": ..., "complete_url": ...}
+    Caller must pass ASCII-safe subject (title) like:
+      "Bulk Upload: 162 Checklist Tasks Created"
     """
     subject = title or "Bulk Upload Summary"
 

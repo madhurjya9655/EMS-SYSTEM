@@ -3,175 +3,192 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="x-ua-compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light only">
   <title>{% block title %}BOS EMS{% endblock %}</title>
 
   <link rel="shortcut icon" href="{% static 'favicon.ico' %}">
   <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
 
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  <!-- Performance: preconnect for fonts + use display=swap -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="{% static 'css/custom.css' %}" rel="stylesheet">
 
   {% block head_extra %}{% endblock %}
 
   <style>
-    :root {
-      --primary:#4f46e5;
-      --primary-light:#6366f1;
-      --primary-dark:#3730a3;
-      --sidebar-width:280px;
-      --header-height:70px;
+    :root{
+      --primary:#4f46e5; --primary-light:#6366f1; --primary-dark:#3730a3;
+      --sidebar-width:280px; --header-height:70px;
     }
-    * { margin:0; padding:0; box-sizing:border-box; }
-    body { font-family:'Inter',sans-serif; background:#f8fafc; }
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f8fafc}
 
     /* Header */
-    .header {
-      position:fixed; top:0; left:0; right:0; height:var(--header-height);
-      background:linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
-      z-index:1000; box-shadow:0 4px 20px rgba(79,70,229,.15);
-      display:flex; align-items:center; padding:0 2rem; justify-content:space-between;
+    .header{
+      position:fixed;inset:0 0 auto 0;height:var(--header-height);
+      background:linear-gradient(135deg,var(--primary) 0%,var(--primary-light) 100%);
+      z-index:1000;box-shadow:0 4px 20px rgba(79,70,229,.15);
+      display:flex;align-items:center;padding:0 2rem;justify-content:space-between
     }
-    .logo { display:flex; align-items:center; gap:12px; color:#fff; }
-    .logo-icon {
-      width:40px; height:40px; background:rgba(255,255,255,.2); border-radius:10px;
-      display:flex; align-items:center; justify-content:center; font-weight:700; backdrop-filter:blur(10px);
+    .logo{display:flex;align-items:center;gap:12px;color:#fff}
+    .logo-icon{
+      width:40px;height:40px;background:rgba(255,255,255,.2);border-radius:10px;
+      display:flex;align-items:center;justify-content:center;font-weight:700;backdrop-filter:blur(10px)
     }
-    .logo-icon img { max-width:32px; max-height:32px; border-radius:7px; }
-    .logo-text { font-size:1.25rem; font-weight:600; }
-    .header-actions { display:flex; align-items:center; gap:1.5rem; }
+    .logo-icon img{max-width:32px;max-height:32px;border-radius:7px}
+    .logo-text{font-size:1.25rem;font-weight:600}
+    .header-actions{display:flex;align-items:center;gap:1.5rem}
 
-    .branch-select {
-      background:rgba(255,255,255,.15); border:1px solid rgba(255,255,255,.3); color:#fff;
-      padding:.6rem 1.2rem; border-radius:8px; font-size:.9rem; backdrop-filter:blur(10px); min-width:160px;
+    .branch-select{
+      background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#fff;
+      padding:.6rem 1.2rem;border-radius:8px;font-size:.9rem;backdrop-filter:blur(10px);min-width:160px
     }
-    .branch-select option { background:var(--primary); color:#fff; }
+    .branch-select option{background:var(--primary);color:#fff}
 
-    .user-menu { display:flex; align-items:center; gap:.8rem; color:#fff; font-size:.9rem; }
-    .user-avatar { width:36px; height:36px; background:rgba(255,255,255,.2); border-radius:50%; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(10px); }
+    .user-menu{display:flex;align-items:center;gap:.8rem;color:#fff;font-size:.9rem}
+    .user-avatar{width:36px;height:36px;background:rgba(255,255,255,.2);border-radius:50%;
+      display:flex;align-items:center;justify-content:center;backdrop-filter:blur(10px)}
 
-    .logout-btn {
-      background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.3); color:#fff;
-      padding:.6rem 1.2rem; border-radius:8px; font-size:.85rem; backdrop-filter:blur(10px); transition:.2s;
+    .logout-btn{
+      background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.3);color:#fff;
+      padding:.6rem 1.2rem;border-radius:8px;font-size:.85rem;backdrop-filter:blur(10px);transition:.2s
     }
-    .logout-btn:hover { background:rgba(255,255,255,.2); transform:translateY(-1px); }
+    .logout-btn:hover{background:rgba(255,255,255,.2);transform:translateY(-1px)}
 
-    .mobile-toggle { display:none; background:none; border:none; color:#fff; font-size:1.3rem; cursor:pointer; }
+    .mobile-toggle{display:none;background:none;border:none;color:#fff;font-size:1.3rem;cursor:pointer}
 
     /* Sidebar */
-    .sidebar {
-      position:fixed; top:var(--header-height); left:0; width:var(--sidebar-width);
-      height:calc(100vh - var(--header-height)); background:#fff;
-      box-shadow:4px 0 20px rgba(0,0,0,.08); overflow-y:auto; transition:transform .3s ease; z-index:900;
+    .sidebar{
+      position:fixed;top:var(--header-height);left:0;width:var(--sidebar-width);
+      height:calc(100vh - var(--header-height));background:#fff;
+      box-shadow:4px 0 20px rgba(0,0,0,.08);overflow-y:auto;transition:transform .3s ease;z-index:900
     }
-    .sidebar.collapsed { transform:translateX(-100%); }
+    .sidebar.collapsed{transform:translateX(-100%)}
 
-    .nav-section { padding:1.5rem 0; border-bottom:1px solid #f1f5f9; }
-    .nav-item {
-      display:block; padding:.8rem 1.5rem; color:#64748b; text-decoration:none; font-size:.9rem;
-      font-weight:500; transition:.2s; width:100%; text-align:left; border:none; background:none; position:relative;
+    .nav-section{padding:1.5rem 0;border-bottom:1px solid #f1f5f9}
+    .nav-item{
+      display:block;padding:.8rem 1.5rem;color:#64748b;text-decoration:none;font-size:.9rem;
+      font-weight:500;transition:.2s;width:100%;text-align:left;border:none;background:none;position:relative
     }
-    .nav-item:hover { background:#f8fafc; color:var(--primary); transform:translateX(4px); }
-    .nav-item.active {
-      background:linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
-      color:var(--primary); border-right:3px solid var(--primary);
+    .nav-item:hover{background:#f8fafc;color:var(--primary);transform:translateX(4px)}
+    .nav-item.active,.nav-item[aria-current="page"]{
+      background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%);
+      color:var(--primary);border-right:3px solid var(--primary)
     }
-    .nav-item i { width:20px; margin-right:.8rem; font-size:1rem; }
-    .nav-item .chevron { float:right; font-size:.75rem; transition:transform .2s; }
+    .nav-item i{width:20px;margin-right:.8rem;font-size:1rem}
+    .nav-item .chevron{float:right;font-size:.75rem;transition:transform .2s}
 
-    .submenu { background:#f8fafc; border-left:2px solid #e2e8f0; margin-left:1rem; display:none; }
-    .submenu .nav-item { padding:.6rem 2.5rem; font-size:.85rem; color:#64748b; }
+    .submenu{background:#f8fafc;border-left:2px solid #e2e8f0;margin-left:1rem;display:none}
+    .submenu .nav-item{padding:.6rem 2.5rem;font-size:.85rem;color:#64748b}
 
     /* Main area */
-    .main-content { margin-left:var(--sidebar-width); margin-top:var(--header-height); padding:2rem; min-height:calc(100vh - var(--header-height)); transition:margin-left .3s ease; }
-    .main-content.expanded { margin-left:0; }
+    .main-content{margin-left:var(--sidebar-width);margin-top:var(--header-height);padding:2rem;min-height:calc(100vh - var(--header-height));transition:margin-left .3s ease}
+    .main-content.expanded{margin-left:0}
 
-    .page-header { background:#fff; padding:2rem; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,.08); margin-bottom:2rem; border:1px solid #f1f5f9; }
-    .page-title { font-size:1.8rem; font-weight:700; color:#1e293b; margin-bottom:.5rem; }
+    .page-header{background:#fff;padding:2rem;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.08);margin-bottom:2rem;border:1px solid #f1f5f9}
+    .page-title{font-size:1.8rem;font-weight:700;color:#1e293b;margin-bottom:.5rem}
 
     /* Footer */
-    footer { background:#fff; border-top:1px solid #f1f5f9; text-align:center; padding:1.5rem; color:#64748b; font-size:.9rem; margin-top:2rem; }
+    footer{background:#fff;border-top:1px solid #f1f5f9;text-align:center;padding:1.5rem;color:#64748b;font-size:.9rem;margin-top:2rem}
 
     /* Overlay */
-    .sidebar-overlay { display:none; position:fixed; top:var(--header-height); left:0; width:100vw; height:100vh; background:rgba(0,0,0,.12); z-index:899; }
-    .sidebar.show ~ .sidebar-overlay, .sidebar-overlay.show { display:block; }
+    .sidebar-overlay{display:none;position:fixed;top:var(--header-height);left:0;width:100vw;height:100vh;background:rgba(0,0,0,.12);z-index:899}
+    .sidebar.show ~ .sidebar-overlay,.sidebar-overlay.show{display:block}
+
+    /* Motion preference */
+    @media (prefers-reduced-motion: reduce){
+      *{scroll-behavior:auto !important}
+      .nav-item:hover{transform:none}
+    }
 
     /* Responsive */
-    @media (max-width:768px) {
-      .mobile-toggle { display:block; }
-      .branch-select, .user-menu span:first-child { display:none; }
-      .sidebar { transform:translateX(-100%); }
-      .sidebar.show { transform:translateX(0); }
-      .main-content { margin-left:0; padding:1rem; }
-      .page-header { padding:1.5rem; }
+    @media (max-width:768px){
+      .mobile-toggle{display:block}
+      .branch-select,.user-menu span:first-child{display:none}
+      .sidebar{transform:translateX(-100%)}
+      .sidebar.show{transform:translateX(0)}
+      .main-content{margin-left:0;padding:1rem}
+      .page-header{padding:1.5rem}
     }
   </style>
 </head>
 <body>
   {% url 'dashboard:home' as dashboard_home_url %}
   {% if user.is_authenticated %}
-    <div class="header">
+    <div class="header" role="banner">
       <div class="logo">
         <button class="mobile-toggle" type="button" aria-label="Toggle sidebar" data-sidebar-toggle>
-          <i class="fas fa-bars"></i>
+          <i class="fas fa-bars" aria-hidden="true"></i>
         </button>
-        <div class="logo-icon"><img src="{% static 'images/bos logo.png' %}" alt="EMS Logo"></div>
+        <div class="logo-icon">
+          <img src="{% static 'images/bos logo.png' %}" alt="BOS EMS logo" loading="lazy" decoding="async">
+        </div>
         <span class="logo-text">BOS EMS</span>
       </div>
 
       <div class="header-actions">
-        <select class="branch-select" aria-label="Select branch">
+        <label class="visually-hidden" for="branchSelect">Branch</label>
+        <select class="branch-select" id="branchSelect" aria-label="Select branch">
           <option>All Branches</option>
           <option>Branch 1</option>
           <option>Branch 2</option>
         </select>
 
-        <div class="user-menu">
+        <div class="user-menu" role="group" aria-label="User menu">
           <span>{{ user.get_full_name|default:user.username }}</span>
-          <div class="user-avatar"><i class="fas fa-user"></i></div>
+          <div class="user-avatar" aria-hidden="true"><i class="fas fa-user"></i></div>
         </div>
 
-        <form method="post" action="{% url 'logout' %}" style="margin:0;">
+        <form method="post" action="{% url 'logout' %}" style="margin:0;" aria-label="Logout">
           {% csrf_token %}
-          <button class="logout-btn"><i class="fas fa-sign-out-alt"></i> Logout</button>
+          <button class="logout-btn" type="submit"><i class="fas fa-sign-out-alt" aria-hidden="true"></i> Logout</button>
         </form>
       </div>
     </div>
 
-    <nav class="sidebar" id="sidebar">
+    <nav class="sidebar" id="sidebar" role="navigation" aria-label="Primary">
       <div class="nav-section">
         <a href="{% url 'dashboard:home' %}"
-           class="nav-item {% if request.resolver_match.app_name == 'dashboard' and request.resolver_match.url_name == 'home' %}active{% endif %}">
-          <i class="fas fa-tachometer-alt"></i> Dashboard
+           class="nav-item {% if request.resolver_match.app_name == 'dashboard' and request.resolver_match.url_name == 'home' %}active{% endif %}"
+           {% if request.resolver_match.app_name == 'dashboard' and request.resolver_match.url_name == 'home' %}aria-current="page"{% endif %}>
+          <i class="fas fa-tachometer-alt" aria-hidden="true"></i> Dashboard
         </a>
 
         {% if user|has_permission:"list_users" or user|has_group:"HR" or user.is_superuser %}
         <a href="{% url 'recruitment:employee_list' %}"
-           class="nav-item {% if request.resolver_match.app_name == 'recruitment' and request.resolver_match.url_name == 'employee_list' %}active{% endif %}">
-          <i class="fas fa-users"></i> Employees
+           class="nav-item {% if request.resolver_match.app_name == 'recruitment' and request.resolver_match.url_name == 'employee_list' %}active{% endif %}"
+           {% if request.resolver_match.app_name == 'recruitment' and request.resolver_match.url_name == 'employee_list' %}aria-current="page"{% endif %}>
+          <i class="fas fa-users" aria-hidden="true"></i> Employees
         </a>
         {% endif %}
 
         {% if user|has_any_permission:"leave_list,leave_apply" or user|has_group:"Manager" or user|has_group:"HR" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="leaveSubmenu" data-submenu-toggle>
-          <i class="fas fa-calendar-day"></i> Leave Register <i class="fas fa-chevron-down chevron"></i>
+          <i class="fas fa-calendar-day" aria-hidden="true"></i> Leave Register <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="leaveSubmenu">
+        <div class="submenu" id="leaveSubmenu" role="group" aria-label="Leave Register">
           {% if user|has_any_permission:"leave_list,leave_apply" %}
-          <a href="{% url 'leave:my_leaves' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'my_leaves' %}active{% endif %}">
-            <i class="fas fa-file-alt"></i> My Leaves
+          <a href="{% url 'leave:my_leaves' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'my_leaves' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'my_leaves' %}aria-current="page"{% endif %}>
+            <i class="fas fa-file-alt" aria-hidden="true"></i> My Leaves
           </a>
           {% endif %}
           {% if user|has_group:"Manager" %}
-          <a href="{% url 'leave:pending_leaves' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'pending_leaves' %}active{% endif %}">
-            <i class="fas fa-check-circle"></i> Manager Approvals
+          <a href="{% url 'leave:pending_leaves' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'pending_leaves' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'pending_leaves' %}aria-current="page"{% endif %}>
+            <i class="fas fa-check-circle" aria-hidden="true"></i> Manager Approvals
           </a>
           {% endif %}
           {% if user|has_group:"HR" %}
-          <a href="{% url 'leave:hr_leaves' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'hr_leaves' %}active{% endif %}">
-            <i class="fas fa-user-tie"></i> HR Approvals
+          <a href="{% url 'leave:hr_leaves' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'hr_leaves' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'hr_leaves' %}aria-current="page"{% endif %}>
+            <i class="fas fa-user-tie" aria-hidden="true"></i> HR Approvals
           </a>
           {% endif %}
         </div>
@@ -179,41 +196,46 @@
 
         {% if user|has_any_permission:"add_checklist,list_checklist" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="checklistSubmenu" data-submenu-toggle>
-          <i class="fas fa-clipboard-list"></i> Checklist <i class="fas fa-chevron-down chevron"></i>
+          <i class="fas fa-clipboard-list" aria-hidden="true"></i> Checklist <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="checklistSubmenu">
+        <div class="submenu" id="checklistSubmenu" role="group" aria-label="Checklist">
           {% if user|has_permission:"add_checklist" %}
-          <a href="{% url 'tasks:add_checklist' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_checklist' %}active{% endif %}">
-            <i class="fas fa-clipboard-plus"></i> Add Checklist
+          <a href="{% url 'tasks:add_checklist' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_checklist' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_checklist' %}aria-current="page"{% endif %}>
+            <i class="fas fa-clipboard-plus" aria-hidden="true"></i> Add Checklist
           </a>
           {% endif %}
           {% if user|has_permission:"list_checklist" %}
-          <a href="{% url 'tasks:list_checklist' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}active{% endif %}">
-            <i class="fas fa-clipboard-list"></i> List Checklist
+          <a href="{% url 'tasks:list_checklist' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}aria-current="page"{% endif %}>
+            <i class="fas fa-clipboard-list" aria-hidden="true"></i> List Checklist
           </a>
           {% endif %}
         </div>
         {% endif %}
 
         {% if user|has_any_permission:"add_checklist,add_delegation" %}
-        <a href="{% url 'tasks:bulk_upload' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'bulk_upload' %}active{% endif %}">
-          <i class="fas fa-upload"></i> Bulk Upload
+        <a href="{% url 'tasks:bulk_upload' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'bulk_upload' %}active{% endif %}"
+           {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'bulk_upload' %}aria-current="page"{% endif %}>
+          <i class="fas fa-upload" aria-hidden="true"></i> Bulk Upload
         </a>
         {% endif %}
 
         {% if user|has_any_permission:"add_delegation,list_delegation" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="delegationSubmenu" data-submenu-toggle>
-          <i class="fas fa-users-cog"></i> Delegation <i class="fas fa-chevron-down chevron"></i>
+          <i class="fas fa-users-cog" aria-hidden="true"></i> Delegation <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="delegationSubmenu">
+        <div class="submenu" id="delegationSubmenu" role="group" aria-label="Delegation">
           {% if user|has_permission:"add_delegation" %}
-          <a href="{% url 'tasks:add_delegation' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_delegation' %}active{% endif %}">
-            <i class="fas fa-user-plus"></i> Add Delegation
+          <a href="{% url 'tasks:add_delegation' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_delegation' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_delegation' %}aria-current="page"{% endif %}>
+            <i class="fas fa-user-plus" aria-hidden="true"></i> Add Delegation
           </a>
           {% endif %}
           {% if user|has_permission:"list_delegation" %}
-          <a href="{% url 'tasks:list_delegation' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_delegation' %}active{% endif %}">
-            <i class="fas fa-user-clock"></i> List Delegation
+          <a href="{% url 'tasks:list_delegation' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_delegation' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_delegation' %}aria-current="page"{% endif %}>
+            <i class="fas fa-user-clock" aria-hidden="true"></i> List Delegation
           </a>
           {% endif %}
         </div>
@@ -221,27 +243,31 @@
 
         {% if user|has_any_permission:"add_ticket,list_all_tickets,assigned_to_me,assigned_by_me" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="ticketsSubmenu" data-submenu-toggle>
-          <i class="fas fa-ticket-alt"></i> Tickets <i class="fas fa-chevron-down chevron"></i>
+          <i class="fas fa-ticket-alt" aria-hidden="true"></i> Tickets <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="ticketsSubmenu">
+        <div class="submenu" id="ticketsSubmenu" role="group" aria-label="Tickets">
           {% if user|has_permission:"add_ticket" %}
-          <a href="{% url 'tasks:add_help_ticket' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_help_ticket' %}active{% endif %}">
-            <i class="fas fa-plus-circle"></i> Add Ticket
+          <a href="{% url 'tasks:add_help_ticket' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_help_ticket' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_help_ticket' %}aria-current="page"{% endif %}>
+            <i class="fas fa-plus-circle" aria-hidden="true"></i> Add Ticket
           </a>
           {% endif %}
           {% if user|has_permission:"list_all_tickets" %}
-          <a href="{% url 'tasks:list_help_ticket' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_help_ticket' %}active{% endif %}">
-            <i class="fas fa-list"></i> List All Tickets
+          <a href="{% url 'tasks:list_help_ticket' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_help_ticket' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_help_ticket' %}aria-current="page"{% endif %}>
+            <i class="fas fa-list" aria-hidden="true"></i> List All Tickets
           </a>
           {% endif %}
           {% if user|has_permission:"assigned_to_me" %}
-          <a href="{% url 'tasks:assigned_to_me' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_to_me' %}active{% endif %}">
-            <i class="fas fa-user-clock"></i> Assigned to Me
+          <a href="{% url 'tasks:assigned_to_me' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_to_me' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_to_me' %}aria-current="page"{% endif %}>
+            <i class="fas fa-user-clock" aria-hidden="true"></i> Assigned to Me
           </a>
           {% endif %}
           {% if user|has_permission:"assigned_by_me" %}
-          <a href="{% url 'tasks:assigned_by_me' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_by_me' %}active{% endif %}">
-            <i class="fas fa-user-plus"></i> Assigned by Me
+          <a href="{% url 'tasks:assigned_by_me' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_by_me' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_by_me' %}aria-current="page"{% endif %}>
+            <i class="fas fa-user-plus" aria-hidden="true"></i> Assigned by Me
           </a>
           {% endif %}
         </div>
@@ -249,27 +275,31 @@
 
         {% if user|has_any_permission:"petty_cash_list,petty_cash_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="pettyCashSubmenu" data-submenu-toggle>
-          <i class="fas fa-wallet"></i> Petty Cash <i class="fas fa-chevron-down chevron"></i>
+          <i class="fas fa-wallet" aria-hidden="true"></i> Petty Cash <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="pettyCashSubmenu">
+        <div class="submenu" id="pettyCashSubmenu" role="group" aria-label="Petty Cash">
           {% if user|has_permission:"petty_cash_list" %}
-          <a href="{% url 'petty_cash:list_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'list_requests' %}active{% endif %}">
-            <i class="fas fa-file-invoice-dollar"></i> My Requests
+          <a href="{% url 'petty_cash:list_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'list_requests' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'list_requests' %}aria-current="page"{% endif %}>
+            <i class="fas fa-file-invoice-dollar" aria-hidden="true"></i> My Requests
           </a>
           {% endif %}
           {% if user|has_permission:"petty_cash_apply" or user|has_group:"EA" %}
-          <a href="{% url 'petty_cash:apply_request' %}" class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'apply_request' %}active{% endif %}">
-            <i class="fas fa-plus-circle"></i> New Request
+          <a href="{% url 'petty_cash:apply_request' %}" class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'apply_request' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'apply_request' %}aria-current="page"{% endif %}>
+            <i class="fas fa-plus-circle" aria-hidden="true"></i> New Request
           </a>
           {% endif %}
           {% if user|has_group:"Manager" %}
-          <a href="{% url 'petty_cash:manager_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'manager_requests' %}active{% endif %}">
-            <i class="fas fa-check"></i> Manager Approvals
+          <a href="{% url 'petty_cash:manager_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'manager_requests' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'manager_requests' %}aria-current="page"{% endif %}>
+            <i class="fas fa-check" aria-hidden="true"></i> Manager Approvals
           </a>
           {% endif %}
           {% if user|has_group:"Finance" %}
-          <a href="{% url 'petty_cash:finance_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'finance_requests' %}active{% endif %}">
-            <i class="fas fa-coins"></i> Finance Approvals
+          <a href="{% url 'petty_cash:finance_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'finance_requests' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'finance_requests' %}aria-current="page"{% endif %}>
+            <i class="fas fa-coins" aria-hidden="true"></i> Finance Approvals
           </a>
           {% endif %}
         </div>
@@ -277,22 +307,25 @@
 
         {% if user|has_any_permission:"reimbursement_list,reimbursement_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="reimbursementSubmenu" data-submenu-toggle>
-          <i class="fas fa-receipt"></i> Reimbursement <i class="fas fa-chevron-down chevron"></i>
+          <i class="fas fa-receipt" aria-hidden="true"></i> Reimbursement <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="reimbursementSubmenu">
+        <div class="submenu" id="reimbursementSubmenu" role="group" aria-label="Reimbursement">
           {% if user|has_any_permission:"reimbursement_list,reimbursement_apply" %}
-          <a href="{% url 'reimbursement:my_reimbursements' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'my_reimbursements' %}active{% endif %}">
-            <i class="fas fa-file-medical"></i> My Requests
+          <a href="{% url 'reimbursement:my_reimbursements' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'my_reimbursements' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'my_reimbursements' %}aria-current="page"{% endif %}>
+            <i class="fas fa-file-medical" aria-hidden="true"></i> My Requests
           </a>
           {% endif %}
           {% if user|has_group:"Manager" %}
-          <a href="{% url 'reimbursement:manager_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'manager_pending' %}active{% endif %}">
-            <i class="fas fa-check-square"></i> Manager Approvals
+          <a href="{% url 'reimbursement:manager_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'manager_pending' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'manager_pending' %}aria-current="page"{% endif %}>
+            <i class="fas fa-check-square" aria-hidden="true"></i> Manager Approvals
           </a>
           {% endif %}
           {% if user|has_group:"Finance" %}
-          <a href="{% url 'reimbursement:finance_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}active{% endif %}">
-            <i class="fas fa-wallet"></i> Finance Approvals
+          <a href="{% url 'reimbursement:finance_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}aria-current="page"{% endif %}>
+            <i class="fas fa-wallet" aria-hidden="true"></i> Finance Approvals
           </a>
           {% endif %}
         </div>
@@ -300,22 +333,25 @@
 
         {% if user|has_any_permission:"doer_tasks,weekly_mis_score,performance_score" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="reportsSubmenu" data-submenu-toggle>
-          <i class="fas fa-chart-pie"></i> Reports <i class="fas fa-chevron-down chevron"></i>
+          <i class="fas fa-chart-pie" aria-hidden="true"></i> Reports <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="reportsSubmenu">
+        <div class="submenu" id="reportsSubmenu" role="group" aria-label="Reports">
           {% if user|has_permission:"doer_tasks" %}
-          <a href="{% url 'reports:doer_tasks' %}" class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'doer_tasks' %}active{% endif %}">
-            <i class="fas fa-tasks-alt"></i> Doer Tasks
+          <a href="{% url 'reports:doer_tasks' %}" class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'doer_tasks' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'doer_tasks' %}aria-current="page"{% endif %}>
+            <i class="fas fa-tasks-alt" aria-hidden="true"></i> Doer Tasks
           </a>
           {% endif %}
           {% if user|has_permission:"weekly_mis_score" %}
-          <a href="{% url 'reports:weekly_mis_score' %}" class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'weekly_mis_score' %}active{% endif %}">
-            <i class="fas fa-calendar-week"></i> Weekly MIS Score
+          <a href="{% url 'reports:weekly_mis_score' %}" class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'weekly_mis_score' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'weekly_mis_score' %}aria-current="page"{% endif %}>
+            <i class="fas fa-calendar-week" aria-hidden="true"></i> Weekly MIS Score
           </a>
           {% endif %}
           {% if user|has_permission:"performance_score" %}
-          <a href="{% url 'reports:performance_score' %}" class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'performance_score' %}active{% endif %}">
-            <i class="fas fa-percent"></i> Performance Score
+          <a href="{% url 'reports:performance_score' %}" class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'performance_score' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'performance_score' %}aria-current="page"{% endif %}>
+            <i class="fas fa-percent" aria-hidden="true"></i> Performance Score
           </a>
           {% endif %}
         </div>
@@ -323,17 +359,19 @@
 
         {% if user|has_any_permission:"list_users,add_user" or user.is_superuser %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="usersSubmenu" data-submenu-toggle>
-          <i class="fas fa-user-friends"></i> Users <i class="fas fa-chevron-down chevron"></i>
+          <i class="fas fa-user-friends" aria-hidden="true"></i> Users <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="usersSubmenu">
+        <div class="submenu" id="usersSubmenu" role="group" aria-label="Users">
           {% if user|has_permission:"list_users" or user.is_superuser %}
-          <a href="{% url 'users:list_users' %}" class="nav-item {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'list_users' %}active{% endif %}">
-            <i class="fas fa-list"></i> List Users
+          <a href="{% url 'users:list_users' %}" class="nav-item {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'list_users' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'list_users' %}aria-current="page"{% endif %}>
+            <i class="fas fa-list" aria-hidden="true"></i> List Users
           </a>
           {% endif %}
           {% if user|has_permission:"add_user" or user.is_superuser %}
-          <a href="{% url 'users:add_user' %}" class="nav-item {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'add_user' %}active{% endif %}">
-            <i class="fas fa-user-plus"></i> Add User
+          <a href="{% url 'users:add_user' %}" class="nav-item {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'add_user' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'add_user' %}aria-current="page"{% endif %}>
+            <i class="fas fa-user-plus" aria-hidden="true"></i> Add User
           </a>
           {% endif %}
         </div>
@@ -341,34 +379,37 @@
 
         {% if user|has_any_permission:"authorized_numbers,system_settings" or user.is_superuser %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="settingsSubmenu" data-submenu-toggle>
-          <i class="fas fa-cog"></i> Settings <i class="fas fa-chevron-down chevron"></i>
+          <i class="fas fa-cog" aria-hidden="true"></i> Settings <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="settingsSubmenu">
+        <div class="submenu" id="settingsSubmenu" role="group" aria-label="Settings">
           {% if user|has_permission:"authorized_numbers" %}
-          <a href="{% url 'settings:authorized_list' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}active{% endif %}">
-            <i class="fas fa-phone"></i> Authorized Numbers
+          <a href="{% url 'settings:authorized_list' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}aria-current="page"{% endif %}>
+            <i class="fas fa-phone" aria-hidden="true"></i> Authorized Numbers
           </a>
           {% endif %}
-          <a href="{% url 'settings:holiday_list' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}active{% endif %}">
-            <i class="fas fa-calendar-day"></i> Holiday List
+          <a href="{% url 'settings:holiday_list' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}aria-current="page"{% endif %}>
+            <i class="fas fa-calendar-day" aria-hidden="true"></i> Holiday List
           </a>
           {% if user|has_permission:"system_settings" %}
-          <a href="{% url 'settings:system_settings' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}active{% endif %}">
-            <i class="fas fa-sliders-h"></i> System Settings
+          <a href="{% url 'settings:system_settings' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}aria-current="page"{% endif %}>
+            <i class="fas fa-sliders-h" aria-hidden="true"></i> System Settings
           </a>
           {% endif %}
         </div>
         {% endif %}
       </div>
     </nav>
-    <div class="sidebar-overlay" data-sidebar-overlay></div>
+    <div class="sidebar-overlay" data-sidebar-overlay aria-hidden="true"></div>
   {% endif %}
 
-  <main class="{% if user.is_authenticated %}main-content{% else %}container mt-5{% endif %}" id="mainContent">
+  <main class="{% if user.is_authenticated %}main-content{% else %}container mt-5{% endif %}" id="mainContent" role="main">
     {% if messages %}
-      <div class="container mb-3">
+      <div class="container mb-3" aria-live="polite" aria-atomic="true">
         {% for message in messages %}
-          <div class="alert {% if message.tags %}alert-{{ message.tags }}{% else %}alert-info{% endif %} shadow-sm" role="alert" aria-live="polite">
+          <div class="alert {% if message.tags %}alert-{{ message.tags }}{% else %}alert-info{% endif %} shadow-sm" role="alert">
             {{ message|safe }}
           </div>
         {% endfor %}
@@ -378,12 +419,13 @@
   </main>
 
   {% if user.is_authenticated %}
-    <footer>
+    <footer role="contentinfo">
       <small>© {% now "Y" %} Developed by Madhurjya Bora</small>
     </footer>
   {% endif %}
 
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <!-- JS at end for faster first paint -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js" defer></script>
 
   <script>
     // --- CSRF helpers (auto-inject into POST forms & AJAX) ---
@@ -394,6 +436,7 @@
     const CSRF_COOKIE = 'csrftoken';
 
     document.addEventListener('DOMContentLoaded', () => {
+      // Ensure CSRF in any POST form (defense-in-depth; server template already includes it)
       document.querySelectorAll('form[method="post"]').forEach(form => {
         const hasToken = form.querySelector('input[name="csrfmiddlewaretoken"]');
         if (!hasToken) {
@@ -514,12 +557,13 @@
         }
       });
 
-      // Auto-open submenu for active nav link
+      // Auto-open submenu for active nav link and set aria-current
       const path = window.location.pathname.replace(/\/+$/,'');
       document.querySelectorAll('.nav-item[href]').forEach(item=>{
         const href = item.getAttribute('href').replace(/\/+$/,'');
         if(href && (href===path || (path.startsWith(href) && href !== ''))){
           item.classList.add('active');
+          item.setAttribute('aria-current','page');
           const submenu=item.closest('.submenu');
           if(submenu){
             submenu.style.display='block';

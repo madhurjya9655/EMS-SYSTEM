@@ -49,7 +49,7 @@ class Command(BaseCommand):
 
         groups = (
             Checklist.objects.filter(**filters)
-            .values("assign_to", "task_name", "mode", "frequency", "group_name")
+            .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
             .distinct()
         )
 
@@ -63,7 +63,7 @@ class Command(BaseCommand):
             processed += 1
             instance = (
                 Checklist.objects.filter(
-                    assign_to=g["assign_to"],
+                    assign_to_id=g["assign_to_id"],
                     task_name=g["task_name"],
                     mode=g["mode"],
                     frequency=g["frequency"],
@@ -77,7 +77,7 @@ class Command(BaseCommand):
 
             # Already have a future pending? skip
             if Checklist.objects.filter(
-                assign_to=instance.assign_to,
+                assign_to_id=instance.assign_to_id,
                 task_name=instance.task_name,
                 mode=instance.mode,
                 frequency=instance.frequency,
@@ -102,7 +102,7 @@ class Command(BaseCommand):
 
             # Dupe guard (±1 minute)
             dupe = Checklist.objects.filter(
-                assign_to=instance.assign_to,
+                assign_to_id=instance.assign_to_id,
                 task_name=instance.task_name,
                 mode=instance.mode,
                 frequency=instance.frequency,

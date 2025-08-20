@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
+import pytz
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from django.db import transaction
@@ -16,6 +17,7 @@ from apps.tasks.recurrence import (
 )
 
 logger = logging.getLogger(__name__)
+IST = pytz.timezone("Asia/Kolkata")
 
 
 def _has_field(model, field_name: str) -> bool:
@@ -23,7 +25,11 @@ def _has_field(model, field_name: str) -> bool:
 
 
 class Command(BaseCommand):
-    help = "Advanced recurrence management: roll forward, cleanup, and validate recurring tasks."
+    help = (
+        "Recurrence utilities: roll due occurrences, cleanup old completed, validate configs.\n"
+        "IMPORTANT: Rolling only creates occurrences that are DUE NOW (<= current time at 10:00 IST), "
+        "and never pre-creates future tasks. Delegations are treated as one-time and skipped."
+    )
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -37,11 +43,12 @@ class Command(BaseCommand):
             action="store_true",
             help="Show what would be done without making changes.",
         )
+        # kept for backward compatibility; ignored by the roll logic now
         parser.add_argument(
             "--days-ahead",
             type=int,
-            default=30,
-            help="Generate recurrences up to this many days ahead (for roll).",
+            default=0,
+            help="(Ignored) Previously used to pre-create future items. Now rolling only creates items due by NOW.",
         )
         parser.add_argument(
             "--cleanup-completed-days",
@@ -63,10 +70,11 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("DRY RUN — no data will be modified.\n"))
 
         if action in ("roll", "all"):
-            count_chk, count_dlg = self._roll_forward(opts, dry_run)
+            count_chk = self._roll_due_checklists(opts, dry_run)
+            # Delegations are one-time by design; we explicitly skip them.
             self.stdout.write(
                 self.style.SUCCESS(
-                    f"Rolled recurrences — Checklist: {count_chk}, Delegation: {count_dlg}"
+                    f"Rolled due recurrences — Checklist created: {count_chk}, Delegation created: 0 (skipped by design)"
                 )
             )
 
@@ -94,110 +102,100 @@ class Command(BaseCommand):
             else:
                 self.stdout.write(self.style.SUCCESS("All recurrence configurations look good."))
 
-    # ------------------------------- ROLL -------------------------------- #
-    def _roll_forward(self, opts, dry_run: bool):
-        days_ahead = opts["days_ahead"]
+    # ------------------------------- ROLL (DUE ONLY) ------------------------------- #
+    def _roll_due_checklists(self, opts, dry_run: bool) -> int:
+        """Create the next occurrence only when it is due (<= now at 10:00 IST)."""
         user_id = opts.get("user_id")
-        target = timezone.now() + timedelta(days=days_ahead)
+        now_ist = timezone.now().astimezone(IST)
 
-        chk_created = self._roll_model(
-            model=Checklist,
-            series_fields=("assign_to_id", "task_name", "mode", "frequency", "group_name"),
-            target=target,
-            dry_run=dry_run,
-            user_id=user_id,
-        )
-        dlg_created = self._roll_model(
-            model=Delegation,
-            series_fields=("assign_to_id", "task_name", "mode", "frequency"),
-            target=target,
-            dry_run=dry_run,
-            user_id=user_id,
-        )
-        return chk_created, dlg_created
-
-    def _roll_model(self, model, series_fields, target, dry_run: bool, user_id=None) -> int:
         filters = {"mode__in": RECURRING_MODES, "frequency__gte": 1}
         if user_id:
             filters["assign_to_id"] = user_id
 
-        series = model.objects.filter(**filters).values(*series_fields).distinct()
+        series = (
+            Checklist.objects.filter(**filters)
+            .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
+            .distinct()
+        )
         created_count = 0
 
         for s in series:
-            latest = model.objects.filter(**s).order_by("-planned_date", "-id").first()
+            latest = Checklist.objects.filter(**s).order_by("-planned_date", "-id").first()
             if not latest:
                 continue
 
-            current = latest.planned_date
-            safety = 0
+            # Compute the next scheduled occurrence (already normalized to 10:00 IST inside)
+            next_dt = get_next_planned_date(latest.planned_date, latest.mode, latest.frequency)
+            if not next_dt:
+                continue
 
-            while current < target and safety < 365:  # cap at ~1 year of steps
-                next_dt = get_next_planned_date(current, latest.mode, latest.frequency)
-                if not next_dt or next_dt <= current:
-                    break
+            # Only create if it's due now (<= current IST time)
+            if next_dt.astimezone(IST) > now_ist:
+                continue
 
-                # Normalize to 10:00 AM IST and skip Sundays/holidays
-                next_dt = schedule_recurring_at_10am(next_dt)
+            # Normalize again for idempotency
+            next_dt = schedule_recurring_at_10am(next_dt)
 
-                # dupe guard (±1 minute)
-                exists = model.objects.filter(
-                    planned_date__gte=next_dt - timedelta(minutes=1),
-                    planned_date__lt=next_dt + timedelta(minutes=1),
-                    **s,
-                ).exists()
+            # Dupe guard (±1 minute)
+            exists = Checklist.objects.filter(
+                assign_to_id=s["assign_to_id"],
+                task_name=s["task_name"],
+                mode=s["mode"],
+                frequency=s["frequency"],
+                group_name=s["group_name"],
+                planned_date__gte=next_dt - timedelta(minutes=1),
+                planned_date__lt=next_dt + timedelta(minutes=1),
+                status="Pending",
+            ).exists()
+            if exists:
+                continue
 
-                if not exists:
-                    if dry_run:
-                        created_count += 1
-                        self.stdout.write(
-                            f"[DRY RUN] Would create {model.__name__}: '{latest.task_name}' at {next_dt}"
-                        )
-                    else:
-                        try:
-                            with transaction.atomic():
-                                kwargs = dict(
-                                    assign_by=getattr(latest, "assign_by", None),
-                                    task_name=latest.task_name,
-                                    assign_to=latest.assign_to,
-                                    planned_date=next_dt,
-                                    priority=getattr(latest, "priority", None),
-                                    attachment_mandatory=getattr(latest, "attachment_mandatory", False),
-                                    mode=latest.mode,
-                                    frequency=latest.frequency,
-                                    status="Pending",
-                                )
-                                # optional fields
-                                for opt in (
-                                    "message",
-                                    "time_per_task_minutes",
-                                    "remind_before_days",
-                                    "assign_pc",
-                                    "notify_to",
-                                    "set_reminder",
-                                    "reminder_mode",
-                                    "reminder_frequency",
-                                    "reminder_starting_time",
-                                    "checklist_auto_close",
-                                    "checklist_auto_close_days",
-                                    "group_name",
-                                    "actual_duration_minutes",
-                                ):
-                                    if hasattr(latest, opt):
-                                        kwargs[opt] = getattr(latest, opt)
+            if dry_run:
+                created_count += 1
+                self.stdout.write(
+                    f"[DRY RUN] Would create Checklist: '{latest.task_name}' at {next_dt}"
+                )
+                continue
 
-                                model.objects.create(**kwargs)
-                            created_count += 1
-                            self.stdout.write(
-                                self.style.SUCCESS(
-                                    f"Created {model.__name__}: '{latest.task_name}' at {next_dt}"
-                                )
-                            )
-                        except Exception as e:
-                            logger.error("Failed to create %s: %s", model.__name__, e)
+            try:
+                with transaction.atomic():
+                    kwargs = dict(
+                        assign_by=getattr(latest, "assign_by", None),
+                        task_name=latest.task_name,
+                        assign_to=latest.assign_to,
+                        planned_date=next_dt,
+                        priority=getattr(latest, "priority", None),
+                        attachment_mandatory=getattr(latest, "attachment_mandatory", False),
+                        mode=latest.mode,
+                        frequency=latest.frequency,
+                        status="Pending",
+                    )
+                    # optional fields mirrored
+                    for opt in (
+                        "message",
+                        "time_per_task_minutes",
+                        "remind_before_days",
+                        "assign_pc",
+                        "notify_to",
+                        "set_reminder",
+                        "reminder_mode",
+                        "reminder_frequency",
+                        "reminder_starting_time",
+                        "checklist_auto_close",
+                        "checklist_auto_close_days",
+                        "group_name",
+                        "actual_duration_minutes",
+                    ):
+                        if hasattr(latest, opt):
+                            kwargs[opt] = getattr(latest, opt)
 
-                current = next_dt or current
-                safety += 1
+                    Checklist.objects.create(**kwargs)
+                created_count += 1
+                self.stdout.write(
+                    self.style.SUCCESS(f"Created Checklist: '{latest.task_name}' at {next_dt}")
+                )
+            except Exception as e:
+                logger.error("Failed to create Checklist recurrence: %s", e)
 
         return created_count
 
@@ -249,5 +247,9 @@ class Command(BaseCommand):
                 issues.append(f"{name} {obj.id}: missing frequency for mode '{obj.mode}'")
 
         _series_issues(Checklist, "Checklist")
-        _series_issues(Delegation, "Delegation")
+        # Delegation should be one-time; flag any with a mode set
+        bad_delegations = Delegation.objects.exclude(mode__isnull=True).exclude(mode__exact="")
+        for d in bad_delegations:
+            issues.append(f"Delegation {d.id}: has recurring fields but delegations are one-time only")
+
         return issues

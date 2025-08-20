@@ -64,6 +64,7 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
 CSRF_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_HTTPONLY = True
 APPEND_SLASH = True
 
 # =============================================================================
@@ -105,11 +106,13 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 # =============================================================================
 # MIDDLEWARE
+# (GZip added for dynamic compression; WhiteNoise keeps static fast)
 # =============================================================================
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
+    "django.middleware.gzip.GZipMiddleware",  # ← fast dynamic responses
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -121,38 +124,62 @@ MIDDLEWARE = [
 ROOT_URLCONF = "employee_management.urls"
 
 # =============================================================================
-# TEMPLATES
+# TEMPLATES (Production uses cached loader for speed)
 # =============================================================================
 
-TEMPLATES = [
-    {
-        "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [BASE_DIR / "templates"],
-        "APP_DIRS": True,
-        "OPTIONS": {
-            "context_processors": [
-                "django.template.context_processors.debug",
-                "django.template.context_processors.request",
-                "django.contrib.auth.context_processors.auth",
-                "django.contrib.messages.context_processors.messages",
-            ],
-            # ✅ Builtins: make these tag libs available in all templates (no {% load %} needed)
-            # Add apps.users.permissions so its permission filters are globally available.
-            "builtins": [
-                "dashboard.templatetags.dashboard_extras",
-                "apps.reports.templatetags.reports_extras",
-                "apps.users.permissions",
-            ],
-            # ✅ Named libraries: map {% load permission_tags %} to the JSON-backed module
-            "libraries": {
-                "common_filters": "apps.common.templatetags.common_filters",
-                "user_filters": "apps.users.templatetags.user_filters",
-                "group_tags": "apps.common.templatetags.group_tags",
-                "permission_tags": "apps.users.permissions",
-            },
-        },
+# Common template options
+_template_options = {
+    "context_processors": [
+        "django.template.context_processors.debug",
+        "django.template.context_processors.request",
+        "django.contrib.auth.context_processors.auth",
+        "django.contrib.messages.context_processors.messages",
+    ],
+    # Builtins globally available
+    "builtins": [
+        "dashboard.templatetags.dashboard_extras",
+        "apps.reports.templatetags.reports_extras",
+        "apps.users.permissions",
+    ],
+    "libraries": {
+        "common_filters": "apps.common.templatetags.common_filters",
+        "user_filters": "apps.users.templatetags.user_filters",
+        "group_tags": "apps.common.templatetags.group_tags",
+        "permission_tags": "apps.users.permissions",
     },
-]
+    "string_if_invalid": "" if DEBUG else "",  # be quiet in templates
+}
+
+if DEBUG:
+    TEMPLATES = [
+        {
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "DIRS": [BASE_DIR / "templates"],
+            "APP_DIRS": True,
+            "OPTIONS": _template_options,
+        }
+    ]
+else:
+    # Cached loader for production
+    TEMPLATES = [
+        {
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "DIRS": [BASE_DIR / "templates"],
+            "APP_DIRS": False,
+            "OPTIONS": {
+                **_template_options,
+                "loaders": [
+                    (
+                        "django.template.loaders.cached.Loader",
+                        [
+                            "django.template.loaders.filesystem.Loader",
+                            "django.template.loaders.app_directories.Loader",
+                        ],
+                    )
+                ],
+            },
+        }
+    ]
 
 WSGI_APPLICATION = "employee_management.wsgi.application"
 
@@ -299,7 +326,7 @@ except Exception:
     pass
 
 # =============================================================================
-# LOGGING - ENHANCED CONFIGURATION
+# LOGGING - ENHANCED CONFIGURATION (UTF-8 safe)
 # =============================================================================
 
 LOGS_DIR = BASE_DIR / "logs"
@@ -319,27 +346,35 @@ LOGGING = {
         },
     },
     "handlers": {
-        "console": {"level": "INFO", "class": "logging.StreamHandler", "formatter": "simple"},
+        # Console kept at WARNING to avoid Windows cp1252 emoji crashes
+        "console": {
+            "level": "WARNING",
+            "class": "logging.StreamHandler",
+            "formatter": "simple",
+        },
         "file": {
             "level": "INFO",
             "class": "logging.FileHandler",
             "filename": str(LOGS_DIR / "django.log"),
             "formatter": "verbose",
+            "encoding": "utf-8",
         },
         "tasks_file": {
-            "level": "DEBUG",
+            "level": "DEBUG" if DEBUG else "INFO",
             "class": "logging.FileHandler",
             "filename": str(LOGS_DIR / "tasks.log"),
             "formatter": "detailed",
+            "encoding": "utf-8",
         },
         "bulk_upload_file": {
             "level": "INFO",
             "class": "logging.FileHandler",
             "filename": str(LOGS_DIR / "bulk_upload.log"),
             "formatter": "detailed",
+            "encoding": "utf-8",
         },
     },
-    "root": {"handlers": ["console"], "level": "INFO"},
+    "root": {"handlers": ["console"], "level": "WARNING"},
     "loggers": {
         "django": {"handlers": ["file"], "level": "INFO", "propagate": False},
         "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
@@ -378,7 +413,7 @@ STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
 }
 
-WHITENOISE_MAX_AGE = 60 * 60 * 24 * 365
+WHITENOISE_MAX_AGE = 60 * 60 * 24 * 365  # 1 year
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.getenv("MEDIA_ROOT") or ("/var/data/media" if os.getenv("RENDER") else str(BASE_DIR / "media"))
@@ -463,6 +498,7 @@ TASK_LIST_PAGE_SIZE = env_int("TASK_LIST_PAGE_SIZE", 50)
 
 # =============================================================================
 # PERFORMANCE SETTINGS
+# (Optional Redis cache auto-detected via REDIS_URL; else LocMem)
 # =============================================================================
 
 SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
@@ -473,14 +509,34 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = env_int("FILE_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 *
 DATA_UPLOAD_MAX_MEMORY_SIZE = env_int("DATA_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 * 1024)
 DATA_UPLOAD_MAX_NUMBER_FIELDS = env_int("DATA_UPLOAD_MAX_NUMBER_FIELDS", 2000)
 
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "unique-snowflake",
-        "TIMEOUT": 300,
-        "OPTIONS": {"MAX_ENTRIES": 1000, "CULL_FREQUENCY": 3},
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+if REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": REDIS_URL,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                "COMPRESSOR": "django_redis.compressors.zlib.ZlibCompressor",
+                "PARSER_CLASS": "redis.connection.HiredisParser",
+            },
+            "TIMEOUT": env_int("CACHE_TIMEOUT", 300),
+        }
     }
-}
+    # Make sessions use Redis too if desired
+    SESSION_ENGINE = "django.contrib.sessions.backends.cache"
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "ems-fast-cache",
+            "TIMEOUT": 300,
+            "OPTIONS": {"MAX_ENTRIES": 2000, "CULL_FREQUENCY": 3},
+        }
+    }
+
+# Faster JSON handling for responses (keeps emoji intact)
+JSON_DUMPS_PARAMS = {"ensure_ascii": False}
 
 # =============================================================================
 # RENDER.COM SPECIFIC SETTINGS
