@@ -96,8 +96,7 @@ LOCAL_APPS = [
     "apps.petty_cash",
     "apps.tasks.apps.TasksConfig",
     "apps.reports",
-    "apps.users",
-    # Use AppConfig so ready() runs and custom tags auto-register, etc.
+    "apps.users.apps.UsersConfig",  # use AppConfig so ready() runs
     "dashboard.apps.DashboardConfig",
     "apps.settings.apps.SettingsConfig",
 ]
@@ -138,16 +137,18 @@ TEMPLATES = [
                 "django.contrib.messages.context_processors.messages",
             ],
             # ✅ Builtins: make these tag libs available in all templates (no {% load %} needed)
+            # Add apps.users.permissions so its permission filters are globally available.
             "builtins": [
                 "dashboard.templatetags.dashboard_extras",
                 "apps.reports.templatetags.reports_extras",
+                "apps.users.permissions",
             ],
-            # Named libraries (optional; you can still {% load %} them by name)
+            # ✅ Named libraries: map {% load permission_tags %} to the JSON-backed module
             "libraries": {
                 "common_filters": "apps.common.templatetags.common_filters",
                 "user_filters": "apps.users.templatetags.user_filters",
                 "group_tags": "apps.common.templatetags.group_tags",
-                "permission_tags": "apps.common.templatetags.permission_tags",
+                "permission_tags": "apps.users.permissions",
             },
         },
     },

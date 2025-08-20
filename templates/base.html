@@ -108,12 +108,12 @@
         </a>
         {% endif %}
 
-        {% if user|has_permission:"leave_list" or user|has_permission:"leave_apply" or user|has_group:"Manager" or user|has_group:"HR" %}
+        {% if user|has_any_permission:"leave_list,leave_apply" or user|has_group:"Manager" or user|has_group:"HR" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="leaveSubmenu" data-submenu-toggle>
           <i class="fas fa-calendar-day"></i> Leave Register <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="leaveSubmenu">
-          {% if user|has_permission:"leave_list" or user|has_permission:"leave_apply" %}
+          {% if user|has_any_permission:"leave_list,leave_apply" %}
           <a href="{% url 'leave:my_leaves' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'my_leaves' %}active{% endif %}">
             <i class="fas fa-file-alt"></i> My Leaves
           </a>
@@ -131,7 +131,7 @@
         </div>
         {% endif %}
 
-        {% if user|has_permission:"add_checklist" or user|has_permission:"list_checklist" %}
+        {% if user|has_any_permission:"add_checklist,list_checklist" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="checklistSubmenu" data-submenu-toggle>
           <i class="fas fa-clipboard-list"></i> Checklist <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -149,13 +149,13 @@
         </div>
         {% endif %}
 
-        {% if user|has_permission:"add_checklist" or user|has_permission:"add_delegation" %}
+        {% if user|has_any_permission:"add_checklist,add_delegation" %}
         <a href="{% url 'tasks:bulk_upload' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'bulk_upload' %}active{% endif %}">
           <i class="fas fa-upload"></i> Bulk Upload
         </a>
         {% endif %}
 
-        {% if user|has_permission:"add_delegation" or user|has_permission:"list_delegation" %}
+        {% if user|has_any_permission:"add_delegation,list_delegation" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="delegationSubmenu" data-submenu-toggle>
           <i class="fas fa-users-cog"></i> Delegation <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -173,7 +173,7 @@
         </div>
         {% endif %}
 
-        {% if user|has_permission:"add_ticket" or user|has_permission:"list_all_tickets" or user|has_permission:"assigned_to_me" or user|has_permission:"assigned_by_me" %}
+        {% if user|has_any_permission:"add_ticket,list_all_tickets,assigned_to_me,assigned_by_me" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="ticketsSubmenu" data-submenu-toggle>
           <i class="fas fa-ticket-alt"></i> Tickets <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -201,7 +201,7 @@
         </div>
         {% endif %}
 
-        {% if user|has_permission:"petty_cash_list" or user|has_permission:"petty_cash_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
+        {% if user|has_any_permission:"petty_cash_list,petty_cash_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="pettyCashSubmenu" data-submenu-toggle>
           <i class="fas fa-wallet"></i> Petty Cash <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -229,12 +229,12 @@
         </div>
         {% endif %}
 
-        {% if user|has_permission:"reimbursement_list" or user|has_permission:"reimbursement_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
+        {% if user|has_any_permission:"reimbursement_list,reimbursement_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="reimbursementSubmenu" data-submenu-toggle>
           <i class="fas fa-receipt"></i> Reimbursement <i class="fas fa-chevron-down chevron"></i>
         </button>
         <div class="submenu" id="reimbursementSubmenu">
-          {% if user|has_permission:"reimbursement_list" or user|has_permission:"reimbursement_apply" %}
+          {% if user|has_any_permission:"reimbursement_list,reimbursement_apply" %}
           <a href="{% url 'reimbursement:my_reimbursements' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'my_reimbursements' %}active{% endif %}">
             <i class="fas fa-file-medical"></i> My Requests
           </a>
@@ -252,7 +252,7 @@
         </div>
         {% endif %}
 
-        {% if user|has_permission:"doer_tasks" or user|has_permission:"weekly_mis_score" or user|has_permission:"performance_score" %}
+        {% if user|has_any_permission:"doer_tasks,weekly_mis_score,performance_score" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="reportsSubmenu" data-submenu-toggle>
           <i class="fas fa-chart-pie"></i> Reports <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -275,7 +275,7 @@
         </div>
         {% endif %}
 
-        {% if user|has_permission:"list_users" or user|has_permission:"add_user" or user.is_superuser %}
+        {% if user|has_any_permission:"list_users,add_user" or user.is_superuser %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="usersSubmenu" data-submenu-toggle>
           <i class="fas fa-user-friends"></i> Users <i class="fas fa-chevron-down chevron"></i>
         </button>
@@ -293,7 +293,7 @@
         </div>
         {% endif %}
 
-        {% if user|has_permission:"authorized_numbers" or user|has_permission:"system_settings" %}
+        {% if user|has_any_permission:"authorized_numbers,system_settings" or user.is_superuser %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="settingsSubmenu" data-submenu-toggle>
           <i class="fas fa-cog"></i> Settings <i class="fas fa-chevron-down chevron"></i>
         </button>

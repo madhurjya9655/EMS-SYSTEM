@@ -2,55 +2,103 @@
 {% block title %}Users{% endblock %}
 
 {% block content %}
-  <h2 class="mb-4">List Users</h2>
-  <a href="{% url 'users:add_user' %}" class="btn btn-success mb-3">
+<div class="page-header mb-4 d-flex justify-content-between align-items-center">
+  <h2 class="page-title mb-0">List Users</h2>
+  <a href="{% url 'users:add_user' %}" class="btn btn-success">
     <i class="fas fa-user-plus"></i> Add User
   </a>
+</div>
+
+<div class="card">
   <div class="table-responsive">
-    <table class="table table-hover align-middle">
+    <table class="table table-hover align-middle mb-0">
       <thead class="table-light">
         <tr>
-          <th>Name</th>
+          <th style="min-width:220px;">Name</th>
           <th>Username</th>
           <th>Email</th>
           <th>Phone</th>
           <th>Role</th>
           <th>Department</th>
-          <th>Action</th>
+          <th class="text-center">Status</th>
+          <th style="width:160px;">Action</th>
         </tr>
       </thead>
       <tbody>
         {% for u in users %}
         <tr>
-          <td>{{ u.first_name }} {{ u.last_name }}</td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div class="rounded-circle bg-secondary text-white d-inline-flex align-items-center justify-content-center"
+                   style="width:32px;height:32px;">
+                {{ u.get_full_name|default:u.username|first|upper }}
+              </div>
+              <div>
+                <div class="fw-semibold">
+                  {{ u.get_full_name|default:u.username }}
+                </div>
+                {% if u.get_full_name %}
+                  <div class="text-muted small">@{{ u.username }}</div>
+                {% endif %}
+              </div>
+            </div>
+          </td>
+
           <td>{{ u.username }}</td>
-          <td>{{ u.email }}</td>
-          <td>{{ u.profile.phone }}</td>
-          <td>{{ u.profile.role }}</td>
-          <td>{{ u.profile.department }}</td>
-          <td class="d-flex gap-1">
-            {% if request.user.is_superuser %}
-            <a href="{% url 'users:edit_user' u.pk %}" class="btn btn-sm btn-primary">
-              <i class="fas fa-edit"></i>
-            </a>
+
+          <td>
+            {% if u.email %}
+              <a href="mailto:{{ u.email }}">{{ u.email }}</a>
+            {% else %}
+              <span class="text-muted">—</span>
             {% endif %}
-            <a href="{% url 'users:delete_user' u.pk %}" class="btn btn-sm btn-danger">
-              <i class="fas fa-trash"></i>
-            </a>
-            {% if request.user.is_superuser %}
-            <a href="{% url 'users:toggle_active' u.pk %}"
-               class="btn btn-sm {% if u.is_active %}btn-secondary{% else %}btn-outline-success{% endif %}">
-              {% if u.is_active %}INACTIVE{% else %}ACTIVE{% endif %}
-            </a>
+          </td>
+
+          <td>{{ u.profile.phone|default:"—" }}</td>
+          <td>{{ u.profile.role|default:"—" }}</td>
+          <td>{{ u.profile.department|default:"—" }}</td>
+
+          <td class="text-center">
+            {% if u.is_active %}
+              <span class="badge bg-success">Active</span>
+            {% else %}
+              <span class="badge bg-secondary">Inactive</span>
             {% endif %}
+          </td>
+
+          <td>
+            <div class="d-flex gap-2">
+              {% if request.user.is_superuser %}
+                <a href="{% url 'users:edit_user' u.pk %}"
+                   class="btn btn-sm btn-primary"
+                   title="Edit user">
+                  <i class="fas fa-edit"></i>
+                </a>
+              {% endif %}
+
+              <a href="{% url 'users:delete_user' u.pk %}"
+                 class="btn btn-sm btn-danger"
+                 title="Delete user">
+                <i class="fas fa-trash"></i>
+              </a>
+
+              {% if request.user.is_superuser %}
+                <a href="{% url 'users:toggle_active' u.pk %}"
+                   class="btn btn-sm {% if u.is_active %}btn-outline-secondary{% else %}btn-outline-success{% endif %}"
+                   title="{% if u.is_active %}Deactivate{% else %}Activate{% endif %} user">
+                  {% if u.is_active %}Deactivate{% else %}Activate{% endif %}
+                </a>
+              {% endif %}
+            </div>
           </td>
         </tr>
         {% empty %}
         <tr>
-          <td colspan="7" class="text-center text-muted">No users found.</td>
+          <td colspan="8" class="text-center text-muted py-4">No users found.</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+</div>
 {% endblock %}

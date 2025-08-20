@@ -1,8 +1,19 @@
 {% extends "base.html" %}
+{% block title %}User Not Found{% endblock %}
+
 {% block content %}
-  <div class="alert alert-danger mt-5">
-    <h2>User Not Found</h2>
-    <p>The requested user does not exist.</p>
-    <a href="{% url 'users:list_users' %}" class="btn btn-primary mt-3">Back to Users</a>
+<div class="page-header mb-4">
+  <h2 class="page-title">User Not Found</h2>
+</div>
+
+<div class="card border-danger">
+  <div class="card-body">
+    <div class="alert alert-danger mb-3" role="alert">
+      The requested user does not exist or may have been deleted.
+    </div>
+    <a href="{% url 'users:list_users' %}" class="btn btn-primary">
+      ← Back to Users
+    </a>
   </div>
+</div>
 {% endblock %}

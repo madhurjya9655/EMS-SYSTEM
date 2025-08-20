@@ -1,12 +1,45 @@
 {% extends "base.html" %}
+
+{% block title %}Confirm User Deletion{% endblock %}
+
 {% block content %}
-  <div class="alert alert-warning mt-5">
-    <h2>Confirm Deletion</h2>
-    <p>Are you sure you want to delete user <strong>{{ user.get_full_name|default:user.username }}</strong>?</p>
-    <form method="post">
+<div class="page-header mb-4">
+  <h2 class="page-title">Confirm Deletion</h2>
+</div>
+
+<div class="card border-warning">
+  <div class="card-body">
+    <p class="mb-3">
+      Are you sure you want to delete user
+      <strong>{{ user.get_full_name|default:user.username }}</strong>?
+    </p>
+
+    <div class="mb-3 text-muted small">
+      <div><strong>Username:</strong> {{ user.username }}</div>
+      {% if user.email %}<div><strong>Email:</strong> {{ user.email }}</div>{% endif %}
+      {% if user.profile %}
+        {% if user.profile.phone %}<div><strong>Phone:</strong> {{ user.profile.phone }}</div>{% endif %}
+        {% if user.profile.role %}<div><strong>Role:</strong> {{ user.profile.role }}</div>{% endif %}
+      {% endif %}
+    </div>
+
+    {% if request.user.pk == user.pk %}
+      <div class="alert alert-danger" role="alert">
+        You cannot delete your own account.
+      </div>
+    {% endif %}
+
+    <form method="post" class="d-flex gap-2">
       {% csrf_token %}
-      <button type="submit" class="btn btn-danger">Yes, delete</button>
-      <a href="{% url 'users:list_users' %}" class="btn btn-secondary">Cancel</a>
+      <button type="submit"
+              class="btn btn-danger"
+              {% if request.user.pk == user.pk %}disabled aria-disabled="true"{% endif %}>
+        <i class="fas fa-trash"></i> Yes, delete
+      </button>
+      <a href="{% url 'users:list_users' %}" class="btn btn-secondary">
+        Cancel
+      </a>
     </form>
   </div>
+</div>
 {% endblock %}

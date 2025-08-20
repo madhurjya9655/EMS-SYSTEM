@@ -3,93 +3,231 @@
 {% block title %}Edit User{% endblock %}
 
 {% block content %}
-  <h2 class="mb-4">Edit {{ user_obj.get_full_name|default:user_obj.username }}</h2>
-  <form method="post" class="mb-4">
-    {% csrf_token %}
-    <div class="row mb-3">
-      <div class="col-md-4">
-        {{ uf.first_name.label_tag }}{{ uf.first_name }}
-      </div>
-      <div class="col-md-4">
-        {{ uf.last_name.label_tag }}{{ uf.last_name }}
-      </div>
-      <div class="col-md-4">
-        {{ uf.username.label_tag }}{{ uf.username }}
-      </div>
-    </div>
-    <div class="row mb-3">
-      <div class="col-md-4">
-        {{ uf.email.label_tag }}{{ uf.email }}
-      </div>
-      <div class="col-md-4">
-        {{ uf.password.label_tag }}{{ uf.password }}
-      </div>
-      <div class="col-md-4">
-        {{ pf.role.label_tag }}{{ pf.role }}
-      </div>
-    </div>
-    <div class="row mb-3">
-      <div class="col-md-4">
-        {{ pf.phone.label_tag }}{{ pf.phone }}
-      </div>
-      <div class="col-md-4">
-        {{ pf.branch.label_tag }}{{ pf.branch }}
-      </div>
-      <div class="col-md-4">
-        {{ pf.department.label_tag }}{{ pf.department }}
-      </div>
-    </div>
-    <div class="row mb-4">
-      <div class="col-md-4">
-        {{ pf.team_leader.label_tag }}{{ pf.team_leader }}
-      </div>
-      <div class="col-md-4"></div>
-      <div class="col-md-4"></div>
-    </div>
+<div class="page-header mb-4">
+  <h2 class="page-title">
+    Edit {{ user_obj.get_full_name|default:user_obj.username }}
+  </h2>
+</div>
 
-    <hr class="my-4">
-    <h5>Select User Privilege</h5>
-    <div class="row">
-      {% for module, perms in permissions_structure.items %}
-        <div class="col-md-4 mb-4">
-          <div style="font-weight: 600; font-size: 1.08rem; margin-bottom: .35em;">
-            <input type="checkbox" class="select-all-module me-2" data-module="{{ module|slugify }}">
-            {{ module }}
+<div class="card mb-5">
+  <div class="card-body">
+    <form method="post" class="row g-4">
+      {% csrf_token %}
+
+      {% if uf.non_field_errors or pf.non_field_errors %}
+        <div class="col-12">
+          <div class="alert alert-danger">
+            {% for e in uf.non_field_errors %}<div>{{ e }}</div>{% endfor %}
+            {% for e in pf.non_field_errors %}<div>{{ e }}</div>{% endfor %}
           </div>
-          {% for code, label in perms %}
-            <div class="form-check ms-4">
-              <input
-                type="checkbox"
-                name="permissions"
-                value="{{ code }}"
-                id="perm_{{ code }}"
-                class="form-check-input module-{{ module|slugify }} permission-checkbox"
-                {% if pf.permissions.value and code in pf.permissions.value %}checked{% endif %}
-              >
-              <label class="form-check-label" for="perm_{{ code }}">
-                {{ label }}
-              </label>
+        </div>
+      {% endif %}
+
+      <!-- User Info -->
+      <div class="col-md-4">
+        <label for="id_first_name" class="form-label">First name</label>
+        <input type="text" name="first_name" id="id_first_name" class="form-control"
+               value="{{ uf.first_name.value|default_if_none:'' }}" autocomplete="given-name">
+        {% for error in uf.first_name.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+
+      <div class="col-md-4">
+        <label for="id_last_name" class="form-label">Last name</label>
+        <input type="text" name="last_name" id="id_last_name" class="form-control"
+               value="{{ uf.last_name.value|default_if_none:'' }}" autocomplete="family-name">
+        {% for error in uf.last_name.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+
+      <div class="col-md-4">
+        <label for="id_username" class="form-label">Username</label>
+        <input type="text" name="username" id="id_username" class="form-control"
+               value="{{ uf.username.value|default_if_none:'' }}" autocomplete="username">
+        {% for error in uf.username.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+
+      <div class="col-md-4">
+        <label for="id_email" class="form-label">Email</label>
+        <input type="email" name="email" id="id_email" class="form-control"
+               value="{{ uf.email.value|default_if_none:'' }}" autocomplete="email">
+        {% for error in uf.email.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+
+      <div class="col-md-4">
+        <label for="id_password" class="form-label">Password</label>
+        <input type="password" name="password" id="id_password" class="form-control"
+               placeholder="Leave blank to keep current" autocomplete="new-password">
+        {% for error in uf.password.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+
+      <div class="col-md-4">
+        <label for="id_role" class="form-label">Role in BOS</label>
+        <select name="role" id="id_role" class="form-select">
+          <option value="">Select One</option>
+          {% for val, label in pf.role.field.choices %}
+            <option value="{{ val }}" {% if pf.role.value == val %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        {% for error in pf.role.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+
+      <div class="col-md-4">
+        <label for="id_phone" class="form-label">Phone <small>(10 digits)</small></label>
+        <input type="text" name="phone" id="id_phone" class="form-control"
+               value="{{ pf.phone.value|default_if_none:'' }}" inputmode="numeric" autocomplete="tel">
+        {% for error in pf.phone.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+
+      <div class="col-md-4">
+        <label for="id_branch" class="form-label">Branch</label>
+        <input type="text" name="branch" id="id_branch" class="form-control"
+               value="{{ pf.branch.value|default_if_none:'' }}">
+        {% for error in pf.branch.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+
+      <div class="col-md-4">
+        <label for="id_department" class="form-label">Department</label>
+        <select name="department" id="id_department" class="form-select">
+          <option value="">Select One</option>
+          <option value="FINANCE" {% if pf.department.value == 'FINANCE' %}selected{% endif %}>FINANCE</option>
+          <option value="MARKETING" {% if pf.department.value == 'MARKETING' %}selected{% endif %}>MARKETING</option>
+          <option value="MDO TEAM" {% if pf.department.value == 'MDO TEAM' %}selected{% endif %}>MDO TEAM</option>
+          <option value="SALES OPERATION TEAM" {% if pf.department.value == 'SALES OPERATION TEAM' %}selected{% endif %}>SALES OPERATION TEAM</option>
+        </select>
+        {% for error in pf.department.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+
+      <div class="col-md-4">
+        <label for="id_team_leader" class="form-label">Team Leader</label>
+        <select name="team_leader" id="id_team_leader" class="form-select">
+          <option value="">---------</option>
+          {% for user in pf.team_leader.field.queryset %}
+            <option value="{{ user.pk }}" {% if pf.team_leader.value|stringformat:"s" == user.pk|stringformat:"s" %}selected{% endif %}>
+              {{ user.get_full_name|default:user.username }}
+            </option>
+          {% endfor %}
+        </select>
+        {% for error in pf.team_leader.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+
+      <!-- Permissions -->
+      <div class="col-12">
+        <hr class="my-4">
+        <div class="d-flex align-items-center justify-content-between mb-2">
+          <h5 class="mb-0">Select User Privilege</h5>
+          <div class="d-none d-md-block text-muted small">Tip: use the module checkbox to select/deselect all in a group.</div>
+        </div>
+
+        <div class="row">
+          {% for module, perms in permissions_structure.items %}
+            {% with module_slug=module|slugify %}
+            <div class="col-md-4 mb-4">
+              <div class="form-check" style="font-weight:600; font-size:1.05rem; margin-bottom:.35em;">
+                <input type="checkbox" class="form-check-input select-all-module"
+                       id="select_all_{{ module_slug }}" data-module="{{ module_slug }}">
+                <label class="form-check-label" for="select_all_{{ module_slug }}">{{ module }}</label>
+              </div>
+
+              {% for code, label in perms %}
+                <div class="form-check ms-4">
+                  <input
+                    type="checkbox"
+                    name="permissions"
+                    value="{{ code }}"
+                    id="perm_{{ code }}"
+                    class="form-check-input permission-checkbox module-{{ module_slug }}"
+                    {% if pf.permissions.value and code in pf.permissions.value %}checked{% endif %}
+                  >
+                  <label class="form-check-label" for="perm_{{ code }}">{{ label }}</label>
+                </div>
+              {% endfor %}
             </div>
+            {% endwith %}
           {% endfor %}
         </div>
-      {% endfor %}
-    </div>
-    {{ pf.permissions.errors }}
 
-    <div class="col-12 text-end mt-4">
-      <button type="submit" class="btn btn-primary">Save Changes</button>
-      <a href="{% url 'users:list_users' %}" class="btn btn-secondary ms-2">Cancel</a>
-    </div>
-  </form>
-  <script>
-    // "Select all" logic for grouped modules
-    document.querySelectorAll('.select-all-module').forEach(function(selectAllBox) {
-      selectAllBox.addEventListener('change', function() {
-        var mod = this.getAttribute('data-module');
-        document.querySelectorAll('.permission-checkbox.module-' + mod).forEach(function(cb) {
-          cb.checked = selectAllBox.checked;
-        });
+        {% for error in pf.permissions.errors %}
+          <div class="invalid-feedback d-block">{{ error }}</div>
+        {% endfor %}
+      </div>
+
+      <div class="col-12 text-end">
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+        <a href="{% url 'users:list_users' %}" class="btn btn-secondary ms-2">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  // Toggle all permissions within a module when its "select all" is toggled
+  document.querySelectorAll('.select-all-module').forEach(function(selectAll) {
+    selectAll.addEventListener('change', function() {
+      var mod = this.getAttribute('data-module');
+      document.querySelectorAll('.permission-checkbox.module-' + mod).forEach(function(cb) {
+        cb.checked = selectAll.checked;
       });
+      selectAll.indeterminate = false;
     });
-  </script>
+  });
+
+  // Keep "select all" checkbox in sync (checked / unchecked / indeterminate)
+  function syncModuleHeader(moduleSlug) {
+    const header = document.querySelector('#select_all_' + moduleSlug);
+    if (!header) return;
+    const boxes = Array.from(document.querySelectorAll('.permission-checkbox.module-' + moduleSlug));
+    const checkedCount = boxes.filter(cb => cb.checked).length;
+    if (checkedCount === 0) {
+      header.checked = false;
+      header.indeterminate = false;
+    } else if (checkedCount === boxes.length) {
+      header.checked = true;
+      header.indeterminate = false;
+    } else {
+      header.checked = false;
+      header.indeterminate = true;
+    }
+  }
+
+  // On any permission checkbox change, sync its module header
+  document.querySelectorAll('.permission-checkbox').forEach(function(cb) {
+    cb.addEventListener('change', function() {
+      const classes = Array.from(cb.classList);
+      const modClass = classes.find(c => c.startsWith('module-'));
+      if (modClass) {
+        const slug = modClass.replace('module-', '');
+        syncModuleHeader(slug);
+      }
+    });
+  });
+
+  // Initial sync on page load (pre-checked state)
+  document.addEventListener('DOMContentLoaded', function() {
+    const modules = new Set();
+    document.querySelectorAll('.permission-checkbox').forEach(cb => {
+      const cls = Array.from(cb.classList).find(c => c.startsWith('module-'));
+      if (cls) modules.add(cls.replace('module-', ''));
+    });
+    modules.forEach(syncModuleHeader);
+  });
+</script>
 {% endblock %}
