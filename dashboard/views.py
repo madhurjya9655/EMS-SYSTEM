@@ -96,7 +96,7 @@ def _coerce_date_safe(dtor):
 
 
 def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> datetime:
-    """Get next planned date for recurring tasks, aligned to 10:00 IST and working days."""
+    """Get next planned date for recurring tasks, aligned to 10:00 IST and working days (legacy local helper)."""
     if (mode or '') not in RECURRING_MODES:
         return None
 
@@ -125,114 +125,39 @@ def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> datet
     return cur_ist.astimezone(tz)
 
 
-def create_missing_recurring_checklist_tasks(user):
+# ---------- NEW: Checklist visibility gating per final rules ----------
+def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     """
-    Create missing recurring checklist tasks for a user.
-    NOTE: If you prefer NOT creating/emailing on dashboard load, remove the call to this function in dashboard_home().
+    Final rules:
+
+    • If planned date < today  → show (pending).
+    • If planned date > today  → hide.
+    • If planned date = today:
+        - If planned time <= now → show immediately (even if before 10 AM).
+        - Else → show from 10:00 AM onwards.
     """
-    now = timezone.now()
+    if not task_dt:
+        return False
 
-    seeds = (
-        Checklist.objects.filter(assign_to=user, mode__in=RECURRING_MODES, status='Pending')
-        .values('assign_to_id', 'task_name', 'mode', 'frequency', 'group_name')
-        .distinct()
-    )
+    # Convert task planned datetime to IST for consistent gating
+    dt_ist = task_dt.astimezone(IST) if timezone.is_aware(task_dt) else IST.localize(task_dt)
+    task_date = dt_ist.date()
+    today = now_ist.date()
 
-    for s in seeds:
-        try:
-            last = (
-                Checklist.objects
-                .filter(status='Pending', **s)
-                .order_by('-planned_date', '-id')
-                .first()
-            )
-            if not last:
-                continue
+    if task_date < today:
+        return True
+    if task_date > today:
+        return False
 
-            if Checklist.objects.filter(status='Pending', planned_date__gt=now, **s).exists():
-                continue
+    # task_date == today
+    if dt_ist.time() <= now_ist.time():
+        return True
 
-            next_planned = get_next_planned_date(last.planned_date, last.mode, last.frequency)
-            if not next_planned:
-                continue
-
-            safety = 0
-            while next_planned and next_planned <= now and safety < 730:
-                next_planned = get_next_planned_date(next_planned, last.mode, last.frequency)
-                safety += 1
-            if not next_planned:
-                continue
-
-            is_dupe = Checklist.objects.filter(
-                assign_to_id=s['assign_to_id'],
-                task_name=s['task_name'],
-                mode=s['mode'],
-                frequency=s['frequency'],
-                group_name=s['group_name'],
-                planned_date__gte=next_planned - timedelta(minutes=1),
-                planned_date__lt=next_planned + timedelta(minutes=1),
-                status='Pending',
-            ).exists()
-            if is_dupe:
-                continue
-
-            new_task = Checklist.objects.create(
-                assign_by=last.assign_by,
-                task_name=last.task_name,
-                message=last.message,
-                assign_to=last.assign_to,
-                planned_date=next_planned,
-                priority=last.priority,
-                attachment_mandatory=last.attachment_mandatory,
-                mode=last.mode,
-                frequency=last.frequency,
-                time_per_task_minutes=last.time_per_task_minutes,
-                remind_before_days=last.remind_before_days,
-                assign_pc=last.assign_pc,
-                notify_to=last.notify_to,
-                set_reminder=last.set_reminder,
-                reminder_mode=last.reminder_mode,
-                reminder_frequency=last.reminder_frequency,
-                reminder_starting_time=last.reminder_starting_time,
-                checklist_auto_close=last.checklist_auto_close,
-                checklist_auto_close_days=last.checklist_auto_close_days,
-                group_name=getattr(last, 'group_name', None),
-                actual_duration_minutes=0,
-                status='Pending',
-            )
-
-            # ALWAYS send emails for recurring tasks
-            try:
-                from django.urls import reverse
-                from apps.tasks.utils import (
-                    send_checklist_assignment_to_user,
-                    send_checklist_admin_confirmation,
-                )
-                from django.conf import settings
-
-                site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
-                complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[new_task.id])}"
-
-                send_checklist_assignment_to_user(
-                    task=new_task,
-                    complete_url=complete_url,
-                    subject_prefix="Recurring Checklist Generated",
-                )
-                send_checklist_admin_confirmation(
-                    task=new_task,
-                    subject_prefix="Recurring Checklist Generated",
-                )
-                logger.info(_safe_console_text(
-                    f"Created and emailed recurring task: {new_task.task_name} for {new_task.assign_to}"
-                ))
-            except Exception as e:
-                logger.error(_safe_console_text(f"Failed to send recurring task emails: {e}"))
-
-        except Exception as e:
-            logger.error(_safe_console_text(f"Failed to create recurring checklist for series {s}: {e}"))
-            continue
+    ten_am = dt_time(10, 0, 0)
+    return now_ist.time() >= ten_am
 
 
+# ---------- Aggregations ----------
 def calculate_checklist_assigned_time(qs, date_from, date_to):
     """Calculate total assigned time for checklists in date range."""
     total_minutes = 0
@@ -338,28 +263,32 @@ def minutes_to_hhmm(minutes):
 @login_required
 def dashboard_home(request):
     """
-    COMPLETELY FIXED: Perfect dashboard filtering per requirements
+    FINAL DASHBOARD RULES IMPLEMENTED
 
-    Dashboard Requirements:
-    - Show all pending tasks with planned date <= today (including past tasks not completed)
-    - Show tasks for today until they are completed
-    - DO NOT show future tasks (planned for tomorrow or later) until the morning of their planned date at 10:00 AM IST
+    Checklist (recurring or one-time):
+      • Delay counted from planned time.
+      • Visibility:
+          - If planned date < today           → show.
+          - If planned date = today and planned time ≤ now → show immediately.
+          - Else (planned today but time > now) → show from 10:00 AM of that day.
+          - If planned date > today → hide.
+
+    Delegation & Help Ticket:
+      • Visible immediately at/after their planned timestamp.
+      • No recurrence logic here.
+
+    Past-due items remain until completed. Completed disappear immediately.
     """
-    try:
-        # If you prefer not to create/email recurrences here, comment the next line:
-        create_missing_recurring_checklist_tasks(request.user)
-    except Exception as e:
-        logger.error(_safe_console_text(f"Error creating recurring tasks in dashboard: {e}"))
-
-    # Current IST and today's date
+    # DO NOT auto-create recurrences here.
     now_ist = timezone.now().astimezone(IST)
     today_ist = now_ist.date()
+
     project_tz = timezone.get_current_timezone()
     now_project_tz = now_ist.astimezone(project_tz)
 
     logger.info(_safe_console_text(f"Dashboard accessed by {request.user.username} at {now_ist.strftime('%Y-%m-%d %H:%M:%S IST')}"))
 
-    # Week boundaries for stats
+    # Week boundaries (Mon..Sun)
     start_current = today_ist - timedelta(days=today_ist.weekday())
     start_prev = start_current - timedelta(days=7)
     end_prev = start_current - timedelta(days=1)
@@ -367,7 +296,7 @@ def dashboard_home(request):
     curr_start_dt, curr_end_dt = span_bounds(start_current, today_ist)
     prev_start_dt, prev_end_dt = span_bounds(start_prev, end_prev)
 
-    # Weekly scores
+    # --- Weekly scores
     try:
         curr_chk = Checklist.objects.filter(
             assign_to=request.user, planned_date__gte=curr_start_dt,
@@ -405,7 +334,7 @@ def dashboard_home(request):
         'help_ticket': {'previous': prev_help,  'current': curr_help},
     }
 
-    # Pending counts
+    # --- Pending counts
     try:
         pending_tasks = {
             'checklist':   Checklist.objects.filter(assign_to=request.user, status='Pending').count(),
@@ -419,56 +348,62 @@ def dashboard_home(request):
     selected = request.GET.get('task_type')
     today_only = (request.GET.get('today') == '1' or request.GET.get('today_only') == '1')
 
-    # Task lists (perfect cutoff logic)
+    # --- Build time bounds in project TZ for DB filtering
+    start_today_ist = timezone.make_aware(datetime.combine(today_ist, dt_time.min), IST).astimezone(project_tz)
+    end_today_ist = timezone.make_aware(datetime.combine(today_ist, dt_time.max), IST).astimezone(project_tz)
+
+    # --- Query, then apply checklist gating in Python (per rules)
     try:
+        # Base set up to end-of-today
+        base_checklists = Checklist.objects.filter(
+            assign_to=request.user, status='Pending',
+            planned_date__lte=end_today_ist
+        ).select_related('assign_by').order_by('planned_date')
+
         if today_only:
-            # Lower bound: start of today IST; Upper bound: NOW (IST) -> converted to project TZ
-            today_start = timezone.make_aware(datetime.combine(today_ist, dt_time.min), IST).astimezone(project_tz)
+            # Restrict to today's date range, then apply gating
+            base_checklists = base_checklists.filter(planned_date__gte=start_today_ist,
+                                                     planned_date__lte=end_today_ist)
 
-            checklist_qs = list(Checklist.objects.filter(
-                assign_to=request.user, status='Pending',
-                planned_date__gte=today_start,
-                planned_date__lte=now_project_tz,  # ← show only up to NOW
-            ).select_related('assign_by').order_by('planned_date'))
+        checklist_qs = []
+        for c in base_checklists:
+            if _should_show_checklist(c.planned_date, now_ist):
+                checklist_qs.append(c)
 
-            delegation_qs = list(Delegation.objects.filter(
-                assign_to=request.user, status='Pending',
-                planned_date__gte=today_start,
-                planned_date__lte=now_project_tz,
-            ).select_related('assign_by').order_by('planned_date'))
-
-            help_ticket_qs = list(HelpTicket.objects.filter(
-                assign_to=request.user,
-                planned_date__gte=today_start,
-                planned_date__lte=now_project_tz,
-            ).exclude(status='Closed').select_related('assign_by').order_by('planned_date'))
-
-            cutoff_debug = f"{now_project_tz} (today up to NOW)"
+        # Delegations — visible immediately if planned <= bound
+        if today_only:
+            delegation_qs = list(
+                Delegation.objects.filter(
+                    assign_to=request.user, status='Pending',
+                    planned_date__gte=start_today_ist,
+                    planned_date__lte=now_project_tz,  # up to now
+                ).select_related('assign_by').order_by('planned_date')
+            )
+            help_ticket_qs = list(
+                HelpTicket.objects.filter(
+                    assign_to=request.user,
+                    planned_date__gte=start_today_ist,
+                    planned_date__lte=now_project_tz,
+                ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
+            )
         else:
-            # End-of-today IST as cutoff
-            end_of_today_ist = timezone.make_aware(datetime.combine(today_ist, dt_time.max), IST).astimezone(project_tz)
-
-            checklist_qs = list(Checklist.objects.filter(
-                assign_to=request.user, status='Pending',
-                planned_date__lte=end_of_today_ist
-            ).select_related('assign_by').order_by('planned_date'))
-
-            delegation_qs = list(Delegation.objects.filter(
-                assign_to=request.user, status='Pending',
-                planned_date__lte=end_of_today_ist
-            ).select_related('assign_by').order_by('planned_date'))
-
-            help_ticket_qs = list(HelpTicket.objects.filter(
-                assign_to=request.user, planned_date__lte=end_of_today_ist
-            ).exclude(status='Closed').select_related('assign_by').order_by('planned_date'))
-
-            cutoff_debug = str(end_of_today_ist)
+            delegation_qs = list(
+                Delegation.objects.filter(
+                    assign_to=request.user, status='Pending',
+                    planned_date__lte=end_today_ist
+                ).select_related('assign_by').order_by('planned_date')
+            )
+            help_ticket_qs = list(
+                HelpTicket.objects.filter(
+                    assign_to=request.user, planned_date__lte=end_today_ist
+                ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
+            )
 
         logger.info(_safe_console_text(
-            f"Perfect dashboard filtering for {request.user.username}:\n"
+            f"Dashboard filtering for {request.user.username}:\n"
             f"  - Today only: {today_only}\n"
-            f"  - Found tasks: {len(checklist_qs)} checklists, {len(delegation_qs)} delegations, {len(help_ticket_qs)} help tickets\n"
-            f"  - Cutoff: Tasks with planned_date <= {cutoff_debug}"
+            f"  - Found tasks (after gating): {len(checklist_qs)} checklists, {len(delegation_qs)} delegations, {len(help_ticket_qs)} help tickets\n"
+            f"  - Cutoff (DB): <= {end_today_ist} ; Gating: 10:00 rule + overdue immediate"
         ))
     except Exception as e:
         logger.error(_safe_console_text(f"Error querying task lists: {e}"))

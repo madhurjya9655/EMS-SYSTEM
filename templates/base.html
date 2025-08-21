@@ -214,7 +214,8 @@
         </div>
         {% endif %}
 
-        {% if user|has_any_permission:"add_checklist,add_delegation" %}
+        {# FIX: Match view decorator for bulk upload permission #}
+        {% if user|has_permission:"mt_bulk_upload" %}
         <a href="{% url 'tasks:bulk_upload' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'bulk_upload' %}active{% endif %}"
            {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'bulk_upload' %}aria-current="page"{% endif %}>
           <i class="fas fa-upload" aria-hidden="true"></i> Bulk Upload

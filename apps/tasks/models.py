@@ -66,7 +66,6 @@ class Checklist(models.Model):
         null=True
     )
     reminder_frequency = models.PositiveIntegerField(default=1, blank=True, null=True)
-    reminder_before_days = models.PositiveIntegerField(default=0, blank=True, null=True)
     reminder_starting_time = models.TimeField(blank=True, null=True)
 
     checklist_auto_close = models.BooleanField(default=False)
@@ -91,7 +90,6 @@ class Checklist(models.Model):
         return timesince(self.planned_date, end)
 
     def clean(self):
-        from django.core.exceptions import ValidationError
         super().clean()
 
     def save(self, *args, **kwargs):
@@ -119,6 +117,7 @@ class Delegation(models.Model):
 
     time_per_task_minutes = models.PositiveIntegerField(default=0, blank=True, null=True)
 
+    # Delegations are one-time only. Keep nullable fields for backward compatibility; always treated as non-recurring.
     mode = models.CharField(
         max_length=10,
         choices=[
@@ -129,9 +128,9 @@ class Delegation(models.Model):
         ],
         blank=True,
         null=True,
-        default='Daily'
+        default=None
     )
-    frequency = models.PositiveIntegerField(default=1, blank=True, null=True)
+    frequency = models.PositiveIntegerField(default=None, blank=True, null=True)
 
     doer_file = models.FileField(upload_to='delegation_doer/', blank=True, null=True)
     doer_notes = models.TextField(blank=True, null=True)
@@ -140,13 +139,10 @@ class Delegation(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def is_recurring(self):
-        return bool(
-            self.mode in ['Daily', 'Weekly', 'Monthly', 'Yearly'] and
-            self.frequency and int(self.frequency) > 0
-        )
+        # Explicitly disabled for Delegation tasks
+        return False
 
     def clean(self):
-        from django.core.exceptions import ValidationError
         super().clean()
 
     def save(self, *args, **kwargs):

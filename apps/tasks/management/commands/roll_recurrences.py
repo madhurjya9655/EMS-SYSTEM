@@ -2,17 +2,19 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, time as dt_time
 
 import pytz
+from dateutil.relativedelta import relativedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from django.db import transaction
 
 from apps.tasks.models import Checklist, Delegation
 from apps.tasks.recurrence import (
-    get_next_planned_date,
-    schedule_recurring_at_10am,
+    normalize_mode,
+    is_working_day,
+    next_working_day,
     RECURRING_MODES,
 )
 
@@ -24,11 +26,68 @@ def _has_field(model, field_name: str) -> bool:
     return any(getattr(f, "name", None) == field_name for f in model._meta.get_fields())
 
 
+def _next_planned_preserve_time(prev_dt: datetime, mode: str, frequency: int) -> datetime | None:
+    """
+    Compute the next occurrence for a recurring checklist while PRESERVING the
+    original planned time-of-day. If the next date lands on Sunday/holiday, move
+    forward to the next working day but KEEP the same time-of-day.
+
+    Returns an aware datetime in the project's timezone.
+    """
+    if not prev_dt:
+        return None
+
+    m = normalize_mode(mode)
+    if m not in RECURRING_MODES:
+        return None
+
+    step = max(int(frequency or 1), 1)
+
+    # Work in IST for wall-clock stability
+    if timezone.is_naive(prev_dt):
+        prev_dt = timezone.make_aware(prev_dt, timezone.get_current_timezone())
+    prev_ist = prev_dt.astimezone(IST)
+
+    # Preserve original time-of-day
+    t_planned = dt_time(prev_ist.hour, prev_ist.minute, prev_ist.second, prev_ist.microsecond)
+
+    # Add interval
+    if m == "Daily":
+        nxt_ist = prev_ist + relativedelta(days=step)
+    elif m == "Weekly":
+        nxt_ist = prev_ist + relativedelta(weeks=step)
+    elif m == "Monthly":
+        nxt_ist = prev_ist + relativedelta(months=step)
+    elif m == "Yearly":
+        nxt_ist = prev_ist + relativedelta(years=step)
+    else:
+        return None
+
+    # Re-apply preserved time-of-day
+    nxt_ist = nxt_ist.replace(
+        hour=t_planned.hour,
+        minute=t_planned.minute,
+        second=t_planned.second,
+        microsecond=t_planned.microsecond,
+    )
+
+    # If Sunday/holiday, push FORWARD to next working day, SAME time
+    d = nxt_ist.date()
+    if not is_working_day(d):
+        d = next_working_day(d)
+        nxt_ist = IST.localize(datetime.combine(d, t_planned))
+
+    # Return in project timezone
+    return nxt_ist.astimezone(timezone.get_current_timezone())
+
+
 class Command(BaseCommand):
     help = (
-        "Recurrence utilities: roll due occurrences, cleanup old completed, validate configs.\n"
-        "IMPORTANT: Rolling only creates occurrences that are DUE NOW (<= current time at 10:00 IST), "
-        "and never pre-creates future tasks. Delegations are treated as one-time and skipped."
+        "Roll due recurring CHECKLIST tasks only (no pre-creation).\n"
+        "• Creates the next occurrence ONLY when it is due now (<= current IST time).\n"
+        "• Next occurrence PRESERVES the original planned time-of-day.\n"
+        "• If the calculated date is Sunday/holiday, it shifts to the next working day (same time).\n"
+        "• Delegations are treated as one-time by policy and are not rolled."
     )
 
     def add_arguments(self, parser):
@@ -43,7 +102,7 @@ class Command(BaseCommand):
             action="store_true",
             help="Show what would be done without making changes.",
         )
-        # kept for backward compatibility; ignored by the roll logic now
+        # Kept for backward compatibility; ignored by the roll logic now
         parser.add_argument(
             "--days-ahead",
             type=int,
@@ -104,7 +163,10 @@ class Command(BaseCommand):
 
     # ------------------------------- ROLL (DUE ONLY) ------------------------------- #
     def _roll_due_checklists(self, opts, dry_run: bool) -> int:
-        """Create the next occurrence only when it is due (<= now at 10:00 IST)."""
+        """
+        Create the next occurrence only when it is due (<= now in IST).
+        Preserves planned time-of-day for delay calculations.
+        """
         user_id = opts.get("user_id")
         now_ist = timezone.now().astimezone(IST)
 
@@ -124,17 +186,14 @@ class Command(BaseCommand):
             if not latest:
                 continue
 
-            # Compute the next scheduled occurrence (already normalized to 10:00 IST inside)
-            next_dt = get_next_planned_date(latest.planned_date, latest.mode, latest.frequency)
+            # Compute the next scheduled occurrence (time-of-day preserved)
+            next_dt = _next_planned_preserve_time(latest.planned_date, latest.mode, latest.frequency)
             if not next_dt:
                 continue
 
             # Only create if it's due now (<= current IST time)
             if next_dt.astimezone(IST) > now_ist:
                 continue
-
-            # Normalize again for idempotency
-            next_dt = schedule_recurring_at_10am(next_dt)
 
             # Dupe guard (±1 minute)
             exists = Checklist.objects.filter(
@@ -163,20 +222,21 @@ class Command(BaseCommand):
                         assign_by=getattr(latest, "assign_by", None),
                         task_name=latest.task_name,
                         assign_to=latest.assign_to,
-                        planned_date=next_dt,
+                        planned_date=next_dt,  # PRESERVED time-of-day
                         priority=getattr(latest, "priority", None),
                         attachment_mandatory=getattr(latest, "attachment_mandatory", False),
                         mode=latest.mode,
                         frequency=latest.frequency,
                         status="Pending",
                     )
-                    # optional fields mirrored
+                    # Optional fields mirrored when present on the model
                     for opt in (
                         "message",
                         "time_per_task_minutes",
                         "remind_before_days",
                         "assign_pc",
                         "notify_to",
+                        "auditor",
                         "set_reminder",
                         "reminder_mode",
                         "reminder_frequency",

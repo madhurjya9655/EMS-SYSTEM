@@ -35,7 +35,7 @@ class ChecklistForm(forms.ModelForm):
             'time_per_task_minutes', 'remind_before_days', 'message',
             'media_upload', 'assign_pc', 'group_name', 'notify_to', 'auditor',
             'set_reminder', 'reminder_mode', 'reminder_frequency',
-            'reminder_before_days', 'reminder_starting_time',
+            'reminder_starting_time',
             'checklist_auto_close', 'checklist_auto_close_days',
         ]
         widgets = {
@@ -57,21 +57,20 @@ class ChecklistForm(forms.ModelForm):
             'set_reminder': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
             'reminder_mode': forms.Select(attrs={'class': 'form-select'}),
             'reminder_frequency': forms.NumberInput(attrs={'class': 'form-control', 'min': '1'}),
-            'reminder_before_days': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
             'checklist_auto_close': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
             'checklist_auto_close_days': forms.NumberInput(attrs={'class': 'form-control', 'min': '0'}),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         active_users = User.objects.filter(is_active=True).order_by('username')
         self.fields['assign_by'].queryset = active_users
         self.fields['assign_to'].queryset = active_users
         self.fields['assign_pc'].queryset = active_users
         self.fields['notify_to'].queryset = active_users
         self.fields['auditor'].queryset = active_users
-        
+
         optional_fields = ['assign_pc', 'notify_to', 'auditor', 'media_upload', 'group_name', 'message']
         for field in optional_fields:
             if field in self.fields:
@@ -85,19 +84,19 @@ class ChecklistForm(forms.ModelForm):
         cleaned = super().clean()
         mode = cleaned.get('mode')
         freq = cleaned.get('frequency')
-        
+
         if mode and mode != '' and (not freq or int(freq) < 1):
             self.add_error('frequency', "Frequency must be at least 1 when a recurrence mode is selected.")
-        
+
         numeric_fields = [
-            'time_per_task_minutes', 'remind_before_days', 'reminder_frequency', 
-            'reminder_before_days', 'checklist_auto_close_days'
+            'time_per_task_minutes', 'remind_before_days', 'reminder_frequency',
+            'checklist_auto_close_days'
         ]
         for field_name in numeric_fields:
             val = cleaned.get(field_name)
             if val is not None and int(val) < 0:
                 self.add_error(field_name, "Must be a non-negative number.")
-        
+
         set_reminder = cleaned.get('set_reminder')
         if set_reminder:
             reminder_mode = cleaned.get('reminder_mode')
@@ -106,7 +105,7 @@ class ChecklistForm(forms.ModelForm):
                 self.add_error('reminder_mode', "Reminder mode is required when reminders are enabled.")
             if not reminder_frequency or int(reminder_frequency) < 1:
                 self.add_error('reminder_frequency', "Reminder frequency must be at least 1 when reminders are enabled.")
-        
+
         return cleaned
 
 
@@ -117,8 +116,8 @@ class CompleteChecklistForm(forms.ModelForm):
         widgets = {
             'doer_file': forms.ClearableFileInput(attrs={'class': 'form-control'}),
             'doer_notes': forms.Textarea(attrs={
-                'class': 'form-control', 
-                'rows': 4, 
+                'class': 'form-control',
+                'rows': 4,
                 'placeholder': 'Add any notes about completing this task...'
             }),
         }
@@ -169,11 +168,11 @@ class DelegationForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         active_users = User.objects.filter(is_active=True).order_by('username')
         self.fields['assign_by'].queryset = active_users
         self.fields['assign_to'].queryset = active_users
-        
+
         optional_fields = ['audio_recording', 'mode', 'frequency']
         for field in optional_fields:
             if field in self.fields:
@@ -187,14 +186,14 @@ class DelegationForm(forms.ModelForm):
         cleaned = super().clean()
         mode = cleaned.get('mode')
         freq = cleaned.get('frequency')
-        
+
         if mode and mode != '' and (not freq or int(freq) < 1):
             self.add_error('frequency', "Frequency must be at least 1 when a recurrence mode is selected.")
-        
+
         time_per_task = cleaned.get('time_per_task_minutes')
         if time_per_task is not None and int(time_per_task) < 0:
             self.add_error('time_per_task_minutes', "Time per task must be non-negative.")
-        
+
         return cleaned
 
 
@@ -205,8 +204,8 @@ class CompleteDelegationForm(forms.ModelForm):
         widgets = {
             'doer_file': forms.ClearableFileInput(attrs={'class': 'form-control'}),
             'doer_notes': forms.Textarea(attrs={
-                'class': 'form-control', 
-                'rows': 4, 
+                'class': 'form-control',
+                'rows': 4,
                 'placeholder': 'Add any notes about completing this delegation...'
             }),
         }
@@ -235,7 +234,7 @@ class BulkUploadForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['csv_file'].help_text = 'Upload a CSV or Excel file (.csv, .xlsx, .xls)'
-        
+
     def clean_csv_file(self):
         csv_file = self.cleaned_data.get('csv_file')
         if csv_file:
@@ -245,10 +244,10 @@ class BulkUploadForm(forms.ModelForm):
                 raise ValidationError(
                     f"Invalid file type. Please upload a CSV or Excel file ({', '.join(allowed_extensions)})"
                 )
-            
+
             if csv_file.size > 10 * 1024 * 1024:
                 raise ValidationError("File size must be under 10MB")
-                
+
         return csv_file
 
 
@@ -267,7 +266,7 @@ class HelpTicketForm(forms.ModelForm):
         model = HelpTicket
         fields = [
             'title',
-            'assign_to', 
+            'assign_to',
             'media_upload',
             'description',
             'priority',
@@ -279,14 +278,14 @@ class HelpTicketForm(forms.ModelForm):
             'title': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter ticket title'}),
             'assign_to': forms.Select(attrs={'class': 'form-select'}),
             'description': forms.Textarea(attrs={
-                'class': 'form-control', 
-                'rows': 4, 
+                'class': 'form-control',
+                'rows': 4,
                 'placeholder': 'Describe the issue or request in detail...'
             }),
             'priority': forms.Select(attrs={'class': 'form-select'}),
             'status': forms.Select(attrs={'class': 'form-select'}),
             'estimated_minutes': forms.NumberInput(attrs={
-                'class': 'form-control', 
+                'class': 'form-control',
                 'min': '0',
                 'placeholder': 'Estimated time in minutes'
             }),
@@ -294,10 +293,10 @@ class HelpTicketForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         active_users = User.objects.filter(is_active=True).order_by('username')
         self.fields['assign_to'].queryset = active_users
-        
+
         optional_fields = ['media_upload', 'estimated_minutes']
         for field in optional_fields:
             if field in self.fields:
@@ -317,16 +316,16 @@ class HelpTicketForm(forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
-        
+
         title = cleaned.get('title')
         description = cleaned.get('description')
-        
+
         if title and len(title.strip()) < 3:
             self.add_error('title', "Title must be at least 3 characters long.")
-            
+
         if description and len(description.strip()) < 10:
             self.add_error('description', "Description must be at least 10 characters long.")
-        
+
         return cleaned
 
 

@@ -2,41 +2,128 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, time as dt_time
 
-from django.core.management.base import BaseCommand
-from django.utils import timezone
-from django.db import transaction
+import pytz
+from dateutil.relativedelta import relativedelta
 from django.conf import settings
+from django.core.management.base import BaseCommand
+from django.db import transaction
 from django.urls import reverse
+from django.utils import timezone
 
-from apps.tasks.models import Checklist, Delegation
-from apps.tasks.recurrence import get_next_planned_date, schedule_recurring_at_10am, RECURRING_MODES
+from apps.tasks.models import Checklist
+from apps.tasks.recurrence import (
+    normalize_mode,
+    is_working_day,
+    next_working_day,
+    RECURRING_MODES,
+)
 from apps.tasks.utils import (
     send_checklist_assignment_to_user,
     send_checklist_admin_confirmation,
-    send_delegation_assignment_to_user,
 )
 
 logger = logging.getLogger(__name__)
 
+IST = pytz.timezone("Asia/Kolkata")
+SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
+SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
+SEND_RECUR_EMAILS_ONLY_AT_10AM = getattr(settings, "SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
+
+
+def _within_10am_ist_window(leeway_minutes: int = 5) -> bool:
+    """
+    True if now (IST) is within [10:00 - leeway, 10:00 + leeway].
+    Default window: 09:55–10:05 IST.
+    """
+    now_ist = timezone.now().astimezone(IST)
+    anchor = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
+    return (anchor - timedelta(minutes=leeway_minutes)) <= now_ist <= (anchor + timedelta(minutes=leeway_minutes))
+
+
+def _next_planned_preserve_time(prev_dt: datetime, mode: str, frequency: int) -> datetime | None:
+    """
+    Compute the next occurrence for a recurring checklist while PRESERVING the
+    original planned time-of-day. If the next date lands on Sunday/holiday, move
+    forward to the next working day but KEEP the same time-of-day.
+
+    Returns an aware datetime in the project's timezone.
+    """
+    if not prev_dt:
+        return None
+
+    m = normalize_mode(mode)
+    if m not in RECURRING_MODES:
+        return None
+
+    step = max(int(frequency or 1), 1)
+
+    # Work in IST for wall-clock stability
+    if timezone.is_naive(prev_dt):
+        prev_dt = timezone.make_aware(prev_dt, timezone.get_current_timezone())
+    prev_ist = prev_dt.astimezone(IST)
+
+    # Original time-of-day to preserve
+    t_planned = dt_time(prev_ist.hour, prev_ist.minute, prev_ist.second, prev_ist.microsecond)
+
+    # Add interval
+    if m == "Daily":
+        nxt_ist = prev_ist + relativedelta(days=step)
+    elif m == "Weekly":
+        nxt_ist = prev_ist + relativedelta(weeks=step)
+    elif m == "Monthly":
+        nxt_ist = prev_ist + relativedelta(months=step)
+    elif m == "Yearly":
+        nxt_ist = prev_ist + relativedelta(years=step)
+    else:
+        return None
+
+    # Re-apply preserved time-of-day
+    nxt_ist = nxt_ist.replace(
+        hour=t_planned.hour,
+        minute=t_planned.minute,
+        second=t_planned.second,
+        microsecond=t_planned.microsecond,
+    )
+
+    # If Sunday/holiday, push FORWARD to next working day, SAME time
+    d = nxt_ist.date()
+    if not is_working_day(d):
+        d = next_working_day(d)
+        nxt_ist = IST.localize(datetime.combine(d, t_planned))
+
+    # Return in project timezone
+    return nxt_ist.astimezone(timezone.get_current_timezone())
+
 
 class Command(BaseCommand):
-    help = "Generate next occurrences for recurring tasks (Checklist / Delegation) and optionally email assignees."
+    help = (
+        "Generate next occurrences for recurring CHECKLIST tasks only.\n"
+        "• Next occurrences PRESERVE the original planned time-of-day.\n"
+        "• If the calculated date is Sunday/holiday, shift to the next working day (same time).\n"
+        "• Dashboard handles 10:00 IST visibility; delay is always from the planned time.\n"
+        "• Delegations/Help Tickets are NOT generated (no recurrence)."
+    )
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--task-type",
-            choices=["checklist", "delegation", "all"],
-            default="all",
-            help="Limit to a specific type.",
+            "--user-id",
+            type=int,
+            help="Limit to a specific assignee (user id).",
         )
-        parser.add_argument("--user-id", type=int, help="Limit to specific assignee (user id).")
-        parser.add_argument("--dry-run", action="store_true", help="Show without creating.")
-        parser.add_argument("--no-email", action="store_true", help="Skip sending emails for created items.")
+        parser.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="Show what would be created without writing to the database.",
+        )
+        parser.add_argument(
+            "--no-email",
+            action="store_true",
+            help="Skip sending emails for created items.",
+        )
 
     def handle(self, *args, **opts):
-        task_type = opts["task_type"]
         user_id = opts.get("user_id")
         dry_run = opts.get("dry_run", False)
         send_emails = not opts.get("no_email", False)
@@ -45,21 +132,9 @@ class Command(BaseCommand):
         if dry_run:
             self.stdout.write(self.style.WARNING("DRY RUN — no tasks will be created.\n"))
 
-        total_created = 0
+        created = 0
 
-        if task_type in ("checklist", "all"):
-            total_created += self._process_checklists(now, user_id, dry_run, send_emails)
-        if task_type in ("delegation", "all"):
-            total_created += self._process_delegations(now, user_id, dry_run, send_emails)
-
-        if dry_run:
-            self.stdout.write(self.style.WARNING(f"[DRY RUN] Would create {total_created} total tasks"))
-        else:
-            self.stdout.write(self.style.SUCCESS(f"Created {total_created} total tasks"))
-
-    # ----------------------------- CHECKLISTS ----------------------------- #
-    def _process_checklists(self, now, user_id, dry_run, send_emails) -> int:
-        site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
+        # ---- CHECKLISTS ONLY (delegations/help tickets have no recurrence by policy) ----
         filters = {"mode__in": RECURRING_MODES, "frequency__gte": 1}
         if user_id:
             filters["assign_to_id"] = user_id
@@ -70,29 +145,38 @@ class Command(BaseCommand):
             .distinct()
         )
 
-        created = 0
         for s in seeds:
-            last = Checklist.objects.filter(**s).order_by("-planned_date", "-id").first()
+            last = (
+                Checklist.objects
+                .filter(
+                    assign_to_id=s["assign_to_id"],
+                    task_name=s["task_name"],
+                    mode=s["mode"],
+                    frequency=s["frequency"],
+                    group_name=s["group_name"],
+                )
+                .order_by("-planned_date", "-id")
+                .first()
+            )
             if not last:
                 continue
 
-            # already has a future pending?
+            # Already has a future pending? skip
             if Checklist.objects.filter(status="Pending", planned_date__gt=now, **s).exists():
                 continue
 
-            # compute next, normalize to 10:00 IST & skip Sunday/holidays
-            next_dt = get_next_planned_date(last.planned_date, last.mode, last.frequency)
+            # Compute next occurrence while preserving time-of-day
+            next_dt = _next_planned_preserve_time(last.planned_date, last.mode, last.frequency)
 
+            # Catch up to future if needed (safety ~2 years)
             safety = 0
             while next_dt and next_dt <= now and safety < 730:
-                next_dt = get_next_planned_date(next_dt, last.mode, last.frequency)
+                next_dt = _next_planned_preserve_time(next_dt, last.mode, last.frequency)
                 safety += 1
             if not next_dt:
                 continue
 
-            next_dt = schedule_recurring_at_10am(next_dt)
-
-            # dupe guard
+            # Dupe guard (±1 minute)
             dupe = Checklist.objects.filter(
                 assign_to_id=s["assign_to_id"],
                 task_name=s["task_name"],
@@ -118,7 +202,7 @@ class Command(BaseCommand):
                         task_name=last.task_name,
                         message=last.message,
                         assign_to=last.assign_to,
-                        planned_date=next_dt,
+                        planned_date=next_dt,  # PRESERVED time-of-day
                         priority=last.priority,
                         attachment_mandatory=last.attachment_mandatory,
                         mode=last.mode,
@@ -127,6 +211,7 @@ class Command(BaseCommand):
                         remind_before_days=last.remind_before_days,
                         assign_pc=last.assign_pc,
                         notify_to=last.notify_to,
+                        auditor=getattr(last, "auditor", None),
                         set_reminder=last.set_reminder,
                         reminder_mode=last.reminder_mode,
                         reminder_frequency=last.reminder_frequency,
@@ -140,14 +225,20 @@ class Command(BaseCommand):
                 created += 1
                 self.stdout.write(self.style.SUCCESS(f"✅ Created checklist: {obj.task_name} at {next_dt}"))
 
-                if send_emails:
+                # Email policy: only if enabled and (optionally) in 10:00 IST window
+                if send_emails and SEND_EMAILS_FOR_AUTO_RECUR and (
+                    not SEND_RECUR_EMAILS_ONLY_AT_10AM or _within_10am_ist_window()
+                ):
                     try:
-                        complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
+                        complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
                         send_checklist_assignment_to_user(
-                            task=obj, complete_url=complete_url, subject_prefix="Recurring Checklist Generated"
+                            task=obj,
+                            complete_url=complete_url,
+                            subject_prefix="Recurring Checklist Generated",
                         )
                         send_checklist_admin_confirmation(
-                            task=obj, subject_prefix="Recurring Checklist Generated"
+                            task=obj,
+                            subject_prefix="Recurring Checklist Generated",
                         )
                     except Exception as e:
                         logger.exception("Email failure for checklist %s: %s", obj.id, e)
@@ -155,86 +246,7 @@ class Command(BaseCommand):
             except Exception as e:
                 logger.exception("Failed checklist generation: %s", e)
 
-        return created
-
-    # ---------------------------- DELEGATIONS ---------------------------- #
-    def _process_delegations(self, now, user_id, dry_run, send_emails) -> int:
-        site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
-        filters = {"mode__in": RECURRING_MODES, "frequency__gte": 1}
-        if user_id:
-            filters["assign_to_id"] = user_id
-
-        seeds = (
-            Delegation.objects.filter(**filters)
-            .values("assign_to_id", "task_name", "mode", "frequency")
-            .distinct()
-        )
-
-        created = 0
-        for s in seeds:
-            last = Delegation.objects.filter(**s).order_by("-planned_date", "-id").first()
-            if not last:
-                continue
-
-            if Delegation.objects.filter(status="Pending", planned_date__gt=now, **s).exists():
-                continue
-
-            next_dt = get_next_planned_date(last.planned_date, last.mode, last.frequency)
-            safety = 0
-            while next_dt and next_dt <= now and safety < 730:
-                next_dt = get_next_planned_date(next_dt, last.mode, last.frequency)
-                safety += 1
-            if not next_dt:
-                continue
-
-            next_dt = schedule_recurring_at_10am(next_dt)
-
-            dupe = Delegation.objects.filter(
-                assign_to_id=s["assign_to_id"],
-                task_name=s["task_name"],
-                mode=s["mode"],
-                frequency=s["frequency"],
-                planned_date__gte=next_dt - timedelta(minutes=1),
-                planned_date__lt=next_dt + timedelta(minutes=1),
-                status="Pending",
-            ).exists()
-            if dupe:
-                continue
-
-            if dry_run:
-                created += 1
-                self.stdout.write(f"[DRY RUN] Would create delegation: {s['task_name']} at {next_dt}")
-                continue
-
-            try:
-                with transaction.atomic():
-                    obj = Delegation.objects.create(
-                        assign_by=last.assign_by,
-                        task_name=last.task_name,
-                        assign_to=last.assign_to,
-                        planned_date=next_dt,
-                        priority=last.priority,
-                        attachment_mandatory=last.attachment_mandatory,
-                        mode=last.mode,
-                        frequency=last.frequency,
-                        time_per_task_minutes=last.time_per_task_minutes,
-                        actual_duration_minutes=0,
-                        status="Pending",
-                    )
-                created += 1
-                self.stdout.write(self.style.SUCCESS(f"✅ Created delegation: {obj.task_name} at {next_dt}"))
-
-                if send_emails and getattr(obj.assign_to, "email", None):
-                    try:
-                        # If you have a dedicated completion URL for delegations, update the route name
-                        complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[obj.id])}"
-                        send_delegation_assignment_to_user(
-                            delegation=obj, complete_url=complete_url, subject_prefix="Recurring Delegation Generated"
-                        )
-                    except Exception as e:
-                        logger.exception("Email failure for delegation %s: %s", obj.id, e)
-
-            except Exception as e:
-                logger.exception("Failed delegation generation: %s", e)
-
-        return created
+        if dry_run:
+            self.stdout.write(self.style.WARNING(f"[DRY RUN] Would create {created} tasks"))
+        else:
+            self.stdout.write(self.style.SUCCESS(f"Created {created} tasks"))

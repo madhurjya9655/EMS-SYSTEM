@@ -139,13 +139,16 @@ _template_options = {
     "builtins": [
         "dashboard.templatetags.dashboard_extras",
         "apps.reports.templatetags.reports_extras",
-        "apps.users.permissions",
+        # (removed invalid: "apps.users.permissions")
+        # optionally expose permission tags globally:
+        # "apps.common.templatetags.permission_tags",
     ],
     "libraries": {
         "common_filters": "apps.common.templatetags.common_filters",
         "user_filters": "apps.users.templatetags.user_filters",
         "group_tags": "apps.common.templatetags.group_tags",
-        "permission_tags": "apps.users.permissions",
+        "permission_tags": "apps.common.templatetags.permission_tags",  # ← correct mapping
+        "model_extras": "apps.common.templatetags.model_extras",
     },
     "string_if_invalid": "" if DEBUG else "",  # be quiet in templates
 }
@@ -444,6 +447,7 @@ EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 30)
 EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
 
 SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", True)
+SEND_RECUR_EMAILS_ONLY_AT_10AM = env_bool("SEND_RECUR_EMAILS_ONLY_AT_10AM", True)  # ← ensures 10:00 IST gate
 EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "[EMS] ")
 
 if DEBUG and not EMAIL_HOST_USER:

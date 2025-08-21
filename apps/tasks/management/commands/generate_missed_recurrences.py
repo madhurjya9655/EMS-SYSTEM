@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, time as dt_time
 
+import pytz
+from dateutil.relativedelta import relativedelta
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -12,10 +14,12 @@ from django.utils import timezone
 
 from apps.tasks.models import Checklist
 from apps.tasks.recurrence import (
-    get_next_planned_date,
-    schedule_recurring_at_10am,
+    normalize_mode,
+    is_working_day,
+    next_working_day,
     RECURRING_MODES,
 )
+
 from apps.tasks.utils import (
     send_checklist_assignment_to_user,
     send_checklist_admin_confirmation,
@@ -23,11 +27,78 @@ from apps.tasks.utils import (
 
 logger = logging.getLogger(__name__)
 
+IST = pytz.timezone("Asia/Kolkata")
+SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
+SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
+SEND_RECUR_EMAILS_ONLY_AT_10AM = getattr(settings, "SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
+
+
+def _within_10am_ist_window(leeway_minutes: int = 5) -> bool:
+    """
+    True if now (IST) is within [10:00 - leeway, 10:00 + leeway].
+    Default window: 09:55–10:05 IST.
+    """
+    now_ist = timezone.now().astimezone(IST)
+    anchor = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
+    return (anchor - timedelta(minutes=leeway_minutes)) <= now_ist <= (anchor + timedelta(minutes=leeway_minutes))
+
+
+def _next_planned_preserve_time(prev_dt: datetime, mode: str, frequency: int) -> datetime | None:
+    """
+    Compute the next occurrence for a recurring checklist while PRESERVING the
+    original planned time-of-day. If the next date lands on Sunday/holiday, move
+    forward to the next working day but KEEP the same time-of-day.
+
+    Returns an aware datetime in the project's timezone.
+    """
+    if not prev_dt:
+        return None
+
+    m = normalize_mode(mode)
+    if m not in RECURRING_MODES:
+        return None
+
+    step = max(int(frequency or 1), 1)
+
+    # Work in IST for wall-clock stability
+    if timezone.is_naive(prev_dt):
+        prev_dt = timezone.make_aware(prev_dt, timezone.get_current_timezone())
+    prev_ist = prev_dt.astimezone(IST)
+
+    # Original time-of-day to preserve
+    t_planned = dt_time(prev_ist.hour, prev_ist.minute, prev_ist.second, prev_ist.microsecond)
+
+    # Add interval
+    if m == "Daily":
+        nxt_ist = prev_ist + relativedelta(days=step)
+    elif m == "Weekly":
+        nxt_ist = prev_ist + relativedelta(weeks=step)
+    elif m == "Monthly":
+        nxt_ist = prev_ist + relativedelta(months=step)
+    elif m == "Yearly":
+        nxt_ist = prev_ist + relativedelta(years=step)
+    else:
+        return None
+
+    # Re-apply preserved time-of-day
+    nxt_ist = nxt_ist.replace(hour=t_planned.hour, minute=t_planned.minute,
+                              second=t_planned.second, microsecond=t_planned.microsecond)
+
+    # If Sunday/holiday, push FORWARD to next working day, SAME time
+    d = nxt_ist.date()
+    if not is_working_day(d):
+        d = next_working_day(d)
+        nxt_ist = IST.localize(datetime.combine(d, t_planned))
+
+    # Return in project timezone
+    return nxt_ist.astimezone(timezone.get_current_timezone())
+
 
 class Command(BaseCommand):
     help = (
         "Ensure one future 'Pending' checklist per recurring series exists. "
-        "Future recurrences are generated at 10:00 AM IST and skip Sundays/holidays."
+        "Next recurrences PRESERVE the original planned time-of-day and only shift "
+        "the DATE to avoid Sundays/holidays. Visibility rules are handled by the dashboard (10:00 IST)."
     )
 
     def add_arguments(self, parser):
@@ -41,7 +112,6 @@ class Command(BaseCommand):
         send_emails = not opts.get("no_email", False)
 
         now = timezone.now()
-        site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
         filters = {"mode__in": RECURRING_MODES, "frequency__gte": 1}
         if user_id:
@@ -87,18 +157,18 @@ class Command(BaseCommand):
             ).exists():
                 continue
 
-            next_planned = get_next_planned_date(instance.planned_date, instance.mode, instance.frequency)
+            # Compute next, preserving the original time-of-day
+            next_planned = _next_planned_preserve_time(instance.planned_date, instance.mode, instance.frequency)
+            if not next_planned:
+                continue
 
             # Catch up to the future
             safety = 0
             while next_planned and next_planned <= now and safety < 730:  # ~2 years
-                next_planned = get_next_planned_date(next_planned, instance.mode, instance.frequency)
+                next_planned = _next_planned_preserve_time(next_planned, instance.mode, instance.frequency)
                 safety += 1
             if not next_planned:
                 continue
-
-            # Normalize to 10:00 IST and skip Sunday/holidays (idempotent)
-            next_planned = schedule_recurring_at_10am(next_planned)
 
             # Dupe guard (±1 minute)
             dupe = Checklist.objects.filter(
@@ -125,7 +195,7 @@ class Command(BaseCommand):
                         assign_by=instance.assign_by,
                         task_name=instance.task_name,
                         assign_to=instance.assign_to,
-                        planned_date=next_planned,
+                        planned_date=next_planned,  # PRESERVED time-of-day
                         priority=instance.priority,
                         attachment_mandatory=instance.attachment_mandatory,
                         mode=instance.mode,
@@ -155,9 +225,12 @@ class Command(BaseCommand):
 
                 created += 1
 
-                if send_emails:
+                # Email policy: only if enabled and (optionally) in 10:00 IST window
+                if send_emails and SEND_EMAILS_FOR_AUTO_RECUR and (
+                    not SEND_RECUR_EMAILS_ONLY_AT_10AM or _within_10am_ist_window()
+                ):
                     try:
-                        complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
+                        complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
                         send_checklist_assignment_to_user(
                             task=new_obj,
                             complete_url=complete_url,

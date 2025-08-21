@@ -1,4 +1,3 @@
-# employee_management/urls.py
 import os
 from django.contrib import admin
 from django.urls import path, include
@@ -27,10 +26,10 @@ urlpatterns = [
     path("users/",         include(("apps.users.urls",         "users"),         namespace="users")),
     path("dashboard/",     include(("dashboard.urls",          "dashboard"),     namespace="dashboard")),
 
-    # Settings app (namespace comes from apps/settings/urls.py -> app_name = "settings")
-    path("settings/", include("apps.settings.urls")),
+    # Settings (namespaced)
+    path("settings/", include(("apps.settings.urls", "settings"), namespace="settings")),
 
-    # Root
+    # Root → recruitment app
     path("", include(("apps.recruitment.urls", "recruitment"), namespace="recruitment")),
 
     # Healthcheck

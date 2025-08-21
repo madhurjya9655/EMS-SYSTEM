@@ -1,3 +1,4 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
 # apps/tasks/views.py
 import csv
 import pytz
@@ -86,6 +87,18 @@ def _background(target, /, *args, **kwargs):
 
 
 # ---------- HELPERS ----------
+def _safe_console_text(s: object) -> str:
+    """Emoji-safe logging string (Windows console tolerant)."""
+    try:
+        text = "" if s is None else str(s)
+    except Exception:
+        text = repr(s)
+    enc = getattr(getattr(logging, "StreamHandler", None), "terminator", None)  # dummy read
+    try:
+        return text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+    except Exception:
+        return text
+
 def clean_unicode_string(text):
     if not text:
         return text
@@ -141,6 +154,50 @@ def next_working_day(d: date) -> date:
     while not is_working_day(d):
         d += timedelta(days=1)
     return d
+
+def day_bounds(d: date):
+    """Get start and end datetime for a given date in current TZ."""
+    tz = timezone.get_current_timezone()
+    start = timezone.make_aware(datetime.combine(d, dt_time.min), tz)
+    end = start + timedelta(days=1)
+    return start, end
+
+def span_bounds(d_from: date, d_to_inclusive: date):
+    """Get start and end datetime for a date range (inclusive end date)."""
+    start, _ = day_bounds(d_from)
+    _, end = day_bounds(d_to_inclusive)
+    return start, end
+
+# ---------- FINAL VISIBILITY GATING FOR CHECKLIST ----------
+def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
+    """
+    Final rules (applies to both one-time and recurring checklists):
+
+    • If planned date < today  → show (pending stays).
+    • If planned date > today  → hide.
+    • If planned date = today:
+        - If planned time <= now → show immediately (even before 10 AM).
+        - Else → show from 10:00 AM IST onwards.
+    """
+    if not task_dt:
+        return False
+
+    # Convert task planned datetime to IST for consistent gating
+    dt_ist = task_dt.astimezone(IST) if timezone.is_aware(task_dt) else IST.localize(task_dt)
+    task_date = dt_ist.date()
+    today = now_ist.date()
+
+    if task_date < today:
+        return True
+    if task_date > today:
+        return False
+
+    # Same day
+    if dt_ist.timetz().replace(tzinfo=None) <= now_ist.timetz().replace(tzinfo=None):
+        return True
+
+    ten_am = dt_time(10, 0, 0)
+    return now_ist.timetz().replace(tzinfo=None) >= ten_am
 
 
 # ---------- BULK PARSING ----------
@@ -1292,29 +1349,13 @@ def download_delegation_template(request):
         raise Http404
     return FileResponse(open(path, "rb"), as_attachment=True, filename="delegation_template.csv")
 
-@login_required
-def list_fms(request):
-    items = FMS.objects.select_related("assign_by", "assign_to").order_by("-planned_date", "-id")
-    return render(request, "tasks/list_fms.html", {"items": items})
-
-@login_required
-def checklist_details(request, pk: int):
-    obj = get_object_or_404(Checklist.objects.select_related("assign_by", "assign_to"), pk=pk)
-    return render(request, "tasks/partials/checklist_detail.html", {"obj": obj})
-
-@login_required
-def delegation_details(request, pk: int):
-    obj = get_object_or_404(Delegation.objects.select_related("assign_by", "assign_to"), pk=pk)
-    return render(request, "tasks/partials/delegation_detail.html", {"obj": obj})
-
-@login_required
-def help_ticket_details(request, pk: int):
-    obj = get_object_or_404(HelpTicket.objects.select_related("assign_by", "assign_to"), pk=pk)
-    return render(request, "tasks/partials/help_ticket_detail.html", {"obj": obj})
-
-
 @has_permission("mt_bulk_upload")
 def bulk_upload(request):
+    """
+    Bulk upload view for Checklist & Delegation.
+    - Creates tasks as provided (no per-upload dedupe).
+    - Sends assignee emails in background.
+    """
     if request.method != "POST":
         return render(request, "tasks/bulk_upload.html", {"form": BulkUploadForm()})
 
@@ -1339,7 +1380,6 @@ def bulk_upload(request):
             return redirect("tasks:bulk_upload")
 
         processing_time = round(time.time() - start_time, 2)
-
         count_created = len(created_tasks)
 
         if created_tasks:
@@ -1368,7 +1408,6 @@ def bulk_upload(request):
                         "Priority": t.priority,
                         "complete_url": complete_url,
                     })
-                # ASCII subject to avoid Windows console encoding issues in logs
                 title = f"Bulk Upload: {count_created} {task_type_name} Tasks Created"
                 send_admin_bulk_summary_async(title=title, rows=preview)
             except Exception as e:
@@ -1390,36 +1429,46 @@ def bulk_upload(request):
     # Redirect so the browser shows the message immediately and the background work continues
     return redirect("tasks:bulk_upload")
 
+@login_required
+def list_fms(request):
+    items = FMS.objects.select_related("assign_by", "assign_to").order_by("-planned_date", "-id")
+    return render(request, "tasks/list_fms.html", {"items": items})
+
+@login_required
+def checklist_details(request, pk: int):
+    obj = get_object_or_404(Checklist.objects.select_related("assign_by", "assign_to"), pk=pk)
+    return render(request, "tasks/partials/checklist_detail.html", {"obj": obj})
+
+@login_required
+def delegation_details(request, pk: int):
+    obj = get_object_or_404(Delegation.objects.select_related("assign_by", "assign_to"), pk=pk)
+    return render(request, "tasks/partials/delegation_detail.html", {"obj": obj})
+
+@login_required
+def help_ticket_details(request, pk: int):
+    obj = get_object_or_404(HelpTicket.objects.select_related("assign_by", "assign_to"), pk=pk)
+    return render(request, "tasks/partials/help_ticket_detail.html", {"obj": obj})
+
 
 # ---------------- DASHBOARD ----------------
-
-def _safe_console_text(s: object) -> str:
-    """Emoji-safe logging string for Windows consoles."""
-    try:
-        text = "" if s is None else str(s)
-    except Exception:
-        text = repr(s)
-    enc = getattr(getattr(logging, "StreamHandler", None), "terminator", None)  # dummy read
-    try:
-        # best effort: replace non-encodables
-        return text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
-    except Exception:
-        return text
-
-def span_bounds(d_from: date, d_to_inclusive: date):
-    tz = timezone.get_current_timezone()
-    start = timezone.make_aware(datetime.combine(d_from, dt_time.min), tz)
-    end = timezone.make_aware(datetime.combine(d_to_inclusive, dt_time.max), tz)
-    return start, end
 
 @login_required
 def dashboard_home(request):
     """
-    Dashboard Requirements:
-    - Show all pending tasks with planned_date <= TODAY 23:59:59.999 IST.
-    - If “Today Only” is ON → planned_date <= NOW.
-    - Do not show future-dated recurrences early (we do NOT auto-generate here).
-    - Past due tasks remain visible until completed.
+    FINAL DASHBOARD RULES (IST-aware):
+    Checklist (recurring or one-time):
+      • Delay counted from planned time.
+      • Visibility:
+          - If planned date < today           → show.
+          - If planned date = today and planned time ≤ now → show immediately (even before 10:00).
+          - Else (planned today but time > now) → show from 10:00 AM IST of that day.
+          - If planned date > today → hide.
+
+    Delegation & Help Ticket:
+      • Visible immediately at/after their planned timestamp (no 10:00 gating).
+      • No recurrence logic here.
+
+    Past-due items remain until completed. Completed disappear immediately.
     """
     # Current IST and today's date
     now_ist = timezone.now().astimezone(IST)
@@ -1489,56 +1538,56 @@ def dashboard_home(request):
     selected = request.GET.get('task_type')
     today_only = (request.GET.get('today') == '1' or request.GET.get('today_only') == '1')
 
-    # Task lists (strict cutoff logic)
+    # --- Build time bounds in project TZ for DB filtering
+    start_today_proj = timezone.make_aware(datetime.combine(today_ist, dt_time.min), IST).astimezone(project_tz)
+    end_today_proj = timezone.make_aware(datetime.combine(today_ist, dt_time.max), IST).astimezone(project_tz)
+
     try:
+        # ---- Checklists (DB pre-filter to reduce volume) ----
+        base_checklists = Checklist.objects.filter(
+            assign_to=request.user, status='Pending',
+            planned_date__lte=(now_project_tz if today_only else end_today_proj)
+        ).select_related('assign_by').order_by('planned_date')
+
         if today_only:
-            # Lower bound: start of today IST; Upper bound: NOW (IST) -> converted to project TZ
-            today_start = timezone.make_aware(datetime.combine(today_ist, dt_time.min), IST).astimezone(project_tz)
+            base_checklists = base_checklists.filter(planned_date__gte=start_today_proj, planned_date__lte=end_today_proj)
 
-            checklist_qs = list(Checklist.objects.filter(
-                assign_to=request.user, status='Pending',
-                planned_date__gte=today_start,
-                planned_date__lte=now_project_tz,  # show only up to NOW
-            ).select_related('assign_by').order_by('planned_date'))
+        checklist_qs = [c for c in base_checklists if _should_show_checklist(c.planned_date, now_ist)]
 
-            delegation_qs = list(Delegation.objects.filter(
-                assign_to=request.user, status='Pending',
-                planned_date__gte=today_start,
-                planned_date__lte=now_project_tz,
-            ).select_related('assign_by').order_by('planned_date'))
-
-            help_ticket_qs = list(HelpTicket.objects.filter(
-                assign_to=request.user,
-                planned_date__gte=today_start,
-                planned_date__lte=now_project_tz,
-            ).exclude(status='Closed').select_related('assign_by').order_by('planned_date'))
-
-            cutoff_debug = f"{now_project_tz} (today up to NOW)"
+        # ---- Delegations: immediate visibility at/after planned timestamp ----
+        if today_only:
+            delegation_qs = list(
+                Delegation.objects.filter(
+                    assign_to=request.user, status='Pending',
+                    planned_date__gte=start_today_proj,
+                    planned_date__lte=now_project_tz,  # up to now
+                ).select_related('assign_by').order_by('planned_date')
+            )
+            help_ticket_qs = list(
+                HelpTicket.objects.filter(
+                    assign_to=request.user,
+                    planned_date__gte=start_today_proj,
+                    planned_date__lte=now_project_tz,
+                ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
+            )
         else:
-            # End-of-today IST as cutoff
-            end_of_today_ist = timezone.make_aware(datetime.combine(today_ist, dt_time.max), IST).astimezone(project_tz)
-
-            checklist_qs = list(Checklist.objects.filter(
-                assign_to=request.user, status='Pending',
-                planned_date__lte=end_of_today_ist
-            ).select_related('assign_by').order_by('planned_date'))
-
-            delegation_qs = list(Delegation.objects.filter(
-                assign_to=request.user, status='Pending',
-                planned_date__lte=end_of_today_ist
-            ).select_related('assign_by').order_by('planned_date'))
-
-            help_ticket_qs = list(HelpTicket.objects.filter(
-                assign_to=request.user, planned_date__lte=end_of_today_ist
-            ).exclude(status='Closed').select_related('assign_by').order_by('planned_date'))
-
-            cutoff_debug = str(end_of_today_ist)
+            delegation_qs = list(
+                Delegation.objects.filter(
+                    assign_to=request.user, status='Pending',
+                    planned_date__lte=end_today_proj
+                ).select_related('assign_by').order_by('planned_date')
+            )
+            help_ticket_qs = list(
+                HelpTicket.objects.filter(
+                    assign_to=request.user, planned_date__lte=end_today_proj
+                ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
+            )
 
         logger.info(_safe_console_text(
-            f"Perfect dashboard filtering for {request.user.username}:\n"
+            f"Dashboard filtering for {request.user.username}:\n"
             f"  - Today only: {today_only}\n"
-            f"  - Found tasks: {len(checklist_qs)} checklists, {len(delegation_qs)} delegations, {len(help_ticket_qs)} help tickets\n"
-            f"  - Cutoff: Tasks with planned_date <= {cutoff_debug}"
+            f"  - Found tasks (after gating): {len(checklist_qs)} checklists, {len(delegation_qs)} delegations, {len(help_ticket_qs)} help tickets\n"
+            f"  - Cutoff (DB): {'NOW' if today_only else 'EOD IST'}; final 10:00/instant gating applied."
         ))
     except Exception as e:
         logger.error(_safe_console_text(f"Error querying task lists: {e}"))
@@ -1568,7 +1617,7 @@ def dashboard_home(request):
         'pending_tasks': pending_tasks,
         'tasks':         tasks,
         'selected':      selected,
-        'prev_time':     "00:00",  # removed heavy aggregation here; keep UI snappy
+        'prev_time':     "00:00",  # intentionally light; heavy aggregation removed
         'curr_time':     "00:00",
         'today_only':    today_only,
     })

@@ -1,6 +1,7 @@
 # apps/tasks/utils.py
 import logging
 import sys
+from datetime import datetime
 from typing import Iterable, List, Optional, Sequence
 
 import pytz
@@ -154,7 +155,7 @@ def _assignment_html(
     task_title: str,
     task_name: str,
     assigner: Optional[User],
-    planned_dt: Optional[timezone.datetime],
+    planned_dt: Optional[datetime],
     complete_url: Optional[str],
     extra_lines: Optional[List[str]] = None,
     cta_label: str = "Open / Complete",

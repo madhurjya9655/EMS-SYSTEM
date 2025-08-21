@@ -1,6 +1,8 @@
 # apps/tasks/signals.py
+from __future__ import annotations
+
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, time as dt_time
 
 import pytz
 from django.conf import settings
@@ -11,7 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .models import Checklist, Delegation, HelpTicket
-from .recurrence import get_next_planned_date, schedule_recurring_at_10am, RECURRING_MODES
+from .recurrence import normalize_mode, is_working_day, next_working_day, RECURRING_MODES
 from . import utils as _utils  # email helpers & console-safe logging
 
 logger = logging.getLogger(__name__)
@@ -65,17 +67,75 @@ def _send_recurring_emails_safely(checklist_obj: Checklist) -> None:
         logger.error(_utils._safe_console_text(f"Failed to send recurring emails for {checklist_obj.id}: {e}"))
 
 
+def _next_planned_preserve_time(prev_dt: datetime, mode: str, frequency: int) -> datetime | None:
+    """
+    Compute the next occurrence for a recurring checklist while PRESERVING the
+    original planned time-of-day. If the next date lands on Sunday/holiday, move
+    forward to the next working day but KEEP the same time-of-day.
+
+    Returns an aware datetime in the project's timezone.
+    """
+    if not prev_dt:
+        return None
+
+    m = normalize_mode(mode)
+    if m not in RECURRING_MODES:
+        return None
+
+    step = max(int(frequency or 1), 1)
+
+    # Work in IST for wall-clock stability
+    if timezone.is_naive(prev_dt):
+        prev_dt = timezone.make_aware(prev_dt, timezone.get_current_timezone())
+    prev_ist = prev_dt.astimezone(IST)
+
+    # Original time-of-day to preserve
+    t_planned = dt_time(prev_ist.hour, prev_ist.minute, prev_ist.second, prev_ist.microsecond)
+
+    # Add interval
+    from dateutil.relativedelta import relativedelta
+
+    if m == "Daily":
+        nxt_ist = prev_ist + relativedelta(days=step)
+    elif m == "Weekly":
+        nxt_ist = prev_ist + relativedelta(weeks=step)
+    elif m == "Monthly":
+        nxt_ist = prev_ist + relativedelta(months=step)
+    elif m == "Yearly":
+        nxt_ist = prev_ist + relativedelta(years=step)
+    else:
+        return None
+
+    # Re-apply preserved time-of-day
+    nxt_ist = nxt_ist.replace(
+        hour=t_planned.hour,
+        minute=t_planned.minute,
+        second=t_planned.second,
+        microsecond=t_planned.microsecond,
+    )
+
+    # If Sunday/holiday, push FORWARD to next working day, SAME time
+    d = nxt_ist.date()
+    if not is_working_day(d):
+        d = next_working_day(d)
+        nxt_ist = IST.localize(datetime.combine(d, t_planned))
+
+    # Return in project timezone
+    return nxt_ist.astimezone(timezone.get_current_timezone())
+
+
 @receiver(post_save, sender=Checklist)
 def create_next_recurring_checklist(sender, instance: Checklist, created: bool, **kwargs):
     """
     When a recurring checklist is marked 'Completed', create the next occurrence:
       • Valid only for modes in RECURRING_MODES
       • Trigger on update (not initial create)
-      • Next occurrence scheduled via recurrence helpers (10:00 IST; skip Sun/holidays)
+      • Next occurrence PRESERVES the original planned time-of-day
+      • If Sun/holiday => shift forward to next working day (same time)
       • Prevent duplicates within a 1-minute window
     """
     # Only recurring series
-    if (instance.mode or "") not in RECURRING_MODES:
+    if normalize_mode(instance.mode) not in RECURRING_MODES:
         return
     # Only when status transitioned to Completed
     if instance.status != "Completed":
@@ -97,23 +157,20 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
     if Checklist.objects.filter(status="Pending", planned_date__gt=now, **series_filter).exists():
         return
 
-    # Compute next planned date using consistent recurrence system
-    next_dt = get_next_planned_date(instance.planned_date, instance.mode, instance.frequency)
+    # Compute next planned date while preserving planned time-of-day
+    next_dt = _next_planned_preserve_time(instance.planned_date, instance.mode, instance.frequency)
     if not next_dt:
         logger.warning(_utils._safe_console_text(f"No next date for recurring checklist {instance.id}"))
         return
 
     # Catch-up loop: ensure next occurrence lands in the future
     safety = 0
-    while next_dt and next_dt <= now and safety < 730:
-        next_dt = get_next_planned_date(next_dt, instance.mode, instance.frequency)
+    while next_dt and next_dt <= now and safety < 730:  # ~2 years safety
+        next_dt = _next_planned_preserve_time(next_dt, instance.mode, instance.frequency)
         safety += 1
     if not next_dt:
         logger.warning(_utils._safe_console_text(f"Could not find a future date for series '{instance.task_name}'"))
         return
-
-    # Force to 10:00 IST and ensure working-day shift (idempotent if already 10:00 & valid)
-    next_dt = schedule_recurring_at_10am(next_dt)
 
     # Duplicate guard (±1 minute window)
     dupe_exists = Checklist.objects.filter(
@@ -133,7 +190,7 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                 task_name=instance.task_name,
                 message=instance.message,
                 assign_to=instance.assign_to,
-                planned_date=next_dt,
+                planned_date=next_dt,  # PRESERVED time-of-day
                 priority=instance.priority,
                 attachment_mandatory=instance.attachment_mandatory,
                 mode=instance.mode,
@@ -142,6 +199,7 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                 remind_before_days=instance.remind_before_days,
                 assign_pc=instance.assign_pc,
                 notify_to=instance.notify_to,
+                auditor=getattr(instance, "auditor", None),
                 set_reminder=instance.set_reminder,
                 reminder_mode=instance.reminder_mode,
                 reminder_frequency=instance.reminder_frequency,
@@ -158,7 +216,8 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
 
             logger.info(
                 _utils._safe_console_text(
-                    f"Created next recurring checklist {new_obj.id} '{new_obj.task_name}' at {new_obj.planned_date}"
+                    f"Created next recurring checklist {new_obj.id} "
+                    f"'{new_obj.task_name}' at {new_obj.planned_date}"
                 )
             )
     except Exception as e:
