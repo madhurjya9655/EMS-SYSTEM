@@ -1,5 +1,3 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
-# apps/tasks/views.py
 import csv
 import pytz
 import re
@@ -627,8 +625,8 @@ def process_delegation_bulk_upload_excel_friendly(file, assign_by_user):
 
     total = len(df)
     bs = optimal_batch_size()
-    for start_idx in range(0, total, bs):
-        end_idx = min(start_idx + bs, total)
+    for start_idx in range(0, len(df), bs):
+        end_idx = min(start_idx + bs, len(df))
         batch_df = df.iloc[start_idx:end_idx]
         batch_created, batch_errors = process_delegation_batch_excel_ultra_optimized(
             batch_df, assign_by_user, start_idx
@@ -688,8 +686,18 @@ def kick_off_bulk_emails_async(created_tasks, task_type="Checklist"):
     _background(_send_bulk_emails_by_ids, task_ids, task_type=task_type, thread_name="bulk-emails")
 
 
-def send_admin_bulk_summary_async(*, title: str, rows):
-    _background(send_admin_bulk_summary, title=title, rows=rows, thread_name="bulk-admin-summary")
+def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: str | None = None):
+    """
+    Fire-and-forget admin summary, with optional exclusion of the assigner
+    (the uploader) from recipients.
+    """
+    _background(
+        send_admin_bulk_summary,
+        title=title,
+        rows=rows,
+        exclude_assigner_email=exclude_assigner_email,
+        thread_name="bulk-admin-summary",
+    )
 
 
 # ---------- VIEWS ----------
@@ -1088,7 +1096,8 @@ def complete_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
     if obj.assign_to_id and obj.assign_to_id != request.user.id and not (request.user.is_staff or request.user.is_superuser):
         messages.error(request, "You are not the assignee of this task.")
-        return redirect(request.GET.get("next", "dashboard:home") + "?task_type=delegation")
+        # ✅ FIX: reverse the view name, then append query string
+        return redirect(request.GET.get("next") or (reverse("dashboard:home") + "?task_type=delegation"))
 
     if request.method == "GET":
         form = CompleteDelegationForm(instance=obj)
@@ -1113,7 +1122,8 @@ def complete_delegation(request, pk):
     except Exception as e:
         logger.error("Error completing delegation %s: %s", pk, e)
         messages.error(request, "An error occurred while completing the task. Please try again.")
-    return redirect(request.GET.get("next", "dashboard:home") + "?task_type=delegation")
+    # ✅ FIX: reverse the view name, then append query string
+    return redirect(request.GET.get("next") or (reverse("dashboard:home") + "?task_type=delegation"))
 
 
 # ---------------- Help Tickets ----------------
@@ -1409,7 +1419,12 @@ def bulk_upload(request):
                         "complete_url": complete_url,
                     })
                 title = f"Bulk Upload: {count_created} {task_type_name} Tasks Created"
-                send_admin_bulk_summary_async(title=title, rows=preview)
+                # ⬇️ Exclude the uploader/assigner from the admin summary recipients
+                send_admin_bulk_summary_async(
+                    title=title,
+                    rows=preview,
+                    exclude_assigner_email=(request.user.email or None),
+                )
             except Exception as e:
                 logger.error("Admin summary schedule failed: %s", e)
 
