@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Welcome to EMS</title>
+    <style>
+      body { font-family: Arial, Helvetica, sans-serif; color:#111; line-height:1.5; margin:0; padding:24px; background:#f7f7f7; }
+      .card { background:#fff; border:1px solid #e5e7eb; border-radius:8px; padding:20px; max-width:640px; margin:0 auto; }
+      h2 { margin:0 0 12px 0; }
+      .muted { color:#6b7280; font-size:12px; margin-top:16px; }
+      table { border-collapse:collapse; width:100%; max-width:640px; }
+      td { padding:6px 8px; vertical-align:top; }
+      td:first-child { font-weight:bold; white-space:nowrap; width:160px; }
+      .btn {
+        display:inline-block; background:#2563eb; color:#fff; text-decoration:none;
+        padding:10px 16px; border-radius:6px; margin-top:14px;
+      }
+      .btn:hover { background:#1d4ed8; }
+      .note { background:#f8fafc; border-left:4px solid #2563eb; padding:10px 12px; border-radius:4px; margin-top:14px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h2>🎉 Welcome to the Employee Management System</h2>
+      <p>Hi {{ user.get_full_name|default:user.username }},</p>
+      <p>Your account has been created. Use the details below to log in.</p>
+
+      <table>
+        <tr>
+          <td>Username</td>
+          <td>{{ username|default:user.username }}</td>
+        </tr>
+        <tr>
+          <td>Email</td>
+          <td>{{ email|default:user.email }}</td>
+        </tr>
+        {% if temporary_password %}
+        <tr>
+          <td>Temporary Password</td>
+          <td><code style="background:#f1f5f9; padding:2px 6px; border-radius:4px;">{{ temporary_password }}</code></td>
+        </tr>
+        {% endif %}
+        <tr>
+          <td>Login URL</td>
+          <td><a href="{{ login_url|default:site_url }}">{{ login_url|default:site_url }}</a></td>
+        </tr>
+      </table>
+
+      <a class="btn" href="{{ login_url|default:site_url }}">Log in to EMS</a>
+
+      {% if temporary_password %}
+      <div class="note">
+        Please log in and change your password immediately from your profile/settings page.
+      </div>
+      {% endif %}
+
+      <p class="muted">
+        If you didn't expect this email, please contact your administrator.
+        <br>Powered by BOS EMS — <a href="{{ site_url }}" style="color:#2563eb; text-decoration:none;">{{ site_url }}</a>
+      </p>
+    </div>
+  </body>
+</html>

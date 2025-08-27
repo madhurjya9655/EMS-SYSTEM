@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, date, time as dt_time, timedelta, tzinfo
-from typing import Optional, Tuple
+from typing import Optional
 
 import pytz
 from dateutil.relativedelta import relativedelta
-
 from django.utils import timezone
 
 from apps.settings.models import Holiday
@@ -16,7 +15,7 @@ from apps.settings.models import Holiday
 # ------------------------------
 IST = pytz.timezone("Asia/Kolkata")
 RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
-VISIBILITY_HOUR = 10  # 10:00 AM IST visibility gate
+VISIBILITY_HOUR = 10  # 10:00 AM IST
 VISIBILITY_MINUTE = 0
 
 
@@ -42,8 +41,7 @@ def _from_ist(dt: datetime) -> datetime:
 
 def is_working_day(d: date) -> bool:
     """
-    Working days = Mon–Sat and not a configured holiday.
-    Monday=0 ... Sunday=6
+    Working days = Mon–Sat and not a configured holiday (Sunday=6).
     """
     if d.weekday() == 6:
         return False
@@ -91,7 +89,13 @@ def preserve_first_occurrence_time(planned_dt: Optional[datetime]) -> Optional[d
 # ------------------------------
 # Recurrence computation (keep same planned time)
 # ------------------------------
-def get_next_same_time(prev_planned: datetime, mode: str, frequency: int) -> Optional[datetime]:
+def get_next_same_time(
+    prev_planned: datetime,
+    mode: str,
+    frequency: int,
+    *,
+    end_date: Optional[date] = None,
+) -> Optional[datetime]:
     """
     Compute next occurrence preserving the SAME wall-clock time as prev_planned.
 
@@ -99,7 +103,8 @@ def get_next_same_time(prev_planned: datetime, mode: str, frequency: int) -> Opt
       1) Move by `frequency` in the requested unit (day/week/month/year) — in IST.
       2) Keep the original time-of-day (HH:MM:SS.microsecond) from prev_planned (IST).
       3) If resulting date is Sunday/holiday → push to next working day, keeping the SAME time.
-      4) Return aware datetime in the project timezone.
+      4) If `end_date` is provided and the computed next date is AFTER it → return None (stop).
+      5) Return aware datetime in the project timezone.
 
     Example:
       prev=2025-08-21 19:00 IST, mode=Weekly, freq=2 → 2025-09-04 19:00 IST (or later working day at 19:00).
@@ -124,6 +129,9 @@ def get_next_same_time(prev_planned: datetime, mode: str, frequency: int) -> Opt
 
     if not is_working_day(nxt_date):
         nxt_date = next_working_day(nxt_date)
+
+    if end_date and nxt_date > end_date:
+        return None
 
     nxt_ist = IST.localize(datetime.combine(nxt_date, wall_time))
     return _from_ist(nxt_ist)
@@ -164,7 +172,7 @@ def is_recurring_visible_now(due_planned: datetime, now: Optional[datetime] = No
 
 def is_checklist_visible_now(due_planned: datetime, now: Optional[datetime] = None) -> bool:
     """
-    FINAL RULE (applies to Checklist tasks — recurring OR one-time):
+    FINAL RULE (Checklist — recurring OR one-time):
       • If due day < today IST      → visible (past-due remains until completed)
       • If due day > today IST      → not visible
       • If due day == today IST     → visible if (now >= planned_datetime) OR (now >= 10:00 IST)
@@ -214,11 +222,10 @@ class DashboardCutoff:
         due_ist = _to_ist(planned_date)
         if today_only and due_ist.date() != self.now_ist.date():
             return False
-        # Unified rule for checklist visibility
         return is_checklist_visible_now(planned_date, now=self.now_ist)
 
     def should_show_delegation(self, *, planned_date: datetime, today_only: bool) -> bool:
-        # Delegations: immediate visibility at/after planned datetime; past-due remains.
+        # Delegations: visible at/after planned datetime; past-due remains.
         due_ist = _to_ist(planned_date)
         if today_only and due_ist.date() != self.now_ist.date():
             return False
@@ -227,16 +234,22 @@ class DashboardCutoff:
         return _ensure_aware(planned_date).astimezone(IST) <= self.now_ist  # type: ignore[union-attr]
 
     def should_show_help_ticket(self, *, planned_date: datetime, today_only: bool) -> bool:
-        # Help tickets behave like one-time tasks: immediate at/after planned datetime; past-due remains.
+        # Help tickets behave like one-time tasks.
         return self.should_show_delegation(planned_date=planned_date, today_only=today_only)
 
 
 # ------------------------------
 # Convenience / Re-exports
 # ------------------------------
-def compute_next_planned_datetime(prev_planned: datetime, mode: str, frequency: int) -> Optional[datetime]:
+def compute_next_planned_datetime(
+    prev_planned: datetime,
+    mode: str,
+    frequency: int,
+    *,
+    end_date: Optional[date] = None,
+) -> Optional[datetime]:
     """Alias for external callers — preserves wall-clock and working-day shift."""
-    return get_next_same_time(prev_planned, mode, frequency)
+    return get_next_same_time(prev_planned, mode, frequency, end_date=end_date)
 
 
 __all__ = [
@@ -246,6 +259,7 @@ __all__ = [
     "get_next_same_time",
     "is_working_day",
     "next_working_day",
+    "normalize_mode",
     "visibility_anchor_ist",
     "is_recurring_visible_now",
     "is_checklist_visible_now",

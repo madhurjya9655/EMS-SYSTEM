@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Callable, Iterable, Tuple, Type
+from typing import Iterable, Tuple, Type
+from datetime import timezone as dt_timezone  # <-- use Python's UTC (Django 5-safe)
 
 import pytz
-from datetime import timezone as py_tz
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
@@ -20,12 +20,14 @@ IST = pytz.timezone("Asia/Kolkata")
 # Helpers
 # ---------------------------
 def _ensure_aware_ist(dt):
-    """Return an aware datetime. Treat naive timestamps as IST."""
+    """
+    Ensure a datetime is timezone-aware.
+    If naive, interpret it as IST wall-clock and localize.
+    """
     if dt is None:
         return None
     if timezone.is_aware(dt):
         return dt
-    # Interpret existing naive DB values as IST wall-clock
     return IST.localize(dt)
 
 
@@ -36,9 +38,10 @@ def _minutes_between_floor_nonneg(a, b) -> int:
     """
     if a is None or b is None:
         return 0
-    a = _ensure_aware_ist(a).astimezone(py_tz.utc)
-    b = _ensure_aware_ist(b).astimezone(py_tz.utc)
-    seconds = (a - b).total_seconds()
+    # Django 5: there is no timezone.utc — use Python's datetime.timezone.utc
+    a_utc = _ensure_aware_ist(a).astimezone(dt_timezone.utc)
+    b_utc = _ensure_aware_ist(b).astimezone(dt_timezone.utc)
+    seconds = (a_utc - b_utc).total_seconds()
     mins = math.floor(seconds / 60.0)
     return max(int(mins), 0)
 
@@ -96,16 +99,16 @@ def _recompute_for_queryset(
 ) -> Tuple[int, int]:
     """
     Returns (scanned_count, changed_count).
-    Only updates rows where the recomputed duration differs.
-    Uses bulk_update; no signals/emails are triggered.
+
+    Recomputes actual_duration_minutes = floor((completed_at - planned_date) / 60s), clamped to >= 0.
+    Updates only rows where the value differs. Uses bulk_update; no signals/emails are triggered.
     """
     Model = spec.model
     scanned = 0
     changed = 0
 
     qs = (
-        Model.objects
-        .filter(**{spec.status_field: spec.done_status})
+        Model.objects.filter(**{spec.status_field: spec.done_status})
         .only("id", spec.planned_attr, spec.completed_attr, spec.duration_field)
         .order_by("id")
     )
@@ -169,8 +172,10 @@ class Command(BaseCommand):
             "--only",
             action="append",
             choices=["checklist", "delegation", "help_ticket"],
-            help="Limit to specific model(s). Can be repeated. "
-                 "Choices: checklist, delegation, help_ticket",
+            help=(
+                "Limit to specific model(s). Can be repeated. "
+                "Choices: checklist, delegation, help_ticket"
+            ),
         )
 
     def handle(self, *args, **opts):
@@ -178,13 +183,13 @@ class Command(BaseCommand):
         batch_size = int(opts.get("batch_size") or 500)
         only: Iterable[str] | None = opts.get("only")
 
-        self.stdout.write(self.style.NOTICE("Starting backfill of actual_duration_minutes"))
-        self.stdout.write(f"  Timezone base    : {IST.zone}")
-        self.stdout.write(f"  Batch size       : {batch_size}")
-        self.stdout.write(f"  Mode             : {'COMMIT' if commit else 'DRY-RUN'}\n")
+        self.stdout.write(self.style.SUCCESS("Starting backfill of actual_duration_minutes"))
+        self.stdout.write(f"  Timezone base : {IST.zone}")
+        self.stdout.write(f"  Batch size    : {batch_size}")
+        self.stdout.write(f"  Mode          : {'COMMIT' if commit else 'DRY-RUN'}\n")
 
         plan = []
-        want = set([s.lower() for s in (only or [])])
+        want = {s.lower() for s in (only or [])}
 
         def _want(key: str) -> bool:
             return not want or key in want
@@ -215,11 +220,15 @@ class Command(BaseCommand):
 
         self.stdout.write("")
         if commit:
-            self.stdout.write(self.style.SUCCESS(
-                f"Done. Scanned {total_scanned:,} row(s), updated {total_changed:,}."
-            ))
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Done. Scanned {total_scanned:,} row(s), updated {total_changed:,}."
+                )
+            )
         else:
-            self.stdout.write(self.style.NOTICE(
-                f"Dry-run complete. Scanned {total_scanned:,} row(s), would update {total_changed:,}."
-            ))
+            self.stdout.write(
+                self.style.WARNING(
+                    f"Dry-run complete. Scanned {total_scanned:,} row(s), would update {total_changed:,}."
+                )
+            )
             self.stdout.write("Run again with --commit to persist changes.")

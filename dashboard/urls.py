@@ -1,8 +1,9 @@
 from django.urls import path
-from . import views
+from apps.tasks import views as task_views
 
 app_name = "dashboard"
 
 urlpatterns = [
-    path("", views.dashboard_home, name="home"),
+    # /dashboard/ → dashboard home
+    path("", task_views.dashboard_home, name="home"),
 ]

@@ -5,34 +5,39 @@
     <meta charset="utf-8">
     <title>{{ title|default:"Assignment Summary" }}</title>
     <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            color: #333; 
-            margin: 0; 
-            padding: 20px; 
-            background: #f9f9f9; 
+        body {
+            font-family: Arial, sans-serif;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            background: #f9f9f9;
         }
-        .container { 
-            max-width: 600px; 
-            margin: 0 auto; 
-            background: #fff; 
-            border-radius: 8px; 
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #fff;
+            border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             overflow: hidden;
         }
-        .header { 
-            background: #007bff; 
-            color: white; 
-            padding: 20px; 
-            text-align: center; 
+        .header {
+            background: #007bff;
+            color: white;
+            padding: 20px;
+            text-align: center;
         }
-        .header h1 { 
-            margin: 0; 
-            font-size: 20px; 
-            font-weight: normal; 
+        .header h1 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: normal;
         }
-        .content { 
-            padding: 30px; 
+        .content { padding: 30px; }
+        .summary-info {
+            background: #e9ecef;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-size: 14px;
         }
         .task-item {
             background: #f8f9fa;
@@ -47,7 +52,7 @@
             font-size: 16px;
             margin-bottom: 8px;
         }
-        .task-details {
+        .kv {
             font-size: 14px;
             color: #555;
             margin: 5px 0;
@@ -62,64 +67,71 @@
             font-size: 14px;
             margin-top: 10px;
         }
-        .complete-button:hover {
-            background: #218838;
-        }
-        .footer { 
-            background: #f8f9fa; 
-            padding: 15px; 
-            text-align: center; 
-            border-top: 1px solid #e9ecef; 
-            font-size: 12px; 
-            color: #6c757d; 
-        }
-        .summary-info {
-            background: #e9ecef;
+        .complete-button:hover { background: #218838; }
+        .footer {
+            background: #f8f9fa;
             padding: 15px;
-            border-radius: 4px;
-            margin-bottom: 20px;
-            font-size: 14px;
+            text-align: center;
+            border-top: 1px solid #e9ecef;
+            font-size: 12px;
+            color: #6c757d;
         }
+        .muted { color:#6c757d; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>{{ title|default:"Task Assignment Summary" }}</h1>
-        </div>
-        
-        <div class="content">
-            {% if items_table %}
-                <div class="summary-info">
-                    <strong>{{ items_table|length }} task(s) have been assigned</strong>
-                </div>
-                
-                {% for task in items_table %}
+<div class="container">
+    <div class="header">
+        <h1>{{ title|default:"Task Assignment Summary" }}</h1>
+    </div>
+
+    <div class="content">
+        {# Preferred: a list of row dicts (items_table), as your code sends #}
+        {% if items_table %}
+            <div class="summary-info">
+                <strong>{{ items_table|length }} task(s) have been assigned</strong>
+            </div>
+
+            {% for task in items_table %}
                 <div class="task-item">
-                    <div class="task-name">{{ task.Task Name }}</div>
-                    <div class="task-details">
-                        <strong>Assigned to:</strong> {{ task.Assign To }}<br>
-                        <strong>Planned Date:</strong> {{ task.Planned Date }}<br>
-                        <strong>Priority:</strong> {{ task.Priority }}
-                    </div>
+                    {# Show a friendly heading if a "Task Name" key exists; otherwise show first non-empty field #}
+                    {% with heading="" %}
+                        {% for k,v in task.items %}
+                            {% if heading == "" and v %}{% with v as heading %}{% endwith %}{% endif %}
+                            {% if k == "Task Name" and v %}{% with v as heading %}{% endwith %}{% endif %}
+                        {% endfor %}
+                        <div class="task-name">{{ heading|default:"Task" }}</div>
+                    {% endwith %}
+
+                    {# Print all key/value pairs except the URL key, preserving your original labels (with spaces) #}
+                    {% for k,v in task.items %}
+                        {% if k != "complete_url" %}
+                            <div class="kv"><strong>{{ k }}:</strong> {{ v }}</div>
+                        {% endif %}
+                    {% endfor %}
+
                     {% if task.complete_url %}
                         <a href="{{ task.complete_url }}" class="complete-button">Complete Task</a>
                     {% endif %}
                 </div>
-                {% endfor %}
-            {% elif items %}
-                {% for item in items %}
+            {% endfor %}
+
+        {# Fallback: simple key/value list (items) #}
+        {% elif items %}
+            {% for item in items %}
                 <div class="task-item">
                     <div class="task-name">{{ item.label }}</div>
-                    <div class="task-details">{{ item.value }}</div>
+                    <div class="kv">{{ item.value }}</div>
                 </div>
-                {% endfor %}
-            {% endif %}
-        </div>
-        
-        <div class="footer">
-            This is an automated message from the Employee Management System.
-        </div>
+            {% endfor %}
+        {% else %}
+            <p class="muted">No assignment details available.</p>
+        {% endif %}
     </div>
+
+    <div class="footer">
+        This is an automated message from the Employee Management System.
+    </div>
+</div>
 </body>
 </html>

@@ -29,6 +29,7 @@ class Checklist(models.Model):
     priority = models.CharField(max_length=10, choices=[('Low', 'Low'), ('Medium', 'Medium'), ('High', 'High')])
     attachment_mandatory = models.BooleanField(default=False)
 
+    # Recurrence (checklists only)
     mode = models.CharField(
         max_length=10,
         choices=[
@@ -41,6 +42,10 @@ class Checklist(models.Model):
         null=True
     )
     frequency = models.PositiveIntegerField(default=1, blank=True, null=True)
+
+    # NEW: Optional end date for the series (no new occurrences after this date).
+    # Interpreted in IST in the recurrence code; stored as a date.
+    recurrence_end_date = models.DateField(null=True, blank=True, help_text="Stop creating new occurrences after this date.")
 
     time_per_task_minutes = models.PositiveIntegerField(default=0, blank=True, null=True)
     remind_before_days = models.PositiveIntegerField(default=0, blank=True, null=True)
@@ -78,6 +83,15 @@ class Checklist(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        indexes = [
+            # Speeds up series lookups (generation & deletion)
+            models.Index(fields=['assign_to', 'task_name', 'mode', 'frequency', 'group_name']),
+            # Common filters on dashboard and list pages
+            models.Index(fields=['assign_to', 'status', 'planned_date']),
+            models.Index(fields=['status', 'planned_date']),
+        ]
+
     def is_recurring(self):
         return bool(
             self.mode in ['Daily', 'Weekly', 'Monthly', 'Yearly'] and
@@ -86,6 +100,7 @@ class Checklist(models.Model):
 
     @property
     def delay(self):
+        # Always compute against the exact planned datetime (no 10:00 AM substitution).
         end = self.completed_at or timezone.now()
         return timesince(self.planned_date, end)
 
@@ -138,14 +153,25 @@ class Delegation(models.Model):
     actual_duration_minutes = models.PositiveIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['assign_to', 'status', 'planned_date']),
+        ]
+
     def is_recurring(self):
         # Explicitly disabled for Delegation tasks
         return False
 
     def clean(self):
+        # Harden: make sure these stay one-time regardless of any incoming data.
+        self.mode = None
+        self.frequency = None
         super().clean()
 
     def save(self, *args, **kwargs):
+        # Enforce one-time at save as well (defense-in-depth)
+        self.mode = None
+        self.frequency = None
         self.full_clean()
         super().save(*args, **kwargs)
 
@@ -207,6 +233,11 @@ class HelpTicket(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['assign_to', 'status', 'planned_date']),
+        ]
 
     @property
     def delay(self):

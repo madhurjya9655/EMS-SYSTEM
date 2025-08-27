@@ -1,3 +1,4 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
 import csv
 import pytz
 import re
@@ -91,7 +92,6 @@ def _safe_console_text(s: object) -> str:
         text = "" if s is None else str(s)
     except Exception:
         text = repr(s)
-    enc = getattr(getattr(logging, "StreamHandler", None), "terminator", None)  # dummy read
     try:
         return text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
     except Exception:
@@ -169,18 +169,18 @@ def span_bounds(d_from: date, d_to_inclusive: date):
 # ---------- FINAL VISIBILITY GATING FOR CHECKLIST ----------
 def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     """
-    Final rules (applies to both one-time and recurring checklists):
+    FINAL rule (Checklist — recurring OR one-time), per product spec:
+      • If planned date < today IST  → visible (past-due remains until completed).
+      • If planned date > today IST  → not visible.
+      • If planned date == today IST → visible ONLY from 10:00 AM IST, regardless of planned time.
 
-    • If planned date < today  → show (pending stays).
-    • If planned date > today  → hide.
-    • If planned date = today:
-        - If planned time <= now → show immediately (even before 10 AM).
-        - Else → show from 10:00 AM IST onwards.
+    Note: this is purely a *dashboard* gate; the stored planned datetime is untouched
+    and the delay is always calculated from the *actual planned time*.
     """
     if not task_dt:
         return False
 
-    # Convert task planned datetime to IST for consistent gating
+    # Convert planned datetime to IST for consistent gating
     dt_ist = task_dt.astimezone(IST) if timezone.is_aware(task_dt) else IST.localize(task_dt)
     task_date = dt_ist.date()
     today = now_ist.date()
@@ -190,12 +190,9 @@ def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     if task_date > today:
         return False
 
-    # Same day
-    if dt_ist.timetz().replace(tzinfo=None) <= now_ist.timetz().replace(tzinfo=None):
-        return True
-
-    ten_am = dt_time(10, 0, 0)
-    return now_ist.timetz().replace(tzinfo=None) >= ten_am
+    # Same day: strictly gate at 10:00 IST (no early visibility)
+    anchor_10am = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
+    return now_ist >= anchor_10am
 
 
 # ---------- BULK PARSING ----------
@@ -627,6 +624,8 @@ def process_delegation_bulk_upload_excel_friendly(file, assign_by_user):
     bs = optimal_batch_size()
     for start_idx in range(0, len(df), bs):
         end_idx = min(start_idx + bs, len(df))
+    for start_idx in range(0, len(df), bs):
+        end_idx = min(start_idx + bs, len(df))
         batch_df = df.iloc[start_idx:end_idx]
         batch_created, batch_errors = process_delegation_batch_excel_ultra_optimized(
             batch_df, assign_by_user, start_idx
@@ -686,6 +685,18 @@ def kick_off_bulk_emails_async(created_tasks, task_type="Checklist"):
     _background(_send_bulk_emails_by_ids, task_ids, task_type=task_type, thread_name="bulk-emails")
 
 
+def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: str | None = None):
+    """
+    Fire-and-forget admin summary, with optional exclusion of the assigner
+    (the uploader) from recipients.
+    """
+    _background(
+        send_admin_bulk_summary,
+        title=title,
+        rows=rows,
+        exclude_assigner_email=exclude_assigner_email,
+        thread_name="bulk-admin-summary",
+    )
 def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: str | None = None):
     """
     Fire-and-forget admin summary, with optional exclusion of the assigner
@@ -1098,6 +1109,8 @@ def complete_delegation(request, pk):
         messages.error(request, "You are not the assignee of this task.")
         # ✅ FIX: reverse the view name, then append query string
         return redirect(request.GET.get("next") or (reverse("dashboard:home") + "?task_type=delegation"))
+        # ✅ reverse the view name, then append query string
+        return redirect(request.GET.get("next") or (reverse("dashboard:home") + "?task_type=delegation"))
 
     if request.method == "GET":
         form = CompleteDelegationForm(instance=obj)
@@ -1123,6 +1136,8 @@ def complete_delegation(request, pk):
         logger.error("Error completing delegation %s: %s", pk, e)
         messages.error(request, "An error occurred while completing the task. Please try again.")
     # ✅ FIX: reverse the view name, then append query string
+    return redirect(request.GET.get("next") or (reverse("dashboard:home") + "?task_type=delegation"))
+    # ✅ reverse the view name, then append query string
     return redirect(request.GET.get("next") or (reverse("dashboard:home") + "?task_type=delegation"))
 
 
@@ -1425,6 +1440,12 @@ def bulk_upload(request):
                     rows=preview,
                     exclude_assigner_email=(request.user.email or None),
                 )
+                # ⬇️ Exclude the uploader/assigner from the admin summary recipients
+                send_admin_bulk_summary_async(
+                    title=title,
+                    rows=preview,
+                    exclude_assigner_email=(request.user.email or None),
+                )
             except Exception as e:
                 logger.error("Admin summary schedule failed: %s", e)
 
@@ -1475,9 +1496,8 @@ def dashboard_home(request):
       • Delay counted from planned time.
       • Visibility:
           - If planned date < today           → show.
-          - If planned date = today and planned time ≤ now → show immediately (even before 10:00).
-          - Else (planned today but time > now) → show from 10:00 AM IST of that day.
-          - If planned date > today → hide.
+          - If planned date = today           → show ONLY from 10:00 AM IST (strict).
+          - If planned date > today           → hide.
 
     Delegation & Help Ticket:
       • Visible immediately at/after their planned timestamp (no 10:00 gating).
@@ -1567,6 +1587,7 @@ def dashboard_home(request):
         if today_only:
             base_checklists = base_checklists.filter(planned_date__gte=start_today_proj, planned_date__lte=end_today_proj)
 
+        # Apply strict 10:00 IST gating for same-day
         checklist_qs = [c for c in base_checklists if _should_show_checklist(c.planned_date, now_ist)]
 
         # ---- Delegations: immediate visibility at/after planned timestamp ----
@@ -1602,7 +1623,7 @@ def dashboard_home(request):
             f"Dashboard filtering for {request.user.username}:\n"
             f"  - Today only: {today_only}\n"
             f"  - Found tasks (after gating): {len(checklist_qs)} checklists, {len(delegation_qs)} delegations, {len(help_ticket_qs)} help tickets\n"
-            f"  - Cutoff (DB): {'NOW' if today_only else 'EOD IST'}; final 10:00/instant gating applied."
+            f"  - Cutoff (DB): {'NOW' if today_only else 'EOD IST'}; final strict 10:00 checklist gating applied."
         ))
     except Exception as e:
         logger.error(_safe_console_text(f"Error querying task lists: {e}"))

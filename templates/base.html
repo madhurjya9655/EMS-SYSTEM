@@ -178,19 +178,18 @@
              {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'my_leaves' %}aria-current="page"{% endif %}>
             <i class="fas fa-file-alt" aria-hidden="true"></i> My Leaves
           </a>
+          <a href="{% url 'leave:apply_leave' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'apply_leave' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'apply_leave' %}aria-current="page"{% endif %}>
+            <i class="fas fa-plus-circle" aria-hidden="true"></i> Apply Leave
+          </a>
           {% endif %}
           {% if user|has_group:"Manager" %}
-          <a href="{% url 'leave:pending_leaves' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'pending_leaves' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'pending_leaves' %}aria-current="page"{% endif %}>
+          <a href="{% url 'leave:manager_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'manager_pending' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'manager_pending' %}aria-current="page"{% endif %}>
             <i class="fas fa-check-circle" aria-hidden="true"></i> Manager Approvals
           </a>
           {% endif %}
-          {% if user|has_group:"HR" %}
-          <a href="{% url 'leave:hr_leaves' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'hr_leaves' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'hr_leaves' %}aria-current="page"{% endif %}>
-            <i class="fas fa-user-tie" aria-hidden="true"></i> HR Approvals
-          </a>
-          {% endif %}
+          {# HR step removed in new workflow #}
         </div>
         {% endif %}
 

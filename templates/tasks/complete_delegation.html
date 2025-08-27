@@ -111,7 +111,8 @@
                 <h6 class="text-muted mb-2">Time Tracking</h6>
                 <p class="text-muted mb-0">No estimate provided</p>
               {% endif %}
-              
+
+              {# Delegations are usually one-time; keeping this check defensive #}
               {% if object.is_recurring %}
               <hr>
               <small class="text-info">
@@ -124,7 +125,7 @@
         </div>
       </div>
 
-      <form method="post" enctype="multipart/form-data" id="complete-form">
+      <form method="post" enctype="multipart/form-data" id="complete-form" novalidate>
         {% csrf_token %}
         
         {% if form.non_field_errors %}
@@ -191,7 +192,7 @@
               {% endwith %}
               
               <button type="submit" class="btn btn-primary btn-lg shadow" id="submit-btn">
-                <span class="spinner-border spinner-border-sm me-2 d-none" role="status"></span>
+                <span class="spinner-border spinner-border-sm me-2 d-none" role="status" aria-hidden="true"></span>
                 <i class="fas fa-check me-2"></i>
                 <strong>Mark Completed</strong>
               </button>
@@ -199,6 +200,13 @@
           </div>
         </div>
       </form>
+
+      <!-- carry attachment requirement to JS without injecting template code in <script> -->
+      <button id="delegationMeta"
+              type="button"
+              data-attach-req="{% if object.attachment_mandatory %}1{% else %}0{% endif %}"
+              hidden></button>
+
     </div>
   </div>
 </div>
@@ -207,42 +215,34 @@
 .bg-gradient-info {
   background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
 }
-
-.card {
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-.card-header {
-  border: none;
-}
-
+.card { border-radius: 12px; overflow: hidden; }
+.card-header { border: none; }
 .form-control:focus {
   border-color: #17a2b8;
   box-shadow: 0 0 0 0.2rem rgba(23, 162, 184, 0.25);
 }
-
-.btn-primary {
-  background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
-  border: none;
-}
-
-.btn-primary:hover {
-  background: linear-gradient(135deg, #0056b3 0%, #004085 100%);
-  transform: translateY(-1px);
-}
+.btn-primary { background: linear-gradient(135deg, #007bff 0%, #0056b3 100%); border: none; }
+.btn-primary:hover { background: linear-gradient(135deg, #0056b3 0%, #004085 100%); transform: translateY(-1px); }
 </style>
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const form = document.getElementById('complete-form');
-    const submitBtn = document.getElementById('submit-btn');
-    const spinner = submitBtn.querySelector('.spinner-border');
-    
-    form.addEventListener('submit', function() {
-        submitBtn.disabled = true;
-        spinner.classList.remove('d-none');
-    });
+  const form = document.getElementById('complete-form');
+  const submitBtn = document.getElementById('submit-btn');
+  const spinner = submitBtn.querySelector('.spinner-border');
+
+  // Read requirement flag from data attribute (avoids Django syntax in JS)
+  const metaEl = document.getElementById('delegationMeta');
+  const attachmentRequired = metaEl && metaEl.dataset.attachReq === '1';
+  if (attachmentRequired) {
+    const fileInput = form.querySelector('input[name="doer_file"]');
+    if (fileInput) fileInput.setAttribute('required', '');
+  }
+
+  form.addEventListener('submit', function() {
+    submitBtn.disabled = true;
+    spinner.classList.remove('d-none');
+  });
 });
 </script>
 {% endblock %}

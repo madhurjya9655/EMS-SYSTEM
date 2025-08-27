@@ -106,13 +106,12 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 # =============================================================================
 # MIDDLEWARE
-# (GZip added for dynamic compression; WhiteNoise keeps static fast)
 # =============================================================================
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
-    "django.middleware.gzip.GZipMiddleware",  # ← fast dynamic responses
+    "django.middleware.gzip.GZipMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -124,10 +123,9 @@ MIDDLEWARE = [
 ROOT_URLCONF = "employee_management.urls"
 
 # =============================================================================
-# TEMPLATES (Production uses cached loader for speed)
+# TEMPLATES
 # =============================================================================
 
-# Common template options
 _template_options = {
     "context_processors": [
         "django.template.context_processors.debug",
@@ -135,22 +133,18 @@ _template_options = {
         "django.contrib.auth.context_processors.auth",
         "django.contrib.messages.context_processors.messages",
     ],
-    # Builtins globally available
     "builtins": [
         "dashboard.templatetags.dashboard_extras",
         "apps.reports.templatetags.reports_extras",
-        # (removed invalid: "apps.users.permissions")
-        # optionally expose permission tags globally:
-        # "apps.common.templatetags.permission_tags",
     ],
     "libraries": {
         "common_filters": "apps.common.templatetags.common_filters",
         "user_filters": "apps.users.templatetags.user_filters",
         "group_tags": "apps.common.templatetags.group_tags",
-        "permission_tags": "apps.common.templatetags.permission_tags",  # ← correct mapping
+        "permission_tags": "apps.common.templatetags.permission_tags",
         "model_extras": "apps.common.templatetags.model_extras",
     },
-    "string_if_invalid": "" if DEBUG else "",  # be quiet in templates
+    "string_if_invalid": "" if DEBUG else "",
 }
 
 if DEBUG:
@@ -349,7 +343,6 @@ LOGGING = {
         },
     },
     "handlers": {
-        # Console kept at WARNING to avoid Windows cp1252 emoji crashes
         "console": {
             "level": "WARNING",
             "class": "logging.StreamHandler",
@@ -446,12 +439,12 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "EMS Sys
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 30)
 EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
 
+# Toggle: send emails for auto-created recurring checklists?
 SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", True)
-SEND_RECUR_EMAILS_ONLY_AT_10AM = env_bool("SEND_RECUR_EMAILS_ONLY_AT_10AM", True)  # ← ensures 10:00 IST gate
-EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "[EMS] ")
+# Toggle: only send those recurring emails around 10:00 IST? (ENABLED to match your rule)
+SEND_RECUR_EMAILS_ONLY_AT_10AM = env_bool("SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
 
-if DEBUG and not EMAIL_HOST_USER:
-    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "[EMS] ")
 
 # =============================================================================
 # SECURITY SETTINGS (Prod)
@@ -502,7 +495,6 @@ TASK_LIST_PAGE_SIZE = env_int("TASK_LIST_PAGE_SIZE", 50)
 
 # =============================================================================
 # PERFORMANCE SETTINGS
-# (Optional Redis cache auto-detected via REDIS_URL; else LocMem)
 # =============================================================================
 
 SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
@@ -562,6 +554,7 @@ if os.environ.get("RENDER"):
 if DEBUG:
     INTERNAL_IPS = ["127.0.0.1", "localhost"]
 
+    # Use console backend if no SMTP creds during local dev
     if not EMAIL_HOST_USER:
         EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 

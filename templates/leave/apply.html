@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% load tz humanize static %}
+
+{% block title %}Apply Leave{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-0">
+  <!-- Employee header -->
+  <div class="card shadow-sm mb-4">
+    <div class="card-body">
+      <div class="d-flex align-items-center">
+        <div class="me-3">
+          {% if employee_header.photo_url %}
+            <img src="{{ employee_header.photo_url }}" alt="Photo" class="rounded-circle" style="width:64px;height:64px;object-fit:cover;">
+          {% else %}
+            <div class="rounded-circle bg-light d-flex align-items-center justify-content-center" style="width:64px;height:64px;">
+              <i class="fas fa-user text-secondary"></i>
+            </div>
+          {% endif %}
+        </div>
+        <div class="flex-grow-1">
+          <div class="fw-semibold fs-5 mb-1">{{ employee_header.name }}</div>
+          <div class="text-muted small">
+            <span class="me-3"><i class="fa-solid fa-id-badge me-1"></i>{{ employee_header.designation|default:"—" }}</span>
+            <span><i class="fa-solid fa-envelope me-1"></i>{{ employee_header.email }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Apply form -->
+  <div class="card shadow-sm">
+    <div class="card-header bg-white">
+      <h5 class="mb-0"><i class="fa-solid fa-calendar-day me-2"></i>Apply for Leave</h5>
+    </div>
+    <div class="card-body">
+      <form method="post" enctype="multipart/form-data" novalidate>
+        {% csrf_token %}
+
+        <!-- Non-field errors -->
+        {% if form.non_field_errors %}
+          <div class="alert alert-danger">
+            {{ form.non_field_errors }}
+          </div>
+        {% endif %}
+
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label" for="{{ form.leave_type.id_for_label }}">Type</label>
+            {{ form.leave_type }}
+            {% if form.leave_type.errors %}<div class="invalid-feedback d-block">{{ form.leave_type.errors|striptags }}</div>{% endif %}
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label" for="{{ form.start_at.id_for_label }}">Start Date &amp; Time</label>
+            {{ form.start_at }}
+            <div class="form-text">Timezone: IST ({{ "now"|timezone:"Asia/Kolkata"|date:"T" }})</div>
+            {% if form.start_at.errors %}<div class="invalid-feedback d-block">{{ form.start_at.errors|striptags }}</div>{% endif %}
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label" for="{{ form.end_at.id_for_label }}">End Date &amp; Time</label>
+            {{ form.end_at }}
+            <div class="form-text">Ensure end is after start.</div>
+            {% if form.end_at.errors %}<div class="invalid-feedback d-block">{{ form.end_at.errors|striptags }}</div>{% endif %}
+          </div>
+
+          <div class="col-md-12">
+            <div class="form-check">
+              {{ form.is_half_day }}
+              <label class="form-check-label" for="{{ form.is_half_day.id_for_label }}">Half day</label>
+            </div>
+            <div class="form-text">Half-day must be the same date and ≤ 6 hours.</div>
+            {% if form.is_half_day.errors %}<div class="invalid-feedback d-block">{{ form.is_half_day.errors|striptags }}</div>{% endif %}
+          </div>
+
+          <div class="col-md-12">
+            <label class="form-label" for="{{ form.reason.id_for_label }}">Reason</label>
+            {{ form.reason }}
+            {% if form.reason.errors %}<div class="invalid-feedback d-block">{{ form.reason.errors|striptags }}</div>{% endif %}
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label" for="{{ form.attachment.id_for_label }}">Attachment (optional)</label>
+            {{ form.attachment }}
+            <div class="form-text">Allowed: PDF, JPG, PNG, DOC, TXT. Max 10MB.</div>
+            {% if form.attachment.errors %}<div class="invalid-feedback d-block">{{ form.attachment.errors|striptags }}</div>{% endif %}
+          </div>
+        </div>
+
+        <div class="d-flex justify-content-end mt-4">
+          <a href="{% url 'leave:my_leaves' %}" class="btn btn-outline-secondary me-2">
+            <i class="fa-solid fa-list me-1"></i> My Leaves
+          </a>
+          <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-paper-plane me-1"></i> Submit Leave
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

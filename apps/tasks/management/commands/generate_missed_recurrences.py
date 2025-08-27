@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, time as dt_time
+from datetime import timedelta
 
 import pytz
-from dateutil.relativedelta import relativedelta
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -14,9 +13,7 @@ from django.utils import timezone
 
 from apps.tasks.models import Checklist
 from apps.tasks.recurrence import (
-    normalize_mode,
-    is_working_day,
-    next_working_day,
+    get_next_planned_date,   # ← uses the final rule: 19:00 IST on working days
     RECURRING_MODES,
 )
 
@@ -43,62 +40,11 @@ def _within_10am_ist_window(leeway_minutes: int = 5) -> bool:
     return (anchor - timedelta(minutes=leeway_minutes)) <= now_ist <= (anchor + timedelta(minutes=leeway_minutes))
 
 
-def _next_planned_preserve_time(prev_dt: datetime, mode: str, frequency: int) -> datetime | None:
-    """
-    Compute the next occurrence for a recurring checklist while PRESERVING the
-    original planned time-of-day. If the next date lands on Sunday/holiday, move
-    forward to the next working day but KEEP the same time-of-day.
-
-    Returns an aware datetime in the project's timezone.
-    """
-    if not prev_dt:
-        return None
-
-    m = normalize_mode(mode)
-    if m not in RECURRING_MODES:
-        return None
-
-    step = max(int(frequency or 1), 1)
-
-    # Work in IST for wall-clock stability
-    if timezone.is_naive(prev_dt):
-        prev_dt = timezone.make_aware(prev_dt, timezone.get_current_timezone())
-    prev_ist = prev_dt.astimezone(IST)
-
-    # Original time-of-day to preserve
-    t_planned = dt_time(prev_ist.hour, prev_ist.minute, prev_ist.second, prev_ist.microsecond)
-
-    # Add interval
-    if m == "Daily":
-        nxt_ist = prev_ist + relativedelta(days=step)
-    elif m == "Weekly":
-        nxt_ist = prev_ist + relativedelta(weeks=step)
-    elif m == "Monthly":
-        nxt_ist = prev_ist + relativedelta(months=step)
-    elif m == "Yearly":
-        nxt_ist = prev_ist + relativedelta(years=step)
-    else:
-        return None
-
-    # Re-apply preserved time-of-day
-    nxt_ist = nxt_ist.replace(hour=t_planned.hour, minute=t_planned.minute,
-                              second=t_planned.second, microsecond=t_planned.microsecond)
-
-    # If Sunday/holiday, push FORWARD to next working day, SAME time
-    d = nxt_ist.date()
-    if not is_working_day(d):
-        d = next_working_day(d)
-        nxt_ist = IST.localize(datetime.combine(d, t_planned))
-
-    # Return in project timezone
-    return nxt_ist.astimezone(timezone.get_current_timezone())
-
-
 class Command(BaseCommand):
     help = (
-        "Ensure one future 'Pending' checklist per recurring series exists. "
-        "Next recurrences PRESERVE the original planned time-of-day and only shift "
-        "the DATE to avoid Sundays/holidays. Visibility rules are handled by the dashboard (10:00 IST)."
+        "Ensure one future 'Pending' checklist per recurring series exists.\n"
+        "Next recurrences are scheduled at 19:00 IST on working days (Sun/holidays skipped),\n"
+        "per the final product rule. Dashboard handles 10:00 IST visibility gating."
     )
 
     def add_arguments(self, parser):
@@ -117,6 +63,7 @@ class Command(BaseCommand):
         if user_id:
             filters["assign_to_id"] = user_id
 
+        # One row per (assignee, task_name, mode, frequency, group_name)
         groups = (
             Checklist.objects.filter(**filters)
             .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
@@ -145,7 +92,7 @@ class Command(BaseCommand):
             if not instance:
                 continue
 
-            # Already have a future pending? skip
+            # If there is already a future pending item in this series, skip.
             if Checklist.objects.filter(
                 assign_to_id=instance.assign_to_id,
                 task_name=instance.task_name,
@@ -157,15 +104,15 @@ class Command(BaseCommand):
             ).exists():
                 continue
 
-            # Compute next, preserving the original time-of-day
-            next_planned = _next_planned_preserve_time(instance.planned_date, instance.mode, instance.frequency)
+            # Compute next planned occurrence (ALWAYS 19:00 IST on a working day)
+            next_planned = get_next_planned_date(instance.planned_date, instance.mode, instance.frequency)
             if not next_planned:
                 continue
 
-            # Catch up to the future
+            # Catch up until next_planned is in the future (rare, but robust)
             safety = 0
-            while next_planned and next_planned <= now and safety < 730:  # ~2 years
-                next_planned = _next_planned_preserve_time(next_planned, instance.mode, instance.frequency)
+            while next_planned and next_planned <= now and safety < 730:  # ≈ 2 years safety
+                next_planned = get_next_planned_date(next_planned, instance.mode, instance.frequency)
                 safety += 1
             if not next_planned:
                 continue
@@ -195,7 +142,7 @@ class Command(BaseCommand):
                         assign_by=instance.assign_by,
                         task_name=instance.task_name,
                         assign_to=instance.assign_to,
-                        planned_date=next_planned,  # PRESERVED time-of-day
+                        planned_date=next_planned,  # 19:00 IST (from recurrence.get_next_planned_date)
                         priority=instance.priority,
                         attachment_mandatory=instance.attachment_mandatory,
                         mode=instance.mode,
@@ -203,7 +150,7 @@ class Command(BaseCommand):
                         status="Pending",
                         actual_duration_minutes=0,
                     )
-                    # Optional fields that may or may not exist on your model
+                    # Optional fields mirrored when present
                     for opt in (
                         "message",
                         "time_per_task_minutes",
@@ -231,11 +178,13 @@ class Command(BaseCommand):
                 ):
                     try:
                         complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
+                        # Assignee only:
                         send_checklist_assignment_to_user(
                             task=new_obj,
                             complete_url=complete_url,
                             subject_prefix="Recurring Checklist Generated",
                         )
+                        # Admin confirmation:
                         send_checklist_admin_confirmation(
                             task=new_obj,
                             subject_prefix="Recurring Checklist Generated",

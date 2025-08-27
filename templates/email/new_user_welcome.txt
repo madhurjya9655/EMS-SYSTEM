@@ -1,0 +1,17 @@
+Welcome to the Employee Management System
+
+Hi {{ user.get_full_name|default:user.username }},
+
+Your account has been created. Use the details below to log in.
+
+Username: {{ username|default:user.username }}
+Email: {{ email|default:user.email }}{% if temporary_password %}
+Temporary Password: {{ temporary_password }}{% endif %}
+Login URL: {{ login_url|default:site_url }}
+
+Next steps:
+- Sign in using the details above.{% if temporary_password %}
+- Change your password immediately from your profile/settings page.{% endif %}
+
+If you didn't expect this email, please contact your administrator.
+BOS EMS — {{ site_url }}

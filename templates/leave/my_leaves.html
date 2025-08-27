@@ -1,19 +1,133 @@
-{% extends 'base.html' %}
+{% extends "base.html" %}
+{% load tz humanize static %}
+
 {% block title %}My Leaves{% endblock %}
+
 {% block content %}
-<h2>My Leave Applications</h2>
-<table class="table">
-  <thead><tr><th>Type</th><th>Dates</th><th>Status</th></tr></thead>
-  <tbody>
-    {% for leave in leaves %}
-    <tr>
-      <td>{{ leave.leave_type }}</td>
-      <td>{{ leave.start_date }} – {{ leave.end_date }}</td>
-      <td>{{ leave.status }}</td>
-    </tr>
-    {% empty %}
-    <tr><td colspan="3">No leaves applied.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div class="container-fluid px-0">
+
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h4 class="mb-0"><i class="fa-solid fa-file-alt me-2"></i>My Leaves</h4>
+    <a href="{% url 'leave:apply_leave' %}" class="btn btn-primary">
+      <i class="fa-solid fa-plus me-1"></i> Submit Leave
+    </a>
+  </div>
+
+  {% if leaves %}
+  <div class="card shadow-sm">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Type</th>
+              <th>Start (IST)</th>
+              <th>End (IST)</th>
+              <th>Half Day</th>
+              <th>Status</th>
+              <th>Approver</th>
+              <th>Reason</th>
+              <th>Attachment</th>
+              <th>Applied</th>
+              <th>Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for lr in leaves %}
+            <tr>
+              <td class="fw-medium">{{ lr.leave_type.name }}</td>
+
+              <td>
+                {% timezone "Asia/Kolkata" %}
+                  {{ lr.start_at|date:"M j, Y" }}<br>
+                  <small class="text-muted">{{ lr.start_at|date:"g:i A" }}</small>
+                {% endtimezone %}
+              </td>
+
+              <td>
+                {% timezone "Asia/Kolkata" %}
+                  {{ lr.end_at|date:"M j, Y" }}<br>
+                  <small class="text-muted">{{ lr.end_at|date:"g:i A" }}</small>
+                {% endtimezone %}
+              </td>
+
+              <td>
+                {% if lr.is_half_day %}
+                  <span class="badge text-bg-info">Yes</span>
+                {% else %}
+                  <span class="badge text-bg-secondary">No</span>
+                {% endif %}
+              </td>
+
+              <td>
+                {% if lr.status == "PENDING" %}
+                  <span class="badge text-bg-warning"><i class="fa-regular fa-hourglass-half me-1"></i>Pending</span>
+                {% elif lr.status == "APPROVED" %}
+                  <span class="badge text-bg-success"><i class="fa-solid fa-check me-1"></i>Approved</span>
+                {% elif lr.status == "REJECTED" %}
+                  <span class="badge text-bg-danger"><i class="fa-solid fa-times me-1"></i>Rejected</span>
+                {% else %}
+                  <span class="badge text-bg-light">{{ lr.status }}</span>
+                {% endif %}
+              </td>
+
+              <td>
+                {% if lr.approver %}
+                  {{ lr.approver.get_full_name|default:lr.approver.username }}
+                  {% if lr.decided_at %}
+                  <br>
+                  <small class="text-muted">
+                    {% timezone "Asia/Kolkata" %}{{ lr.decided_at|date:"M j, Y g:i A" }}{% endtimezone %}
+                  </small>
+                  {% endif %}
+                  {% if lr.decision_comment %}
+                    <div class="small text-muted mt-1"><em>{{ lr.decision_comment }}</em></div>
+                  {% endif %}
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+
+              <td style="max-width: 280px;">
+                <div class="text-truncate" title="{{ lr.reason|striptags }}">
+                  {{ lr.reason }}
+                </div>
+              </td>
+
+              <td>
+                {% if lr.attachment %}
+                  <a href="{{ lr.attachment.url }}" class="btn btn-sm btn-outline-secondary" target="_blank" rel="noopener">
+                    <i class="fa-solid fa-paperclip"></i> View
+                  </a>
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+
+              <td>
+                {% timezone "Asia/Kolkata" %}{{ lr.applied_at|date:"M j, Y g:i A" }}{% endtimezone %}
+              </td>
+
+              <td>
+                {% timezone "Asia/Kolkata" %}{{ lr.updated_at|date:"M j, Y g:i A" }}{% endtimezone %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% else %}
+    <div class="card shadow-sm">
+      <div class="card-body py-5 text-center text-muted">
+        <p class="mb-3"><i class="fa-regular fa-folder-open fa-2x"></i></p>
+        <p class="mb-3">No leave applications yet.</p>
+        <a href="{% url 'leave:apply_leave' %}" class="btn btn-primary">
+          <i class="fa-solid fa-plus me-1"></i> Submit Leave
+        </a>
+      </div>
+    </div>
+  {% endif %}
+</div>
 {% endblock %}

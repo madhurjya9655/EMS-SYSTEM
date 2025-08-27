@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% load tz humanize static %}
+
+{% block title %}Manager Approvals{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-0">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h4 class="mb-0"><i class="fa-solid fa-check-circle me-2"></i>Pending Approvals</h4>
+  </div>
+
+  {% if leaves %}
+  <div class="card shadow-sm">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Employee</th>
+              <th>Designation</th>
+              <th>Type</th>
+              <th>Start (IST)</th>
+              <th>End (IST)</th>
+              <th>Half Day</th>
+              <th>Reason</th>
+              <th>Attachment</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for lr in leaves %}
+            <tr>
+              <td>
+                <div class="d-flex align-items-center">
+                  <div class="me-2">
+                    {% with prof=lr.employee.profile %}
+                      {% if prof and prof.photo %}
+                        <img src="{{ prof.photo.url }}" alt="Photo" class="rounded-circle" style="width:36px;height:36px;object-fit:cover;">
+                      {% else %}
+                        <div class="rounded-circle bg-light d-flex align-items-center justify-content-center" style="width:36px;height:36px;">
+                          <i class="fas fa-user text-secondary"></i>
+                        </div>
+                      {% endif %}
+                    {% endwith %}
+                  </div>
+                  <div>
+                    <div class="fw-semibold">{{ lr.employee.get_full_name|default:lr.employee.username }}</div>
+                    <div class="text-muted small">{{ lr.employee.email }}</div>
+                  </div>
+                </div>
+              </td>
+              <td>{{ lr.employee_designation|default:"—" }}</td>
+              <td>{{ lr.leave_type.name }}</td>
+
+              <td>
+                {% timezone "Asia/Kolkata" %}
+                  {{ lr.start_at|date:"M j, Y" }}<br>
+                  <small class="text-muted">{{ lr.start_at|date:"g:i A" }}</small>
+                {% endtimezone %}
+              </td>
+              <td>
+                {% timezone "Asia/Kolkata" %}
+                  {{ lr.end_at|date:"M j, Y" }}<br>
+                  <small class="text-muted">{{ lr.end_at|date:"g:i A" }}</small>
+                {% endtimezone %}
+              </td>
+              <td>
+                {% if lr.is_half_day %}
+                  <span class="badge text-bg-info">Yes</span>
+                {% else %}
+                  <span class="badge text-bg-secondary">No</span>
+                {% endif %}
+              </td>
+              <td style="max-width: 240px;">
+                <div class="text-truncate" title="{{ lr.reason|striptags }}">{{ lr.reason }}</div>
+              </td>
+              <td>
+                {% if lr.attachment %}
+                  <a href="{{ lr.attachment.url }}" class="btn btn-sm btn-outline-secondary" target="_blank" rel="noopener">
+                    <i class="fa-solid fa-paperclip"></i> View
+                  </a>
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+              <td>
+                <form action="{% url 'leave:manager_decide_approve' lr.pk %}" method="post" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="id" value="{{ lr.pk }}">
+                  <button type="submit" class="btn btn-sm btn-success" title="Approve">
+                    <i class="fa-solid fa-check"></i>
+                  </button>
+                </form>
+                <form action="{% url 'leave:manager_decide_reject' lr.pk %}" method="post" class="d-inline ms-1">
+                  {% csrf_token %}
+                  <input type="hidden" name="id" value="{{ lr.pk }}">
+                  <input type="hidden" name="decision_comment" value="Rejected by manager.">
+                  <button type="submit" class="btn btn-sm btn-danger" title="Reject">
+                    <i class="fa-solid fa-xmark"></i>
+                  </button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% else %}
+    <div class="card shadow-sm">
+      <div class="card-body py-5 text-center text-muted">
+        <p class="mb-3"><i class="fa-regular fa-folder-open fa-2x"></i></p>
+        <p class="mb-0">No pending approvals.</p>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

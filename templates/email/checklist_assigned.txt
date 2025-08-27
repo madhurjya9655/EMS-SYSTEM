@@ -1,10 +1,10 @@
 New Checklist Assigned
 
-Task: {{ task.task_name }}
-Assigned By: {{ task.assign_by.get_full_name|default:task.assign_by.username }}
-Assigned To: {{ task.assign_to.get_full_name|default:task.assign_to.username }}
+Task: {{ task.task_name|default:"Task" }}
+Assigned By: {{ task.assign_by.get_full_name|default:task.assign_by.username|default:"System" }}
+Assigned To: {{ task.assign_to.get_full_name|default:task.assign_to.username|default:"—" }}
 Planned Date: {% if task.planned_date %}{{ task.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}
-Priority: {{ task.get_priority_display|default:task.priority }}{% if task.time_per_task_minutes %}
+Priority: {{ task.get_priority_display|default:task.priority|default:"Low" }}{% if task.time_per_task_minutes %}
 
 Estimated Time: {{ task.time_per_task_minutes }} min{% endif %}{% if task.group_name %}
 

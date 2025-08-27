@@ -1,8 +1,8 @@
-# apps/tasks/recurrence.py
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, time as dt_time, date
+from typing import Optional, Tuple
 
 import pytz
 from dateutil.relativedelta import relativedelta
@@ -14,17 +14,24 @@ logger = logging.getLogger(__name__)
 # Project timezone helpers
 # -------------------------------------------------------------------
 IST = pytz.timezone("Asia/Kolkata")
+
+# Dashboard gating anchor (kept for compatibility helpers)
 ASSIGN_HOUR = 10
 ASSIGN_MINUTE = 0
+
+# Fixed planned time for ALL FUTURE recurrences
+EVENING_HOUR = 19  # 7:00 PM IST
+EVENING_MINUTE = 0
 
 # Valid recurring modes
 RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
 
-# Public API (so imports remain stable)
+# Public API (so existing imports remain stable)
 __all__ = [
     "preserve_first_occurrence_time",
     "schedule_recurring_at_10am",
     "schedule_recurring_preserve_time",
+    "schedule_recurring_at_7pm",
     "get_next_planned_date",
     "next_working_day",
     "is_working_day",
@@ -38,7 +45,7 @@ __all__ = [
 # -------------------------------------------------------------------
 # Internal helpers
 # -------------------------------------------------------------------
-def _ensure_aware(dt: datetime | None) -> datetime | None:
+def _ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
     """Ensure datetime is timezone-aware in the current project timezone."""
     if dt is None:
         return None
@@ -48,9 +55,9 @@ def _ensure_aware(dt: datetime | None) -> datetime | None:
 
 
 def _to_ist(dt: datetime) -> datetime:
-    """Convert datetime to IST (keeps wallclock if already IST)."""
+    """Convert datetime to IST (keeps wall-clock if already IST)."""
     dt = _ensure_aware(dt)
-    return dt.astimezone(IST)
+    return dt.astimezone(IST)  # type: ignore[union-attr]
 
 
 def _from_ist(dt: datetime) -> datetime:
@@ -61,7 +68,7 @@ def _from_ist(dt: datetime) -> datetime:
 def _holiday_model():
     """Import Holiday lazily to avoid app-registry timing issues."""
     try:
-        from apps.settings.models import Holiday
+        from apps.settings.models import Holiday  # type: ignore
         return Holiday
     except Exception:
         return None
@@ -69,7 +76,7 @@ def _holiday_model():
 # -------------------------------------------------------------------
 # Mode normalization
 # -------------------------------------------------------------------
-def normalize_mode(mode: str | None) -> str:
+def normalize_mode(mode: Optional[str]) -> str:
     """
     Accepts: Day/Daily, Week/Weekly, Month/Monthly, Year/Yearly (case-insensitive).
     Returns canonical: Daily, Weekly, Monthly, Yearly (or empty string if invalid).
@@ -116,7 +123,7 @@ def next_working_day(d: date) -> date:
 # -------------------------------------------------------------------
 # First occurrence handling
 # -------------------------------------------------------------------
-def preserve_first_occurrence_time(planned_dt: datetime | None) -> datetime | None:
+def preserve_first_occurrence_time(planned_dt: Optional[datetime]) -> Optional[datetime]:
     """
     FIRST occurrence (manual add / bulk upload):
     - Keep the exact date+time the user supplied (planned time is authoritative).
@@ -135,14 +142,13 @@ def preserve_first_occurrence_time(planned_dt: datetime | None) -> datetime | No
     return _from_ist(planned_dt.astimezone(IST))
 
 # -------------------------------------------------------------------
-# Recurring occurrence handling
+# Recurring occurrence helpers
 # -------------------------------------------------------------------
-def schedule_recurring_at_10am(planned_dt: datetime | None) -> datetime | None:
+def schedule_recurring_at_10am(planned_dt: Optional[datetime]) -> Optional[datetime]:
     """
     Historical helper (kept for compatibility):
     - Schedule at 10:00 AM IST and push to next working day if needed.
-    NOTE: For current product rules we prefer schedule_recurring_preserve_time()
-    so delay is always counted from the user's planned time-of-day.
+    NOTE: Not used for the new rule; kept so old imports keep working.
     """
     if not planned_dt:
         return planned_dt
@@ -157,15 +163,12 @@ def schedule_recurring_at_10am(planned_dt: datetime | None) -> datetime | None:
     return _from_ist(recur_ist)
 
 
-def schedule_recurring_preserve_time(planned_dt: datetime | None) -> datetime | None:
+def schedule_recurring_preserve_time(planned_dt: Optional[datetime]) -> Optional[datetime]:
     """
-    For RECURRING occurrences:
-    - Keep the same wall-clock time as the previous occurrence (e.g., 19:00).
+    Compatibility helper (not used by the new rule):
+    - Keep the same wall-clock time as the given datetime.
     - If the date is Sunday/holiday, push forward (preserving the time).
     - Return aware datetime in the project timezone.
-
-    This matches the final workflow: visibility may be gated at 10:00 AM on the day
-    by the dashboard, but delay is always counted from the planned time.
     """
     if not planned_dt:
         return planned_dt
@@ -181,17 +184,35 @@ def schedule_recurring_preserve_time(planned_dt: datetime | None) -> datetime | 
     return _from_ist(recur_ist)
 
 
-def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> datetime | None:
+def schedule_recurring_at_7pm(planned_dt: Optional[datetime]) -> Optional[datetime]:
+    """
+    New helper for the final rule:
+    - Set time to 19:00 IST (7 PM) on the same date.
+    - If Sunday/holiday, push forward to the next working day at 19:00.
+    - Return in project timezone.
+    """
+    if not planned_dt:
+        return planned_dt
+
+    planned_ist = _to_ist(planned_dt)
+    d = planned_ist.date()
+
+    if not is_working_day(d):
+        d = next_working_day(d)
+
+    recur_ist = IST.localize(datetime.combine(d, dt_time(EVENING_HOUR, EVENING_MINUTE)))
+    return _from_ist(recur_ist)
+
+# -------------------------------------------------------------------
+# Next recurrence computation (ALWAYS 19:00 IST on working day)
+# -------------------------------------------------------------------
+def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> Optional[datetime]:
     """
     Compute the next planned datetime for a recurring task based on the *previous* occurrence.
-    The next occurrence keeps the original planned time-of-day (e.g., 19:00), and will be
-    shifted forward to the next working day if the calculated date is Sunday/holiday.
-
-    Examples:
-      - Daily + 1 : every day (same time-of-day), skip Sundays/holidays
-      - Weekly + 2: every 2 weeks (same weekday/time), skip Sun/hol
-      - Monthly + 4: every 4 months (same dom/time), calendar-safe
-      - Yearly + 1 : same date next year (same time), calendar-safe
+    FINAL RULE:
+      - The next occurrence is scheduled at **19:00 IST** on the calculated date.
+      - If that date is Sunday/holiday, move to the next working day at **19:00 IST**.
+      - Only the DATE advances per mode/frequency; the TIME is fixed at 19:00.
     """
     if not prev_dt:
         return None
@@ -215,8 +236,13 @@ def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> datet
         else:
             return None
 
-        # Preserve time-of-day; shift only for non-working days
-        return schedule_recurring_preserve_time(nxt_ist)
+        # Force 19:00 IST on a working day
+        nxt_date = nxt_ist.date()
+        if not is_working_day(nxt_date):
+            nxt_date = next_working_day(nxt_date)
+
+        nxt_19_ist = IST.localize(datetime.combine(nxt_date, dt_time(EVENING_HOUR, EVENING_MINUTE)))
+        return _from_ist(nxt_19_ist)
 
     except Exception as e:
         logger.error("Error calculating next planned date (mode=%s, freq=%s): %s", m, step, e)
@@ -225,7 +251,7 @@ def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> datet
 # -------------------------------------------------------------------
 # Compatibility utilities
 # -------------------------------------------------------------------
-def extract_ist_wallclock(dt: datetime) -> tuple[date, dt_time]:
+def extract_ist_wallclock(dt: datetime) -> Tuple[date, dt_time]:
     """Extract IST date and time components (for backward compatibility)."""
     if timezone.is_naive(dt):
         dt = IST.localize(dt)
@@ -239,6 +265,6 @@ def ist_wallclock_to_project_tz(d: date, t: dt_time) -> datetime:
     return ist_dt.astimezone(timezone.get_current_timezone())
 
 
-def get_next_planned_datetime(prev_dt: datetime, mode: str, freq: int) -> datetime | None:
+def get_next_planned_datetime(prev_dt: datetime, mode: str, freq: int) -> Optional[datetime]:
     """Legacy alias for get_next_planned_date (for backward compatibility)."""
     return get_next_planned_date(prev_dt, mode, freq)

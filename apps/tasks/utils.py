@@ -1,4 +1,3 @@
-# apps/tasks/utils.py
 import logging
 import sys
 from datetime import datetime
@@ -10,6 +9,9 @@ from django.contrib.auth import get_user_model
 from django.core.mail import EmailMultiAlternatives
 from django.db import transaction, connection
 from django.utils import timezone
+from django.urls import reverse
+from django.template.loader import render_to_string
+from django.template import TemplateDoesNotExist
 
 from apps.settings.models import Holiday
 from .models import Checklist, Delegation, HelpTicket
@@ -24,6 +26,7 @@ DEFAULT_FROM_EMAIL: Optional[str] = getattr(settings, "DEFAULT_FROM_EMAIL", None
     settings, "EMAIL_HOST_USER", None
 )
 EMAIL_FAIL_SILENTLY: bool = bool(getattr(settings, "EMAIL_FAIL_SILENTLY", False) or getattr(settings, "DEBUG", False))
+SEND_WELCOME_EMAILS: bool = bool(getattr(settings, "SEND_WELCOME_EMAILS", True))
 
 
 # ======================================================================
@@ -437,3 +440,100 @@ def send_admin_bulk_summary(
     rcpts = _safe_list(rcpts)
     if rcpts:
         _on_commit(lambda: _send_email(subject, rcpts, html))
+
+
+# ======================================================================
+#                     NEW USER WELCOME EMAIL (🎉)
+# ======================================================================
+
+def send_new_user_welcome(
+    user: User,
+    *,
+    temp_password: Optional[str] = None,
+    login_url: Optional[str] = None,
+    subject_prefix: str = "Welcome to BOS EMS",
+) -> None:
+    """
+    Send a welcome email to a newly-created user.
+    Rules:
+      • Only the new user receives it (never the assigner/admin).
+      • If SEND_WELCOME_EMAILS=False, skip.
+      • Uses HTML & TXT templates if present; falls back to a styled shell.
+    """
+    try:
+        if not SEND_WELCOME_EMAILS:
+            logger.info("Welcome emails disabled via SEND_WELCOME_EMAILS")
+            return
+        if not user or not getattr(user, "email", None):
+            return
+
+        display_name = (user.get_full_name() or user.username or "there").strip() or "there"
+
+        # Login URL resolution
+        resolved_login = login_url
+        if not resolved_login:
+            try:
+                resolved_login = f"{SITE_URL}{reverse('login')}"
+            except Exception:
+                resolved_login = f"{SITE_URL}/accounts/login/"
+
+        ctx = {
+            "user": user,
+            "display_name": display_name,
+            "username": user.username,
+            "email": user.email,
+            "temp_password": temp_password,  # include only if you pass it
+            "site_url": SITE_URL,
+            "login_url": resolved_login,
+        }
+
+        # Try template render; fallback to inline shell
+        text_body = None
+        html_body = None
+        try:
+            html_body = render_to_string("email/new_user_welcome.html", ctx)
+        except TemplateDoesNotExist:
+            pass
+        try:
+            text_body = render_to_string("email/new_user_welcome.txt", ctx)
+        except TemplateDoesNotExist:
+            pass
+
+        if not html_body:
+            lines = [
+                f"Hi {display_name},",
+                "Your account has been created in BOS EMS.",
+                f"Username: {user.username}",
+            ]
+            if temp_password:
+                lines.append(f"Temporary Password: {temp_password}")
+            lines.append("You can log in using the button below.")
+            body = "<p>" + "<br/>".join(lines) + "</p>" + _cta_button(resolved_login, "Go to Login")
+            html_body = _shell_html("Welcome to BOS EMS", "Account Created", body)
+
+        subject = subject_prefix
+
+        _on_commit(lambda: _send_email(subject, [user.email], html_body, text_body))
+        logger.info(_safe_console_text(f"Sent welcome email to {user.email}"))
+
+    except Exception as e:
+        logger.error(_safe_console_text(f"Failed to send welcome email to {getattr(user, 'email', '?')}: {e}"))
+
+
+__all__ = [
+    # core senders
+    "send_checklist_assignment_to_user",
+    "send_delegation_assignment_to_user",
+    "send_help_ticket_assignment_to_user",
+    "send_recurring_assignment_to_user",
+    "send_checklist_admin_confirmation",
+    "send_checklist_unassigned_notice",
+    "send_help_ticket_admin_confirmation",
+    "send_help_ticket_unassigned_notice",
+    "send_admin_bulk_summary",
+    # helpers
+    "_safe_console_text",
+    "is_working_day",
+    # new
+    "send_new_user_welcome",
+]

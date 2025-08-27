@@ -12,15 +12,15 @@
     <table cellpadding="6" cellspacing="0" border="0" style="border-collapse:collapse; max-width:640px;">
       <tr>
         <td style="font-weight:bold; white-space:nowrap;">Task</td>
-        <td>{{ task.task_name }}</td>
+        <td>{{ task.task_name|default:"Task" }}</td>
       </tr>
       <tr>
         <td style="font-weight:bold; white-space:nowrap;">Assigned By</td>
-        <td>{{ task.assign_by.get_full_name|default:task.assign_by.username }}</td>
+        <td>{{ task.assign_by.get_full_name|default:task.assign_by.username|default:"System" }}</td>
       </tr>
       <tr>
         <td style="font-weight:bold; white-space:nowrap;">Assigned To</td>
-        <td>{{ task.assign_to.get_full_name|default:task.assign_to.username }}</td>
+        <td>{{ task.assign_to.get_full_name|default:task.assign_to.username|default:"—" }}</td>
       </tr>
       <tr>
         <td style="font-weight:bold; white-space:nowrap;">Planned Date</td>
@@ -28,7 +28,7 @@
       </tr>
       <tr>
         <td style="font-weight:bold; white-space:nowrap;">Priority</td>
-        <td>{{ task.get_priority_display|default:task.priority }}</td>
+        <td>{{ task.get_priority_display|default:task.priority|default:"Low" }}</td>
       </tr>
       {% if task.time_per_task_minutes %}
       <tr>

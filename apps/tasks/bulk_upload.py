@@ -10,11 +10,10 @@ from typing import List, Tuple
 
 import pandas as pd
 import pytz
-from dateutil.relativedelta import relativedelta
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db import connection, transaction, OperationalError, close_old_connections
+from django.db import connection, transaction, close_old_connections
 from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
@@ -30,6 +29,9 @@ from .recurrence import preserve_first_occurrence_time
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
+# -----------------------------
+# Constants
+# -----------------------------
 IST = pytz.timezone("Asia/Kolkata")
 ASSIGN_HOUR = 10
 ASSIGN_MINUTE = 0
@@ -298,7 +300,7 @@ def _optimal_batch_size() -> int:
 
 
 # -----------------------------
-# Core batch creators
+# Core row -> model builders
 # -----------------------------
 def _build_checklist_from_row(row, assign_by_user):
     task_name = _clean_str(row.get("Task Name"))
@@ -397,7 +399,8 @@ def _parse_time_flexible(val):
 # -----------------------------
 def process_checklist_bulk_upload(file, assign_by_user, *, send_emails: bool = True):
     """
-    Returns: (created_objects: List[Checklist], errors: List[str])
+    Parse file → create Checklist tasks → send assignee emails in background.
+    Returns: (created_objects, errors)
     """
     try:
         df = parse_excel_file_optimized(file)
@@ -426,14 +429,19 @@ def process_checklist_bulk_upload(file, assign_by_user, *, send_emails: bool = T
 
     if created and send_emails:
         _kick_off_bulk_emails_async([o.id for o in created if getattr(o, "id", None)], task_type="Checklist")
-        _send_admin_preview_async("Bulk Upload: {} Checklist Tasks Created".format(len(created)), created[:10])
+        _send_admin_preview_async(
+            f"✅ Bulk Upload: {len(created)} Checklist Tasks Created",
+            created[:10],
+            exclude_assigner_email=(assign_by_user.email or None),
+        )
 
     return created, errors
 
 
 def process_delegation_bulk_upload(file, assign_by_user, *, send_emails: bool = True):
     """
-    Returns: (created_objects: List[Delegation], errors: List[str])
+    Parse file → create Delegation tasks → send assignee emails in background.
+    Returns: (created_objects, errors)
     """
     try:
         df = parse_excel_file_optimized(file)
@@ -462,7 +470,11 @@ def process_delegation_bulk_upload(file, assign_by_user, *, send_emails: bool = 
 
     if created and send_emails:
         _kick_off_bulk_emails_async([o.id for o in created if getattr(o, "id", None)], task_type="Delegation")
-        _send_admin_preview_async("Bulk Upload: {} Delegation Tasks Created".format(len(created)), created[:10])
+        _send_admin_preview_async(
+            f"✅ Bulk Upload: {len(created)} Delegation Tasks Created",
+            created[:10],
+            exclude_assigner_email=(assign_by_user.email or None),
+        )
 
     return created, errors
 
@@ -571,6 +583,10 @@ def _create_delegation_batch(batch_df, assign_by_user):
 # Email helpers (async)
 # -----------------------------
 def _send_bulk_emails(task_ids: List[int], *, task_type: str):
+    """
+    Runs in a background thread. Refetches tasks and sends emails to ASSIGNEES ONLY.
+    If an assignee has no email, sending is silently skipped (logged inside mailer).
+    """
     Model = Checklist if task_type == "Checklist" else Delegation
     CHUNK = 100
     for i in range(0, len(task_ids), CHUNK):
@@ -606,7 +622,15 @@ def _kick_off_bulk_emails_async(task_ids: List[int], *, task_type: str):
     _background(_send_bulk_emails, task_ids, task_type=task_type, thread_name="bulk-upload-emails")
 
 
-def _send_admin_preview_async(title: str, created_subset: List[Checklist | Delegation]):
+def _send_admin_preview_async(
+    title: str,
+    created_subset: List[Checklist | Delegation],
+    *,
+    exclude_assigner_email: str | None = None,
+):
+    """
+    Sends a small preview table to admins/superusers; can optionally exclude the uploader.
+    """
     def _runner():
         try:
             rows = []
@@ -631,7 +655,8 @@ def _send_admin_preview_async(title: str, created_subset: List[Checklist | Deleg
                         "Priority": t.priority,
                         "complete_url": complete_url,
                     })
-            send_admin_bulk_summary(title=title, rows=rows)
+            # utils should ignore the uploader if an email is provided
+            send_admin_bulk_summary(title=title, rows=rows, exclude_assigner_email=exclude_assigner_email)
         except Exception as e:
             logger.error("Admin bulk summary failed: %s", e)
 

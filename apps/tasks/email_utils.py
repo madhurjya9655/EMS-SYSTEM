@@ -1,12 +1,8 @@
-# apps/tasks/email_utils.py
-# Robust, template-friendly email utilities for tasks (Checklist, Delegation, Help Ticket)
-
 from __future__ import annotations
 
 from typing import Iterable, List, Sequence, Optional, Dict, Any
 from datetime import datetime, time as _time
 import logging
-import pytz
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -14,11 +10,17 @@ from django.core.mail import EmailMultiAlternatives, send_mail
 from django.template.loader import render_to_string
 from django.utils import timezone
 
+# Prefer Python stdlib tz (Django 5+ defaults to zoneinfo)
+try:
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover
+    ZoneInfo = None  # type: ignore
+
 User = get_user_model()
 logger = logging.getLogger(__name__)
 
 SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
-IST = pytz.timezone("Asia/Kolkata")
+IST = ZoneInfo(getattr(settings, "TIME_ZONE", "Asia/Kolkata")) if ZoneInfo else timezone.get_fixed_timezone(330)  # 330 mins = IST
 DEFAULT_ASSIGN_T = _time(10, 0)
 
 
@@ -31,26 +33,39 @@ def _dedupe_emails(emails: Iterable[str]) -> List[str]:
     out: List[str] = []
     for e in emails or []:
         s = (e or "").strip()
-        if s and s not in seen:
-            seen.add(s)
-            out.append(s)
+        if s and "@" in s:
+            low = s.lower()
+            if low not in seen:
+                seen.add(low)
+                out.append(s)
     return out
 
 
-def get_admin_emails() -> List[str]:
+def _without_emails(emails: Sequence[str], exclude: Sequence[str] | None) -> List[str]:
+    """Case-insensitive subtract of exclude from emails."""
+    if not emails:
+        return []
+    excl = {e.strip().lower() for e in (exclude or []) if e}
+    return [e for e in emails if e and e.strip().lower() not in excl]
+
+
+def get_admin_emails(exclude: Sequence[str] | None = None) -> List[str]:
     """
     Superusers + members of Admin/Manager/EA/CEO groups.
-    Returns a deduped list of emails.
+    Returns a deduped list of emails, excluding any in `exclude`.
     """
     try:
-        qs = User.objects.filter(is_active=True)
+        qs = User.objects.filter(is_active=True).exclude(email__isnull=True).exclude(email__exact="")
         admins = list(qs.filter(is_superuser=True).values_list("email", flat=True))
         groups = list(
             qs.filter(groups__name__in=["Admin", "Manager", "EA", "CEO"])
             .values_list("email", flat=True)
             .distinct()
         )
-        return _dedupe_emails(admins + groups)
+        all_emails = _dedupe_emails(admins + groups)
+        if exclude:
+            all_emails = _without_emails(all_emails, exclude)
+        return all_emails
     except Exception as e:
         logger.error("get_admin_emails failed: %s", e)
         return []
@@ -75,7 +90,7 @@ def _fmt_value(v: Any) -> Any:
     if isinstance(v, datetime):
         tz = timezone.get_current_timezone()
         aware = v if timezone.is_aware(v) else timezone.make_aware(v, tz)
-        return aware.astimezone(tz).strftime("%Y-%m-%d %H:%M")
+        return timezone.localtime(aware, tz).strftime("%Y-%m-%d %H:%M")
     if hasattr(v, "get_full_name") or hasattr(v, "username"):
         try:
             name = getattr(v, "get_full_name", lambda: "")() or getattr(v, "username", "")
@@ -107,9 +122,9 @@ def _fmt_dt_date(dt: Any) -> str:
     if not dt:
         return ""
     try:
-        tz = timezone.get_current_timezone()
+        tz = IST or timezone.get_current_timezone()
         aware = dt if timezone.is_aware(dt) else timezone.make_aware(dt, tz)
-        ist = aware.astimezone(IST)
+        ist = timezone.localtime(aware, tz)
         base = ist.strftime("%Y-%m-%d")
         t = ist.timetz().replace(tzinfo=None)
         if t not in (DEFAULT_ASSIGN_T, _time(0, 0)):
@@ -118,6 +133,14 @@ def _fmt_dt_date(dt: Any) -> str:
     except Exception as e:
         logger.error("Failed to format datetime %r: %s", dt, e)
         return str(dt)
+
+
+def _from_email() -> str:
+    return getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None) or "EMS <no-reply@example.com>"
+
+
+def _fail_silently() -> bool:
+    return bool(getattr(settings, "EMAIL_FAIL_SILENTLY", False) or getattr(settings, "DEBUG", False))
 
 
 # -------------------------------------------------------------------
@@ -132,7 +155,7 @@ def _render_or_fallback(template_name: str, context: Dict[str, Any], fallback: s
 
 
 def _send_unified_assignment_email(*, subject: str, to_email: str, context: Dict[str, Any]) -> None:
-    """Render standardized TXT + HTML and send safely."""
+    """Render standardized TXT + HTML and send safely (assignee-only)."""
     to_email = (to_email or "").strip()
     if not to_email:
         return
@@ -147,7 +170,7 @@ def _send_unified_assignment_email(*, subject: str, to_email: str, context: Dict
         f"Planned Date: {context.get('planned_date_display', 'Not specified')}\n"
         f"Assigned By: {context.get('assign_by_display', 'System')}\n\n"
         f"{context.get('cta_text', 'Please complete this task as soon as possible.')}\n"
-        f"Complete URL: {context.get('complete_url', 'N/A')}\n"
+        f"Open URL: {context.get('complete_url', 'N/A')}\n"
         f"\nRegards,\nEMS System"
     )
 
@@ -163,6 +186,7 @@ def _send_unified_assignment_email(*, subject: str, to_email: str, context: Dict
     .card {{ border: 1px solid #ddd; padding: 16px; border-radius: 6px; }}
     .btn {{ display: inline-block; background: #0d6efd; color: #fff; padding: 10px 16px; text-decoration: none; border-radius: 4px; }}
     .muted {{ color: #666; }}
+    table td {{ padding: 4px 8px; vertical-align: top; }}
   </style>
 </head>
 <body>
@@ -191,15 +215,11 @@ def _send_unified_assignment_email(*, subject: str, to_email: str, context: Dict
         msg = EmailMultiAlternatives(
             subject=subject,
             body=text_body,
-            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None),
+            from_email=_from_email(),
             to=[to_email],
         )
         msg.attach_alternative(html_body, "text/html")
-        msg.send(
-            fail_silently=bool(
-                getattr(settings, "EMAIL_FAIL_SILENTLY", False) or getattr(settings, "DEBUG", False)
-            )
-        )
+        msg.send(fail_silently=_fail_silently())
         logger.info("Sent assignment email to %s (%s)", to_email, subject)
     except Exception as e:
         logger.error("Failed sending assignment email to %s: %s", to_email, e)
@@ -223,9 +243,7 @@ def send_html_email(
     cc_list = _dedupe_emails(cc or [])
     bcc_list = _dedupe_emails(bcc or [])
 
-    effective_fail_silently = (
-        fail_silently or getattr(settings, "EMAIL_FAIL_SILENTLY", False) or getattr(settings, "DEBUG", False)
-    )
+    effective_fail_silently = fail_silently or _fail_silently()
 
     try:
         ctx = dict(context or {})
@@ -244,7 +262,7 @@ def send_html_email(
         msg = EmailMultiAlternatives(
             subject=subject,
             body=html_message,
-            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None),
+            from_email=_from_email(),
             to=to_list,
             cc=cc_list or None,
             bcc=bcc_list or None,
@@ -265,7 +283,17 @@ def send_html_email(
 def send_checklist_assignment_to_user(
     *, task, complete_url: str, subject_prefix: str = "Checklist Assigned"
 ) -> None:
-    """User-facing email for Checklist."""
+    """
+    User-facing email for Checklist (assignee-only).
+    Rule: if assigner == assignee (self-assign), do NOT email (assigner must never receive emails).
+    """
+    try:
+        if getattr(task, "assign_by_id", None) and task.assign_by_id == task.assign_to_id:
+            logger.info("Checklist email suppressed (self-assign) for CL-%s", getattr(task, "id", "?"))
+            return
+    except Exception:
+        pass
+
     to_email = getattr(getattr(task, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
@@ -306,7 +334,17 @@ def send_checklist_assignment_to_user(
 def send_delegation_assignment_to_user(
     *, delegation, complete_url: str, subject_prefix: str = "Delegation Assigned"
 ) -> None:
-    """User-facing email for Delegation."""
+    """
+    User-facing email for Delegation (assignee-only).
+    Rule: if assigner == assignee (self-assign), do NOT email.
+    """
+    try:
+        if getattr(delegation, "assign_by_id", None) and delegation.assign_by_id == delegation.assign_to_id:
+            logger.info("Delegation email suppressed (self-assign) for DL-%s", getattr(delegation, "id", "?"))
+            return
+    except Exception:
+        pass
+
     to_email = getattr(getattr(delegation, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
@@ -343,7 +381,17 @@ def send_delegation_assignment_to_user(
 def send_help_ticket_assignment_to_user(
     *, ticket, complete_url: str, subject_prefix: str = "Help Ticket Assigned"
 ) -> None:
-    """User-facing email for Help Ticket."""
+    """
+    User-facing email for Help Ticket (assignee-only).
+    Rule: if assigner == assignee (self-assign), do NOT email.
+    """
+    try:
+        if getattr(ticket, "assign_by_id", None) and ticket.assign_by_id == ticket.assign_to_id:
+            logger.info("Help-ticket email suppressed (self-assign) for HT-%s", getattr(ticket, "id", "?"))
+            return
+    except Exception:
+        pass
+
     to_email = getattr(getattr(ticket, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
@@ -372,8 +420,20 @@ def send_help_ticket_assignment_to_user(
 
 
 def send_checklist_admin_confirmation(*, task, subject_prefix: str = "Checklist Assignment") -> None:
-    """Detailed admin confirmation for checklist."""
-    admins = get_admin_emails()
+    """
+    Detailed admin confirmation for checklist.
+
+    IMPORTANT: Excludes the assigner from recipients to satisfy
+    “Assigner should never receive emails”.
+    """
+    exclude = []
+    try:
+        if getattr(task, "assign_by", None) and getattr(task.assign_by, "email", None):
+            exclude = [task.assign_by.email]
+    except Exception:
+        pass
+
+    admins = get_admin_emails(exclude=exclude)
     if not admins:
         return
 
@@ -391,10 +451,7 @@ def send_checklist_admin_confirmation(*, task, subject_prefix: str = "Checklist 
                     {"label": "Planned Date", "value": task.planned_date},
                     {"label": "Priority", "value": task.priority},
                     {"label": "Group", "value": getattr(task, "group_name", "") or "No group"},
-                    {
-                        "label": "Time Estimate",
-                        "value": f"{getattr(task, 'time_per_task_minutes', 0) or 0} minutes",
-                    },
+                    {"label": "Time Estimate", "value": f"{getattr(task, 'time_per_task_minutes', 0) or 0} minutes"},
                     {
                         "label": "Recurring",
                         "value": f"{task.mode} (Every {task.frequency})" if getattr(task, "mode", None) else "One-time",
@@ -408,8 +465,15 @@ def send_checklist_admin_confirmation(*, task, subject_prefix: str = "Checklist 
 
 
 def send_delegation_admin_confirmation(*, delegation, subject_prefix: str = "Delegation Assignment") -> None:
-    """Detailed admin confirmation for delegation."""
-    admins = get_admin_emails()
+    """Detailed admin confirmation for delegation (assigner excluded)."""
+    exclude = []
+    try:
+        if getattr(delegation, "assign_by", None) and getattr(delegation.assign_by, "email", None):
+            exclude = [delegation.assign_by.email]
+    except Exception:
+        pass
+
+    admins = get_admin_emails(exclude=exclude)
     if not admins:
         return
 
@@ -444,8 +508,15 @@ def send_delegation_admin_confirmation(*, delegation, subject_prefix: str = "Del
 
 
 def send_help_ticket_admin_confirmation(*, ticket, subject_prefix: str = "Help Ticket Assignment") -> None:
-    """Detailed admin confirmation for help ticket."""
-    admins = get_admin_emails()
+    """Detailed admin confirmation for help ticket (assigner excluded)."""
+    exclude = []
+    try:
+        if getattr(ticket, "assign_by", None) and getattr(ticket.assign_by, "email", None):
+            exclude = [ticket.assign_by.email]
+    except Exception:
+        pass
+
+    admins = get_admin_emails(exclude=exclude)
     if not admins:
         return
 
@@ -475,7 +546,7 @@ def send_help_ticket_admin_confirmation(*, ticket, subject_prefix: str = "Help T
 
 
 # -------------------------------------------------------------------
-# Unassignment notices
+# Unassignment notices (assignee only)
 # -------------------------------------------------------------------
 def send_checklist_unassigned_notice(*, task, old_user) -> None:
     email = getattr(old_user, "email", "") or ""
@@ -535,13 +606,19 @@ def send_help_ticket_unassigned_notice(*, ticket, old_user) -> None:
 # Reminders & Summaries
 # -------------------------------------------------------------------
 def send_task_reminder_email(*, task, task_type: str = "Checklist") -> None:
-    """Reminder email for upcoming/overdue tasks."""
+    """Reminder email for upcoming/overdue tasks (assignee only)."""
     to_email = getattr(getattr(task, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
 
     if getattr(task, "planned_date", None):
-        days_until = (task.planned_date.date() - timezone.now().date()).days
+        # planned_date may be date or datetime; normalize to date
+        pd = getattr(task, "planned_date")
+        if isinstance(pd, datetime):
+            pd_date = timezone.localtime(pd, IST or timezone.get_current_timezone()).date()
+        else:
+            pd_date = pd
+        days_until = (pd_date - timezone.localdate()).days
         if days_until < 0:
             urgency = "OVERDUE"
         elif days_until == 0:
@@ -570,7 +647,7 @@ def send_task_reminder_email(*, task, task_type: str = "Checklist") -> None:
         "site_url": SITE_URL,
         "task_id": task.id,
         "cta_text": "Please review and complete this item.",
-        "complete_url": SITE_URL,  # Optional: customize with a deep link if available
+        "complete_url": SITE_URL,
     }
 
     _send_unified_assignment_email(
@@ -580,9 +657,13 @@ def send_task_reminder_email(*, task, task_type: str = "Checklist") -> None:
     )
 
 
-def send_admin_bulk_summary(*, title: str, rows: Sequence[dict]) -> None:
-    """Send clean admin bulk summary with basic stats."""
-    admins = get_admin_emails()
+def send_admin_bulk_summary(*, title: str, rows: Sequence[dict], exclude_assigner_email: str | None = None) -> None:
+    """
+    Send clean admin bulk summary with basic stats.
+    IMPORTANT: will exclude the assigner email if provided.
+    """
+    exclude = [exclude_assigner_email] if exclude_assigner_email else None
+    admins = get_admin_emails(exclude=exclude)
     if not admins or not rows:
         return
 
@@ -593,7 +674,7 @@ def send_admin_bulk_summary(*, title: str, rows: Sequence[dict]) -> None:
     ]
 
     send_html_email(
-        subject=title,
+        subject=title,  # e.g., "✅ Bulk Upload: 162 Checklist Tasks Created"
         template_name="email/admin_assignment_summary.html",
         context={
             "title": title,
@@ -607,7 +688,7 @@ def send_admin_bulk_summary(*, title: str, rows: Sequence[dict]) -> None:
 
 
 def send_bulk_completion_summary(*, user, completed_tasks: List, date_range: str = "today") -> None:
-    """Send summary of completed tasks to a user."""
+    """Send summary of completed tasks to a user (assignee)."""
     email = getattr(user, "email", "") or ""
     if not email.strip() or not completed_tasks:
         return
@@ -636,13 +717,62 @@ def send_bulk_completion_summary(*, user, completed_tasks: List, date_range: str
 
 
 # -------------------------------------------------------------------
+# Welcome email for new users (future use; call from user creation flow)
+# -------------------------------------------------------------------
+def send_welcome_email(*, user: User, raw_password: str | None = None) -> None:
+    """
+    Welcome mail with login details. Skips if user has no email.
+    This does NOT CC/BCC anyone (assigner never receives).
+    """
+    to_email = (getattr(user, "email", "") or "").strip()
+    if not to_email:
+        return
+
+    username = getattr(user, "username", "") or ""
+    ctx = {
+        "title": "Welcome to EMS",
+        "full_name": _display_name(user),
+        "username": username,
+        "raw_password": raw_password or "",
+        "login_url": SITE_URL,
+    }
+
+    # Minimal fallback body
+    fallback_html = f"""
+    <html><body>
+      <h3>Welcome to EMS</h3>
+      <p>Hi {ctx['full_name']},</p>
+      <p>Your account has been created.</p>
+      <p><strong>Username:</strong> {username}</p>
+      {"<p><strong>Password:</strong> " + ctx["raw_password"] + "</p>" if raw_password else ""}
+      <p><a href="{SITE_URL}">Login here</a></p>
+    </body></html>
+    """.strip()
+
+    html_body = _render_or_fallback("email/welcome_user.html", ctx, fallback_html)
+
+    try:
+        msg = EmailMultiAlternatives(
+            subject="👋 Welcome to EMS",
+            body=html_body,
+            from_email=_from_email(),
+            to=[to_email],
+        )
+        msg.attach_alternative(html_body, "text/html")
+        msg.send(fail_silently=_fail_silently())
+        logger.info("Welcome email sent to %s", to_email)
+    except Exception as e:
+        logger.error("Failed to send welcome email to %s: %s", to_email, e)
+
+
+# -------------------------------------------------------------------
 # Diagnostics
 # -------------------------------------------------------------------
 def test_email_configuration() -> bool:
     """Send a single test message to DEFAULT_FROM_EMAIL; return True on success."""
     try:
-        from_addr = getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None)
-        to_addr = from_addr or "admin@example.com"
+        from_addr = _from_email()
+        to_addr = from_addr
         send_mail(
             subject="EMS Email Configuration Test",
             message="This is a test email to verify email configuration.",
@@ -678,7 +808,7 @@ __all__ = [
     "send_checklist_assignment_to_user",
     "send_delegation_assignment_to_user",
     "send_help_ticket_assignment_to_user",
-    # admin confirmations
+    # admin confirmations (assigner auto-excluded)
     "send_checklist_admin_confirmation",
     "send_delegation_admin_confirmation",
     "send_help_ticket_admin_confirmation",
@@ -690,6 +820,8 @@ __all__ = [
     "send_admin_bulk_summary",
     "send_bulk_completion_summary",
     "send_task_reminder_email",
+    # welcome
+    "send_welcome_email",
     # helpers
     "_dedupe_emails",
     "_fmt_value",
