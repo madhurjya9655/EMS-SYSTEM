@@ -42,15 +42,16 @@ def env_int(name: str, default: int = 0) -> int:
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-__dev-only-use-this__")
 DEBUG = env_bool("DEBUG", True)
 SITE_URL = os.getenv("SITE_URL", "https://ems-system-d26q.onrender.com")
+ON_RENDER = bool(os.environ.get("RENDER"))
 
 ALLOWED_HOSTS = env_list(
     "ALLOWED_HOSTS",
-    "ems-system-v944.onrender.com,ems-system-d26q.onrender.com,localhost,127.0.0.1,0.0.0.0",
+    "ems-system-d26q.onrender.com,localhost,127.0.0.1,0.0.0.0",
 )
 
 CSRF_TRUSTED_ORIGINS = env_list(
     "CSRF_TRUSTED_ORIGINS",
-    "https://ems-system-v944.onrender.com,https://ems-system-d26q.onrender.com",
+    "https://ems-system-d26q.onrender.com",
 )
 
 # Add local origins in debug mode
@@ -59,13 +60,23 @@ if DEBUG:
         if local_origin not in CSRF_TRUSTED_ORIGINS:
             CSRF_TRUSTED_ORIGINS.append(local_origin)
 
-# Security settings
+# Proxy/SSL awareness for Render (critical for session cookies)
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
+
+# Cookie & security defaults
 CSRF_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_HTTPONLY = True
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False  # persist logins
 APPEND_SLASH = True
+
+# Make sure cookies are secure in prod and on Render
+SESSION_COOKIE_SECURE = True if (ON_RENDER or not DEBUG) else False
+CSRF_COOKIE_SECURE = True if (ON_RENDER or not DEBUG) else False
+
+# Extra hardening
+SECURE_CONTENT_TYPE_NOSNIFF = True
 
 # =============================================================================
 # APPLICATIONS
@@ -97,7 +108,7 @@ LOCAL_APPS = [
     "apps.petty_cash",
     "apps.tasks.apps.TasksConfig",
     "apps.reports",
-    "apps.users.apps.UsersConfig",  # use AppConfig so ready() runs
+    "apps.users.apps.UsersConfig",
     "dashboard.apps.DashboardConfig",
     "apps.settings.apps.SettingsConfig",
 ]
@@ -160,7 +171,7 @@ else:
     # Cached loader for production
     TEMPLATES = [
         {
-            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "BACKEND": "django.template.backends.django.DjangoDjangoTemplates",
             "DIRS": [BASE_DIR / "templates"],
             "APP_DIRS": False,
             "OPTIONS": {
@@ -327,7 +338,7 @@ except Exception:
 # =============================================================================
 
 LOGS_DIR = BASE_DIR / "logs"
-if not DEBUG and os.environ.get("RENDER"):
+if not DEBUG and ON_RENDER:
     LOGS_DIR = Path("/tmp/logs")
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -412,7 +423,7 @@ STORAGES = {
 WHITENOISE_MAX_AGE = 60 * 60 * 24 * 365  # 1 year
 
 MEDIA_URL = "/media/"
-MEDIA_ROOT = os.getenv("MEDIA_ROOT") or ("/var/data/media" if os.getenv("RENDER") else str(BASE_DIR / "media"))
+MEDIA_ROOT = os.getenv("MEDIA_ROOT") or ("/var/data/media" if ON_RENDER else str(BASE_DIR / "media"))
 Path(MEDIA_ROOT).mkdir(parents=True, exist_ok=True)
 
 # =============================================================================
@@ -421,7 +432,7 @@ Path(MEDIA_ROOT).mkdir(parents=True, exist_ok=True)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LOGIN_URL = "login"
-LOGIN_REDIRECT_URL = "dashboard:home"
+LOGIN_REDIRECT_URL = "/dashboard/"   # keep simple, avoids reverse issues on Render
 LOGOUT_REDIRECT_URL = "login"
 
 # =============================================================================
@@ -439,9 +450,7 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "EMS Sys
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 30)
 EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
 
-# Toggle: send emails for auto-created recurring checklists?
 SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", True)
-# Toggle: only send those recurring emails around 10:00 IST? (ENABLED to match your rule)
 SEND_RECUR_EMAILS_ONLY_AT_10AM = env_bool("SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
 
 EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "[EMS] ")
@@ -452,6 +461,7 @@ EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "[EMS] ")
 
 if not DEBUG:
     SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", True)
+    # Cookies already set above; keep True here too
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
 
@@ -460,6 +470,7 @@ if not DEBUG:
     SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", True)
 
     SECURE_CONTENT_TYPE_NOSNIFF = True
+    # Kept for compatibility; harmless in modern Django
     SECURE_BROWSER_XSS_FILTER = True
     X_FRAME_OPTIONS = "DENY"
     SECURE_REFERRER_POLICY = os.getenv("SECURE_REFERRER_POLICY", "strict-origin-when-cross-origin")
@@ -497,9 +508,9 @@ TASK_LIST_PAGE_SIZE = env_int("TASK_LIST_PAGE_SIZE", 50)
 # PERFORMANCE SETTINGS
 # =============================================================================
 
-SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
-SESSION_CACHE_ALIAS = "default"
-SESSION_COOKIE_AGE = 60 * 60 * 24 * 7
+# Default to DB-backed sessions (stable across dyno restarts)
+SESSION_ENGINE = "django.contrib.sessions.backends.db"
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 7  # 1 week
 
 FILE_UPLOAD_MAX_MEMORY_SIZE = env_int("FILE_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 * 1024)
 DATA_UPLOAD_MAX_MEMORY_SIZE = env_int("DATA_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 * 1024)
@@ -519,8 +530,7 @@ if REDIS_URL:
             "TIMEOUT": env_int("CACHE_TIMEOUT", 300),
         }
     }
-    # Make sessions use Redis too if desired
-    SESSION_ENGINE = "django.contrib.sessions.backends.cache"
+
 else:
     CACHES = {
         "default": {
@@ -538,12 +548,16 @@ JSON_DUMPS_PARAMS = {"ensure_ascii": False}
 # RENDER.COM SPECIFIC SETTINGS
 # =============================================================================
 
-if os.environ.get("RENDER"):
-    WEB_CONCURRENCY = env_int("WEB_CONCURRENCY", 2)
+if ON_RENDER:
+    # Force DB sessions and secure cookies behind proxy
     SESSION_ENGINE = "django.contrib.sessions.backends.db"
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
+    WEB_CONCURRENCY = env_int("WEB_CONCURRENCY", 2)
     MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
-    FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
-    DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
+    FILE_UPLOAD_MAX_MEMORY_SIZE = min(FILE_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024)
+    DATA_UPLOAD_MAX_MEMORY_SIZE = min(DATA_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024)
     EMAIL_FAIL_SILENTLY = True
     STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
@@ -558,7 +572,7 @@ if DEBUG:
     if not EMAIL_HOST_USER:
         EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
-    CORS_ALLOW_ALL_ORIGINS = True
+    # Keep dev relaxed
     SECURE_SSL_REDIRECT = False
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
