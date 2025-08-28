@@ -3,10 +3,7 @@
 
 {% block content %}
   <!-- Flatpickr CSS/JS -->
-  <link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css"
-  />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 
   <h2 class="mb-4">Add Delegation</h2>
@@ -58,15 +55,18 @@
   </form>
 
   <script>
-    // Flatpickr on delegation planned_date: DATE ONLY, disable Sundays
+    // Flatpickr on delegation planned_date: DATE + TIME (24h), disable Sundays if needed
     document.addEventListener('DOMContentLoaded', function() {
-      if (document.getElementById('id_planned_date')) {
-        flatpickr("#id_planned_date", {
-          dateFormat: "Y-m-d",
-          enableTime: false,
-          disable: [
-            date => date.getDay() === 0
-          ]
+      var el = document.getElementById('id_planned_date');
+      if (el) {
+        flatpickr(el, {
+          enableTime: true,
+          time_24hr: true,
+          minuteIncrement: 5,
+          dateFormat: "Y-m-d H:i",
+          altInput: true,
+          altFormat: "d M, Y H:i",
+          disable: [d => d.getDay() === 0]  // keep if you want Sundays disabled
         });
       }
     });
