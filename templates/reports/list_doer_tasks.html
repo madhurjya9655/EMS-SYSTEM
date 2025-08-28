@@ -8,6 +8,7 @@
     <h1 class="page-title">Doer Tasks Report</h1>
   </div>
 
+  <!-- FILTER CARD -->
   <div class="card mb-4">
     <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
          data-bs-toggle="collapse" href="#filterPanel" role="button" aria-expanded="true">
@@ -43,59 +44,99 @@
     </div>
   </div>
 
-  <div class="card">
-    <div class="table-responsive">
-      <table class="table table-hover mb-0">
-        <thead>
-          <tr>
-            <th>Doer</th>
-            <th>Task Name</th>
-            <th>Task Type</th>
-            <th>Assigned By</th>
-            <th>Planned Date</th>
-            <th>Status</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for item in items %}
-          <tr>
-            <td>{{ item.assign_to.get_full_name|default:item.assign_to.username }}</td>
-            <td>{{ item.task_name }}</td>
-            <td>
-              {% if item.mode %}
-                <span class="badge bg-info">Checklist</span>
-              {% else %}
-                <span class="badge bg-secondary">One-time</span>
-              {% endif %}
-            </td>
-            <td>{{ item.assign_by.get_full_name|default:item.assign_by.username }}</td>
-            <td>{{ item.planned_date|date:"Y-m-d H:i" }}</td>
-            <td>
-              <span class="badge bg-{% if item.status == 'Pending' %}warning{% elif item.status == 'Completed' %}success{% else %}primary{% endif %}">
-                {{ item.status }}
-              </span>
-            </td>
-            <td>
-              <!-- Details Button -->
-              <button type="button" class="btn btn-sm btn-outline-info" 
-                      data-bs-toggle="modal" data-bs-target="#doerTaskDetailsModal{{ item.id }}"
-                      title="View Details">
-                <i class="fas fa-eye"></i> Details
-              </button>
-            </td>
-          </tr>
-          {% empty %}
-          <tr>
-            <td colspan="7" class="text-center text-muted">No tasks found for these criteria.</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
+  <!-- BULK DELETE FORM WRAPS THE TABLE -->
+  <form id="bulkForm" method="post" novalidate>
+    {% csrf_token %}
+    <input type="hidden" name="action" id="bulkAction" value="">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <label class="form-check m-0">
+            <input class="form-check-input" type="checkbox" id="selectAll">
+            <span class="form-check-label">Select All</span>
+          </label>
+        </div>
+        <div>
+          <button type="button" class="btn btn-danger" id="bulkDeleteBtn">
+            <i class="fas fa-trash-alt"></i> Bulk Delete
+          </button>
+        </div>
+      </div>
 
-  <!-- Details Modals for doer tasks -->
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th style="width:40px;"></th>
+              <th>Doer</th>
+              <th>Task Name</th>
+              <th>Task Type</th>
+              <th>Assigned By</th>
+              <th>Planned Date</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in items %}
+            <tr>
+              <td>
+                <!-- name="sel" so Django sees request.POST.getlist("sel") -->
+                <input type="checkbox" class="row-check" name="sel" value="{{ item.id }}">
+              </td>
+              <td>{{ item.assign_to.get_full_name|default:item.assign_to.username }}</td>
+              <td>{{ item.task_name }}</td>
+              <td>
+                {% if item.mode %}
+                  <span class="badge bg-info">Checklist</span>
+                {% else %}
+                  <span class="badge bg-secondary">One-time</span>
+                {% endif %}
+              </td>
+              <td>{{ item.assign_by.get_full_name|default:item.assign_by.username }}</td>
+              <td>{{ item.planned_date|date:"Y-m-d H:i" }}</td>
+              <td>
+                <span class="badge bg-{% if item.status == 'Pending' %}warning{% elif item.status == 'Completed' %}success{% else %}primary{% endif %}">
+                  {{ item.status }}
+                </span>
+              </td>
+              <td class="text-nowrap">
+                <button type="button"
+                        class="btn btn-sm btn-outline-info"
+                        data-bs-toggle="modal"
+                        data-bs-target="#doerTaskDetailsModal{{ item.id }}"
+                        title="View Details">
+                  <i class="fas fa-eye"></i>
+                </button>
+
+                <!-- no inline JS; use data-pk and bind in script -->
+                <button type="button"
+                        class="btn btn-sm btn-outline-danger ms-1 delete-one"
+                        data-pk="{{ item.id }}"
+                        title="Delete">
+                  <i class="fas fa-trash-alt"></i>
+                </button>
+              </td>
+            </tr>
+            {% empty %}
+            <tr>
+              <td colspan="8" class="text-center text-muted">No tasks found for these criteria.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </form>
+
+  <!-- Hidden single-delete form -->
+  <form id="singleDeleteForm" method="post" class="d-none">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="delete_one">
+    <input type="hidden" name="pk" id="singleDeletePk">
+  </form>
+
+  <!-- Details Modals (trimmed) -->
   {% for item in items %}
   <div class="modal fade" id="doerTaskDetailsModal{{ item.id }}" tabindex="-1" aria-labelledby="doerTaskDetailsModalLabel{{ item.id }}" aria-hidden="true">
       <div class="modal-dialog modal-lg">
@@ -107,135 +148,10 @@
                   <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
               </div>
               <div class="modal-body">
-                  <div class="row g-3">
-                      <div class="col-md-6">
-                          <label class="fw-bold">Task ID:</label>
-                          <p>{{ item.id }}</p>
-                      </div>
-                      <div class="col-md-6">
-                          <label class="fw-bold">Task Type:</label>
-                          <p>
-                              {% if item.mode %}
-                                  <span class="badge bg-info">Checklist</span>
-                              {% else %}
-                                  <span class="badge bg-secondary">One-time Task</span>
-                              {% endif %}
-                          </p>
-                      </div>
-                      <div class="col-md-6">
-                          <label class="fw-bold">Status:</label>
-                          <p>
-                              <span class="badge bg-{% if item.status == 'Pending' %}warning{% elif item.status == 'Completed' %}success{% else %}primary{% endif %}">
-                                  {{ item.status }}
-                              </span>
-                          </p>
-                      </div>
-                      <div class="col-12">
-                          <label class="fw-bold">Task Name:</label>
-                          <p>{{ item.task_name }}</p>
-                      </div>
-                      {% if item.message %}
-                      <div class="col-12">
-                          <label class="fw-bold">Message/Description:</label>
-                          <p>{{ item.message|linebreaks }}</p>
-                      </div>
-                      {% endif %}
-                      <div class="col-md-6">
-                          <label class="fw-bold">Assigned By:</label>
-                          <p>{{ item.assign_by.get_full_name|default:item.assign_by.username }}</p>
-                      </div>
-                      <div class="col-md-6">
-                          <label class="fw-bold">Assigned To (Doer):</label>
-                          <p>{{ item.assign_to.get_full_name|default:item.assign_to.username }}</p>
-                      </div>
-                      <div class="col-md-6">
-                          <label class="fw-bold">Planned Date:</label>
-                          <p>{{ item.planned_date|date:"d M, Y H:i" }}</p>
-                      </div>
-                      {% if item.priority %}
-                      <div class="col-md-6">
-                          <label class="fw-bold">Priority:</label>
-                          <p>
-                              <span class="badge bg-{% if item.priority == 'High' %}danger{% elif item.priority == 'Medium' %}warning{% else %}success{% endif %}">
-                                  {{ item.priority }}
-                              </span>
-                          </p>
-                      </div>
-                      {% endif %}
-                      {% if item.time_per_task_minutes %}
-                      <div class="col-md-6">
-                          <label class="fw-bold">Time per Task:</label>
-                          <p>{{ item.time_per_task_minutes }} minutes</p>
-                      </div>
-                      {% endif %}
-                      {% if item.actual_duration_minutes %}
-                      <div class="col-md-6">
-                          <label class="fw-bold">Actual Duration:</label>
-                          <p>{{ item.actual_duration_minutes }} minutes</p>
-                      </div>
-                      {% endif %}
-                      {% if item.completed_at %}
-                      <div class="col-md-6">
-                          <label class="fw-bold">Completed At:</label>
-                          <p>{{ item.completed_at|date:"d M, Y H:i" }}</p>
-                      </div>
-                      {% endif %}
-                      {% if item.created_at %}
-                      <div class="col-md-6">
-                          <label class="fw-bold">Created At:</label>
-                          <p>{{ item.created_at|date:"d M, Y H:i" }}</p>
-                      </div>
-                      {% endif %}
-                      {% if item.group_name %}
-                      <div class="col-md-6">
-                          <label class="fw-bold">Group Name:</label>
-                          <p>{{ item.group_name }}</p>
-                      </div>
-                      {% endif %}
-                      {% if item.frequency %}
-                      <div class="col-md-6">
-                          <label class="fw-bold">Recurrence:</label>
-                          <p>{{ item.mode }} (Every {{ item.frequency }} {{ item.mode|lower }}{{ item.frequency|pluralize }})</p>
-                      </div>
-                      {% endif %}
-                      {% if item.doer_notes %}
-                      <div class="col-12">
-                          <label class="fw-bold">Completion Notes:</label>
-                          <p>{{ item.doer_notes|linebreaks }}</p>
-                      </div>
-                      {% endif %}
-                      {% if item.media_upload %}
-                      <div class="col-12">
-                          <label class="fw-bold">Attachment:</label>
-                          <p>
-                              <a href="{{ item.media_upload.url }}" target="_blank" class="btn btn-sm btn-outline-primary">
-                                  <i class="fas fa-download"></i> Download Attachment
-                              </a>
-                          </p>
-                      </div>
-                      {% endif %}
-                      {% if item.doer_file %}
-                      <div class="col-12">
-                          <label class="fw-bold">Completion File:</label>
-                          <p>
-                              <a href="{{ item.doer_file.url }}" target="_blank" class="btn btn-sm btn-outline-success">
-                                  <i class="fas fa-download"></i> Download Completion File
-                              </a>
-                          </p>
-                      </div>
-                      {% endif %}
-                      {% if item.audio_recording %}
-                      <div class="col-12">
-                          <label class="fw-bold">Audio Recording:</label>
-                          <p>
-                              <audio controls class="w-100">
-                                  <source src="{{ item.audio_recording.url }}" type="audio/mpeg">
-                                  Your browser does not support the audio element.
-                              </audio>
-                          </p>
-                      </div>
-                      {% endif %}
-                  </div>
+                  <p><strong>Assigned By:</strong> {{ item.assign_by.get_full_name|default:item.assign_by.username }}</p>
+                  <p><strong>Assigned To:</strong> {{ item.assign_to.get_full_name|default:item.assign_to.username }}</p>
+                  <p><strong>Planned:</strong> {{ item.planned_date|date:"d M, Y H:i" }}</p>
+                  {% if item.message %}<p><strong>Message:</strong><br>{{ item.message|linebreaks }}</p>{% endif %}
               </div>
               <div class="modal-footer">
                   {% if item.status == 'Pending' %}
@@ -251,12 +167,68 @@
   {% endfor %}
 
   <script>
-    document.querySelectorAll('[data-bs-toggle="collapse"]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const icon = btn.querySelector('i');
-        icon.classList.toggle('fa-minus');
-        icon.classList.toggle('fa-plus');
+  (function () {
+    // Toggle +/- icon on filter card
+    var toggles = document.querySelectorAll('[data-bs-toggle="collapse"]');
+    for (var i = 0; i < toggles.length; i++) {
+      toggles[i].addEventListener('click', function () {
+        var icon = this.querySelector('i');
+        if (!icon) return;
+        if (icon.classList.contains('fa-minus')) {
+          icon.classList.remove('fa-minus');
+          icon.classList.add('fa-plus');
+        } else {
+          icon.classList.remove('fa-plus');
+          icon.classList.add('fa-minus');
+        }
       });
-    });
+    }
+
+    function getRowChecks() {
+      return document.getElementsByClassName('row-check');
+    }
+
+    // Select all / unselect all
+    var selectAll = document.getElementById('selectAll');
+    if (selectAll) {
+      selectAll.addEventListener('change', function () {
+        var checks = getRowChecks();
+        for (var i = 0; i < checks.length; i++) {
+          checks[i].checked = selectAll.checked;
+        }
+      });
+    }
+
+    // Bulk delete
+    var bulkBtn = document.getElementById('bulkDeleteBtn');
+    if (bulkBtn) {
+      bulkBtn.addEventListener('click', function () {
+        var checks = getRowChecks();
+        var any = false;
+        for (var i = 0; i < checks.length; i++) {
+          if (checks[i].checked) { any = true; break; }
+        }
+        if (!any) {
+          alert('Please select at least one row.');
+          return;
+        }
+        if (confirm('Delete selected tasks? This cannot be undone.')) {
+          document.getElementById('bulkAction').value = 'bulk_delete';
+          document.getElementById('bulkForm').submit();
+        }
+      });
+    }
+
+    // Single delete via hidden form (no inline JS)
+    var delBtns = document.getElementsByClassName('delete-one');
+    for (var j = 0; j < delBtns.length; j++) {
+      delBtns[j].addEventListener('click', function () {
+        var pk = this.getAttribute('data-pk');
+        if (!confirm('Delete this task?')) return;
+        document.getElementById('singleDeletePk').value = pk;
+        document.getElementById('singleDeleteForm').submit();
+      });
+    }
+  })();
   </script>
 {% endblock %}
