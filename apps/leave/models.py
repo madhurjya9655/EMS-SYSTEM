@@ -174,24 +174,24 @@ class LeaveRequest(models.Model):
         # Try to read from Profile if app exists
         try:
             from apps.users.models import Profile  # type: ignore
-            prof = Profile.objects.select_related("manager").filter(user=user).first()
+            prof = Profile.objects.select_related("team_leader").filter(user=user).first()
             if prof and getattr(prof, "designation", None):
                 designation = (prof.designation or "").strip()
-            # Prefer profile.manager as default manager if not set
-            if not self.manager and prof and getattr(prof, "manager_id", None):
-                self.manager = prof.manager
+            # Prefer profile.team_leader as default manager if not set
+            if not self.manager and prof and getattr(prof, "team_leader_id", None):
+                self.manager = prof.team_leader
         except Exception:
             pass
         self.employee_designation = designation
 
     def _pick_default_manager(self) -> Optional[User]:
-        """Resolve a manager: profile.manager → any 'Manager' group user → any superuser."""
-        # Profile.manager
+        """Resolve a manager: profile.team_leader → any 'Manager' group user → any superuser."""
+        # Profile.team_leader
         try:
             from apps.users.models import Profile  # type: ignore
-            prof = Profile.objects.select_related("manager").filter(user=self.employee).first()
-            if prof and getattr(prof, "manager_id", None):
-                return prof.manager
+            prof = Profile.objects.select_related("team_leader").filter(user=self.employee).first()
+            if prof and getattr(prof, "team_leader_id", None):
+                return prof.team_leader
         except Exception:
             pass
 
