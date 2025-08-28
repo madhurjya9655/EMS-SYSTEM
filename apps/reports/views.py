@@ -16,9 +16,26 @@ User = get_user_model()
 
 
 def get_week_dates(frm: date | None, to: date | None) -> Tuple[date, date]:
+    """
+    Robust range builder:
+
+    - If both dates provided, return them in ascending order (swap if necessary).
+    - If only `frm` provided, make a 7-day window [frm, frm+6].
+    - If only `to` provided, make a 7-day window [to-6, to].
+    - If neither provided, use the current local week (Mon..Sun).
+    """
     if frm and to:
+        if frm > to:
+            frm, to = to, frm
         return frm, to
-    today = date.today()
+
+    if frm and not to:
+        return frm, frm + timedelta(days=6)
+
+    if to and not frm:
+        return to - timedelta(days=6), to
+
+    today = timezone.localdate()
     start = today - timedelta(days=today.weekday())
     return start, start + timedelta(days=6)
 
@@ -36,12 +53,20 @@ def span_bounds(d_from: date, d_to_inclusive: date):
     return s, e
 
 
+# -------- time helpers --------
 def calculate_checklist_total_time(qs) -> int:
+    # sum of actual time taken (minutes)
     return sum(task.actual_duration_minutes or 0 for task in qs)
 
 
 def calculate_delegation_total_time(qs) -> int:
+    # sum of actual time taken (minutes)
     return qs.aggregate(total=Sum('actual_duration_minutes'))['total'] or 0
+
+
+def calculate_assigned_total_time(qs) -> int:
+    # sum of planned/assigned minutes
+    return qs.aggregate(total=Sum('time_per_task_minutes'))['total'] or 0
 
 
 def minutes_to_hhmm(minutes: int) -> str:
@@ -50,10 +75,15 @@ def minutes_to_hhmm(minutes: int) -> str:
     return f"{h:02d}:{m:02d}"
 
 
+# -------- percentage helpers --------
 def percent_not_completed(planned: int, completed: int) -> float:
+    """
+    Return NEGATIVE percentage for 'not completed'.
+    Example: planned=5, completed=2 -> -(3/5*100) = -60.0
+    """
     if planned == 0:
         return 0.0
-    return round(((planned - completed) / planned) * 100, 2)
+    return -round(((planned - completed) / planned) * 100, 2)
 
 
 @login_required
@@ -112,16 +142,19 @@ def weekly_mis_score(request):
     avg_scores = None
     pending_checklist = pending_delegation = 0
     delayed_checklist = delayed_delegation = 0
-    time_checklist = "00:00"
-    time_delegation = "00:00"
-    actual_time_checklist = "00:00"
-    actual_time_delegation = "00:00"
+    time_checklist = "00:00"          # planned/assigned
+    time_delegation = "00:00"         # planned/assigned
+    actual_time_checklist = "00:00"   # actual
+    actual_time_delegation = "00:00"  # actual
     this_week_commitment = None
     last_week_commitment = None
 
     if form.is_valid() and form.cleaned_data.get('doer'):
         doer = form.cleaned_data['doer']
-        frm, to = get_week_dates(form.cleaned_data['date_from'], form.cleaned_data['date_to'])
+
+        # normalized date window
+        frm, to = get_week_dates(form.cleaned_data.get('date_from'), form.cleaned_data.get('date_to'))
+
         week_start = frm
         prev_frm = frm - timedelta(days=7)
         prev_to = frm - timedelta(days=1)
@@ -171,6 +204,7 @@ def weekly_mis_score(request):
                 }
             commitment_form = WeeklyMISCommitmentForm(initial=initial)
 
+        # summary rows (this vs last) — negative % for not completed
         for Model, label in [(Checklist, 'Checklist'), (Delegation, 'Delegation')]:
             planned = Model.objects.filter(assign_to=doer, planned_date__gte=s_this, planned_date__lt=e_this).count()
             planned_last = Model.objects.filter(assign_to=doer, planned_date__gte=s_prev, planned_date__lt=e_prev).count()
@@ -187,16 +221,19 @@ def weekly_mis_score(request):
         checklist_qs = Checklist.objects.filter(assign_to=doer, planned_date__gte=s_this, planned_date__lt=e_this).select_related('assign_to')
         delegation_qs = Delegation.objects.filter(assign_to=doer, planned_date__gte=s_this, planned_date__lt=e_this).select_related('assign_to')
 
-        total_checklist_minutes = calculate_checklist_total_time(checklist_qs)
-        total_delegation_minutes = calculate_delegation_total_time(delegation_qs)
+        # actual vs assigned times
+        actual_checklist_minutes = calculate_checklist_total_time(checklist_qs)
+        actual_delegation_minutes = calculate_delegation_total_time(delegation_qs)
+        assigned_checklist_minutes = calculate_assigned_total_time(checklist_qs)
+        assigned_delegation_minutes = calculate_assigned_total_time(delegation_qs)
 
-        time_checklist = minutes_to_hhmm(total_checklist_minutes)
-        time_delegation = minutes_to_hhmm(total_delegation_minutes)
-        total_hours = minutes_to_hhmm(total_checklist_minutes + total_delegation_minutes)
+        time_checklist = minutes_to_hhmm(assigned_checklist_minutes)
+        time_delegation = minutes_to_hhmm(assigned_delegation_minutes)
+        actual_time_checklist = minutes_to_hhmm(actual_checklist_minutes)
+        actual_time_delegation = minutes_to_hhmm(actual_delegation_minutes)
+        total_hours = minutes_to_hhmm(actual_checklist_minutes + actual_delegation_minutes)
 
-        actual_time_checklist = time_checklist
-        actual_time_delegation = time_delegation
-
+        # % scores (negative for "not completed/not on-time")
         checklist_planned = rows[0]['planned']
         checklist_completed = rows[0]['completed']
         checklist_ontime = Checklist.objects.filter(
@@ -261,10 +298,10 @@ def weekly_mis_score(request):
         'this_week_commitment':  this_week_commitment if form.is_valid() and form.cleaned_data.get('doer') else None,
         'last_week_commitment':  last_week_commitment if form.is_valid() and form.cleaned_data.get('doer') else None,
         'avg_scores':            avg_scores,
-        'time_checklist':        time_checklist,
-        'time_delegation':       time_delegation,
-        'actual_time_checklist': actual_time_checklist,
-        'actual_time_delegation': actual_time_delegation,
+        'time_checklist':        time_checklist,         # planned (assigned)
+        'time_delegation':       time_delegation,        # planned (assigned)
+        'actual_time_checklist': actual_time_checklist,  # actual
+        'actual_time_delegation': actual_time_delegation,# actual
     })
 
 
@@ -283,6 +320,8 @@ def performance_score(request):
 
     if form.is_valid() and (form.cleaned_data.get('doer') or not request.user.is_staff):
         doer = form.cleaned_data.get('doer') or request.user
+
+        # normalized date window
         frm, to = get_week_dates(form.cleaned_data.get('date_from'), form.cleaned_data.get('date_to'))
         week_start = frm
         s_this, e_this = span_bounds(frm, to)
@@ -290,10 +329,14 @@ def performance_score(request):
         checklist_qs = Checklist.objects.filter(assign_to=doer, planned_date__gte=s_this, planned_date__lt=e_this).select_related('assign_to')
         delegation_qs = Delegation.objects.filter(assign_to=doer, planned_date__gte=s_this, planned_date__lt=e_this).select_related('assign_to')
 
+        # actual vs assigned minutes
         total_checklist_minutes = calculate_checklist_total_time(checklist_qs)
         total_delegation_minutes = calculate_delegation_total_time(delegation_qs)
-        time_checklist = minutes_to_hhmm(total_checklist_minutes)
-        time_delegation = minutes_to_hhmm(total_delegation_minutes)
+        assigned_checklist_minutes = calculate_assigned_total_time(checklist_qs)
+        assigned_delegation_minutes = calculate_assigned_total_time(delegation_qs)
+
+        time_checklist = minutes_to_hhmm(assigned_checklist_minutes)   # planned (assigned)
+        time_delegation = minutes_to_hhmm(assigned_delegation_minutes) # planned (assigned)
         total_hours = minutes_to_hhmm(total_checklist_minutes + total_delegation_minutes)
 
         p = checklist_qs.count()
@@ -302,8 +345,20 @@ def performance_score(request):
         on_time = checklist_qs.filter(status='Completed', completed_at__lte=F('planned_date')).count()
         score_on = percent_not_completed(p, on_time)
         checklist_data = [
-            {'task_type': 'All work should be done',         'planned': p,  'completed': completed, 'pct': score_not, 'actual_minutes': total_checklist_minutes},
-            {'task_type': 'All work should be done on time', 'planned': p,  'completed': on_time,   'pct': score_on,  'actual_minutes': total_checklist_minutes},
+            {
+                'task_type': 'All work should be done',
+                'planned': p,  'completed': completed,
+                'pct': score_not,  # negative
+                'assigned_minutes': assigned_checklist_minutes,
+                'actual_minutes': total_checklist_minutes
+            },
+            {
+                'task_type': 'All work should be done on time',
+                'planned': p,  'completed': on_time,
+                'pct': score_on,   # negative
+                'assigned_minutes': assigned_checklist_minutes,
+                'actual_minutes': total_checklist_minutes
+            },
         ]
 
         p2 = delegation_qs.count()
@@ -312,8 +367,20 @@ def performance_score(request):
         on_time2 = delegation_qs.filter(status='Completed', completed_at__lte=F('planned_date')).count()
         score2_on = percent_not_completed(p2, on_time2)
         delegation_data = [
-            {'task_type': 'All work should be done',         'planned': p2, 'completed': completed2, 'pct': score2_not, 'actual_minutes': total_delegation_minutes},
-            {'task_type': 'All work should be done on time', 'planned': p2, 'completed': on_time2,   'pct': score2_on,  'actual_minutes': total_delegation_minutes},
+            {
+                'task_type': 'All work should be done',
+                'planned': p2, 'completed': completed2,
+                'pct': score2_not,  # negative
+                'assigned_minutes': assigned_delegation_minutes,
+                'actual_minutes': total_delegation_minutes
+            },
+            {
+                'task_type': 'All work should be done on time',
+                'planned': p2, 'completed': on_time2,
+                'pct': score2_on,   # negative
+                'assigned_minutes': assigned_delegation_minutes,
+                'actual_minutes': total_delegation_minutes
+            },
         ]
 
         summary = {
@@ -346,10 +413,10 @@ def performance_score(request):
         'header':              header,
         'checklist_data':      checklist_data,
         'delegation_data':     delegation_data,
-        'time_checklist':      time_checklist,
-        'time_delegation':     time_delegation,
+        'time_checklist':      time_checklist,   # planned (assigned)
+        'time_delegation':     time_delegation,  # planned (assigned)
         'summary':             summary,
-        'total_hours':         total_hours,
+        'total_hours':         total_hours,      # sum of actuals
         'week_start':          week_start,
         'pending_checklist':   pending_checklist,
         'pending_delegation':  pending_delegation,
