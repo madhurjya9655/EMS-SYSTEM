@@ -329,7 +329,7 @@ def dashboard_home(request):
         base_checklists = (
             Checklist.objects
             .filter(assign_to=request.user, status='Pending', planned_date__lte=end_today_proj)
-            .select_related('assign_by')
+            .select_related('assign_by', 'assign_to')  # ensure modal fields are warm
             .order_by('planned_date')
         )
 
@@ -352,26 +352,26 @@ def dashboard_home(request):
                     assign_to=request.user, status='Pending',
                     planned_date__gte=start_today_proj,
                     planned_date__lte=now_project_tz,
-                ).select_related('assign_by').order_by('planned_date')
+                ).select_related('assign_by', 'assign_to').order_by('planned_date')
             )
             help_ticket_qs = list(
                 HelpTicket.objects.filter(
                     assign_to=request.user,
                     planned_date__gte=start_today_proj,
                     planned_date__lte=now_project_tz,
-                ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
+                ).exclude(status='Closed').select_related('assign_by', 'assign_to').order_by('planned_date')
             )
         else:
             delegation_qs = list(
                 Delegation.objects.filter(
                     assign_to=request.user, status='Pending',
                     planned_date__lte=end_today_proj
-                ).select_related('assign_by').order_by('planned_date')
+                ).select_related('assign_by', 'assign_to').order_by('planned_date')
             )
             help_ticket_qs = list(
                 HelpTicket.objects.filter(
                     assign_to=request.user, planned_date__lte=end_today_proj
-                ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
+                ).exclude(status='Closed').select_related('assign_by', 'assign_to').order_by('planned_date')
             )
 
         logger.info(_safe_console_text(

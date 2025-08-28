@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% load static %}
 {% load dashboard_extras %}
+{% load custom_filters %}
 
 {% block content %}
 <div class="container-fluid py-3">
@@ -52,18 +53,9 @@
         <div class="card-body p-0">
           <table class="table mb-0">
             <tbody>
-              <tr>
-                <td>Checklist</td>
-                <td class="text-end">{{ pending_tasks.checklist }}</td>
-              </tr>
-              <tr>
-                <td>Delegation</td>
-                <td class="text-end">{{ pending_tasks.delegation }}</td>
-              </tr>
-              <tr>
-                <td>Help Ticket</td>
-                <td class="text-end">{{ pending_tasks.help_ticket }}</td>
-              </tr>
+              <tr><td>Checklist</td><td class="text-end">{{ pending_tasks.checklist }}</td></tr>
+              <tr><td>Delegation</td><td class="text-end">{{ pending_tasks.delegation }}</td></tr>
+              <tr><td>Help Ticket</td><td class="text-end">{{ pending_tasks.help_ticket }}</td></tr>
             </tbody>
           </table>
         </div>
@@ -100,7 +92,7 @@
     </div>
   </div>
 
-  <!-- Task Table (simple summary table on main dashboard) -->
+  <!-- Task Table -->
   <div class="card">
     <div class="card-header fw-bold">
       {% if not selected or selected == 'checklist' %}Checklist Tasks{% endif %}
@@ -137,11 +129,16 @@
                         {{ task.mode }}{% if task.frequency %} ({{ task.frequency }}){% endif %}
                       </span>
                     {% endif %}
+                    {% if task.group_name %}
+                      <span class="badge bg-secondary ms-1">{{ task.group_name }}</span>
+                    {% endif %}
                   </td>
 
                   <td class="text-muted">
                     {% if task.message %}
-                      {{ task.message }}
+                      {{ task.message|truncatechars:60 }}
+                    {% elif task.description %}
+                      {{ task.description|truncatechars:60 }}
                     {% else %}
                       <span class="text-muted">—</span>
                     {% endif %}
@@ -172,6 +169,8 @@
                   <td>
                     {% if task.time_per_task_minutes %}
                       {{ task.time_per_task_minutes }} min
+                    {% elif task.estimated_minutes %}
+                      {{ task.estimated_minutes }} min
                     {% else %}
                       <span class="text-muted">—</span>
                     {% endif %}
@@ -187,30 +186,47 @@
 
                   <td>
                     {% if task.planned_date %}
-                      {{ task.planned_date|delay_since }}
+                      {% if today_only %}
+                        {{ task.planned_date|delay_since }}
+                      {% else %}
+                        {{ task.planned_date|delay_since:"signed" }}
+                      {% endif %}
                     {% else %}
                       <span class="text-muted">—</span>
                     {% endif %}
                   </td>
 
-                  <td>
-                    {% if not selected or selected == 'checklist' %}
-                      <a class="btn btn-outline-secondary btn-sm" href="{% url 'tasks:list_checklist' %}">Details</a>
-                      <a class="btn btn-success btn-sm" href="{% url 'tasks:complete_checklist' task.id %}">✔ Complete</a>
-                    {% elif selected == 'delegation' %}
-                      <a class="btn btn-outline-secondary btn-sm" href="{% url 'tasks:list_delegation' %}">Details</a>
-                      <a class="btn btn-success btn-sm" href="{% url 'tasks:complete_delegation' task.id %}">✔ Complete</a>
-                    {% else %}
-                      <a class="btn btn-outline-secondary btn-sm" href="{% url 'tasks:list_help_ticket' %}">Details</a>
+                  <td class="text-nowrap">
+                    <!-- Details opens modal -->
+                    <button type="button"
+                            class="btn btn-outline-secondary btn-sm"
+                            data-bs-toggle="modal"
+                            data-bs-target="#dashTaskDetails{{ task.id }}">
+                      Details
+                    </button>
+
+                    {% if task.status == 'Pending' %}
+                      {% if not selected or selected == 'checklist' %}
+                        <a class="btn btn-success btn-sm"
+                           href="{% url 'tasks:complete_checklist' task.id %}?next={{ request.get_full_path|urlencode }}">✔ Complete</a>
+                      {% elif selected == 'delegation' %}
+                        <a class="btn btn-success btn-sm"
+                           href="{% url 'tasks:complete_delegation' task.id %}?next={{ request.get_full_path|urlencode }}">✔ Complete</a>
+                      {% endif %}
+                    {% endif %}
+
+                    {% if selected == 'help_ticket' and task.status != 'Closed' %}
+                      <a class="btn btn-primary btn-sm"
+                         href="{% url 'tasks:note_help_ticket' task.id %}?next={{ request.get_full_path|urlencode }}">Note</a>
+                      <a class="btn btn-success btn-sm"
+                         href="{% url 'tasks:note_help_ticket' task.id %}?next={{ request.get_full_path|urlencode }}">Close</a>
                     {% endif %}
                   </td>
                 </tr>
               {% endfor %}
             {% else %}
               <tr>
-                <td colspan="9" class="text-center text-muted py-4">
-                  No tasks to show.
-                </td>
+                <td colspan="9" class="text-center text-muted py-4">No tasks to show.</td>
               </tr>
             {% endif %}
           </tbody>
@@ -225,4 +241,120 @@
     </div>
   </div>
 </div>
+
+<!-- Details Modals -->
+{% for task in tasks %}
+<div class="modal fade" id="dashTaskDetails{{ task.id }}" tabindex="-1"
+     aria-labelledby="dashTaskDetailsLabel{{ task.id }}" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="dashTaskDetailsLabel{{ task.id }}">
+          {% if not selected or selected == 'checklist' %}<i class="fas fa-clipboard-check"></i> Checklist
+          {% elif selected == 'delegation' %}<i class="fas fa-people-arrows"></i> Delegation
+          {% else %}<i class="fas fa-ticket-alt"></i> Help Ticket{% endif %}
+          • ID {{ task.id }}
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+
+      <div class="modal-body">
+        {% if not selected or selected == 'checklist' %}
+          <div class="row g-3">
+            <div class="col-md-6"><label class="fw-bold">Task Name:</label><p class="mb-0">{{ task.task_name }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Status:</label><p class="mb-0"><span class="badge bg-{% if task.status == 'Pending' %}warning{% else %}success{% endif %}">{{ task.status }}</span></p></div>
+            <div class="col-md-6"><label class="fw-bold">Assigned By:</label><p class="mb-0">{{ task.assign_by.get_full_name|default:task.assign_by.username }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Assigned To:</label><p class="mb-0">{{ task.assign_to.get_full_name|default:task.assign_to.username }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Planned Date:</label><p class="mb-0">{{ task.planned_date|date:"d M, Y H:i" }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Priority:</label><p class="mb-0"><span class="badge bg-{% if task.priority == 'High' %}danger{% elif task.priority == 'Medium' %}warning{% else %}success{% endif %}">{{ task.priority|default:"Low" }}</span></p></div>
+            <div class="col-md-6"><label class="fw-bold">Mode / Frequency:</label><p class="mb-0">{% if task.frequency %}{{ task.mode }} (Every {{ task.frequency }} {{ task.mode|lower }}{{ task.frequency|pluralize }}){% else %}{{ task.mode|default:"—" }}{% endif %}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Group:</label><p class="mb-0">{{ task.group_name|default:"—" }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Time/Task:</label><p class="mb-0">{{ task.time_per_task_minutes|default:0 }} min</p></div>
+            <div class="col-md-6"><label class="fw-bold">Actual Time:</label><p class="mb-0">{% if task.actual_duration_minutes %}{{ task.actual_duration_minutes }} min{% else %}—{% endif %}</p></div>
+            <div class="col-12"><label class="fw-bold">Message:</label><p class="mb-0">{{ task.message|default:"—" }}</p></div>
+          </div>
+
+        {% elif selected == 'delegation' %}
+          <div class="row g-3">
+            <div class="col-md-6"><label class="fw-bold">Task Title:</label><p class="mb-0">{{ task.task_name }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Status:</label><p class="mb-0"><span class="badge bg-{% if task.status == 'Pending' %}warning{% else %}success{% endif %}">{{ task.status }}</span></p></div>
+            <div class="col-md-6"><label class="fw-bold">Assigned By:</label><p class="mb-0">{{ task.assign_by.get_full_name|default:task.assign_by.username }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Assigned To:</label><p class="mb-0">{{ task.assign_to.get_full_name|default:task.assign_to.username }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Planned Date:</label><p class="mb-0">{{ task.planned_date|date:"d M, Y H:i" }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Priority:</label><p class="mb-0"><span class="badge bg-{% if task.priority == 'High' %}danger{% elif task.priority == 'Medium' %}warning{% else %}success{% endif %}">{{ task.priority|default:"Low" }}</span></p></div>
+            <div class="col-md-6"><label class="fw-bold">Time/Task:</label><p class="mb-0">{{ task.time_per_task_minutes|default:0 }} min</p></div>
+            <div class="col-md-6"><label class="fw-bold">Actual Time:</label><p class="mb-0">{% if task.actual_duration_minutes %}{{ task.actual_duration_minutes }} min{% else %}—{% endif %}</p></div>
+            <div class="col-12"><label class="fw-bold">Doer Notes:</label><p class="mb-0">{{ task.doer_notes|default:"—" }}</p></div>
+            {% if task.audio_recording %}
+              <div class="col-12">
+                <label class="fw-bold">Audio:</label>
+                <audio controls class="w-100">
+                  <source src="{{ task.audio_recording.url }}" type="audio/mpeg">
+                </audio>
+              </div>
+            {% endif %}
+            {% if task.doer_file %}
+              <div class="col-12">
+                <a href="{{ task.doer_file.url }}" target="_blank" class="btn btn-sm btn-outline-success">
+                  <i class="fas fa-download"></i> Download Completion File
+                </a>
+              </div>
+            {% endif %}
+          </div>
+
+        {% else %}
+          <div class="row g-3">
+            <div class="col-md-6"><label class="fw-bold">Subject:</label><p class="mb-0">{{ task.title }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Status:</label><p class="mb-0"><span class="badge bg-{% if task.status == 'Open' %}primary{% elif task.status == 'In Progress' %}warning{% else %}success{% endif %}">{{ task.status }}</span></p></div>
+            <div class="col-md-6"><label class="fw-bold">Assigned By:</label><p class="mb-0">{{ task.assign_by.get_full_name|default:task.assign_by.username }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Assigned To:</label><p class="mb-0">{{ task.assign_to.get_full_name|default:task.assign_to.username }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Created:</label><p class="mb-0">{{ task.created_at|date:"d M, Y H:i" }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Planned Date:</label><p class="mb-0">{{ task.planned_date|date:"d M, Y H:i" }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Priority:</label><p class="mb-0"><span class="badge bg-{% if task.priority == 'High' %}danger{% elif task.priority == 'Medium' %}warning{% else %}success{% endif %}">{{ task.priority }}</span></p></div>
+            <div class="col-md-6"><label class="fw-bold">Actual Duration:</label><p class="mb-0">{% if task.actual_duration_minutes %}{{ task.actual_duration_minutes }} min{% else %}—{% endif %}</p></div>
+            <div class="col-12"><label class="fw-bold">Message:</label>
+              <p class="mb-0">
+                {% if task.description %}{{ task.description|linebreaks }}
+                {% elif task.message %}{{ task.message|linebreaks }}
+                {% else %}—{% endif %}
+              </p>
+            </div>
+            {% if task.media_upload %}
+              <div class="col-12">
+                <a href="{{ task.media_upload.url }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                  <i class="fas fa-download"></i> Download Attachment
+                </a>
+              </div>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="modal-footer">
+        {% if not selected or selected == 'checklist' %}
+          {% if task.status == 'Pending' %}
+            <a href="{% url 'tasks:complete_checklist' task.id %}?next={{ request.get_full_path|urlencode }}"
+               class="btn btn-success"><i class="fas fa-check"></i> Complete</a>
+          {% endif %}
+        {% elif selected == 'delegation' %}
+          {% if task.status == 'Pending' %}
+            <a href="{% url 'tasks:complete_delegation' task.id %}?next={{ request.get_full_path|urlencode }}"
+               class="btn btn-success"><i class="fas fa-check"></i> Complete</a>
+          {% endif %}
+        {% elif selected == 'help_ticket' %}
+          {% if task.status != 'Closed' %}
+            <a href="{% url 'tasks:note_help_ticket' task.id %}?next={{ request.get_full_path|urlencode }}"
+               class="btn btn-primary"><i class="fas fa-sticky-note"></i> Add Note</a>
+            <a href="{% url 'tasks:note_help_ticket' task.id %}?next={{ request.get_full_path|urlencode }}"
+               class="btn btn-success"><i class="fas fa-check"></i> Close Ticket</a>
+          {% endif %}
+        {% endif %}
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endfor %}
+
 {% endblock content %}
