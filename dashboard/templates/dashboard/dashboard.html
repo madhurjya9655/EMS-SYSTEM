@@ -2,11 +2,7 @@
 {% load static %}
 {% load dashboard_extras %}
 
-{# If your base template is not "base.html", change the extends path accordingly,
-   e.g. "layouts/base.html" or "core/base.html". #}
-
 {% block content %}
-
 <div class="container-fluid py-3">
 
   <!-- Week Score + Pending Tasks -->
@@ -78,22 +74,22 @@
   <!-- Type Switcher + Today Only toggle -->
   <div class="d-flex align-items-center justify-content-between mt-4 mb-2">
     <div class="btn-group" role="group" aria-label="Task type">
-      <a href="?task_type=checklist{% if today_only %}&today=1{% endif %}"
+      <a href="?task_type=checklist{% if today_only %}&today_only=1{% endif %}"
          class="btn btn-primary {% if not selected or selected == 'checklist' %}active{% endif %}">
         Checklist Tasks
       </a>
-      <a href="?task_type=delegation{% if today_only %}&today=1{% endif %}"
+      <a href="?task_type=delegation{% if today_only %}&today_only=1{% endif %}"
          class="btn btn-primary {% if selected == 'delegation' %}active{% endif %}">
         Delegation Tasks
       </a>
-      <a href="?task_type=help_ticket{% if today_only %}&today=1{% endif %}"
+      <a href="?task_type=help_ticket{% if today_only %}&today_only=1{% endif %}"
          class="btn btn-primary {% if selected == 'help_ticket' %}active{% endif %}">
         Help Ticket Tasks
       </a>
     </div>
 
     <div class="d-flex gap-2">
-      <a href="?{% if selected %}task_type={{ selected }}&{% endif %}today=1"
+      <a href="?{% if selected %}task_type={{ selected }}&{% endif %}today_only=1"
          class="btn btn-outline-secondary {% if today_only %}active{% endif %}">
         Today Only
       </a>
@@ -104,7 +100,7 @@
     </div>
   </div>
 
-  <!-- Task Table -->
+  <!-- Task Table (simple summary table on main dashboard) -->
   <div class="card">
     <div class="card-header fw-bold">
       {% if not selected or selected == 'checklist' %}Checklist Tasks{% endif %}
@@ -189,7 +185,6 @@
                     {% endif %}
                   </td>
 
-                  <!-- Delay: future -> 00:00, past -> HH:MM (IST) -->
                   <td>
                     {% if task.planned_date %}
                       {{ task.planned_date|delay_since }}
@@ -230,5 +225,4 @@
     </div>
   </div>
 </div>
-
 {% endblock content %}

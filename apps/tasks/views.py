@@ -44,7 +44,7 @@ from .utils import (
     send_help_ticket_unassigned_notice,
     send_admin_bulk_summary,
 )
-from .recurrence import preserve_first_occurrence_time  # source of truth
+from .recurrence_utils import preserve_first_occurrence_time  # source of truth
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -190,10 +190,10 @@ def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     FINAL rule (Checklist — recurring OR one-time), per product spec:
       • If planned date < today IST  → visible (past-due remains until completed).
       • If planned date > today IST  → not visible.
-      • If planned date == today IST → visible ONLY from 10:00 AM IST, regardless of planned time.
+      • If planned date == today IST → visible ONLY from 10:00 AM IST (strict).
 
     Note: this is purely a *dashboard* gate; the stored planned datetime is untouched
-    and the delay is always calculated from the *actual planned time*.
+    and the delay is always calculated from the *actual planned time* (e.g., 19:00).
     """
     if not task_dt:
         return False
@@ -1515,17 +1515,19 @@ def dashboard_home(request):
     """
     FINAL DASHBOARD RULES (IST-aware):
     Checklist (recurring or one-time):
-      • Delay counted from planned time.
-      • Visibility:
-          - If planned date < today           → show.
-          - If planned date = today           → show ONLY from 10:00 AM IST (strict).
-          - If planned date > today           → hide.
+      • Delay counted from planned time (e.g., 19:00).
+      • Visibility (UNTIL COMPLETED):
+          - If planned date < today           → show (past-due remains).
+          - If planned date = today           → show ONLY from 10:00 AM IST (strict), and remain visible after 19:00.
+          - If planned date > today           → hide (future not visible).
+      • This ensures: even if previous day is incomplete, it stays visible; and today's new
+        recurrence becomes visible at 10:00 IST (planned still 19:00).
 
     Delegation & Help Ticket:
       • Visible immediately at/after their planned timestamp (no 10:00 gating).
       • No recurrence logic here.
 
-    Past-due items remain until completed. Completed disappear immediately.
+    Completed items disappear immediately.
     """
     # Current IST and today's date
     now_ist = timezone.now().astimezone(IST)

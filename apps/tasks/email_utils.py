@@ -278,6 +278,30 @@ def send_html_email(
 
 
 # -------------------------------------------------------------------
+# Subject builder (prevents duplication with scheduler)
+# -------------------------------------------------------------------
+def _build_subject(subject_prefix: str, task_title: str) -> str:
+    """
+    If 'subject_prefix' already looks like a full subject (e.g. the scheduler's
+    '✅ Task Reminder: <name> scheduled for <date>, <time>'), use it as-is.
+    Otherwise, treat it as a prefix and append ': <task_title>'.
+    """
+    sp = (subject_prefix or "").strip()
+    if not sp:
+        return task_title
+
+    low = sp.lower()
+    # Heuristics that strongly indicate a fully-formed subject
+    markers = ("reminder", "scheduled for", "due", "overdue")
+    if any(m in low for m in markers):
+        return sp
+    # If it already includes the task title, assume it's full
+    if task_title and task_title.strip().lower() in low:
+        return sp
+    return f"{sp}: {task_title}"
+
+
+# -------------------------------------------------------------------
 # Task-specific senders (Assignment / Admin confirmations)
 # -------------------------------------------------------------------
 def send_checklist_assignment_to_user(
@@ -298,9 +322,12 @@ def send_checklist_assignment_to_user(
     if not to_email.strip():
         return
 
+    task_title = getattr(task, "task_name", "Checklist")
+    subject = _build_subject(subject_prefix, task_title)
+
     ctx = {
         "kind": "Checklist",
-        "task_title": getattr(task, "task_name", "Checklist"),
+        "task_title": task_title,
         "task_code": f"CL-{task.id}",
         "planned_date_display": _fmt_dt_date(getattr(task, "planned_date", None)),
         "priority_display": getattr(task, "priority", "") or "Low",
@@ -325,7 +352,7 @@ def send_checklist_assignment_to_user(
     }
 
     _send_unified_assignment_email(
-        subject=f"{subject_prefix}: {ctx['task_title']}",
+        subject=subject,
         to_email=to_email,
         context=ctx,
     )
@@ -349,9 +376,12 @@ def send_delegation_assignment_to_user(
     if not to_email.strip():
         return
 
+    task_title = getattr(delegation, "task_name", "Delegation")
+    subject = _build_subject(subject_prefix, task_title)
+
     ctx = {
         "kind": "Delegation",
-        "task_title": getattr(delegation, "task_name", "Delegation"),
+        "task_title": task_title,
         "task_code": f"DL-{delegation.id}",
         "planned_date_display": _fmt_dt_date(getattr(delegation, "planned_date", None)),
         "priority_display": getattr(delegation, "priority", "") or "Low",
@@ -372,7 +402,7 @@ def send_delegation_assignment_to_user(
     }
 
     _send_unified_assignment_email(
-        subject=f"{subject_prefix}: {ctx['task_title']}",
+        subject=subject,
         to_email=to_email,
         context=ctx,
     )
@@ -396,9 +426,12 @@ def send_help_ticket_assignment_to_user(
     if not to_email.strip():
         return
 
+    task_title = getattr(ticket, "title", "Help Ticket")
+    subject = _build_subject(subject_prefix, task_title)
+
     ctx = {
         "kind": "Help Ticket",
-        "task_title": getattr(ticket, "title", "Help Ticket"),
+        "task_title": task_title,
         "task_code": f"HT-{ticket.id}",
         "planned_date_display": _fmt_dt_date(getattr(ticket, "planned_date", None)),
         "priority_display": getattr(ticket, "priority", "") or "Low",
@@ -413,7 +446,7 @@ def send_help_ticket_assignment_to_user(
     }
 
     _send_unified_assignment_email(
-        subject=f"{subject_prefix}: {ctx['task_title']}",
+        subject=subject,
         to_email=to_email,
         context=ctx,
     )

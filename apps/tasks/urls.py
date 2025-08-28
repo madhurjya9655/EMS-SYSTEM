@@ -1,5 +1,8 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\urls.py
 from django.urls import path
 from . import views
+# Add this import for the lightweight recurring report view (admin-only)
+from .views_reports import recurring_report  # ensure you created views_reports.py as shown
 
 app_name = "tasks"
 
@@ -39,4 +42,7 @@ urlpatterns = [
 
     # Full-page note/close form (used for completion URL in emails)
     path("help_ticket/note/<int:pk>/",      views.note_help_ticket,     name="note_help_ticket"),
+
+    # Recurring Report (IST-aware, CSV available via query params)
+    path("reports/recurring/",              recurring_report,           name="recurring_report"),
 ]
