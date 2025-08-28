@@ -52,6 +52,18 @@ class PCReportFilterForm(forms.Form):
         group_names = Group.objects.order_by("name").values_list("name", "name")
         self.fields["department"].choices = [("", "All")] + list(group_names)
 
+    def clean(self):
+        """
+        Make the form resilient:
+        - If both dates exist and are inverted, swap them.
+        """
+        cleaned = super().clean()
+        frm = cleaned.get("date_from")
+        to = cleaned.get("date_to")
+        if frm and to and frm > to:
+            cleaned["date_from"], cleaned["date_to"] = to, frm
+        return cleaned
+
 
 class WeeklyMISCommitmentForm(forms.Form):
     """
