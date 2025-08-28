@@ -1,0 +1,30 @@
+{% load tz %}
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Recurring Tasks Report</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; }
+    table { border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+    th { background: #f7f7f7; }
+    .counts { font-size: 18px; margin-top: 8px; }
+    .btns a { margin-right: 12px; }
+  </style>
+</head>
+<body>
+  <h2>Recurring Tasks Report</h2>
+  <div>From: <strong>{{ from }}</strong> — To: <strong>{{ to }}</strong>{% if user_id %} — User: <strong>{{ user_id }}</strong>{% endif %}</div>
+  <div class="counts">
+    Completed: <strong>{{ stats.completed }}</strong> &nbsp;|&nbsp;
+    Missed: <strong>{{ stats.missed }}</strong> &nbsp;|&nbsp;
+    Pending: <strong>{{ stats.pending }}</strong> &nbsp;|&nbsp;
+    Total: <strong>{{ stats.total }}</strong>
+  </div>
+  <div class="btns" style="margin-top: 12px;">
+    <a href="?from={{ from }}&to={{ to }}{% if user_id %}&user_id={{ user_id }}{% endif %}&download=overall">Download CSV (Overall)</a>
+    <a href="?from={{ from }}&to={{ to }}&download=per_user">Download CSV (Per User)</a>
+  </div>
+</body>
+</html>

@@ -1,8 +1,7 @@
 # E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\urls.py
 from django.urls import path
 from . import views
-# Add this import for the lightweight recurring report view (admin-only)
-from .views_reports import recurring_report  # ensure you created views_reports.py as shown
+from .views_reports import recurring_report
 
 app_name = "tasks"
 
