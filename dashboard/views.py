@@ -125,7 +125,7 @@ def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> datet
     return cur_ist.astimezone(tz)
 
 
-# ---------- Checklist visibility gating (aligned with tasks/views.py) ----------
+# ---------- Checklist visibility gating (aligned with apps.tasks.views) ----------
 def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     """
     FINAL rule (Checklist — recurring OR one-time):
@@ -151,8 +151,23 @@ def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
         return False
 
     # Same day: strictly gate at 10:00 IST (no early visibility)
-    ten_am = dt_time(10, 0, 0)
-    return now_ist.timetz().replace(tzinfo=None) >= ten_am
+    anchor_10am = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
+    return now_ist >= anchor_10am
+
+
+# ---------- Query-flag helper (robust) ----------
+def _flag_on(qs, *keys) -> bool:
+    """
+    Treat presence of ?today, ?today_only, etc. as ON.
+    Only explicit 0/false/off disables.
+    """
+    for k in keys:
+        if k in qs:
+            v = (qs.get(k) or "").strip().lower()
+            if v in ("0", "false", "no", "off"):
+                return False
+            return True
+    return False
 
 
 # ---------- Aggregations ----------
@@ -271,10 +286,8 @@ def dashboard_home(request):
           - If planned date > today           → hide.
 
     Delegation & Help Ticket:
-      • Visible immediately at/after their planned timestamp.
-      • No recurrence logic here.
-
-    Past-due items remain until completed. Completed disappear immediately.
+      • Visible immediately (no 10:00 gating).
+      • When "Today Only" is ON, show the entire day's items (00:00–23:59 IST).
     """
     # Current IST and today's date
     now_ist = timezone.now().astimezone(IST)
@@ -343,7 +356,8 @@ def dashboard_home(request):
         pending_tasks = {'checklist': 0, 'delegation': 0, 'help_ticket': 0}
 
     selected = request.GET.get('task_type')
-    today_only = (request.GET.get('today') == '1' or request.GET.get('today_only') == '1')
+    # ✅ robust: ?today, ?today=1, ?today_only, ?today_only=true all work
+    today_only = _flag_on(request.GET, 'today', 'today_only')
 
     # --- Build time bounds in project TZ for DB filtering (IST-aligned)
     start_today_proj = timezone.make_aware(datetime.combine(today_ist, dt_time.min), IST).astimezone(project_tz)
@@ -351,7 +365,7 @@ def dashboard_home(request):
 
     # --- Query, then apply checklist gating in Python (per rules)
     try:
-        # Base set up to end-of-today
+        # Base set up to end-of-today (and all past)
         base_checklists = Checklist.objects.filter(
             assign_to=request.user, status='Pending',
             planned_date__lte=end_today_proj
@@ -359,25 +373,27 @@ def dashboard_home(request):
 
         if today_only:
             # Restrict to today's date range, then apply gating
-            base_checklists = base_checklists.filter(planned_date__gte=start_today_proj,
-                                                     planned_date__lte=end_today_proj)
+            base_checklists = base_checklists.filter(
+                planned_date__gte=start_today_proj,
+                planned_date__lte=end_today_proj
+            )
 
         checklist_qs = [c for c in base_checklists if _should_show_checklist(c.planned_date, now_ist)]
 
-        # Delegations — visible immediately if planned <= bound
+        # Delegations — "Today Only" shows ALL of today's items (00:00–23:59), not just up to now
         if today_only:
             delegation_qs = list(
                 Delegation.objects.filter(
                     assign_to=request.user, status='Pending',
                     planned_date__gte=start_today_proj,
-                    planned_date__lte=now_project_tz,  # up to now
+                    planned_date__lte=end_today_proj,   # ⬅️ full day
                 ).select_related('assign_by').order_by('planned_date')
             )
             help_ticket_qs = list(
                 HelpTicket.objects.filter(
                     assign_to=request.user,
                     planned_date__gte=start_today_proj,
-                    planned_date__lte=now_project_tz,
+                    planned_date__lte=end_today_proj,   # ⬅️ full day
                 ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
             )
         else:
@@ -397,7 +413,7 @@ def dashboard_home(request):
             f"Dashboard filtering for {request.user.username}:\n"
             f"  - Today only: {today_only}\n"
             f"  - Found tasks (after gating): {len(checklist_qs)} checklists, {len(delegation_qs)} delegations, {len(help_ticket_qs)} help tickets\n"
-            f"  - Cutoff (DB): {'NOW' if today_only else 'EOD IST'}; final strict 10:00 checklist gating applied."
+            f"  - Cutoff (DB): {'TODAY EOD' if today_only else 'ALL ≤ TODAY EOD'}; strict 10:00 checklist gating applied."
         ))
     except Exception as e:
         logger.error(_safe_console_text(f"Error querying task lists: {e}"))
