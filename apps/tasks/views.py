@@ -69,6 +69,8 @@ def _background(target, /, *args, **kwargs):
     Run `target(*args, **kwargs)` in a detached daemon thread.
     Ensures DB connections are fresh for the new thread.
     """
+    thread_name = kwargs.pop("thread_name", "bulk-bg")
+
     def _runner():
         try:
             close_old_connections()
@@ -81,8 +83,7 @@ def _background(target, /, *args, **kwargs):
             except Exception:
                 pass
 
-    t = Thread(target=_runner, daemon=True, name=kwargs.pop("thread_name", "bulk-bg"))
-    t.start()
+    Thread(target=_runner, daemon=True, name=thread_name).start()
 
 
 # ---------- HELPERS ----------
@@ -97,11 +98,13 @@ def _safe_console_text(s: object) -> str:
     except Exception:
         return text
 
+
 def clean_unicode_string(text):
     if not text:
         return text
     text = str(text).replace("\x96", "-").replace("\u2013", "-").replace("\u2014", "-")
     return unicodedata.normalize("NFKD", text)
+
 
 def robust_db_operation(max_retries=3, base_delay=0.05):
     def deco(fn):
@@ -125,6 +128,7 @@ def robust_db_operation(max_retries=3, base_delay=0.05):
         return inner
     return deco
 
+
 def optimal_batch_size() -> int:
     try:
         if connection.vendor == "sqlite":
@@ -132,6 +136,7 @@ def optimal_batch_size() -> int:
         return min(BULK_BATCH_SIZE, 500)
     except Exception:
         return 250
+
 
 def _minutes_between(now_dt: datetime, planned_dt: datetime) -> int:
     if not planned_dt:
@@ -143,15 +148,18 @@ def _minutes_between(now_dt: datetime, planned_dt: datetime) -> int:
         pass
     return max(int((now_dt - planned_dt).total_seconds() // 60), 0)
 
+
 def is_working_day(d: date) -> bool:
     if d.weekday() == 6:
         return False
     return not Holiday.objects.filter(date=d).exists()
 
+
 def next_working_day(d: date) -> date:
     while not is_working_day(d):
         d += timedelta(days=1)
     return d
+
 
 def day_bounds(d: date):
     """Get start and end datetime for a given date in current TZ."""
@@ -160,11 +168,21 @@ def day_bounds(d: date):
     end = start + timedelta(days=1)
     return start, end
 
+
 def span_bounds(d_from: date, d_to_inclusive: date):
     """Get start and end datetime for a date range (inclusive end date)."""
     start, _ = day_bounds(d_from)
     _, end = day_bounds(d_to_inclusive)
     return start, end
+
+
+def _ist_date(dt: datetime) -> date | None:
+    if not dt:
+        return None
+    if timezone.is_aware(dt):
+        return dt.astimezone(IST).date()
+    return IST.localize(dt).date()
+
 
 # ---------- FINAL VISIBILITY GATING FOR CHECKLIST ----------
 def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
@@ -204,16 +222,14 @@ def parse_datetime_flexible(value):
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
     if isinstance(value, (pd.Timestamp,)):
-        dt = value.to_pydatetime()
-        return dt
+        return value.to_pydatetime()
     s = str(value).strip()
     if not s:
         return None
     fmts = [
         "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S",
         "%d/%m/%Y %H:%M", "%m/%d/%Y %H:%M",
-        "%d-%m-%Y %H:%M",
-        "%d.%m.%Y %H:%M",
+        "%d-%m-%Y %H:%M", "%d.%m.%Y %H:%M",
         "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%d.%m.%Y",
     ]
     for f in fmts:
@@ -234,16 +250,18 @@ def parse_datetime_flexible(value):
     except Exception:
         return None
 
+
 _SYN_MODE = {
     "day": "Daily", "daily": "Daily",
     "week": "Weekly", "weekly": "Weekly",
     "month": "Monthly", "monthly": "Monthly",
     "year": "Yearly", "yearly": "Yearly",
 }
-
 _RECURRENCE_RE = re.compile(r"(?i)\b(?:every|evry)?\s*(\d+)?\s*(day|daily|week|weekly|month|monthly|year|yearly)\b")
 
+
 def _clean_str(val): return clean_unicode_string("" if val is None else str(val).strip())
+
 
 def parse_mode_frequency_from_row(row):
     """Parse recurrence info if present, else return ('', None)."""
@@ -282,14 +300,22 @@ def parse_mode_frequency_from_row(row):
             return mode, 1
     return "", None
 
+
 def parse_bool(val) -> bool: return _clean_str(val).lower() in {"1", "true", "yes", "y", "on"}
+
+
 def parse_int(val, default=0) -> int:
     s = _clean_str(val)
-    if not s: return default
+    if not s:
+        return default
     m = re.search(r"(-?\d+)", s)
-    if not m: return default
-    try: return int(float(m.group(1)))
-    except Exception: return default
+    if not m:
+        return default
+    try:
+        return int(float(m.group(1)))
+    except Exception:
+        return default
+
 
 def parse_excel_file_optimized(file):
     file.seek(0)
@@ -305,6 +331,7 @@ def parse_excel_file_optimized(file):
             keep_default_na=False,
         )
     raise ValueError("Unsupported file format. Please upload .xlsx, .xls, or .csv")
+
 
 def validate_and_prepare_excel_data(df, task_type="checklist"):
     df.columns = (
@@ -350,6 +377,7 @@ class UserCache:
     def __init__(self):
         self._cache = {}
         self._lock = Lock()
+
     def get_user(self, username_or_email):
         key = (username_or_email or "").strip()
         if not key:
@@ -368,6 +396,7 @@ class UserCache:
         with self._lock:
             self._cache[key] = u
         return u
+
     def preload_usernames(self, usernames):
         if not usernames:
             return
@@ -377,9 +406,11 @@ class UserCache:
                 self._cache[u.username] = u
                 if u.email:
                     self._cache[u.email] = u
+
     def clear(self):
         with self._lock:
             self._cache.clear()
+
 
 user_cache = UserCache()
 can_create = lambda u: u.is_superuser or u.groups.filter(name__in=["Admin", "Manager", "EA", "CEO"]).exists()
@@ -507,6 +538,7 @@ def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, star
                             errors.append(f"Failed to save '{clean_unicode_string(obj.task_name)}': {save_err}")
     return created, errors
 
+
 @robust_db_operation()
 def process_delegation_batch_excel_ultra_optimized(batch_df, assign_by_user, start_idx):
     """
@@ -580,6 +612,7 @@ def process_delegation_batch_excel_ultra_optimized(batch_df, assign_by_user, sta
                             errors.append(f"Failed to save delegation '{clean_unicode_string(obj.task_name)}': {save_err}")
     return created, errors
 
+
 def process_checklist_bulk_upload_excel_friendly(file, assign_by_user):
     try:
         df = parse_excel_file_optimized(file)
@@ -607,6 +640,7 @@ def process_checklist_bulk_upload_excel_friendly(file, assign_by_user):
             time.sleep(0.01)
     return created, errors
 
+
 def process_delegation_bulk_upload_excel_friendly(file, assign_by_user):
     try:
         df = parse_excel_file_optimized(file)
@@ -622,10 +656,8 @@ def process_delegation_bulk_upload_excel_friendly(file, assign_by_user):
 
     total = len(df)
     bs = optimal_batch_size()
-    for start_idx in range(0, len(df), bs):
-        end_idx = min(start_idx + bs, len(df))
-    for start_idx in range(0, len(df), bs):
-        end_idx = min(start_idx + bs, len(df))
+    for start_idx in range(0, total, bs):
+        end_idx = min(start_idx + bs, total)
         batch_df = df.iloc[start_idx:end_idx]
         batch_created, batch_errors = process_delegation_batch_excel_ultra_optimized(
             batch_df, assign_by_user, start_idx
@@ -646,7 +678,7 @@ def _send_bulk_emails_by_ids(task_ids, *, task_type: str):
     Model = Checklist if task_type == "Checklist" else Delegation
     CHUNK = 100
     for i in range(0, len(task_ids), CHUNK):
-        ids_chunk = task_ids[i:i+CHUNK]
+        ids_chunk = task_ids[i:i + CHUNK]
         qs = (
             Model.objects.filter(id__in=ids_chunk)
             .select_related("assign_by", "assign_to")
@@ -688,27 +720,21 @@ def kick_off_bulk_emails_async(created_tasks, task_type="Checklist"):
 def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: str | None = None):
     """
     Fire-and-forget admin summary, with optional exclusion of the assigner
-    (the uploader) from recipients.
+    (the uploader) from recipients. Compatible with utils that may not accept
+    `exclude_assigner_email`.
     """
-    _background(
-        send_admin_bulk_summary,
-        title=title,
-        rows=rows,
-        exclude_assigner_email=exclude_assigner_email,
-        thread_name="bulk-admin-summary",
-    )
-def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: str | None = None):
-    """
-    Fire-and-forget admin summary, with optional exclusion of the assigner
-    (the uploader) from recipients.
-    """
-    _background(
-        send_admin_bulk_summary,
-        title=title,
-        rows=rows,
-        exclude_assigner_email=exclude_assigner_email,
-        thread_name="bulk-admin-summary",
-    )
+    def _safe_call():
+        try:
+            try:
+                # Try modern signature
+                send_admin_bulk_summary(title=title, rows=rows, exclude_assigner_email=exclude_assigner_email)
+            except TypeError:
+                # Fallback for older signature
+                send_admin_bulk_summary(title=title, rows=rows)
+        except Exception as e:
+            logger.error("Admin summary failed: %s", e)
+
+    _background(_safe_call, thread_name="bulk-admin-summary")
 
 
 # ---------- VIEWS ----------
@@ -1107,9 +1133,7 @@ def complete_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
     if obj.assign_to_id and obj.assign_to_id != request.user.id and not (request.user.is_staff or request.user.is_superuser):
         messages.error(request, "You are not the assignee of this task.")
-        # ✅ FIX: reverse the view name, then append query string
-        return redirect(request.GET.get("next") or (reverse("dashboard:home") + "?task_type=delegation"))
-        # ✅ reverse the view name, then append query string
+        # reverse the view name, then append query string
         return redirect(request.GET.get("next") or (reverse("dashboard:home") + "?task_type=delegation"))
 
     if request.method == "GET":
@@ -1135,9 +1159,7 @@ def complete_delegation(request, pk):
     except Exception as e:
         logger.error("Error completing delegation %s: %s", pk, e)
         messages.error(request, "An error occurred while completing the task. Please try again.")
-    # ✅ FIX: reverse the view name, then append query string
-    return redirect(request.GET.get("next") or (reverse("dashboard:home") + "?task_type=delegation"))
-    # ✅ reverse the view name, then append query string
+    # reverse the view name, then append query string
     return redirect(request.GET.get("next") or (reverse("dashboard:home") + "?task_type=delegation"))
 
 
@@ -1367,12 +1389,14 @@ def download_checklist_template(request):
         raise Http404
     return FileResponse(open(path, "rb"), as_attachment=True, filename="checklist_template.csv")
 
+
 @has_permission("mt_bulk_upload")
 def download_delegation_template(request):
     path = finders.find("bulk_upload_templates/delegation_template.csv")
     if not path:
         raise Http404
     return FileResponse(open(path, "rb"), as_attachment=True, filename="delegation_template.csv")
+
 
 @has_permission("mt_bulk_upload")
 def bulk_upload(request):
@@ -1434,13 +1458,7 @@ def bulk_upload(request):
                         "complete_url": complete_url,
                     })
                 title = f"Bulk Upload: {count_created} {task_type_name} Tasks Created"
-                # ⬇️ Exclude the uploader/assigner from the admin summary recipients
-                send_admin_bulk_summary_async(
-                    title=title,
-                    rows=preview,
-                    exclude_assigner_email=(request.user.email or None),
-                )
-                # ⬇️ Exclude the uploader/assigner from the admin summary recipients
+                # Exclude the uploader/assigner from the admin summary recipients
                 send_admin_bulk_summary_async(
                     title=title,
                     rows=preview,
@@ -1465,20 +1483,24 @@ def bulk_upload(request):
     # Redirect so the browser shows the message immediately and the background work continues
     return redirect("tasks:bulk_upload")
 
+
 @login_required
 def list_fms(request):
     items = FMS.objects.select_related("assign_by", "assign_to").order_by("-planned_date", "-id")
     return render(request, "tasks/list_fms.html", {"items": items})
+
 
 @login_required
 def checklist_details(request, pk: int):
     obj = get_object_or_404(Checklist.objects.select_related("assign_by", "assign_to"), pk=pk)
     return render(request, "tasks/partials/checklist_detail.html", {"obj": obj})
 
+
 @login_required
 def delegation_details(request, pk: int):
     obj = get_object_or_404(Delegation.objects.select_related("assign_by", "assign_to"), pk=pk)
     return render(request, "tasks/partials/delegation_detail.html", {"obj": obj})
+
 
 @login_required
 def help_ticket_details(request, pk: int):
@@ -1573,30 +1595,33 @@ def dashboard_home(request):
     selected = request.GET.get('task_type')
     today_only = (request.GET.get('today') == '1' or request.GET.get('today_only') == '1')
 
-    # --- Build time bounds in project TZ for DB filtering
+    # Build IST-aligned bounds for DB filtering
     start_today_proj = timezone.make_aware(datetime.combine(today_ist, dt_time.min), IST).astimezone(project_tz)
     end_today_proj = timezone.make_aware(datetime.combine(today_ist, dt_time.max), IST).astimezone(project_tz)
 
     try:
-        # ---- Checklists (DB pre-filter to reduce volume) ----
-        base_checklists = Checklist.objects.filter(
-            assign_to=request.user, status='Pending',
-            planned_date__lte=(now_project_tz if today_only else end_today_proj)
-        ).select_related('assign_by').order_by('planned_date')
-
+        # ---- Checklists: fetch up to EOD IST; apply IST "today" + 10:00 gating in Python ----
+        base_checklists = (
+            Checklist.objects
+            .filter(assign_to=request.user, status='Pending', planned_date__lte=end_today_proj)
+            .select_related('assign_by')
+            .order_by('planned_date')
+        )
         if today_only:
-            base_checklists = base_checklists.filter(planned_date__gte=start_today_proj, planned_date__lte=end_today_proj)
+            checklist_qs = [
+                c for c in base_checklists
+                if (_ist_date(c.planned_date) == today_ist) and _should_show_checklist(c.planned_date, now_ist)
+            ]
+        else:
+            checklist_qs = [c for c in base_checklists if _should_show_checklist(c.planned_date, now_ist)]
 
-        # Apply strict 10:00 IST gating for same-day
-        checklist_qs = [c for c in base_checklists if _should_show_checklist(c.planned_date, now_ist)]
-
-        # ---- Delegations: immediate visibility at/after planned timestamp ----
+        # ---- Delegations & Help Tickets: visible when planned time arrives ----
         if today_only:
             delegation_qs = list(
                 Delegation.objects.filter(
                     assign_to=request.user, status='Pending',
                     planned_date__gte=start_today_proj,
-                    planned_date__lte=now_project_tz,  # up to now
+                    planned_date__lte=now_project_tz,
                 ).select_related('assign_by').order_by('planned_date')
             )
             help_ticket_qs = list(
@@ -1620,10 +1645,8 @@ def dashboard_home(request):
             )
 
         logger.info(_safe_console_text(
-            f"Dashboard filtering for {request.user.username}:\n"
-            f"  - Today only: {today_only}\n"
-            f"  - Found tasks (after gating): {len(checklist_qs)} checklists, {len(delegation_qs)} delegations, {len(help_ticket_qs)} help tickets\n"
-            f"  - Cutoff (DB): {'NOW' if today_only else 'EOD IST'}; final strict 10:00 checklist gating applied."
+            f"Dashboard filtering for {request.user.username}: today_only={today_only} | "
+            f"checklists={len(checklist_qs)} delegations={len(delegation_qs)} help_tickets={len(help_ticket_qs)}"
         ))
     except Exception as e:
         logger.error(_safe_console_text(f"Error querying task lists: {e}"))
