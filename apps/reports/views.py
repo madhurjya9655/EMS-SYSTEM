@@ -1,6 +1,7 @@
 from datetime import date, datetime, time, timedelta
 from typing import Tuple
 
+from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ObjectDoesNotExist
@@ -15,26 +16,23 @@ from apps.tasks.models import Checklist, Delegation
 User = get_user_model()
 
 
+# -------- date helpers --------
 def get_week_dates(frm: date | None, to: date | None) -> Tuple[date, date]:
     """
     Robust range builder:
-
-    - If both dates provided, return them in ascending order (swap if necessary).
-    - If only `frm` provided, make a 7-day window [frm, frm+6].
-    - If only `to` provided, make a 7-day window [to-6, to].
-    - If neither provided, use the current local week (Mon..Sun).
+    - If both dates given, return them in ascending order.
+    - If only frm, make a 7-day window [frm, frm+6].
+    - If only to,   make a 7-day window [to-6, to].
+    - If neither,   current local week (Mon..Sun).
     """
     if frm and to:
         if frm > to:
             frm, to = to, frm
         return frm, to
-
     if frm and not to:
         return frm, frm + timedelta(days=6)
-
     if to and not frm:
         return to - timedelta(days=6), to
-
     today = timezone.localdate()
     start = today - timedelta(days=today.weekday())
     return start, start + timedelta(days=6)
@@ -86,8 +84,44 @@ def percent_not_completed(planned: int, completed: int) -> float:
     return -round(((planned - completed) / planned) * 100, 2)
 
 
+# ----------------- REPORTS -----------------
 @login_required
 def list_doer_tasks(request):
+    """
+    Report of checklist tasks, with bulk and single delete.
+    """
+    # ---- handle deletes ----
+    if request.method == "POST":
+        action = request.POST.get("action", "")
+        if action == "bulk_delete":
+            ids = request.POST.getlist("sel")
+            if not ids:
+                messages.warning(request, "No rows selected.")
+                return redirect("reports:doer_tasks")
+            try:
+                deleted, _ = Checklist.objects.filter(pk__in=ids).delete()
+                if deleted:
+                    messages.success(request, f"Deleted {deleted} task(s).")
+                else:
+                    messages.info(request, "No tasks were deleted.")
+            except Exception as e:
+                messages.error(request, f"Error during bulk delete: {e}")
+            return redirect("reports:doer_tasks")
+
+        if action == "delete_one":
+            pk = request.POST.get("pk")
+            if pk:
+                try:
+                    obj = Checklist.objects.get(pk=pk)
+                    obj.delete()
+                    messages.success(request, "Task deleted.")
+                except Checklist.DoesNotExist:
+                    messages.warning(request, "The task no longer exists.")
+                except Exception as e:
+                    messages.error(request, f"Error deleting task: {e}")
+            return redirect("reports:doer_tasks")
+
+    # ---- filtering (GET) ----
     form = PCReportFilterForm(request.GET or None, user=request.user)
     items = Checklist.objects.select_related('assign_by', 'assign_to').order_by('planned_date', 'id')
     if form.is_valid():
@@ -164,6 +198,7 @@ def weekly_mis_score(request):
         this_week_commitment = WeeklyCommitment.objects.filter(user=doer, week_start=frm).first()
         last_week_commitment = WeeklyCommitment.objects.filter(user=doer, week_start=prev_frm).first()
 
+        # Save commitments
         if request.method == "POST" and 'update_commitment' in request.POST:
             commitment_form = WeeklyMISCommitmentForm(request.POST)
             if commitment_form.is_valid():
@@ -233,7 +268,7 @@ def weekly_mis_score(request):
         actual_time_delegation = minutes_to_hhmm(actual_delegation_minutes)
         total_hours = minutes_to_hhmm(actual_checklist_minutes + actual_delegation_minutes)
 
-        # % scores (negative for "not completed/not on-time")
+        # % scores (negative for "not completed/on-time not met")
         checklist_planned = rows[0]['planned']
         checklist_completed = rows[0]['completed']
         checklist_ontime = Checklist.objects.filter(
