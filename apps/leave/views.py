@@ -32,7 +32,7 @@ def _employee_header(user) -> Dict[str, Optional[str]]:
 
     try:
         from apps.users.models import Profile  # type: ignore
-        prof = Profile.objects.select_related("manager").filter(user=user).first()
+        prof = Profile.objects.select_related("team_leader").filter(user=user).first()
         if prof:
             designation = (getattr(prof, "designation", "") or "").strip()
             photo = getattr(prof, "photo", None)
@@ -72,13 +72,13 @@ def apply_leave(request):
             lr.employee = request.user
             lr.status = LeaveStatus.PENDING  # explicit; model guards too
 
-            # Prefer Profile.manager if available (model will also auto-pick if absent)
+            # Prefer Profile.team_leader if available (model will also auto-pick if absent)
             try:
                 if not lr.manager:
                     from apps.users.models import Profile  # type: ignore
-                    prof = Profile.objects.select_related("manager").filter(user=request.user).first()
-                    if prof and getattr(prof, "manager_id", None):
-                        lr.manager = prof.manager
+                    prof = Profile.objects.select_related("team_leader").filter(user=request.user).first()
+                    if prof and getattr(prof, "team_leader_id", None):
+                        lr.manager = prof.team_leader
             except Exception:
                 logger.exception("While setting manager from profile")
 
