@@ -133,8 +133,9 @@ class CompleteChecklistForm(forms.ModelForm):
 # Delegation
 # -----------------------------
 class DelegationForm(forms.ModelForm):
+    # Use plain text input so Flatpickr fully controls date & time in the template
     planned_date = forms.DateTimeField(
-        widget=forms.DateTimeInput(attrs={"type": "datetime-local", "class": "form-control"}),
+        widget=forms.DateTimeInput(attrs={"class": "form-control", "placeholder": "YYYY-MM-DD HH:MM"}),
         help_text="Select date and time for this delegation",
     )
     audio_recording = forms.FileField(
