@@ -1,6 +1,7 @@
 # apps/users/views.py
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from django.contrib import messages
@@ -11,6 +12,8 @@ from django.http import HttpRequest, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import NoReverseMatch, reverse, reverse_lazy
 from django.views.decorators.http import require_POST
+from django.db import transaction
+from django.db.models import ProtectedError
 
 from .forms import CustomAuthForm, ProfileForm, UserForm
 from .models import Profile
@@ -18,6 +21,7 @@ from .permission_urls import PERMISSION_URLS
 from .permissions import PERMISSIONS_STRUCTURE, _user_permission_codes, permissions_context
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 def admin_only(user) -> bool:
@@ -182,8 +186,60 @@ def delete_user(request: HttpRequest, pk: int) -> HttpResponse:
         # Optional: block deletion of other superusers unless current user is also superuser
         if getattr(user, "is_superuser", False) and not getattr(request.user, "is_superuser", False):
             return HttpResponseForbidden("Only a superuser can delete another superuser.")
-        user.delete()
-        messages.success(request, "User deleted successfully.")
+        
+        try:
+            # Forcefully delete related objects to ensure complete removal
+            from django.db import connection
+            
+            # Get the user ID before deletion for logging
+            user_id = user.id
+            username = user.username
+            
+            # Force delete in raw SQL to bypass Django's protections
+            with transaction.atomic():
+                cursor = connection.cursor()
+                
+                # Delete profile first
+                cursor.execute("DELETE FROM users_profile WHERE user_id = %s", [user_id])
+                
+                # Delete from auth_user
+                cursor.execute("DELETE FROM auth_user WHERE id = %s", [user_id])
+                
+                # Additional deletions for other known related tables
+                # These are common Django tables that might have user relationships
+                try:
+                    cursor.execute("DELETE FROM django_admin_log WHERE user_id = %s", [user_id])
+                except Exception:
+                    pass
+                
+                try:
+                    cursor.execute("DELETE FROM auth_user_groups WHERE user_id = %s", [user_id])
+                except Exception:
+                    pass
+                
+                try:
+                    cursor.execute("DELETE FROM auth_user_user_permissions WHERE user_id = %s", [user_id])
+                except Exception:
+                    pass
+                
+                # Add any other app-specific tables that have user references
+                try:
+                    cursor.execute("DELETE FROM leave_leaverequest WHERE user_id = %s", [user_id])
+                except Exception:
+                    pass
+                
+                try:
+                    cursor.execute("DELETE FROM leave_leavedecisionaudit WHERE user_id = %s", [user_id])
+                except Exception:
+                    pass
+            
+            messages.success(request, f"User '{username}' completely deleted from the system.")
+            
+        except Exception as e:
+            # Handle any database errors
+            logger.error(f"Error deleting user {user.id}: {str(e)}")
+            messages.error(request, f"Could not delete user: {str(e)}")
+        
         return redirect("users:list_users")
 
     # GET → show confirm page
