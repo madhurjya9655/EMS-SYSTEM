@@ -1,4 +1,4 @@
-{% load static group_tags permission_tags %}
+{% load static group_tags user_filters %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -377,222 +377,230 @@
           {% if user|has_permission:"add_user" or user.is_superuser %}
           <a href="{% url 'users:add_user' %}" class="nav-item {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'add_user' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'add_user' %}aria-current="page"{% endif %}>
-            <i class="fas fa-user-plus" aria-hidden="true"></i> Add User
-          </a>
-          {% endif %}
-        </div>
-        {% endif %}
+           <i class="fas fa-user-plus" aria-hidden="true"></i> Add User
+         </a>
+         {% endif %}
+       </div>
+       {% endif %}
 
-        {% if user|has_any_permission:"authorized_numbers,system_settings" or user.is_superuser %}
-        <button type="button" class="nav-item" aria-expanded="false" aria-controls="settingsSubmenu" data-submenu-toggle>
-          <i class="fas fa-cog" aria-hidden="true"></i> Settings <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
-        </button>
-        <div class="submenu" id="settingsSubmenu" role="group" aria-label="Settings">
-          {% if user|has_permission:"authorized_numbers" %}
-          <a href="{% url 'settings:authorized_list' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}aria-current="page"{% endif %}>
-            <i class="fas fa-phone" aria-hidden="true"></i> Authorized Numbers
-          </a>
-          {% endif %}
-          <a href="{% url 'settings:holiday_list' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}aria-current="page"{% endif %}>
-            <i class="fas fa-calendar-day" aria-hidden="true"></i> Holiday List
-          </a>
-          {% if user|has_permission:"system_settings" %}
-          <a href="{% url 'settings:system_settings' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}aria-current="page"{% endif %}>
-            <i class="fas fa-sliders-h" aria-hidden="true"></i> System Settings
-          </a>
-          {% endif %}
-        </div>
-        {% endif %}
-      </div>
-    </nav>
-    <div class="sidebar-overlay" data-sidebar-overlay aria-hidden="true"></div>
-  {% endif %}
+       {% if user|has_any_permission:"authorized_numbers,system_settings" or user.is_superuser %}
+       <button type="button" class="nav-item" aria-expanded="false" aria-controls="settingsSubmenu" data-submenu-toggle>
+         <i class="fas fa-cog" aria-hidden="true"></i> Settings <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+       </button>
+       <div class="submenu" id="settingsSubmenu" role="group" aria-label="Settings">
+         {% if user|has_permission:"authorized_numbers" %}
+         <a href="{% url 'settings:authorized_list' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}active{% endif %}"
+            {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}aria-current="page"{% endif %}>
+           <i class="fas fa-phone" aria-hidden="true"></i> Authorized Numbers
+         </a>
+         {% endif %}
+         <a href="{% url 'settings:holiday_list' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}active{% endif %}"
+            {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}aria-current="page"{% endif %}>
+           <i class="fas fa-calendar-day" aria-hidden="true"></i> Holiday List
+         </a>
+         {% if user|has_permission:"system_settings" %}
+         <a href="{% url 'settings:system_settings' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}active{% endif %}"
+            {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}aria-current="page"{% endif %}>
+           <i class="fas fa-sliders-h" aria-hidden="true"></i> System Settings
+         </a>
+         {% endif %}
+       </div>
+       {% endif %}
 
-  <main class="{% if user.is_authenticated %}main-content{% else %}container mt-5{% endif %}" id="mainContent" role="main">
-    {% if messages %}
-      <div class="container mb-3" aria-live="polite" aria-atomic="true">
-        {% for message in messages %}
-          <div class="alert {% if message.tags %}alert-{{ message.tags }}{% else %}alert-info{% endif %} shadow-sm" role="alert">
-            {{ message|safe }}
-          </div>
-        {% endfor %}
-      </div>
-    {% endif %}
-    {% block content %}{% endblock %}
-  </main>
+       <!-- Debug link - only visible to superusers -->
+       {% if user.is_superuser %}
+       <a href="{% url 'users:debug_permissions' %}" class="nav-item {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'debug_permissions' %}active{% endif %}"
+          {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'debug_permissions' %}aria-current="page"{% endif %}>
+         <i class="fas fa-bug" aria-hidden="true"></i> Debug Permissions
+       </a>
+       {% endif %}
+     </div>
+   </nav>
+   <div class="sidebar-overlay" data-sidebar-overlay aria-hidden="true"></div>
+ {% endif %}
 
-  {% if user.is_authenticated %}
-    <footer role="contentinfo">
-      <small>© {% now "Y" %} Developed by Madhurjya Bora</small>
-    </footer>
-  {% endif %}
+ <main class="{% if user.is_authenticated %}main-content{% else %}container mt-5{% endif %}" id="mainContent" role="main">
+   {% if messages %}
+     <div class="container mb-3" aria-live="polite" aria-atomic="true">
+       {% for message in messages %}
+         <div class="alert {% if message.tags %}alert-{{ message.tags }}{% else %}alert-info{% endif %} shadow-sm" role="alert">
+           {{ message|safe }}
+         </div>
+       {% endfor %}
+     </div>
+   {% endif %}
+   {% block content %}{% endblock %}
+ </main>
 
-  <!-- JS at end for faster first paint -->
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js" defer></script>
+ {% if user.is_authenticated %}
+   <footer role="contentinfo">
+     <small>© {% now "Y" %} Developed by Madhurjya Bora</small>
+   </footer>
+ {% endif %}
 
-  <script>
-    // --- CSRF helpers ---
-    function getCookie(name){
-      const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
-      return m ? decodeURIComponent(m.pop()) : null;
-    }
-    const CSRF_COOKIE = 'csrftoken';
+ <!-- JS at end for faster first paint -->
+ <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js" defer></script>
 
-    document.addEventListener('DOMContentLoaded', () => {
-      // Ensure CSRF in any POST form
-      document.querySelectorAll('form[method="post"]').forEach(form => {
-        const hasToken = form.querySelector('input[name="csrfmiddlewaretoken"]');
-        if (!hasToken) {
-          const token = getCookie(CSRF_COOKIE);
-          if (token) {
-            const input = document.createElement('input');
-            input.type = 'hidden';
-            input.name = 'csrfmiddlewaretoken';
-            input.value = token;
-            form.prepend(input);
-          }
-        }
-      });
-    });
+ <script>
+   // --- CSRF helpers ---
+   function getCookie(name){
+     const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+     return m ? decodeURIComponent(m.pop()) : null;
+   }
+   const CSRF_COOKIE = 'csrftoken';
 
-    (function patchFetch(){
-      const _fetch = window.fetch;
-      window.fetch = function(input, init){
-        try{
-          const url = (typeof input === 'string') ? input : input.url;
-          const sameOrigin = !/^https?:\/\//i.test(url) || url.startsWith(window.location.origin);
-          const method = (init && (init.method || (init.headers && init.headers['X-HTTP-Method-Override']))) || 'GET';
-          const safe = /^(GET|HEAD|OPTIONS|TRACE)$/i.test(method);
-          if (sameOrigin && !safe){
-            init = init || {};
-            init.headers = new Headers(init.headers || {});
-            if (!init.headers.has('X-CSRFToken')) {
-              const token = getCookie(CSRF_COOKIE);
-              if (token) init.headers.set('X-CSRFToken', token);
-            }
-          }
-        }catch(_e){}
-        return _fetch(input, init);
-      };
-    })();
+   document.addEventListener('DOMContentLoaded', () => {
+     // Ensure CSRF in any POST form
+     document.querySelectorAll('form[method="post"]').forEach(form => {
+       const hasToken = form.querySelector('input[name="csrfmiddlewaretoken"]');
+       if (!hasToken) {
+         const token = getCookie(CSRF_COOKIE);
+         if (token) {
+           const input = document.createElement('input');
+           input.type = 'hidden';
+           input.name = 'csrfmiddlewaretoken';
+           input.value = token;
+           form.prepend(input);
+         }
+       }
+     });
+   });
 
-    (function patchXHR(){
-      const origOpen = XMLHttpRequest.prototype.open;
-      const origSend = XMLHttpRequest.prototype.send;
-      XMLHttpRequest.prototype.open = function(method, url){
-        this._isSameOrigin = !/^https?:\/\//i.test(url) || url.startsWith(window.location.origin);
-        this._method = method || 'GET';
-        return origOpen.apply(this, arguments);
-      };
-      XMLHttpRequest.prototype.send = function(body){
-        try{
-          const safe = /^(GET|HEAD|OPTIONS|TRACE)$/i.test(this._method || 'GET');
-          if (this._isSameOrigin && !safe) {
-            const token = getCookie(CSRF_COOKIE);
-            if (token) this.setRequestHeader('X-CSRFToken', token);
-          }
-        }catch(_e){}
-        return origSend.apply(this, arguments);
-      };
-    })();
+   (function patchFetch(){
+     const _fetch = window.fetch;
+     window.fetch = function(input, init){
+       try{
+         const url = (typeof input === 'string') ? input : input.url;
+         const sameOrigin = !/^https?:\/\//i.test(url) || url.startsWith(window.location.origin);
+         const method = (init && (init.method || (init.headers && init.headers['X-HTTP-Method-Override']))) || 'GET';
+         const safe = /^(GET|HEAD|OPTIONS|TRACE)$/i.test(method);
+         if (sameOrigin && !safe){
+           init = init || {};
+           init.headers = new Headers(init.headers || {});
+           if (!init.headers.has('X-CSRFToken')) {
+             const token = getCookie(CSRF_COOKIE);
+             if (token) init.headers.set('X-CSRFToken', token);
+           }
+         }
+       }catch(_e){}
+       return _fetch(input, init);
+     };
+   })();
 
-    // --- Sidebar & submenu ---
-    function toggleSidebar(){
-      const sidebar=document.getElementById('sidebar'),
-            overlay=document.querySelector('[data-sidebar-overlay]'),
-            main=document.getElementById('mainContent');
-      if(!sidebar || !main) return;
-      if(window.innerWidth<=768){
-        sidebar.classList.toggle('show');
-        if(overlay) overlay.classList.toggle('show');
-      }else{
-        sidebar.classList.toggle('collapsed');
-        if (sidebar.classList.contains('collapsed')) {
-          main.classList.add('expanded');
-        } else {
-          main.classList.remove('expanded');
-        }
-      }
-    }
+   (function patchXHR(){
+     const origOpen = XMLHttpRequest.prototype.open;
+     const origSend = XMLHttpRequest.prototype.send;
+     XMLHttpRequest.prototype.open = function(method, url){
+       this._isSameOrigin = !/^https?:\/\//i.test(url) || url.startsWith(window.location.origin);
+       this._method = method || 'GET';
+       return origOpen.apply(this, arguments);
+     };
+     XMLHttpRequest.prototype.send = function(body){
+       try{
+         const safe = /^(GET|HEAD|OPTIONS|TRACE)$/i.test(this._method || 'GET');
+         if (this._isSameOrigin && !safe) {
+           const token = getCookie(CSRF_COOKIE);
+           if (token) this.setRequestHeader('X-CSRFToken', token);
+         }
+       }catch(_e){}
+       return origSend.apply(this, arguments);
+     };
+   })();
 
-    function toggleSubmenu(btn){
-      const id = btn.getAttribute('aria-controls');
-      const submenu = id && document.getElementById(id);
-      const chev = btn.querySelector('.chevron');
-      if(!submenu) return;
-      const isOpen = submenu.style.display === 'block';
-      submenu.style.display = isOpen ? 'none' : 'block';
-      if(chev) chev.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
-      btn.setAttribute('aria-expanded', String(!isOpen));
-    }
+   // --- Sidebar & submenu ---
+   function toggleSidebar(){
+     const sidebar=document.getElementById('sidebar'),
+           overlay=document.querySelector('[data-sidebar-overlay]'),
+           main=document.getElementById('mainContent');
+     if(!sidebar || !main) return;
+     if(window.innerWidth<=768){
+       sidebar.classList.toggle('show');
+       if(overlay) overlay.classList.toggle('show');
+     }else{
+       sidebar.classList.toggle('collapsed');
+       if (sidebar.classList.contains('collapsed')) {
+         main.classList.add('expanded');
+       } else {
+         main.classList.remove('expanded');
+       }
+     }
+   }
 
-    document.addEventListener('DOMContentLoaded', () => {
-      document.querySelectorAll('[data-sidebar-toggle]').forEach(el=>{
-        el.addEventListener('click', toggleSidebar);
-      });
-      document.querySelectorAll('[data-sidebar-overlay]').forEach(el=>{
-        el.addEventListener('click', toggleSidebar);
-      });
+   function toggleSubmenu(btn){
+     const id = btn.getAttribute('aria-controls');
+     const submenu = id && document.getElementById(id);
+     const chev = btn.querySelector('.chevron');
+     if(!submenu) return;
+     const isOpen = submenu.style.display === 'block';
+     submenu.style.display = isOpen ? 'none' : 'block';
+     if(chev) chev.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
+     btn.setAttribute('aria-expanded', String(!isOpen));
+   }
 
-      document.querySelectorAll('[data-submenu-toggle]').forEach(btn=>{
-        btn.addEventListener('click', () => toggleSubmenu(btn));
-      });
+   document.addEventListener('DOMContentLoaded', () => {
+     document.querySelectorAll('[data-sidebar-toggle]').forEach(el=>{
+       el.addEventListener('click', toggleSidebar);
+     });
+     document.querySelectorAll('[data-sidebar-overlay]').forEach(el=>{
+       el.addEventListener('click', toggleSidebar);
+     });
 
-      // Ensure correct classes on resize
-      window.addEventListener('resize',()=>{
-        const sidebar=document.getElementById('sidebar'),
-              overlay=document.querySelector('[data-sidebar-overlay]'),
-              main=document.getElementById('mainContent');
-        if(!sidebar || !main) return;
-        if(window.innerWidth>768){
-          sidebar.classList.remove('show');
-          if(overlay) overlay.classList.remove('show');
-          if (sidebar.classList.contains('collapsed')) {
-            main.classList.add('expanded');
-          } else {
-            main.classList.remove('expanded');
-          }
-        }else{
-          sidebar.classList.remove('collapsed');
-          main.classList.remove('expanded');
-        }
-      });
+     document.querySelectorAll('[data-submenu-toggle]').forEach(btn=>{
+       btn.addEventListener('click', () => toggleSubmenu(btn));
+     });
 
-      // Auto-open submenu for active nav link (fallback path-based)
-      const path = window.location.pathname.replace(/\/+$/,'');
-      document.querySelectorAll('.nav-item[href]').forEach(item=>{
-        const href = item.getAttribute('href').replace(/\/+$/,'');
-        if(href && (href===path || (path.startsWith(href) && href !== ''))){
-          item.classList.add('active');
-          item.setAttribute('aria-current','page');
-          const submenu=item.closest('.submenu');
-          if(submenu){
-            submenu.style.display='block';
-            const parentBtn=submenu.previousElementSibling;
-            if(parentBtn){
-              const chev=parentBtn.querySelector('.chevron');
-              if(chev) chev.style.transform='rotate(180deg)';
-              parentBtn.setAttribute('aria-expanded','true');
-            }
-          }
-        }
-      });
+     // Ensure correct classes on resize
+     window.addEventListener('resize',()=>{
+       const sidebar=document.getElementById('sidebar'),
+             overlay=document.querySelector('[data-sidebar-overlay]'),
+             main=document.getElementById('mainContent');
+       if(!sidebar || !main) return;
+       if(window.innerWidth>768){
+         sidebar.classList.remove('show');
+         if(overlay) overlay.classList.remove('show');
+         if (sidebar.classList.contains('collapsed')) {
+           main.classList.add('expanded');
+         } else {
+           main.classList.remove('expanded');
+         }
+       }else{
+         sidebar.classList.remove('collapsed');
+         main.classList.remove('expanded');
+       }
+     });
 
-      // Optional: filter header +/- toggles
-      document.querySelectorAll('[data-filter-toggle]').forEach(btn=>{
-        btn.addEventListener('click', ()=>{
-          const icon = btn.querySelector('[data-filter-toggle-icon]');
-          if(!icon) return;
-          icon.classList.toggle('fa-minus');
-          icon.classList.toggle('fa-plus');
-        });
-      });
-    });
-  </script>
+     // Auto-open submenu for active nav link (fallback path-based)
+     const path = window.location.pathname.replace(/\/+$/,'');
+     document.querySelectorAll('.nav-item[href]').forEach(item=>{
+       const href = item.getAttribute('href').replace(/\/+$/,'');
+       if(href && (href===path || (path.startsWith(href) && href !== ''))){
+         item.classList.add('active');
+         item.setAttribute('aria-current','page');
+         const submenu=item.closest('.submenu');
+         if(submenu){
+           submenu.style.display='block';
+           const parentBtn=submenu.previousElementSibling;
+           if(parentBtn){
+             const chev=parentBtn.querySelector('.chevron');
+             if(chev) chev.style.transform='rotate(180deg)';
+             parentBtn.setAttribute('aria-expanded','true');
+           }
+         }
+       }
+     });
 
-  {% block extra_js %}{% endblock %}
+     // Optional: filter header +/- toggles
+     document.querySelectorAll('[data-filter-toggle]').forEach(btn=>{
+       btn.addEventListener('click', ()=>{
+         const icon = btn.querySelector('[data-filter-toggle-icon]');
+         if(!icon) return;
+         icon.classList.toggle('fa-minus');
+         icon.classList.toggle('fa-plus');
+       });
+     });
+   });
+ </script>
+
+ {% block extra_js %}{% endblock %}
 </body>
 </html>

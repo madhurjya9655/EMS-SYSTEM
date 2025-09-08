@@ -1,11 +1,12 @@
+# apps/users/mixins.py
 from __future__ import annotations
 
-from typing import Iterable, Optional, Sequence, Set
+from typing import Optional, Sequence, Set
 
-from django.core.exceptions import PermissionDenied
 from django.contrib.auth.views import redirect_to_login
+from django.http import HttpResponseForbidden
 
-from .permissions import _extract_perms
+from .permissions import _user_permission_codes
 
 
 class PermissionRequiredMixin:
@@ -38,17 +39,21 @@ class PermissionRequiredMixin:
         if getattr(user, "is_superuser", False):
             return True
 
-        user_perms: Set[str] = _extract_perms(user)
+        user_perms: Set[str] = _user_permission_codes(user)
+
+        # Universal permissions
+        if {"*", "all"} & user_perms:
+            return True
 
         if self.permission_code:
-            return self.permission_code in user_perms
+            return self.permission_code.lower() in user_perms
 
         if self.permission_any:
-            wanted_any = {c.strip() for c in self.permission_any if c and str(c).strip()}
+            wanted_any = {c.strip().lower() for c in self.permission_any if c and str(c).strip()}
             return bool(user_perms & wanted_any)
 
         if self.permission_all:
-            wanted_all = {c.strip() for c in self.permission_all if c and str(c).strip()}
+            wanted_all = {c.strip().lower() for c in self.permission_all if c and str(c).strip()}
             return wanted_all.issubset(user_perms)
 
         # No requirement specified: allow
@@ -60,6 +65,6 @@ class PermissionRequiredMixin:
             return redirect_to_login(request.get_full_path())
 
         if not self._has_required_perms(user):
-            raise PermissionDenied
+            return HttpResponseForbidden("403 Forbidden: You don't have permission to access this page.")
 
         return super().dispatch(request, *args, **kwargs)

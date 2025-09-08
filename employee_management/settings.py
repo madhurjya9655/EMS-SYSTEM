@@ -115,6 +115,9 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # Add these new middleware entries after authentication middleware
+    "apps.users.middleware.PermissionEnforcementMiddleware",  # URL permission enforcement
+    "apps.users.middleware.PermissionDebugMiddleware",        # Permission debugging
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -132,6 +135,8 @@ _template_options = {
         "django.template.context_processors.request",
         "django.contrib.auth.context_processors.auth",
         "django.contrib.messages.context_processors.messages",
+        # Add this new context processor
+        "apps.users.permissions.permissions_context",
     ],
     "builtins": [
         "dashboard.templatetags.dashboard_extras",
@@ -336,7 +341,7 @@ LOGGING = {
     },
     "handlers": {
         "console": {
-            "level": "WARNING",
+            "level": "DEBUG" if DEBUG else "WARNING",  # Changed to DEBUG in development
             "class": "logging.StreamHandler",
             "formatter": "simple",
         },
@@ -345,6 +350,13 @@ LOGGING = {
             "class": "logging.FileHandler",
             "filename": str(LOGS_DIR / "django.log"),
             "formatter": "verbose",
+            "encoding": "utf-8",
+        },
+        "permissions_file": {  # New handler for permissions
+            "level": "DEBUG" if DEBUG else "INFO",
+            "class": "logging.FileHandler",
+            "filename": str(LOGS_DIR / "permissions.log"),
+            "formatter": "detailed",
             "encoding": "utf-8",
         },
         "tasks_file": {
@@ -366,6 +378,17 @@ LOGGING = {
     "loggers": {
         "django": {"handlers": ["file"], "level": "INFO", "propagate": False},
         "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
+        # Add these new loggers
+        "apps.users.permissions": {
+            "handlers": ["permissions_file", "console"],
+            "level": "DEBUG" if DEBUG else "INFO",
+            "propagate": False,
+        },
+        "apps.users.middleware": {
+            "handlers": ["permissions_file", "console"],
+            "level": "DEBUG" if DEBUG else "INFO",
+            "propagate": False,
+        },
         "apps.tasks": {"handlers": ["tasks_file", "console"], "level": "DEBUG" if DEBUG else "INFO", "propagate": False},
         "apps.tasks.views": {"handlers": ["bulk_upload_file", "console"], "level": "INFO", "propagate": False},
         "apps.tasks.signals": {"handlers": ["tasks_file"], "level": "INFO", "propagate": False},
@@ -586,3 +609,9 @@ HELP_TICKET_STATUSES = [("Open", "Open"), ("In Progress", "In Progress"), ("Clos
 # LEAVE ROUTING FILE (used by the Routing Map admin page)
 # -----------------------------------------------------------------------------
 LEAVE_ROUTING_FILE = str(BASE_DIR / "apps" / "users" / "data" / "leave_routing.json")
+
+# -----------------------------------------------------------------------------
+# PERMISSION SYSTEM SETTINGS
+# -----------------------------------------------------------------------------
+PERMISSION_DENIED_REDIRECT = "dashboard:home"  # Where to redirect on permission failure
+PERMISSION_DEBUG_ENABLED = DEBUG  # Enable permission debugging in development

@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Permission Debug{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1>User Permission Debug</h1>
+    
+    <div class="card mb-4">
+        <div class="card-header bg-primary text-white">
+            <h5 class="mb-0">User Information</h5>
+        </div>
+        <div class="card-body">
+            <p><strong>Username:</strong> {{ user.username }}</p>
+            <p><strong>Name:</strong> {{ user.get_full_name|default:"N/A" }}</p>
+            <p><strong>Is Superuser:</strong> {{ is_superuser }}</p>
+            <p><strong>Is Staff:</strong> {{ is_staff }}</p>
+        </div>
+    </div>
+    
+    <div class="card mb-4">
+        <div class="card-header bg-success text-white">
+            <h5 class="mb-0">User Permissions ({{ permissions|length }})</h5>
+        </div>
+        <div class="card-body">
+            {% if permissions %}
+                <ul class="list-group">
+                    {% for perm in permissions %}
+                        <li class="list-group-item">{{ perm }}</li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <p class="text-danger">No permissions found for this user.</p>
+            {% endif %}
+        </div>
+    </div>
+    
+    <div class="card mb-4">
+        <div class="card-header bg-info text-white">
+            <h5 class="mb-0">Accessible URLs ({{ permission_urls|length }})</h5>
+        </div>
+        <div class="card-body">
+            {% if permission_urls %}
+                <div class="table-responsive">
+                    <table class="table table-bordered table-hover">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Permission Code</th>
+                                <th>URL Name</th>
+                                <th>URL</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for code, data in permission_urls.items %}
+                                <tr>
+                                    <td>{{ code }}</td>
+                                    <td>{{ data.url_name }}</td>
+                                    <td>
+                                        {% if data.url %}
+                                            {{ data.url }}
+                                        {% else %}
+                                            <span class="text-danger">{{ data.error|default:"N/A" }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if data.url %}
+                                            <a href="{{ data.url }}" class="btn btn-sm btn-primary">Visit</a>
+                                        {% else %}
+                                            <button class="btn btn-sm btn-secondary" disabled>Not Available</button>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <p class="text-danger">No accessible URLs found for this user.</p>
+            {% endif %}
+        </div>
+    </div>
+    
+    <div class="card mb-4">
+        <div class="card-header bg-warning text-dark">
+            <h5 class="mb-0">URL to Permission Mapping</h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-bordered table-hover">
+                    <thead class="table-light">
+                        <tr>
+                            <th>URL Name</th>
+                            <th>Required Permissions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for url_name, perms in url_to_perms.items %}
+                            <tr>
+                                <td>{{ url_name }}</td>
+                                <td>
+                                    {% for perm in perms %}
+                                        <span class="badge {% if perm in permissions %}bg-success{% else %}bg-danger{% endif %} me-1">
+                                            {{ perm }}
+                                        </span>
+                                    {% endfor %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card mb-4">
+        <div class="card-header bg-danger text-white">
+            <h5 class="mb-0">Missing Permissions</h5>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-bordered table-hover">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Permission Code</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for perm in all_permissions %}
+                            {% if perm in permissions %}
+                                <tr class="table-success">
+                                    <td>{{ perm }}</td>
+                                    <td>
+                                        <span class="badge bg-success">Granted</span>
+                                    </td>
+                                </tr>
+                            {% else %}
+                                <tr class="table-danger">
+                                    <td>{{ perm }}</td>
+                                    <td>
+                                        <span class="badge bg-danger">Missing</span>
+                                    </td>
+                                </tr>
+                            {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

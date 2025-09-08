@@ -1,5 +1,9 @@
+# apps/users/urls.py
 from django.urls import path
-from .views import list_users, add_user, edit_user, delete_user, toggle_active
+from .views import (
+    list_users, add_user, edit_user, delete_user, 
+    toggle_active, debug_permissions
+)
 
 app_name = 'users'
 
@@ -9,4 +13,5 @@ urlpatterns = [
     path('<int:pk>/edit/',  edit_user,       name='edit_user'),
     path('<int:pk>/delete/', delete_user,     name='delete_user'),
     path('<int:pk>/toggle-active/', toggle_active, name='toggle_active'),
+    path('debug-permissions/', debug_permissions, name='debug_permissions'),
 ]

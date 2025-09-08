@@ -15,7 +15,7 @@ from django.views.decorators.http import require_POST
 from .forms import CustomAuthForm, ProfileForm, UserForm
 from .models import Profile
 from .permission_urls import PERMISSION_URLS
-from .permissions import PERMISSIONS_STRUCTURE, _extract_perms
+from .permissions import PERMISSIONS_STRUCTURE, _user_permission_codes, permissions_context
 
 User = get_user_model()
 
@@ -49,11 +49,11 @@ class CustomLoginView(LoginView):
             return reverse_lazy("dashboard:home")
 
         # Permissions come from Profile.permissions via helper
-        user_codes = _extract_perms(user)
+        user_codes = _user_permission_codes(user)
 
         # In PERMISSION_URLS order, route to the first available URL
         for code, url_name in PERMISSION_URLS.items():
-            if code in user_codes:
+            if code.lower() in user_codes:
                 try:
                     return reverse(url_name)
                 except NoReverseMatch:
@@ -207,3 +207,48 @@ def toggle_active(request: HttpRequest, pk: int) -> HttpResponse:
     u.save(update_fields=["is_active"])
     messages.success(request, f"User {'activated' if u.is_active else 'deactivated'} successfully.")
     return redirect("users:list_users")
+
+
+@login_required
+def debug_permissions(request: HttpRequest) -> HttpResponse:
+    """
+    Debug view to show permissions for the current user.
+    Add to urls.py as: path('debug-permissions/', debug_permissions, name='debug_permissions')
+    """
+    user = request.user
+    user_perms = _user_permission_codes(user)
+    
+    # Map permissions to available URLs
+    permission_urls = {}
+    for code, url_name in PERMISSION_URLS.items():
+        if code.lower() in user_perms or getattr(user, "is_superuser", False):
+            try:
+                url = reverse(url_name)
+                permission_urls[code] = {
+                    'url_name': url_name,
+                    'url': url,
+                }
+            except NoReverseMatch:
+                permission_urls[code] = {
+                    'url_name': url_name,
+                    'url': None,
+                    'error': 'URL not found'
+                }
+    
+    # Get the reverse URL mapping for debugging
+    url_to_perms = {}
+    for code, url in PERMISSION_URLS.items():
+        if url not in url_to_perms:
+            url_to_perms[url] = []
+        url_to_perms[url].append(code)
+    
+    return render(request, 'users/debug_permissions.html', {
+        'user': user,
+        'is_superuser': user.is_superuser,
+        'is_staff': user.is_staff,
+        'permissions': sorted(user_perms),
+        'permission_urls': permission_urls,
+        'url_to_perms': url_to_perms,
+        'all_permissions': sorted(PERMISSION_URLS.keys()),
+        'context': permissions_context(request),
+    })
