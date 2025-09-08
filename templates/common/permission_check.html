@@ -1,0 +1,7 @@
+{% if has_permission %}
+  <!-- permitted: render nothing (used as a guard in templates) -->
+{% else %}
+  <div class="alert alert-warning" role="alert">
+    {{ fallback_message }}
+  </div>
+{% endif %}
