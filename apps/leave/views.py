@@ -856,6 +856,7 @@ def approver_mapping_edit(request: HttpRequest, user_id: int) -> HttpResponse:
 
     ctx = {
         "employee": employee,
+        "employee_obj": employee,  # alias for templates expecting `employee_obj`
         "mapping": mapping,
         "reporting_label": _user_label(getattr(mapping, "reporting_person", None)) if mapping else "—",
         "cc_label": _user_label(getattr(mapping, "cc_person", None)) if mapping else "—",
@@ -967,6 +968,7 @@ def approver_mapping_edit_field(request: HttpRequest, user_id: int, field: str) 
 
     ctx = {
         "employee": employee,
+        "employee_obj": employee,  # alias for templates expecting `employee_obj`
         "mapping": mapping,
         "options": options,
         "selected_id": selected_id,
