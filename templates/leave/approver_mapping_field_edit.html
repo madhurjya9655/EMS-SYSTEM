@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Edit {{ field|capfirst }} — Approver Mapping{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h1 class="mb-1">
+      {% if field == 'reporting' %}Edit Reporting person{% else %}Edit CC person{% endif %}
+    </h1>
+    <div class="text-muted" style="font-size:.95rem;">
+      {{ employee.get_full_name|default:employee.username }}
+      {% if employee.email %}
+        <span class="badge text-bg-light border ms-2">{{ employee.email }}</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary"
+       href="{% url 'leave:approver_mapping_edit' employee.id %}{% if next_url %}?next={{ next_url|urlencode }}{% endif %}">
+      Back to Summary
+    </a>
+    <a class="btn btn-outline-secondary" href="{{ next_url|default:'/' }}">Back</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="post">
+      {% csrf_token %}
+
+      {% if field == 'reporting' %}
+        <p class="text-muted">Choose the primary approver (required).</p>
+      {% else %}
+        <p class="text-muted">Choose an optional CC person (you may leave this blank).</p>
+      {% endif %}
+
+      <div class="mb-3">
+        <label class="form-label">
+          {% if field == 'reporting' %}Reporting person{% else %}CC person{% endif %}
+          {% if field == 'reporting' %}<span class="text-danger">*</span>{% endif %}
+        </label>
+
+        <select class="form-select" name="chosen_id" {% if field == 'reporting' %}required{% endif %}>
+          {% if field == 'cc' %}
+            <option value="" {% if not selected_id %}selected{% endif %}>— None —</option>
+          {% endif %}
+          {% for op in options %}
+            <option value="{{ op.pk }}" {% if selected_id == op.pk %}selected{% endif %}>
+              {{ op.get_full_name|default:op.username }}{% if op.email %} ({{ op.email }}){% endif %}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="d-flex flex-wrap gap-2">
+        {% if request.user.is_superuser %}
+          <button type="submit" class="btn btn-primary">Save</button>
+        {% else %}
+          <button type="button" class="btn btn-primary" disabled>Save</button>
+        {% endif %}
+        <a class="btn btn-outline-secondary" href="{{ next_url|default:'/' }}">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

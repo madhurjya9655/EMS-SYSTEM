@@ -66,10 +66,9 @@ class UserForm(forms.ModelForm):
         # Make password optional on edit (instance exists)
         if self.instance and self.instance.pk:
             self.fields['password'].required = False
-            # Help text to clarify behavior
             self.fields['password'].help_text = "Leave empty to keep the current password."
 
-        # Basic Bootstrap classes (if you want consistent styling without widget_tweaks)
+        # Basic Bootstrap classes
         for name, field in self.fields.items():
             if not isinstance(field.widget, (forms.CheckboxInput, forms.RadioSelect, forms.FileInput)):
                 field.widget.attrs.setdefault('class', 'form-control')
@@ -160,7 +159,32 @@ class ProfileForm(forms.ModelForm):
             raise forms.ValidationError("This phone number is already registered.")
         if not phone:
             raise forms.ValidationError("Phone is required.")
-        # Basic length check (you can expand this to full validation if needed)
         if not phone.isdigit() or len(phone) != 10:
             raise forms.ValidationError("Enter a valid 10-digit phone number.")
         return phone
+
+    # ---- Admin role exact behavior on save (when form performs the save) ----
+    def save(self, commit: bool = True) -> Profile:
+        """
+        When commit=True and role == 'Admin', ensure linked User is staff.
+        (We will also add a post_save signal to cover saves done outside this form.)
+        """
+        instance: Profile = super().save(commit=False)
+        # Ensure permissions field is stored as a list
+        instance.permissions = self.cleaned_data.get('permissions') or []
+
+        if commit:
+            instance.save()
+            self._maybe_mark_user_staff(instance)
+
+        return instance
+
+    def _maybe_mark_user_staff(self, instance: Profile) -> None:
+        try:
+            # EXACT: If role is Admin, make sure user.is_staff is True.
+            if instance.role == "Admin" and instance.user and not instance.user.is_staff:
+                instance.user.is_staff = True
+                instance.user.save(update_fields=["is_staff"])
+        except Exception:
+            # Never break form save due to a secondary sync issue.
+            pass

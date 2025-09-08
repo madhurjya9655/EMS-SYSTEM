@@ -1,0 +1,21 @@
+Hello {{ employee_name }},
+
+Your leave request has been {{ status }}{% if approver_name %} by {{ approver_name }}{% endif %}.
+
+Decision Details
+----------------
+Status: {{ status }}
+Decided At (IST): {{ decided_at_ist }}{% if decision_comment %}
+Manager’s note: {{ decision_comment }}{% endif %}
+
+Leave Details
+-------------
+Type: {{ leave_type }}
+Duration: {% if is_half_day %}Half-day (0.5 day){% else %}{{ duration_days }} days{% endif %}
+From (IST): {{ start_at_ist }}
+To (IST):   {{ end_at_ist }}{% if reason %}
+Reason: {{ reason }}{% endif %}
+
+{% if site_url %}Open EMS: {{ site_url }}{% endif %}
+
+— EMS

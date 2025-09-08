@@ -1,407 +1,327 @@
+# apps/users/management/commands/import_employee_sheet.py
 from __future__ import annotations
 
 import csv
-import re
+import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from django.apps import apps
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
-from django.utils.text import slugify
 
 User = get_user_model()
 
+# Columns expected in the APP Sheet CSV
+REQUIRED_COLUMNS = [
+    "E-mail",
+    "Employee Name",
+    "Mobile Number",
+    "Employee ID",
+    "To Reporting officer",
+    "CC Email",
+    "Employee Designation",
+]
 
-# --------------------------------------------------------------------------------------
-# Your sheet’s exact headers (baked in from: APP Sheet - Employee data.csv)
-# Detected columns:
-#   E-mail, Employee Name, Mobile Number, Employee ID, MD Name,
-#   To Reporting officer, MD Whatsapp Number, CC Email, Employee Designation
-#
-# Mapping below is used first; we still auto-detect as a fallback if headers change.
-# --------------------------------------------------------------------------------------
-EXACT_HEADER_MAPPING: Dict[str, Optional[str]] = {
-    "name": "Employee Name",
-    "email": "E-mail",
-    "designation": "Employee Designation",
-    "department": None,  # not present in the current sheet
-    # Manager resolution:
-    #   - Primary: "To Reporting officer" (appears to contain manager email)
-    #   - Fallback name: "MD Name"
-    #   - Secondary email fallback: first email from "CC Email" if needed
-    "manager_email": "To Reporting officer",
-    "manager_name": "MD Name",
-    "cc_email": "CC Email",  # optional; may contain multiple comma-separated emails
-}
-
-# Header candidates (used only if EXACT_HEADER_MAPPING doesn’t match the CSV)
-CANDIDATES = {
-    "name": {"name", "employee name", "full name", "emp name", "employee"},
-    "email": {"email", "e-mail", "official email", "work email", "office email", "employee email"},
-    "designation": {"designation", "title", "role", "job title", "position", "employee designation"},
-    "department": {"department", "dept", "team"},
-    "manager_email": {
-        "manager email",
-        "manager_email",
-        "manager e-mail",
-        "reporting manager email",
-        "reports to email",
-        "supervisor email",
-        "to reporting officer",
-        "to reporting officer email",
-    },
-    "manager_name": {
-        "manager",
-        "manager name",
-        "reporting manager",
-        "reports to",
-        "supervisor",
-        "line manager",
-        "md name",
-    },
-    "cc_email": {"cc", "cc email", "cc emails"},
-}
+# Where we persist the admin-only routing data (manager/CC) per employee
+DEFAULT_ROUTING_FILE = Path(settings.BASE_DIR) / "apps" / "users" / "data" / "leave_routing.json"
 
 
-def _norm(s: str | None) -> str:
-    return (s or "").strip()
+def _routing_file_path() -> Path:
+    path = getattr(settings, "LEAVE_ROUTING_FILE", None)
+    return Path(path) if path else DEFAULT_ROUTING_FILE
 
 
-def _norm_email(s: str | None) -> str:
-    return _norm(s).lower()
+def _safe_lower(s: Optional[str]) -> str:
+    return (s or "").strip().lower()
 
 
-def _split_name(full_name: str) -> Tuple[str, str]:
-    """Best-effort split into first/last names."""
-    s = " ".join(_norm(full_name).split())
-    if not s:
-        return "", ""
-    parts = s.split(" ")
-    if len(parts) == 1:
-        return parts[0], ""
-    return " ".join(parts[:-1]), parts[-1]
-
-
-def _extract_emails(s: str | None) -> List[str]:
-    """
-    Extract one or more email addresses from a free-text field.
-    Also fixes a common typo we observed: 'bluleoceansteels.com' -> 'blueoceansteels.com'
-    """
-    raw = (_norm(s) or "")
-    if not raw:
+def _split_emails(value: str) -> List[str]:
+    if not value:
         return []
-    # Normalize common domain typo
-    raw = raw.replace("bluleoceansteels.com", "blueoceansteels.com")
-    # Split on commas/semicolons/whitespace
-    parts = re.split(r"[,\s;]+", raw)
-    emails: List[str] = []
+    parts = [p.strip() for p in value.replace(";", ",").split(",")]
+    out, seen = [], set()
     for p in parts:
-        p = p.strip().lower()
-        if not p:
-            continue
-        # crude email check
-        if re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", p):
-            emails.append(p)
-    # de-duplicate while preserving order
-    seen = set()
-    uniq: List[str] = []
-    for e in emails:
-        if e not in seen:
-            uniq.append(e)
-            seen.add(e)
-    return uniq
+        low = _safe_lower(p)
+        if low and low not in seen:
+            seen.add(low)
+            out.append(low)
+    return out
 
 
-def _first_email(*candidates: str | None) -> str:
-    for cand in candidates:
-        emails = _extract_emails(cand)
-        if emails:
-            return emails[0]
-    return ""
+def _load_existing_mapping(path: Path) -> Dict[str, Dict[str, List[str]]]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f) or {}
+        # normalize keys/values
+        out: Dict[str, Dict[str, List[str]]] = {}
+        for emp_email, row in raw.items():
+            mgr = _safe_lower((row or {}).get("manager_email"))
+            cc = row.get("cc_emails") or []
+            if isinstance(cc, str):
+                cc = _split_emails(cc)
+            else:
+                cc = [_safe_lower(x) for x in cc if _safe_lower(x)]
+            out[_safe_lower(emp_email)] = {"manager_email": mgr, "cc_emails": cc}
+        return out
+    except Exception:
+        return {}
+
+
+def _save_mapping(path: Path, mapping: Dict[str, Dict[str, List[str]]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(mapping, f, indent=2, ensure_ascii=False)
 
 
 @dataclass
 class Row:
-    name: str
-    email: str
-    designation: str
-    department: str
+    employee_email: str
+    employee_name: str
+    employee_phone: str
+    employee_id: str
     manager_email: str
-    manager_name: str
+    cc_emails: List[str]
+    designation: str
+
+
+def _read_csv(csv_path: Path) -> List[Row]:
+    if not csv_path.exists():
+        raise CommandError(f"CSV not found: {csv_path}")
+
+    # Handle common BOM
+    try_encodings = ("utf-8-sig", "utf-8", "cp1252", "latin-1")
+    last_err: Optional[Exception] = None
+    for enc in try_encodings:
+        try:
+            with csv_path.open("r", encoding=enc, newline="") as f:
+                reader = csv.DictReader(f)
+                headers = set(reader.fieldnames or [])
+                missing = [c for c in REQUIRED_COLUMNS if c not in headers]
+                if missing:
+                    raise CommandError(
+                        f"CSV missing required columns: {', '.join(missing)}. "
+                        f"Found columns: {', '.join(headers)}"
+                    )
+                rows: List[Row] = []
+                for r in reader:
+                    rows.append(
+                        Row(
+                            employee_email=_safe_lower(r.get("E-mail", "")),
+                            employee_name=(r.get("Employee Name", "") or "").strip(),
+                            employee_phone=(r.get("Mobile Number", "") or "").strip(),
+                            employee_id=(r.get("Employee ID", "") or "").strip(),
+                            manager_email=_safe_lower(r.get("To Reporting officer", "")),
+                            cc_emails=_split_emails(r.get("CC Email", "")),
+                            designation=(r.get("Employee Designation", "") or "").strip(),
+                        )
+                    )
+                return rows
+        except Exception as e:
+            last_err = e
+            continue
+    raise CommandError(f"Failed to read CSV {csv_path}: {last_err}")
+
+
+def _ensure_profile_model():
+    try:
+        return apps.get_model("users", "Profile")
+    except Exception:
+        raise CommandError("users.Profile model not found")
+
+
+def _normalize_phone(value: str) -> Optional[str]:
+    # Use the helper from Profile if available, else a simple fallback
+    try:
+        from apps.users.models import normalize_phone  # type: ignore
+        return normalize_phone(value)
+    except Exception:
+        digits = "".join([c for c in (value or "") if c.isdigit()])
+        digits = digits.lstrip("0")
+        if not digits:
+            return None
+        return digits[-13:]
+
+
+def _username_from_email(email: str) -> str:
+    base = (email.split("@")[0] if "@" in email else email).replace(".", "_").replace("-", "_")
+    candidate = base or "user"
+    exists = set(User.objects.filter(username__startswith=candidate).values_list("username", flat=True))
+    if candidate not in exists:
+        return candidate
+    i = 1
+    while f"{candidate}{i}" in exists:
+        i += 1
+    return f"{candidate}{i}"
 
 
 class Command(BaseCommand):
     help = (
-        "Import/Sync employees from 'APP Sheet - Employee data.csv'. "
-        "Creates/updates Users and Profiles; resolves manager by email/name; idempotent."
+        "Import the APP Sheet CSV and pre-code manager/CC routing for leave emails into a single admin-owned file.\n"
+        "Also updates/creates Profile entries for phone & employee_id, and (optionally) links team_leader."
     )
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--path",
-            dest="path",
+            "--csv",
+            dest="csv_path",
             default="APP Sheet - Employee data.csv",
-            help="CSV path (default: 'APP Sheet - Employee data.csv' at project root).",
+            help="Path to the APP Sheet CSV file.",
         )
         parser.add_argument(
-            "--activate-new",
+            "--routing-file",
+            dest="routing_file",
+            default=str(_routing_file_path()),
+            help="Path to write admin-only leave routing JSON.",
+        )
+        parser.add_argument(
+            "--create-missing-users",
             action="store_true",
-            help="If given, new users will be active. Default is INACTIVE for newly created users.",
+            default=False,
+            help="Create User rows for missing employees/managers (inactive passwords).",
+        )
+        parser.add_argument(
+            "--link-manager",
+            action="store_true",
+            default=False,
+            help="Set Profile.team_leader for employees to the resolved manager user (if found/created).",
+        )
+        parser.add_argument(
+            "--dry-run",
+            action="store_true",
+            default=False,
+            help="Parse and show summary without writing JSON or touching DB.",
         )
 
-    # ----------------------------- Profile helpers ----------------------------- #
-
-    def _get_profile_model(self):
-        """Try to find a profile model under apps.users"""
-        for name in ("Profile", "UserProfile", "EmployeeProfile"):
-            try:
-                M = apps.get_model("users", name)
-                # Ensure it has O2O to User
-                for f in M._meta.get_fields():
-                    if getattr(getattr(f, "remote_field", None), "model", None) is User and f.one_to_one:
-                        return M
-            except Exception:
-                continue
-        return None
-
-    def _get_profile_for(self, user):
-        """get_or_create a profile instance if model exists; else return None."""
-        Profile = self._get_profile_model()
-        if not Profile:
-            return None
-        # Find o2o field to User
-        user_field_name = None
-        for f in Profile._meta.get_fields():
-            if getattr(getattr(f, "remote_field", None), "model", None) is User and f.one_to_one:
-                user_field_name = f.name
-                break
-        if not user_field_name:
-            return None
-
-        obj, _ = Profile.objects.get_or_create(**{user_field_name: user})
-        return obj
-
-    def _set_if_has(self, obj, field: str, value):
-        if hasattr(obj, field):
-            setattr(obj, field, value)
-            return True
-        return False
-
-    def _find_manager_user(self, *, email: str, name: str) -> Optional[User]:
-        email = _norm_email(email)
-        name = _norm(name)
-        if email:
-            try:
-                return User.objects.filter(email__iexact=email).first()
-            except Exception:
-                pass
-        if name:
-            fn, ln = _split_name(name)
-            qs = User.objects.all()
-            if fn and ln:
-                u = qs.filter(first_name__iexact=fn, last_name__iexact=ln).first()
-                if u:
-                    return u
-            # Fallback: username or full_name contains
-            name_slug = slugify(name).replace("-", " ")
-            for u in qs.only("id", "username", "first_name", "last_name"):
-                try:
-                    full = f"{u.first_name} {u.last_name}".strip().lower()
-                    if full == name.lower() or slugify(full).replace("-", " ") == name_slug:
-                        return u
-                    if (u.username or "").strip().lower() == name.lower():
-                        return u
-                except Exception:
-                    continue
-        return None
-
-    # ----------------------------- CSV mapping ----------------------------- #
-
-    def _map_headers(self, headers: list[str]) -> Dict[str, str]:
-        """
-        Return a mapping of our logical keys -> actual header in CSV.
-
-        Strategy:
-          1) If EXACT_HEADER_MAPPING fits the CSV, use it (ignoring keys with None).
-          2) Else, try auto-detection using CANDIDATES.
-        """
-        existing = {h.strip().lower(): h for h in headers}
-
-        # Try exact first
-        exact: Dict[str, str] = {}
-        fits_exact = True
-        for key, hdr in EXACT_HEADER_MAPPING.items():
-            if hdr is None:
-                continue
-            if hdr in headers:
-                exact[key] = hdr
-            else:
-                fits_exact = False
-                break
-        if fits_exact:
-            return exact
-
-        # Fallback: candidates
-        mapping: Dict[str, str] = {}
-        for key, options in CANDIDATES.items():
-            for opt in options:
-                if opt in existing:
-                    mapping[key] = existing[opt]
-                    break
-
-        # Minimal required
-        missing = [k for k in ("name", "email") if k not in mapping]
-        if missing:
-            raise CommandError(
-                f"CSV must contain columns for {', '.join(missing)}. "
-                f"Detected headers: {headers}"
-            )
-        return mapping
-
-    def _row_from(self, raw: dict, mapping: Dict[str, str]) -> Row:
-        g = lambda k: raw.get(mapping.get(k, ""), "")
-        # Choose manager email: primary field; else first email from cc; else ""
-        mgr_email = _first_email(g("manager_email"), raw.get(EXACT_HEADER_MAPPING.get("cc_email") or "", ""))
-        # Manager name fallback (may be top boss / MD)
-        mgr_name = _norm(g("manager_name"))
-        return Row(
-            name=_norm(g("name")),
-            email=_norm_email(g("email")),
-            designation=_norm(g("designation")),
-            department=_norm(g("department")) if mapping.get("department") else "",
-            manager_email=_norm_email(mgr_email),
-            manager_name=mgr_name,
-        )
-
-    # ----------------------------- Main logic ----------------------------- #
-
-    @transaction.atomic
     def handle(self, *args, **options):
-        default_path = Path(options["path"])
-        if not default_path.is_absolute():
-            from django.conf import settings
-            csv_path = Path(settings.BASE_DIR) / options["path"]
-        else:
-            csv_path = default_path
+        csv_path = Path(options["csv_path"])
+        routing_path = Path(options["routing_file"])
+        create_users = bool(options["create_missing_users"])
+        link_manager = bool(options["link_manager"])
+        dry_run = bool(options["dry_run"])
 
-        if not csv_path.exists():
-            self.stdout.write(self.style.WARNING(f"CSV not found: {csv_path}. No-op."))
-            return
+        rows = _read_csv(csv_path)
+        Profile = _ensure_profile_model()
 
-        activate_new: bool = options.get("activate_new", False)
+        existing_map = _load_existing_mapping(routing_path)
+        new_map = dict(existing_map)  # copy
 
         created_users = 0
-        updated_users = 0
-        profiles_touched = 0
-        managers_resolved = 0
-        rows_seen = 0
+        updated_profiles = 0
+        linked_team_leaders = 0
+        routed_count = 0
 
-        with csv_path.open("r", encoding="utf-8-sig", newline="") as fh:
-            reader = csv.DictReader(fh)
-            headers = reader.fieldnames or []
-            if not headers:
-                raise CommandError("CSV has no headers.")
-
-            mapping = self._map_headers(headers)
-
-            self.stdout.write(self.style.NOTICE("Detected headers:"))
-            self.stdout.write("  " + ", ".join(headers))
-            self.stdout.write(self.style.NOTICE("Using mapping:"))
-            display_keys = ("name", "email", "designation", "department", "manager_email", "manager_name")
-            for k in display_keys:
-                self.stdout.write(f"  {k:>14} -> {mapping.get(k, '—')}")
-
-            for raw in reader:
-                rows_seen += 1
-                row = self._row_from(raw, mapping)
-                if not row.email:
-                    self.stdout.write(self.style.WARNING(f"Row {rows_seen}: skipped (missing email)."))
+        # First pass: ensure/collect manager users if requested
+        manager_cache: Dict[str, User] = {}
+        if create_users:
+            for row in rows:
+                m_email = row.manager_email
+                if not m_email:
                     continue
-
-                # ----- User create/update -----
-                try:
-                    user = User.objects.filter(email__iexact=row.email).first()
-                except Exception as e:
-                    raise CommandError(f"Failed querying for user {row.email}: {e}")
-
-                first_name, last_name = _split_name(row.name)
-                if user:
-                    changed = False
-                    if first_name and user.first_name != first_name:
-                        user.first_name = first_name
-                        changed = True
-                    if last_name and user.last_name != last_name:
-                        user.last_name = last_name
-                        changed = True
-                    if not user.username:
-                        user.username = row.email.split("@", 1)[0]
-                        changed = True
-                    if changed:
-                        user.save(update_fields=["first_name", "last_name", "username"])
-                        updated_users += 1
-                else:
-                    username_base = (row.email.split("@", 1)[0] or slugify(row.name) or "user").lower()
-                    username = username_base
-                    # Ensure unique username
-                    suffix = 1
-                    while User.objects.filter(username__iexact=username).exists():
-                        suffix += 1
-                        username = f"{username_base}{suffix}"
-
+                if m_email in manager_cache:
+                    continue
+                user = User.objects.filter(email__iexact=m_email).first()
+                if not user:
                     user = User.objects.create(
-                        username=username,
-                        email=row.email,
-                        first_name=first_name,
-                        last_name=last_name,
-                        is_active=bool(activate_new),
+                        username=_username_from_email(m_email),
+                        email=m_email,
+                        first_name="",  # unknown in CSV
+                        is_active=True,
                     )
                     created_users += 1
+                manager_cache[m_email] = user
 
-                # ----- Profile create/update (best-effort) -----
-                prof = self._get_profile_for(user)
-                if prof:
-                    touched = False
-                    touched |= self._set_if_has(prof, "designation", row.designation)
-                    touched |= self._set_if_has(prof, "department", row.department)
+        # Process each employee row
+        for row in rows:
+            emp_email = row.employee_email
+            mgr_email = row.manager_email
+            if not emp_email:
+                self.stdout.write(self.style.WARNING("Skipping row with empty employee email"))
+                continue
 
-                    # Resolve manager (prefer email; else name)
-                    manager = self._find_manager_user(email=row.manager_email, name=row.manager_name)
-                    if manager:
-                        # Find a likely field for manager (FK to User)
-                        manager_field = None
-                        for f in prof._meta.get_fields():
-                            if getattr(getattr(f, "remote_field", None), "model", None) is User:
-                                if f.name in {"manager", "reporting_manager", "reports_to", "supervisor"}:
-                                    manager_field = f.name
-                                    break
-                        if not manager_field:
-                            # fallback to first FK to User that's not the O2O to user
-                            for f in prof._meta.get_fields():
-                                if (
-                                    getattr(getattr(f, "remote_field", None), "model", None) is User
-                                    and not getattr(f, "one_to_one", False)
-                                ):
-                                    manager_field = f.name
-                                    break
-                        if manager_field:
-                            setattr(prof, manager_field, manager)
-                            touched = True
-                            managers_resolved += 1
+            # Build routing mapping entry
+            entry = new_map.get(emp_email, {"manager_email": "", "cc_emails": []})
+            if mgr_email:
+                entry["manager_email"] = mgr_email
+            # Merge CCs (dedup)
+            cc_set = {c for c in entry.get("cc_emails", [])}
+            for c in row.cc_emails:
+                cc_set.add(_safe_lower(c))
+            entry["cc_emails"] = sorted([c for c in cc_set if c])
+            new_map[emp_email] = entry
+            routed_count += 1
 
-                    # Photo placeholder only if field exists and empty
-                    if hasattr(prof, "photo") and not getattr(prof, "photo"):
-                        # leave empty; template can show placeholder
-                        pass
+            if dry_run:
+                continue
 
-                    if touched:
-                        prof.save()
-                        profiles_touched += 1
+            # Ensure employee user/profile
+            user = User.objects.filter(email__iexact=emp_email).first()
+            if not user and create_users:
+                user = User.objects.create(
+                    username=_username_from_email(emp_email),
+                    email=emp_email,
+                    first_name=(row.employee_name or "").split(" ", 1)[0],
+                    last_name=(row.employee_name or "").split(" ", 1)[1] if " " in (row.employee_name or "") else "",
+                    is_active=True,
+                )
+                created_users += 1
 
-        self.stdout.write(self.style.SUCCESS("Import finished."))
-        self.stdout.write(
-            f"Rows: {rows_seen} | Users created: {created_users} | Users updated: {updated_users} | "
-            f"Profiles touched: {profiles_touched} | Managers resolved: {managers_resolved}"
-        )
+            if not user:
+                # Can't update Profile without a user
+                continue
+
+            prof, _ = Profile.objects.get_or_create(user=user)
+
+            # Update phone & employee_id (idempotent)
+            phone_norm = _normalize_phone(row.employee_phone or "")
+            changed = False
+            if phone_norm and prof.phone != phone_norm:
+                prof.phone = phone_norm
+                changed = True
+            if row.employee_id and getattr(prof, "employee_id", "") != row.employee_id:
+                setattr(prof, "employee_id", row.employee_id)
+                changed = True
+
+            # Optionally set team_leader
+            if link_manager and mgr_email:
+                mgr_user = manager_cache.get(mgr_email) or User.objects.filter(email__iexact=mgr_email).first()
+                if mgr_user and prof.team_leader_id != getattr(mgr_user, "id", None):
+                    prof.team_leader = mgr_user
+                    changed = True
+                    linked_team_leaders += 1
+
+            if changed:
+                prof.save()
+                updated_profiles += 1
+
+        # Write the admin-only routing JSON
+        if not dry_run:
+            _save_mapping(routing_path, new_map)
+            # Bust the in-memory cache used by the app
+            try:
+                from apps.users.models import load_leave_routing_map  # type: ignore
+                load_leave_routing_map.cache_clear()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+        # Summary
+        self.stdout.write(self.style.SUCCESS("=== Import Summary ==="))
+        self.stdout.write(f"CSV rows read         : {len(rows)}")
+        self.stdout.write(f"Routing entries written: {routed_count} → {routing_path}")
+        self.stdout.write(f"Users created         : {created_users}")
+        self.stdout.write(f"Profiles updated      : {updated_profiles}")
+        if link_manager:
+            self.stdout.write(f"Team leaders linked   : {linked_team_leaders}")
+        if dry_run:
+            self.stdout.write(self.style.WARNING("Dry-run mode: no files written, no DB changes."))
+
+        # Friendly reminder about global CC defaults
+        if getattr(settings, "LEAVE_DEFAULT_CC", None):
+            self.stdout.write(f"Global default CC (settings.LEAVE_DEFAULT_CC): {settings.LEAVE_DEFAULT_CC}")
+        else:
+            self.stdout.write("Tip: you can set a global default CC list via settings.LEAVE_DEFAULT_CC = ['ops@example.com', ...]")

@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% load tz %}
+
+{% block title %}Leave Approval · #{{ leave.id }}{% endblock %}
+
+{% block content %}
+<style>
+  .card { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px 18px; }
+  /* message variants (was inline style with {% if %} …) */
+  .msg { border-color:#e2e8f0; margin-bottom:12px; }
+  .msg-error   { background:#fff1f2; border-color:#fecdd3; }
+  .msg-success { background:#ecfdf5; border-color:#bbf7d0; }
+
+  .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; color:#fff; }
+  .badge-pending  { background:#f59e0b; }
+  .badge-approved { background:#10b981; }
+  .badge-rejected { background:#ef4444; }
+
+  .kv { display:grid; grid-template-columns: 180px 1fr; gap:8px 16px; }
+  .kv div.label { color:#64748b; }
+
+  .actions { display:flex; gap:10px; flex-wrap:wrap; }
+  .btn { appearance:none; border:0; border-radius:8px; padding:10px 16px; font-weight:600; cursor:pointer; }
+  .btn-approve { background:#16a34a; color:#fff; }
+  .btn-reject  { background:#dc2626; color:#fff; }
+  .btn-secondary { background:#0b5ed7; color:#fff; text-decoration:none; display:inline-block; }
+
+  textarea[name="comment"] { width:100%; min-height:110px; resize:vertical; }
+  .meta { color:#6b7280; font-size:12px; }
+</style>
+
+<div class="container" style="max-width:920px; margin: 0 auto;">
+  {% if messages %}
+    <div>
+      {% for m in messages %}
+        <div class="card msg {% if m.tags == 'error' %}msg-error{% elif m.tags == 'success' %}msg-success{% endif %}">
+          {{ m }}
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <h1 style="margin:8px 0 16px;">Leave Approval <span class="meta">#{{ leave.id }}</span></h1>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+      <div>
+        <div style="font-weight:700; font-size:18px;">
+          {{ leave.employee_name|default:leave.employee.get_full_name|default:leave.employee.username }}
+        </div>
+        <div class="meta">
+          {{ leave.employee_email|default:leave.employee.email }}{% if leave.employee_designation %} · {{ leave.employee_designation }}{% endif %}
+        </div>
+      </div>
+      <div>
+        {% if leave.status == 'PENDING' %}
+          <span class="badge badge-pending">Pending</span>
+        {% elif leave.status == 'APPROVED' %}
+          <span class="badge badge-approved">Approved</span>
+        {% elif leave.status == 'REJECTED' %}
+          <span class="badge badge-rejected">Rejected</span>
+        {% else %}
+          <span class="badge" style="background:#64748b;">{{ leave.get_status_display }}</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #eef2f7; margin:12px 0 16px;">
+
+    <div class="kv">
+      <div class="label">Type</div>
+      <div>{{ leave.leave_type }}</div>
+
+      <div class="label">Duration</div>
+      <div>
+        {% if leave.is_half_day %}
+          Half-day (0.5 day)
+        {% else %}
+          {% with s=leave.start_at|localtime d=leave.end_at|localtime %}
+            {% if s.date == d.date %}
+              1 day
+            {% else %}
+              {{ s|date:"d M Y" }} – {{ d|date:"d M Y" }}
+            {% endif %}
+          {% endwith %}
+        {% endif %}
+      </div>
+
+      <div class="label">From (IST)</div>
+      <div>{{ leave.start_at|localtime|date:"d M Y, h:i A" }}</div>
+
+      <div class="label">To (IST)</div>
+      <div>{{ leave.end_at|localtime|date:"d M Y, h:i A" }}</div>
+
+      {% if leave.reason %}
+      <div class="label">Reason</div>
+      <div>{{ leave.reason }}</div>
+      {% endif %}
+
+      {% if leave.attachment %}
+      <div class="label">Attachment</div>
+      <div><a href="{{ leave.attachment.url }}" target="_blank" rel="noopener">View attachment</a></div>
+      {% endif %}
+
+      {% if leave.decided_at %}
+      <div class="label">Decided at</div>
+      <div>{{ leave.decided_at|localtime|date:"d M Y, h:i A" }}</div>
+      {% endif %}
+
+      {% if leave.decision_comment %}
+      <div class="label">Manager’s note</div>
+      <div>{{ leave.decision_comment }}</div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if not leave.is_decided %}
+    <div class="card" style="margin-bottom:16px;">
+      <h2 style="margin:0 0 10px;">Take action</h2>
+      <form method="post">
+        {% csrf_token %}
+        <label for="id_comment" class="meta">Optional note to the employee</label>
+        <textarea id="id_comment" name="comment" placeholder="Write a short note (optional)…"></textarea>
+
+        <div class="actions" style="margin-top:12px;">
+          <button type="submit" name="action" value="APPROVED" class="btn btn-approve">Approve</button>
+          <button type="submit" name="action" value="REJECTED" class="btn btn-reject">Reject</button>
+          <a href="{% url 'leave:manager_pending' %}" class="btn btn-secondary">Back to My Pending</a>
+        </div>
+        <p class="meta" style="margin-top:8px;">
+          Note: same-day decisions are blocked after <strong>10:00 AM IST</strong>.
+        </p>
+      </form>
+    </div>
+  {% else %}
+    <div class="card">
+      <p style="margin:0 0 12px;">This request is already <strong>{{ leave.get_status_display }}</strong>.</p>
+      <div class="actions">
+        <a href="{% url 'leave:manager_pending' %}" class="btn btn-secondary">Back to My Pending</a>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

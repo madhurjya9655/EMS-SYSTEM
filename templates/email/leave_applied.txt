@@ -1,0 +1,29 @@
+Hello,
+
+{{ employee_name }}{% if employee_designation %} ({{ employee_designation }}){% endif %} has applied for leave.
+
+Reporting Person: {% if manager_name %}{{ manager_name }}{% else %}Manager{% endif %}{% if manager_email %} <{{ manager_email }}>{% endif %}
+{% if cc_list and cc_list|length %}CC: {{ cc_list|join:", " }}{% endif %}
+
+Leave Details
+-------------
+Leave ID: {{ leave_id }}
+Type: {{ leave_type }}
+Duration: {% if is_half_day %}Half-day (0.5 day){% else %}{{ duration_days }} days{% endif %}
+From (IST): {{ start_at_ist }}
+To (IST):   {{ end_at_ist }}
+{% if reason %}Reason: {{ reason }}{% endif %}
+
+Actions
+-------
+Approve (approval page): {{ approve_url }}
+Reject  (approval page): {{ reject_url }}
+
+{% if token_approve_url or token_reject_url %}
+One-click (secure; expires in 7 days; one-time use)
+{% if token_approve_url %}Approve via secure link: {{ token_approve_url }}{% endif %}
+{% if token_reject_url %}Reject via secure link:  {{ token_reject_url }}{% endif %}
+{% endif %}
+
+— EMS
+{% if site_url %}Open EMS: {{ site_url }}{% endif %}

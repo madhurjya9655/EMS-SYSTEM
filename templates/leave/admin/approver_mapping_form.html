@@ -1,0 +1,107 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static admin_urls %}
+
+{% block title %}
+  {% if original %}{% trans "Edit Approver Mapping" %}{% else %}{% trans "Add Approver Mapping" %}{% endif %} |
+  {{ site_title|default:_("Django site admin") }}
+{% endblock %}
+
+{% block extrahead %}
+  {{ block.super }}
+  {{ media }}
+  <style>
+    .am-wrap { max-width: 900px; }
+    .am-card {
+      background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+      padding: 16px 18px; margin: 12px 0 24px;
+    }
+    .am-title { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
+    .am-sub { color:#64748b; margin-bottom: 10px; }
+    .am-row { display:flex; flex-direction: column; margin: 10px 0 14px; }
+    .am-row label { font-weight: 600; margin-bottom: 6px; }
+    .am-row .help { color:#6b7280; font-size: 12px; margin-top: 6px; }
+    .am-error { color:#b91c1c; margin: 6px 0 0; font-size: 13px; }
+    .am-meta { color:#6b7280; font-size: 12px; }
+    .am-actions { margin-top: 10px; }
+    .am-breadcrumbs a { color:#2563eb; text-decoration:none; }
+  </style>
+{% endblock %}
+
+{% block breadcrumbs %}
+  <div class="breadcrumbs am-breadcrumbs">
+    <a href="{% url 'admin:index' %}">{% trans "Home" %}</a>
+    › <a href="{% url 'admin:leave_approvermapping_changelist' %}">{% trans "Approver Mappings" %}</a>
+    › {% if original %}{% trans "Edit" %}{% else %}{% trans "Add" %}{% endif %}
+  </div>
+{% endblock %}
+
+{% block content %}
+<div class="am-wrap">
+  <h1 class="am-title">
+    {% if original %}{% trans "Change Approver Mapping" %}{% else %}{% trans "Add Approver Mapping" %}{% endif %}
+  </h1>
+  <p class="am-sub">
+    {% trans "Map each employee to a Reporting Person (manager) and an optional CC recipient. This drives leave approvals and sales notifications." %}
+  </p>
+
+  {% if errors %}
+    <p class="errornote">{{ errors|length }} {% trans "error(s) found. Please correct the highlighted fields." %}</p>
+  {% endif %}
+
+  <form method="post" novalidate>
+    {% csrf_token %}
+
+    <div class="am-card">
+      {# non-field errors #}
+      {% if adminform.form.non_field_errors %}
+        <div class="am-error">{{ adminform.form.non_field_errors }}</div>
+      {% endif %}
+
+      <div class="am-row">
+        <label for="{{ adminform.form.employee.id_for_label }}">{% trans "Employee" %}</label>
+        {{ adminform.form.employee }}
+        {% if adminform.form.employee.errors %}
+          <div class="am-error">{{ adminform.form.employee.errors }}</div>
+        {% endif %}
+      </div>
+
+      <div class="am-row">
+        <label for="{{ adminform.form.reporting_person.id_for_label }}">{% trans "Reporting person" %}</label>
+        {{ adminform.form.reporting_person }}
+        <div class="help">{% trans "Primary approver who receives one-click Approve/Reject links." %}</div>
+        {% if adminform.form.reporting_person.errors %}
+          <div class="am-error">{{ adminform.form.reporting_person.errors }}</div>
+        {% endif %}
+      </div>
+
+      <div class="am-row">
+        <label for="{{ adminform.form.cc_person.id_for_label }}">{% trans "CC person" %}</label>
+        {{ adminform.form.cc_person }}
+        <div class="help">{% trans "Optional: also notified on new leave requests." %}</div>
+        {% if adminform.form.cc_person.errors %}
+          <div class="am-error">{{ adminform.form.cc_person.errors }}</div>
+        {% endif %}
+      </div>
+
+      <div class="am-row">
+        <label for="{{ adminform.form.notes.id_for_label }}">{% trans "Notes" %}</label>
+        {{ adminform.form.notes }}
+        {% if adminform.form.notes.errors %}
+          <div class="am-error">{{ adminform.form.notes.errors }}</div>
+        {% endif %}
+      </div>
+
+      {% if original %}
+        <div class="am-meta">
+          {% trans "Updated at:" %} {{ original.updated_at|date:"M j, Y, P" }}
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="am-actions">
+      {# Use the standard admin submit row so permissions (delete/history) still work #}
+      {% include "admin/submit_line.html" %}
+    </div>
+  </form>
+</div>
+{% endblock %}

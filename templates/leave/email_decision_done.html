@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Decision Recorded</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f8fafc;margin:0;padding:24px;}
+    .card{max-width:640px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+    .hd{padding:18px 20px;border-bottom:1px solid #e5e7eb}
+    .bd{padding:20px}
+    .ok{color:#16a34a}.bad{color:#dc2626}
+    .btn{display:inline-block;background:#111827;color:#fff;border-radius:8px;padding:10px 14px;text-decoration:none}
+    .muted{color:#6b7280}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="hd"><h1 style="margin:0">Leave Decision Saved</h1></div>
+    <div class="bd">
+      {% if leave %}
+        <p>The leave for <strong>{{ leave.employee.get_full_name|default:leave.employee.username }}</strong> has been
+          {% if leave.status == "APPROVED" %}<span class="ok">Approved</span>{% elif leave.status == "REJECTED" %}<span class="bad">Rejected</span>{% else %}updated{% endif %}.
+        </p>
+        <p class="muted">ID #{{ leave.id }} · {{ leave.leave_type.name }} · {{ leave.start_at|date:"Y-m-d" }} → {{ leave.end_at|date:"Y-m-d" }}</p>
+        <p>
+          <a class="btn" href="{% url 'leave:manager_pending' %}">Back to Manager Queue</a>
+          &nbsp;&nbsp;<a class="btn" style="background:#374151" href="{% url 'leave:approval_page' leave.id %}">View Approval Page</a>
+        </p>
+      {% else %}
+        <p>Decision recorded.</p>
+        <p><a class="btn" href="{% url 'leave:manager_pending' %}">Back to Manager Queue</a></p>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>

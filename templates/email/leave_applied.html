@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en" style="margin:0;padding:0;background:#f6f8fb;">
+<head>
+  <meta charset="utf-8">
+  <meta name="x-apple-disable-message-reformatting">
+  <meta name="color-scheme" content="light only">
+  <title>Leave Request — {{ employee_name }}</title>
+</head>
+<body style="margin:0;padding:0;background:#f6f8fb;">
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f6f8fb;">
+    <tr>
+      <td align="center" style="padding:24px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="640" style="max-width:640px;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #e8edf3;">
+          <!-- Header -->
+          <tr>
+            <td style="background:#0b5ed7;color:#ffffff;padding:18px 24px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+              <div style="font-size:18px;font-weight:700;">Leave Request</div>
+              <div style="opacity:0.9;font-size:13px;margin-top:4px;">
+                To: {% if manager_name %}{{ manager_name }}{% else %}Manager{% endif %} ({{ manager_email|default:"not set" }})
+                {% if cc_list and cc_list|length %} &nbsp;•&nbsp; CC: {{ cc_list|join:", " }}{% endif %}
+              </div>
+            </td>
+          </tr>
+
+          <!-- Intro -->
+          <tr>
+            <td style="padding:20px 24px 8px 24px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
+              <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;">
+                <strong>{{ employee_name }}</strong>{% if employee_designation %} ({{ employee_designation }}){% endif %}
+                has applied for leave.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Details -->
+          <tr>
+            <td style="padding:0 24px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border:1px solid #e8edf3;border-radius:8px;overflow:hidden;">
+                <tr>
+                  <td style="background:#f8fafc;padding:10px 14px;font-weight:600;font-size:13px;color:#334155;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+                    Summary
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:12px 14px;font-size:14px;color:#0f172a;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+                    <div><strong>Applicant:</strong> {{ employee_name }}{% if employee_email %} &lt;{{ employee_email }}&gt;{% endif %}</div>
+                    <div><strong>Reporting Person:</strong>
+                      {% if manager_name %}{{ manager_name }}{% else %}Manager{% endif %}
+                      {% if manager_email %}&lt;{{ manager_email }}&gt;{% endif %}
+                    </div>
+                    {% if cc_list and cc_list|length %}<div><strong>CC:</strong> {{ cc_list|join:", " }}</div>{% endif %}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Spacer -->
+          <tr><td style="height:12px"></td></tr>
+
+          <!-- Leave details -->
+          <tr>
+            <td style="padding:0 24px 0 24px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border:1px solid #e8edf3;border-radius:8px;overflow:hidden;">
+                <tr>
+                  <td style="background:#f8fafc;padding:10px 14px;font-weight:600;font-size:13px;color:#334155;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+                    Leave Details
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:12px 14px;font-size:14px;color:#0f172a;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+                    <div><strong>Leave ID:</strong> {{ leave_id }}</div>
+                    <div><strong>Type:</strong> {{ leave_type }}</div>
+                    <div><strong>Duration:</strong>
+                      {% if is_half_day %}Half-day (0.5 day){% else %}{{ duration_days }} days{% endif %}
+                    </div>
+                    <div><strong>From (IST):</strong> {{ start_at_ist }}</div>
+                    <div><strong>To (IST):</strong> {{ end_at_ist }}</div>
+                    {% if reason %}<div style="margin-top:6px;"><strong>Reason:</strong> {{ reason }}</div>{% endif %}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Spacer -->
+          <tr><td style="height:16px"></td></tr>
+
+          <!-- Actions -->
+          <tr>
+            <td style="padding:0 24px 6px 24px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+                <tr>
+                  <td align="left" style="padding:6px 0 12px 0;">
+                    <a href="{{ approve_url }}" style="text-decoration:none;display:inline-block;background:#16a34a;border-radius:8px;color:#ffffff;padding:10px 16px;font-size:14px;font-weight:600;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+                      Approve
+                    </a>
+                    &nbsp;
+                    <a href="{{ reject_url }}" style="text-decoration:none;display:inline-block;background:#dc2626;border-radius:8px;color:#ffffff;padding:10px 16px;font-size:14px;font-weight:600;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+                      Reject
+                    </a>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#475569;font-size:12px;line-height:1.5;">
+                    These buttons open the EMS approval page (login may be required).
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          {% if token_approve_url or token_reject_url %}
+          <tr>
+            <td style="padding:0 24px 6px 24px;">
+              <div style="border:1px dashed #e2e8f0;border-radius:8px;padding:12px 14px;background:#fcfdff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
+                <div style="font-weight:600;font-size:13px;color:#334155;margin-bottom:6px;">One-click (secure)</div>
+                <div style="font-size:13px;line-height:1.4;color:#475569;margin-bottom:8px;">
+                  Valid for 7 days, single use per link.
+                </div>
+                <div>
+                  {% if token_approve_url %}
+                  <a href="{{ token_approve_url }}" style="text-decoration:none;display:inline-block;background:#15803d;border-radius:6px;color:#ffffff;padding:8px 12px;font-size:13px;font-weight:600;margin-right:8px;">Approve via secure link</a>
+                  {% endif %}
+                  {% if token_reject_url %}
+                  <a href="{{ token_reject_url }}" style="text-decoration:none;display:inline-block;background:#b91c1c;border-radius:6px;color:#ffffff;padding:8px 12px;font-size:13px;font-weight:600;">Reject via secure link</a>
+                  {% endif %}
+                </div>
+              </div>
+            </td>
+          </tr>
+          {% endif %}
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:16px 24px 22px 24px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7280;font-size:12px;line-height:1.6;">
+              <div>This message was sent by EMS.</div>
+              {% if site_url %}<div><a href="{{ site_url }}" style="color:#2563eb;text-decoration:none;">Open EMS</a></div>{% endif %}
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

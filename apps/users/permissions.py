@@ -8,6 +8,7 @@ from typing import Any, Iterable, Set
 from django import template
 from django.contrib.auth.views import redirect_to_login
 from django.http import HttpResponseForbidden
+from django.apps import apps as django_apps
 
 register = template.Library()
 
@@ -24,6 +25,8 @@ PERMISSIONS_STRUCTURE = {
     "Leave": [
         ("leave_apply", "Leave Apply"),
         ("leave_list", "Leave List"),
+        # NEW: needed by /leave/manager/... endpoints (approval queue & decide)
+        ("leave_pending_manager", "Manager Approvals"),
     ],
     "Checklist": [
         ("add_checklist", "Add Checklist"),
@@ -168,6 +171,7 @@ _SYNONYMS = {
     # Delegation
     "list_delegation": {"mt_list_delegation"},
     "add_delegation": {"mt_add_delegation"},
+    # (Add more synonyms here if needed)
 }
 
 
@@ -180,18 +184,63 @@ def _expand_synonyms(codes: Set[str]) -> Set[str]:
     return out
 
 
+def _codes_from_groups(user) -> Set[str]:
+    """
+    Map Django auth groups to implied permission codes.
+    Keeps Profile permissions as the source of truth; this just adds grants.
+    """
+    try:
+        names = {n.strip().lower() for n in user.groups.values_list("name", flat=True)}
+    except Exception:
+        names = set()
+
+    grants: Set[str] = set()
+
+    # If a user is in "Manager", grant the leave-approval queue permission.
+    if "manager" in names:
+        grants.add("leave_pending_manager")
+
+    # Add other group → code mappings here as your org evolves.
+
+    return grants
+
+
+def _codes_from_mapping(user) -> Set[str]:
+    """
+    Dynamic grant: users who are the Reporting Person for anyone
+    (via ApproverMapping) automatically get 'leave_pending_manager'.
+    """
+    try:
+        Mapping = django_apps.get_model("leave", "ApproverMapping")
+        if not Mapping:
+            return set()
+        if Mapping.objects.filter(reporting_person_id=getattr(user, "id", 0)).exists():
+            return {"leave_pending_manager"}
+    except Exception:
+        # Be silent; never break permission checks
+        pass
+    return set()
+
+
 def _user_permission_codes(user) -> Set[str]:
     profile = getattr(user, "profile", None)
     raw = getattr(profile, "permissions", []) if profile else []
     codes = _normalize_raw(raw)
+
+    # Add grants implied by Django auth groups (e.g., "Manager")
+    codes |= _codes_from_groups(user)
+
+    # Add dynamic RP grants from ApproverMapping
+    codes |= _codes_from_mapping(user)
+
     return _expand_synonyms(codes)
 
 
-# ---- Backwards-compatibility alias (required by apps.common.templatetags.permission_tags) ----
+# ---- Backwards-compatibility alias (required by apps.users.views etc.) ----
 def _extract_perms(user) -> Set[str]:  # noqa: N802 (legacy name)
     """
     Legacy alias so older template tags importing `_extract_perms` keep working.
-    Returns a set of lowercased permission codes (with synonyms expanded).
+    Returns a set of lowercased permission codes (with synonyms, group & RP grants).
     """
     return _user_permission_codes(user)
 
@@ -199,16 +248,18 @@ def _extract_perms(user) -> Set[str]:  # noqa: N802 (legacy name)
 # -----------------------------------------------------------------------------
 # Decorator & Mixins
 # -----------------------------------------------------------------------------
-def has_permission(*required: Iterable[str]):
+def has_permission(*required: str):
     """
     Usage:
         @has_permission("list_checklist")
-        @has_permission("list_checklist", "mt_list_checklist")   # either works
+        @has_permission("leave_pending_manager")  # manager approval views
+
     Rules:
         • Anonymous  -> redirect to login
-        • Superuser or staff -> allow
+        • Superuser  -> allow
         • '*' or 'all' in Profile.permissions -> allow
         • Case-insensitive
+        • Honors grants from Django Groups and ApproverMapping (RP auto-grant)
     """
     need = {str(c).strip().lower() for c in required if c}
 
@@ -220,7 +271,7 @@ def has_permission(*required: Iterable[str]):
             if not getattr(user, "is_authenticated", False):
                 return redirect_to_login(request.get_full_path())
 
-            if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+            if getattr(user, "is_superuser", False):
                 return view_func(request, *args, **kwargs)
 
             have = _user_permission_codes(user)
@@ -239,7 +290,8 @@ class PermissionRequiredMixin:
     """
     CBV mixin:
       • Set `permission_code = "code"`
-      • Superuser/staff bypass checks
+      • Superuser bypasses checks
+      • Honors grants from Django Groups and ApproverMapping (RP auto-grant)
     """
     permission_code: str | None = None
 
@@ -248,7 +300,7 @@ class PermissionRequiredMixin:
         if not getattr(user, "is_authenticated", False):
             return redirect_to_login(request.get_full_path())
 
-        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+        if getattr(user, "is_superuser", False):
             return super().dispatch(request, *args, **kwargs)
 
         if self.permission_code:
@@ -267,7 +319,7 @@ def user_has_permission(user, code: str) -> bool:
     """Template usage:  {% if user|has_permission:'add_ticket' %} ... {% endif %}"""
     if not getattr(user, "is_authenticated", False):
         return False
-    if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+    if getattr(user, "is_superuser", False):
         return True
     return str(code or "").strip().lower() in _user_permission_codes(user)
 
@@ -280,7 +332,27 @@ def user_has_any_permission(user, csv_codes: str) -> bool:
     """
     if not getattr(user, "is_authenticated", False):
         return False
-    if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+    if getattr(user, "is_superuser", False):
         return True
     wanted = {c.strip().lower() for c in (csv_codes or "").split(",") if c.strip()}
     return bool(_user_permission_codes(user) & wanted)
+
+
+# -----------------------------------------------------------------------------
+# Optional helper for templates/context processors
+# -----------------------------------------------------------------------------
+def sidebar_flags_for(user) -> dict:
+    """
+    Compute booleans templates can use to show/hide sections.
+    - show_manager_approvals: True for superusers, explicit permission, or RP via ApproverMapping.
+    - can_apply_leave / can_view_leave: convenience flags.
+    """
+    codes = _user_permission_codes(user) if getattr(user, "is_authenticated", False) else set()
+    return {
+        "show_manager_approvals": bool(
+            getattr(user, "is_superuser", False)
+            or ("leave_pending_manager" in codes)
+        ),
+        "can_apply_leave": "leave_apply" in codes or getattr(user, "is_superuser", False),
+        "can_view_leave": "leave_list" in codes or getattr(user, "is_superuser", False),
+    }

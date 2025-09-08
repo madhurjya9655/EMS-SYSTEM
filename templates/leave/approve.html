@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Leave Approval{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+  <h3 class="mb-3">Leave Approval</h3>
+
+  {# Flash messages #}
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert alert-{% if message.tags %}{{ message.tags }}{% else %}info{% endif %}">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
+
+  <div class="card">
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <p class="mb-1"><strong>Employee:</strong> {{ employee_full_name }}</p>
+          {% if employee_designation %}
+            <p class="mb-1"><strong>Designation:</strong> {{ employee_designation }}</p>
+          {% endif %}
+          {% if employee_email %}
+            <p class="mb-1"><strong>Email:</strong> {{ employee_email }}</p>
+          {% endif %}
+        </div>
+        <div class="col-md-6">
+          <p class="mb-1"><strong>Type:</strong> {{ leave_type_name }}</p>
+          <p class="mb-1"><strong>From (IST):</strong> {{ from_ist|date:"Y-m-d H:i" }}</p>
+          <p class="mb-1"><strong>To (IST):</strong> {{ to_ist|date:"Y-m-d H:i" }}</p>
+          <p class="mb-1"><strong>Half-day:</strong> {{ is_half_day|yesno:"Yes,No" }}</p>
+        </div>
+      </div>
+
+      {% if reason %}
+        <hr>
+        <p class="mb-1"><strong>Reason:</strong></p>
+        <div class="border rounded p-2 bg-light">{{ reason|linebreaksbr }}</div>
+      {% endif %}
+
+      {% if attachment %}
+        <p class="mt-2">
+          <a class="btn btn-outline-secondary btn-sm" href="{{ attachment.url }}" target="_blank" rel="noopener">
+            View Attachment
+          </a>
+        </p>
+      {% endif %}
+
+      {% if leave.is_decided %}
+        <hr>
+        <p class="text-muted mb-0">
+          This request is already <strong>{{ leave.get_status_display }}</strong>.
+          {% if leave.approver %} (by {{ leave.approver.get_full_name|default:leave.approver.username }}){% endif %}
+        </p>
+      {% else %}
+        <hr>
+        <div class="alert alert-warning py-2">
+          Approvals/Rejections for leaves that include <strong>today</strong> are locked after <strong>10:00 AM IST</strong>.
+        </div>
+
+        <form method="post" action="{% url 'leave:manager_decide_approve' leave.id %}" class="mb-2">
+          {% csrf_token %}
+          <div class="mb-2">
+            <label for="decision_comment" class="form-label">Decision comment (optional)</label>
+            <textarea id="decision_comment" name="decision_comment" rows="3" class="form-control"></textarea>
+          </div>
+          {% if next_url %}
+            <input type="hidden" name="next" value="{{ next_url }}">
+          {% endif %}
+          <button type="submit" class="btn btn-success me-2">Approve</button>
+          <button type="button" class="btn btn-outline-danger"
+                  onclick="document.getElementById('reject-form').submit();">
+            Reject
+          </button>
+        </form>
+
+        <form id="reject-form" method="post" action="{% url 'leave:manager_decide_reject' leave.id %}">
+          {% csrf_token %}
+          {% if next_url %}
+            <input type="hidden" name="next" value="{{ next_url }}">
+          {% endif %}
+          <input type="hidden" name="decision_comment" value="">
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="mt-3">
+    <a href="{{ next_url|default:'/leave/manager/pending/' }}" class="btn btn-link">&larr; Back</a>
+  </div>
+</div>
+{% endblock %}

@@ -1,9 +1,95 @@
-{% extends 'base.html' %}
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% load static %}
+
 {% block title %}Apply Leave{% endblock %}
+
 {% block content %}
-<h2>Apply for Leave</h2>
-<form method="post">{% csrf_token %}
-  {{ form.as_p }}
-  <button class="btn btn-primary">Submit</button>
-</form>
+<div class="container py-4">
+
+  {# Flash messages #}
+  {% if messages %}
+    <div class="mb-3">
+      {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
+          {{ message }}
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {# Header #}
+  <div class="d-flex align-items-center justify-content-between mb-4">
+    <div class="d-flex align-items-center gap-3">
+      {% if employee_header.photo_url %}
+        <img src="{{ employee_header.photo_url }}" alt="Photo" width="64" height="64"
+             style="border-radius:50%;object-fit:cover;border:1px solid #e5e7eb;">
+      {% else %}
+        <div class="d-flex align-items-center justify-content-center bg-secondary-subtle"
+             style="width:64px;height:64px;border-radius:50%;border:1px solid #e5e7eb;">
+          <span class="fw-bold text-secondary">
+            {{ employee_header.name|default:user.username|slice:":1"|upper }}
+          </span>
+        </div>
+      {% endif %}
+      <div>
+        <h4 class="mb-1">Apply Leave</h4>
+        <div class="small text-muted">
+          {{ employee_header.name|default:user.get_username }}
+          {% if employee_header.email %} • {{ employee_header.email }}{% endif %}
+          {% if employee_header.designation %} • {{ employee_header.designation }}{% endif %}
+        </div>
+        <div class="small text-muted">IST now: {{ now_ist|date:"Y-m-d H:i" }}</div>
+      </div>
+    </div>
+    <div>
+      <a class="btn btn-outline-secondary" href="{% url 'leave:dashboard' %}">Back to Dashboard</a>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    {# Form #}
+    <div class="col-12 col-lg-8">
+      <div class="card">
+        <div class="card-body">
+          <h6 class="card-title mb-3">Leave Details</h6>
+
+          <form method="post" enctype="multipart/form-data" novalidate>
+            {% csrf_token %}
+            {{ form|crispy }}
+
+            <div class="d-flex justify-content-between mt-3">
+              <a href="{% url 'leave:dashboard' %}" class="btn btn-light">Cancel</a>
+              <button type="submit" class="btn btn-primary">Submit Application</button>
+            </div>
+          </form>
+
+          <div class="mt-3 small text-muted">
+            Note: Overlapping with existing pending/approved leaves is blocked.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# Rules / Tips #}
+    <div class="col-12 col-lg-4">
+      <div class="card">
+        <div class="card-body">
+          <h6 class="card-title mb-3">Rules (IST)</h6>
+          <ul class="mb-3" style="padding-left: 1.2rem;">
+            <li>Same-day leave must be applied <strong>before 09:30 AM</strong>.</li>
+            <li>After <strong>10:00 AM</strong>, applying for today is blocked.</li>
+            <li>Half-day must be on a single date and be ≤ <strong>6 hours</strong>.</li>
+            <li>Manager approval/rejection for today’s leaves is locked after <strong>10:00 AM</strong>.</li>
+            <li>Recurring tasks still generate, but if you are on leave they’ll be skipped for you.</li>
+          </ul>
+          <p class="small text-muted mb-0">
+            Attachments are optional. Supported: PDF, PNG, JPG, JPEG, WEBP, HEIC, DOC, DOCX (max 10&nbsp;MB).
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
 {% endblock %}

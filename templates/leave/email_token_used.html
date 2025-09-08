@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Token Already Used</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f8fafc;margin:0;padding:24px;}
+    .card{max-width:640px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+    .hd{padding:18px 20px;border-bottom:1px solid #e5e7eb}
+    .bd{padding:20px}
+    .warn{background:#fff7ed;border:1px solid #fed7aa;color:#7c2d12;padding:12px;border-radius:10px}
+    .btn{display:inline-block;background:#111827;color:#fff;border-radius:8px;padding:10px 14px;text-decoration:none;margin-top:10px}
+    .pill{display:inline-block;border-radius:999px;padding:2px 8px;color:#fff;font-size:12px}
+    .p-approved{background:#10b981}.p-rejected{background:#ef4444}.p-pending{background:#f59e0b}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="hd"><h1 style="margin:0">Token Already Used</h1></div>
+    <div class="bd">
+      <div class="warn">This decision link has already been used or the leave was decided by another method.</div>
+      {% if leave %}
+        <p>Leave #{{ leave.id }} – {{ leave.employee.get_full_name|default:leave.employee.username }}</p>
+        <p>Status:
+          {% if leave.status == "APPROVED" %}<span class="pill p-approved">Approved</span>
+          {% elif leave.status == "REJECTED" %}<span class="pill p-rejected">Rejected</span>
+          {% else %}<span class="pill p-pending">Pending</span>{% endif %}
+        </p>
+        <p>
+          <a class="btn" href="{% url 'leave:approval_page' leave.id %}">Open Approval Page</a>
+          &nbsp;&nbsp;<a class="btn" style="background:#374151" href="{% url 'leave:manager_pending' %}">Manager Queue</a>
+        </p>
+      {% else %}
+        <p><a class="btn" href="{% url 'leave:manager_pending' %}">Manager Queue</a></p>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>

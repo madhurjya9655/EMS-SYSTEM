@@ -1,0 +1,142 @@
+{
+  "pankaj@blueoceansteels.com": {
+    "manager_email": "pankaj@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com"]
+  },
+  "amreen@blueoceansteels.com": {
+    "manager_email": "pankaj@blueoceansteels.com",
+    "cc_emails": ["vilas@blueoceansteels.com", "smruti@blueoceansteels.com", "sangam@blueoceansteels.com", "ganesh@blueoceansteels.com"]
+  },
+  "sangam@blueoceansteels.com": {
+    "manager_email": "pankaj@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "vilas@blueoceansteels.com", "ganesh@blueoceansteels.com", "smruti@blueoceansteels.com"]
+  },
+  "ganesh@blueoceansteels.com": {
+    "manager_email": "pankaj@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "vilas@blueoceansteels.com", "sangam@blueoceansteels.com", "smruti@blueoceansteels.com"]
+  },
+  "vilas@blueoceansteels.com": {
+    "manager_email": "pankaj@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "ganesh@blueoceansteels.com", "sangam@blueoceansteels.com", "smruti@blueoceansteels.com"]
+  },
+  "amit@blueoceansteels.com": {
+    "manager_email": "sangam@blueoceansteels.com",
+    "cc_emails": ["pankaj@blueoceansteels.com", "amreen@blueoceansteels.com", "ganesh@blueoceansteels.com", "sangam@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com"]
+  },
+  "pratik@blueoceansteels.com": {
+    "manager_email": "sangam@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com"]
+  },
+  "sushant@blueoceansteels.com": {
+    "manager_email": "sangam@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com"]
+  },
+  "rahul@blueoceansteels.com": {
+    "manager_email": "ganesh@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com", "sangam@blueoceansteels.com", "tushar@blueoceansteels.com"]
+  },
+  "nitin@blueoceansteels.com": {
+    "manager_email": "vilas@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "sangam@blueoceansteels.com", "ganesh@blueoceansteels.com"]
+  },
+  "akshay@blueoceansteels.com": {
+    "manager_email": "pankaj@blueoceansteels.com",
+    "cc_emails": ["vilas@blueoceansteels.com", "smruti@blueoceansteels.com", "amreen@blueoceansteels.com"]
+  },
+  "saurabh@blueoceansteels.com": {
+    "manager_email": "pankaj@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com"]
+  },
+  "dnyaneshwar@blueoceansteels.com": {
+    "manager_email": "sangam@blueoceansteels.com",
+    "cc_emails": ["vilas@blueoceansteels.com", "amreen@blueoceansteels.com", "smruti@blueoceansteels.com"]
+  },
+  "crm@blueoceansteels.com": {
+    "manager_email": "vilas@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "pankaj@blueoceansteels.com"]
+  },
+  "vaishanavi@blueoceansteels.com": {
+    "manager_email": "vilas@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com"]
+  },
+  "rohit@blueoceansteels.com": {
+    "manager_email": "vilas@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com"]
+  },
+  "gaurithorat@blueoceansteels.com": {
+    "manager_email": "vilas@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com"]
+  },
+  "sonali@blueoceansteels.com": {
+    "manager_email": "vilas@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com"]
+  },
+  "tushar@blueoceansteels.com": {
+    "manager_email": "ganesh@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com", "sangam@blueoceansteels.com", "rahul@blueoceansteels.com"]
+  },
+  "vishal@blueoceansteels.com": {
+    "manager_email": "sangam@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com"]
+  },
+  "manoj@blueoceansteels.com": {
+    "manager_email": "sangam@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com"]
+  },
+  "smruti@blueoceansteels.com": {
+    "manager_email": "vilas@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com"]
+  },
+  "ravimakhane@blueoceansteels.com": {
+    "manager_email": "ganesh@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com", "sangam@blueoceansteels.com"]
+  },
+  "manish@blueoceansteels.com": {
+    "manager_email": "pankaj@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com"]
+  },
+  "karan@blueoceansteels.com": {
+    "manager_email": "pankaj@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "vilas@blueoceansteels.com", "ganesh@blueoceansteels.com", "sangam@blueoceansteels.com", "smruti@blueoceansteels.com"]
+  },
+  "sharyu@blueoceansteels.com": {
+    "manager_email": "ganesh@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com", "sangam@blueoceansteels.com", "rahul@blueoceansteels.com", "kartik@blueoceansteels.com", "punewarehouse@blueoceansteels.com"]
+  },
+  "rutuja@blueoceansteels.com": {
+    "manager_email": "vilas@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "akshay@blueoceansteels.com"]
+  },
+  "aditya@blueoceansteels.com": {
+    "manager_email": "ganesh@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com", "sangam@blueoceansteels.com"]
+  },
+  "jivan@blueoceansteels.com": {
+    "manager_email": "sangam@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com"]
+  },
+  "kartik@blueoceansteels.com": {
+    "manager_email": "ganesh@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com", "sangam@blueoceansteels.com", "rahul@blueoceansteels.com", "sharyu@blueoceansteels.com", "punewarehouse@blueoceansteels.com"]
+  },
+  "kazi@blueoceansteels.com": {
+    "manager_email": "ganesh@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com", "sangam@blueoceansteels.com", "rahul@blueoceansteels.com", "sharyu@blueoceansteels.com", "punewarehouse@blueoceansteels.com", "kartik@blueoceansteels.com"]
+  },
+  "dinesh@blueoceansteels.com": {
+    "manager_email": "vilas@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "sangam@blueoceansteels.com", "ganesh@blueoceansteels.com"]
+  },
+  "punewarehouse@blueoceansteels.com": {
+    "manager_email": "ganesh@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "vilas@blueoceansteels.com", "sangam@blueoceansteels.com", "rahul@blueoceansteels.com", "sharyu@blueoceansteels.com", "kartik@blueoceansteels.com"]
+  },
+  "aman@blueoceansteels.com": {
+    "manager_email": "vilas@blueoceansteels.com",
+    "cc_emails": ["amreen@blueoceansteels.com", "smruti@blueoceansteels.com", "sangam@blueoceansteels.com", "ganesh@blueoceansteels.com"]
+  },
+  "mbora209@gmail.com": {
+    "manager_email": "system.techtidesolutions@gmail.com",
+    "cc_emails": ["system.techtidesolutions@gmail.com"]
+  }
+}

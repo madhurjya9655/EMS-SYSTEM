@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Leave Decision</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root{--ok:#16a34a;--bad:#dc2626;--muted:#6b7280;--bg:#f8fafc;}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);margin:0;padding:24px;}
+    .card{max-width:760px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+    .hd{padding:18px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center}
+    .bd{padding:20px}
+    .title{margin:0;font-size:18px}
+    .sub{color:var(--muted);font-size:13px;margin-top:6px}
+    table{width:100%;border-collapse:collapse;margin:10px 0 16px}
+    th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #f1f5f9;font-size:14px}
+    .muted{color:var(--muted)}
+    .btnrow{display:flex;gap:12px;margin-top:14px}
+    button{border:0;border-radius:9px;padding:10px 14px;font-weight:600;cursor:pointer}
+    .approve{background:var(--ok);color:#fff}
+    .reject{background:var(--bad);color:#fff}
+    .ghost{background:#fff;border:1px solid #e5e7eb;color:#111827;text-decoration:none;line-height:36px;padding:0 12px;border-radius:9px}
+    .alert{padding:10px 12px;border-radius:8px;background:#fff7ed;border:1px solid #fed7aa;color:#7c2d12;font-size:14px;margin:10px 0}
+    .hint{font-size:12px;color:var(--muted);margin-top:8px}
+    .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;color:#fff}
+    .b-pending{background:#f59e0b}.b-approved{background:#10b981}.b-rejected{background:#ef4444}
+    .disclaimer{font-size:12px;color:#6b7280;margin-top:6px}
+    .ok{color:var(--ok)} .bad{color:var(--bad)}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="hd">
+      <div>
+        <h1 class="title">Leave Decision</h1>
+        <div class="sub">Secure one-click link (single use, expires in 7 days).</div>
+      </div>
+    </div>
+    <div class="bd">
+
+      {% if invalid %}
+        <div class="alert">This decision link is invalid or has expired.</div>
+
+      {% elif already %}
+        <div class="alert">This leave has already been decided. No further action is possible.</div>
+        {% if leave %}
+          <p class="muted">Reference #{{ leave.id }} · {{ leave.leave_type.name }}</p>
+          <p><a class="ghost" href="{% url 'leave:approval_page' leave.id %}">Open Approval Page</a></p>
+        {% endif %}
+
+      {% elif done %}
+        <h2 style="margin:0 0 6px;">Decision Saved</h2>
+        <p>
+          {% if action == "APPROVED" %}<span class="ok">Approved</span>
+          {% elif action == "REJECTED" %}<span class="bad">Rejected</span>
+          {% else %}Updated{% endif %}
+          successfully.
+        </p>
+        {% if leave %}
+          <p class="muted">ID #{{ leave.id }} · {{ leave.leave_type.name }} · {{ leave.start_at|date:"Y-m-d" }} → {{ leave.end_at|date:"Y-m-d" }}</p>
+          <p>
+            <a class="ghost" href="{% url 'leave:manager_pending' %}">Back to Manager Queue</a>
+            &nbsp;&nbsp;<a class="ghost" href="{% url 'leave:approval_page' leave.id %}">View Approval Page</a>
+          </p>
+        {% endif %}
+
+      {% else %}
+        {# confirmation screen #}
+        {% if leave %}
+        <table>
+          <tr><th>Employee</th><td>{{ leave.employee.get_full_name|default:leave.employee.username }}</td></tr>
+          <tr><th>Type</th><td>{{ leave.leave_type.name }}</td></tr>
+          <tr><th>From (IST)</th><td>{{ leave.start_at|date:"Y-m-d H:i" }}</td></tr>
+          <tr><th>To (IST)</th><td>{{ leave.end_at|date:"Y-m-d H:i" }}</td></tr>
+          <tr><th>Half-day</th><td>{{ leave.is_half_day|yesno:"Yes,No" }}</td></tr>
+          <tr><th>Reason</th><td>{{ leave.reason|default:"—" }}</td></tr>
+          <tr>
+            <th>Status</th>
+            <td>
+              {% if leave.status == "PENDING" %}
+                <span class="badge b-pending">Pending</span>
+              {% elif leave.status == "APPROVED" %}
+                <span class="badge b-approved">Approved</span>
+              {% elif leave.status == "REJECTED" %}
+                <span class="badge b-rejected">Rejected</span>
+              {% else %}
+                <span class="muted">{{ leave.get_status_display }}</span>
+              {% endif %}
+            </td>
+          </tr>
+        </table>
+
+        <form method="post" action="">
+          {% csrf_token %}
+          <div class="btnrow">
+            <button name="action" value="APPROVED" class="approve">Approve</button>
+            <button name="action" value="REJECTED" class="reject">Reject</button>
+            <a href="{% url 'leave:approval_page' leave.id %}" class="ghost">Open Approval Page</a>
+          </div>
+          <div class="hint">Note: Decisions for leaves covering <strong>today</strong> are blocked after <strong>10:00 AM IST</strong>.</div>
+        </form>
+        {% endif %}
+      {% endif %}
+
+      <div class="disclaimer">If this link was opened accidentally, you can safely close this page.</div>
+    </div>
+  </div>
+</body>
+</html>

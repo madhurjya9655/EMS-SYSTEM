@@ -1,0 +1,200 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block title %}Leave Routing Map | {{ site_title|default:_("Django site admin") }}{% endblock %}
+
+{% block extrastyle %}
+<style>
+  .routing-wrap { max-width: 1100px; }
+  .routing-meta { margin: 0 0 14px; color: #334155; }
+  .routing-meta code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; }
+  .pill {
+    display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; color:#fff; background:#ef4444;
+  }
+  .pill.ok { background:#10b981; }
+  textarea#id_content {
+    width:100%; min-height:420px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    font-size:13px; line-height:1.5; tab-size:2; white-space:pre; resize:vertical;
+  }
+  .actions { display:flex; gap:8px; align-items:center; margin-top:12px; flex-wrap: wrap; }
+  .helptext { color:#64748b; margin-top:10px; }
+  .sr { position:absolute; left:-9999px; }
+</style>
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% trans "Home" %}</a>
+  › <a href="{{ changelist_url }}">{{ opts.app_config.verbose_name|capfirst }} / {{ opts.verbose_name_plural|capfirst }}</a>
+  › {% trans "Leave Routing Map" %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="routing-wrap">
+  <h1>{% trans "Leave Routing Map" %}</h1>
+
+  <p class="routing-meta">
+    <strong>{% trans "File" %}:</strong>
+    <code>{{ file_path_display }}</code>
+    &nbsp;&nbsp;
+    {% if file_exists %}
+      <span class="pill ok">{% trans "Found" %}</span>
+    {% else %}
+      <span class="pill">{% trans "Not found (will be created on save)" %}</span>
+    {% endif %}
+  </p>
+
+  <div id="flash" class="helptext" aria-live="polite"></div>
+
+  <form method="post" action="" novalidate>
+    {% csrf_token %}
+    <label for="id_content" class="sr">{% trans "JSON content" %}</label>
+    <textarea id="id_content" name="content" spellcheck="false">{{ content }}</textarea>
+
+    <div class="actions">
+      {% if can_edit %}
+        <input type="submit" value="{% trans 'Save' %}" class="default" id="btn-save">
+      {% endif %}
+      <button type="button" id="btn-format">{% trans "Format JSON" %}</button>
+      <button type="button" id="btn-validate">{% trans "Validate" %}</button>
+      <button type="button" id="btn-sample">{% trans "Insert Sample" %}</button>
+      <button type="button" id="btn-copy">{% trans "Copy" %}</button>
+      <a id="btn-download" download="leave_routing.json" class="button">{% trans "Download" %}</a>
+      {% if not can_edit %}
+        <span class="helptext">{% trans "Read-only: only superusers may modify this file." %}</span>
+      {% endif %}
+    </div>
+  </form>
+
+  <p class="helptext">
+    {% trans "Accepted structures (emails are case-insensitive):" %}<br>
+    <code>
+      {<br>
+      &nbsp;&nbsp;"rajesh.sharma@example.com": { "to": "anil.verma@example.com", "cc": ["priya.das@example.com"] },<br>
+      &nbsp;&nbsp;"team@branch.example.com":    { "to": "lead@example.com",      "cc": [] }<br>
+      }<br><br>
+      <!-- or -->{{ "" }}<br>
+      {<br>
+      &nbsp;&nbsp;"rajesh.sharma@example.com": { "manager_email": "anil.verma@example.com", "cc_emails": ["priya.das@example.com"] }<br>
+      }
+    </code>
+  </p>
+</div>
+
+<script>
+(function(){
+  const area = document.getElementById('id_content');
+  const flash = document.getElementById('flash');
+  const btnFmt = document.getElementById('btn-format');
+  const btnVal = document.getElementById('btn-validate');
+  const btnCopy = document.getElementById('btn-copy');
+  const btnDl  = document.getElementById('btn-download');
+  const btnSave = document.getElementById('btn-save');
+  const btnSample = document.getElementById('btn-sample');
+
+  function setFlash(msg, ok){
+    flash.textContent = msg || '';
+    flash.style.color = ok ? '#065f46' : '#b91c1c';
+  }
+
+  function parseJSON() {
+    try {
+      const obj = JSON.parse(area.value || '{}');
+      return [obj, null];
+    } catch (e) {
+      return [null, e && e.message ? e.message : String(e)];
+    }
+  }
+
+  // Accept both shapes:
+  //  - {"email": {"to": "...", "cc": []}}
+  //  - {"email": {"manager_email": "...", "cc_emails": []}}
+  // and also if nested under {"by_employee": {...}}
+  function isValidMap(obj){
+    if (typeof obj !== 'object' || !obj) return false;
+
+    // If nested under by_employee, validate that object
+    const root = (obj.by_employee && typeof obj.by_employee === 'object') ? obj.by_employee : obj;
+
+    for (const [k, v] of Object.entries(root)) {
+      if (typeof v !== 'object' || !v) return false;
+
+      const manager = (typeof v.to === 'string' && v.to) ||
+                      (typeof v.manager_email === 'string' && v.manager_email);
+      const cc = (Array.isArray(v.cc) ? v.cc :
+                 (Array.isArray(v.cc_emails) ? v.cc_emails : null));
+
+      if (!manager || !cc) return false;
+
+      // quick email-ish checks (not strict)
+      if (!String(manager).includes('@')) return false;
+      for (const x of cc) {
+        if (typeof x !== 'string' || !x.includes('@')) return false;
+      }
+    }
+    return true;
+  }
+
+  btnFmt.addEventListener('click', function(){
+    const [obj, err] = parseJSON();
+    if (err) { setFlash('JSON error: ' + err, false); return; }
+    area.value = JSON.stringify(obj, null, 2);
+    setFlash('Formatted ✓', true);
+  });
+
+  btnVal.addEventListener('click', function(){
+    const [obj, err] = parseJSON();
+    if (err) { setFlash('JSON error: ' + err, false); return; }
+    if (!isValidMap(obj)) {
+      setFlash('Invalid structure. Expect {"email": {"to":"manager","cc":[...]}} or {"email": {"manager_email":"...","cc_emails":[...]}}', false);
+      return;
+    }
+    setFlash('Valid JSON & structure ✓', true);
+  });
+
+  btnCopy.addEventListener('click', async function(){
+    try {
+      await navigator.clipboard.writeText(area.value || '');
+      setFlash('Copied to clipboard ✓', true);
+    } catch(e){
+      setFlash('Copy failed: ' + (e.message || e), false);
+    }
+  });
+
+  function dataURLFromText(text){
+    return 'data:application/json;charset=utf-8,' + encodeURIComponent(text || '{}');
+  }
+  btnDl.addEventListener('click', function(){
+    btnDl.href = dataURLFromText(area.value || '{}');
+  });
+
+  if (btnSave){
+    btnSave.closest('form').addEventListener('submit', function(ev){
+      const [obj, err] = parseJSON();
+      if (err){
+        ev.preventDefault();
+        setFlash('Cannot save: JSON error: ' + err, false);
+        return;
+      }
+      if (!isValidMap(obj)){
+        ev.preventDefault();
+        setFlash('Cannot save: invalid structure. Use {"email": {"to":"manager","cc":[...]}} or {"email": {"manager_email":"...","cc_emails":[...]}}', false);
+      }
+    });
+  }
+
+  btnSample.addEventListener('click', function(){
+    const sample = {
+      "rajesh.sharma@example.com": {
+        "to": "anil.verma@example.com",
+        "cc": ["priya.das@example.com"]
+      }
+    };
+    area.value = JSON.stringify(sample, null, 2);
+    setFlash('Sample inserted ✓', true);
+  });
+})();
+</script>
+{% endblock %}

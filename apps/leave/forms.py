@@ -1,79 +1,111 @@
+# apps/leave/forms.py
 from __future__ import annotations
 
-from typing import Optional, Iterable
+from datetime import timedelta
+from typing import Optional
 
 from django import forms
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Group
 from django.utils import timezone
+from zoneinfo import ZoneInfo
 
-from .models import LeaveRequest, LeaveType, LeaveStatus
+from .models import LeaveRequest, LeaveStatus, LeaveType
 
+IST = ZoneInfo("Asia/Kolkata")
 User = get_user_model()
 
+ALLOWED_ATTACHMENT_EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".doc", ".docx"}
 
-# HTML5 datetime-local widget (renders and parses "YYYY-MM-DDTHH:MM")
-# We explicitly set format and accepted input formats for reliability across browsers.
-_DATETIME_LOCAL_FORMAT = "%Y-%m-%dT%H:%M"
-_DATETIME_LOCAL_INPUTS: Iterable[str] = (
-    "%Y-%m-%dT%H:%M",
-    "%Y-%m-%dT%H:%M:%S",
-)
 
-class DateTimeLocalInput(forms.DateTimeInput):
-    input_type = "datetime-local"
-    def __init__(self, *args, **kwargs):
-        kwargs.setdefault("format", _DATETIME_LOCAL_FORMAT)
-        super().__init__(*args, **kwargs)
+def _naive_to_ist(dt):
+    if not dt:
+        return dt
+    if timezone.is_naive(dt):
+        return timezone.make_aware(dt, IST)
+    return timezone.localtime(dt, IST)
 
 
 class LeaveRequestForm(forms.ModelForm):
     """
-    Employee leave application form.
-    - Uses HTML5 datetime-local inputs.
-    - Converts naive datetimes to timezone-aware (Asia/Kolkata via settings.TIME_ZONE).
-    - Validates end > start and half-day constraints.
-    - Optional 'manager' select (can override auto-assignment).
+    Thin-but-safe ModelForm:
+      - surfaces key fields,
+      - prevents overlaps (pending/approved),
+      - caps half-day duration to ≤ 6h (business rule),
+      - friendly attachment checks,
+      - defers strict same-day time gates to model.clean() (single source of truth).
     """
 
-    # Override model fields to wire in custom widgets / input formats
-    start_at = forms.DateTimeField(
-        widget=DateTimeLocalInput(attrs={"class": "form-control"}),
-        input_formats=_DATETIME_LOCAL_INPUTS,
-        help_text="Start date & time (IST).",
-    )
-    end_at = forms.DateTimeField(
-        widget=DateTimeLocalInput(attrs={"class": "form-control"}),
-        input_formats=_DATETIME_LOCAL_INPUTS,
-        help_text="End date & time (IST).",
-    )
     leave_type = forms.ModelChoiceField(
         queryset=LeaveType.objects.all().order_by("name"),
-        widget=forms.Select(attrs={"class": "form-select"}),
-        empty_label="-- Select Leave Type --",
-    )
-    is_half_day = forms.BooleanField(
-        required=False,
-        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
-        help_text="Half-day must start and end on the same calendar date.",
-    )
-    reason = forms.CharField(
-        widget=forms.Textarea(attrs={"class": "form-control", "rows": 3, "placeholder": "Reason for leave..."}),
-        help_text="Tell your manager why you need this leave.",
-    )
-    attachment = forms.FileField(
-        required=False,
-        widget=forms.ClearableFileInput(attrs={"class": "form-control"}),
-        help_text="Optional supporting file (PDF/Image, etc.).",
+        required=True,
+        empty_label="-- Select Type --",
+        label="Leave Type",
     )
 
-    # Optional: allow employee to suggest/override manager
-    manager = forms.ModelChoiceField(
-        queryset=User.objects.none(),  # set in __init__
-        required=False,
-        widget=forms.Select(attrs={"class": "form-select"}),
-        help_text="Optional: choose a specific manager. If left blank, your profile’s manager (or a default) will be used.",
+    start_at = forms.DateTimeField(
+        required=True,
+        label="From (IST)",
+        widget=forms.DateTimeInput(attrs={"type": "datetime-local"}),
+        help_text="Start date & time (IST).",
     )
+
+    end_at = forms.DateTimeField(
+        required=True,
+        label="To (IST)",
+        widget=forms.DateTimeInput(attrs={"type": "datetime-local"}),
+        help_text="End date & time (IST).",
+    )
+
+    is_half_day = forms.BooleanField(
+        required=False,
+        label="Half-day",
+        help_text="For a half-day, keep start & end on the same date and within 6 hours.",
+    )
+
+    reason = forms.CharField(
+        required=True,
+        label="Reason",
+        widget=forms.Textarea(attrs={"rows": 3, "placeholder": "e.g., Medical Checkup"}),
+    )
+
+    attachment = forms.FileField(
+        required=False,
+        label="Attachment (optional)",
+        help_text="Allowed: PDF, images, DOC/DOCX.",
+    )
+
+    def __init__(self, *args, user: Optional[User] = None, **kwargs):
+        """
+        Pass the logged-in user via `LeaveRequestForm(user=request.user)`.
+        We eagerly attach the employee to the instance so any model logic
+        (upload_to paths, snapshots, validations) can safely access it.
+        """
+        super().__init__(*args, **kwargs)
+        self.user = user
+
+        # Prefer instance.employee if editing; otherwise, use provided user.
+        if self.instance and getattr(self.instance, "employee_id", None):
+            self.employee = self.instance.employee
+        else:
+            self.employee = user
+
+        # **Critical**: ensure the instance has employee set before any save/clean hooks.
+        try:
+            if self.instance and not getattr(self.instance, "employee_id", None) and self.employee:
+                self.instance.employee = self.employee
+        except Exception:
+            # Best-effort: never crash the form init
+            pass
+
+        # Help text clarity
+        self.fields["start_at"].help_text = "Start date & time (IST)."
+        self.fields["end_at"].help_text = "End date & time (IST)."
+
+        # Basic Bootstrap-ish styling (optional; remove if you style via templates)
+        for name, field in self.fields.items():
+            if not isinstance(field.widget, (forms.CheckboxInput, forms.FileInput)):
+                field.widget.attrs.setdefault("class", "form-control")
+        self.fields["is_half_day"].widget.attrs.setdefault("class", "form-check-input")
 
     class Meta:
         model = LeaveRequest
@@ -84,74 +116,104 @@ class LeaveRequestForm(forms.ModelForm):
             "is_half_day",
             "reason",
             "attachment",
-            "manager",   # optional; model will still auto-assign if empty
         ]
 
-    def __init__(self, *args, **kwargs):
-        request_user: Optional[User] = kwargs.pop("user", None)
-        super().__init__(*args, **kwargs)
+    # ---------------------------
+    # Field-level sanitation
+    # ---------------------------
+    def clean_attachment(self):
+        f = self.cleaned_data.get("attachment")
+        if not f:
+            return f
+        name = (getattr(f, "name", "") or "").lower()
+        ext = ""
+        if "." in name:
+            ext = name[name.rfind(".") :]
+        if ext not in ALLOWED_ATTACHMENT_EXTS:
+            raise forms.ValidationError("Unsupported file type. Upload PDF, image, or DOC/DOCX.")
+        if getattr(f, "size", 0) and f.size > 10 * 1024 * 1024:  # 10 MB
+            raise forms.ValidationError("File too large. Max 10 MB.")
+        return f
 
-        # Build manager queryset: Manager group users OR superusers, active, not the applicant
-        mgr_qs = User.objects.filter(is_active=True)
-        try:
-            mgr_grp = Group.objects.get(name__iexact="Manager")
-            mgr_qs = mgr_qs.filter(forms.models.Q(groups=mgr_grp) | forms.models.Q(is_superuser=True)).distinct()
-        except Group.DoesNotExist:
-            mgr_qs = mgr_qs.filter(is_superuser=True)
+    def clean_start_at(self):
+        dt = self.cleaned_data.get("start_at")
+        return _naive_to_ist(dt)
 
-        if request_user and getattr(request_user, "pk", None):
-            mgr_qs = mgr_qs.exclude(pk=request_user.pk)
+    def clean_end_at(self):
+        dt = self.cleaned_data.get("end_at")
+        return _naive_to_ist(dt)
 
-        self.fields["manager"].queryset = mgr_qs.order_by("date_joined", "id")
+    # ---------------------------
+    # Form-level validation
+    # ---------------------------
+    def _overlaps_existing(self, start_at, end_at) -> bool:
+        """
+        Detect overlap with user's PENDING/APPROVED leaves.
+        [s1, e1] overlaps [s2, e2] if s1 < e2 and s2 < e1
+        """
+        if not self.employee:
+            return False
 
-        # If instance already decided, lock all fields
-        if getattr(self.instance, "pk", None) and self.instance.is_decided:
-            for f in self.fields.values():
-                f.disabled = True
+        qs = (
+            LeaveRequest.objects.filter(employee=self.employee)
+            .exclude(pk=self.instance.pk or 0)
+            .filter(status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED])
+        )
+        return qs.filter(start_at__lt=end_at, end_at__gt=start_at).exists()
 
-    # --- helpers ---
-    @staticmethod
-    def _to_aware(dt):
-        """Make date-time timezone-aware in the current TZ if it is naive."""
-        if not dt:
-            return dt
-        tz = timezone.get_current_timezone()  # should be Asia/Kolkata per settings
-        if timezone.is_naive(dt):
-            return timezone.make_aware(dt, tz)
-        # normalize to current tz for consistency
-        return timezone.localtime(dt, tz)
-
-    # --- cross-field validation ---
     def clean(self):
         cleaned = super().clean()
 
-        start_at = self._to_aware(cleaned.get("start_at"))
-        end_at = self._to_aware(cleaned.get("end_at"))
-        is_half_day = cleaned.get("is_half_day") is True
+        start_at: Optional[timezone.datetime] = cleaned.get("start_at")
+        end_at: Optional[timezone.datetime] = cleaned.get("end_at")
+        is_half_day: bool = bool(cleaned.get("is_half_day"))
 
-        # Push aware values back to cleaned_data so the model's clean() sees aware datetimes
+        if not start_at or not end_at:
+            return cleaned
+
+        # Safety: Ensure tz-aware and normalized to IST for business rules
+        start_at = _naive_to_ist(start_at)
+        end_at = _naive_to_ist(end_at)
         cleaned["start_at"] = start_at
         cleaned["end_at"] = end_at
 
-        # Basic presence
-        if not start_at:
-            self.add_error("start_at", "Please provide a start datetime.")
-        if not end_at:
-            self.add_error("end_at", "Please provide an end datetime.")
-        if self.errors:
-            return cleaned
-
-        # end > start
+        # Basic order check (model.clean also enforces)
         if end_at <= start_at:
             self.add_error("end_at", "End must be after Start.")
 
-        # Half-day rules
+        # Half-day constraints (same date, ≤ 6 hours)
         if is_half_day:
             if start_at.date() != end_at.date():
-                self.add_error("is_half_day", "Half-day must begin and end on the same calendar date.")
-            # Guard unusual long half-day (> 6 hours)
-            duration = end_at - start_at
-            if duration.total_seconds() > 6 * 3600:
-                self.add_error("is_half_day", "Half-day duration should be 6 hours or less.")
+                self.add_error("is_half_day", "Half-day must start and end on the same date.")
+            if (end_at - start_at) > timedelta(hours=6):
+                self.add_error("is_half_day", "Half-day duration should be ≤ 6 hours.")
+
+        # Prevent overlaps with user's other PENDING/APPROVED leaves
+        try:
+            if self._overlaps_existing(start_at, end_at):
+                raise forms.ValidationError(
+                    "You already have a pending/approved leave that overlaps this period."
+                )
+        except forms.ValidationError as e:
+            self.add_error(None, e)
 
         return cleaned
+
+    # ---------------------------
+    # Save
+    # ---------------------------
+    def save(self, commit: bool = True) -> LeaveRequest:
+        """
+        - Attach employee to the instance (double-sure).
+        - Let the model handle snapshots, blocked_days, strict time cutoffs,
+          and routing defaults.
+        """
+        obj: LeaveRequest = super().save(commit=False)
+
+        # **Double-safety** before model.save() triggers upload_to/snapshots.
+        if self.employee and not getattr(obj, "employee_id", None):
+            obj.employee = self.employee
+
+        if commit:
+            obj.save()
+        return obj

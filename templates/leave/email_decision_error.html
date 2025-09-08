@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Decision Error</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f8fafc;margin:0;padding:24px;}
+    .card{max-width:640px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+    .hd{padding:18px 20px;border-bottom:1px solid #e5e7eb}
+    .bd{padding:20px}
+    .err{background:#fef2f2;border:1px solid #fecaca;color:#7f1d1d;padding:12px;border-radius:10px}
+    .btn{display:inline-block;background:#111827;color:#fff;border-radius:8px;padding:10px 14px;text-decoration:none;margin-top:10px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="hd"><h1 style="margin:0">We couldn’t complete that action</h1></div>
+    <div class="bd">
+      <div class="err">
+        {{ message|default:"This link is invalid, expired, or the action is blocked by business rules (e.g., after 10:00 AM IST for today’s leaves)." }}
+      </div>
+      <p>
+        <a class="btn" href="{% url 'leave:manager_pending' %}">Back to Manager Queue</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>

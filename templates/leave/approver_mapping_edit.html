@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Change Approver Mapping{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h1 class="mb-1">Change Approver Mapping</h1>
+    <div class="text-muted" style="font-size:.95rem;">
+      {{ employee_obj.get_full_name|default:employee_obj.username }}
+      {% if employee_obj.email %}
+        <span class="badge text-bg-light border ms-2">{{ employee_obj.email }}</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <a class="btn btn-outline-secondary" href="{{ next_url|default:'/' }}">Back</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <p class="text-muted mb-4">
+      Map the selected employee to a <strong>Reporting person</strong> (approver) and an optional
+      <strong>CC person</strong>. The reporting person receives one-click approve/reject links in emails.
+    </p>
+
+    <div class="mb-3">
+      <label class="form-label">Employee</label>
+      <input class="form-control"
+             value="{{ employee_obj.get_full_name|default:employee_obj.username }}{% if employee_obj.email %} ({{ employee_obj.email }}){% endif %}"
+             disabled>
+    </div>
+
+    <div class="row g-4">
+      <div class="col-md-6">
+        <div class="d-flex justify-content-between align-items-center">
+          <label class="form-label mb-0">Reporting person <span class="text-danger">*</span></label>
+          {% if request.user.is_superuser %}
+            <a class="btn btn-sm btn-outline-primary"
+               href="{% url 'leave:approver_mapping_edit_reporting' employee_obj.id %}?next={{ next_url|urlencode }}">
+              {% if mapping and mapping.reporting_person %}Change{% else %}Set{% endif %}
+            </a>
+          {% endif %}
+        </div>
+        <input class="form-control mt-2"
+               value="{% if mapping and mapping.reporting_person %}{{ mapping.reporting_person.get_full_name|default:mapping.reporting_person.username }}{% if mapping.reporting_person.email %} ({{ mapping.reporting_person.email }}){% endif %}{% else %}—{% endif %}"
+               disabled>
+        <div class="form-text">Primary approver who receives one-click Approve/Reject links.</div>
+      </div>
+
+      <div class="col-md-6">
+        <div class="d-flex justify-content-between align-items-center">
+          <label class="form-label mb-0">CC person (optional)</label>
+          {% if request.user.is_superuser %}
+            <a class="btn btn-sm btn-outline-primary"
+               href="{% url 'leave:approver_mapping_edit_cc' employee_obj.id %}?next={{ next_url|urlencode }}">
+              {% if mapping and mapping.cc_person %}Change{% else %}Set{% endif %}
+            </a>
+          {% endif %}
+        </div>
+        <input class="form-control mt-2"
+               value="{% if mapping and mapping.cc_person %}{{ mapping.cc_person.get_full_name|default:mapping.cc_person.username }}{% if mapping.cc_person.email %} ({{ mapping.cc_person.email }}){% endif %}{% else %}—{% endif %}"
+               disabled>
+        <div class="form-text">Also notified on new leave requests.</div>
+      </div>
+    </div>
+
+    <div class="mt-4">
+      <a href="{{ next_url|default:'/' }}" class="btn btn-outline-secondary">Done</a>
+    </div>
+  </div>
+</div>
+
+<p class="text-muted mt-3" style="font-size:.95rem;">
+  Tip: If you cannot find someone in the editor list, ensure their user account is active and has an email address.
+</p>
+{% endblock %}

@@ -8,37 +8,31 @@ from django.db.backends.signals import connection_created
 
 load_dotenv()
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+# -----------------------------------------------------------------------------
+# PATHS
+# -----------------------------------------------------------------------------
+BASE_DIR = Path(__file__).resolve().parent.parent  # …/employee_management_system
 
-
-# =============================================================================
+# -----------------------------------------------------------------------------
 # ENV HELPERS
-# =============================================================================
-
+# -----------------------------------------------------------------------------
 def env_list(name: str, default_csv: str = "") -> List[str]:
-    """Parse comma-separated environment variable into list"""
     raw = os.getenv(name, default_csv) or ""
     return [part.strip() for part in raw.split(",") if part.strip()]
 
-
 def env_bool(name: str, default: bool = False) -> bool:
-    """Parse boolean environment variable"""
     raw = os.getenv(name, str(default))
     return str(raw).lower() in ("1", "true", "yes", "on")
 
-
 def env_int(name: str, default: int = 0) -> int:
-    """Parse integer environment variable"""
     try:
         return int(os.getenv(name, str(default)))
     except (ValueError, TypeError):
         return default
 
-
-# =============================================================================
-# CORE SETTINGS
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# CORE
+# -----------------------------------------------------------------------------
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-__dev-only-use-this__")
 DEBUG = env_bool("DEBUG", True)
 SITE_URL = os.getenv("SITE_URL", "https://ems-system-d26q.onrender.com")
@@ -54,34 +48,28 @@ CSRF_TRUSTED_ORIGINS = env_list(
     "https://ems-system-d26q.onrender.com",
 )
 
-# Add local origins in debug mode
 if DEBUG:
     for local_origin in ("http://localhost:8000", "http://127.0.0.1:8000", "http://0.0.0.0:8000"):
         if local_origin not in CSRF_TRUSTED_ORIGINS:
             CSRF_TRUSTED_ORIGINS.append(local_origin)
 
-# Proxy/SSL awareness for Render (critical for session cookies)
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
 
-# Cookie & security defaults
 CSRF_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_HTTPONLY = True
-SESSION_EXPIRE_AT_BROWSER_CLOSE = False  # persist logins
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False
 APPEND_SLASH = True
 
-# Make sure cookies are secure in prod and on Render
 SESSION_COOKIE_SECURE = True if (ON_RENDER or not DEBUG) else False
 CSRF_COOKIE_SECURE = True if (ON_RENDER or not DEBUG) else False
 
-# Extra hardening
 SECURE_CONTENT_TYPE_NOSNIFF = True
 
-# =============================================================================
-# APPLICATIONS
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# APPS
+# -----------------------------------------------------------------------------
 DJANGO_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -101,7 +89,8 @@ THIRD_PARTY_APPS = [
 LOCAL_APPS = [
     "apps.common",
     "apps.recruitment",
-    "apps.leave",
+    # IMPORTANT: use the AppConfig so signals (emails/audits) are registered
+    "apps.leave.apps.LeaveConfig",
     "apps.core",
     "apps.sales",
     "apps.reimbursement",
@@ -115,10 +104,9 @@ LOCAL_APPS = [
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # MIDDLEWARE
-# =============================================================================
-
+# -----------------------------------------------------------------------------
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -131,12 +119,13 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
+# IMPORTANT: your project package is "employee_management"
 ROOT_URLCONF = "employee_management.urls"
+WSGI_APPLICATION = "employee_management.wsgi.application"
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # TEMPLATES
-# =============================================================================
-
+# -----------------------------------------------------------------------------
 _template_options = {
     "context_processors": [
         "django.template.context_processors.debug",
@@ -152,7 +141,8 @@ _template_options = {
         "common_filters": "apps.common.templatetags.common_filters",
         "user_filters": "apps.users.templatetags.user_filters",
         "group_tags": "apps.common.templatetags.group_tags",
-        "permission_tags": "apps.common.templatetags.permission_tags",
+        # Use only the main permission module to avoid conflicts
+        "permission_tags": "apps.users.permissions",
         "model_extras": "apps.common.templatetags.model_extras",
     },
     "string_if_invalid": "" if DEBUG else "",
@@ -168,10 +158,9 @@ if DEBUG:
         }
     ]
 else:
-    # Cached loader for production
     TEMPLATES = [
         {
-            "BACKEND": "django.template.backends.django.DjangoDjangoTemplates",
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
             "DIRS": [BASE_DIR / "templates"],
             "APP_DIRS": False,
             "OPTIONS": {
@@ -189,12 +178,9 @@ else:
         }
     ]
 
-WSGI_APPLICATION = "employee_management.wsgi.application"
-
-# =============================================================================
-# DATABASE - OPTIMIZED SQLITE CONFIGURATION
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# DATABASE - SQLITE
+# -----------------------------------------------------------------------------
 DB_PATH = os.getenv("SQLITE_PATH") or str(BASE_DIR / "db.sqlite3")
 Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 
@@ -212,10 +198,9 @@ DATABASES = {
 DATABASE_CONNECTION_POOLING = False
 CONN_MAX_AGE = 0
 
-# =============================================================================
-# ROBUST SQLITE HANDLING (PRAGMAs + decoding)
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# SQLITE ROBUSTNESS (PRAGMAs + decoding)
+# -----------------------------------------------------------------------------
 def _robust_sqlite_decoder(val):
     if val is None:
         return None
@@ -251,7 +236,6 @@ try:
         sqlite3.register_converter(dt_type, _robust_sqlite_decoder)
 except Exception:
     pass
-
 
 def _configure_sqlite_connection(sender, connection, **kwargs):
     if connection.vendor != "sqlite":
@@ -333,10 +317,9 @@ try:
 except Exception:
     pass
 
-# =============================================================================
-# LOGGING - ENHANCED CONFIGURATION (UTF-8 safe)
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# LOGGING
+# -----------------------------------------------------------------------------
 LOGS_DIR = BASE_DIR / "logs"
 if not DEBUG and ON_RENDER:
     LOGS_DIR = Path("/tmp/logs")
@@ -391,10 +374,9 @@ LOGGING = {
     },
 }
 
-# =============================================================================
-# INTERNATIONALIZATION
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# I18N / TZ
+# -----------------------------------------------------------------------------
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -407,10 +389,9 @@ TIME_ZONE = "Asia/Kolkata"
 USE_I18N = True
 USE_TZ = True
 
-# =============================================================================
-# STATIC & MEDIA FILES
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# STATIC & MEDIA
+# -----------------------------------------------------------------------------
 STATIC_URL = "/static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
@@ -426,19 +407,17 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = os.getenv("MEDIA_ROOT") or ("/var/data/media" if ON_RENDER else str(BASE_DIR / "media"))
 Path(MEDIA_ROOT).mkdir(parents=True, exist_ok=True)
 
-# =============================================================================
-# AUTHENTICATION
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# AUTH
+# -----------------------------------------------------------------------------
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LOGIN_URL = "login"
-LOGIN_REDIRECT_URL = "/dashboard/"   # keep simple, avoids reverse issues on Render
+LOGIN_REDIRECT_URL = "/dashboard/"
 LOGOUT_REDIRECT_URL = "login"
 
-# =============================================================================
-# EMAIL CONFIGURATION - ENHANCED
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# EMAIL
+# -----------------------------------------------------------------------------
 EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = env_int("EMAIL_PORT", 587)
@@ -455,13 +434,17 @@ SEND_RECUR_EMAILS_ONLY_AT_10AM = env_bool("SEND_RECUR_EMAILS_ONLY_AT_10AM", True
 
 EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "[EMS] ")
 
-# =============================================================================
-# SECURITY SETTINGS (Prod)
-# =============================================================================
+# ----- Leave-specific email / token settings ---------------------------------
+LEAVE_EMAIL_FROM = os.getenv("LEAVE_EMAIL_FROM", DEFAULT_FROM_EMAIL)
+LEAVE_EMAIL_REPLY_TO_EMPLOYEE = env_bool("LEAVE_EMAIL_REPLY_TO_EMPLOYEE", True)
+LEAVE_DECISION_TOKEN_SALT = os.getenv("LEAVE_DECISION_TOKEN_SALT", "leave-action-v1")
+LEAVE_DECISION_TOKEN_MAX_AGE = env_int("LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)  # 7 days
 
+# -----------------------------------------------------------------------------
+# SECURITY (Prod)
+# -----------------------------------------------------------------------------
 if not DEBUG:
     SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", True)
-    # Cookies already set above; keep True here too
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
 
@@ -470,15 +453,12 @@ if not DEBUG:
     SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", True)
 
     SECURE_CONTENT_TYPE_NOSNIFF = True
-    # Kept for compatibility; harmless in modern Django
-    SECURE_BROWSER_XSS_FILTER = True
     X_FRAME_OPTIONS = "DENY"
     SECURE_REFERRER_POLICY = os.getenv("SECURE_REFERRER_POLICY", "strict-origin-when-cross-origin")
 
-# =============================================================================
-# THIRD-PARTY PACKAGES
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# THIRD-PARTY
+# -----------------------------------------------------------------------------
 CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
 CRISPY_TEMPLATE_PACK = "bootstrap5"
 
@@ -486,10 +466,9 @@ GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 GOOGLE_SHEET_SCOPES = os.getenv("GOOGLE_SHEET_SCOPES")
 
-# =============================================================================
-# TASK SYSTEM CONFIGURATION - OPTIMIZED
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# TASK SYSTEM
+# -----------------------------------------------------------------------------
 BULK_UPLOAD_BATCH_SIZE = env_int("BULK_UPLOAD_BATCH_SIZE", 200)
 BULK_UPLOAD_MAX_ROWS = env_int("BULK_UPLOAD_MAX_ROWS", 5000)
 EMAIL_BATCH_SIZE = env_int("EMAIL_BATCH_SIZE", 20)
@@ -504,11 +483,9 @@ RECURRING_TASK_LOOKAHEAD_DAYS = env_int("RECURRING_TASK_LOOKAHEAD_DAYS", 30)
 DASHBOARD_CACHE_TIMEOUT = env_int("DASHBOARD_CACHE_TIMEOUT", 300)
 TASK_LIST_PAGE_SIZE = env_int("TASK_LIST_PAGE_SIZE", 50)
 
-# =============================================================================
-# PERFORMANCE SETTINGS
-# =============================================================================
-
-# Default to DB-backed sessions (stable across dyno restarts)
+# -----------------------------------------------------------------------------
+# PERFORMANCE / CACHING
+# -----------------------------------------------------------------------------
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
 SESSION_COOKIE_AGE = 60 * 60 * 24 * 7  # 1 week
 
@@ -530,7 +507,6 @@ if REDIS_URL:
             "TIMEOUT": env_int("CACHE_TIMEOUT", 300),
         }
     }
-
 else:
     CACHES = {
         "default": {
@@ -541,15 +517,12 @@ else:
         }
     }
 
-# Faster JSON handling for responses (keeps emoji intact)
 JSON_DUMPS_PARAMS = {"ensure_ascii": False}
 
-# =============================================================================
-# RENDER.COM SPECIFIC SETTINGS
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# RENDER.COM SPECIFIC
+# -----------------------------------------------------------------------------
 if ON_RENDER:
-    # Force DB sessions and secure cookies behind proxy
     SESSION_ENGINE = "django.contrib.sessions.backends.db"
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
@@ -559,28 +532,21 @@ if ON_RENDER:
     FILE_UPLOAD_MAX_MEMORY_SIZE = min(FILE_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024)
     DATA_UPLOAD_MAX_MEMORY_SIZE = min(DATA_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024)
     EMAIL_FAIL_SILENTLY = True
-    STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
-# =============================================================================
-# DEVELOPMENT SETTINGS
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# DEVELOPMENT CONVENIENCES
+# -----------------------------------------------------------------------------
 if DEBUG:
     INTERNAL_IPS = ["127.0.0.1", "localhost"]
-
-    # Use console backend if no SMTP creds during local dev
-    if not EMAIL_HOST_USER:
+    if not os.getenv("EMAIL_HOST_USER"):
         EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-
-    # Keep dev relaxed
     SECURE_SSL_REDIRECT = False
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # CUSTOM SETTINGS VALIDATION
-# =============================================================================
-
+# -----------------------------------------------------------------------------
 def validate_email_settings():
     if not DEBUG and EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend":
         if not EMAIL_HOST_USER or not EMAIL_HOST_PASSWORD:
@@ -598,10 +564,9 @@ def validate_required_dirs():
 validate_email_settings()
 validate_required_dirs()
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # FEATURE FLAGS
-# =============================================================================
-
+# -----------------------------------------------------------------------------
 FEATURES = {
     "BULK_UPLOAD_ENABLED": env_bool("FEATURE_BULK_UPLOAD", True),
     "EMAIL_NOTIFICATIONS": env_bool("FEATURE_EMAIL_NOTIFICATIONS", True),
@@ -611,11 +576,15 @@ FEATURES = {
     "AUDIT_LOGGING": env_bool("FEATURE_AUDIT_LOGGING", True),
 }
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # CONSTANTS
-# =============================================================================
-
+# -----------------------------------------------------------------------------
 TASK_PRIORITIES = [("Low", "Low"), ("Medium", "Medium"), ("High", "High")]
 TASK_STATUSES = [("Pending", "Pending"), ("Completed", "Completed")]
 RECURRING_MODES = [("Daily", "Daily"), ("Weekly", "Weekly"), ("Monthly", "Monthly"), ("Yearly", "Yearly")]
 HELP_TICKET_STATUSES = [("Open", "Open"), ("In Progress", "In Progress"), ("Closed", "Closed")]
+
+# -----------------------------------------------------------------------------
+# LEAVE ROUTING FILE (used by the Routing Map admin page)
+# -----------------------------------------------------------------------------
+LEAVE_ROUTING_FILE = str(BASE_DIR / "apps" / "users" / "data" / "leave_routing.json")
