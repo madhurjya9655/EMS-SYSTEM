@@ -378,8 +378,8 @@
               <td>
                 <span class="badge bg-light text-dark">{{ lr.leave_type.name }}</span>
               </td>
-              <td class="text-nowrap">{{ lr.start_at|date:"M d, H:i" }}</td>
-              <td class="text-nowrap">{{ lr.end_at|date:"M d, H:i" }}</td>
+              <td class="text-nowrap">{% if lr.start_at %}{{ lr.start_at|date:"M d, H:i" }}{% else %}—{% endif %}</td>
+              <td class="text-nowrap">{% if lr.end_at %}{{ lr.end_at|date:"M d, H:i" }}{% else %}—{% endif %}</td>
               <td class="text-center">
                 {% if lr.is_half_day %}
                   <i class="fas fa-check-circle text-success" title="Half-day"></i>
@@ -424,7 +424,7 @@
               <td>
                 {% if lr.status == 'PENDING' %}
                   <button type="button" class="btn btn-delete btn-sm" 
-                          onclick="confirmDelete({{ lr.id }}, '{{ lr.leave_type.name }}', '{{ lr.start_at|date:"M d" }}')"
+                          onclick="confirmDelete({{ lr.id }}, '{{ lr.leave_type.name|escapejs }}', '{% if lr.start_at %}{{ lr.start_at|date:"M d"|escapejs }}{% else %}—{% endif %}')"
                           title="Delete leave request">
                     <i class="fas fa-trash"></i>
                   </button>
@@ -515,7 +515,7 @@ function toggleSelectAll() {
   const selectAll = document.getElementById('selectAll');
   const checkboxes = document.querySelectorAll('.leave-checkbox');
   
-  checkboxes.forEach(checkbox => {
+  checkboxes.forEach(function(checkbox) {
     checkbox.checked = selectAll.checked;
   });
   
@@ -554,7 +554,9 @@ function showBulkActions() {
 }
 
 function clearSelection() {
-  document.querySelectorAll('.leave-checkbox').forEach(cb => cb.checked = false);
+  document.querySelectorAll('.leave-checkbox').forEach(function(cb) {
+    cb.checked = false;
+  });
   document.getElementById('selectAll').checked = false;
   updateBulkActions();
 }
@@ -562,8 +564,8 @@ function clearSelection() {
 // Delete Functions
 function confirmDelete(leaveId, leaveType, startDate) {
   document.getElementById('deleteDetails').innerHTML = 
-    `<strong>${leaveType}</strong><br>Start Date: ${startDate}`;
-  document.getElementById('deleteForm').action = `/leave/delete/${leaveId}/`;
+    '<strong>' + leaveType + '</strong><br>Start Date: ' + startDate;
+  document.getElementById('deleteForm').action = '/leave/delete/' + leaveId + '/';
   
   const modal = new bootstrap.Modal(document.getElementById('deleteModal'));
   modal.show();
@@ -579,7 +581,9 @@ function confirmBulkDelete() {
 
 function executeBulkDelete() {
   const checkboxes = document.querySelectorAll('.leave-checkbox:checked');
-  const ids = Array.from(checkboxes).map(cb => cb.value);
+  const ids = Array.from(checkboxes).map(function(cb) {
+    return cb.value;
+  });
   
   // Create form for bulk delete
   const form = document.createElement('form');
@@ -595,7 +599,7 @@ function executeBulkDelete() {
   form.appendChild(csrfInput);
   
   // Add leave IDs
-  ids.forEach(id => {
+  ids.forEach(function(id) {
     const input = document.createElement('input');
     input.type = 'hidden';
     input.name = 'leave_ids';

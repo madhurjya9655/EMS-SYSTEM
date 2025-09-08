@@ -141,8 +141,6 @@ _template_options = {
         "common_filters": "apps.common.templatetags.common_filters",
         "user_filters": "apps.users.templatetags.user_filters",
         "group_tags": "apps.common.templatetags.group_tags",
-        # Use only the main permission module to avoid conflicts
-        "permission_tags": "apps.users.permissions",
         "model_extras": "apps.common.templatetags.model_extras",
     },
     "string_if_invalid": "" if DEBUG else "",
