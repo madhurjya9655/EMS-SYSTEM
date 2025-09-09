@@ -2,98 +2,78 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta, date
-from typing import Iterable, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple, Iterable
 from zoneinfo import ZoneInfo
+from urllib.parse import urljoin
 
 from django.conf import settings
-from django.contrib.auth import get_user_model
 from django.core import signing
 from django.core.mail import EmailMultiAlternatives
-from django.template.loader import render_to_string
+from django.template.loader import get_template
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.leave.models import (
-    LeaveRequest,
-    LeaveDecisionAudit,
-    DecisionAction,
-)
+from apps.leave.models import LeaveRequest, LeaveDecisionAudit, DecisionAction
+from django.contrib.auth import get_user_model
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
 IST = ZoneInfo("Asia/Kolkata")
 TOKEN_SALT = getattr(settings, "LEAVE_DECISION_TOKEN_SALT", "leave-action-v1")
-TOKEN_MAX_AGE_SECONDS = getattr(settings, "LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)
+TOKEN_MAX_AGE_SECONDS = getattr(settings, "LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)  # enforced by view
 
-
-# ----------------------------------------------------------------------
-# Helpers
-# ----------------------------------------------------------------------
-def _site_base_url() -> str:
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+def _site_base() -> str:
     base = (
         getattr(settings, "SITE_URL", "")
         or getattr(settings, "SITE_BASE_URL", "")
         or "http://localhost:8000"
     ).strip()
-    return base.rstrip("/")
+    return base.rstrip("/") + "/"
 
+def _abs_url(path: str) -> str:
+    return urljoin(_site_base(), path.lstrip("/"))
 
-def _abs(path: str) -> str:
-    return f"{_site_base_url()}{path}"
-
-
-def _ist(dt):
+def _format_ist(dt) -> str:
     try:
-        return timezone.localtime(dt, IST)
+        return timezone.localtime(dt, IST).strftime("%d %b %Y, %I:%M %p")
     except Exception:
-        return dt
+        return str(dt)
 
-
-def _format_dates_for_subject(lr: LeaveRequest) -> str:
-    """
-    Compact human-readable range for email subject.
-    Uses IST, inclusive end date.
-    """
+def _email_enabled() -> bool:
     try:
-        s = _ist(lr.start_at).date()
-        # inclusive end: subtract 1 microsecond then take date
-        e = _ist(lr.end_at - timedelta(microseconds=1)).date()
+        return bool(getattr(settings, "FEATURES", {}).get("EMAIL_NOTIFICATIONS", True))
     except Exception:
-        s = lr.start_at.date()
-        e = lr.end_at.date()
+        return True
 
-    if s == e:
-        return s.strftime("%d %b %Y")
-    if s.month == e.month and s.year == e.year:
-        return f"{s.day}–{e.day} {s.strftime('%b %Y')}"
-    return f"{s.strftime('%d %b %Y')} – {e.strftime('%d %b %Y')}"
+def _render_pair(html_tpl: str, txt_tpl: str, context: Dict) -> Tuple[str, str]:
+    html = get_template(html_tpl).render(context)
+    txt = get_template(txt_tpl).render(context)
+    return html, txt
 
-
-def _approval_page_url(lr: LeaveRequest) -> str:
-    return _abs(reverse("leave:approval_page", args=[lr.id]))
-
-
-def _token_links_for_recipient(lr: LeaveRequest, recipient_email: str) -> Tuple[str, str]:
-    """
-    Build one-click token links for the given recipient.
-    """
-    email_norm = (recipient_email or "").strip().lower()
-    base = {"leave_id": int(lr.id), "actor_email": email_norm, "manager_email": email_norm}
-    approve = signing.dumps({**base, "action": "approve"}, salt=TOKEN_SALT)
-    reject = signing.dumps({**base, "action": "reject"}, salt=TOKEN_SALT)
-    return (
-        _abs(reverse("leave:token_decide", args=[approve])) + "?a=APPROVED",
-        _abs(reverse("leave:token_decide", args=[reject])) + "?a=REJECTED",
+def _send(subject: str, to_addr: str, cc: List[str], reply_to: List[str], html: str, txt: str) -> None:
+    if not to_addr:
+        logger.warning("Leave email suppressed: empty TO address.")
+        return
+    msg = EmailMultiAlternatives(
+        subject=subject,
+        body=txt,
+        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
+        to=[to_addr],
+        cc=cc or None,
+        reply_to=reply_to or None,
     )
+    msg.attach_alternative(html, "text/html")
+    msg.send(fail_silently=getattr(settings, "EMAIL_FAIL_SILENTLY", True))
 
-
-def _already_sent_recent(
-    leave: LeaveRequest, kind_hint: str | None = None, within_seconds: int = 90
-) -> bool:
+def _already_sent_recent(leave: LeaveRequest, kind_hint: str | None = None, within_seconds: int = 90) -> bool:
+    """Light duplicate suppression using EMAIL_SENT audits."""
     try:
-        since = timezone.now() - timedelta(seconds=within_seconds)
+        since = timezone.now() - timezone.timedelta(seconds=within_seconds)
         qs = LeaveDecisionAudit.objects.filter(
             leave=leave, action=DecisionAction.EMAIL_SENT, decided_at__gte=since
         )
@@ -103,55 +83,42 @@ def _already_sent_recent(
     except Exception:
         return False
 
+@dataclass
+class _TokenLinks:
+    approve: Optional[str]
+    reject: Optional[str]
 
-def _audit_sent(
-    leave: LeaveRequest, kind: str, to: Iterable[str], cc: Iterable[str] | None = None
-) -> None:
-    try:
-        LeaveDecisionAudit.objects.create(
-            leave=leave,
-            action=DecisionAction.EMAIL_SENT,
-            decided_by=None if kind != "decision" else leave.approver,
-            extra={"kind": kind, "to": list(to), "cc": list(cc or [])},
-        )
-    except Exception:
-        logger.exception(
-            "Failed to write EMAIL_SENT audit (kind=%s, leave=%s)",
-            kind,
-            getattr(leave, "id", "?"),
-        )
+def _build_token_links(leave: LeaveRequest, recipient_email: str) -> _TokenLinks:
+    """Create one-click links bound to the recipient's address."""
+    recipient_email = (recipient_email or "").strip().lower()
+    if not recipient_email:
+        return _TokenLinks(None, None)
 
+    payload_base = {
+        "leave_id": int(leave.id),
+        "actor_email": recipient_email,
+        "manager_email": recipient_email,  # legacy key for older handlers
+    }
 
-def _datespan_ist(start_dt, end_dt) -> List[date]:
-    """Inclusive list of IST dates between start_dt and end_dt (order agnostic)."""
-    if not (start_dt and end_dt):
-        return []
-    s = _ist(start_dt).date()
-    e = _ist(end_dt).date()
+    approve_token = signing.dumps({**payload_base, "action": "approve"}, salt=TOKEN_SALT)
+    reject_token = signing.dumps({**payload_base, "action": "reject"}, salt=TOKEN_SALT)
+
+    approve_url = _abs_url(reverse("leave:leave_action_via_token", args=[approve_token])) + "?a=APPROVED"
+    reject_url  = _abs_url(reverse("leave:leave_action_via_token", args=[reject_token])) + "?a=REJECTED"
+    return _TokenLinks(approve=approve_url, reject=reject_url)
+
+def _duration_days_ist(leave: LeaveRequest) -> float:
+    """Inclusive day count in IST, respecting half-day."""
+    if not (leave.start_at and leave.end_at):
+        return 0.0
+    s = timezone.localtime(leave.start_at, IST).date()
+    e = timezone.localtime(leave.end_at, IST).date()
     if e < s:
         s, e = e, s
-    out: List[date] = []
-    cur = s
-    while cur <= e:
-        out.append(cur)
-        cur = cur + timedelta(days=1)
-    return out
-
-
-def _duration_days(leave: LeaveRequest) -> float:
-    """
-    Duration in days using IST, matching how UI/admin calculates:
-    - half-day if single-date half-day
-    - otherwise number of unique dates in span
-    """
-    span = _datespan_ist(leave.start_at, leave.end_at)
-    if not span:
-        return 0.0
-    uniq = set(span)
-    if leave.is_half_day and len(uniq) == 1:
+    days = (e - s).days + 1
+    if leave.is_half_day and days == 1:
         return 0.5
-    return float(len(uniq))
-
+    return float(days)
 
 def _employee_display_name(user) -> str:
     try:
@@ -159,13 +126,7 @@ def _employee_display_name(user) -> str:
     except Exception:
         return (getattr(user, "username", "") or "").strip()
 
-
-def _manager_name_for_email(leave: LeaveRequest, manager_email: str) -> Optional[str]:
-    """
-    Try to show a pretty manager name for header:
-    - If leave.reporting_person matches email, use their full name/username
-    - Else look up a User with that email
-    """
+def _manager_display_name(leave: LeaveRequest, manager_email: str) -> Optional[str]:
     em = (manager_email or "").strip().lower()
     if not em:
         return None
@@ -182,50 +143,40 @@ def _manager_name_for_email(leave: LeaveRequest, manager_email: str) -> Optional
         pass
     return None
 
-
-def _resolve_rp_cc_from_args_or_mapping(
+def _resolve_recipients(
     leave: LeaveRequest,
     manager_email: Optional[str],
     cc_list: Optional[Iterable[str]],
 ) -> Tuple[str, List[str]]:
     """
-    Return (manager_email, cc_list) using explicit args > model mapping > routing fallback.
-    Emails are normalized to lowercase/trimmed.
+    Return (to, cc) using explicit args > model snapshot > routing fallback.
     """
     if manager_email:
         return manager_email.strip().lower(), [e.strip().lower() for e in (cc_list or []) if e]
 
-    # Prefer model mapping present on the leave instance
+    # Prefer model snapshot
     if getattr(leave, "reporting_person", None) and getattr(leave.reporting_person, "email", None):
         to_addr = leave.reporting_person.email.strip().lower()
         cc = []
-        # cc_person is optional on the LeaveRequest snapshot/model; guard it.
         if getattr(leave, "cc_person", None) and getattr(leave.cc_person, "email", None):
             cc.append(leave.cc_person.email.strip().lower())
         return to_addr, cc
 
-    # Fallback to dynamic routing
+    # Fallback: dynamic routing
     try:
         from apps.users.routing import recipients_for_leave
-
-        emp_email = (
-            leave.employee_email or getattr(leave.employee, "email", "") or ""
-        ).strip().lower()
+        emp_email = (leave.employee_email or getattr(leave.employee, "email", "") or "").strip().lower()
         mapping = recipients_for_leave(emp_email) or {}
         to_addr = (mapping.get("to") or "").strip().lower()
         cc = [e.strip().lower() for e in (mapping.get("cc") or []) if e]
         return to_addr, cc
     except Exception:
-        logger.warning(
-            "Could not resolve routing; no recipients for leave id=%s",
-            getattr(leave, "id", None),
-        )
+        logger.warning("Could not resolve recipients for leave id=%s", getattr(leave, "id", None))
         return "", []
 
-
-# ----------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Public API
-# ----------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 def send_leave_request_email(
     leave: LeaveRequest,
     manager_email: Optional[str] = None,
@@ -234,177 +185,132 @@ def send_leave_request_email(
     force: bool = False,
 ) -> None:
     """
-    Notify Reporting Person (and CC) about a new leave request.
-    Renders templates/email/leave_applied.{html,txt}
+    Send the initial leave request to the Reporting Person (TO) and CC.
+    Templates:
+      - email/leave_applied.html
+      - email/leave_applied.txt
     """
-    # allow forced resend (e.g., after editing routing)
-    if not force and _already_sent_recent(leave, kind_hint="request"):
-        logger.info(
-            "Suppressing duplicate request email for leave #%s (recent audit found).",
-            leave.id,
-        )
+    if not _email_enabled():
         return
 
-    to_addr, cc = _resolve_rp_cc_from_args_or_mapping(leave, manager_email, cc_list)
+    # Light duplicate suppression (unless force=True)
+    if not force and _already_sent_recent(leave, kind_hint="request"):
+        logger.info("Suppressing duplicate request email for leave #%s (recent audit).", leave.id)
+        return
+
+    to_addr, cc = _resolve_recipients(leave, manager_email, cc_list)
     if not to_addr:
         logger.warning("Request email suppressed: no RP email for leave #%s.", leave.id)
         return
 
-    # URLs
-    token_approve_url, token_reject_url = _token_links_for_recipient(leave, to_addr)
-    # Approval-page buttons (login flow). We add a hint param (?a=...) for UX.
-    approval_page = _approval_page_url(leave)
-    approve_url = f"{approval_page}?a=APPROVED"
-    reject_url = f"{approval_page}?a=REJECTED"
+    tokens = _build_token_links(leave, to_addr)
 
-    # People
+    # Approval page (login) with hint
+    approval_page_url = _abs_url(reverse("leave:approval_page", args=[leave.id]))
+    approve_url = f"{approval_page_url}?a=APPROVED"
+    reject_url  = f"{approval_page_url}?a=REJECTED"
+
     employee_name = leave.employee_name or _employee_display_name(leave.employee)
-    manager_name = _manager_name_for_email(leave, to_addr)
+    manager_name = _manager_display_name(leave, to_addr)
 
-    # Subject
     subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
-    subject = f"{subject_prefix}Leave Request — {employee_name} ({_format_dates_for_subject(leave)})"
+    # Compact dates in subject
+    s = _format_ist(leave.start_at)
+    e = _format_ist(leave.end_at)
+    subject = f"{subject_prefix}Leave Request — {employee_name} (#{leave.id})"
 
-    # Context for templates
     ctx = {
-        # employee
-        "employee_name": employee_name,
-        "employee_email": (leave.employee_email or getattr(leave.employee, "email", "") or "").strip(),
-        "employee_id": getattr(leave, "employee_id", "") or "",
-        "employee_phone": getattr(leave, "employee_phone", "") or "",
-        "employee_designation": getattr(leave, "employee_designation", "") or "",
-        # routing
-        "manager_email": to_addr,
-        "manager_name": manager_name,
-        "cc_list": list(cc or []),
-        # leave
+        "site_url": _site_base().rstrip("/"),
         "leave_id": leave.id,
         "leave_type": getattr(leave.leave_type, "name", str(leave.leave_type)),
-        "start_at_ist": _ist(leave.start_at).strftime("%d %b %Y, %I:%M %p"),
-        "end_at_ist": _ist(leave.end_at).strftime("%d %b %Y, %I:%M %p"),
-        "is_half_day": bool(leave.is_half_day),
-        "reason": (leave.reason or "").strip(),
-        "duration_days": _duration_days(leave),
-        "blocked_days": getattr(leave, "blocked_days", None),
-        # actions
+        "start_at_ist": _format_ist(leave.start_at),
+        "end_at_ist": _format_ist(leave.end_at),
+        "reason": leave.reason or "",
+        "employee_name": employee_name,
+        "employee_email": (leave.employee_email or getattr(leave.employee, "email", "") or "").strip(),
+        "employee_designation": getattr(leave, "employee_designation", "") or "",
+        "is_half_day": bool(getattr(leave, "is_half_day", False)),
+        "duration_days": _duration_days_ist(leave),
+        "manager_name": manager_name,
+        "manager_email": to_addr,
+        "cc_list": list(cc or []),
+        # Buttons (approval page)
         "approve_url": approve_url,
         "reject_url": reject_url,
-        # One-click tokens (optional)
-        "token_approve_url": token_approve_url,
-        "token_reject_url": token_reject_url,
-        # site
-        "site_url": _site_base_url(),
+        "approval_page_url": approval_page_url,
+        # One-click tokens for the RP (TO) only
+        "token_approve_url": tokens.approve,
+        "token_reject_url": tokens.reject,
     }
 
-    # Render templates
-    body_txt = render_to_string("email/leave_applied.txt", ctx)
-    body_html = render_to_string("email/leave_applied.html", ctx)
+    html, txt = _render_pair("email/leave_applied.html", "email/leave_applied.txt", ctx)
+    reply_to = [e for e in [ctx["employee_email"]] if e]
 
-    # Build message
-    msg = EmailMultiAlternatives(
-        subject=subject,
-        body=body_txt,
-        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
-        to=[to_addr],
-        cc=list(cc) or None,
-        reply_to=[
-            e
-            for e in [
-                (leave.employee_email or getattr(leave.employee, "email", "")),
-            ]
-            if e
-        ],
-    )
-    msg.attach_alternative(body_html, "text/html")
-
-    try:
-        msg.send(fail_silently=False)
-        _audit_sent(leave, "request", to=[to_addr], cc=cc)
-    except Exception:
-        logger.exception("Failed to send leave request email (leave #%s).", leave.id)
-
+    _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
+    # Let model’s post_save log EMAIL_SENT to avoid double audits
 
 def send_leave_decision_email(leave: LeaveRequest) -> None:
     """
-    Notify employee about APPROVED/REJECTED decision.
-    Renders templates/email/leave_decision.{html,txt}
+    Send the approve/reject decision email to the employee.
+    Templates:
+      - email/leave_decision.html
+      - email/leave_decision.txt
     """
-    if _already_sent_recent(leave, kind_hint="decision"):
-        logger.info(
-            "Suppressing duplicate decision email for leave #%s (recent audit found).",
-            leave.id,
-        )
+    if not _email_enabled():
         return
 
-    to_addr: Optional[str] = (
-        leave.employee_email or getattr(leave.employee, "email", "") or ""
-    ).strip()
+    # Light suppression
+    if _already_sent_recent(leave, kind_hint="decision"):
+        logger.info("Suppressing duplicate decision email for leave #%s (recent audit).", leave.id)
+        return
+
+    to_addr: Optional[str] = (leave.employee_email or getattr(leave.employee, "email", "") or "").strip()
     if not to_addr:
-        logger.info(
-            "Decision email suppressed: employee has no email (leave #%s).",
-            leave.id,
-        )
+        logger.info("Decision email suppressed: employee has no email (leave #%s).", leave.id)
         return
 
     status_label = leave.get_status_display()
-    subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
-    subject = f"{subject_prefix}Leave {status_label} — {_format_dates_for_subject(leave)}"
-
-    approver_name = None
+    approver_name = ""
     try:
-        if getattr(leave, "approver", None):
-            approver_name = (
-                getattr(leave.approver, "get_full_name", lambda: "")() or leave.approver.username
-            ).strip()
+        ap = getattr(leave, "approver", None) or getattr(leave, "reporting_person", None)
+        if ap:
+            approver_name = (getattr(ap, "get_full_name", lambda: "")() or ap.username or "").strip()
     except Exception:
-        approver_name = "Manager"
+        approver_name = ""
 
     ctx = {
-        # decision
-        "status": status_label,
-        "approver_name": approver_name or "Manager",
-        "decided_at_ist": _ist(getattr(leave, "decided_at", timezone.now())).strftime(
-            "%d %b %Y, %I:%M %p"
-        ),
-        "decision_comment": (getattr(leave, "decision_comment", "") or "").strip(),
-        # employee
-        "employee_name": leave.employee_name or _employee_display_name(leave.employee),
-        # leave
+        "site_url": _site_base().rstrip("/"),
         "leave_id": leave.id,
         "leave_type": getattr(leave.leave_type, "name", str(leave.leave_type)),
-        "start_at_ist": _ist(leave.start_at).strftime("%d %b %Y, %I:%M %p"),
-        "end_at_ist": _ist(leave.end_at).strftime("%d %b %Y, %I:%M %p"),
-        "is_half_day": bool(leave.is_half_day),
-        "reason": (leave.reason or "").strip(),
-        "duration_days": _duration_days(leave),
-        "blocked_days": getattr(leave, "blocked_days", None),
-        # site
-        "site_url": _site_base_url(),
+        "start_at_ist": _format_ist(leave.start_at),
+        "end_at_ist": _format_ist(leave.end_at),
+        "employee_name": leave.employee_name or _employee_display_name(leave.employee),
+        "decided_at_ist": _format_ist(leave.decided_at or timezone.now()),
+        "decision_comment": (leave.decision_comment or "").strip(),
+        "status": status_label,
+        "is_half_day": bool(getattr(leave, "is_half_day", False)),
+        "duration_days": _duration_days_ist(leave),
+        "reason": leave.reason or "",
+        "approver_name": approver_name,
     }
 
-    body_txt = render_to_string("email/leave_decision.txt", ctx)
-    body_html = render_to_string("email/leave_decision.html", ctx)
+    subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
+    subject = f"{subject_prefix}Leave {status_label} — #{leave.id}"
+
+    html, txt = _render_pair("email/leave_decision.html", "email/leave_decision.txt", ctx)
 
     reply_to: List[str] = []
     try:
         if getattr(leave.approver, "email", ""):
             reply_to.append(leave.approver.email)
-        elif getattr(leave.reporting_person, "email", ""):
-            reply_to.append(leave.reporting_person.email)
+        else:
+            # fallback to routing manager so employee can reply
+            from apps.users.routing import recipients_for_leave
+            routing = recipients_for_leave(ctx["employee_name"])
+            if routing.get("to"):
+                reply_to.append(routing["to"])
     except Exception:
         pass
 
-    msg = EmailMultiAlternatives(
-        subject=subject,
-        body=body_txt,
-        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
-        to=[to_addr],
-        reply_to=reply_to or None,
-    )
-    msg.attach_alternative(body_html, "text/html")
-
-    try:
-        msg.send(fail_silently=False)
-        _audit_sent(leave, "decision", to=[to_addr])
-    except Exception:
-        logger.exception("Failed to send leave decision email (leave #%s).", leave.id)
+    _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
+    # Let model code log EMAIL_SENT

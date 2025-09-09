@@ -126,11 +126,12 @@ def _on_mapping_changed(sender, instance: ApproverMapping, created: bool, **kwar
             lr.cc_person = new_cc
             lr.save(update_fields=["reporting_person", "cc_person", "updated_at"])
 
-            # Resend to the new recipients (service handles subject/body & throttling)
+            # Resend to the new recipients (bypass recent-duplicate suppression)
             send_leave_request_email(
                 lr,
                 manager_email=(new_rp.email or None),
                 cc_list=[new_cc.email] if getattr(new_cc, "email", None) else [],
+                force=True,  # ensure resend after mapping changes
             )
 
             logger.info(

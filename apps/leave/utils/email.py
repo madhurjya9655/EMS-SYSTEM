@@ -109,6 +109,20 @@ def _build_token_links(leave, recipient_email: str) -> _TokenLinks:
     return _TokenLinks(approve=approve_url, reject=reject_url)
 
 
+def _duration_days_ist(leave) -> float:
+    """Inclusive day count in IST, respecting half-day."""
+    if not (leave.start_at and leave.end_at):
+        return 0.0
+    s = timezone.localtime(leave.start_at, IST).date()
+    e = timezone.localtime(leave.end_at, IST).date()
+    if e < s:
+        s, e = e, s
+    days = (e - s).days + 1
+    if leave.is_half_day and days == 1:
+        return 0.5
+    return float(days)
+
+
 # ---------------------------------------------------------------------------
 # Public API (called from models.signals)
 # ---------------------------------------------------------------------------
@@ -130,11 +144,19 @@ def send_leave_applied_email(leave) -> None:
         manager_addr: str = (routing.get("to") or "").strip().lower()
         cc_list: List[str] = [e.strip().lower() for e in (routing.get("cc") or []) if e]
 
-        # Links
-        queue_url = _abs_url(reverse("leave:manager_pending"))
+        # Specific approval page for this leave
         approval_page_url = _abs_url(reverse("leave:approval_page", args=[leave.id]))
 
-        # Common context (recipient-specific details will be added per email)
+        # Manager display name (best effort)
+        manager_name = ""
+        try:
+            rp = getattr(leave, "reporting_person", None)
+            if rp:
+                manager_name = (getattr(rp, "get_full_name", lambda: "")() or rp.username or "").strip()
+        except Exception:
+            manager_name = ""
+
+        # Common context (recipient-specific details added per email)
         base_ctx = {
             "site_url": _site_base().rstrip("/"),
             "leave_id": leave.id,
@@ -145,16 +167,19 @@ def send_leave_applied_email(leave) -> None:
             "employee_name": leave.employee_name or (getattr(leave.employee, "get_full_name", lambda: "")() or leave.employee.username),
             "employee_email": employee_email,
             "employee_designation": leave.employee_designation or "",
-            # App (login) links — safe defaults
-            "approve_url": queue_url,
-            "reject_url": queue_url,
+            "is_half_day": bool(getattr(leave, "is_half_day", False)),
+            "duration_days": _duration_days_ist(leave),
+            "manager_name": manager_name,
+            # Buttons in the template should open the approval page for this leave
+            "approve_url": approval_page_url,
+            "reject_url": approval_page_url,
             "approval_page_url": approval_page_url,
         }
 
         subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
         subject = f"{subject_prefix}Leave Request — {base_ctx['employee_name']} (#{leave.id})"
 
-        # Send per recipient so tokens are bound to the exact recipient email.
+        # Per-recipient send so tokens are bound to the exact address
         recipients: List[str] = [e for e in [manager_addr, *cc_list] if e]
 
         for rec in recipients:
@@ -169,7 +194,6 @@ def send_leave_applied_email(leave) -> None:
             }
             html, txt = _render_pair("email/leave_applied.html", "email/leave_applied.txt", ctx)
             reply_to = [e for e in [employee_email] if e]
-            # We do not CC others to avoid wrong-token confusion; everyone gets their own actionable email.
             _send(subject, rec, cc=[], reply_to=reply_to, html=html, txt=txt)
             _audit_email_sent(leave, "applied", rec, [])
 
@@ -190,6 +214,15 @@ def send_leave_decision_email(leave) -> None:
             logger.warning("Decision email suppressed: employee has no email (leave #%s).", leave.id)
             return
 
+        # Approver display name (best effort)
+        approver_name = ""
+        try:
+            ap = getattr(leave, "approver", None) or getattr(leave, "reporting_person", None)
+            if ap:
+                approver_name = (getattr(ap, "get_full_name", lambda: "")() or ap.username or "").strip()
+        except Exception:
+            approver_name = ""
+
         status_label = leave.get_status_display()
         context = {
             "site_url": _site_base().rstrip("/"),
@@ -201,6 +234,10 @@ def send_leave_decision_email(leave) -> None:
             "decided_at_ist": _format_ist(leave.decided_at or timezone.now()),
             "decision_comment": leave.decision_comment or "",
             "status": status_label,
+            "is_half_day": bool(getattr(leave, "is_half_day", False)),
+            "duration_days": _duration_days_ist(leave),
+            "reason": leave.reason or "",
+            "approver_name": approver_name,
         }
 
         subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
