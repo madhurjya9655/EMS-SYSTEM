@@ -14,7 +14,10 @@ from .models import LeaveRequest, LeaveStatus, LeaveType
 IST = ZoneInfo("Asia/Kolkata")
 User = get_user_model()
 
-ALLOWED_ATTACHMENT_EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".doc", ".docx"}
+# Keep in sync with your UI hint; include txt as well.
+ALLOWED_ATTACHMENT_EXTS = {
+    ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".doc", ".docx", ".txt"
+}
 
 
 def _naive_to_ist(dt):
@@ -30,13 +33,14 @@ class LeaveRequestForm(forms.ModelForm):
     Thin-but-safe ModelForm:
       - surfaces key fields,
       - prevents overlaps (pending/approved),
-      - caps half-day duration to ≤ 6h (business rule),
+      - caps half-day duration to ≤ 6h,
       - friendly attachment checks,
-      - defers strict same-day time gates to model.clean() (single source of truth).
+      - defers strict same-day time gates to model.clean().
     """
 
+    # Use a placeholder queryset; we set the real one in __init__ so it’s always fresh.
     leave_type = forms.ModelChoiceField(
-        queryset=LeaveType.objects.all().order_by("name"),
+        queryset=LeaveType.objects.none(),
         required=True,
         empty_label="-- Select Type --",
         label="Leave Type",
@@ -71,17 +75,20 @@ class LeaveRequestForm(forms.ModelForm):
     attachment = forms.FileField(
         required=False,
         label="Attachment (optional)",
-        help_text="Allowed: PDF, images, DOC/DOCX.",
+        help_text="Allowed: PDF, images, DOC/DOCX/TXT (max 10 MB).",
     )
 
     def __init__(self, *args, user: Optional[User] = None, **kwargs):
         """
-        Pass the logged-in user via `LeaveRequestForm(user=request.user)`.
-        We eagerly attach the employee to the instance so any model logic
-        (upload_to paths, snapshots, validations) can safely access it.
+        Pass the logged-in user via LeaveRequestForm(user=request.user).
+        We attach the employee to the instance so model hooks (upload_to, snapshots)
+        have access to it.
         """
         super().__init__(*args, **kwargs)
         self.user = user
+
+        # Always refresh the list so newly seeded/added types show up.
+        self.fields["leave_type"].queryset = LeaveType.objects.all().order_by("name")
 
         # Prefer instance.employee if editing; otherwise, use provided user.
         if self.instance and getattr(self.instance, "employee_id", None):
@@ -89,20 +96,19 @@ class LeaveRequestForm(forms.ModelForm):
         else:
             self.employee = user
 
-        # **Critical**: ensure the instance has employee set before any save/clean hooks.
+        # Ensure instance has employee before model.save() triggers upload_to/snapshots.
         try:
             if self.instance and not getattr(self.instance, "employee_id", None) and self.employee:
                 self.instance.employee = self.employee
         except Exception:
-            # Best-effort: never crash the form init
             pass
 
-        # Help text clarity
+        # Small UX helpers
         self.fields["start_at"].help_text = "Start date & time (IST)."
         self.fields["end_at"].help_text = "End date & time (IST)."
 
-        # Basic Bootstrap-ish styling (optional; remove if you style via templates)
-        for name, field in self.fields.items():
+        # Bootstrap-ish styling
+        for _, field in self.fields.items():
             if not isinstance(field.widget, (forms.CheckboxInput, forms.FileInput)):
                 field.widget.attrs.setdefault("class", "form-control")
         self.fields["is_half_day"].widget.attrs.setdefault("class", "form-check-input")
@@ -130,7 +136,7 @@ class LeaveRequestForm(forms.ModelForm):
         if "." in name:
             ext = name[name.rfind(".") :]
         if ext not in ALLOWED_ATTACHMENT_EXTS:
-            raise forms.ValidationError("Unsupported file type. Upload PDF, image, or DOC/DOCX.")
+            raise forms.ValidationError("Unsupported file type. Upload PDF, image, DOC/DOCX, or TXT.")
         if getattr(f, "size", 0) and f.size > 10 * 1024 * 1024:  # 10 MB
             raise forms.ValidationError("File too large. Max 10 MB.")
         return f
@@ -171,7 +177,7 @@ class LeaveRequestForm(forms.ModelForm):
         if not start_at or not end_at:
             return cleaned
 
-        # Safety: Ensure tz-aware and normalized to IST for business rules
+        # Ensure tz-aware & IST-normalized
         start_at = _naive_to_ist(start_at)
         end_at = _naive_to_ist(end_at)
         cleaned["start_at"] = start_at
@@ -181,7 +187,7 @@ class LeaveRequestForm(forms.ModelForm):
         if end_at <= start_at:
             self.add_error("end_at", "End must be after Start.")
 
-        # Half-day constraints (same date, ≤ 6 hours)
+        # Half-day constraints
         if is_half_day:
             if start_at.date() != end_at.date():
                 self.add_error("is_half_day", "Half-day must start and end on the same date.")
@@ -191,9 +197,7 @@ class LeaveRequestForm(forms.ModelForm):
         # Prevent overlaps with user's other PENDING/APPROVED leaves
         try:
             if self._overlaps_existing(start_at, end_at):
-                raise forms.ValidationError(
-                    "You already have a pending/approved leave that overlaps this period."
-                )
+                self.add_error(None, "You already have a pending/approved leave that overlaps this period.")
         except forms.ValidationError as e:
             self.add_error(None, e)
 
@@ -204,13 +208,11 @@ class LeaveRequestForm(forms.ModelForm):
     # ---------------------------
     def save(self, commit: bool = True) -> LeaveRequest:
         """
-        - Attach employee to the instance (double-sure).
-        - Let the model handle snapshots, blocked_days, strict time cutoffs,
-          and routing defaults.
+        Attach employee to the instance and let the model handle snapshots,
+        blocked_days, time cutoffs, and routing.
         """
         obj: LeaveRequest = super().save(commit=False)
 
-        # **Double-safety** before model.save() triggers upload_to/snapshots.
         if self.employee and not getattr(obj, "employee_id", None):
             obj.employee = self.employee
 
