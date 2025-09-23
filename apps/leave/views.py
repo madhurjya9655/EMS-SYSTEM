@@ -14,7 +14,7 @@ from django.contrib.auth.decorators import login_required
 from django.core import signing
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.http import HttpRequest, HttpResponse, HttpResponseForbidden, HttpResponseBadRequest, JsonResponse
+from django.http import HttpRequest, HttpResponse, HttpResponseForbidden, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -29,6 +29,8 @@ from .models import (
     LeaveStatus,
     LeaveType,
     ApproverMapping,
+    LeaveHandover,
+    HandoverTaskType,
 )
 
 # optional notifications service (used for token path decision emails)
@@ -43,6 +45,12 @@ try:
 except Exception:  # pragma: no cover
     LeaveDecisionAudit = None
     DecisionAction = None
+
+# optional handover email
+try:
+    from .services.notifications import send_handover_email  # noqa: F401
+except Exception:  # pragma: no cover
+    send_handover_email = None
 
 logger = logging.getLogger(__name__)
 
@@ -288,69 +296,98 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 @has_permission("leave_apply")
 @login_required
 def apply_leave(request: HttpRequest) -> HttpResponse:
-    """
-    Employee applies for leave.
-    Pre-check same-day cutoffs for UX; final strict check & task-blocking handled by model.
-    Email to RP+CC is sent by models.py post_save (via services), so we do NOT send here.
-    """
+    """Employee applies for leave with CC and handover functionality."""
     header = _employee_header(request.user)
     now = now_ist()
 
     if request.method == "POST":
         form = LeaveRequestForm(request.POST, request.FILES, user=request.user)
         if form.is_valid():
-            lr: LeaveRequest = form.save(commit=False)
-            lr.employee = request.user
-            lr.status = LeaveStatus.PENDING
-
-            # Prefer Profile.team_leader if available (display; routing resolved by mapping)
             try:
-                Profile = django_apps.get_model("users", "Profile")
-                if Profile and not lr.reporting_person:
-                    qs = Profile.objects.filter(user=request.user)
-                    if _model_has_field(Profile, "team_leader"):
-                        qs = qs.select_related("team_leader")
-                    prof = qs.first()
-                    if prof and getattr(prof, "team_leader_id", None):
-                        lr.reporting_person = prof.team_leader
+                with transaction.atomic():
+                    lr = form.save(commit=True)
+
+                    # Handle task handovers
+                    cd = form.cleaned_data
+                    delegate_to = cd.get("delegate_to")
+                    ho_msg = (cd.get("handover_message") or "").strip()
+
+                    # Collect task selections (IDs come as strings from MultiChoiceField)
+                    def _to_int_list(vals):
+                        out: List[int] = []
+                        for v in (vals or []):
+                            try:
+                                out.append(int(v))
+                            except (TypeError, ValueError):
+                                continue
+                        return out
+
+                    cl_ids = _to_int_list(cd.get("handover_checklist"))
+                    dg_ids = _to_int_list(cd.get("handover_delegation"))
+                    ht_ids = _to_int_list(cd.get("handover_help_ticket"))
+
+                    if delegate_to and (cl_ids or dg_ids or ht_ids):
+                        # Create handover records
+                        handovers = []
+                        ef_start = lr.start_date
+                        ef_end = lr.end_date
+                        
+                        # Create handovers for each task type
+                        for tid in cl_ids:
+                            handovers.append(
+                                LeaveHandover(
+                                    leave_request=lr,
+                                    original_assignee=request.user,
+                                    new_assignee=delegate_to,
+                                    task_type=HandoverTaskType.CHECKLIST,
+                                    original_task_id=tid,
+                                    message=ho_msg,
+                                    effective_start_date=ef_start,
+                                    effective_end_date=ef_end,
+                                    is_active=True,
+                                )
+                            )
+                        for tid in dg_ids:
+                            handovers.append(
+                                LeaveHandover(
+                                    leave_request=lr,
+                                    original_assignee=request.user,
+                                    new_assignee=delegate_to,
+                                    task_type=HandoverTaskType.DELEGATION,
+                                    original_task_id=tid,
+                                    message=ho_msg,
+                                    effective_start_date=ef_start,
+                                    effective_end_date=ef_end,
+                                    is_active=True,
+                                )
+                            )
+                        for tid in ht_ids:
+                            handovers.append(
+                                LeaveHandover(
+                                    leave_request=lr,
+                                    original_assignee=request.user,
+                                    new_assignee=delegate_to,
+                                    task_type=HandoverTaskType.HELP_TICKET,
+                                    original_task_id=tid,
+                                    message=ho_msg,
+                                    effective_start_date=ef_start,
+                                    effective_end_date=ef_end,
+                                    is_active=True,
+                                )
+                            )
+                        
+                        if handovers:
+                            LeaveHandover.objects.bulk_create(handovers, ignore_conflicts=True)
+                            messages.success(request, f"Leave application submitted with {len(handovers)} task handovers.")
+                        else:
+                            messages.success(request, "Leave application submitted.")
+                    else:
+                        messages.success(request, "Leave application submitted.")
+
+                return redirect("leave:dashboard")
             except Exception:
-                logger.exception("While setting reporting_person from profile")
-
-            # UX-only same-day cutoff pre-check
-            try:
-                s_ist = timezone.localtime(lr.start_at, IST)
-                if s_ist.date() == now.date():
-                    anchor_930 = now.replace(hour=9, minute=30, second=0, microsecond=0)
-                    anchor_1000 = now.replace(hour=10, minute=0, second=0, microsecond=0)
-                    if now >= anchor_1000:
-                        raise ValidationError(
-                            "You cannot apply for leave after 10:00 AM because 10:00 AM recurring tasks will get assigned automatically."
-                        )
-                    if now >= anchor_930:
-                        raise ValidationError("Same-day leaves must be applied before 09:30 AM IST.")
-            except ValidationError as e:
-                for msg in e.messages:
-                    messages.error(request, msg)
-                return render(
-                    request,
-                    "leave/apply_leave.html",
-                    {"form": form, "employee_header": header, "now_ist": now},
-                )
-
-            # Save (model.save() will snapshot, recompute blocked_days, enforce validations, and post_save sends email)
-            try:
-                lr.save()
-            except ValidationError as e:
-                for msg in e.messages:
-                    messages.error(request, msg)
-                return render(
-                    request,
-                    "leave/apply_leave.html",
-                    {"form": form, "employee_header": header, "now_ist": now},
-                )
-
-            messages.success(request, "Leave application submitted.")
-            return redirect("leave:dashboard")
+                logger.exception("apply_leave failed to create leave and/or handover")
+                messages.error(request, "Could not submit the leave. Please try again.")
         else:
             messages.error(request, "Please fix the errors below.")
     else:
@@ -447,7 +484,6 @@ def manager_decide_approve(request: HttpRequest, pk: int) -> HttpResponse:
 
     comment = (request.POST.get("decision_comment") or "").strip()
     try:
-        # Use model helper to enforce gates + send decision email
         leave.approve(by_user=request.user, comment=comment)
         messages.success(request, "Leave approved.")
     except ValidationError as e:
@@ -475,7 +511,6 @@ def manager_decide_reject(request: HttpRequest, pk: int) -> HttpResponse:
 
     comment = (request.POST.get("decision_comment") or "").strip() or "Rejected by manager."
     try:
-        # Use model helper to enforce gates + send decision email
         leave.reject(by_user=request.user, comment=comment)
         messages.success(request, "Leave rejected.")
     except ValidationError as e:
@@ -488,7 +523,7 @@ def manager_decide_reject(request: HttpRequest, pk: int) -> HttpResponse:
 
 
 # -----------------------------------------------------------------------------#
-# Delete functionality (NEW)                                                   #
+# Delete functionality                                                          #
 # -----------------------------------------------------------------------------#
 @has_permission("leave_list")
 @login_required
@@ -504,19 +539,17 @@ def delete_leave(request: HttpRequest, pk: int) -> HttpResponse:
         employee=request.user
     )
     
-    # Only allow deletion of pending requests
     if leave.status != LeaveStatus.PENDING:
         messages.error(request, "Only pending leave requests can be deleted.")
         return redirect("leave:dashboard")
     
-    # Store details for success message
     leave_type = leave.leave_type.name
     start_date = leave.start_at.strftime("%B %d, %Y")
     
     try:
         leave.delete()
         messages.success(request, f"Successfully deleted {leave_type} leave request for {start_date}.")
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to delete leave request %s", pk)
         messages.error(request, "Failed to delete leave request. Please try again.")
     
@@ -538,14 +571,12 @@ def bulk_delete_leaves(request: HttpRequest) -> HttpResponse:
         return redirect("leave:dashboard")
     
     try:
-        # Convert to integers and validate
         leave_ids = [int(id_str) for id_str in leave_ids if id_str.isdigit()]
         
         if not leave_ids:
             messages.error(request, "Invalid leave request IDs provided.")
             return redirect("leave:dashboard")
         
-        # Get leaves that can be deleted (only pending, owned by current user)
         leaves_to_delete = LeaveRequest.objects.select_for_update().filter(
             pk__in=leave_ids,
             employee=request.user,
@@ -553,12 +584,10 @@ def bulk_delete_leaves(request: HttpRequest) -> HttpResponse:
         )
         
         deleted_count = leaves_to_delete.count()
-        
         if deleted_count == 0:
             messages.warning(request, "No eligible leave requests found for deletion. Only pending requests can be deleted.")
             return redirect("leave:dashboard")
         
-        # Delete the leaves
         leaves_to_delete.delete()
         
         if deleted_count == 1:
@@ -566,7 +595,6 @@ def bulk_delete_leaves(request: HttpRequest) -> HttpResponse:
         else:
             messages.success(request, f"Successfully deleted {deleted_count} leave requests.")
             
-        # Inform about any skipped items
         total_requested = len(leave_ids)
         if deleted_count < total_requested:
             skipped = total_requested - deleted_count
@@ -574,7 +602,7 @@ def bulk_delete_leaves(request: HttpRequest) -> HttpResponse:
     
     except ValueError:
         messages.error(request, "Invalid leave request IDs provided.")
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to bulk delete leave requests")
         messages.error(request, "Failed to delete leave requests. Please try again.")
     
@@ -689,14 +717,14 @@ class TokenDecisionView(View):
         if self._token_already_used(leave, token_hash):
             return render(request, self.template_used, {"leave": leave})
 
-        # Authorization: RP only (or superuser / assigned RP if logged in)
+        # Authorization
         if not (
             (request.user.is_authenticated and (request.user.is_superuser or leave.reporting_person_id == getattr(request.user, "id", None)))
             or (_role_for_email(leave, actor_email) == "manager")
         ):
             raise PermissionDenied("Only the assigned Reporting Person can decide this leave.")
 
-        # Resolve approver user: logged-in > user by actor_email > fallback to leave.reporting_person
+        # Resolve approver user
         decider_user = request.user if request.user.is_authenticated else None
         if decider_user is None:
             try:
@@ -707,7 +735,7 @@ class TokenDecisionView(View):
         if decider_user is None:
             decider_user = leave.reporting_person
 
-        # Decide via model helpers (enforces 10:00 IST and sends decision email)
+        # Decide
         try:
             if new_status == LeaveStatus.APPROVED:
                 leave.approve(by_user=decider_user, comment="Email decision: APPROVED by Reporting Person.")
@@ -720,7 +748,7 @@ class TokenDecisionView(View):
             logger.exception("Token decision failed for leave %s", leave.pk)
             return render(request, self.template_error, {"message": "Could not complete the action."}, status=400)
 
-        # Audits (soft-fail)
+        # Audits
         try:
             if LeaveDecisionAudit:
                 LeaveDecisionAudit.objects.create(
@@ -826,10 +854,10 @@ def _csrf_input(request: HttpRequest) -> str:
         return f"<input type='hidden' name='csrfmiddlewaretoken' value='{token}'>"
     except Exception:
         return ""
-
+    
 
 # -----------------------------------------------------------------------------#
-# Approver Mapping – custom editor (summary page + dedicated field pages)       #
+# Approver Mapping – editor (summary + dedicated field pages)                   #
 # -----------------------------------------------------------------------------#
 def _user_label(u) -> str:
     if not u:
@@ -905,7 +933,6 @@ def approver_mapping_save(request: HttpRequest) -> HttpResponse:
     return redirect(next_url)
 
 
-# ----------------------------- new dedicated pages ----------------------------#
 @login_required
 def approver_mapping_edit_field(request: HttpRequest, user_id: int, field: str) -> HttpResponse:
     """
@@ -924,7 +951,6 @@ def approver_mapping_edit_field(request: HttpRequest, user_id: int, field: str) 
     mapping = ApproverMapping.objects.select_related("employee", "reporting_person", "cc_person") \
                                      .filter(employee=employee).first()
 
-    # All active users as options (must have an email so routing works)
     users_qs = User.objects.filter(is_active=True) \
         .exclude(email__isnull=True).exclude(email__exact="") \
         .only("id", "first_name", "last_name", "username", "email") \
@@ -945,7 +971,6 @@ def approver_mapping_edit_field(request: HttpRequest, user_id: int, field: str) 
         if not getattr(request.user, "is_superuser", False):
             return HttpResponseForbidden("Only administrators can modify approver mappings.")
 
-        # Accept either the new field names or a generic 'chosen_id' for flexibility
         if field == "reporting":
             chosen = (request.POST.get("reporting_person_id") or request.POST.get("chosen_id") or "").strip()
             if not chosen:

@@ -50,13 +50,54 @@
   <div class="row g-3">
     {# Form #}
     <div class="col-12 col-lg-8">
-      <div class="card">
+      <div class="card mb-3">
         <div class="card-body">
           <h6 class="card-title mb-3">Leave Details</h6>
 
           <form method="post" enctype="multipart/form-data" novalidate>
             {% csrf_token %}
-            {{ form|crispy }}
+            {{ form.leave_type|as_crispy_field }}
+            <div class="row">
+              <div class="col-md-6">{{ form.start_at|as_crispy_field }}</div>
+              <div class="col-md-6">{{ form.end_at|as_crispy_field }}</div>
+            </div>
+            <div class="form-check mb-3">
+              {{ form.is_half_day }}
+              <label class="form-check-label" for="{{ form.is_half_day.id_for_label }}">Half day</label>
+            </div>
+            {{ form.reason|as_crispy_field }}
+            {{ form.attachment|as_crispy_field }}
+
+            <hr class="my-4">
+
+            <h6 class="mb-2">Notifications</h6>
+            <p class="text-muted small mb-3">
+              Your manager and HR will be automatically notified. You can add additional people to be CC'd on the leave notification emails.
+            </p>
+            {{ form.cc_users|as_crispy_field }}
+
+            <hr class="my-4">
+
+            <h6 class="mb-2">Task Handover (optional)</h6>
+            <p class="text-muted small mb-3">
+              If you want someone to cover your tasks during this leave, pick a colleague and select the tasks below.
+              The lists show items due/in-progress within the chosen period. Submit the form after setting your dates to refresh the lists.
+            </p>
+
+            {{ form.delegate_to|as_crispy_field }}
+            <div class="row">
+              <div class="col-md-4">
+                {{ form.handover_checklist|as_crispy_field }}
+              </div>
+              <div class="col-md-4">
+                {{ form.handover_delegation|as_crispy_field }}
+              </div>
+              <div class="col-md-4">
+                {{ form.handover_help_ticket|as_crispy_field }}
+              </div>
+            </div>
+            
+            {{ form.handover_message|as_crispy_field }}
 
             <div class="d-flex justify-content-between mt-3">
               <a href="{% url 'leave:dashboard' %}" class="btn btn-light">Cancel</a>
@@ -80,12 +121,24 @@
             <li>Same-day leave must be applied <strong>before 09:30 AM</strong>.</li>
             <li>After <strong>10:00 AM</strong>, applying for today is blocked.</li>
             <li>Half-day must be on a single date and be ≤ <strong>6 hours</strong>.</li>
-            <li>Manager approval/rejection for today’s leaves is locked after <strong>10:00 AM</strong>.</li>
-            <li>Recurring tasks still generate, but if you are on leave they’ll be skipped for you.</li>
+            <li>Manager approval/rejection for today's leaves is locked after <strong>10:00 AM</strong>.</li>
+            <li>Recurring tasks still generate, but if you are on leave they'll be skipped for you.</li>
           </ul>
           <p class="small text-muted mb-0">
             Attachments are optional. Supported: PDF, PNG, JPG, JPEG, WEBP, HEIC, DOC, DOCX (max 10&nbsp;MB).
           </p>
+        </div>
+      </div>
+      
+      <div class="card mt-3">
+        <div class="card-body">
+          <h6 class="card-title mb-3">Task Handover</h6>
+          <ul class="mb-0 small text-muted" style="padding-left: 1.2rem;">
+            <li>Select a colleague to temporarily cover your tasks during leave.</li>
+            <li>Only tasks due or in progress during your leave period are shown.</li>
+            <li>Original task ownership is preserved - tasks return to you after leave.</li>
+            <li>The selected colleague will receive an email with task details and your message.</li>
+          </ul>
         </div>
       </div>
     </div>

@@ -16,44 +16,29 @@ urlpatterns = [
     # Backward-compat: /leave/my → dashboard
     path("my/", RedirectView.as_view(pattern_name="leave:dashboard", permanent=False), name="my_leaves"),
 
-    # Apply Leave
+    # Apply Leave (renders templates/leave/apply_leave.html)
     path("apply/", views.apply_leave, name="apply_leave"),
 
-    # Delete functionality (NEW)
-    path('delete/<int:pk>/', views.delete_leave, name='delete_leave'),
-    path('bulk-delete/', views.bulk_delete_leaves, name='bulk_delete'),
+    # Delete functionality
+    path("delete/<int:pk>/", views.delete_leave, name="delete_leave"),
+    path("bulk-delete/", views.bulk_delete_leaves, name="bulk_delete"),
 
-    # Approval page (friendly GET)
+    # Approval page + decisions
     path("approve/<int:pk>/", views.approval_page, name="approval_page"),
-
-    # Manager views (slash-agnostic)
     re_path(r"^manager/pending/?$", views.manager_pending, name="manager_pending"),
     re_path(r"^manager/decide/(?P<pk>\d+)/approve/?$", views.manager_decide_approve, name="manager_decide_approve"),
     re_path(r"^manager/decide/(?P<pk>\d+)/reject/?$", views.manager_decide_reject, name="manager_decide_reject"),
 
-    # One-click email link → confirmation + POST decision (slash-agnostic)
+    # One-click email decision (token)
     re_path(r"^action/(?P<token>[^/]+)/?$", views.TokenDecisionView.as_view(), name="leave_action_via_token"),
     re_path(r"^t/(?P<token>[^/]+)/?$", views.TokenDecisionView.as_view(), name="token_decide"),
 
-    # Optional tiny widget (used in dashboards/partials)
+    # Optional manager widget
     path("manager/widget/", views.manager_widget, name="manager_widget"),
 
-    # ------------------------------
-    # Approver Mapping (main page + field edit pages)
-    # ------------------------------
+    # Approver Mapping editor
     path("approver-mapping/<int:user_id>/", views.approver_mapping_edit, name="approver_mapping_edit"),
-    # Separate pages when clicking Edit
-    path(
-        "approver-mapping/<int:user_id>/edit/reporting/",
-        views.approver_mapping_edit_reporting,
-        name="approver_mapping_edit_reporting",
-    ),
-    path(
-        "approver-mapping/<int:user_id>/edit/cc/",
-        views.approver_mapping_edit_cc,
-        name="approver_mapping_edit_cc",
-    ),
-
-    # Legacy endpoint (kept if something else posts here)
+    path("approver-mapping/<int:user_id>/edit/reporting/", views.approver_mapping_edit_reporting, name="approver_mapping_edit_reporting"),
+    path("approver-mapping/<int:user_id>/edit/cc/", views.approver_mapping_edit_cc, name="approver_mapping_edit_cc"),
     path("approver-mapping/save/", views.approver_mapping_save, name="approver_mapping_save"),
 ]
