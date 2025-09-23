@@ -1,5 +1,4 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\models.py
-
+# apps/tasks/models.py
 from datetime import timedelta
 from django.db import models
 from django.contrib.auth import get_user_model
@@ -43,8 +42,7 @@ class Checklist(models.Model):
     )
     frequency = models.PositiveIntegerField(default=1, blank=True, null=True)
 
-    # NEW: Optional end date for the series (no new occurrences after this date).
-    # Interpreted in IST in the recurrence code; stored as a date.
+    # Optional end date for the series (no new occurrences after this date)
     recurrence_end_date = models.DateField(null=True, blank=True, help_text="Stop creating new occurrences after this date.")
 
     time_per_task_minutes = models.PositiveIntegerField(default=0, blank=True, null=True)
@@ -85,9 +83,7 @@ class Checklist(models.Model):
 
     class Meta:
         indexes = [
-            # Speeds up series lookups (generation & deletion)
             models.Index(fields=['assign_to', 'task_name', 'mode', 'frequency', 'group_name']),
-            # Common filters on dashboard and list pages
             models.Index(fields=['assign_to', 'status', 'planned_date']),
             models.Index(fields=['status', 'planned_date']),
         ]
@@ -100,7 +96,6 @@ class Checklist(models.Model):
 
     @property
     def delay(self):
-        # Always compute against the exact planned datetime (no 10:00 AM substitution).
         end = self.completed_at or timezone.now()
         return timesince(self.planned_date, end)
 
@@ -147,6 +142,11 @@ class Delegation(models.Model):
     )
     frequency = models.PositiveIntegerField(default=None, blank=True, null=True)
 
+    # IMPORTANT: keep this to satisfy prod schema; default avoids NOT NULL failures
+    description = models.TextField(default="", blank=True)
+
+    message = models.TextField(blank=True)
+
     doer_file = models.FileField(upload_to='delegation_doer/', blank=True, null=True)
     doer_notes = models.TextField(blank=True, null=True)
 
@@ -159,17 +159,15 @@ class Delegation(models.Model):
         ]
 
     def is_recurring(self):
-        # Explicitly disabled for Delegation tasks
         return False
 
     def clean(self):
-        # Harden: make sure these stay one-time regardless of any incoming data.
+        # enforce one-time regardless of incoming data
         self.mode = None
         self.frequency = None
         super().clean()
 
     def save(self, *args, **kwargs):
-        # Enforce one-time at save as well (defense-in-depth)
         self.mode = None
         self.frequency = None
         self.full_clean()
