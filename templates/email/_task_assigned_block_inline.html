@@ -1,0 +1,66 @@
+{% comment %}Internal partial used by task_assigned.html{% endcomment %}
+{% with
+   kind_show=kind|default:kind_f|default:"Task"
+   title_show=task_title|default:title_f|default:"Task"
+   code_show=task_code|default:code_p|add:"-"|add:obj.id
+%}
+  <p class="hello">Hi {{ assignee_name|default:obj.assign_to.get_full_name|default:obj.assign_to.username|default:"Team Member" }},</p>
+  <p class="lead">You have been assigned a new {{ kind_show|lower }}. Please review the details below.</p>
+
+  <div class="card">
+    <div class="title">{{ title_show }}</div>
+    <div class="muted">{{ kind_show }} • ID #{{ code_show }}</div>
+
+    <div class="row"><span class="label">Planned</span>
+      {% if planned_date_display %}
+        {{ planned_date_display }}
+      {% else %}
+        {% if obj.planned_date %}{{ obj.planned_date|date:"D, d M Y • h:i A" }}{% else %}Not specified{% endif %}
+      {% endif %}
+    </div>
+
+    <div class="row"><span class="label">Priority</span>
+      {% with p=priority_display|default:obj.get_priority_display|default:obj.priority|default:"Low" %}
+        <span class="pill {% if p|lower == 'high' %}high{% elif p|lower == 'medium' %}medium{% else %}low{% endif %}">
+          {{ p }}
+        </span>
+      {% endwith %}
+    </div>
+
+    <div class="row"><span class="label">Assigned by</span>
+      {{ assign_by_display|default:obj.assign_by.get_full_name|default:obj.assign_by.username|default:"System" }}
+    </div>
+
+    {% if obj.time_per_task_minutes %}
+      <div class="row"><span class="label">Estimated Time</span> {{ obj.time_per_task_minutes }} min</div>
+    {% endif %}
+    {% if obj.estimated_minutes %}
+      <div class="row"><span class="label">Estimated Time</span> {{ obj.estimated_minutes }} min</div>
+    {% endif %}
+    {% if obj.group_name %}
+      <div class="row"><span class="label">Group</span> {{ obj.group_name }}</div>
+    {% endif %}
+
+    {% if obj.message %}
+      <div class="row"><span class="label">Description</span> {{ obj.message|linebreaksbr }}</div>
+    {% endif %}
+    {% if obj.description %}
+      <div class="row"><span class="label">Description</span> {{ obj.description|linebreaksbr }}</div>
+    {% endif %}
+
+    {% if obj.attachment_mandatory %}
+      <div class="row"><span class="label">Attachment</span> Required on completion</div>
+    {% endif %}
+  </div>
+
+  {% if cta_text %}<p class="lead" style="margin-top:16px;">{{ cta_text }}</p>{% endif %}
+  <div class="cta">
+    {% with default_label=cta_label|default:kind_show|lower %}
+      <a href="{{ complete_url|default:site_url|default:'#' }}" class="btn">
+        {% if cta_label %}{{ cta_label }}{% else %}
+          {% if kind_show == "Checklist" %}Open Checklist{% elif kind_show == "Delegation" %}Open Delegation{% elif kind_show == "Help Ticket" %}Open Ticket{% else %}Open / Complete{% endif %}
+        {% endif %}
+      </a>
+    {% endwith %}
+  </div>
+{% endwith %}
