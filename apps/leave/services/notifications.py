@@ -14,7 +14,7 @@ from django.template.loader import get_template
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.leave.models import LeaveRequest, LeaveDecisionAudit, DecisionAction
+from apps.leave.models import LeaveRequest, LeaveDecisionAudit, DecisionAction, LeaveHandover, HandoverTaskType
 from django.contrib.auth import get_user_model
 
 logger = logging.getLogger(__name__)
@@ -150,9 +150,18 @@ def _resolve_recipients(
 ) -> Tuple[str, List[str]]:
     """
     Return (to, cc) using explicit args > model snapshot > routing fallback.
+    Also merges user-selected cc_users from the leave.
     """
+    # Selected CCs by the employee
+    selected_ccs = []
+    try:
+        selected_ccs = [e.email.strip().lower() for e in leave.cc_users.all() if getattr(e, "email", None)]
+    except Exception:
+        selected_ccs = []
+
     if manager_email:
-        return manager_email.strip().lower(), [e.strip().lower() for e in (cc_list or []) if e]
+        merged = list({*(cc_list or []), *selected_ccs})
+        return manager_email.strip().lower(), merged
 
     # Prefer model snapshot
     if getattr(leave, "reporting_person", None) and getattr(leave.reporting_person, "email", None):
@@ -160,6 +169,7 @@ def _resolve_recipients(
         cc = []
         if getattr(leave, "cc_person", None) and getattr(leave.cc_person, "email", None):
             cc.append(leave.cc_person.email.strip().lower())
+        cc = list({*cc, *selected_ccs})
         return to_addr, cc
 
     # Fallback: dynamic routing
@@ -169,10 +179,11 @@ def _resolve_recipients(
         mapping = recipients_for_leave(emp_email) or {}
         to_addr = (mapping.get("to") or "").strip().lower()
         cc = [e.strip().lower() for e in (mapping.get("cc") or []) if e]
+        cc = list({*cc, *selected_ccs})
         return to_addr, cc
     except Exception:
         logger.warning("Could not resolve recipients for leave id=%s", getattr(leave, "id", None))
-        return "", []
+        return "", selected_ccs
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -185,7 +196,7 @@ def send_leave_request_email(
     force: bool = False,
 ) -> None:
     """
-    Send the initial leave request to the Reporting Person (TO) and CC.
+    Send the initial leave request to the Reporting Person (TO) and CC (admin + selected).
     Templates:
       - email/leave_applied.html
       - email/leave_applied.txt
@@ -214,9 +225,6 @@ def send_leave_request_email(
     manager_name = _manager_display_name(leave, to_addr)
 
     subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
-    # Compact dates in subject
-    s = _format_ist(leave.start_at)
-    e = _format_ist(leave.end_at)
     subject = f"{subject_prefix}Leave Request — {employee_name} (#{leave.id})"
 
     ctx = {
@@ -246,7 +254,7 @@ def send_leave_request_email(
     html, txt = _render_pair("email/leave_applied.html", "email/leave_applied.txt", ctx)
     reply_to = [e for e in [ctx["employee_email"]] if e]
 
-    _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
+    _send(subject, to_addr, cc=list(cc or []), reply_to=reply_to, html=html, txt=txt)
     # Let model’s post_save log EMAIL_SENT to avoid double audits
 
 def send_leave_decision_email(leave: LeaveRequest) -> None:
@@ -314,3 +322,59 @@ def send_leave_decision_email(leave: LeaveRequest) -> None:
 
     _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
     # Let model code log EMAIL_SENT
+
+# ------------------------------ Handover email -------------------------------
+
+def _handover_items_for(leave: LeaveRequest, assignee: User) -> List[str]:
+    items: List[str] = []
+    for ho in LeaveHandover.objects.filter(leave_request=leave, new_assignee=assignee):
+        prefix = {
+            HandoverTaskType.CHECKLIST: "Checklist",
+            HandoverTaskType.DELEGATION: "Delegation",
+            HandoverTaskType.HELP_TICKET: "Help Ticket",
+        }.get(ho.task_type, ho.task_type)
+        items.append(f"{prefix} #{ho.original_task_id}")
+    return items
+
+def send_handover_email(leave: LeaveRequest, delegate_to: User) -> None:
+    """
+    Notify the delegate about handed-over tasks for this leave.
+    Simple text email for now; uses default from email.
+    """
+    if not _email_enabled():
+        return
+    try:
+        to_addr = (delegate_to.email or "").strip()
+        if not to_addr:
+            return
+        s = timezone.localtime(leave.start_at, IST).strftime("%d %b %Y, %I:%M %p")
+        e = timezone.localtime(leave.end_at, IST).strftime("%d %b %Y, %I:%M %p")
+        items = _handover_items_for(leave, delegate_to)
+        if not items:
+            return
+
+        subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
+        subject = f"{subject_prefix}Task handover for {leave.employee_name or _employee_display_name(leave.employee)} (#{leave.id})"
+
+        # Minimal inline template
+        html = (
+            f"<p>Hi {delegate_to.get_full_name() or delegate_to.username},</p>"
+            f"<p><strong>{leave.employee_name or _employee_display_name(leave.employee)}</strong> has handed over the following tasks to you "
+            f"for the leave window <strong>{s}</strong> to <strong>{e}</strong> (IST):</p>"
+            f"<ul>{''.join(f'<li>{x}</li>' for x in items)}</ul>"
+            f"<p>Message: {leave.reason or '-'}<br>"
+            f"Handover note: {(LeaveHandover.objects.filter(leave_request=leave, new_assignee=delegate_to).first() or LeaveHandover()).message or '-'}</p>"
+            f"<p>Thank you.</p>"
+        )
+        txt = (
+            f"Task handover\n\n"
+            f"From: {leave.employee_name or _employee_display_name(leave.employee)}\n"
+            f"Window (IST): {s} -> {e}\n\n"
+            f"Tasks:\n- " + "\n- ".join(items) + "\n\n"
+            f"Message: {leave.reason or '-'}\n"
+            f"Handover note: {(LeaveHandover.objects.filter(leave_request=leave, new_assignee=delegate_to).first() or LeaveHandover()).message or '-'}\n"
+        )
+
+        _send(subject, to_addr, cc=[], reply_to=[], html=html, txt=txt)
+    except Exception:
+        logger.exception("Failed to send handover email")

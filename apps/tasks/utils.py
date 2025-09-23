@@ -74,16 +74,81 @@ def _safe_list(items: Iterable[Optional[str]]) -> List[str]:
     return out
 
 
+def _collect_cc_emails(obj) -> List[str]:
+    """
+    Best-effort collector that supports multiple shapes of "cc" on task-like objects:
+      • ManyToMany to User on `cc` or `cc_users`
+      • Iterable[str] on `cc_list` / `cc_emails`
+      • Comma-separated string on `cc_emails`
+      • Single user on `notify_to` (legacy) will be included too
+    """
+    emails: List[str] = []
+
+    def _append_user(u):
+        try:
+            e = (getattr(u, "email", "") or "").strip()
+            if e:
+                emails.append(e)
+        except Exception:
+            pass
+
+    try:
+        # M2M: .cc or .cc_users
+        for attr in ("cc", "cc_users"):
+            rel = getattr(obj, attr, None)
+            if rel is not None:
+                try:
+                    for u in rel.all():
+                        _append_user(u)
+                except Exception:
+                    # If it's already a list
+                    for u in list(rel or []):
+                        _append_user(u)
+    except Exception:
+        pass
+
+    # Plain lists
+    for attr in ("cc_list", "cc_emails"):
+        try:
+            val = getattr(obj, attr, None)
+            if isinstance(val, (list, tuple, set)):
+                for it in val:
+                    s = (str(it) or "").strip()
+                    if s:
+                        emails.append(s)
+            elif isinstance(val, str):
+                parts = [p.strip() for p in val.split(",")]
+                for s in parts:
+                    if s:
+                        emails.append(s)
+        except Exception:
+            pass
+
+    # Legacy: single notify_to user
+    try:
+        nt = getattr(obj, "notify_to", None)
+        if nt:
+            _append_user(nt)
+    except Exception:
+        pass
+
+    return _safe_list(emails)
+
+
 def _send_email(
     subject: str,
     recipients: Sequence[str],
     html_body: str,
     text_body: Optional[str] = None,
+    *,
+    cc: Optional[Sequence[str]] = None,
     fail_silently: Optional[bool] = None,
 ) -> None:
     """
     Small wrapper around EmailMultiAlternatives with logging.
     Uses console-safe logging to avoid UnicodeEncodeError on Windows terminals.
+
+    Supports multiple CC recipients via `cc`.
     """
     rcpts = _safe_list(recipients)
     if not rcpts:
@@ -93,16 +158,20 @@ def _send_email(
     if fail_silently is None:
         fail_silently = EMAIL_FAIL_SILENTLY
 
+    cc_list = _safe_list(cc or [])
+
     try:
         msg = EmailMultiAlternatives(
             subject=subject,
             body=(text_body or " "),
             from_email=DEFAULT_FROM_EMAIL,
             to=rcpts,
+            cc=cc_list or None,
         )
         msg.attach_alternative(html_body, "text/html")
         msg.send(fail_silently=fail_silently)
-        logger.debug(_safe_console_text(f"Sent email '{subject}' to {', '.join(rcpts)}"))
+        cc_log = f" cc={', '.join(cc_list)}" if cc_list else ""
+        logger.debug(_safe_console_text(f"Sent email '{subject}' to {', '.join(rcpts)}{cc_log}"))
     except Exception as e:
         logger.error(_safe_console_text(f"Email send failed for '{subject}': {e}"))
 
@@ -221,7 +290,7 @@ def send_checklist_assignment_to_user(
     complete_url: Optional[str],
     subject_prefix: str = "Checklist Assigned",
 ) -> None:
-    """Notify assignee for a Checklist task."""
+    """Notify assignee for a Checklist task (supports multi-CC)."""
     if not task or not task.assign_to:
         return
     subject = f"{subject_prefix}: {task.task_name}"
@@ -234,7 +303,8 @@ def send_checklist_assignment_to_user(
         cta_label="Open Checklist",
     )
     recipients = [task.assign_to.email]
-    _on_commit(lambda: _send_email(subject, recipients, html))
+    cc_emails = _collect_cc_emails(task)
+    _on_commit(lambda: _send_email(subject, recipients, html, cc=cc_emails))
 
 
 def send_delegation_assignment_to_user(
@@ -243,7 +313,7 @@ def send_delegation_assignment_to_user(
     complete_url: Optional[str],
     subject_prefix: str = "Delegation Assigned",
 ) -> None:
-    """Notify assignee for a Delegation task."""
+    """Notify assignee for a Delegation task (supports multi-CC)."""
     if not delegation or not delegation.assign_to:
         return
     subject = f"{subject_prefix}: {delegation.task_name}"
@@ -256,7 +326,8 @@ def send_delegation_assignment_to_user(
         cta_label="Open Delegation",
     )
     recipients = [delegation.assign_to.email]
-    _on_commit(lambda: _send_email(subject, recipients, html))
+    cc_emails = _collect_cc_emails(delegation)
+    _on_commit(lambda: _send_email(subject, recipients, html, cc=cc_emails))
 
 
 def send_help_ticket_assignment_to_user(
@@ -265,7 +336,7 @@ def send_help_ticket_assignment_to_user(
     complete_url: Optional[str],
     subject_prefix: str = "Help Ticket Assigned",
 ) -> None:
-    """Notify assignee for a Help Ticket."""
+    """Notify assignee for a Help Ticket (supports multi-CC)."""
     if not ticket or not ticket.assign_to:
         return
     subject = f"{subject_prefix}: {ticket.title}"
@@ -280,7 +351,8 @@ def send_help_ticket_assignment_to_user(
         extra_lines=[f"<strong>Ticket ID:</strong> HT-{ticket.id}"],
     )
     recipients = [ticket.assign_to.email]
-    _on_commit(lambda: _send_email(subject, recipients, html))
+    cc_emails = _collect_cc_emails(ticket)
+    _on_commit(lambda: _send_email(subject, recipients, html, cc=cc_emails))
 
 
 def send_recurring_assignment_to_user(
@@ -520,6 +592,50 @@ def send_new_user_welcome(
         logger.error(_safe_console_text(f"Failed to send welcome email to {getattr(user, 'email', '?')}: {e}"))
 
 
+# ======================================================================
+#                     TASK HANDOVER EMAIL (Leave)
+# ======================================================================
+
+def send_task_handover_notice(
+    *,
+    to_user: User,
+    cc_users_or_emails: Iterable,
+    handover_lines: List[str],
+    leave_window: str,
+    actor_name: str,
+    subject_prefix: str = "Task Handover (Leave)",
+) -> None:
+    """
+    Send a concise handover summary to the delegate with CC to others.
+    `handover_lines` should be a list of bullet strings describing each handed-over task.
+    """
+    if not to_user or not getattr(to_user, "email", None):
+        return
+
+    subject = f"{subject_prefix}: {actor_name}"
+    body = "<p>" + "<br/>".join([
+        f"<strong>From:</strong> {actor_name}",
+        f"<strong>Leave Window:</strong> {leave_window}",
+        "The following items are temporarily handed over to you:",
+    ]) + "</p>"
+
+    if handover_lines:
+        body += "<ul style='margin-top:6px'>" + "".join(f"<li>{_safe_console_text(x)}</li>" for x in handover_lines) + "</ul>"
+
+    html = _shell_html("Task Handover", "Temporary delegation due to leave", body)
+
+    # Collect CCs (accept users or emails)
+    cc_raw: List[str] = []
+    for x in cc_users_or_emails or []:
+        if isinstance(x, str):
+            cc_raw.append(x)
+        else:
+            cc_raw.append(getattr(x, "email", "") or "")
+    cc_emails = _safe_list(cc_raw)
+
+    _on_commit(lambda: _send_email(subject, [to_user.email], html, cc=cc_emails))
+
+
 __all__ = [
     # core senders
     "send_checklist_assignment_to_user",
@@ -536,4 +652,5 @@ __all__ = [
     "is_working_day",
     # new
     "send_new_user_welcome",
+    "send_task_handover_notice",
 ]

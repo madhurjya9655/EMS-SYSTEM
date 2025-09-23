@@ -230,6 +230,13 @@
             <p>{{ d.task_name }}</p>
           </div>
 
+          {% if d.message %}
+          <div class="col-12">
+            <label class="fw-bold">Message/Description:</label>
+            <div class="border rounded p-2 bg-light">{{ d.message|linebreaks }}</div>
+          </div>
+          {% endif %}
+
           <div class="col-md-6">
             <label class="fw-bold">Assigned By:</label>
             <p>

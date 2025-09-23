@@ -157,6 +157,7 @@ class DelegationForm(forms.ModelForm):
             "planned_date", "priority",
             "attachment_mandatory", "audio_recording",
             "time_per_task_minutes", "mode", "frequency",
+            "message",
         ]
         widgets = {
             "assign_by": forms.Select(attrs={"class": "form-select"}),
@@ -166,6 +167,7 @@ class DelegationForm(forms.ModelForm):
             "attachment_mandatory": forms.CheckboxInput(attrs={"class": "form-check-input"}),
             "mode": forms.Select(attrs={"class": "form-select"}),
             "frequency": forms.NumberInput(attrs={"class": "form-control", "min": "1"}),
+            "message": forms.Textarea(attrs={"class": "form-control", "rows": 3, "placeholder": "Delegation description or instructions"}),
         }
 
     def __init__(self, *args, **kwargs):
@@ -175,7 +177,7 @@ class DelegationForm(forms.ModelForm):
         self.fields["assign_by"].queryset = active_users
         self.fields["assign_to"].queryset = active_users
 
-        for fld in ("audio_recording", "mode", "frequency"):
+        for fld in ("audio_recording", "mode", "frequency", "message"):
             if fld in self.fields:
                 self.fields[fld].required = False
 
@@ -220,7 +222,7 @@ class CompleteDelegationForm(forms.ModelForm):
 class BulkUploadForm(forms.ModelForm):
     """
     Minimal model-backed form so your upload can be audited (if BulkUpload model persists entries).
-    If you don’t want DB persistence, switch this to a simple forms.Form with the same fields/validation.
+    If you don't want DB persistence, switch this to a simple forms.Form with the same fields/validation.
     """
     class Meta:
         model = BulkUpload

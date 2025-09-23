@@ -184,6 +184,43 @@ def _ist_date(dt: datetime) -> date | None:
     return IST.localize(dt).date()
 
 
+# ---------- HANDOVER INTEGRATION ----------
+def _get_handover_tasks_for_user(user, today_date):
+    """
+    Get tasks that are handed over to the user for today's date.
+    Returns dict with task_type -> list of task_ids that should appear on this user's dashboard.
+    """
+    try:
+        from apps.leave.models import LeaveHandover, LeaveRequest
+        
+        # Find active handovers for this user on today's date
+        active_handovers = LeaveHandover.objects.filter(
+            new_assignee=user,
+            is_active=True,
+            effective_start_date__lte=today_date,
+            effective_end_date__gte=today_date,
+            leave_request__status='APPROVED'  # Only for approved leaves
+        ).select_related('leave_request')
+        
+        handover_tasks = {
+            'checklist': [],
+            'delegation': [], 
+            'help_ticket': []
+        }
+        
+        for handover in active_handovers:
+            task_type_key = handover.task_type.lower().replace('_', '')  # checklist, delegation, helpticket
+            if task_type_key == 'helpticket':
+                task_type_key = 'help_ticket'
+            if task_type_key in handover_tasks:
+                handover_tasks[task_type_key].append(handover.original_task_id)
+        
+        return handover_tasks
+    except Exception as e:
+        logger.error(f"Error getting handover tasks: {e}")
+        return {'checklist': [], 'delegation': [], 'help_ticket': []}
+
+
 # ---------- FINAL VISIBILITY GATING FOR CHECKLIST ----------
 def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     """
@@ -1528,6 +1565,9 @@ def dashboard_home(request):
       • No recurrence logic here.
 
     Completed items disappear immediately.
+
+    HANDOVER INTEGRATION:
+      • Show tasks handed over to the current user during active leaves.
     """
     # Current IST and today's date
     now_ist = timezone.now().astimezone(IST)
@@ -1601,6 +1641,9 @@ def dashboard_home(request):
     start_today_proj = timezone.make_aware(datetime.combine(today_ist, dt_time.min), IST).astimezone(project_tz)
     end_today_proj = timezone.make_aware(datetime.combine(today_ist, dt_time.max), IST).astimezone(project_tz)
 
+    # Get handover tasks for the current user
+    handover_tasks = _get_handover_tasks_for_user(request.user, today_ist)
+    
     try:
         # ---- Checklists: fetch up to EOD IST; apply IST "today" + 10:00 gating in Python ----
         base_checklists = (
@@ -1609,24 +1652,46 @@ def dashboard_home(request):
             .select_related('assign_by')
             .order_by('planned_date')
         )
+        
+        # Add handed-over checklists (tasks originally assigned to others but handed over to current user)
+        if handover_tasks['checklist']:
+            handover_checklists = (
+                Checklist.objects
+                .filter(id__in=handover_tasks['checklist'], status='Pending', planned_date__lte=end_today_proj)
+                .select_related('assign_by')
+                .order_by('planned_date')
+            )
+            # Mark these as handed over for display purposes
+            for task in handover_checklists:
+                task._is_handover = True
+            # Combine original and handover tasks
+            all_checklists = list(base_checklists) + list(handover_checklists)
+        else:
+            all_checklists = list(base_checklists)
+
         if today_only:
             checklist_qs = [
-                c for c in base_checklists
-                if (_ist_date(c.planned_date) == today_ist) and _should_show_checklist(c.planned_date, now_ist)
+                c for c in all_checklists
+                if (_ist_date(c.planned_date) == today_ist) and 
+                   (getattr(c, '_is_handover', False) or _should_show_checklist(c.planned_date, now_ist))
             ]
         else:
-            checklist_qs = [c for c in base_checklists if _should_show_checklist(c.planned_date, now_ist)]
+            checklist_qs = [
+                c for c in all_checklists 
+                if getattr(c, '_is_handover', False) or _should_show_checklist(c.planned_date, now_ist)
+            ]
 
         # ---- Delegations & Help Tickets: visible when planned time arrives ----
+        # Original tasks assigned to current user
         if today_only:
-            delegation_qs = list(
+            base_delegations = list(
                 Delegation.objects.filter(
                     assign_to=request.user, status='Pending',
                     planned_date__gte=start_today_proj,
                     planned_date__lte=now_project_tz,
                 ).select_related('assign_by').order_by('planned_date')
             )
-            help_ticket_qs = list(
+            base_help_tickets = list(
                 HelpTicket.objects.filter(
                     assign_to=request.user,
                     planned_date__gte=start_today_proj,
@@ -1634,21 +1699,50 @@ def dashboard_home(request):
                 ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
             )
         else:
-            delegation_qs = list(
+            base_delegations = list(
                 Delegation.objects.filter(
                     assign_to=request.user, status='Pending',
                     planned_date__lte=end_today_proj
                 ).select_related('assign_by').order_by('planned_date')
             )
-            help_ticket_qs = list(
+            base_help_tickets = list(
                 HelpTicket.objects.filter(
                     assign_to=request.user, planned_date__lte=end_today_proj
                 ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
             )
 
+        # Add handed-over delegations
+        if handover_tasks['delegation']:
+            handover_delegations = list(
+                Delegation.objects.filter(
+                    id__in=handover_tasks['delegation'], status='Pending',
+                    planned_date__lte=end_today_proj
+                ).select_related('assign_by').order_by('planned_date')
+            )
+            for task in handover_delegations:
+                task._is_handover = True
+            delegation_qs = base_delegations + handover_delegations
+        else:
+            delegation_qs = base_delegations
+
+        # Add handed-over help tickets
+        if handover_tasks['help_ticket']:
+            handover_help_tickets = list(
+                HelpTicket.objects.filter(
+                    id__in=handover_tasks['help_ticket'],
+                    planned_date__lte=end_today_proj
+                ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
+            )
+            for task in handover_help_tickets:
+                task._is_handover = True
+            help_ticket_qs = base_help_tickets + handover_help_tickets
+        else:
+            help_ticket_qs = base_help_tickets
+
         logger.info(_safe_console_text(
             f"Dashboard filtering for {request.user.username}: today_only={today_only} | "
-            f"checklists={len(checklist_qs)} delegations={len(delegation_qs)} help_tickets={len(help_ticket_qs)}"
+            f"checklists={len(checklist_qs)} delegations={len(delegation_qs)} help_tickets={len(help_ticket_qs)} | "
+            f"handover_counts: checklist={len(handover_tasks['checklist'])} delegation={len(handover_tasks['delegation'])} help_ticket={len(handover_tasks['help_ticket'])}"
         ))
     except Exception as e:
         logger.error(_safe_console_text(f"Error querying task lists: {e}"))
@@ -1668,9 +1762,10 @@ def dashboard_home(request):
     if tasks:
         for i, task in enumerate(tasks[:3], start=1):
             tdt = task.planned_date.astimezone(IST) if task.planned_date else None
+            handover_info = " (HANDOVER)" if getattr(task, '_is_handover', False) else ""
             logger.info(_safe_console_text(
                 f"  - Sample task {i}: '{getattr(task, 'task_name', getattr(task, 'title', ''))}' "
-                f"planned for {tdt.strftime('%Y-%m-%d %H:%M IST') if tdt else 'No date'}"
+                f"planned for {tdt.strftime('%Y-%m-%d %H:%M IST') if tdt else 'No date'}{handover_info}"
             ))
 
     return render(request, 'dashboard/dashboard.html', {
