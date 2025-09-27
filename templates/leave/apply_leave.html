@@ -68,13 +68,7 @@
             {{ form.reason|as_crispy_field }}
             {{ form.attachment|as_crispy_field }}
 
-            <hr class="my-4">
-
-            <h6 class="mb-2">Notifications</h6>
-            <p class="text-muted small mb-3">
-              Your manager and HR will be automatically notified. You can add additional people to be CC'd on the leave notification emails.
-            </p>
-            {{ form.cc_users|as_crispy_field }}
+            {# NOTE: CC chooser removed intentionally. Admins manage CC on Employees page. #}
 
             <hr class="my-4">
 
@@ -96,7 +90,7 @@
                 {{ form.handover_help_ticket|as_crispy_field }}
               </div>
             </div>
-            
+
             {{ form.handover_message|as_crispy_field }}
 
             <div class="d-flex justify-content-between mt-3">
@@ -129,16 +123,16 @@
           </p>
         </div>
       </div>
-      
+
       <div class="card mt-3">
         <div class="card-body">
           <h6 class="card-title mb-3">Task Handover</h6>
-          <ul class="mb-0 small text-muted" style="padding-left: 1.2rem;">
-            <li>Select a colleague to temporarily cover your tasks during leave.</li>
-            <li>Only tasks due or in progress during your leave period are shown.</li>
-            <li>Original task ownership is preserved - tasks return to you after leave.</li>
-            <li>The selected colleague will receive an email with task details and your message.</li>
-          </ul>
+        <ul class="mb-0 small text-muted" style="padding-left: 1.2rem;">
+          <li>Select a colleague to temporarily cover your tasks during leave.</li>
+          <li>Only tasks due or in progress during your leave period are shown.</li>
+          <li>Original task ownership is preserved - tasks return to you after leave.</li>
+          <li>The selected colleague will receive an email with task details and your message.</li>
+        </ul>
         </div>
       </div>
     </div>

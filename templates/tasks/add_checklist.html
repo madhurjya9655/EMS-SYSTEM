@@ -14,42 +14,127 @@
     {% csrf_token %}
     <div class="row g-4">
       <div class="col-md-6">
-        <div class="mb-3">{{ form.assign_by.label_tag }}{{ form.assign_by }}</div>
-        <div class="mb-3">{{ form.planned_date.label_tag }}{{ form.planned_date }}</div>
-        <div class="mb-3">{{ form.mode.label_tag }}{{ form.mode }}</div>
-        <div class="mb-3">{{ form.frequency.label_tag }}{{ form.frequency }}</div>
-        <div class="mb-3">{{ form.time_per_task_minutes.label_tag }}{{ form.time_per_task_minutes }}</div>
-        <div class="mb-3">{{ form.remind_before_days.label_tag }}{{ form.remind_before_days }}</div>
-        <div class="mb-3">{{ form.message.label_tag }}{{ form.message }}</div>
+        <div class="mb-3">
+          {{ form.assign_by.label_tag }}{{ form.assign_by }}
+        </div>
+
+        <div class="mb-3">
+          {{ form.planned_date.label_tag }}{{ form.planned_date }}
+          <div class="form-text">
+            Visible on the dashboard at/after <strong>10:00 IST</strong> on the due day.
+            Delay is calculated from the actual planned time.
+            (Sundays are disabled here.)
+          </div>
+        </div>
+
+        <div class="mb-3">
+          {{ form.mode.label_tag }}{{ form.mode }}
+          <div class="form-text">
+            Leave blank for a one-time task. For recurring: Daily / Weekly / Monthly / Yearly.
+          </div>
+        </div>
+
+        <div class="mb-3">
+          {{ form.frequency.label_tag }}{{ form.frequency }}
+          <div class="form-text">Number of intervals between recurrences (e.g., 1 = every week).</div>
+        </div>
+
+        <div class="mb-3">
+          {{ form.time_per_task_minutes.label_tag }}{{ form.time_per_task_minutes }}
+          <div class="form-text">Estimated minutes for this task (for planning/scorecards).</div>
+        </div>
+
+        <div class="mb-3">
+          {{ form.remind_before_days.label_tag }}{{ form.remind_before_days }}
+          <div class="form-text">Optional heads-up email X day(s) before the planned date.</div>
+        </div>
+
+        <div class="mb-3">
+          {{ form.message.label_tag }}{{ form.message }}
+          <div class="form-text">Task description shown to the assignee.</div>
+        </div>
+
+        {# Render Extra Instructions if your form/model provides it #}
+        {% if form.extra_instructions %}
+          <div class="mb-3">
+            {{ form.extra_instructions.label_tag }}{{ form.extra_instructions }}
+            <div class="form-text">
+              Extra instructions for the email (if provided). If empty, the message is used.
+            </div>
+          </div>
+        {% endif %}
       </div>
+
       <div class="col-md-6">
-        <div class="mb-3">{{ form.task_name.label_tag }}{{ form.task_name }}</div>
-        <div class="mb-3">{{ form.assign_to.label_tag }}{{ form.assign_to }}</div>
-        <div class="mb-3">{{ form.priority.label_tag }}{{ form.priority }}</div>
-        <div class="form-check mb-3">{{ form.attachment_mandatory }}{{ form.attachment_mandatory.label_tag }}</div>
-        <div class="mb-3">{{ form.media_upload.label_tag }}{{ form.media_upload }}</div>
-        <div class="mb-3">{{ form.assign_pc.label_tag }}{{ form.assign_pc }}</div>
-        <div class="mb-3">{{ form.group_name.label_tag }}{{ form.group_name }}</div>
-        <div class="mb-3">{{ form.notify_to.label_tag }}{{ form.notify_to }}</div>
-        <div class="mb-3">{{ form.auditor.label_tag }}{{ form.auditor }}</div>
+        <div class="mb-3">
+          {{ form.task_name.label_tag }}{{ form.task_name }}
+        </div>
+
+        <div class="mb-3">
+          {{ form.assign_to.label_tag }}{{ form.assign_to }}
+        </div>
+
+        <div class="mb-3">
+          {{ form.priority.label_tag }}{{ form.priority }}
+        </div>
+
+        <div class="form-check mb-3">
+          {{ form.attachment_mandatory }}{{ form.attachment_mandatory.label_tag }}
+        </div>
+
+        <div class="mb-3">
+          {{ form.media_upload.label_tag }}{{ form.media_upload }}
+        </div>
+
+        <div class="mb-3">
+          {{ form.assign_pc.label_tag }}{{ form.assign_pc }}
+        </div>
+
+        <div class="mb-3">
+          {{ form.group_name.label_tag }}{{ form.group_name }}
+        </div>
+
+        <div class="mb-3">
+          {{ form.notify_to.label_tag }}{{ form.notify_to }}
+        </div>
+
+        <div class="mb-3">
+          {{ form.auditor.label_tag }}{{ form.auditor }}
+        </div>
       </div>
     </div>
 
-    <div class="form-check mb-4">{{ form.set_reminder }}{{ form.set_reminder.label_tag }}</div>
+    <div class="form-check mb-4">
+      {{ form.set_reminder }}{{ form.set_reminder.label_tag }}
+    </div>
+
     <div id="reminder_fields" class="border p-3 mb-4" style="display:none;">
       <div class="row g-3">
-        <div class="col-md-4">{{ form.reminder_mode.label_tag }}{{ form.reminder_mode }}</div>
-        <div class="col-md-4">{{ form.reminder_frequency.label_tag }}{{ form.reminder_frequency }}</div>
-        <div class="col-md-4">{{ form.reminder_before_days.label_tag }}{{ form.reminder_before_days }}</div>
-        <div class="col-md-4">{{ form.reminder_starting_time.label_tag }}{{ form.reminder_starting_time }}</div>
+        <div class="col-md-4">
+          {{ form.reminder_mode.label_tag }}{{ form.reminder_mode }}
+        </div>
+        <div class="col-md-4">
+          {{ form.reminder_frequency.label_tag }}{{ form.reminder_frequency }}
+        </div>
+        <!-- Removed duplicate 'remind_before_days' here to avoid confusion -->
+        <div class="col-md-4">
+          {{ form.reminder_starting_time.label_tag }}{{ form.reminder_starting_time }}
+        </div>
         <div class="col-md-4 form-check d-flex align-items-center">
           {{ form.checklist_auto_close }}{{ form.checklist_auto_close.label_tag }}
         </div>
-        <div class="col-md-4">{{ form.checklist_auto_close_days.label_tag }}{{ form.checklist_auto_close_days }}</div>
+        <div class="col-md-4">
+          {{ form.checklist_auto_close_days.label_tag }}{{ form.checklist_auto_close_days }}
+        </div>
+      </div>
+      <div class="form-text mt-2">
+        Reminder schedule (mode + frequency + starting time). Auto-close will mark the task done after the specified days.
       </div>
     </div>
 
-    <div class="text-end"><button type="submit" class="btn btn-primary">Submit</button></div>
+    <div class="text-end">
+      <button type="submit" class="btn btn-primary">Submit</button>
+    </div>
   </form>
 
   <script>

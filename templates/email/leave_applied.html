@@ -83,6 +83,42 @@
             </td>
           </tr>
 
+          <!-- Handover Summary (if any) -->
+          {% if has_handovers %}
+          <tr><td style="height:12px"></td></tr>
+          <tr>
+            <td style="padding:0 24px 0 24px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border:1px solid #e8edf3;border-radius:8px;overflow:hidden;">
+                <tr>
+                  <td style="background:#f0f7ff;padding:10px 14px;font-weight:600;font-size:13px;color:#1e40af;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+                    Task Handover Summary
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:12px 14px;font-size:13px;color:#0f172a;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+                    <div style="margin-bottom:8px;">Tasks delegated during this leave:</div>
+                    {% for handover in handover_summary %}
+                    <div style="margin-bottom:6px;padding:8px;border-radius:6px;background:#f8fafc;border:1px solid #e5e7eb;">
+                      <div style="font-weight:600;">{{ handover.task_title }}</div>
+                      <div style="font-size:12px;color:#64748b;">
+                        {{ handover.task_type }} #{{ handover.task_id }} → {{ handover.assignee_name }}
+                        {% if handover.task_url %} | <a href="{{ handover.task_url }}" style="color:#2563eb;">View Task</a>{% endif %}
+                      </div>
+                      {% if handover.message %}
+                      <div style="font-size:12px;color:#475569;margin-top:4px;font-style:italic;">"{{ handover.message }}"</div>
+                      {% endif %}
+                    </div>
+                    {% endfor %}
+                    <div style="margin-top:8px;font-size:12px;color:#64748b;">
+                      Separate handover emails have been sent to the assignees.
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          {% endif %}
+
           <!-- Spacer -->
           <tr><td style="height:16px"></td></tr>
 

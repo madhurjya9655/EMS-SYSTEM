@@ -22,7 +22,7 @@ User = get_user_model()
 
 IST = ZoneInfo("Asia/Kolkata")
 TOKEN_SALT = getattr(settings, "LEAVE_DECISION_TOKEN_SALT", "leave-action-v1")
-TOKEN_MAX_AGE_SECONDS = getattr(settings, "LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)  # enforced by view
+TOKEN_MAX_AGE_SECONDS = getattr(settings, "LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)
 
 # ---------------------------------------------------------------------------
 # Utilities
@@ -195,12 +195,7 @@ def send_leave_request_email(
     *,
     force: bool = False,
 ) -> None:
-    """
-    Send the initial leave request to the Reporting Person (TO) and CC (admin + selected).
-    Templates:
-      - email/leave_applied.html
-      - email/leave_applied.txt
-    """
+    """Send the initial leave request to the Reporting Person (TO) and CC (admin + selected)."""
     if not _email_enabled():
         return
 
@@ -225,7 +220,27 @@ def send_leave_request_email(
     manager_name = _manager_display_name(leave, to_addr)
 
     subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
-    subject = f"{subject_prefix}Leave Request — {employee_name} (#{leave.id})"
+    subject = f"{subject_prefix}Leave Request — {employee_name} ({_format_ist(leave.start_at)} to {_format_ist(leave.end_at)})"
+
+    # Collect handover summary for email
+    handover_summary = []
+    try:
+        handovers = LeaveHandover.objects.filter(leave_request=leave).select_related('new_assignee')
+        for handover in handovers:
+            task_title = handover.get_task_title()
+            task_url = handover.get_task_url()
+            if task_url:
+                task_url = _abs_url(task_url)
+            handover_summary.append({
+                'task_type': handover.get_task_type_display(),
+                'task_id': handover.original_task_id,
+                'task_title': task_title,
+                'task_url': task_url,
+                'assignee_name': _employee_display_name(handover.new_assignee),
+                'message': handover.message,
+            })
+    except Exception:
+        pass
 
     ctx = {
         "site_url": _site_base().rstrip("/"),
@@ -242,6 +257,9 @@ def send_leave_request_email(
         "manager_name": manager_name,
         "manager_email": to_addr,
         "cc_list": list(cc or []),
+        # Handover summary
+        "handover_summary": handover_summary,
+        "has_handovers": len(handover_summary) > 0,
         # Buttons (approval page)
         "approve_url": approve_url,
         "reject_url": reject_url,
@@ -255,15 +273,9 @@ def send_leave_request_email(
     reply_to = [e for e in [ctx["employee_email"]] if e]
 
     _send(subject, to_addr, cc=list(cc or []), reply_to=reply_to, html=html, txt=txt)
-    # Let model’s post_save log EMAIL_SENT to avoid double audits
 
 def send_leave_decision_email(leave: LeaveRequest) -> None:
-    """
-    Send the approve/reject decision email to the employee.
-    Templates:
-      - email/leave_decision.html
-      - email/leave_decision.txt
-    """
+    """Send the approve/reject decision email to the employee."""
     if not _email_enabled():
         return
 
@@ -321,60 +333,103 @@ def send_leave_decision_email(leave: LeaveRequest) -> None:
         pass
 
     _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
-    # Let model code log EMAIL_SENT
 
-# ------------------------------ Handover email -------------------------------
-
-def _handover_items_for(leave: LeaveRequest, assignee: User) -> List[str]:
-    items: List[str] = []
-    for ho in LeaveHandover.objects.filter(leave_request=leave, new_assignee=assignee):
-        prefix = {
-            HandoverTaskType.CHECKLIST: "Checklist",
-            HandoverTaskType.DELEGATION: "Delegation",
-            HandoverTaskType.HELP_TICKET: "Help Ticket",
-        }.get(ho.task_type, ho.task_type)
-        items.append(f"{prefix} #{ho.original_task_id}")
-    return items
-
-def send_handover_email(leave: LeaveRequest, delegate_to: User) -> None:
-    """
-    Notify the delegate about handed-over tasks for this leave.
-    Simple text email for now; uses default from email.
-    """
+def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
+    """Send handover notification to the delegate about assigned tasks."""
     if not _email_enabled():
         return
-    try:
-        to_addr = (delegate_to.email or "").strip()
-        if not to_addr:
-            return
-        s = timezone.localtime(leave.start_at, IST).strftime("%d %b %Y, %I:%M %p")
-        e = timezone.localtime(leave.end_at, IST).strftime("%d %b %Y, %I:%M %p")
-        items = _handover_items_for(leave, delegate_to)
-        if not items:
-            return
+        
+    to_addr = (assignee.email or "").strip()
+    if not to_addr:
+        logger.warning(f"Handover email suppressed: assignee {assignee} has no email")
+        return
 
-        subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
-        subject = f"{subject_prefix}Task handover for {leave.employee_name or _employee_display_name(leave.employee)} (#{leave.id})"
+    if not handovers:
+        return
 
-        # Minimal inline template
-        html = (
-            f"<p>Hi {delegate_to.get_full_name() or delegate_to.username},</p>"
-            f"<p><strong>{leave.employee_name or _employee_display_name(leave.employee)}</strong> has handed over the following tasks to you "
-            f"for the leave window <strong>{s}</strong> to <strong>{e}</strong> (IST):</p>"
-            f"<ul>{''.join(f'<li>{x}</li>' for x in items)}</ul>"
-            f"<p>Message: {leave.reason or '-'}<br>"
-            f"Handover note: {(LeaveHandover.objects.filter(leave_request=leave, new_assignee=delegate_to).first() or LeaveHandover()).message or '-'}</p>"
-            f"<p>Thank you.</p>"
-        )
-        txt = (
-            f"Task handover\n\n"
-            f"From: {leave.employee_name or _employee_display_name(leave.employee)}\n"
-            f"Window (IST): {s} -> {e}\n\n"
-            f"Tasks:\n- " + "\n- ".join(items) + "\n\n"
-            f"Message: {leave.reason or '-'}\n"
-            f"Handover note: {(LeaveHandover.objects.filter(leave_request=leave, new_assignee=delegate_to).first() or LeaveHandover()).message or '-'}\n"
-        )
+    employee_name = leave.employee_name or _employee_display_name(leave.employee)
+    assignee_name = _employee_display_name(assignee)
+    
+    # Prepare handover details with task links
+    handover_details = []
+    for handover in handovers:
+        task_title = handover.get_task_title()
+        task_url = handover.get_task_url()
+        if task_url:
+            task_url = _abs_url(task_url)
+        
+        handover_details.append({
+            'task_name': task_title,
+            'task_type': handover.get_task_type_display(),
+            'task_id': handover.original_task_id,
+            'task_url': task_url,
+            'message': handover.message,
+        })
 
-        _send(subject, to_addr, cc=[], reply_to=[], html=html, txt=txt)
-    except Exception:
-        logger.exception("Failed to send handover email")
+    subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
+    subject = f"{subject_prefix}Task Handover: {employee_name} ({_format_ist(leave.start_at)} - {_format_ist(leave.end_at)})"
+
+    ctx = {
+        "site_url": _site_base().rstrip("/"),
+        "leave_id": leave.id,
+        "leave_type": getattr(leave.leave_type, "name", str(leave.leave_type)),
+        "start_at_ist": _format_ist(leave.start_at),
+        "end_at_ist": _format_ist(leave.end_at),
+        "duration_days": _duration_days_ist(leave),
+        "is_half_day": bool(getattr(leave, "is_half_day", False)),
+        "employee_name": employee_name,
+        "employee_email": (leave.employee_email or getattr(leave.employee, "email", "") or "").strip(),
+        "assignee_name": assignee_name,
+        "handovers": handover_details,
+        "handover_message": handovers[0].message if handovers else "",
+    }
+
+    html, txt = _render_pair("email/leave_handover.html", "email/leave_handover.txt", ctx)
+    reply_to = [e for e in [ctx["employee_email"]] if e]
+
+    _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
+
+def send_delegation_reminder_email(reminder) -> None:
+    """Send reminder email for delegated task."""
+    if not _email_enabled():
+        return
+    
+    handover = reminder.leave_handover
+    leave = handover.leave_request
+    assignee = handover.new_assignee
+    
+    to_addr = (assignee.email or "").strip()
+    if not to_addr:
+        logger.warning(f"Reminder email suppressed: assignee {assignee} has no email")
+        return
+
+    employee_name = leave.employee_name or _employee_display_name(leave.employee)
+    assignee_name = _employee_display_name(assignee)
+    task_title = handover.get_task_title()
+    task_url = handover.get_task_url()
+    if task_url:
+        task_url = _abs_url(task_url)
+
+    subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
+    subject = f"{subject_prefix}Reminder: {task_title} (delegated by {employee_name})"
+
+    ctx = {
+        "site_url": _site_base().rstrip("/"),
+        "leave_id": leave.id,
+        "task_title": task_title,
+        "task_url": task_url,
+        "task_type": handover.get_task_type_display(),
+        "task_id": handover.original_task_id,
+        "employee_name": employee_name,
+        "employee_email": (leave.employee_email or getattr(leave.employee, "email", "") or "").strip(),
+        "assignee_name": assignee_name,
+        "original_message": handover.message,
+        "interval_days": reminder.interval_days,
+        "total_sent": reminder.total_sent,
+        "effective_end_date": handover.effective_end_date,
+    }
+
+    html, txt = _render_pair("email/delegation_reminder.html", "email/delegation_reminder.txt", ctx)
+    reply_to = [e for e in [ctx["employee_email"]] if e]
+
+    _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)

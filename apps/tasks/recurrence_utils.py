@@ -1,3 +1,4 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\recurrence_utils.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -32,7 +33,11 @@ DEFAULT_EVENING_MINUTE = 0
 # Low-level datetime helpers
 # ------------------------------
 def _ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
-    """Return an aware datetime in the *project* timezone if possible; treat naive input as IST first."""
+    """
+    Return an aware datetime.
+    - If input is aware, return as-is.
+    - If input is naive, treat it as IST wall-clock and localize.
+    """
     if dt is None:
         return None
     if timezone.is_aware(dt):

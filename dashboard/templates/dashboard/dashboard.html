@@ -1,7 +1,8 @@
+<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\dashboard\templates\dashboard\dashboard.html -->
 {% extends "base.html" %}
 {% load static %}
 {% load dashboard_extras %}
-{% load custom_filters %}
+{% load dashboard_filters %}
 
 {% block content %}
 <div class="container-fluid py-3">
@@ -132,6 +133,9 @@
                     {% if task.group_name %}
                       <span class="badge bg-secondary ms-1">{{ task.group_name }}</span>
                     {% endif %}
+                    {% if task.is_handover %}
+                      <span class="badge bg-dark ms-1">Handover</span>
+                    {% endif %}
                   </td>
 
                   <td class="text-muted">
@@ -254,6 +258,7 @@
           {% elif selected == 'delegation' %}<i class="fas fa-people-arrows"></i> Delegation
           {% else %}<i class="fas fa-ticket-alt"></i> Help Ticket{% endif %}
           • ID {{ task.id }}
+          {% if task.is_handover %}<span class="badge bg-dark ms-2">Handover</span>{% endif %}
         </h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>

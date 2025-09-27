@@ -1,3 +1,4 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\recurrence.py
 from __future__ import annotations
 
 import logging
@@ -78,7 +79,7 @@ def _holiday_model():
 # -------------------------------------------------------------------
 def normalize_mode(mode: Optional[str]) -> str:
     """
-    Accepts: Day/Daily, Week/Weekly, Month/Monthly, Year/Yearly (case-insensitive).
+    Accepts: Day/Daily, Week/Weekly, Month/Monthly, Year/Yearly/Annual/Annually (case-insensitive).
     Returns canonical: Daily, Weekly, Monthly, Yearly (or empty string if invalid).
     """
     if not mode:
@@ -131,15 +132,17 @@ def preserve_first_occurrence_time(planned_dt: Optional[datetime]) -> Optional[d
     - Do NOT shift off Sundays/holidays.
     - Return as aware in project timezone.
     """
-    if not planned_dt:
-        return planned_dt
+    if planned_dt is None:
+        return None
 
+    # If naive, treat as IST wall-clock; else respect given tz
     if timezone.is_naive(planned_dt):
-        # Treat naive user input as IST-local time
-        planned_dt = IST.localize(planned_dt)
+        ist_dt = IST.localize(planned_dt)
+    else:
+        ist_dt = planned_dt.astimezone(IST)
 
     # Convert IST -> project tz
-    return _from_ist(planned_dt.astimezone(IST))
+    return _from_ist(ist_dt)
 
 # -------------------------------------------------------------------
 # Recurring occurrence helpers

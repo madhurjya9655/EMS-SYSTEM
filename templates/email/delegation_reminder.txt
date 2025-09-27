@@ -1,0 +1,29 @@
+TASK DELEGATION REMINDER #{{ total_sent }}
+=========================================
+
+Hello {{ assignee_name }},
+
+This is a reminder about a task that was delegated to you during {{ employee_name }}'s leave period.
+
+TASK DETAILS
+------------
+Task: {{ task_title }}
+Type: {{ task_type }} #{{ task_id }}
+{% if original_message %}Instructions: {{ original_message }}{% endif %}
+Delegation Period: Until {{ effective_end_date|date:"M d, Y" }}
+
+REMINDER INFO
+-------------
+This is reminder #{{ total_sent }}. You'll receive reminders every {{ interval_days }} day(s) until the task is completed or the leave period ends.
+
+ACTIONS
+-------
+{% if task_url %}View & Complete Task: {{ task_url }}{% endif %}
+Go to Dashboard: {{ site_url }}
+
+CONTACT
+-------
+If you have questions, contact {{ employee_name }} at {{ employee_email }}.
+
+---
+This is an automated reminder from the EMS system.

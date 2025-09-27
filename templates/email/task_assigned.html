@@ -6,123 +6,76 @@
   <title>{{ kind|default:"Task" }} Task Assigned</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      color: #333;
-      margin: 0;
-      padding: 20px;
-      background: #f9f9f9;
-    }
-    .container {
-      max-width: 600px;
-      margin: 0 auto;
-      background: #fff;
-      border-radius: 8px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-      overflow: hidden;
-    }
-    .header {
-      background: #007bff;
-      color: #fff;
-      padding: 20px;
-      text-align: center;
-    }
-    .header h1 {
-      margin: 0;
-      font-size: 24px;
-      font-weight: normal;
-    }
-    .content { padding: 30px; }
-    .greeting { font-size: 16px; margin-bottom: 20px; }
-    .task-details {
-      background: #f8f9fa;
-      border-left: 4px solid #007bff;
-      padding: 20px;
-      margin: 20px 0;
-    }
-    .task-details h3 { margin: 0 0 15px; color: #007bff; font-size: 18px; }
-    .detail-row { margin: 10px 0; font-size: 14px; }
-    .detail-label { font-weight: bold; color: #555; }
-    .cta-section { text-align: center; margin: 30px 0; }
-    .cta-button {
-      display: inline-block;
-      background: #28a745;
-      color: #fff;
-      padding: 15px 30px;
-      text-decoration: none;
-      border-radius: 5px;
-      font-weight: bold;
-      font-size: 16px;
-    }
-    .cta-button:hover { background: #218838; }
-    .footer {
-      background: #f8f9fa;
-      padding: 20px;
-      text-align: center;
-      border-top: 1px solid #e9ecef;
-      font-size: 12px;
-      color: #6c757d;
-    }
-    .priority-high { color: #dc3545; font-weight: bold; }
-    .priority-medium { color: #fd7e14; font-weight: bold; }
-    .priority-low { color: #28a745; font-weight: bold; }
+    body { font-family: Arial, sans-serif; color:#333; margin:0; padding:20px; background:#f9f9f9; }
+    .container { max-width:600px; margin:0 auto; background:#fff; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,0.1); overflow:hidden; }
+    .header { background:#5842f4; background:linear-gradient(90deg,#5842f4,#6a64f1); color:#fff; padding:20px; text-align:left; }
+    .header h1 { margin:0; font-size:22px; font-weight:600; }
+    .content { padding:28px; }
+    .greeting { font-size:16px; margin-bottom:18px; }
+    .task-details { background:#f8f9fa; border-left:4px solid #5842f4; padding:18px; margin:16px 0; border-radius:6px; }
+    .task-details h3 { margin:0 0 12px; color:#5842f4; font-size:18px; }
+    .detail-row { margin:8px 0; font-size:14px; }
+    .detail-label { font-weight:bold; color:#444; }
+    .section-title { font-weight:600; margin:20px 0 8px; }
+    .note { white-space:pre-wrap; line-height:1.5; }
+    .cta-section { text-align:left; margin:26px 0 8px; }
+    .cta-button { display:inline-block; background:#5842f4; color:#fff !important; padding:12px 20px; text-decoration:none; border-radius:6px; font-weight:600; font-size:15px; }
+    .cta-button:hover { opacity:.92; }
+    .footer { background:#f8f9fa; padding:16px 20px; text-align:left; border-top:1px solid #e9ecef; font-size:12px; color:#6c757d; }
+    .priority-high { color:#dc3545; font-weight:700; }
+    .priority-medium { color:#fd7e14; font-weight:700; }
+    .priority-low { color:#28a745; font-weight:700; }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
-      <h1>{{ kind|default:"Task" }} Task Assigned</h1>
+      <h1>{{ kind|default:"Task" }} Task</h1>
     </div>
 
     <div class="content">
-      <div class="greeting">
-        Hi {{ assignee_name|default:"Team Member" }},
-      </div>
-
-      <p>You have been assigned a new {{ kind|default:"task"|lower }}. Please review the details below:</p>
+      <p class="greeting">Hi {{ assignee_name|default:"Team Member" }},</p>
+      <p>You have a new assignment.</p>
 
       <div class="task-details">
         <h3>{{ task_title|default:"Task" }}</h3>
 
-        <div class="detail-row">
-          <span class="detail-label">Task ID:</span>
-          #{{ task_code|default:"N/A" }}
-        </div>
-
-        {% if planned_date_display %}
-          <div class="detail-row">
-            <span class="detail-label">Planned Date:</span>
-            {{ planned_date_display }}
-          </div>
-        {% endif %}
-
+        <div class="detail-row"><span class="detail-label">Task:</span> {{ task_title|default:"Task" }}</div>
+        <div class="detail-row"><span class="detail-label">Planned:</span> {{ planned_date_display|default:"Not specified" }}</div>
         {% if priority_display %}
-          <div class="detail-row">
-            <span class="detail-label">Priority:</span>
+          <div class="detail-row"><span class="detail-label">Priority:</span>
             <span class="priority-{{ priority_display|lower }}">{{ priority_display }}</span>
           </div>
         {% endif %}
-
         {% if assign_by_display %}
-          <div class="detail-row">
-            <span class="detail-label">Assigned by:</span>
-            {{ assign_by_display }}
-          </div>
+          <div class="detail-row"><span class="detail-label">Assigned by:</span> {{ assign_by_display }}</div>
+        {% endif %}
+        {% if task_code %}
+          <div class="detail-row"><span class="detail-label">Task ID:</span> #{{ task_code }}</div>
         {% endif %}
       </div>
 
-      {% if cta_text %}<p>{{ cta_text }}</p>{% endif %}
+      {% if instructions %}
+        <div>
+          <div class="section-title">Instructions</div>
+          <div class="note">{{ instructions }}</div>
+        </div>
+      {% endif %}
+
+      {% if cta_text %}
+        <p class="note" style="margin-top:14px;">{{ cta_text }}</p>
+      {% endif %}
 
       <div class="cta-section">
-        <a href="{{ complete_url|default:site_url|default:'#' }}" class="cta-button">Complete Task</a>
+        <a href="{{ complete_url|default:site_url|default:'#' }}" class="cta-button">Open {{ kind|default:"Task" }}</a>
       </div>
 
-      <p>If you have any questions about this task, please contact {{ assign_by_display|default:"your manager" }}.</p>
+      <p style="margin-top:18px;">If you have any questions, please contact {{ assign_by_display|default:"your manager" }}.</p>
     </div>
 
     <div class="footer">
-      This is an automated message from the Employee Management System.<br>
-      Please do not reply to this email.
+      Sent by BOS EMS<br>
+      {{ site_url|default:"" }}
     </div>
   </div>
 </body>

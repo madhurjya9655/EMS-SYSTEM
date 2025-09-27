@@ -1,8 +1,9 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\management\commands\generate_recurring_tasks.py
 # apps/tasks/management/commands/generate_recurring_tasks.py
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, date, time as dt_time
+from datetime import datetime, timedelta, time as dt_time
 
 import pytz
 from django.conf import settings
@@ -12,12 +13,10 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.tasks.models import Checklist
-from apps.tasks.recurrence_utils import (
+from apps.tasks.recurrence import (
     normalize_mode,
     RECURRING_MODES,
-    compute_next_planned_datetime,  # preserves wall-clock; shifts to next working day
-    is_working_day,
-    next_working_day,
+    get_next_planned_date,     # ALWAYS 19:00 IST on next working day
 )
 from apps.tasks.utils import send_checklist_assignment_to_user
 
@@ -79,6 +78,7 @@ def _send_recur_email(obj: Checklist) -> None:
         complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
         subject = f"✅ Task Reminder: {obj.task_name} scheduled for {pretty_date}, {pretty_time}"
 
+        # This uses your utils.py which now includes the “message/instructions” block.
         send_checklist_assignment_to_user(
             task=obj,
             complete_url=complete_url,
@@ -93,11 +93,10 @@ class Command(BaseCommand):
     help = (
         "Recurring Checklist generator & 10:00 reminder sender.\n"
         "Rules:\n"
-        "• Always generate the next occurrence on a working day (Sunday/holiday → next working day).\n"
-        "• The TIME-OF-DAY of recurrences is preserved from the previous planned_time (e.g., 19:00).\n"
-        "• Generate even if previous is not completed (missed tasks remain; next still appears).\n"
-        "• Emails are sent at ~10:00 IST on the planned day (subject uses date/time).\n"
-        "• Dashboard hides future tasks until 10:00 IST (handled by views).\n"
+        "• Next occurrence is always on a working day at 19:00 IST (Sun/holiday → next working day at 19:00).\n"
+        "• Generation is independent of completion (missed tasks remain; next still appears).\n"
+        "• Emails are sent at ~10:00 IST on the planned day (subject shows date/time).\n"
+        "• Dashboard 10:00 gating handled in views/templates.\n"
         "• Idempotent dupe-guard (±1 minute) on planned_date.\n"
     )
 
@@ -167,7 +166,8 @@ class Command(BaseCommand):
             safety = 0
             cur_dt = last.planned_date
             while safety < 730:  # ~2 years safety
-                next_dt = compute_next_planned_datetime(cur_dt, m, freq)
+                # FINAL RULE: ALWAYS 19:00 IST on working day
+                next_dt = get_next_planned_date(cur_dt, m, freq)
                 if not next_dt:
                     break
 
@@ -205,7 +205,7 @@ class Command(BaseCommand):
                                 task_name=last.task_name,
                                 message=last.message,
                                 assign_to=last.assign_to,
-                                planned_date=next_dt,  # same wall-clock time; shifted to working day if needed
+                                planned_date=next_dt,  # fixed 19:00 IST; shifted to working day if needed
                                 priority=last.priority,
                                 attachment_mandatory=last.attachment_mandatory,
                                 mode=last.mode,

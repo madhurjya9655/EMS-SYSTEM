@@ -22,7 +22,7 @@ from django.views import View
 from django.views.decorators.http import require_GET, require_POST
 
 from apps.users.permissions import has_permission
-from apps.users.routing import recipients_for_leave  # use current mapping for token role checks
+from apps.users.routing import recipients_for_leave
 from .forms import LeaveRequestForm
 from .models import (
     LeaveRequest,
@@ -33,24 +33,27 @@ from .models import (
     HandoverTaskType,
 )
 
-# optional notifications service (used for token path decision emails)
+# Import notification services
 try:
-    from .services.notifications import send_leave_decision_email  # noqa: F401
-except Exception:  # pragma: no cover
+    from .services.notifications import send_leave_decision_email, send_leave_request_email, send_handover_email
+except Exception:
     send_leave_decision_email = None
+    send_leave_request_email = None
+    send_handover_email = None
 
-# optional audits (token/open/approve/reject)
+# Import audit models
 try:
-    from .models import LeaveDecisionAudit, DecisionAction  # noqa: F401
-except Exception:  # pragma: no cover
+    from .models import LeaveDecisionAudit, DecisionAction
+except Exception:
     LeaveDecisionAudit = None
     DecisionAction = None
 
-# optional handover email
+# Import Celery tasks
 try:
-    from .services.notifications import send_handover_email  # noqa: F401
-except Exception:  # pragma: no cover
-    send_handover_email = None
+    from .tasks import send_leave_emails_async, send_handover_emails_async
+except Exception:
+    send_leave_emails_async = None
+    send_handover_emails_async = None
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +308,7 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
         if form.is_valid():
             try:
                 with transaction.atomic():
+                    # Save the leave request first
                     lr = form.save(commit=True)
 
                     # Handle task handovers
@@ -326,6 +330,7 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                     dg_ids = _to_int_list(cd.get("handover_delegation"))
                     ht_ids = _to_int_list(cd.get("handover_help_ticket"))
 
+                    handovers_created = []
                     if delegate_to and (cl_ids or dg_ids or ht_ids):
                         # Create handover records
                         handovers = []
@@ -377,17 +382,41 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                             )
                         
                         if handovers:
-                            LeaveHandover.objects.bulk_create(handovers, ignore_conflicts=True)
-                            messages.success(request, f"Leave application submitted with {len(handovers)} task handovers.")
-                        else:
-                            messages.success(request, "Leave application submitted.")
-                    else:
-                        messages.success(request, "Leave application submitted.")
+                            handovers_created = LeaveHandover.objects.bulk_create(handovers, ignore_conflicts=True)
+
+                # Send emails after successful database commit using Celery
+                def _send_emails():
+                    try:
+                        # Send leave request emails
+                        if send_leave_emails_async:
+                            send_leave_emails_async.delay(lr.id)
+                        elif send_leave_request_email:
+                            _send_leave_emails_sync(lr)
+                        
+                        # Send handover emails if any handovers were created
+                        if handovers_created and send_handover_emails_async:
+                            handover_ids = [h.id for h in handovers_created if h.id]
+                            if handover_ids:
+                                send_handover_emails_async.delay(lr.id, handover_ids)
+                        elif handovers_created and send_handover_email:
+                            _send_handover_emails_sync(lr, handovers_created)
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to send emails for leave {lr.id}: {e}")
+
+                # Schedule emails after commit
+                transaction.on_commit(_send_emails)
+
+                if handovers_created:
+                    messages.success(request, f"Leave application submitted with {len(handovers_created)} task handovers. Email notifications are being sent.")
+                else:
+                    messages.success(request, "Leave application submitted successfully. Email notifications are being sent.")
 
                 return redirect("leave:dashboard")
-            except Exception:
+                
+            except Exception as e:
                 logger.exception("apply_leave failed to create leave and/or handover")
-                messages.error(request, "Could not submit the leave. Please try again.")
+                messages.error(request, f"Could not submit the leave: {str(e)}. Please try again.")
         else:
             messages.error(request, "Please fix the errors below.")
     else:
@@ -402,6 +431,70 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
             "now_ist": now,
         },
     )
+
+
+def _send_leave_emails_sync(leave: LeaveRequest):
+    """Send leave request emails synchronously (fallback)."""
+    try:
+        # Get CC users from the saved leave request
+        cc_emails = [user.email for user in leave.cc_users.all() if user.email]
+        
+        # Get routing info
+        manager_email = None
+        admin_cc_list = []
+        
+        if leave.reporting_person and leave.reporting_person.email:
+            manager_email = leave.reporting_person.email
+        
+        if leave.cc_person and leave.cc_person.email:
+            admin_cc_list.append(leave.cc_person.email)
+        
+        # Combine admin CC and user-selected CC
+        all_cc = list(set(admin_cc_list + cc_emails))
+        
+        # Send leave request email
+        send_leave_request_email(
+            leave,
+            manager_email=manager_email,
+            cc_list=all_cc
+        )
+        
+        # Log email sent
+        if LeaveDecisionAudit and DecisionAction:
+            LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT)
+            
+        logger.info(f"Sent leave request email for leave {leave.id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to send leave emails sync for leave {leave.id}: {e}")
+
+
+def _send_handover_emails_sync(leave: LeaveRequest, handovers: List[LeaveHandover]):
+    """Send handover emails synchronously (fallback)."""
+    try:
+        # Group handovers by assignee to send one email per person
+        assignee_handovers = {}
+        for handover in handovers:
+            assignee_id = handover.new_assignee.id
+            if assignee_id not in assignee_handovers:
+                assignee_handovers[assignee_id] = []
+            assignee_handovers[assignee_id].append(handover)
+        
+        # Send email to each assignee
+        for assignee_id, user_handovers in assignee_handovers.items():
+            try:
+                assignee = user_handovers[0].new_assignee
+                send_handover_email(leave, assignee, user_handovers)
+                
+                # Log handover email sent
+                if LeaveDecisionAudit and DecisionAction:
+                    LeaveDecisionAudit.log(leave, DecisionAction.HANDOVER_EMAIL_SENT, extra={'assignee_id': assignee_id})
+                    
+            except Exception as e:
+                logger.error(f"Failed to send handover email to assignee {assignee_id}: {e}")
+                
+    except Exception as e:
+        logger.error(f"Failed to send handover emails sync for leave {leave.id}: {e}")
 
 
 @has_permission("leave_list")
@@ -822,7 +915,7 @@ def manager_widget(request: HttpRequest) -> HttpResponse:
     )
     rows = []
     for lr in leaves:
-        start = timezone.localtime(lr.start_at, IST).strftime("%b %d, %I:%M %p")
+        start = timezone.localtime(lr.start_at, IST).strftime("%b  %d, %I:%M %p")
         rows.append(
             f"<tr><td>{lr.employee.get_full_name() or lr.employee.username}</td>"
             f"<td>{lr.leave_type.name}</td>"

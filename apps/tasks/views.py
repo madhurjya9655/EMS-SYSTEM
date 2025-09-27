@@ -697,7 +697,7 @@ def process_delegation_bulk_upload_excel_friendly(file, assign_by_user):
         end_idx = min(start_idx + bs, total)
         batch_df = df.iloc[start_idx:end_idx]
         batch_created, batch_errors = process_delegation_batch_excel_ultra_optimized(
-            batch_df, assign_by_user, start_idx
+           batch_df, assign_by_user, start_idx
         )
         created.extend(batch_created)
         errors.extend(batch_errors)
@@ -1353,12 +1353,57 @@ def assigned_by_me(request):
             messages.warning(request, "Invalid action specified.")
         return redirect("tasks:assigned_by_me")
 
-    items = HelpTicket.objects.filter(assign_by=request.user).select_related("assign_by", "assign_to").order_by("-planned_date")
-    return render(request, "tasks/list_help_ticket_assigned_by.html", {"items": items, "current_tab": "assigned_by"})
+    items = (
+        HelpTicket.objects
+        .filter(assign_by=request.user)
+        .select_related("assign_by", "assign_to")
+        .order_by("-planned_date")
+    )
+
+    # Attach safe display names to avoid template key lookups on None
+    for t in items:
+        t.assign_by_display = (t.assign_by.get_full_name() or t.assign_by.username) if t.assign_by else "-"
+        t.assign_to_display = (t.assign_to.get_full_name() or t.assign_to.username) if t.assign_to else "-"
+
+    return render(
+        request,
+        "tasks/list_help_ticket_assigned_by.html",
+        {
+            "items": items,
+            "current_tab": "assigned_by",
+        },
+    )
 
 
 @login_required
 def complete_help_ticket(request, pk):
+    """
+    Immediate completion endpoint for HelpTicket.
+    If the request is POST OR has ?immediate=1, mark as Closed and redirect.
+    Otherwise, fall back to notes page.
+    """
+    ticket = get_object_or_404(HelpTicket.objects.select_related("assign_by", "assign_to"), pk=pk)
+
+    # Only assignee (or staff/superuser) can complete immediately
+    if ticket.assign_to_id and ticket.assign_to_id != request.user.id and not (request.user.is_staff or request.user.is_superuser):
+        messages.error(request, "You are not the assignee of this help ticket.")
+        return redirect(request.GET.get("next", reverse("tasks:assigned_to_me")))
+
+    do_immediate = (request.method == "POST") or (request.GET.get("immediate") == "1")
+
+    if do_immediate:
+        now = timezone.now()
+        ticket.status = "Closed"
+        ticket.resolved_at = now
+        ticket.resolved_by = request.user
+        if ticket.planned_date:
+            mins = int((now - ticket.planned_date).total_seconds() // 60)
+            ticket.actual_duration_minutes = max(mins, 0)
+        ticket.save()
+        messages.success(request, f"Help ticket '{ticket.title}' marked as completed.")
+        return redirect(request.GET.get("next", reverse("tasks:assigned_to_me")))
+
+    # Default: go to notes page (legacy flow)
     return redirect("tasks:note_help_ticket", pk=pk)
 
 
@@ -1381,9 +1426,9 @@ def note_help_ticket(request, pk):
 
         if ticket.status == "Closed":
             recipients = []
-            if ticket.assign_to.email:
+            if ticket.assign_to and ticket.assign_to.email:
                 recipients.append(ticket.assign_to.email)
-            if ticket.assign_by.email and ticket.assign_by.email not in recipients:
+            if ticket.assign_by and ticket.assign_by.email and ticket.assign_by.email not in recipients:
                 recipients.append(ticket.assign_by.email)
             if recipients:
                 from django.core.mail import EmailMultiAlternatives
@@ -1663,7 +1708,7 @@ def dashboard_home(request):
             )
             # Mark these as handed over for display purposes
             for task in handover_checklists:
-                task._is_handover = True
+                task.is_handover = True
             # Combine original and handover tasks
             all_checklists = list(base_checklists) + list(handover_checklists)
         else:
@@ -1673,12 +1718,12 @@ def dashboard_home(request):
             checklist_qs = [
                 c for c in all_checklists
                 if (_ist_date(c.planned_date) == today_ist) and 
-                   (getattr(c, '_is_handover', False) or _should_show_checklist(c.planned_date, now_ist))
+                   (getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist))
             ]
         else:
             checklist_qs = [
                 c for c in all_checklists 
-                if getattr(c, '_is_handover', False) or _should_show_checklist(c.planned_date, now_ist)
+                if getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist)
             ]
 
         # ---- Delegations & Help Tickets: visible when planned time arrives ----
@@ -1720,7 +1765,7 @@ def dashboard_home(request):
                 ).select_related('assign_by').order_by('planned_date')
             )
             for task in handover_delegations:
-                task._is_handover = True
+                task.is_handover = True
             delegation_qs = base_delegations + handover_delegations
         else:
             delegation_qs = base_delegations
@@ -1734,7 +1779,7 @@ def dashboard_home(request):
                 ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
             )
             for task in handover_help_tickets:
-                task._is_handover = True
+                task.is_handover = True
             help_ticket_qs = base_help_tickets + handover_help_tickets
         else:
             help_ticket_qs = base_help_tickets
@@ -1762,7 +1807,7 @@ def dashboard_home(request):
     if tasks:
         for i, task in enumerate(tasks[:3], start=1):
             tdt = task.planned_date.astimezone(IST) if task.planned_date else None
-            handover_info = " (HANDOVER)" if getattr(task, '_is_handover', False) else ""
+            handover_info = " (HANDOVER)" if getattr(task, 'is_handover', False) else ""
             logger.info(_safe_console_text(
                 f"  - Sample task {i}: '{getattr(task, 'task_name', getattr(task, 'title', ''))}' "
                 f"planned for {tdt.strftime('%Y-%m-%d %H:%M IST') if tdt else 'No date'}{handover_info}"

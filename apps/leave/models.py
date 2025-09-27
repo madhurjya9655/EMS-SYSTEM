@@ -1,3 +1,4 @@
+# apps/leave/models.py
 from __future__ import annotations
 
 import hashlib
@@ -95,6 +96,56 @@ class ApproverMapping(models.Model):
         return f"{self.employee} → RP:{self.reporting_person} CC:{self.cc_person}"
 
 
+class CCConfiguration(models.Model):
+    """
+    Admin-controlled CC options for leave applications.
+    Only users in this list can be selected as CC recipients.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        help_text="User who can be selected as CC recipient"
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this user is available for CC selection"
+    )
+    display_name = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Optional display name override"
+    )
+    department = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Department or role for grouping"
+    )
+    sort_order = models.PositiveIntegerField(
+        default=0,
+        help_text="Display order (lower numbers first)"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["sort_order", "department", "user__first_name", "user__last_name"]
+        verbose_name = "CC Configuration"
+        verbose_name_plural = "CC Configurations"
+        unique_together = ("user",)
+
+    def __str__(self) -> str:
+        display = self.display_name or self.user.get_full_name() or self.user.username
+        dept = f" ({self.department})" if self.department else ""
+        return f"{display}{dept}"
+
+    @property
+    def display_label(self) -> str:
+        """Get the display label for this CC option"""
+        if self.display_name:
+            return self.display_name
+        return self.user.get_full_name() or self.user.username
+
+
 # ---------------------------------------------------------------------------
 # Core models
 # ---------------------------------------------------------------------------
@@ -131,6 +182,11 @@ class LeaveRequestQuerySet(models.QuerySet):
         """
         return self.filter(start_date__lte=d, end_date__gte=d)
 
+    def active_today(self) -> "LeaveRequestQuerySet":
+        """Get leaves that are active today"""
+        today = timezone.now().date()
+        return self.active_for_blocking().covering_ist_date(today)
+
 
 class LeaveRequest(models.Model):
     objects = LeaveRequestQuerySet.as_manager()
@@ -156,12 +212,12 @@ class LeaveRequest(models.Model):
         help_text="HR (or other) observer.",
     )
 
-    # user-selected extra CC recipients
+    # user-selected extra CC recipients (only from admin-configured list)
     cc_users = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
         related_name="leave_requests_cc_user",
         blank=True,
-        help_text="Additional CC recipients selected by the employee."
+        help_text="Additional CC recipients selected by the employee from admin-configured options."
     )
 
     leave_type = models.ForeignKey(LeaveType, on_delete=models.PROTECT, related_name="leave_requests")
@@ -236,6 +292,14 @@ class LeaveRequest(models.Model):
     @property
     def active_for_blocking(self) -> bool:
         return self.status in (LeaveStatus.PENDING, LeaveStatus.APPROVED)
+
+    @property
+    def is_currently_active(self) -> bool:
+        """Check if leave is currently active (today falls within leave period)"""
+        if not self.active_for_blocking:
+            return False
+        today = timezone.now().date()
+        return self.includes_ist_date(today)
 
     def ist_dates(self) -> List[date]:
         if not self.start_at or not self.end_at:
@@ -368,6 +432,21 @@ class LeaveRequest(models.Model):
         self.full_clean()
         super().save(*args, **kwargs)
 
+        # Update handover effective dates after save
+        if not is_new:
+            self._update_handover_dates()
+
+    def _update_handover_dates(self) -> None:
+        """Update effective dates for all handovers when leave dates change"""
+        try:
+            handovers = LeaveHandover.objects.filter(leave_request=self)
+            for handover in handovers:
+                handover.effective_start_date = self.start_date
+                handover.effective_end_date = self.end_date
+                handover.save(update_fields=['effective_start_date', 'effective_end_date'])
+        except Exception:
+            logger.exception("Failed to update handover dates")
+
     def approve(self, by_user: Optional[User], comment: str = "") -> None:
         if self.status != LeaveStatus.PENDING:
             raise ValidationError("Only pending requests can be approved.")
@@ -388,6 +467,9 @@ class LeaveRequest(models.Model):
             self.approver = by_user
             self.decided_at = timezone.now()
             self.decision_comment = comment or self.decision_comment
+            # Deactivate handovers when leave is rejected
+            LeaveHandover.objects.filter(leave_request=self).update(is_active=False)
+            DelegationReminder.objects.filter(leave_handover__leave_request=self).update(is_active=False)
             self.save(update_fields=["status", "approver", "decided_at", "decision_comment", "updated_at"])
             LeaveDecisionAudit.log(self, DecisionAction.REJECTED, decided_by=by_user)
         _safe_send_decision_email(self)
@@ -395,6 +477,11 @@ class LeaveRequest(models.Model):
     @staticmethod
     def is_user_blocked_on(user: User, d: date) -> bool:
         return LeaveRequest.objects.active_for_blocking().filter(employee=user).covering_ist_date(d).exists()
+
+    @staticmethod
+    def get_user_active_leaves(user: User) -> "LeaveRequestQuerySet":
+        """Get all currently active leaves for a user"""
+        return LeaveRequest.objects.filter(employee=user).active_today()
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +494,29 @@ class HandoverTaskType(models.TextChoices):
     HELP_TICKET = "help_ticket", "Help Ticket"
 
 
+class LeaveHandoverQuerySet(models.QuerySet):
+    def active_now(self) -> "LeaveHandoverQuerySet":
+        """Get handovers that are currently active"""
+        today = timezone.now().date()
+        return self.filter(
+            is_active=True,
+            leave_request__status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED],
+            effective_start_date__lte=today,
+            effective_end_date__gte=today
+        )
+
+    def for_assignee(self, user: User) -> "LeaveHandoverQuerySet":
+        """Get handovers assigned to a specific user"""
+        return self.filter(new_assignee=user)
+
+    def currently_assigned_to(self, user: User) -> "LeaveHandoverQuerySet":
+        """Get tasks currently assigned to user due to handovers"""
+        return self.active_now().for_assignee(user)
+
+
 class LeaveHandover(models.Model):
+    objects = LeaveHandoverQuerySet.as_manager()
+
     leave_request = models.ForeignKey(
         LeaveRequest, on_delete=models.CASCADE, related_name="handovers"
     )
@@ -421,7 +530,7 @@ class LeaveHandover(models.Model):
     original_task_id = models.PositiveIntegerField()
     message = models.TextField(blank=True)
 
-    # nullable to avoid migration prompts and allow seamless deploys
+    # Effective dates are set from leave request dates
     effective_start_date = models.DateField(null=True, blank=True)
     effective_end_date = models.DateField(null=True, blank=True)
 
@@ -436,11 +545,224 @@ class LeaveHandover(models.Model):
             models.Index(fields=["new_assignee"]),
             models.Index(fields=["effective_start_date", "effective_end_date"]),
             models.Index(fields=["is_active"]),
+            models.Index(fields=["new_assignee", "is_active"]),
         ]
         unique_together = ("task_type", "original_task_id", "leave_request", "new_assignee")
 
     def __str__(self) -> str:
         return f"Handover({self.task_type}#{self.original_task_id}) {self.original_assignee} → {self.new_assignee} [{self.effective_start_date}..{self.effective_end_date}]"
+
+    @property
+    def is_currently_active(self) -> bool:
+        """Check if this handover is currently active"""
+        if not self.is_active:
+            return False
+        if self.leave_request.status not in [LeaveStatus.PENDING, LeaveStatus.APPROVED]:
+            return False
+        today = timezone.now().date()
+        if self.effective_start_date and today < self.effective_start_date:
+            return False
+        if self.effective_end_date and today > self.effective_end_date:
+            return False
+        return True
+
+    def get_task_object(self):
+        """Get the actual task object this handover refers to"""
+        try:
+            if self.task_type == HandoverTaskType.CHECKLIST:
+                from apps.tasks.models import Checklist
+                return Checklist.objects.get(id=self.original_task_id)
+            elif self.task_type == HandoverTaskType.DELEGATION:
+                from apps.tasks.models import Delegation
+                return Delegation.objects.get(id=self.original_task_id)
+            elif self.task_type == HandoverTaskType.HELP_TICKET:
+                from apps.tasks.models import HelpTicket
+                return HelpTicket.objects.get(id=self.original_task_id)
+        except Exception:
+            pass
+        return None
+
+    def get_task_title(self):
+        """Get task title/name for display"""
+        task_obj = self.get_task_object()
+        if task_obj:
+            return getattr(task_obj, 'task_name', None) or getattr(task_obj, 'title', str(task_obj))
+        return f"{self.task_type.title()} #{self.original_task_id}"
+
+    def get_task_url(self):
+        """Generate URL to view the task detail"""
+        from django.urls import reverse
+        try:
+            if self.task_type == HandoverTaskType.CHECKLIST:
+                return reverse('tasks:edit_checklist', args=[self.original_task_id])
+            elif self.task_type == HandoverTaskType.DELEGATION:
+                return reverse('tasks:edit_delegation', args=[self.original_task_id])
+            elif self.task_type == HandoverTaskType.HELP_TICKET:
+                return reverse('tasks:edit_help_ticket', args=[self.original_task_id])
+        except Exception:
+            pass
+        return None
+
+    def save(self, *args, **kwargs):
+        # Set effective dates from leave request if not already set
+        if not self.effective_start_date and self.leave_request:
+            self.effective_start_date = self.leave_request.start_date
+        if not self.effective_end_date and self.leave_request:
+            self.effective_end_date = self.leave_request.end_date
+        super().save(*args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Task Dashboard Integration
+# ---------------------------------------------------------------------------
+
+class HandoverTaskMixin:
+    """Mixin to add handover functionality to task models"""
+
+    @classmethod
+    def get_tasks_for_user(cls, user: User):
+        """Get all tasks for a user including handed over tasks"""
+        # Original tasks assigned to user
+        original_tasks = cls.objects.filter(assign_to=user)
+
+        # Tasks handed over to user
+        handovers = LeaveHandover.objects.currently_assigned_to(user).filter(
+            task_type=cls._get_task_type_name()
+        )
+
+        # Get handed over task IDs
+        handed_over_task_ids = [h.original_task_id for h in handovers]
+
+        # Include handed over tasks
+        if handed_over_task_ids:
+            handed_over_tasks = cls.objects.filter(id__in=handed_over_task_ids)
+            # Combine using union
+            return original_tasks.union(handed_over_tasks).order_by('-id')
+
+        return original_tasks
+
+    def get_current_assignee(self):
+        """Get the current assignee (considering active handovers)"""
+        today = timezone.now().date()
+
+        # Check if there's an active handover for this task
+        handover = LeaveHandover.objects.filter(
+            task_type=self._get_task_type_name(),
+            original_task_id=self.id,
+            is_active=True,
+            effective_start_date__lte=today,
+            effective_end_date__gte=today,
+            leave_request__status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED]
+        ).first()
+
+        if handover:
+            return handover.new_assignee
+
+        return self.assign_to
+
+    def get_handover_info(self):
+        """Get handover information for this task"""
+        today = timezone.now().date()
+
+        handover = LeaveHandover.objects.filter(
+            task_type=self._get_task_type_name(),
+            original_task_id=self.id,
+            is_active=True,
+            effective_start_date__lte=today,
+            effective_end_date__gte=today,
+            leave_request__status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED]
+        ).select_related('leave_request', 'original_assignee', 'new_assignee').first()
+
+        if handover:
+            return {
+                'is_handed_over': True,
+                'original_assignee': handover.original_assignee,
+                'current_assignee': handover.new_assignee,
+                'handover_message': handover.message,
+                'leave_request': handover.leave_request,
+                'handover_end_date': handover.effective_end_date,
+                'handover': handover
+            }
+
+        return {'is_handed_over': False}
+
+    @classmethod
+    def _get_task_type_name(cls):
+        """Get the task type name for handovers"""
+        if 'checklist' in cls.__name__.lower():
+            return 'checklist'
+        elif 'delegation' in cls.__name__.lower():
+            return 'delegation'
+        elif 'help' in cls.__name__.lower() or 'ticket' in cls.__name__.lower():
+            return 'help_ticket'
+        return 'unknown'
+
+
+# ---------------------------------------------------------------------------
+# Delegation Reminder System
+# ---------------------------------------------------------------------------
+
+class DelegationReminder(models.Model):
+    """
+    Tracks automatic reminders for delegated tasks until completion.
+    """
+    leave_handover = models.ForeignKey(
+        LeaveHandover, on_delete=models.CASCADE, related_name="reminders"
+    )
+    interval_days = models.PositiveIntegerField(
+        default=2, help_text="Send reminder every N days"
+    )
+    next_run_at = models.DateTimeField(
+        help_text="Next scheduled reminder time"
+    )
+    is_active = models.BooleanField(
+        default=True, help_text="Set to False to stop reminders"
+    )
+    last_sent_at = models.DateTimeField(null=True, blank=True)
+    total_sent = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["next_run_at", "is_active"]),
+            models.Index(fields=["leave_handover"]),
+        ]
+
+    def __str__(self):
+        return f"Reminder for {self.leave_handover} (every {self.interval_days}d, sent {self.total_sent}x)"
+
+    def should_send_reminder(self):
+        """Check if reminder should be sent now"""
+        if not self.is_active:
+            return False
+        if timezone.now() < self.next_run_at:
+            return False
+
+        # Check if handover is still active
+        if not self.leave_handover.is_currently_active:
+            return False
+
+        # Check if the original task is completed
+        task_obj = self.leave_handover.get_task_object()
+        if task_obj and hasattr(task_obj, 'status'):
+            if task_obj.status in ['Completed', 'Closed', 'Done']:
+                return False
+
+        return True
+
+    def mark_sent(self):
+        """Mark reminder as sent and schedule next one"""
+        self.last_sent_at = timezone.now()
+        self.total_sent += 1
+        self.next_run_at = timezone.now() + timedelta(days=self.interval_days)
+        self.save(update_fields=['last_sent_at', 'total_sent', 'next_run_at', 'updated_at'])
+
+    def deactivate(self):
+        """Stop sending reminders"""
+        self.is_active = False
+        self.save(update_fields=['is_active', 'updated_at'])
 
 
 # ---------------------------------------------------------------------------
@@ -455,11 +777,13 @@ class DecisionAction(models.TextChoices):
     TOKEN_APPROVE = "TOKEN_APPROVE", "Token Approve"
     TOKEN_REJECT = "TOKEN_REJECT", "Token Reject"
     EMAIL_SENT = "EMAIL_SENT", "Email Sent"
+    HANDOVER_EMAIL_SENT = "HANDOVER_EMAIL_SENT", "Handover Email Sent"
+    REMINDER_EMAIL_SENT = "REMINDER_EMAIL_SENT", "Reminder Email Sent"
 
 
 class LeaveDecisionAudit(models.Model):
     leave = models.ForeignKey(LeaveRequest, on_delete=models.CASCADE, related_name="audits")
-    action = models.CharField(max_length=20, choices=DecisionAction.choices)
+    action = models.CharField(max_length=25, choices=DecisionAction.choices)
     decided_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     decided_at = models.DateTimeField(auto_now_add=True)
 
@@ -494,6 +818,38 @@ class LeaveDecisionAudit(models.Model):
 
 
 # ---------------------------------------------------------------------------
+# Utility Functions for Dashboard Integration
+# ---------------------------------------------------------------------------
+
+def get_handed_over_tasks_for_user(user: User) -> dict:
+    """Get all tasks handed over to a user, grouped by type"""
+    handovers = LeaveHandover.objects.currently_assigned_to(user).select_related(
+        'leave_request', 'original_assignee'
+    )
+
+    result = {
+        'checklist': [],
+        'delegation': [],
+        'help_ticket': []
+    }
+
+    for handover in handovers:
+        task_obj = handover.get_task_object()
+        if task_obj:
+            task_data = {
+                'task': task_obj,
+                'handover': handover,
+                'original_assignee': handover.original_assignee,
+                'leave_request': handover.leave_request,
+                'handover_message': handover.message,
+                'task_url': handover.get_task_url()
+            }
+            result[handover.task_type].append(task_data)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Signals (emails + audits)
 # ---------------------------------------------------------------------------
 
@@ -504,6 +860,43 @@ def _safe_send_request_email(leave: LeaveRequest) -> None:
         LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT)
     except Exception:
         logger.exception("Failed to send leave request email")
+
+
+def _safe_send_handover_emails(leave: LeaveRequest) -> None:
+    """Send separate handover emails to each assignee"""
+    try:
+        from apps.leave.services.notifications import send_handover_email
+        handovers = LeaveHandover.objects.filter(leave_request=leave).select_related('new_assignee')
+
+        # Group handovers by assignee to send one email per person
+        assignee_handovers = {}
+        for handover in handovers:
+            assignee_id = handover.new_assignee.id
+            if assignee_id not in assignee_handovers:
+                assignee_handovers[assignee_id] = []
+            assignee_handovers[assignee_id].append(handover)
+
+        # Send email to each assignee
+        for assignee_id, user_handovers in assignee_handovers.items():
+            assignee = user_handovers[0].new_assignee
+            send_handover_email(leave, assignee, user_handovers)
+            LeaveDecisionAudit.log(leave, DecisionAction.HANDOVER_EMAIL_SENT, extra={'assignee_id': assignee_id})
+
+            # Create delegation reminders if configured
+            for handover in user_handovers:
+                # Default to 2-day reminders for delegated tasks
+                reminder_interval = 2
+                next_run = timezone.now() + timedelta(days=reminder_interval)
+
+                DelegationReminder.objects.create(
+                    leave_handover=handover,
+                    interval_days=reminder_interval,
+                    next_run_at=next_run,
+                    is_active=True
+                )
+
+    except Exception:
+        logger.exception("Failed to send handover emails")
 
 
 def _safe_send_decision_email(leave: LeaveRequest) -> None:
@@ -524,3 +917,7 @@ def _on_leave_created(sender, instance: LeaveRequest, created: bool, **kwargs) -
         return
     LeaveDecisionAudit.log(instance, DecisionAction.APPLIED)
     _safe_send_request_email(instance)
+
+    # Send handover emails if there are any handovers
+    if LeaveHandover.objects.filter(leave_request=instance).exists():
+        _safe_send_handover_emails(instance)

@@ -8,9 +8,14 @@
   <h1 class="mb-0">Employees</h1>
 
   {% if request.user.is_superuser %}
-    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addEmployeeModal">
-      <i class="fa fa-plus me-1"></i> Add Employee
-    </button>
+    <div class="btn-group">
+      <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addEmployeeModal">
+        <i class="fa fa-plus me-1"></i> Add Employee
+      </button>
+      <a href="{% url 'admin:leave_ccconfiguration_changelist' %}" class="btn btn-outline-primary">
+        <i class="fa fa-cog me-1"></i> Manage CC Options
+      </a>
+    </div>
   {% endif %}
 </div>
 
@@ -19,6 +24,9 @@
   .emp-table th, .emp-table td { vertical-align: middle !important; white-space: nowrap; }
   .emp-table td.col-wide { white-space: normal; }
   .emp-table .btn-sm { font-weight: 600; }
+  .cc-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-left: 8px; }
+  .cc-active { background-color: #10b981; }
+  .cc-inactive { background-color: #ef4444; }
 </style>
 
 <div class="card">
@@ -33,6 +41,7 @@
             <th>MD Name</th>
             <th class="col-wide">To Reporting officer</th>
             <th>CC Email</th>
+            <th>CC Available</th>
             <th>Employee Designation</th>
             <th class="text-end">Actions</th>
           </tr>
@@ -46,6 +55,15 @@
             <td>{{ r.md_name|default:"—" }}</td>
             <td class="col-wide">{{ r.reporting_officer|default:"—" }}</td>
             <td>{{ r.cc_email|default:"—" }}</td>
+            <td>
+              {% if r.cc_config_active %}
+                <span class="cc-indicator cc-active" title="Available for CC selection"></span>
+                Active
+              {% else %}
+                <span class="cc-indicator cc-inactive" title="Not available for CC selection"></span>
+                Inactive
+              {% endif %}
+            </td>
             <td>{{ r.designation|default:"—" }}</td>
             <td class="text-end">
               {% if request.user.is_superuser %}
@@ -71,7 +89,7 @@
             </td>
           </tr>
         {% empty %}
-          <tr><td colspan="8" class="text-muted">No employees.</td></tr>
+          <tr><td colspan="9" class="text-muted">No employees.</td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -126,10 +144,20 @@
               <label class="form-label">Employee Designation</label>
               <input type="text" class="form-control" name="designation">
             </div>
+
+            <div class="col-md-6">
+              <div class="form-check mt-4">
+                <input class="form-check-input" type="checkbox" name="add_to_cc_config" id="addToCcConfig" checked>
+                <label class="form-check-label" for="addToCcConfig">
+                  Make available for CC selection
+                </label>
+                <small class="form-text text-muted">Add this user to the CC configuration list</small>
+              </div>
+            </div>
           </div>
 
           <div class="form-text mt-3">
-            After saving, you can set the approver mapping via <em>Edit Mapping</em>.
+            After saving, you can set the approver mapping via <em>Edit Mapping</em> and manage CC availability via <em>Manage CC Options</em>.
           </div>
         </div>
 
@@ -142,6 +170,17 @@
       </form>
     </div>
   </div>
+</div>
+{% endif %}
+
+{% if request.user.is_superuser %}
+<div class="alert alert-info mt-3">
+  <h6>CC Configuration Notes:</h6>
+  <ul class="mb-0">
+    <li>Only users marked as "Active" in CC configuration can be selected for leave CC</li>
+    <li>Use <strong>Manage CC Options</strong> to control who employees can CC on leave requests</li>
+    <li>CC configuration is separate from approver mapping and provides fine-grained control</li>
+  </ul>
 </div>
 {% endif %}
 {% endblock %}

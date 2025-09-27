@@ -44,11 +44,14 @@
       {% endif %}
     </table>
 
-    {% if task.message %}
-    <div style="margin-top:16px;">
-      <div style="font-weight:bold; margin-bottom:6px;">Description</div>
-      <div>{{ task.message|linebreaksbr }}</div>
-    </div>
+    {# ---- NEW: Extra Instructions box ---- #}
+    {% if extra_instructions or task.extra_instructions or task.message %}
+      <div style="margin-top:16px;">
+        <div style="font-weight:bold; margin-bottom:6px;">Extra Instructions</div>
+        <div style="border:1px solid #e2e6ea; border-radius:6px; padding:12px 14px; background:#fff; white-space:pre-wrap;">
+          {{ extra_instructions|default:task.extra_instructions|default:task.message|linebreaksbr }}
+        </div>
+      </div>
     {% endif %}
 
     {% if task.is_recurring %}

@@ -22,7 +22,7 @@ from .forms import (
     InterviewScheduleForm,
 )
 from .models import Candidate, Employee, InterviewFeedback, InterviewSchedule
-from apps.leave.models import ApproverMapping
+from apps.leave.models import ApproverMapping, CCConfiguration
 from apps.users.models import Profile
 
 User = get_user_model()
@@ -54,6 +54,12 @@ class EmployeeListView(LoginRequiredMixin, ListView):
             for m in ApproverMapping.objects.select_related("employee", "reporting_person", "cc_person")
         }
 
+        # Prefetch CCConfiguration into a dict by user_id
+        cc_configs = {
+            c.user_id: c
+            for c in CCConfiguration.objects.select_related("user")
+        }
+
         def full_name(u: User) -> str:
             name = (getattr(u, "get_full_name", lambda: "")() or "").strip()
             if name:
@@ -67,6 +73,7 @@ class EmployeeListView(LoginRequiredMixin, ListView):
         for u in users:
             prof: Profile | None = getattr(u, "profile", None)
             mapping: ApproverMapping | None = mappings.get(u.id)
+            cc_config: CCConfiguration | None = cc_configs.get(u.id)
 
             # Reporting officer (from ApproverMapping)
             rp_name = rp_email = ""
@@ -81,7 +88,7 @@ class EmployeeListView(LoginRequiredMixin, ListView):
                 cc = mapping.cc_person
                 cc_email = (cc.email or "").strip()
 
-            # “MD Name” — mirror Reporting officer (as per requirement)
+            # "MD Name" — mirror Reporting officer (as per requirement)
             md_name = rp_name
 
             rows.append(
@@ -93,6 +100,7 @@ class EmployeeListView(LoginRequiredMixin, ListView):
                     "md_name": md_name,
                     "reporting_officer": f"{rp_name} ({rp_email})" if rp_name or rp_email else "",
                     "cc_email": cc_email,
+                    "cc_config_active": cc_config.is_active if cc_config else False,
                     # Use role as designation if no explicit designation field exists
                     "designation": (getattr(prof, "role", "") or ""),
                     # admin edit shortcut (fallback link)
@@ -124,7 +132,7 @@ def _split_name(full: str) -> Tuple[str, str]:
 def employee_create(request):
     """
     POST-only endpoint backing the 'Add Employee' modal.
-    Creates (or updates) a Django auth User + Profile.
+    Creates (or updates) a Django auth User + Profile + CC Configuration.
     """
     if request.method != "POST":
         return HttpResponseForbidden("POST required")
@@ -135,6 +143,7 @@ def employee_create(request):
     name = (request.POST.get("name") or "").strip()
     mobile = (request.POST.get("mobile") or "").strip()
     designation = (request.POST.get("designation") or "").strip()
+    add_to_cc_config = bool(request.POST.get("add_to_cc_config"))
 
     if not email or not name:
         messages.error(request, "E-mail and Employee Name are required.")
@@ -179,6 +188,19 @@ def employee_create(request):
     if changed:
         profile.save()
 
+    # Add to CC Configuration if requested
+    if add_to_cc_config:
+        cc_config, cc_created = CCConfiguration.objects.get_or_create(
+            user=user,
+            defaults={
+                'is_active': True,
+                'department': designation or 'Other',
+                'sort_order': 20,  # Default sort order for new users
+            }
+        )
+        if cc_created:
+            messages.info(request, f"Added {name} to CC configuration options.")
+
     messages.success(request, f"{'Created' if created else 'Updated'} employee: {name} ({email})")
     return redirect(next_url)
 
@@ -188,7 +210,7 @@ def employee_create(request):
 @transaction.atomic
 def employee_delete(request, user_id: int):
     """
-    POST-only: deletes the Django auth User and detaches any ApproverMapping links.
+    POST-only: deletes the Django auth User and detaches any ApproverMapping links and CC config.
     """
     if request.method != "POST":
         return HttpResponseForbidden("POST required")
@@ -202,6 +224,9 @@ def employee_delete(request, user_id: int):
     # 2) If used as reporting/cc → null them out (if nullable)
     ApproverMapping.objects.filter(reporting_person_id=user.id).update(reporting_person=None)
     ApproverMapping.objects.filter(cc_person_id=user.id).update(cc_person=None)
+
+    # Clean up CC Configuration
+    CCConfiguration.objects.filter(user_id=user.id).delete()
 
     name = getattr(user, "get_full_name", lambda: "")() or user.username or user.email
     user.delete()

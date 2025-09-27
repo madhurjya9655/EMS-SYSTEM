@@ -1,3 +1,4 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\signals.py
 from __future__ import annotations
 
 import logging
@@ -8,13 +9,19 @@ import time as _time
 import pytz
 from django.conf import settings
 from django.db import transaction
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from django.urls import reverse
 from django.utils import timezone
 
 from .models import Checklist, Delegation, HelpTicket
-from .recurrence import normalize_mode, is_working_day, next_working_day, RECURRING_MODES
+from .recurrence import (
+    normalize_mode,
+    is_working_day,
+    next_working_day,
+    RECURRING_MODES,
+    get_next_planned_date,  # ← fixed at 19:00 IST on working days
+)
 from . import utils as _utils  # email helpers & console-safe logging
 
 logger = logging.getLogger(__name__)
@@ -22,10 +29,9 @@ logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
 SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
-# Controls whether auto-recurring checklist emails are sent at all.
+# Email policy toggles
 SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
-
-# If True → recurring emails go out at ~10:00 IST on the planned date (your product rule)
+# All checklist assignment emails (first + recurring) are gated to ~10:00 IST
 SEND_RECUR_EMAILS_ONLY_AT_10AM = getattr(settings, "SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
 
 
@@ -48,70 +54,60 @@ def _spawn_delayed(send_at_utc: datetime, fn, *, name: str = "recur-email"):
                 secs = (send_at_utc - now).total_seconds()
                 if secs <= 0:
                     break
-                # sleep in small-ish chunks (max 60s) to be responsive to process shutdowns
                 _time.sleep(min(60.0, max(0.5, secs)))
             fn()
         except Exception as e:
-            logger.error(_utils._safe_console_text(f"Delayed recurring email failed: {e}"))
+            logger.error(_utils._safe_console_text(f"Delayed checklist email failed: {e}"))
 
     t = Thread(target=_runner, name=name, daemon=True)
     t.start()
 
 
-def _schedule_or_send_recurring_email(checklist_obj: Checklist) -> None:
+def _schedule_10am_email_for_checklist(obj: Checklist) -> None:
     """
-    Send email for automatically created recurring checklist occurrences.
-
-    Rules:
-    - Assignee only (never the assigner); skip if self-assign.
-    - If SEND_RECUR_EMAILS_ONLY_AT_10AM:
-        * schedule for 10:00 IST on the task's planned date (if in the future),
-        * send immediately if we're already in the 10:00±leeway window,
-        * send immediately (late) if it's already past the window today.
-    - If flag is False: send immediately on creation.
+    Schedule/send the assignee-only email for ANY created checklist (first or recurring)
+    at ~10:00 IST on its planned date.
     """
     if not SEND_EMAILS_FOR_AUTO_RECUR:
         return
 
     # Never email the assigner (including self-assign)
     try:
-        if checklist_obj.assign_by_id and checklist_obj.assign_by_id == checklist_obj.assign_to_id:
-            logger.info(
-                _utils._safe_console_text(
-                    f"Auto-recur email suppressed for CL-{checklist_obj.id}: assigner == assignee."
-                )
-            )
+        if obj.assign_by_id and obj.assign_by_id == obj.assign_to_id:
+            logger.info(_utils._safe_console_text(
+                f"Checklist email suppressed for CL-{obj.id}: assigner == assignee."
+            ))
             return
     except Exception:
         pass
 
-    to_email = (getattr(getattr(checklist_obj, "assign_to", None), "email", "") or "").strip()
+    to_email = (getattr(getattr(obj, "assign_to", None), "email", "") or "").strip()
     if not to_email:
-        logger.info(
-            _utils._safe_console_text(
-                f"Auto-recur email skipped for CL-{checklist_obj.id}: assignee has no email."
-            )
-        )
+        logger.info(_utils._safe_console_text(
+            f"Checklist email skipped for CL-{obj.id}: assignee has no email."
+        ))
         return
 
     def _send_now():
-        complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[checklist_obj.id])}"
+        complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
         _utils.send_checklist_assignment_to_user(
-            task=checklist_obj,
+            task=obj,
             complete_url=complete_url,
-            subject_prefix="Recurring Checklist Generated",
+            subject_prefix="Checklist Assigned" if normalize_mode(obj.mode) not in RECURRING_MODES
+            else "Recurring Checklist Generated",
         )
 
     if not SEND_RECUR_EMAILS_ONLY_AT_10AM:
         _utils._on_commit(_send_now)
         return
 
-    # Determine the anchor 10:00 IST on the PLANNED date
+    # Determine anchor 10:00 IST on the PLANNED date
     try:
-        planned = checklist_obj.planned_date
+        planned = obj.planned_date
         if not planned:
             _utils._on_commit(_send_now)
             return
+
         planned_ist = timezone.localtime(planned, IST)
         anchor_ist = IST.localize(datetime.combine(planned_ist.date(), dt_time(10, 0)))
         now_ist = timezone.now().astimezone(IST)
@@ -122,82 +118,59 @@ def _schedule_or_send_recurring_email(checklist_obj: Checklist) -> None:
         elif now_ist < anchor_ist:
             # schedule for anchor time
             anchor_utc = anchor_ist.astimezone(pytz.UTC)
-            _utils._on_commit(lambda: _spawn_delayed(anchor_utc, _send_now, name=f"recur-email-CL{checklist_obj.id}"))
+            _utils._on_commit(lambda: _spawn_delayed(anchor_utc, _send_now, name=f"cl-10am-email-{obj.id}"))
         else:
-            # it's later the same day (past window) → send now (late catch-up)
+            # It's later the same day (past window) → send now (late catch-up)
             _utils._on_commit(_send_now)
     except Exception as e:
-        logger.error(_utils._safe_console_text(f"Recurring email scheduling failed for {checklist_obj.id}: {e}"))
+        logger.error(_utils._safe_console_text(f"Checklist email scheduling failed for {obj.id}: {e}"))
         _utils._on_commit(_send_now)
 
 
-def _next_planned_preserve_time(prev_dt: datetime, mode: str, frequency: int) -> datetime | None:
+# ------------------------------------------------------------------------------
+# FIRST OCCURRENCE: force 19:00 IST on create (for recurring series only)
+# ------------------------------------------------------------------------------
+@receiver(pre_save, sender=Checklist)
+def force_first_occurrence_time(sender, instance: Checklist, **kwargs):
     """
-    Compute the next occurrence for a recurring checklist while PRESERVING the
-    original planned time-of-day. If the next date lands on Sunday/holiday, move
-    forward to the next working day but KEEP the same time-of-day.
-
-    Returns an aware datetime in the project's timezone.
+    FINAL RULE: First occurrence of a RECURRING checklist must be at 19:00 IST
+    on the planned DATE (do NOT shift off Sundays/holidays).
+    One-time (non-recurring) checklists keep the time the user set.
     """
-    if not prev_dt:
-        return None
+    try:
+        # Only when creating (no PK yet) and mode is recurring
+        if instance.pk is not None:
+            return
+        m = normalize_mode(getattr(instance, "mode", None))
+        if m not in RECURRING_MODES:
+            return
+        if not instance.planned_date:
+            return
 
-    m = normalize_mode(mode)
-    if m not in RECURRING_MODES:
-        return None
-
-    step = max(int(frequency or 1), 1)
-
-    # Work in IST for wall-clock stability
-    if timezone.is_naive(prev_dt):
-        prev_dt = timezone.make_aware(prev_dt, timezone.get_current_timezone())
-    prev_ist = prev_dt.astimezone(IST)
-
-    # Original time-of-day to preserve
-    t_planned = dt_time(prev_ist.hour, prev_ist.minute, prev_ist.second, prev_ist.microsecond)
-
-    # Add interval
-    from dateutil.relativedelta import relativedelta
-
-    if m == "Daily":
-        nxt_ist = prev_ist + relativedelta(days=step)
-    elif m == "Weekly":
-        nxt_ist = prev_ist + relativedelta(weeks=step)
-    elif m == "Monthly":
-        nxt_ist = prev_ist + relativedelta(months=step)
-    elif m == "Yearly":
-        nxt_ist = prev_ist + relativedelta(years=step)
-    else:
-        return None
-
-    # Re-apply preserved time-of-day
-    nxt_ist = nxt_ist.replace(
-        hour=t_planned.hour,
-        minute=t_planned.minute,
-        second=t_planned.second,
-        microsecond=t_planned.microsecond,
-    )
-
-    # If Sunday/holiday, push FORWARD to next working day, SAME time
-    d = nxt_ist.date()
-    if not is_working_day(d):
-        d = next_working_day(d)
-        nxt_ist = IST.localize(datetime.combine(d, t_planned))
-
-    # Return in project timezone
-    return nxt_ist.astimezone(timezone.get_current_timezone())
+        # Compute IST date from whatever timezone, then set time to 19:00 IST
+        dt = instance.planned_date
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, timezone.get_current_timezone())
+        dt_ist = dt.astimezone(IST)
+        new_ist = IST.localize(datetime.combine(dt_ist.date(), dt_time(19, 0, 0)))
+        instance.planned_date = new_ist.astimezone(timezone.get_current_timezone())
+    except Exception as e:
+        logger.error(_utils._safe_console_text(f"force_first_occurrence_time failed: {e}"))
 
 
+# ------------------------------------------------------------------------------
+# CREATE NEXT RECURRING CHECKLIST (at fixed 19:00 IST on a working day)
+# ------------------------------------------------------------------------------
 @receiver(post_save, sender=Checklist)
 def create_next_recurring_checklist(sender, instance: Checklist, created: bool, **kwargs):
     """
     When a recurring checklist is marked 'Completed', create the next occurrence:
       • Valid only for modes in RECURRING_MODES
       • Trigger on update (not initial create)
-      • Next occurrence PRESERVES the original planned time-of-day
-      • If Sun/holiday => shift forward to next working day (same time)
+      • Next occurrence is scheduled via recurrence.get_next_planned_date()
+        → ALWAYS 19:00 IST on a working day (Sun/holidays skipped)
       • Prevent duplicates within a 1-minute window
-      • Schedule/send the assignee email following the 10:00 IST rule
+      • Do NOT send email here; a generic 'created' handler will schedule the 10:00 email.
     """
     # Only recurring series
     if normalize_mode(instance.mode) not in RECURRING_MODES:
@@ -222,8 +195,8 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
     if Checklist.objects.filter(status="Pending", planned_date__gt=now, **series_filter).exists():
         return
 
-    # Compute next planned date while preserving planned time-of-day
-    next_dt = _next_planned_preserve_time(instance.planned_date, instance.mode, instance.frequency)
+    # Compute next planned date via FINAL RULE helper (fixed 19:00 IST on working day)
+    next_dt = get_next_planned_date(instance.planned_date, instance.mode, instance.frequency)
     if not next_dt:
         logger.warning(_utils._safe_console_text(f"No next date for recurring checklist {instance.id}"))
         return
@@ -231,7 +204,7 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
     # Catch-up loop: ensure next occurrence lands in the future
     safety = 0
     while next_dt and next_dt <= now and safety < 730:  # ~2 years safety
-        next_dt = _next_planned_preserve_time(next_dt, instance.mode, instance.frequency)
+        next_dt = get_next_planned_date(next_dt, instance.mode, instance.frequency)
         safety += 1
     if not next_dt:
         logger.warning(_utils._safe_console_text(f"Could not find a future date for series '{instance.task_name}'"))
@@ -255,7 +228,7 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                 task_name=instance.task_name,
                 message=instance.message,
                 assign_to=instance.assign_to,
-                planned_date=next_dt,  # PRESERVED time-of-day
+                planned_date=next_dt,  # FIXED 19:00 IST on a working day
                 priority=instance.priority,
                 attachment_mandatory=instance.attachment_mandatory,
                 mode=instance.mode,
@@ -276,19 +249,38 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                 status="Pending",
             )
 
-            # After commit, schedule or send the assignee-only email (10:00 IST policy)
-            transaction.on_commit(lambda: _schedule_or_send_recurring_email(new_obj))
-
             logger.info(
                 _utils._safe_console_text(
                     f"Created next recurring checklist {new_obj.id} "
                     f"'{new_obj.task_name}' at {new_obj.planned_date}"
                 )
             )
+        # Do NOT send email directly here — the generic created handler below will schedule @ 10:00 IST.
     except Exception as e:
         logger.error(_utils._safe_console_text(f"Failed to create recurring checklist for {instance.id}: {e}"))
 
 
+# ------------------------------------------------------------------------------
+# GENERIC: On ANY checklist creation, schedule the 10:00 IST email
+# ------------------------------------------------------------------------------
+@receiver(post_save, sender=Checklist)
+def schedule_checklist_email_on_create(sender, instance: Checklist, created: bool, **kwargs):
+    """
+    For BOTH first occurrences and auto-created recurrences:
+    schedule (or send) the assignee email at ~10:00 IST on the planned date.
+    """
+    if not created:
+        return
+    try:
+        transaction.on_commit(lambda: _schedule_10am_email_for_checklist(instance))
+    except Exception:
+        # Fallback if not in a transaction
+        _schedule_10am_email_for_checklist(instance)
+
+
+# ------------------------------------------------------------------------------
+# Logging helpers for other models (unchanged)
+# ------------------------------------------------------------------------------
 @receiver(post_save, sender=Checklist)
 def log_checklist_completion(sender, instance, created, **kwargs):
     """Log checklist completion for monitoring."""

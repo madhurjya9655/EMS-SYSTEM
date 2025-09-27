@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Task Delegation Reminder</title>
+</head>
+<body style="margin:0; padding:0; background:#f4f6f8; font-family:Arial,sans-serif;">
+  
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f4f6f8;">
+    <tr>
+      <td align="center" style="padding:24px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="width:600px; max-width:600px; background:#ffffff; border-radius:10px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.06);">
+          
+          <tr>
+            <td style="background:#dc2626; padding:18px 24px;">
+              <div style="font:700 18px Arial,Helvetica,sans-serif; color:#ffffff;">Task Delegation Reminder</div>
+              <div style="font:400 12px Arial,Helvetica,sans-serif; color:#fecaca; margin-top:4px;">Reminder #{{ total_sent }} - Task delegated during leave</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:24px;">
+              <p style="margin:0 0 10px; font:400 14px/1.6 Arial,Helvetica,sans-serif; color:#111827;">
+                Hello <strong>{{ assignee_name }}</strong>,
+              </p>
+              <p style="margin:0 0 18px; font:400 14px/1.6 Arial,Helvetica,sans-serif; color:#111827;">
+                This is a reminder about a task that was delegated to you during <strong>{{ employee_name }}</strong>'s leave period.
+              </p>
+
+              <div style="margin:16px 0; padding:14px; border-radius:8px; background:#fef2f2; border:1px solid #fecaca;">
+                <div style="font:700 14px Arial,Helvetica,sans-serif; color:#dc2626; margin-bottom:8px;">{{ task_title }}</div>
+                <div style="font:400 13px Arial,Helvetica,sans-serif; color:#111827; margin-bottom:6px;">
+                  <strong>Task Type:</strong> {{ task_type }} #{{ task_id }}
+                </div>
+                {% if original_message %}
+                <div style="font:400 13px Arial,Helvetica,sans-serif; color:#374151; margin-bottom:6px;">
+                  <strong>Instructions:</strong> {{ original_message }}
+                </div>
+                {% endif %}
+                <div style="font:400 13px Arial,Helvetica,sans-serif; color:#6b7280;">
+                  <strong>Delegation Period:</strong> Until {{ effective_end_date|date:"M d, Y" }}
+                </div>
+              </div>
+
+              <div style="margin:18px 0 6px; font:400 13px Arial,Helvetica,sans-serif; color:#6b7280;">
+                This is reminder #{{ total_sent }}. You'll receive reminders every {{ interval_days }} day(s) until the task is completed or the leave period ends.
+              </div>
+
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:22px;">
+                <tr>
+                  <td align="left">
+                    {% if task_url %}
+                    <a href="{{ task_url }}"
+                       style="background:#dc2626; border:1px solid #dc2626; border-radius:8px; color:#ffffff; display:inline-block; font:700 14px Arial,Helvetica,sans-serif; line-height:40px; text-align:center; text-decoration:none; padding:0 18px; margin-right:10px;">
+                      View & Complete Task
+                    </a>
+                    {% endif %}
+                    <a href="{{ site_url }}"
+                       style="background:#6b7280; border:1px solid #6b7280; border-radius:8px; color:#ffffff; display:inline-block; font:700 14px Arial,Helvetica,sans-serif; line-height:40px; text-align:center; text-decoration:none; padding:0 18px;">
+                      Go to Dashboard
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="margin-top:14px; font:400 12px Arial,Helvetica,sans-serif; color:#6b7280;">
+                If you have questions, contact {{ employee_name }} at {{ employee_email }}.
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background:#f9fafb; padding:16px 24px; border-top:1px solid #eef2f7;">
+              <div style="font:400 12px/1.5 Arial,Helvetica,sans-serif; color:#6b7280;">
+                This is an automated reminder from the EMS system.
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

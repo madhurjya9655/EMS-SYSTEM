@@ -36,7 +36,7 @@ urlpatterns = [
     # Optional manager widget
     path("manager/widget/", views.manager_widget, name="manager_widget"),
 
-    # Approver Mapping editor
+    # Approver Mapping editor (Admin controls routing)
     path("approver-mapping/<int:user_id>/", views.approver_mapping_edit, name="approver_mapping_edit"),
     path("approver-mapping/<int:user_id>/edit/reporting/", views.approver_mapping_edit_reporting, name="approver_mapping_edit_reporting"),
     path("approver-mapping/<int:user_id>/edit/cc/", views.approver_mapping_edit_cc, name="approver_mapping_edit_cc"),

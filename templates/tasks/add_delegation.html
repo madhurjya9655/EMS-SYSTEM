@@ -28,6 +28,9 @@
       <div class="col-md-4">
         {{ form.planned_date.label_tag }}<br>
         {{ form.planned_date }}
+        <div class="form-text">
+          Delegations appear once their planned time arrives. (Sundays are disabled here.)
+        </div>
       </div>
       <div class="col-md-4">
         {{ form.priority.label_tag }}<br>
@@ -48,6 +51,7 @@
       <div class="col-md-4">
         {{ form.time_per_task_minutes.label_tag }}<br>
         {{ form.time_per_task_minutes }}
+        <div class="form-text">Estimated minutes (for planning/scorecards).</div>
       </div>
     </div>
 
@@ -55,7 +59,16 @@
       <div class="col-12">
         {{ form.message.label_tag }}<br>
         {{ form.message }}
+        <div class="form-text">Instructions/details for the assignee.</div>
       </div>
+      {# Optional: if your form exposes extra_instructions, render it #}
+      {% if form.extra_instructions %}
+        <div class="col-12">
+          {{ form.extra_instructions.label_tag }}<br>
+          {{ form.extra_instructions }}
+          <div class="form-text">Email-only extra instructions (if provided).</div>
+        </div>
+      {% endif %}
     </div>
 
     <button type="submit" class="btn btn-primary mt-4">Submit</button>
@@ -73,7 +86,7 @@
           dateFormat: "Y-m-d H:i",
           altInput: true,
           altFormat: "d M, Y H:i",
-          disable: [d => d.getDay() === 0]  // keep if you want Sundays disabled
+          disable: [d => d.getDay() === 0]
         });
       }
     });

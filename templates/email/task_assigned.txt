@@ -2,21 +2,20 @@ BOS EMS - {{ kind|default:"Task" }} Assignment
 
 Hello {{ assignee_name|default:"Team Member" }},
 
-You have been assigned a new {{ kind|default:"task"|lower }} that requires your attention.
+You have a new {{ kind|default:"task"|lower }}.
 
-TASK DETAILS:
-- Title: {{ task_title|default:"Task" }}
-- Task Code: #{{ task_code|default:"N/A" }}
-- Planned Date: {{ planned_date_display|default:"Not specified" }}
-- Priority: {{ priority_display|default:"Low" }}
-- Assigned By: {{ assign_by_display|default:"System" }}
+Title: {{ task_title|default:"Task" }}
+Task Code: #{{ task_code|default:"N/A" }}
+Planned: {{ planned_date_display|default:"Not specified" }}
+Priority: {{ priority_display|default:"Low" }}
+Assigned By: {{ assign_by_display|default:"System" }}
 
-{{ cta_text|default:"Please review and complete this item." }}
+{% if instructions %}Instructions:
+{{ instructions }}
 
-To complete this task, please visit:
+{% endif %}{% if cta_text %}{{ cta_text }}
+
+{% endif %}Open:
 {{ complete_url|default:site_url|default:"" }}
 
-This is an automated notification from the BOS Employee Management System.
-If you have any questions, please contact your supervisor or system administrator.
-
-© {% now "Y" %} BOS Employee Management System
+This is an automated notification from BOS EMS.

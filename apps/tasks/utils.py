@@ -1,3 +1,6 @@
+# apps/tasks/utils.py
+from __future__ import annotations
+
 import logging
 import sys
 from datetime import datetime
@@ -140,7 +143,7 @@ def _send_email(
     recipients: Sequence[str],
     html_body: str,
     text_body: Optional[str] = None,
-    *,
+    * ,
     cc: Optional[Sequence[str]] = None,
     fail_silently: Optional[bool] = None,
 ) -> None:
@@ -223,6 +226,49 @@ def _shell_html(title: str, heading: str, body_html: str) -> str:
 </body></html>"""
 
 
+# ---------- message/description helpers ----------
+def _html_instructions_block(label: str, text: str) -> str:
+    """Return an 'Instructions' box with basic escaping + linebreaks."""
+    from django.utils.html import escape
+    safe = escape(text).replace("\n", "<br/>")
+    return f"""
+      <div style="margin-top:14px;padding:12px 14px;background:#f8fafc;border-left:4px solid #4f46e5;border-radius:8px">
+        <div style="font-weight:700;margin-bottom:6px;color:#0f172a">{label}</div>
+        <div style="color:#334155;font-size:14px;line-height:1.6">{safe}</div>
+      </div>
+    """
+
+
+def _txt_instructions_block(label: str, text: str) -> str:
+    sep = "-" * len(label)
+    return f"\n{label}\n{sep}\n{text}\n"
+
+
+def _extract_message_for(obj) -> tuple[str, str]:
+    """
+    Return (label, text) if obj has non-empty message/description; else ("", "").
+    Checklist/Delegation → 'message'; HelpTicket → 'description' (fall back to 'message').
+    """
+    label = ""
+    text = ""
+
+    # Try attributes in order
+    for attr in ("message", "description"):
+        try:
+            val = getattr(obj, attr, None)
+            if val:
+                text = str(val).strip()
+                if text:
+                    label = "Instructions" if attr == "message" else "Description"
+                    break
+        except Exception:
+            continue
+
+    if not text:
+        return "", ""
+    return label, text
+
+
 def _assignment_html(
     task_title: str,
     task_name: str,
@@ -230,6 +276,7 @@ def _assignment_html(
     planned_dt: Optional[datetime],
     complete_url: Optional[str],
     extra_lines: Optional[List[str]] = None,
+    message_tuple: tuple[str, str] = ("", ""),
     cta_label: str = "Open / Complete",
 ) -> str:
     planned_str = (
@@ -244,10 +291,50 @@ def _assignment_html(
     ]
     if extra_lines:
         lines.extend(extra_lines)
+
     body = "<p>" + "<br/>".join(lines) + "</p>"
+
+    # Inject message/description block if present
+    if message_tuple and message_tuple[0]:
+        body += _html_instructions_block(message_tuple[0], message_tuple[1])
+
     if complete_url:
         body += _cta_button(complete_url, cta_label)
     return _shell_html(task_title, "You have a new assignment", body)
+
+
+def _assignment_text(
+    task_name: str,
+    planned_dt: Optional[datetime],
+    assigner: Optional[User],
+    extra_lines: Optional[List[str]] = None,
+    message_tuple: tuple[str, str] = ("", ""),
+    action_url: Optional[str] = None,
+) -> str:
+    planned_str = (
+        timezone.localtime(planned_dt, IST).strftime("%a, %d %b %Y • %I:%M %p IST")
+        if planned_dt else "Not specified"
+    )
+    who = (assigner.get_full_name() or assigner.username) if assigner else "System"
+
+    parts = [
+        f"Task: {task_name}",
+        f"Planned: {planned_str}",
+        f"Assigned by: {who}",
+    ]
+    if extra_lines:
+        parts.extend(extra_lines)
+
+    txt = "\n".join(parts)
+
+    if message_tuple and message_tuple[0]:
+        txt += _txt_instructions_block(message_tuple[0], message_tuple[1])
+
+    if action_url:
+        txt += f"\nOpen/Complete: {action_url}\n"
+
+    txt += f"\n--\nBOS EMS • {SITE_URL}\n"
+    return txt
 
 
 def _info_html(title: str, heading: str, lines: List[str]) -> str:
@@ -285,7 +372,7 @@ def is_working_day(d) -> bool:
 # ======================================================================
 
 def send_checklist_assignment_to_user(
-    *,
+    * ,
     task: Checklist,
     complete_url: Optional[str],
     subject_prefix: str = "Checklist Assigned",
@@ -293,22 +380,34 @@ def send_checklist_assignment_to_user(
     """Notify assignee for a Checklist task (supports multi-CC)."""
     if not task or not task.assign_to:
         return
+
     subject = f"{subject_prefix}: {task.task_name}"
+    # Extract message
+    msg_tuple = _extract_message_for(task)
+
     html = _assignment_html(
         task_title="Checklist Task",
         task_name=task.task_name,
         assigner=task.assign_by,
         planned_dt=task.planned_date,
         complete_url=complete_url,
+        message_tuple=msg_tuple,
         cta_label="Open Checklist",
+    )
+    text = _assignment_text(
+        task_name=task.task_name,
+        planned_dt=task.planned_date,
+        assigner=task.assign_by,
+        message_tuple=msg_tuple,
+        action_url=complete_url,
     )
     recipients = [task.assign_to.email]
     cc_emails = _collect_cc_emails(task)
-    _on_commit(lambda: _send_email(subject, recipients, html, cc=cc_emails))
+    _on_commit(lambda: _send_email(subject, recipients, html, text_body=text, cc=cc_emails))
 
 
 def send_delegation_assignment_to_user(
-    *,
+    * ,
     delegation: Delegation,
     complete_url: Optional[str],
     subject_prefix: str = "Delegation Assigned",
@@ -316,22 +415,34 @@ def send_delegation_assignment_to_user(
     """Notify assignee for a Delegation task (supports multi-CC)."""
     if not delegation or not delegation.assign_to:
         return
+
     subject = f"{subject_prefix}: {delegation.task_name}"
+    msg_tuple = _extract_message_for(delegation)
+
     html = _assignment_html(
         task_title="Delegation Task",
         task_name=delegation.task_name,
         assigner=delegation.assign_by,
         planned_dt=delegation.planned_date,
         complete_url=complete_url,
+        message_tuple=msg_tuple,
         cta_label="Open Delegation",
     )
+    text = _assignment_text(
+        task_name=delegation.task_name,
+        planned_dt=delegation.planned_date,
+        assigner=delegation.assign_by,
+        message_tuple=msg_tuple,
+        action_url=complete_url,
+    )
+
     recipients = [delegation.assign_to.email]
     cc_emails = _collect_cc_emails(delegation)
-    _on_commit(lambda: _send_email(subject, recipients, html, cc=cc_emails))
+    _on_commit(lambda: _send_email(subject, recipients, html, text_body=text, cc=cc_emails))
 
 
 def send_help_ticket_assignment_to_user(
-    *,
+    * ,
     ticket: HelpTicket,
     complete_url: Optional[str],
     subject_prefix: str = "Help Ticket Assigned",
@@ -339,24 +450,38 @@ def send_help_ticket_assignment_to_user(
     """Notify assignee for a Help Ticket (supports multi-CC)."""
     if not ticket or not ticket.assign_to:
         return
+
     subject = f"{subject_prefix}: {ticket.title}"
-    planned = ticket.planned_date
+    # For tickets, prefer description; fall back to message
+    msg_tuple = _extract_message_for(ticket)
+    extra_lines = [f"<strong>Ticket ID:</strong> HT-{ticket.id}"]
+
     html = _assignment_html(
         task_title="Help Ticket",
         task_name=ticket.title,
         assigner=ticket.assign_by,
-        planned_dt=planned,
+        planned_dt=ticket.planned_date,
         complete_url=complete_url,
+        extra_lines=extra_lines,
+        message_tuple=msg_tuple,
         cta_label="Open Ticket",
-        extra_lines=[f"<strong>Ticket ID:</strong> HT-{ticket.id}"],
     )
+    text = _assignment_text(
+        task_name=ticket.title,
+        planned_dt=ticket.planned_date,
+        assigner=ticket.assign_by,
+        message_tuple=msg_tuple,
+        action_url=complete_url,
+        extra_lines=[f"Ticket ID: HT-{ticket.id}"],
+    )
+
     recipients = [ticket.assign_to.email]
     cc_emails = _collect_cc_emails(ticket)
-    _on_commit(lambda: _send_email(subject, recipients, html, cc=cc_emails))
+    _on_commit(lambda: _send_email(subject, recipients, html, text_body=text, cc=cc_emails))
 
 
 def send_recurring_assignment_to_user(
-    *,
+    * ,
     task: Checklist,
     complete_url: Optional[str],
     subject_prefix: str = "Recurring Checklist Generated",
@@ -366,7 +491,7 @@ def send_recurring_assignment_to_user(
 
 
 def send_checklist_admin_confirmation(
-    *,
+    * ,
     task: Checklist,
     subject_prefix: str = "Checklist Task Assignment",
 ) -> None:
@@ -384,6 +509,12 @@ def send_checklist_admin_confirmation(
         f"<strong>Assigned to:</strong> {assignee_name}",
         f"<strong>Assigned by:</strong> {who}",
     ]
+    # Include instructions for admin copy too (nice to have)
+    msg_label, msg_text = _extract_message_for(task)
+    if msg_label:
+        from django.utils.html import escape
+        lines.append(f"<strong>{msg_label}:</strong> {escape(msg_text)}")
+
     html = _info_html("Checklist Assignment - Admin Copy", "Assignment Confirmation", lines)
     recipients = _safe_list([
         getattr(task.assign_by, "email", ""),
@@ -397,7 +528,7 @@ def send_checklist_admin_confirmation(
 
 
 def send_checklist_unassigned_notice(
-    *,
+    * ,
     task: Checklist,
     old_user: User,
 ) -> None:
@@ -415,7 +546,7 @@ def send_checklist_unassigned_notice(
 
 
 def send_help_ticket_admin_confirmation(
-    *,
+    * ,
     ticket: HelpTicket,
     subject_prefix: str = "Help Ticket Assignment",
 ) -> None:
@@ -432,6 +563,12 @@ def send_help_ticket_admin_confirmation(
         f"<strong>Assigned to:</strong> {assignee_name}",
         f"<strong>Assigned by:</strong> {who}",
     ]
+    # Include description in admin copy
+    msg_label, msg_text = _extract_message_for(ticket)
+    if msg_label:
+        from django.utils.html import escape
+        lines.append(f"<strong>{msg_label}:</strong> {escape(msg_text)}")
+
     html = _info_html("Help Ticket - Admin Copy", "Assignment Confirmation", lines)
     recipients = _safe_list([
         getattr(ticket.assign_by, "email", ""),
@@ -444,7 +581,7 @@ def send_help_ticket_admin_confirmation(
 
 
 def send_help_ticket_unassigned_notice(
-    *,
+    * ,
     ticket: HelpTicket,
     old_user: User,
 ) -> None:
@@ -461,7 +598,7 @@ def send_help_ticket_unassigned_notice(
 
 
 def send_admin_bulk_summary(
-    *,
+    * ,
     title: str,
     rows: List[dict],
 ) -> None:
@@ -520,7 +657,7 @@ def send_admin_bulk_summary(
 
 def send_new_user_welcome(
     user: User,
-    *,
+    * ,
     temp_password: Optional[str] = None,
     login_url: Optional[str] = None,
     subject_prefix: str = "Welcome to BOS EMS",
@@ -597,7 +734,7 @@ def send_new_user_welcome(
 # ======================================================================
 
 def send_task_handover_notice(
-    *,
+    * ,
     to_user: User,
     cc_users_or_emails: Iterable,
     handover_lines: List[str],

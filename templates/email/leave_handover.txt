@@ -9,7 +9,7 @@ LEAVE DETAILS
 -------------
 - Period : {{ start_at_ist }} to {{ end_at_ist }}
 - Type   : {{ leave_type }}
-- Span   : {{ duration_days }} day{% if duration_days != 1 %}s{% endif %}{% if is_half_day %} (Half-day){% endif %}
+- Duration: {{ duration_days }} day{% if duration_days != 1 %}s{% endif %}{% if is_half_day %} (Half-day){% endif %}
 
 {% if handover_message %}
 MESSAGE FROM {{ employee_name|upper }}
@@ -19,13 +19,24 @@ MESSAGE FROM {{ employee_name|upper }}
 
 TASKS ASSIGNED TO YOU
 ---------------------
-{% for handover in handovers -%}
-• {{ handover.task_name }}
+{% for handover in handovers %}• {{ handover.task_name }}
+  Type: {{ handover.task_type }}
+  ID: #{{ handover.task_id }}
+  {% if handover.task_url %}Link: {{ handover.task_url }}{% endif %}
+  {% if handover.message %}Instructions: "{{ handover.message }}"{% endif %}
+
 {% endfor %}
 
 These tasks will appear in your dashboard during the leave period and will be
 automatically reassigned back to {{ employee_name }} when the leave ends.
 
-Open dashboard: {{ site_url }}
+ACTIONS
+-------
+Go to Dashboard: {{ site_url }}
 
-This is an automated message. If you have questions, contact {{ employee_name }} at {{ employee_email }}.
+CONTACT
+-------
+If you have questions, contact {{ employee_name }} at {{ employee_email }}.
+
+---
+This is an automated message from EMS. Please do not reply directly to this email.

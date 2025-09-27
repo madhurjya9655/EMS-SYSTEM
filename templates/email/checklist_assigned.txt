@@ -8,9 +8,9 @@ Priority: {{ task.get_priority_display|default:task.priority|default:"Low" }}{% 
 
 Estimated Time: {{ task.time_per_task_minutes }} min{% endif %}{% if task.group_name %}
 
-Group: {{ task.group_name }}{% endif %}{% if task.message %}
+Group: {{ task.group_name }}{% endif %}{% if extra_instructions or task.extra_instructions or task.message %}
 
-Description:
-{{ task.message }}{% endif %}{% if task.is_recurring %}
+Extra Instructions:
+{{ extra_instructions|default:task.extra_instructions|default:task.message }}{% endif %}{% if task.is_recurring %}
 
 Recurring: {{ task.mode }}{% if task.frequency %} (Every {{ task.frequency }} {{ task.mode|lower }}{{ task.frequency|pluralize }}){% endif %}{% endif %}

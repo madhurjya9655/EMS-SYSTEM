@@ -22,6 +22,7 @@ from .models import (
     LeaveStatus,
     ApproverMapping,
     LeaveType,
+    CCConfiguration,
 )
 
 User = get_user_model()
@@ -74,6 +75,61 @@ class LeaveDecisionAuditInline(TabularInline):
 
 
 # ---------------------------------------------------------------------
+# CC Configuration Admin
+# ---------------------------------------------------------------------
+@admin.register(CCConfiguration)
+class CCConfigurationAdmin(admin.ModelAdmin):
+    list_display = (
+        "user_display",
+        "department",
+        "is_active",
+        "sort_order",
+        "updated_at",
+    )
+    list_filter = (
+        "is_active",
+        "department",
+        ("updated_at", admin.DateFieldListFilter),
+    )
+    search_fields = (
+        "user__username",
+        "user__first_name", 
+        "user__last_name",
+        "user__email",
+        "display_name",
+        "department",
+    )
+    ordering = ("sort_order", "department", "user__first_name", "user__last_name")
+    
+    fields = (
+        "user",
+        "is_active", 
+        "display_name",
+        "department",
+        "sort_order",
+    )
+    
+    readonly_fields = ("created_at", "updated_at")
+
+    @admin.display(description="User", ordering="user__first_name")
+    def user_display(self, obj: CCConfiguration) -> str:
+        user = obj.user
+        name = user.get_full_name() or user.username
+        email = user.email or "no-email"
+        display = obj.display_name or name
+        active_indicator = "✓" if obj.is_active else "✗"
+        return format_html(
+            "<strong>{}</strong> ({})<br><span style='color:#6b7280'>{}</span>",
+            active_indicator + " " + display,
+            email,
+            name if obj.display_name else ""
+        )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("user")
+
+
+# ---------------------------------------------------------------------
 # LeaveRequest admin
 # ---------------------------------------------------------------------
 @admin.register(LeaveRequest)
@@ -99,6 +155,7 @@ class LeaveRequestAdmin(admin.ModelAdmin):
         "is_half_day",
         "status_badge",
         "manager_col",   # reporting_person
+        "cc_display",    # cc users
         "approver_col",
         "decided_at_ist",
         "blocked_days",
@@ -143,6 +200,8 @@ class LeaveRequestAdmin(admin.ModelAdmin):
         ("start_at", "end_at", "is_half_day"),
         "reason",
         "attachment",
+        # CC Users
+        "cc_users",
         # Status/decision
         ("status", "approver", "decided_at"),
         "decision_comment",
@@ -153,6 +212,7 @@ class LeaveRequestAdmin(admin.ModelAdmin):
         ("applied_at", "updated_at"),
     )
 
+    filter_horizontal = ("cc_users",)
     inlines = [LeaveDecisionAuditInline]
 
     # ---------- displays ----------
@@ -169,6 +229,17 @@ class LeaveRequestAdmin(admin.ModelAdmin):
         if not m:
             return "—"
         return f"{m.get_full_name() or m.username} ({m.email or 'no-email'})"
+
+    @admin.display(description="CC Recipients")
+    def cc_display(self, obj: LeaveRequest) -> str:
+        cc_users = obj.cc_users.all()
+        if not cc_users:
+            return "—"
+        names = [u.get_full_name() or u.username for u in cc_users[:3]]
+        result = ", ".join(names)
+        if cc_users.count() > 3:
+            result += f" (+{cc_users.count() - 3} more)"
+        return result
 
     @admin.display(description="Approver", ordering="approver__username")
     def approver_col(self, obj: LeaveRequest) -> str:
@@ -220,7 +291,7 @@ class LeaveRequestAdmin(admin.ModelAdmin):
             ro.extend([
                 "employee", "reporting_person", "leave_type", "start_at", "end_at",
                 "is_half_day", "reason", "attachment", "status", "approver",
-                "decided_at", "decision_comment",
+                "decided_at", "decision_comment", "cc_users",
             ])
         # dedupe preserving order
         seen, out = set(), []

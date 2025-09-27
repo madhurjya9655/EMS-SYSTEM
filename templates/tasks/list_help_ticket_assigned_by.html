@@ -1,3 +1,4 @@
+<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\tasks\list_help_ticket_assigned_by.html -->
 {% extends "tasks/help_ticket_tasks_base.html" %}
 {% load static %}
 
@@ -39,13 +40,19 @@
                 <tr>
                   <td><input class="row-check-ticket" type="checkbox" name="sel" value="{{ ticket.id }}"></td>
                   <td>HT-{{ ticket.id }}</td>
-                  <td>{{ ticket.assign_to.get_full_name|default:ticket.assign_to.username|default:"—" }}</td>
+                  <td>{{ ticket.assign_to_display|default:"—" }}</td>
                   <td>{{ ticket.title }}</td>
                   <td>{{ ticket.created_at|date:"d M, Y h:i A"|default:"—" }}</td>
                   <td>{{ ticket.planned_date|date:"d M, Y h:i A"|default:"—" }}</td>
                   <td>{{ ticket.resolved_at|date:"d M, Y h:i A"|default:"—" }}</td>
                   <td>{{ ticket.delay|default:"—" }}</td>
-                  <td>{{ ticket.resolved_by.get_full_name|default:ticket.resolved_by.username|default:"—" }}</td>
+                  <td>
+                    {% if ticket.resolved_by %}
+                      {{ ticket.resolved_by.get_full_name|default:ticket.resolved_by.username }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
                   <td class="text-wrap">{{ ticket.resolved_notes|default:"—" }}</td>
                   <td>{% if ticket.media_upload %}<a href="{{ ticket.media_upload.url }}" download>Download</a>{% else %}—{% endif %}</td>
                   <td>{{ ticket.status }}</td>
@@ -85,9 +92,12 @@ function toggleSelectAllTickets(source) {
 function updateTicketBulkState() {
   const checks = [...document.querySelectorAll('.row-check-ticket')];
   const selected = checks.filter(cb => cb.checked).length;
-  document.getElementById('bulkDeleteTicketBtn').disabled = selected === 0;
-  document.getElementById('selectedTicketCount').textContent = selected;
-  document.getElementById('selectAllTickets').checked = selected === checks.length && checks.length > 0;
+  const btn = document.getElementById('bulkDeleteTicketBtn');
+  const count = document.getElementById('selectedTicketCount');
+  const selectAll = document.getElementById('selectAllTickets');
+  if (btn) btn.disabled = selected === 0;
+  if (count) count.textContent = selected;
+  if (selectAll) selectAll.checked = selected === checks.length && checks.length > 0;
 }
 document.addEventListener('change', (e) => {
   if (e.target.classList.contains('row-check-ticket')) {

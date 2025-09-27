@@ -337,6 +337,7 @@ def send_checklist_assignment_to_user(
         "cta_text": "Open the task and mark it complete when done.",
         # extra details
         "task_message": getattr(task, "message", "") or "",
+        "instructions": getattr(task, "message", "") or "",  # <-- added normalized key
         "task_frequency": (
             f"{getattr(task, 'mode', '')} (Every {getattr(task, 'frequency', '')})"
             if getattr(task, "mode", None) and getattr(task, "frequency", None)
@@ -389,6 +390,7 @@ def send_delegation_assignment_to_user(
         "assignee_name": _display_name(getattr(delegation, "assign_to", None)),
         "complete_url": complete_url,
         "cta_text": "Open the task and mark it complete when done.",
+        "instructions": getattr(delegation, "message", "") or "",  # <-- added normalized key
         "task_frequency": (
             f"{getattr(delegation, 'mode', '')} (Every {getattr(delegation, 'frequency', '')})"
             if getattr(delegation, "mode", None) and getattr(delegation, "frequency", None)
@@ -440,6 +442,7 @@ def send_help_ticket_assignment_to_user(
         "complete_url": complete_url,
         "cta_text": "Open the ticket to add notes or close it when resolved.",
         "task_message": getattr(ticket, "description", "") or "",
+        "instructions": getattr(ticket, "description", "") or "",  # <-- added normalized key
         "estimated_minutes": getattr(ticket, "estimated_minutes", 0) or 0,
         "site_url": SITE_URL,
         "task_id": ticket.id,

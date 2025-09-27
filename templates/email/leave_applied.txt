@@ -14,6 +14,20 @@ From (IST): {{ start_at_ist }}
 To (IST):   {{ end_at_ist }}
 {% if reason %}Reason: {{ reason }}{% endif %}
 
+{% if has_handovers %}
+Task Handover Summary
+---------------------
+Tasks delegated during this leave:
+
+{% for handover in handover_summary %}• {{ handover.task_title }} ({{ handover.task_type }} #{{ handover.task_id }})
+  → Assigned to: {{ handover.assignee_name }}{% if handover.task_url %}
+  → Task link: {{ handover.task_url }}{% endif %}{% if handover.message %}
+  → Instructions: "{{ handover.message }}"{% endif %}
+
+{% endfor %}
+Separate handover emails have been sent to the assignees.
+{% endif %}
+
 Actions
 -------
 Approve (approval page): {{ approve_url }}
