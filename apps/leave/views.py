@@ -20,6 +20,8 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views import View
 from django.views.decorators.http import require_GET, require_POST
+from django import forms
+from django.conf import settings  # use settings.ENABLE_CELERY_EMAIL
 
 from apps.users.permissions import has_permission
 from apps.users.routing import recipients_for_leave
@@ -31,9 +33,10 @@ from .models import (
     ApproverMapping,
     LeaveHandover,
     HandoverTaskType,
+    CCConfiguration,
 )
 
-# Import notification services
+# Notification services
 try:
     from .services.notifications import send_leave_decision_email, send_leave_request_email, send_handover_email
 except Exception:
@@ -41,14 +44,14 @@ except Exception:
     send_leave_request_email = None
     send_handover_email = None
 
-# Import audit models
+# Audits
 try:
     from .models import LeaveDecisionAudit, DecisionAction
 except Exception:
     LeaveDecisionAudit = None
     DecisionAction = None
 
-# Import Celery tasks
+# Celery tasks
 try:
     from .tasks import send_leave_emails_async, send_handover_emails_async
 except Exception:
@@ -149,12 +152,6 @@ def _role_for_email(leave: LeaveRequest, email: str) -> Optional[str]:
 
 
 def _can_manage(request_user, leave: LeaveRequest) -> bool:
-    """
-    Decision is restricted to:
-      • superuser, OR
-      • the assigned reporting_person.
-    (CC is notify-only by spec.)
-    """
     if not getattr(request_user, "is_authenticated", False):
         return False
     if getattr(request_user, "is_superuser", False):
@@ -181,7 +178,6 @@ def _client_ip(request: HttpRequest) -> Optional[str]:
 
 # ---- blocked days math (IST, inclusive) -------------------------------------#
 def _datespan_ist(start_dt, end_dt) -> List[date]:
-    """Inclusive list of IST dates between start_dt and end_dt (order agnostic)."""
     if not (start_dt and end_dt):
         return []
     s = timezone.localtime(start_dt, IST).date()
@@ -224,10 +220,6 @@ class BalanceRow:
 
 
 def _leave_balances_for_user(user) -> Tuple[List[BalanceRow], float]:
-    """
-    Build leave balance summary per type for current IST calendar year.
-    Returns (rows, total_remaining).
-    """
     year = now_ist().year
     rows: List[BalanceRow] = []
     types = list(LeaveType.objects.all().order_by("name"))
@@ -299,7 +291,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 @has_permission("leave_apply")
 @login_required
 def apply_leave(request: HttpRequest) -> HttpResponse:
-    """Employee applies for leave with CC and handover functionality."""
     header = _employee_header(request.user)
     now = now_ist()
 
@@ -308,15 +299,12 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
         if form.is_valid():
             try:
                 with transaction.atomic():
-                    # Save the leave request first
                     lr = form.save(commit=True)
 
-                    # Handle task handovers
                     cd = form.cleaned_data
                     delegate_to = cd.get("delegate_to")
                     ho_msg = (cd.get("handover_message") or "").strip()
 
-                    # Collect task selections (IDs come as strings from MultiChoiceField)
                     def _to_int_list(vals):
                         out: List[int] = []
                         for v in (vals or []):
@@ -332,12 +320,9 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
 
                     handovers_created = []
                     if delegate_to and (cl_ids or dg_ids or ht_ids):
-                        # Create handover records
                         handovers = []
                         ef_start = lr.start_date
                         ef_end = lr.end_date
-                        
-                        # Create handovers for each task type
                         for tid in cl_ids:
                             handovers.append(
                                 LeaveHandover(
@@ -380,32 +365,34 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                                     is_active=True,
                                 )
                             )
-                        
                         if handovers:
                             handovers_created = LeaveHandover.objects.bulk_create(handovers, ignore_conflicts=True)
 
-                # Send emails after successful database commit using Celery
+                # ---------------- Email dispatch (sync or Celery) ----------------
                 def _send_emails():
                     try:
-                        # Send leave request emails
-                        if send_leave_emails_async:
+                        use_async = bool(getattr(settings, "ENABLE_CELERY_EMAIL", False)) and bool(send_leave_emails_async)
+
+                        if use_async:
+                            # Celery path
                             send_leave_emails_async.delay(lr.id)
                         elif send_leave_request_email:
+                            # Synchronous fallback
                             _send_leave_emails_sync(lr)
-                        
-                        # Send handover emails if any handovers were created
-                        if handovers_created and send_handover_emails_async:
-                            handover_ids = [h.id for h in handovers_created if h.id]
-                            if handover_ids:
-                                send_handover_emails_async.delay(lr.id, handover_ids)
-                        elif handovers_created and send_handover_email:
-                            _send_handover_emails_sync(lr, handovers_created)
-                            
+
+                        if handovers_created:
+                            use_async_ho = bool(getattr(settings, "ENABLE_CELERY_EMAIL", False)) and bool(send_handover_emails_async)
+                            if use_async_ho:
+                                handover_ids = [h.id for h in handovers_created if h.id]
+                                if handover_ids:
+                                    send_handover_emails_async.delay(lr.id, handover_ids)
+                            elif send_handover_email:
+                                _send_handover_emails_sync(lr, handovers_created)
                     except Exception as e:
                         logger.error(f"Failed to send emails for leave {lr.id}: {e}")
 
-                # Schedule emails after commit
                 transaction.on_commit(_send_emails)
+                # ----------------------------------------------------------------
 
                 if handovers_created:
                     messages.success(request, f"Leave application submitted with {len(handovers_created)} task handovers. Email notifications are being sent.")
@@ -413,7 +400,7 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                     messages.success(request, "Leave application submitted successfully. Email notifications are being sent.")
 
                 return redirect("leave:dashboard")
-                
+
             except Exception as e:
                 logger.exception("apply_leave failed to create leave and/or handover")
                 messages.error(request, f"Could not submit the leave: {str(e)}. Please try again.")
@@ -434,65 +421,48 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
 
 
 def _send_leave_emails_sync(leave: LeaveRequest):
-    """Send leave request emails synchronously (fallback)."""
     try:
-        # Get CC users from the saved leave request
         cc_emails = [user.email for user in leave.cc_users.all() if user.email]
-        
-        # Get routing info
         manager_email = None
         admin_cc_list = []
-        
+
         if leave.reporting_person and leave.reporting_person.email:
             manager_email = leave.reporting_person.email
-        
+
         if leave.cc_person and leave.cc_person.email:
             admin_cc_list.append(leave.cc_person.email)
-        
-        # Combine admin CC and user-selected CC
+
         all_cc = list(set(admin_cc_list + cc_emails))
-        
-        # Send leave request email
-        send_leave_request_email(
-            leave,
-            manager_email=manager_email,
-            cc_list=all_cc
-        )
-        
-        # Log email sent
+
+        send_leave_request_email(leave, manager_email=manager_email, cc_list=all_cc)
+
         if LeaveDecisionAudit and DecisionAction:
             LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT)
-            
+
         logger.info(f"Sent leave request email for leave {leave.id}")
-        
+
     except Exception as e:
         logger.error(f"Failed to send leave emails sync for leave {leave.id}: {e}")
 
 
 def _send_handover_emails_sync(leave: LeaveRequest, handovers: List[LeaveHandover]):
-    """Send handover emails synchronously (fallback)."""
     try:
-        # Group handovers by assignee to send one email per person
         assignee_handovers = {}
         for handover in handovers:
             assignee_id = handover.new_assignee.id
             if assignee_id not in assignee_handovers:
                 assignee_handovers[assignee_id] = []
             assignee_handovers[assignee_id].append(handover)
-        
-        # Send email to each assignee
+
         for assignee_id, user_handovers in assignee_handovers.items():
             try:
                 assignee = user_handovers[0].new_assignee
                 send_handover_email(leave, assignee, user_handovers)
-                
-                # Log handover email sent
                 if LeaveDecisionAudit and DecisionAction:
                     LeaveDecisionAudit.log(leave, DecisionAction.HANDOVER_EMAIL_SENT, extra={'assignee_id': assignee_id})
-                    
             except Exception as e:
                 logger.error(f"Failed to send handover email to assignee {assignee_id}: {e}")
-                
+
     except Exception as e:
         logger.error(f"Failed to send handover emails sync for leave {leave.id}: {e}")
 
@@ -506,17 +476,12 @@ def my_leaves(request: HttpRequest) -> HttpResponse:
 @has_permission("leave_pending_manager")
 @login_required
 def manager_pending(request: HttpRequest) -> HttpResponse:
-    """Manager queue: list PENDING leaves assigned to the logged-in reporting person."""
     leaves = (
         LeaveRequest.objects.filter(reporting_person=request.user, status=LeaveStatus.PENDING)
         .select_related("employee", "leave_type")
         .order_by("start_at")
     )
-    return render(
-        request,
-        "leave/manager_pending.html",
-        {"leaves": leaves},
-    )
+    return render(request, "leave/manager_pending.html", {"leaves": leaves})
 
 
 def _build_approval_context(leave: LeaveRequest) -> Dict[str, object]:
@@ -549,10 +514,6 @@ def _build_approval_context(leave: LeaveRequest) -> Dict[str, object]:
 @login_required
 @require_GET
 def approval_page(request: HttpRequest, pk: int) -> HttpResponse:
-    """
-    Friendly approval page that shows details and exposes Approve/Reject forms.
-    Only the assigned Reporting Person (or superuser) can decide.
-    """
     leave = get_object_or_404(LeaveRequest, pk=pk)
     if not _can_manage(request.user, leave):
         return HttpResponseForbidden("You are not allowed to view this approval page.")
@@ -623,29 +584,25 @@ def manager_decide_reject(request: HttpRequest, pk: int) -> HttpResponse:
 @require_POST
 @transaction.atomic
 def delete_leave(request: HttpRequest, pk: int) -> HttpResponse:
-    """
-    Delete a single leave request (only PENDING requests by the owner).
-    """
     leave = get_object_or_404(
         LeaveRequest.objects.select_for_update(),
         pk=pk,
         employee=request.user
     )
-    
     if leave.status != LeaveStatus.PENDING:
         messages.error(request, "Only pending leave requests can be deleted.")
         return redirect("leave:dashboard")
-    
+
     leave_type = leave.leave_type.name
     start_date = leave.start_at.strftime("%B %d, %Y")
-    
+
     try:
         leave.delete()
         messages.success(request, f"Successfully deleted {leave_type} leave request for {start_date}.")
     except Exception:
         logger.exception("Failed to delete leave request %s", pk)
         messages.error(request, "Failed to delete leave request. Please try again.")
-    
+
     return redirect("leave:dashboard")
 
 
@@ -654,51 +611,46 @@ def delete_leave(request: HttpRequest, pk: int) -> HttpResponse:
 @require_POST
 @transaction.atomic
 def bulk_delete_leaves(request: HttpRequest) -> HttpResponse:
-    """
-    Delete multiple leave requests (only PENDING requests by the owner).
-    """
     leave_ids = request.POST.getlist('leave_ids')
-    
     if not leave_ids:
         messages.error(request, "No leave requests selected for deletion.")
         return redirect("leave:dashboard")
-    
+
     try:
         leave_ids = [int(id_str) for id_str in leave_ids if id_str.isdigit()]
-        
         if not leave_ids:
             messages.error(request, "Invalid leave request IDs provided.")
             return redirect("leave:dashboard")
-        
+
         leaves_to_delete = LeaveRequest.objects.select_for_update().filter(
             pk__in=leave_ids,
             employee=request.user,
             status=LeaveStatus.PENDING
         )
-        
+
         deleted_count = leaves_to_delete.count()
         if deleted_count == 0:
             messages.warning(request, "No eligible leave requests found for deletion. Only pending requests can be deleted.")
             return redirect("leave:dashboard")
-        
+
         leaves_to_delete.delete()
-        
+
         if deleted_count == 1:
             messages.success(request, "Successfully deleted 1 leave request.")
         else:
             messages.success(request, f"Successfully deleted {deleted_count} leave requests.")
-            
+
         total_requested = len(leave_ids)
         if deleted_count < total_requested:
             skipped = total_requested - deleted_count
             messages.info(request, f"{skipped} request(s) were skipped (only pending requests can be deleted).")
-    
+
     except ValueError:
         messages.error(request, "Invalid leave request IDs provided.")
     except Exception:
         logger.exception("Failed to bulk delete leave requests")
         messages.error(request, "Failed to delete leave requests. Please try again.")
-    
+
     return redirect("leave:dashboard")
 
 
@@ -706,12 +658,6 @@ def bulk_delete_leaves(request: HttpRequest) -> HttpResponse:
 # One-click Token Decision (CONFIRMATION + POST)                                #
 # -----------------------------------------------------------------------------#
 class TokenDecisionView(View):
-    """
-    GET  -> show confirmation screen (log TOKEN_OPENED)
-    POST -> approve/reject (enforce 10:00 IST via model validation), notify employee
-    Only the Reporting Person (per current admin mapping) or a superuser may decide.
-    CC is notify-only.
-    """
     template_confirm = "leave/email_decision_confirm.html"
     template_done = "leave/email_decision_done.html"
     template_used = "leave/email_token_used.html"
@@ -754,7 +700,6 @@ class TokenDecisionView(View):
         if self._token_already_used(leave, token_hash) or leave.is_decided:
             return render(request, self.template_used, {"leave": leave})
 
-        # Only current RP (per latest mapping) may act via email link.
         allowed = False
         role = _role_for_email(leave, actor_email)
         if role == "manager":
@@ -764,7 +709,6 @@ class TokenDecisionView(View):
         if request.user.is_authenticated and leave.reporting_person_id == getattr(request.user, "id", None):
             allowed = True
 
-        # Audit token open (soft-fail)
         try:
             if LeaveDecisionAudit:
                 LeaveDecisionAudit.objects.create(
@@ -810,14 +754,12 @@ class TokenDecisionView(View):
         if self._token_already_used(leave, token_hash):
             return render(request, self.template_used, {"leave": leave})
 
-        # Authorization
         if not (
             (request.user.is_authenticated and (request.user.is_superuser or leave.reporting_person_id == getattr(request.user, "id", None)))
             or (_role_for_email(leave, actor_email) == "manager")
         ):
             raise PermissionDenied("Only the assigned Reporting Person can decide this leave.")
 
-        # Resolve approver user
         decider_user = request.user if request.user.is_authenticated else None
         if decider_user is None:
             try:
@@ -828,7 +770,6 @@ class TokenDecisionView(View):
         if decider_user is None:
             decider_user = leave.reporting_person
 
-        # Decide
         try:
             if new_status == LeaveStatus.APPROVED:
                 leave.approve(by_user=decider_user, comment="Email decision: APPROVED by Reporting Person.")
@@ -841,7 +782,6 @@ class TokenDecisionView(View):
             logger.exception("Token decision failed for leave %s", leave.pk)
             return render(request, self.template_error, {"message": "Could not complete the action."}, status=400)
 
-        # Audits
         try:
             if LeaveDecisionAudit:
                 LeaveDecisionAudit.objects.create(
@@ -947,7 +887,7 @@ def _csrf_input(request: HttpRequest) -> str:
         return f"<input type='hidden' name='csrfmiddlewaretoken' value='{token}'>"
     except Exception:
         return ""
-    
+
 
 # -----------------------------------------------------------------------------#
 # Approver Mapping – editor (summary + dedicated field pages)                   #
@@ -962,10 +902,6 @@ def _user_label(u) -> str:
 
 @login_required
 def approver_mapping_edit(request: HttpRequest, user_id: int) -> HttpResponse:
-    """
-    Read-only summary with Edit buttons that open dedicated field pages.
-    Only superusers can save changes (on field pages).
-    """
     User = get_user_model()
     employee = get_object_or_404(User, pk=user_id)
     mapping = (
@@ -977,7 +913,7 @@ def approver_mapping_edit(request: HttpRequest, user_id: int) -> HttpResponse:
 
     ctx = {
         "employee": employee,
-        "employee_obj": employee,  # alias for templates expecting `employee_obj`
+        "employee_obj": employee,
         "mapping": mapping,
         "reporting_label": _user_label(getattr(mapping, "reporting_person", None)) if mapping else "—",
         "cc_label": _user_label(getattr(mapping, "cc_person", None)) if mapping else "—",
@@ -990,10 +926,6 @@ def approver_mapping_edit(request: HttpRequest, user_id: int) -> HttpResponse:
 @require_POST
 @transaction.atomic
 def approver_mapping_save(request: HttpRequest) -> HttpResponse:
-    """
-    Legacy POST handler (kept for backward compatibility).
-    Only superusers may write.
-    """
     if not getattr(request.user, "is_superuser", False):
         return HttpResponseForbidden("Only administrators can modify approver mappings.")
 
@@ -1028,12 +960,6 @@ def approver_mapping_save(request: HttpRequest) -> HttpResponse:
 
 @login_required
 def approver_mapping_edit_field(request: HttpRequest, user_id: int, field: str) -> HttpResponse:
-    """
-    Dedicated page to edit only one mapping field:
-      /leave/approver-mapping/<user_id>/edit/reporting/
-      /leave/approver-mapping/<user_id>/edit/cc/
-    Only superusers can save; others may view.
-    """
     field = (field or "").strip().lower()
     if field not in ("reporting", "cc"):
         return HttpResponseBadRequest("Unknown field.")
@@ -1086,11 +1012,11 @@ def approver_mapping_edit_field(request: HttpRequest, user_id: int, field: str) 
 
     ctx = {
         "employee": employee,
-        "employee_obj": employee,  # alias for templates expecting `employee_obj`
+        "employee_obj": employee,
         "mapping": mapping,
         "options": options,
         "selected_id": selected_id,
-        "field": field,  # "reporting" or "cc"
+        "field": field,
         "next_url": next_url,
     }
     return render(request, "leave/approver_mapping_field_edit.html", ctx)
@@ -1098,11 +1024,192 @@ def approver_mapping_edit_field(request: HttpRequest, user_id: int, field: str) 
 
 @login_required
 def approver_mapping_edit_reporting(request: HttpRequest, user_id: int) -> HttpResponse:
-    """Wrapper for reporting field edit page to match URL name used by templates."""
     return approver_mapping_edit_field(request, user_id, "reporting")
 
 
 @login_required
 def approver_mapping_edit_cc(request: HttpRequest, user_id: int) -> HttpResponse:
-    """Wrapper for CC field edit page to match URL name used by templates."""
     return approver_mapping_edit_field(request, user_id, "cc")
+
+
+# -----------------------------------------------------------------------------#
+# CC Config (admin-only) + per-employee CC assignment                           #
+# -----------------------------------------------------------------------------#
+class _CCAddForm(forms.Form):
+    user = forms.ModelChoiceField(
+        queryset=get_user_model().objects.filter(is_active=True).order_by("first_name", "last_name", "username")
+    )
+
+    def clean_user(self):
+        u = self.cleaned_data["user"]
+        if not getattr(u, "email", ""):
+            raise forms.ValidationError("Selected user must have an email.")
+        return u
+
+
+@login_required
+def cc_config(request: HttpRequest) -> HttpResponse:
+    if not getattr(request.user, "is_superuser", False):
+        return HttpResponseForbidden("Admins only.")
+    add_form = _CCAddForm()
+    rows = list(CCConfiguration.objects.select_related("user").order_by("sort_order", "department", "user__first_name", "user__last_name"))
+
+    if request.method == "POST":
+        updated = 0
+        with transaction.atomic():
+            for obj in rows:
+                dep = request.POST.get(f"row-{obj.id}-department", "")
+                is_active = bool(request.POST.get(f"row-{obj.id}-is_active"))
+                try:
+                    sort_val = int(request.POST.get(f"row-{obj.id}-sort_order", "0"))
+                except Exception:
+                    sort_val = 0
+                changed = False
+                if obj.department != dep:
+                    obj.department = dep
+                    changed = True
+                if obj.is_active != is_active:
+                    obj.is_active = is_active
+                    changed = True
+                if obj.sort_order != sort_val:
+                    obj.sort_order = sort_val
+                    changed = True
+                if changed:
+                    obj.save(update_fields=["department", "is_active", "sort_order", "updated_at"])
+                    updated += 1
+        messages.success(request, f"Saved {updated} row(s).")
+        return redirect("leave:cc_config")
+
+    return render(request, "leave/cc_config.html", {"rows": rows, "add_form": add_form})
+
+
+@login_required
+@require_POST
+@transaction.atomic
+def cc_config_add(request: HttpRequest) -> HttpResponse:
+    if not getattr(request.user, "is_superuser", False):
+        return HttpResponseForbidden("Admins only.")
+    form = _CCAddForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Please select a valid user.")
+        return redirect("leave:cc_config")
+    u = form.cleaned_data["user"]
+    obj, created = CCConfiguration.objects.get_or_create(
+        user=u, defaults={"department": "", "is_active": True, "sort_order": 0}
+    )
+    if created:
+        messages.success(request, "User added to CC options.")
+    else:
+        messages.info(request, "User already exists in CC options.")
+    return redirect("leave:cc_config")
+
+
+@login_required
+@require_POST
+@transaction.atomic
+def cc_config_remove(request: HttpRequest, pk: int) -> HttpResponse:
+    if not getattr(request.user, "is_superuser", False):
+        return HttpResponseForbidden("Admins only.")
+    try:
+        obj = CCConfiguration.objects.get(pk=pk)
+        obj.delete()
+        messages.success(request, "Removed from CC options.")
+    except CCConfiguration.DoesNotExist:
+        messages.info(request, "Entry not found.")
+    return redirect("leave:cc_config")
+
+
+@login_required
+def cc_assign(request: HttpRequest) -> HttpResponse:
+    """
+    Admin: assign per-employee CC (ApproverMapping.cc_person) using active CC options.
+    """
+    if not getattr(request.user, "is_superuser", False):
+        return HttpResponseForbidden("Admins only.")
+
+    User = get_user_model()
+
+    # Active CC options (choices)
+    active_cc = list(
+        CCConfiguration.objects.filter(is_active=True)
+        .select_related("user")
+        .order_by("sort_order", "department", "user__first_name", "user__last_name")
+    )
+
+    choices: List[Tuple[int, str]] = []
+    for opt in active_cc:
+        label = opt.display_name or (opt.user.get_full_name() or opt.user.username)
+        if opt.department:
+            label = f"{label} — {opt.department}"
+        choices.append((opt.user.id, label))
+
+    # Employees to show
+    employees = list(
+        User.objects.filter(is_active=True)
+        .only("id", "first_name", "last_name", "username", "email")
+        .order_by("first_name", "last_name", "username")
+    )
+
+    # Preload mappings
+    mappings = {
+        m.employee_id: m
+        for m in ApproverMapping.objects.select_related("employee", "cc_person").filter(employee__in=employees)
+    }
+
+    if request.method == "POST":
+        updated = 0
+        with transaction.atomic():
+            for emp in employees:
+                key = f"row-{emp.id}-cc_user_id"
+                raw = (request.POST.get(key) or "").strip()
+                mapping = mappings.get(emp.id)
+                before_id = getattr(mapping, "cc_person_id", None)
+
+                if raw == "":  # no change submitted for this row -> skip
+                    continue
+
+                if raw == "0":  # clear CC
+                    if mapping and mapping.cc_person_id is not None:
+                        mapping.cc_person = None
+                        mapping.save(update_fields=["cc_person", "updated_at"])
+                        updated += 1
+                    continue
+
+                try:
+                    cc_user_id = int(raw)
+                except ValueError:
+                    continue
+
+                if before_id == cc_user_id:
+                    continue
+
+                if not mapping:
+                    mapping = ApproverMapping.objects.create(employee=emp, cc_person_id=cc_user_id)
+                    mappings[emp.id] = mapping
+                    updated += 1
+                else:
+                    mapping.cc_person_id = cc_user_id
+                    mapping.save(update_fields=["cc_person", "updated_at"])
+                    updated += 1
+
+        messages.success(request, f"Updated {updated} employee(s).")
+        return redirect("leave:cc_assign")
+
+    # Build rows for template
+    rows = []
+    for emp in employees:
+        mapping = mappings.get(emp.id)
+        rows.append(
+            {
+                "id": emp.id,
+                "name": (emp.get_full_name() or emp.username),
+                "email": emp.email,
+                "current_cc": mapping.cc_person if mapping else None,
+            }
+        )
+
+    ctx = {
+        "rows": rows,
+        "cc_choices": choices,  # list of (user_id, label)
+    }
+    return render(request, "leave/cc_assign.html", ctx)

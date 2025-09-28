@@ -16,7 +16,7 @@ urlpatterns = [
     # Backward-compat: /leave/my → dashboard
     path("my/", RedirectView.as_view(pattern_name="leave:dashboard", permanent=False), name="my_leaves"),
 
-    # Apply Leave (renders templates/leave/apply_leave.html)
+    # Apply Leave
     path("apply/", views.apply_leave, name="apply_leave"),
 
     # Delete functionality
@@ -36,9 +36,17 @@ urlpatterns = [
     # Optional manager widget
     path("manager/widget/", views.manager_widget, name="manager_widget"),
 
-    # Approver Mapping editor (Admin controls routing)
+    # Approver Mapping editor
     path("approver-mapping/<int:user_id>/", views.approver_mapping_edit, name="approver_mapping_edit"),
     path("approver-mapping/<int:user_id>/edit/reporting/", views.approver_mapping_edit_reporting, name="approver_mapping_edit_reporting"),
     path("approver-mapping/<int:user_id>/edit/cc/", views.approver_mapping_edit_cc, name="approver_mapping_edit_cc"),
     path("approver-mapping/save/", views.approver_mapping_save, name="approver_mapping_save"),
+
+    # CC Config (admin-only)
+    path("cc-config/", views.cc_config, name="cc_config"),
+    path("cc-config/add/", views.cc_config_add, name="cc_config_add"),
+    path("cc-config/<int:pk>/remove/", views.cc_config_remove, name="cc_config_remove"),
+
+    # Per-employee CC assignment (admin-only)
+    path("cc-assign/", views.cc_assign, name="cc_assign"),
 ]

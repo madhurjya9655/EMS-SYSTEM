@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Assign CC – BOS EMS{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="mb-0">Assign CC (Per Employee)</h1>
+  <div class="d-flex gap-2">
+    <a href="{% url 'leave:cc_config' %}" class="btn btn-outline-secondary">
+      <i class="fa-solid fa-sliders"></i> CC Configuration
+    </a>
+    <a href="{% url 'recruitment:employee_list' %}" class="btn btn-outline-primary">
+      ← Back to Employees
+    </a>
+  </div>
+</div>
+
+<div class="alert alert-info">
+  <strong>Admins only.</strong>
+  Select a CC person for each employee.  
+  <code>— No change —</code> leaves the current value as-is.  
+  Choose <code>— Clear CC —</code> to remove the existing CC.
+</div>
+
+<div class="card">
+  <div class="card-body">
+    {% if not user.is_superuser %}
+      <div class="alert alert-danger mb-0">Only administrators can access this page.</div>
+    {% else %}
+      {% if rows %}
+        <form method="post" action="{% url 'leave:cc_assign' %}">
+          {% csrf_token %}
+
+          <div class="table-responsive">
+            <table class="table table-hover align-middle mb-3">
+              <thead class="table-light">
+                <tr>
+                  <th style="min-width: 220px;">Employee</th>
+                  <th>Email</th>
+                  <th style="min-width: 360px;">CC Person</th>
+                  <th class="text-end" style="width: 120px;">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in rows %}
+                  <tr>
+                    <td>
+                      <div class="fw-semibold">{{ row.name }}</div>
+                      <div class="text-muted small">ID: {{ row.id }}</div>
+                    </td>
+                    <td class="text-muted">{{ row.email|default:"—" }}</td>
+                    <td>
+                      <select
+                        class="form-select"
+                        name="row-{{ row.id }}-cc_user_id"
+                        aria-label="Select CC for {{ row.name }}"
+                      >
+                        {# IMPORTANT: empty value = skip/no change #}
+                        <option value="" selected>— No change —</option>
+                        {# value 0 = clear #}
+                        <option value="0">— Clear CC —</option>
+                        {% for uid, label in cc_choices %}
+                          <option value="{{ uid }}"
+                            {% if row.current_cc and row.current_cc.id == uid %}selected{% endif %}
+                          >{{ label }}</option>
+                        {% endfor %}
+                      </select>
+                    </td>
+                    <td class="text-end">
+                      {% if row.current_cc %}
+                        <span class="badge bg-success">Assigned</span>
+                      {% else %}
+                        <span class="badge bg-secondary">None</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="d-flex justify-content-end gap-2">
+            <a href="{{ request.get_full_path }}" class="btn btn-light">Reset</a>
+            <button type="submit" class="btn btn-primary">
+              <i class="fa-solid fa-floppy-disk"></i> Save Changes
+            </button>
+          </div>
+        </form>
+      {% else %}
+        <div class="alert alert-warning mb-0">No employees to display.</div>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -226,7 +226,7 @@ class LeaveRequestForm(forms.ModelForm):
             if start_at and end_at and (end_at - start_at).days < 30:  # Only filter if reasonable date range
                 q = q.filter(planned_date__range=(start_at - timedelta(days=1), end_at + timedelta(days=1)))
 
-            cl_items = [(t.id, _fmt(t, "task_name")) for t in q.order_by("-planned_date")[:20]]
+            cl_items = [(t.id, _fmt(t, "task_name")) for t in q.order_by("-planned_date", "-id")[:50]]
         except Exception as e:
             print(f"Error loading checklist tasks: {e}")
             cl_items = []
@@ -240,7 +240,7 @@ class LeaveRequestForm(forms.ModelForm):
             if start_at and end_at and (end_at - start_at).days < 30:
                 q = q.filter(planned_date__range=(start_at - timedelta(days=1), end_at + timedelta(days=1)))
 
-            dg_items = [(t.id, _fmt(t, "task_name")) for t in q.order_by("-planned_date")[:20]]
+            dg_items = [(t.id, _fmt(t, "task_name")) for t in q.order_by("-planned_date", "-id")[:50]]
         except Exception as e:
             print(f"Error loading delegation tasks: {e}")
             dg_items = []
@@ -255,7 +255,7 @@ class LeaveRequestForm(forms.ModelForm):
             if start_at and end_at and (end_at - start_at).days < 30:
                 q = q.filter(planned_date__range=(start_at - timedelta(days=1), end_at + timedelta(days=1)))
 
-            ht_items = [(t.id, _fmt(t, "title")) for t in q.order_by("-planned_date")[:20]]
+            ht_items = [(t.id, _fmt(t, "title")) for t in q.order_by("-planned_date", "-id")[:50]]
         except Exception as e:
             print(f"Error loading help tickets: {e}")
             ht_items = []
@@ -280,7 +280,7 @@ class LeaveRequestForm(forms.ModelForm):
         name = (getattr(f, "name", "") or "").lower()
         ext = ""
         if "." in name:
-            ext = name[name.rfind(".") :]
+            ext = name[name.rfind("."):]
         if ext not in ALLOWED_ATTACHMENT_EXTS:
             raise forms.ValidationError("Unsupported file type. Upload PDF, image, DOC/DOCX, or TXT.")
         if getattr(f, "size", 0) and f.size > 10 * 1024 * 1024:  # 10 MB

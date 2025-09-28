@@ -341,7 +341,7 @@ LOGGING = {
     },
     "handlers": {
         "console": {
-            "level": "DEBUG" if DEBUG else "WARNING",  # Changed to DEBUG in development
+            "level": "DEBUG" if DEBUG else "WARNING",
             "class": "logging.StreamHandler",
             "formatter": "simple",
         },
@@ -352,7 +352,7 @@ LOGGING = {
             "formatter": "verbose",
             "encoding": "utf-8",
         },
-        "permissions_file": {  # New handler for permissions
+        "permissions_file": {
             "level": "DEBUG" if DEBUG else "INFO",
             "class": "logging.FileHandler",
             "filename": str(LOGS_DIR / "permissions.log"),
@@ -378,7 +378,6 @@ LOGGING = {
     "loggers": {
         "django": {"handlers": ["file"], "level": "INFO", "propagate": False},
         "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
-        # Add these new loggers
         "apps.users.permissions": {
             "handlers": ["permissions_file", "console"],
             "level": "DEBUG" if DEBUG else "INFO",
@@ -613,17 +612,21 @@ LEAVE_ROUTING_FILE = str(BASE_DIR / "apps" / "users" / "data" / "leave_routing.j
 # -----------------------------------------------------------------------------
 # PERMISSION SYSTEM SETTINGS
 # -----------------------------------------------------------------------------
-PERMISSION_DENIED_REDIRECT = "dashboard:home"  # Where to redirect on permission failure
-PERMISSION_DEBUG_ENABLED = DEBUG  # Enable permission debugging in development
+PERMISSION_DENIED_REDIRECT = "dashboard:home"
+PERMISSION_DEBUG_ENABLED = DEBUG
 
 # -----------------------------------------------------------------------------
-# CELERY CONFIGURATION
+# CELERY CONFIGURATION  (Updated)
 # -----------------------------------------------------------------------------
-CELERY_BROKER_URL = 'db+sqlite:///celerydb.sqlite'
-CELERY_RESULT_BACKEND = 'db+sqlite:///celeryresults.sqlite'
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
+# Toggle whether email notifications use Celery (async) or run in-process (sync)
+ENABLE_CELERY_EMAIL = env_bool("ENABLE_CELERY_EMAIL", False)
+
+# Use a real broker when enabled; defaults are Redis URIs (override with env).
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/1")
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_ENABLE_UTC = True
 CELERY_TASK_TRACK_STARTED = True
@@ -632,6 +635,6 @@ CELERY_TASK_SOFT_TIME_LIMIT = 60
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
 
-# Add django-celery-beat to INSTALLED_APPS
+# Add django-celery-beat to INSTALLED_APPS if present
 if 'django_celery_beat' not in INSTALLED_APPS:
     INSTALLED_APPS.append('django_celery_beat')

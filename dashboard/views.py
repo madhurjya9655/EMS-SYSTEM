@@ -1,4 +1,3 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\dashboard\views.py
 from datetime import timedelta, datetime, time as dt_time, date
 import logging
 import sys
@@ -134,13 +133,14 @@ def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> datet
     return cur_ist.astimezone(tz)
 
 
-# ---------- Checklist visibility gating (shared intent with apps.tasks.views) ----------
+# ---------- Checklist visibility gating ----------
 def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     """
-    FINAL rule:
-      • planned date < today IST  → visible
-      • planned date > today IST  → hide
-      • planned date == today IST → visible ONLY from 10:00 IST
+    Visible if:
+      • planned date < today (IST)
+      • planned date == today (IST) AND current time >= 10:00 IST
+    Hidden if:
+      • planned date > today (IST)
     """
     if not task_dt:
         return False
@@ -159,13 +159,40 @@ def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
 
 
 # -------------------------- HANDOVER INTEGRATION ---------------------------
+def _normalize_task_type(val) -> str | None:
+    """
+    Map DB task_type (enum/int/label) to 'checklist' | 'delegation' | 'help_ticket'
+    """
+    if val is None:
+        return None
+    # ints (enum)
+    try:
+        ival = int(val)
+        mapping_int = {1: "checklist", 2: "delegation", 3: "help_ticket"}
+        if ival in mapping_int:
+            return mapping_int[ival]
+    except Exception:
+        pass
+    # strings
+    s = str(val).strip().lower()
+    if s in ("checklist", "delegation", "help_ticket", "help ticket"):
+        return "help_ticket" if s.startswith("help") else s
+    if s in ("help_ticket", "helpticket"):
+        return "help_ticket"
+    if s in ("CHECKLIST", "DELEGATION", "HELP_TICKET"):
+        # unlikely here, but just in case
+        return s.lower()
+    return None
+
+
 def _get_handover_tasks_for_user(user, today_date: date):
     """
     Returns dict: {'checklist': [ids], 'delegation': [ids], 'help_ticket': [ids]}
     for tasks handed over to the given user and active *today* (IST date).
+    Uses real LeaveStatus to avoid string/enum mismatches.
     """
     try:
-        from apps.leave.models import LeaveHandover, LeaveRequest  # noqa: F401
+        from apps.leave.models import LeaveHandover, LeaveStatus  # type: ignore
 
         active = (
             LeaveHandover.objects
@@ -174,21 +201,38 @@ def _get_handover_tasks_for_user(user, today_date: date):
                 is_active=True,
                 effective_start_date__lte=today_date,
                 effective_end_date__gte=today_date,
-                leave_request__status='APPROVED'
+                leave_request__status=LeaveStatus.APPROVED,
             )
             .select_related('leave_request')
         )
-        result = {'checklist': [], 'delegation': [], 'help_ticket': []}
+
+        out = {'checklist': [], 'delegation': [], 'help_ticket': []}
         for h in active:
-            key = (h.task_type or "").lower().replace("_", "")
-            if key == "helpticket":
-                key = "help_ticket"
-            if key in result:
-                result[key].append(h.original_task_id)
-        return result
+            key = _normalize_task_type(getattr(h, "task_type", None))
+            if key and key in out:
+                out[key].append(h.original_task_id)
+
+        logger.info(_safe_console_text(
+            f"handover ids for {user.username} on {today_date}: "
+            f"CL={len(out['checklist'])}, DL={len(out['delegation'])}, HT={len(out['help_ticket'])}"
+        ))
+        return out
     except Exception as e:
         logger.error(_safe_console_text(f"handover lookup failed: {e}"))
         return {'checklist': [], 'delegation': [], 'help_ticket': []}
+
+
+def _dedupe_by_id(items):
+    """De-duplicate a list of model instances by id while preserving order."""
+    seen = set()
+    out = []
+    for x in items:
+        _id = getattr(x, 'id', None)
+        if _id in seen:
+            continue
+        seen.add(_id)
+        out.append(x)
+    return out
 
 
 # ------------------------------ aggregations ------------------------------
@@ -275,7 +319,10 @@ def calculate_delegation_assigned_time_safe(assign_to_user, date_from, date_to):
 
         for d in delegations:
             try:
-                planned_date = _coerce_date_safe(d.planned_date)
+                planned = d.planned_date
+                if planned and timezone.is_naive(planned):
+                    planned = timezone.make_aware(planned, timezone.get_current_timezone())
+                planned_date = _coerce_date_safe(planned)
                 if date_from <= planned_date <= date_to:
                     total += d.time_per_task_minutes or 0
             except Exception as e:
@@ -300,15 +347,7 @@ def minutes_to_hhmm(minutes):
 @login_required
 def dashboard_home(request):
     """
-    Checklist (recurring or one-time):
-      • visible if past due
-      • visible today only after 10:00 IST
-      • hide future
-    Delegation & Help Ticket: visible at/after their planned timestamp.
-
-    Handover integration:
-      • Include tasks handed over to the current user (approved leaves within date window).
-      • Mark these with `._is_handover = True` for the template badge.
+    Dashboard with “handed-over” section.
     """
     now_ist = timezone.now().astimezone(IST)
     today_ist = now_ist.date()
@@ -403,8 +442,8 @@ def dashboard_home(request):
                 .order_by('planned_date')
             )
             for t in ho_qs:
-                t._is_handover = True
-            all_checklists = base_checklists + ho_qs
+                t.is_handover = True
+            all_checklists = _dedupe_by_id(base_checklists + ho_qs)
         else:
             all_checklists = base_checklists
 
@@ -412,12 +451,12 @@ def dashboard_home(request):
             checklist_qs = [
                 c for c in all_checklists
                 if (_ist_date(c.planned_date) == today_ist) and
-                   (getattr(c, '_is_handover', False) or _should_show_checklist(c.planned_date, now_ist))
+                   (getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist))
             ]
         else:
             checklist_qs = [
                 c for c in all_checklists
-                if getattr(c, '_is_handover', False) or _should_show_checklist(c.planned_date, now_ist)
+                if getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist)
             ]
 
         # ------------------- Delegations -------------------
@@ -445,8 +484,8 @@ def dashboard_home(request):
                 ).select_related('assign_by', 'assign_to').order_by('planned_date')
             )
             for t in ho_del:
-                t._is_handover = True
-            delegation_qs = base_delegations + ho_del
+                t.is_handover = True
+            delegation_qs = _dedupe_by_id(base_delegations + ho_del)
         else:
             delegation_qs = base_delegations
 
@@ -474,8 +513,8 @@ def dashboard_home(request):
                 ).exclude(status='Closed').select_related('assign_by', 'assign_to').order_by('planned_date')
             )
             for t in ho_help:
-                t._is_handover = True
-            help_ticket_qs = base_help + ho_help
+                t.is_handover = True
+            help_ticket_qs = _dedupe_by_id(base_help + ho_help)
         else:
             help_ticket_qs = base_help
 
@@ -514,11 +553,48 @@ def dashboard_home(request):
         logger.error(_safe_console_text(f"Error calculating time aggregations: {e}"))
         prev_min = curr_min = prev_min_del = curr_min_del = 0
 
-    # small sample log
+    # Build “handed-over” section with real objects (so template can link)
+    handed_over_full = {'checklist': [], 'delegation': [], 'help_ticket': []}
+    if any(handover.values()):
+        # Checklist
+        if handover['checklist']:
+            for t in Checklist.objects.filter(id__in=handover['checklist']).select_related("assign_by", "assign_to"):
+                handed_over_full['checklist'].append({
+                    'task': t,
+                    'handover': None,
+                    'original_assignee': t.assign_to,
+                    'leave_request': None,
+                    'handover_message': '',
+                    'task_url': f"/checklist/{t.id}/",
+                })
+        # Delegation
+        if handover['delegation']:
+            for t in Delegation.objects.filter(id__in=handover['delegation']).select_related("assign_by", "assign_to"):
+                handed_over_full['delegation'].append({
+                    'task': t,
+                    'handover': None,
+                    'original_assignee': t.assign_to,
+                    'leave_request': None,
+                    'handover_message': '',
+                    'task_url': f"/delegation/{t.id}/",
+                })
+        # Help tickets
+        if handover['help_ticket']:
+            for t in HelpTicket.objects.filter(id__in=handover['help_ticket']).select_related("assign_by", "assign_to"):
+                handed_over_full['help_ticket'].append({
+                    'task': t,
+                    'handover': None,
+                    'original_assignee': t.assign_to,
+                    'leave_request': None,
+                    'handover_message': '',
+                    'task_url': f"/tickets/{t.id}/",
+                })
+
+    # sample log
     if tasks:
         for i, task in enumerate(tasks[:3], start=1):
             tdt = task.planned_date.astimezone(IST) if task.planned_date else None
-            handover_info = " (HANDOVER)" if getattr(task, '_is_handover', False) else ""
+            handover_info = " (HANDOVER)" if getattr(task, 'is_handover', False) else ""
             logger.info(_safe_console_text(
                 f"  sample {i}: '{getattr(task, 'task_name', getattr(task, 'title', ''))}' "
                 f"@ {tdt.strftime('%Y-%m-%d %H:%M IST') if tdt else 'No date'}{handover_info}"
@@ -532,4 +608,5 @@ def dashboard_home(request):
         'prev_time':     minutes_to_hhmm(prev_min + prev_min_del),
         'curr_time':     minutes_to_hhmm(curr_min + curr_min_del),
         'today_only':    today_only,
+        'handed_over':   handed_over_full,   # << add to context
     })

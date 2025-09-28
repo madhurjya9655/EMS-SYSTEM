@@ -7,26 +7,30 @@ Hello {{ assignee_name }},
 
 LEAVE DETAILS
 -------------
-- Period : {{ start_at_ist }} to {{ end_at_ist }}
-- Type   : {{ leave_type }}
+- Period  : {{ start_at_ist }} to {{ end_at_ist }}
+- Type    : {{ leave_type }}
 - Duration: {{ duration_days }} day{% if duration_days != 1 %}s{% endif %}{% if is_half_day %} (Half-day){% endif %}
 
 {% if handover_message %}
 MESSAGE FROM {{ employee_name|upper }}
 -------------------------------------
 {{ handover_message }}
-{% endif %}
 
+{% endif %}
 TASKS ASSIGNED TO YOU
 ---------------------
+{% if handovers %}
 {% for handover in handovers %}• {{ handover.task_name }}
-  Type: {{ handover.task_type }}
-  ID: #{{ handover.task_id }}
+  {% if handover.task_type %}Type: {{ handover.task_type }}{% endif %}
+  {% if handover.task_id %}ID: #{{ handover.task_id }}{% endif %}
   {% if handover.task_url %}Link: {{ handover.task_url }}{% endif %}
   {% if handover.message %}Instructions: "{{ handover.message }}"{% endif %}
 
 {% endfor %}
+{% else %}
+No tasks were attached to this handover.
 
+{% endif %}
 These tasks will appear in your dashboard during the leave period and will be
 automatically reassigned back to {{ employee_name }} when the leave ends.
 

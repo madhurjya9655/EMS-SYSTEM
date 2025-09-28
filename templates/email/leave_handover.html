@@ -1,72 +1,104 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="x-apple-disable-message-reformatting">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Task Handover</title>
   <style>
-    .preheader { display:none!important; visibility:hidden; opacity:0; color:transparent; height:0; width:0; overflow:hidden; mso-hide:all; }
-    @media (max-width:600px){
-      .container{ width:100%!important; }
-    }
+    .preheader{display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;mso-hide:all;}
+    @media (max-width:600px){.container{width:100%!important}}
+    a{color:#2563eb}
   </style>
 </head>
-<body style="margin:0; padding:0; background:#f4f6f8;">
+<body style="margin:0;padding:0;background:#f4f6f8;">
   <div class="preheader">
     Tasks handed over to you by {{ employee_name }} for {{ leave_type }} from {{ start_at_ist }} to {{ end_at_ist }}.
   </div>
 
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f4f6f8;">
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background:#f4f6f8;">
     <tr>
       <td align="center" style="padding:24px;">
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" class="container" style="width:600px; max-width:600px; background:#ffffff; border-radius:10px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.06);">
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" class="container" style="width:600px;max-width:600px;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06);">
           <tr>
-            <td style="background:#1f6feb; padding:18px 24px;">
-              <div style="font:700 18px Arial,Helvetica,sans-serif; color:#ffffff;">Task Handover During Leave</div>
-              <div style="font:400 12px Arial,Helvetica,sans-serif; color:#d6e7ff; margin-top:4px;">You have been assigned tasks temporarily</div>
+            <td style="background:#1f6feb;padding:18px 24px;">
+              <div style="font:700 18px Arial,Helvetica,sans-serif;color:#fff;">Task Handover During Leave</div>
+              <div style="font:400 12px Arial,Helvetica,sans-serif;color:#d6e7ff;margin-top:4px;">You have been assigned tasks temporarily</div>
             </td>
           </tr>
 
           <tr>
             <td style="padding:24px;">
-              <p style="margin:0 0 10px; font:400 14px/1.6 Arial,Helvetica,sans-serif; color:#111827;">
+              <p style="margin:0 0 10px;font:400 14px/1.6 Arial,Helvetica,sans-serif;color:#111827;">
                 Hello <strong>{{ assignee_name }}</strong>,
               </p>
-              <p style="margin:0 0 18px; font:400 14px/1.6 Arial,Helvetica,sans-serif; color:#111827;">
+              <p style="margin:0 0 18px;font:400 14px/1.6 Arial,Helvetica,sans-serif;color:#111827;">
                 <strong>{{ employee_name }}</strong> has assigned you tasks during their upcoming leave.
               </p>
 
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate; border-spacing:0 10px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;border-spacing:0 10px;">
                 <tr>
-                  <td style="width:160px; font:700 13px Arial,Helvetica,sans-serif; color:#374151;">Leave Period</td>
-                  <td style="font:400 13px Arial,Helvetica,sans-serif; color:#111827;">
-                    {{ start_at_ist }} &nbsp;–&nbsp; {{ end_at_ist }} ({{ duration_days }} day{% if duration_days != 1 %}s{% endif %})
+                  <td style="width:160px;font:700 13px Arial,Helvetica,sans-serif;color:#374151;">Leave Period</td>
+                  <td style="font:400 13px Arial,Helvetica,sans-serif;color:#111827;">
+                    {{ start_at_ist }} – {{ end_at_ist }}
+                    ({{ duration_days }} day{% if duration_days != 1 %}s{% endif %}{% if is_half_day %}, half-day{% endif %})
                   </td>
                 </tr>
                 <tr>
-                  <td style="width:160px; font:700 13px Arial,Helvetica,sans-serif; color:#374151;">Leave Type</td>
-                  <td style="font:400 13px Arial,Helvetica,sans-serif; color:#111827;">{{ leave_type }}</td>
+                  <td style="width:160px;font:700 13px Arial,Helvetica,sans-serif;color:#374151;">Leave Type</td>
+                  <td style="font:400 13px Arial,Helvetica,sans-serif;color:#111827;">{{ leave_type }}</td>
                 </tr>
               </table>
 
               {% if handover_message %}
-              <div style="margin:16px 0 6px; padding:14px; border-radius:8px; background:#f0f7ff; border:1px solid #d9e8ff;">
-                <div style="font:700 13px Arial,Helvetica,sans-serif; color:#1d4ed8; margin-bottom:6px;">Message from {{ employee_name }}</div>
-                <div style="font:400 13px/1.5 Arial,Helvetica,sans-serif; color:#111827;">
+              <div style="margin:16px 0 6px;padding:14px;border-radius:8px;background:#f0f7ff;border:1px solid #d9e8ff;">
+                <div style="font:700 13px Arial,Helvetica,sans-serif;color:#1d4ed8;margin-bottom:6px;">Message from {{ employee_name }}</div>
+                <div style="font:400 13px/1.5 Arial,Helvetica,sans-serif;color:#111827;">
                   {{ handover_message }}
                 </div>
               </div>
               {% endif %}
 
-              <div style="margin:18px 0 2px; padding:14px; border-radius:8px; background:#f9fafb; border:1px solid #eef2f7;">
-                <div style="font:700 13px Arial,Helvetica,sans-serif; color:#374151; margin-bottom:8px;">Tasks Assigned to You</div>
-                {% for handover in handovers %}
-                  <div style="padding:8px 0; border-bottom:1px solid #e5e7eb;">
-                    <span style="font:700 13px Arial,Helvetica,sans-serif; color:#111827;">{{ handover.task_name }}</span>
-                  </div>
-                {% endfor %}
-                <div style="font:400 12px Arial,Helvetica,sans-serif; color:#4b5563; margin-top:8px;">
+              <div style="margin:18px 0 2px;padding:14px;border-radius:8px;background:#f9fafb;border:1px solid #eef2f7;">
+                <div style="font:700 13px Arial,Helvetica,sans-serif;color:#374151;margin-bottom:8px;">Tasks Assigned to You</div>
+
+                {% if handovers %}
+                  {% for handover in handovers %}
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-bottom:1px solid #e5e7eb;padding:10px 0;">
+                      <tr>
+                        <td style="font:700 13px Arial,Helvetica,sans-serif;color:#111827;">
+                          {{ handover.task_name }}
+                          {% if handover.task_type %}
+                            <span style="display:inline-block;background:#eef2ff;color:#3730a3;border-radius:999px;padding:2px 8px;font:700 10px Arial,Helvetica,sans-serif;margin-left:6px;text-transform:uppercase;">
+                              {{ handover.task_type }}
+                            </span>
+                          {% endif %}
+                        </td>
+                        <td style="text-align:right;font:400 12px Arial,Helvetica,sans-serif;color:#6b7280;">
+                          {% if handover.task_id %}#{{ handover.task_id }}{% endif %}
+                        </td>
+                      </tr>
+                      {% if handover.message %}
+                      <tr>
+                        <td colspan="2" style="font:400 12px/1.5 Arial,Helvetica,sans-serif;color:#111827;padding-top:6px;">
+                          <em>Instructions:</em> {{ handover.message }}
+                        </td>
+                      </tr>
+                      {% endif %}
+                      {% if handover.task_url %}
+                      <tr>
+                        <td colspan="2" style="padding-top:6px;">
+                          <a href="{{ handover.task_url }}" style="font:700 12px Arial,Helvetica,sans-serif;text-decoration:none;background:#2563eb;border:1px solid #2563eb;border-radius:6px;color:#fff;display:inline-block;line-height:30px;padding:0 12px;">View task</a>
+                        </td>
+                      </tr>
+                      {% endif %}
+                    </table>
+                  {% endfor %}
+                {% else %}
+                  <div style="font:400 13px Arial,Helvetica,sans-serif;color:#6b7280;">No tasks were attached to this handover.</div>
+                {% endif %}
+
+                <div style="font:400 12px Arial,Helvetica,sans-serif;color:#4b5563;margin-top:10px;">
                   These tasks will appear in your dashboard during the leave period and will be automatically reassigned back to {{ employee_name }} when the leave ends.
                 </div>
               </div>
@@ -75,29 +107,27 @@
                 <tr>
                   <td align="left">
                     <!--[if mso]>
-                      <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="{{ site_url }}" style="height:40px;v-text-anchor:middle;width:180px;" arcsize="10%" strokecolor="#2563eb" fillcolor="#2563eb">
+                      <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="{{ site_url }}" style="height:40px;v-text-anchor:middle;width:200px;" arcsize="10%" strokecolor="#2563eb" fillcolor="#2563eb">
                         <w:anchorlock/>
-                        <center style="color:#ffffff; font-family:Arial,Helvetica,sans-serif; font-size:14px; font-weight:bold;">Go to Dashboard</center>
+                        <center style="color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:bold;">Go to Dashboard</center>
                       </v:roundrect>
-                    <![endif]--><!--[if !mso]><!-- -->
-                      <a href="{{ site_url }}"
-                         style="background:#2563eb; border:1px solid #2563eb; border-radius:8px; color:#ffffff; display:inline-block; font:700 14px Arial,Helvetica,sans-serif; line-height:40px; text-align:center; text-decoration:none; padding:0 18px;">
-                        Go to Dashboard
-                      </a>
+                    <![endif]-->
+                    <!--[if !mso]><!-- -->
+                      <a href="{{ site_url }}" style="background:#2563eb;border:1px solid #2563eb;border-radius:8px;color:#ffffff;display:inline-block;font:700 14px Arial,Helvetica,sans-serif;line-height:40px;text-align:center;text-decoration:none;padding:0 18px;">Go to Dashboard</a>
                     <!--<![endif]-->
                   </td>
                 </tr>
               </table>
 
-              <div style="margin-top:14px; font:400 12px Arial,Helvetica,sans-serif; color:#6b7280;">
+              <div style="margin-top:14px;font:400 12px Arial,Helvetica,sans-serif;color:#6b7280;">
                 If you have any questions, contact {{ employee_name }} at {{ employee_email }}.
               </div>
             </td>
           </tr>
 
           <tr>
-            <td style="background:#f9fafb; padding:16px 24px; border-top:1px solid #eef2f7;">
-              <div style="font:400 12px/1.5 Arial,Helvetica,sans-serif; color:#6b7280;">
+            <td style="background:#f9fafb;padding:16px 24px;border-top:1px solid #eef2f7;">
+              <div style="font:400 12px/1.5 Arial,Helvetica,sans-serif;color:#6b7280;">
                 This is an automated message. Please do not reply directly to this email.
               </div>
             </td>

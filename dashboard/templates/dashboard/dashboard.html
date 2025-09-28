@@ -1,4 +1,3 @@
-<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\dashboard\templates\dashboard\dashboard.html -->
 {% extends "base.html" %}
 {% load static %}
 {% load dashboard_extras %}
@@ -93,6 +92,9 @@
     </div>
   </div>
 
+  {# Handed-over tasks card #}
+  {% include "dashboard/partials/handed_over_tasks.html" with handed_over=handed_over card_title="Tasks handed over to you (active today)" %}
+
   <!-- Task Table -->
   <div class="card">
     <div class="card-header fw-bold">
@@ -157,16 +159,30 @@
                   </td>
 
                   <td>
-                    {% if task.status %}
-                      {% if task.status == 'Pending' %}
-                        <span class="badge bg-warning text-dark">Pending</span>
-                      {% elif task.status == 'Completed' or task.status == 'Closed' %}
-                        <span class="badge bg-success">Completed</span>
+                    {% if selected == 'help_ticket' %}
+                      {% if task.status == 'Open' %}
+                        <span class="badge bg-primary">Open</span>
+                      {% elif task.status == 'In Progress' %}
+                        <span class="badge bg-warning text-dark">In&nbsp;Progress</span>
+                      {% elif task.status == 'Closed' %}
+                        <span class="badge bg-success">Closed</span>
                       {% else %}
-                        <span class="badge bg-secondary">{{ task.status }}</span>
+                        <span class="badge bg-secondary">{{ task.status|default:"—" }}</span>
                       {% endif %}
                     {% else %}
-                      <span class="badge bg-secondary">—</span>
+                      {% if task.status %}
+                        {% if task.status == 'Pending' %}
+                          <span class="badge bg-warning text-dark">Pending</span>
+                        {% elif task.status == 'Completed' or task.status == 'Closed' %}
+                          <span class="badge bg-success">
+                            {% if task.status == 'Closed' %}Closed{% else %}Completed{% endif %}
+                          </span>
+                        {% else %}
+                          <span class="badge bg-secondary">{{ task.status }}</span>
+                        {% endif %}
+                      {% else %}
+                        <span class="badge bg-secondary">—</span>
+                      {% endif %}
                     {% endif %}
                   </td>
 
@@ -201,7 +217,6 @@
                   </td>
 
                   <td class="text-nowrap">
-                    <!-- Details opens modal -->
                     <button type="button"
                             class="btn btn-outline-secondary btn-sm"
                             data-bs-toggle="modal"
@@ -213,17 +228,19 @@
                       {% if not selected or selected == 'checklist' %}
                         <a class="btn btn-success btn-sm"
                            href="{% url 'tasks:complete_checklist' task.id %}?next={{ request.get_full_path|urlencode }}">✔ Complete</a>
-                      {% elif selected == 'delegation' %}
-                        <a class="btn btn-success btn-sm"
-                           href="{% url 'tasks:complete_delegation' task.id %}?next={{ request.get_full_path|urlencode }}">✔ Complete</a>
                       {% endif %}
+                    {% endif %}
+
+                    {% if selected == 'delegation' and task.status == 'Pending' %}
+                      <a class="btn btn-success btn-sm"
+                         href="{% url 'tasks:complete_delegation' task.id %}?next={{ request.get_full_path|urlencode }}">✔ Complete</a>
                     {% endif %}
 
                     {% if selected == 'help_ticket' and task.status != 'Closed' %}
                       <a class="btn btn-primary btn-sm"
                          href="{% url 'tasks:note_help_ticket' task.id %}?next={{ request.get_full_path|urlencode }}">Note</a>
                       <a class="btn btn-success btn-sm"
-                         href="{% url 'tasks:note_help_ticket' task.id %}?next={{ request.get_full_path|urlencode }}">Close</a>
+                         href="{% url 'tasks:close_help_ticket' task.id %}?next={{ request.get_full_path|urlencode }}">Close</a>
                     {% endif %}
                   </td>
                 </tr>
@@ -310,7 +327,19 @@
         {% else %}
           <div class="row g-3">
             <div class="col-md-6"><label class="fw-bold">Subject:</label><p class="mb-0">{{ task.title }}</p></div>
-            <div class="col-md-6"><label class="fw-bold">Status:</label><p class="mb-0"><span class="badge bg-{% if task.status == 'Open' %}primary{% elif task.status == 'In Progress' %}warning{% else %}success{% endif %}">{{ task.status }}</span></p></div>
+            <div class="col-md-6"><label class="fw-bold">Status:</label>
+              <p class="mb-0">
+                {% if task.status == 'Open' %}
+                  <span class="badge bg-primary">Open</span>
+                {% elif task.status == 'In Progress' %}
+                  <span class="badge bg-warning text-dark">In&nbsp;Progress</span>
+                {% elif task.status == 'Closed' %}
+                  <span class="badge bg-success">Closed</span>
+                {% else %}
+                  <span class="badge bg-secondary">{{ task.status|default:"—" }}</span>
+                {% endif %}
+              </p>
+            </div>
             <div class="col-md-6"><label class="fw-bold">Assigned By:</label><p class="mb-0">{{ task.assign_by.get_full_name|default:task.assign_by.username }}</p></div>
             <div class="col-md-6"><label class="fw-bold">Assigned To:</label><p class="mb-0">{{ task.assign_to.get_full_name|default:task.assign_to.username }}</p></div>
             <div class="col-md-6"><label class="fw-bold">Created:</label><p class="mb-0">{{ task.created_at|date:"d M, Y H:i" }}</p></div>
@@ -350,7 +379,7 @@
           {% if task.status != 'Closed' %}
             <a href="{% url 'tasks:note_help_ticket' task.id %}?next={{ request.get_full_path|urlencode }}"
                class="btn btn-primary"><i class="fas fa-sticky-note"></i> Add Note</a>
-            <a href="{% url 'tasks:note_help_ticket' task.id %}?next={{ request.get_full_path|urlencode }}"
+            <a href="{% url 'tasks:close_help_ticket' task.id %}?next={{ request.get_full_path|urlencode }}"
                class="btn btn-success"><i class="fas fa-check"></i> Close Ticket</a>
           {% endif %}
         {% endif %}

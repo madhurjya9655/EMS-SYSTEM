@@ -23,6 +23,8 @@ from .models import (
     ApproverMapping,
     LeaveType,
     CCConfiguration,
+    LeaveHandover,
+    DelegationReminder,
 )
 
 User = get_user_model()
@@ -93,22 +95,22 @@ class CCConfigurationAdmin(admin.ModelAdmin):
     )
     search_fields = (
         "user__username",
-        "user__first_name", 
+        "user__first_name",
         "user__last_name",
         "user__email",
         "display_name",
         "department",
     )
     ordering = ("sort_order", "department", "user__first_name", "user__last_name")
-    
+
     fields = (
         "user",
-        "is_active", 
+        "is_active",
         "display_name",
         "department",
         "sort_order",
     )
-    
+
     readonly_fields = ("created_at", "updated_at")
 
     @admin.display(description="User", ordering="user__first_name")
@@ -483,8 +485,6 @@ class LeaveDecisionAuditAdmin(admin.ModelAdmin):
 
 # ---------------------------------------------------------------------
 # ApproverMapping admin (central routing)
-#   - staff can view, only superusers can modify
-#   - uses a simple custom change form template (clean UI)
 # ---------------------------------------------------------------------
 @admin.register(ApproverMapping)
 class ApproverMappingAdmin(admin.ModelAdmin):
@@ -567,3 +567,168 @@ class LeaveTypeAdmin(admin.ModelAdmin):
     list_display = ("name", "default_days")
     search_fields = ("name",)
     ordering = ("name",)
+
+
+# ---------------------------------------------------------------------
+# LeaveHandover admin
+# ---------------------------------------------------------------------
+@admin.register(LeaveHandover)
+class LeaveHandoverAdmin(admin.ModelAdmin):
+    list_select_related = ("leave_request", "original_assignee", "new_assignee")
+    ordering = ("-created_at", "-id")
+
+    list_display = (
+        "id",
+        "task_label",
+        "task_type",
+        "original_assignee_col",
+        "new_assignee_col",
+        "effective_window",
+        "is_active",
+        "leave_link",
+        "created_at_ist",
+    )
+    list_filter = (
+        "task_type",
+        "is_active",
+        ("leave_request__status", admin.ChoicesFieldListFilter),
+        ("effective_start_date", admin.DateFieldListFilter),
+        ("effective_end_date", admin.DateFieldListFilter),
+        ("created_at", admin.DateFieldListFilter),
+    )
+    search_fields = (
+        "original_task_id",
+        "message",
+        "original_assignee__username",
+        "original_assignee__email",
+        "new_assignee__username",
+        "new_assignee__email",
+    )
+    readonly_fields = (
+        "created_at",
+        "updated_at",
+        "effective_start_date",
+        "effective_end_date",
+    )
+    fields = (
+        "leave_request",
+        ("task_type", "original_task_id"),
+        ("original_assignee", "new_assignee"),
+        "message",
+        ("effective_start_date", "effective_end_date"),
+        "is_active",
+        ("created_at", "updated_at"),
+    )
+    actions = ("action_deactivate",)
+
+    @admin.action(description="Deactivate selected handovers")
+    def action_deactivate(self, request: HttpRequest, queryset):
+        updated = queryset.update(is_active=False)
+        if updated:
+            self.message_user(request, f"Deactivated {updated} handover(s).", level=messages.SUCCESS)
+
+    @admin.display(description="Task")
+    def task_label(self, obj: LeaveHandover) -> str:
+        title = obj.get_task_title()
+        return f"#{obj.original_task_id} • {title}"
+
+    @admin.display(description="Original Assignee", ordering="original_assignee__username")
+    def original_assignee_col(self, obj: LeaveHandover) -> str:
+        u = obj.original_assignee
+        return f"{u.get_full_name() or u.username} ({u.email or 'no-email'})"
+
+    @admin.display(description="New Assignee", ordering="new_assignee__username")
+    def new_assignee_col(self, obj: LeaveHandover) -> str:
+        u = obj.new_assignee
+        return f"{u.get_full_name() or u.username} ({u.email or 'no-email'})"
+
+    @admin.display(description="Window")
+    def effective_window(self, obj: LeaveHandover) -> str:
+        s = obj.effective_start_date or "—"
+        e = obj.effective_end_date or "—"
+        return f"{s} → {e}"
+
+    @admin.display(description="Leave")
+    def leave_link(self, obj: LeaveHandover) -> str:
+        url = reverse("admin:leave_leaverequest_change", args=[obj.leave_request_id])
+        return format_html('<a href="{}">#{}</a>', url, obj.leave_request_id)
+
+    @admin.display(description="Created (IST)")
+    def created_at_ist(self, obj: LeaveHandover) -> str:
+        try:
+            return timezone.localtime(obj.created_at, IST).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return str(obj.created_at)
+
+
+# ---------------------------------------------------------------------
+# DelegationReminder admin
+# ---------------------------------------------------------------------
+@admin.register(DelegationReminder)
+class DelegationReminderAdmin(admin.ModelAdmin):
+    list_select_related = ("leave_handover", "leave_handover__new_assignee", "leave_handover__leave_request")
+    ordering = ("-next_run_at", "-id")
+
+    list_display = (
+        "id",
+        "handover_col",
+        "assignee_col",
+        "interval_days",
+        "next_run_at_ist",
+        "is_active",
+        "total_sent",
+        "last_sent_at_ist",
+    )
+    list_filter = (
+        "is_active",
+        ("next_run_at", admin.DateFieldListFilter),
+        ("last_sent_at", admin.DateFieldListFilter),
+        ("interval_days", admin.AllValuesFieldListFilter),
+    )
+    search_fields = (
+        "leave_handover__original_task_id",
+        "leave_handover__new_assignee__username",
+        "leave_handover__new_assignee__email",
+    )
+    fields = (
+        "leave_handover",
+        "interval_days",
+        "next_run_at",
+        "is_active",
+        ("last_sent_at", "total_sent"),
+        ("created_at", "updated_at"),
+    )
+    readonly_fields = ("created_at", "updated_at", "last_sent_at", "total_sent")
+    actions = ("action_deactivate",)
+
+    @admin.action(description="Deactivate selected reminders")
+    def action_deactivate(self, request: HttpRequest, queryset):
+        updated = queryset.update(is_active=False)
+        if updated:
+            self.message_user(request, f"Deactivated {updated} reminder(s).", level=messages.SUCCESS)
+
+    @admin.display(description="Handover")
+    def handover_col(self, obj: DelegationReminder) -> str:
+        ho = obj.leave_handover
+        return f"{ho.task_type} #{ho.original_task_id} (Leave #{ho.leave_request_id})"
+
+    @admin.display(description="Assignee", ordering="leave_handover__new_assignee__username")
+    def assignee_col(self, obj: DelegationReminder) -> str:
+        u = obj.leave_handover.new_assignee
+        return f"{u.get_full_name() or u.username} ({u.email or 'no-email'})"
+
+    @admin.display(description="Next Run (IST)")
+    def next_run_at_ist(self, obj: DelegationReminder) -> str:
+        try:
+            return timezone.localtime(obj.next_run_at, IST).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return str(obj.next_run_at)
+
+    @admin.display(description="Last Sent (IST)")
+    def last_sent_at_ist(self, obj: DelegationReminder) -> str:
+        if not obj.last_sent_at:
+            return "—"
+        try:
+            return timezone.localtime(obj.last_sent_at, IST).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return str(obj.last_sent_at)

@@ -12,8 +12,13 @@
       <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addEmployeeModal">
         <i class="fa fa-plus me-1"></i> Add Employee
       </button>
-      <a href="{% url 'admin:leave_ccconfiguration_changelist' %}" class="btn btn-outline-primary">
-        <i class="fa fa-cog me-1"></i> Manage CC Options
+
+      <a href="{% url 'leave:cc_config' %}" class="btn btn-outline-primary">
+        <i class="fa fa-sliders-h me-1"></i> Manage CC Options
+      </a>
+
+      <a href="{% url 'leave:cc_assign' %}" class="btn btn-outline-primary">
+        <i class="fa fa-user-cog me-1"></i> Assign CC per Employee
       </a>
     </div>
   {% endif %}
@@ -72,7 +77,6 @@
                   Edit Mapping
                 </a>
 
-                <!-- Delete -->
                 <form method="post"
                       action="{% url 'recruitment:employee_delete' r.user_id %}"
                       class="d-inline"
@@ -132,8 +136,7 @@
 
             <div class="col-md-6">
               <label class="form-label">To Reporting officer</label>
-              <input type="text" class="form-control" name="reporting_officer"
-                     placeholder="Full name or email">
+              <input type="text" class="form-control" name="reporting_officer" placeholder="Full name or email">
             </div>
             <div class="col-md-6">
               <label class="form-label">CC Email</label>
@@ -148,9 +151,7 @@
             <div class="col-md-6">
               <div class="form-check mt-4">
                 <input class="form-check-input" type="checkbox" name="add_to_cc_config" id="addToCcConfig" checked>
-                <label class="form-check-label" for="addToCcConfig">
-                  Make available for CC selection
-                </label>
+                <label class="form-check-label" for="addToCcConfig">Make available for CC selection</label>
                 <small class="form-text text-muted">Add this user to the CC configuration list</small>
               </div>
             </div>
@@ -179,6 +180,7 @@
   <ul class="mb-0">
     <li>Only users marked as "Active" in CC configuration can be selected for leave CC</li>
     <li>Use <strong>Manage CC Options</strong> to control who employees can CC on leave requests</li>
+    <li>Use <strong>Assign CC per Employee</strong> to set the default CC person for each employee</li>
     <li>CC configuration is separate from approver mapping and provides fine-grained control</li>
   </ul>
 </div>

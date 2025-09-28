@@ -29,6 +29,8 @@ PERMISSIONS_STRUCTURE = {
         ("leave_list", "Leave List"),
         # NEW: needed by /leave/manager/... endpoints (approval queue & decide)
         ("leave_pending_manager", "Manager Approvals"),
+        # Admin-only utility (UI entry can use this, views still enforce superuser)
+        ("leave_cc_admin", "Manage CC (Admin)"),
     ],
     "Checklist": [
         ("add_checklist", "Add Checklist"),
@@ -404,6 +406,8 @@ def permissions_context(request):
         "can_add_checklist": "add_checklist" in user_perms or getattr(request.user, "is_superuser", False),
         "can_view_delegation": "list_delegation" in user_perms or getattr(request.user, "is_superuser", False),
         "can_add_delegation": "add_delegation" in user_perms or getattr(request.user, "is_superuser", False),
+        # Convenience flag to surface CC admin links in UI (still admin-gated in views)
+        "can_manage_cc": "leave_cc_admin" in user_perms or getattr(request.user, "is_superuser", False),
     }
     
     return {

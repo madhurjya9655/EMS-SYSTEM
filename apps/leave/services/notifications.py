@@ -14,7 +14,12 @@ from django.template.loader import get_template
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.leave.models import LeaveRequest, LeaveDecisionAudit, DecisionAction, LeaveHandover, HandoverTaskType
+from apps.leave.models import (
+    LeaveRequest,
+    LeaveDecisionAudit,
+    DecisionAction,
+    LeaveHandover,
+)
 from django.contrib.auth import get_user_model
 
 logger = logging.getLogger(__name__)
@@ -324,7 +329,7 @@ def send_leave_decision_email(leave: LeaveRequest) -> None:
         if getattr(leave.approver, "email", ""):
             reply_to.append(leave.approver.email)
         else:
-            # fallback to routing manager so employee can reply
+            # fallback so employee can reply to their manager/route
             from apps.users.routing import recipients_for_leave
             routing = recipients_for_leave(ctx["employee_name"])
             if routing.get("to"):
@@ -338,7 +343,7 @@ def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
     """Send handover notification to the delegate about assigned tasks."""
     if not _email_enabled():
         return
-        
+
     to_addr = (assignee.email or "").strip()
     if not to_addr:
         logger.warning(f"Handover email suppressed: assignee {assignee} has no email")
@@ -349,7 +354,7 @@ def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
 
     employee_name = leave.employee_name or _employee_display_name(leave.employee)
     assignee_name = _employee_display_name(assignee)
-    
+
     # Prepare handover details with task links
     handover_details = []
     for handover in handovers:
@@ -357,7 +362,7 @@ def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
         task_url = handover.get_task_url()
         if task_url:
             task_url = _abs_url(task_url)
-        
+
         handover_details.append({
             'task_name': task_title,
             'task_type': handover.get_task_type_display(),
@@ -393,11 +398,11 @@ def send_delegation_reminder_email(reminder) -> None:
     """Send reminder email for delegated task."""
     if not _email_enabled():
         return
-    
+
     handover = reminder.leave_handover
     leave = handover.leave_request
     assignee = handover.new_assignee
-    
+
     to_addr = (assignee.email or "").strip()
     if not to_addr:
         logger.warning(f"Reminder email suppressed: assignee {assignee} has no email")

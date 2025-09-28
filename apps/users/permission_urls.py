@@ -6,6 +6,8 @@ PERMISSION_URLS = {
     "leave_list": "leave:my_leaves",
     "leave_pending_manager": "leave:pending_leaves",  # optional, if used
     "leave_pending_hr": "leave:hr_leaves",            # optional, if used
+    # Admin CC management (UI convenience; views still enforce superuser)
+    "leave_cc_admin": "leave:cc_config",
 
     # -----------------------
     # Checklist

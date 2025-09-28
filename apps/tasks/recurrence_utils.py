@@ -278,6 +278,15 @@ def is_checklist_visible_now(due_planned: datetime, now: Optional[datetime] = No
     return now_ist >= visibility_anchor_ist(due_planned)
 
 
+def is_delegation_visible_now(due_planned: datetime, now: Optional[datetime] = None) -> bool:
+    """
+    FINAL RULE (Delegation – one-time):
+      • Same gate as Checklist: show from 10:00 IST on the due day, plus all past-due.
+      • Do NOT show future days before 10:00 IST on the due day.
+    """
+    return is_checklist_visible_now(due_planned, now=now)
+
+
 # ------------------------------
 # Dashboard cutoffs (for views)
 # ------------------------------
@@ -286,7 +295,8 @@ class DashboardCutoff:
     """
     Encapsulates dynamic dashboard gating:
       • Checklist: use is_checklist_visible_now()
-      • Delegation/HelpTicket: visible at/after planned datetime; past-due remains shown.
+      • Delegation: use is_delegation_visible_now()  (10:00 IST gate)
+      • HelpTicket: same gate as Delegation for visibility
       • "today_only" narrows by IST date.
     """
     now_ist: datetime
@@ -307,16 +317,13 @@ class DashboardCutoff:
         return is_checklist_visible_now(planned_date, now=self.now_ist)
 
     def should_show_delegation(self, *, planned_date: datetime, today_only: bool) -> bool:
-        due_ist = _to_ist(planned_date)
-        if today_only and due_ist.date() != self.now_ist.date():
+        if today_only and not self._same_ist_date(planned_date):
             return False
-        # Visible when its planned time has arrived (or past)
-        if _ensure_aware(planned_date).astimezone(IST) <= self.now_ist:  # type: ignore[union-attr]
-            return True
-        # Past days (shouldn't happen with filter, but safe):
-        return due_ist.date() < self.now_ist.date()
+        # Use the same 10:00 IST visibility gate as Checklist
+        return is_delegation_visible_now(planned_date, now=self.now_ist)
 
     def should_show_help_ticket(self, *, planned_date: datetime, today_only: bool) -> bool:
+        # Same visibility rule as delegation (10:00 IST gate)
         return self.should_show_delegation(planned_date=planned_date, today_only=today_only)
 
 
@@ -354,6 +361,7 @@ __all__ = [
     "visibility_anchor_ist",
     "is_recurring_visible_now",
     "is_checklist_visible_now",
+    "is_delegation_visible_now",
     "DashboardCutoff",
 
     # Utilities

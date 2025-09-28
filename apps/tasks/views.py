@@ -1,4 +1,4 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
+# apps/tasks/views.py
 import csv
 import pytz
 import re
@@ -184,7 +184,7 @@ def _ist_date(dt: datetime) -> date | None:
     return IST.localize(dt).date()
 
 
-# ---------- HANDOVER INTEGRATION ----------
+# ---------- HANDOVER INTEGRATION (IDs only; dashboard gating uses this) ----------
 def _get_handover_tasks_for_user(user, today_date):
     """
     Get tasks that are handed over to the user for today's date.
@@ -193,13 +193,12 @@ def _get_handover_tasks_for_user(user, today_date):
     try:
         from apps.leave.models import LeaveHandover, LeaveRequest
         
-        # Find active handovers for this user on today's date
         active_handovers = LeaveHandover.objects.filter(
             new_assignee=user,
             is_active=True,
             effective_start_date__lte=today_date,
             effective_end_date__gte=today_date,
-            leave_request__status='APPROVED'  # Only for approved leaves
+            leave_request__status='APPROVED'
         ).select_related('leave_request')
         
         handover_tasks = {
@@ -221,6 +220,93 @@ def _get_handover_tasks_for_user(user, today_date):
         return {'checklist': [], 'delegation': [], 'help_ticket': []}
 
 
+# ---------- NEW: Detailed handover rows for the partial card ----------
+def _normalize_task_type(val) -> str | None:
+    """
+    Accept enum/int/string variants and normalize to:
+      'checklist' | 'delegation' | 'help_ticket'
+    """
+    if val is None:
+        return None
+    try:
+        ival = int(val)
+        mapping = {1: "checklist", 2: "delegation", 3: "help_ticket"}
+        if ival in mapping:
+            return mapping[ival]
+    except Exception:
+        pass
+    s = str(val).strip().lower().replace(" ", "").replace("_", "")
+    if s in ("checklist", "delegation", "helpticket"):
+        return "help_ticket" if s == "helpticket" else s
+    return None
+
+
+def _get_handover_rows_for_user(user, today_date):
+    """
+    Build the structure your partial expects:
+    {
+      'checklist':  [ {task, handover, original_assignee, leave_request, handover_message, task_url}, ... ],
+      'delegation': [ ... ],
+      'help_ticket':[ ... ],
+    }
+    """
+    try:
+        from apps.leave.models import LeaveHandover, LeaveStatus  # type: ignore
+    except Exception:
+        return {'checklist': [], 'delegation': [], 'help_ticket': []}
+
+    rows = {'checklist': [], 'delegation': [], 'help_ticket': []}
+
+    handovers = (
+        LeaveHandover.objects
+        .filter(
+            new_assignee=user,
+            is_active=True,
+            effective_start_date__lte=today_date,
+            effective_end_date__gte=today_date,
+            leave_request__status=LeaveStatus.APPROVED,
+        )
+        .select_related("leave_request", "original_assignee", "new_assignee")
+        .order_by("id")
+    )
+
+    ids = {'checklist': [], 'delegation': [], 'help_ticket': []}
+    hlist = {'checklist': [], 'delegation': [], 'help_ticket': []}
+    for ho in handovers:
+        key = _normalize_task_type(getattr(ho, "task_type", None))
+        if key:
+            ids[key].append(ho.original_task_id)
+            hlist[key].append(ho)
+
+    tasks_map = {'checklist': {}, 'delegation': {}, 'help_ticket': {}}
+    if ids['checklist']:
+        for t in Checklist.objects.filter(id__in=ids['checklist']).select_related("assign_by", "assign_to"):
+            tasks_map['checklist'][t.id] = t
+    if ids['delegation']:
+        for t in Delegation.objects.filter(id__in=ids['delegation']).select_related("assign_by", "assign_to"):
+            tasks_map['delegation'][t.id] = t
+    if ids['help_ticket']:
+        for t in HelpTicket.objects.filter(id__in=ids['help_ticket']).select_related("assign_by", "assign_to"):
+            tasks_map['help_ticket'][t.id] = t
+
+    for key in ('checklist', 'delegation', 'help_ticket'):
+        for ho in hlist[key]:
+            task = tasks_map[key].get(ho.original_task_id)
+            if not task:
+                continue
+            setattr(ho, "is_currently_active", True)
+            rows[key].append({
+                "task": task,
+                "handover": ho,
+                "original_assignee": getattr(ho, "original_assignee", None),
+                "leave_request": getattr(ho, "leave_request", None),
+                "handover_message": getattr(ho, "message", "") or "",
+                "task_url": None,  # add URLs later if you have per-task detail pages
+            })
+
+    return rows
+
+
 # ---------- FINAL VISIBILITY GATING FOR CHECKLIST ----------
 def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     """
@@ -228,24 +314,16 @@ def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
       • If planned date < today IST  → visible (past-due remains until completed).
       • If planned date > today IST  → not visible.
       • If planned date == today IST → visible ONLY from 10:00 AM IST (strict).
-
-    Note: this is purely a *dashboard* gate; the stored planned datetime is untouched
-    and the delay is always calculated from the *actual planned time* (e.g., 19:00).
     """
     if not task_dt:
         return False
-
-    # Convert planned datetime to IST for consistent gating
     dt_ist = task_dt.astimezone(IST) if timezone.is_aware(task_dt) else IST.localize(task_dt)
     task_date = dt_ist.date()
     today = now_ist.date()
-
     if task_date < today:
         return True
     if task_date > today:
         return False
-
-    # Same day: strictly gate at 10:00 IST (no early visibility)
     anchor_10am = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
     return now_ist >= anchor_10am
 
@@ -367,7 +445,7 @@ def parse_excel_file_optimized(file):
             engine="openpyxl" if name.endswith(".xlsx") else "xlrd",
             keep_default_na=False,
         )
-    raise ValueError("Unsupported file format. Please upload .xlsx, .xls, or .csv")
+    raise ValueError("Unsupported file format. Please upload .xlsx, .xls or .csv")
 
 
 def validate_and_prepare_excel_data(df, task_type="checklist"):
@@ -397,7 +475,6 @@ def validate_and_prepare_excel_data(df, task_type="checklist"):
     if len(df) == 0:
         return None, ["No valid rows found in the file"]
 
-    # warm user cache
     usernames = set()
     for col in ["Assign To", "Assign PC", "Notify To", "Auditor"]:
         if col in df.columns:
@@ -763,10 +840,8 @@ def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: s
     def _safe_call():
         try:
             try:
-                # Try modern signature
                 send_admin_bulk_summary(title=title, rows=rows, exclude_assigner_email=exclude_assigner_email)
             except TypeError:
-                # Fallback for older signature
                 send_admin_bulk_summary(title=title, rows=rows)
         except Exception as e:
             logger.error("Admin summary failed: %s", e)
@@ -835,7 +910,6 @@ def list_checklist(request):
             request.session["suppress_auto_recur"] = True
         return redirect("tasks:list_checklist")
 
-    # Only Pending items by default (dashboard-friendly)
     qs = Checklist.objects.filter(status="Pending").select_related("assign_by", "assign_to")
 
     kw = request.GET.get("keyword", "").strip()
@@ -1170,7 +1244,6 @@ def complete_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
     if obj.assign_to_id and obj.assign_to_id != request.user.id and not (request.user.is_staff or request.user.is_superuser):
         messages.error(request, "You are not the assignee of this task.")
-        # reverse the view name, then append query string
         return redirect(request.GET.get("next") or (reverse("dashboard:home") + "?task_type=delegation"))
 
     if request.method == "GET":
@@ -1196,7 +1269,6 @@ def complete_delegation(request, pk):
     except Exception as e:
         logger.error("Error completing delegation %s: %s", pk, e)
         messages.error(request, "An error occurred while completing the task. Please try again.")
-    # reverse the view name, then append query string
     return redirect(request.GET.get("next") or (reverse("dashboard:home") + "?task_type=delegation"))
 
 
@@ -1360,7 +1432,6 @@ def assigned_by_me(request):
         .order_by("-planned_date")
     )
 
-    # Attach safe display names to avoid template key lookups on None
     for t in items:
         t.assign_by_display = (t.assign_by.get_full_name() or t.assign_by.username) if t.assign_by else "-"
         t.assign_to_display = (t.assign_to.get_full_name() or t.assign_to.username) if t.assign_to else "-"
@@ -1384,7 +1455,6 @@ def complete_help_ticket(request, pk):
     """
     ticket = get_object_or_404(HelpTicket.objects.select_related("assign_by", "assign_to"), pk=pk)
 
-    # Only assignee (or staff/superuser) can complete immediately
     if ticket.assign_to_id and ticket.assign_to_id != request.user.id and not (request.user.is_staff or request.user.is_superuser):
         messages.error(request, "You are not the assignee of this help ticket.")
         return redirect(request.GET.get("next", reverse("tasks:assigned_to_me")))
@@ -1403,7 +1473,6 @@ def complete_help_ticket(request, pk):
         messages.success(request, f"Help ticket '{ticket.title}' marked as completed.")
         return redirect(request.GET.get("next", reverse("tasks:assigned_to_me")))
 
-    # Default: go to notes page (legacy flow)
     return redirect("tasks:note_help_ticket", pk=pk)
 
 
@@ -1490,7 +1559,6 @@ def bulk_upload(request):
     if request.method != "POST":
         return render(request, "tasks/bulk_upload.html", {"form": BulkUploadForm()})
 
-    # PRG pattern to avoid re-submits on refresh:
     form = BulkUploadForm(request.POST, request.FILES)
     if not form.is_valid():
         return render(request, "tasks/bulk_upload.html", {"form": form})
@@ -1520,10 +1588,8 @@ def bulk_upload(request):
                 f"Assignment emails are being sent in the background."
             )
 
-            # Kick off assignee emails in background (non-blocking)
             kick_off_bulk_emails_async(created_tasks, task_type_name)
 
-            # Prepare quick admin preview (first 10) and send summary asynchronously
             try:
                 preview = []
                 for t in created_tasks[:10]:
@@ -1540,7 +1606,6 @@ def bulk_upload(request):
                         "complete_url": complete_url,
                     })
                 title = f"Bulk Upload: {count_created} {task_type_name} Tasks Created"
-                # Exclude the uploader/assigner from the admin summary recipients
                 send_admin_bulk_summary_async(
                     title=title,
                     rows=preview,
@@ -1562,7 +1627,6 @@ def bulk_upload(request):
         messages.error(request, f"An error occurred during bulk upload: {e}")
         logger.error("Bulk upload error: %s", e)
 
-    # Redirect so the browser shows the message immediately and the background work continues
     return redirect("tasks:bulk_upload")
 
 
@@ -1595,26 +1659,9 @@ def help_ticket_details(request, pk: int):
 @login_required
 def dashboard_home(request):
     """
-    FINAL DASHBOARD RULES (IST-aware):
-    Checklist (recurring or one-time):
-      • Delay counted from planned time (e.g., 19:00).
-      • Visibility (UNTIL COMPLETED):
-          - If planned date < today           → show (past-due remains).
-          - If planned date = today           → show ONLY from 10:00 AM IST (strict), and remain visible after 19:00.
-          - If planned date > today           → hide (future not visible).
-      • This ensures: even if previous day is incomplete, it stays visible; and today's new
-        recurrence becomes visible at 10:00 IST (planned still 19:00).
-
-    Delegation & Help Ticket:
-      • Visible immediately at/after their planned timestamp (no 10:00 gating).
-      • No recurrence logic here.
-
-    Completed items disappear immediately.
-
-    HANDOVER INTEGRATION:
-      • Show tasks handed over to the current user during active leaves.
+    FINAL DASHBOARD RULES (IST-aware)
+    + Handover integration (detailed rows for the partial and IDs for inclusion in tables).
     """
-    # Current IST and today's date
     now_ist = timezone.now().astimezone(IST)
     today_ist = now_ist.date()
     project_tz = timezone.get_current_timezone()
@@ -1682,52 +1729,50 @@ def dashboard_home(request):
     selected = request.GET.get('task_type')
     today_only = (request.GET.get('today') == '1' or request.GET.get('today_only') == '1')
 
-    # Build IST-aligned bounds for DB filtering
+    # IST-aligned bounds for DB filtering
     start_today_proj = timezone.make_aware(datetime.combine(today_ist, dt_time.min), IST).astimezone(project_tz)
     end_today_proj = timezone.make_aware(datetime.combine(today_ist, dt_time.max), IST).astimezone(project_tz)
 
-    # Get handover tasks for the current user
-    handover_tasks = _get_handover_tasks_for_user(request.user, today_ist)
-    
+    # Detailed handover rows for partial
+    handed_over = _get_handover_rows_for_user(request.user, today_ist)
+
     try:
-        # ---- Checklists: fetch up to EOD IST; apply IST "today" + 10:00 gating in Python ----
+        # ---- Checklists ----
         base_checklists = (
             Checklist.objects
             .filter(assign_to=request.user, status='Pending', planned_date__lte=end_today_proj)
             .select_related('assign_by')
             .order_by('planned_date')
         )
-        
-        # Add handed-over checklists (tasks originally assigned to others but handed over to current user)
-        if handover_tasks['checklist']:
-            handover_checklists = (
+
+        # Include handed-over checklist items in table (by id) and flag them
+        ho_ids_checklist = [row["task"].id for row in handed_over['checklist']]
+        if ho_ids_checklist:
+            ho_checklists = (
                 Checklist.objects
-                .filter(id__in=handover_tasks['checklist'], status='Pending', planned_date__lte=end_today_proj)
+                .filter(id__in=ho_ids_checklist, status='Pending', planned_date__lte=end_today_proj)
                 .select_related('assign_by')
                 .order_by('planned_date')
             )
-            # Mark these as handed over for display purposes
-            for task in handover_checklists:
-                task.is_handover = True
-            # Combine original and handover tasks
-            all_checklists = list(base_checklists) + list(handover_checklists)
+            for t in ho_checklists:
+                t.is_handover = True
+            all_checklists = list(base_checklists) + list(ho_checklists)
         else:
             all_checklists = list(base_checklists)
 
         if today_only:
             checklist_qs = [
                 c for c in all_checklists
-                if (_ist_date(c.planned_date) == today_ist) and 
+                if (_ist_date(c.planned_date) == today_ist) and
                    (getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist))
             ]
         else:
             checklist_qs = [
-                c for c in all_checklists 
+                c for c in all_checklists
                 if getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist)
             ]
 
-        # ---- Delegations & Help Tickets: visible when planned time arrives ----
-        # Original tasks assigned to current user
+        # ---- Delegations ----
         if today_only:
             base_delegations = list(
                 Delegation.objects.filter(
@@ -1736,7 +1781,31 @@ def dashboard_home(request):
                     planned_date__lte=now_project_tz,
                 ).select_related('assign_by').order_by('planned_date')
             )
-            base_help_tickets = list(
+        else:
+            base_delegations = list(
+                Delegation.objects.filter(
+                    assign_to=request.user, status='Pending',
+                    planned_date__lte=end_today_proj
+                ).select_related('assign_by').order_by('planned_date')
+            )
+
+        ho_ids_delegation = [row["task"].id for row in handed_over['delegation']]
+        if ho_ids_delegation:
+            ho_delegations = list(
+                Delegation.objects.filter(
+                    id__in=ho_ids_delegation, status='Pending',
+                    planned_date__lte=end_today_proj
+                ).select_related('assign_by').order_by('planned_date')
+            )
+            for t in ho_delegations:
+                t.is_handover = True
+            delegation_qs = base_delegations + ho_delegations
+        else:
+            delegation_qs = base_delegations
+
+        # ---- Help Tickets ----
+        if today_only:
+            base_help = list(
                 HelpTicket.objects.filter(
                     assign_to=request.user,
                     planned_date__gte=start_today_proj,
@@ -1744,50 +1813,29 @@ def dashboard_home(request):
                 ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
             )
         else:
-            base_delegations = list(
-                Delegation.objects.filter(
-                    assign_to=request.user, status='Pending',
-                    planned_date__lte=end_today_proj
-                ).select_related('assign_by').order_by('planned_date')
-            )
-            base_help_tickets = list(
+            base_help = list(
                 HelpTicket.objects.filter(
                     assign_to=request.user, planned_date__lte=end_today_proj
                 ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
             )
 
-        # Add handed-over delegations
-        if handover_tasks['delegation']:
-            handover_delegations = list(
-                Delegation.objects.filter(
-                    id__in=handover_tasks['delegation'], status='Pending',
-                    planned_date__lte=end_today_proj
-                ).select_related('assign_by').order_by('planned_date')
-            )
-            for task in handover_delegations:
-                task.is_handover = True
-            delegation_qs = base_delegations + handover_delegations
-        else:
-            delegation_qs = base_delegations
-
-        # Add handed-over help tickets
-        if handover_tasks['help_ticket']:
-            handover_help_tickets = list(
+        ho_ids_help = [row["task"].id for row in handed_over['help_ticket']]
+        if ho_ids_help:
+            ho_help = list(
                 HelpTicket.objects.filter(
-                    id__in=handover_tasks['help_ticket'],
-                    planned_date__lte=end_today_proj
+                    id__in=ho_ids_help, planned_date__lte=end_today_proj
                 ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
             )
-            for task in handover_help_tickets:
-                task.is_handover = True
-            help_ticket_qs = base_help_tickets + handover_help_tickets
+            for t in ho_help:
+                t.is_handover = True
+            help_ticket_qs = base_help + ho_help
         else:
-            help_ticket_qs = base_help_tickets
+            help_ticket_qs = base_help
 
         logger.info(_safe_console_text(
             f"Dashboard filtering for {request.user.username}: today_only={today_only} | "
             f"checklists={len(checklist_qs)} delegations={len(delegation_qs)} help_tickets={len(help_ticket_qs)} | "
-            f"handover_counts: checklist={len(handover_tasks['checklist'])} delegation={len(handover_tasks['delegation'])} help_ticket={len(handover_tasks['help_ticket'])}"
+            f"handed_over: CL={len(handed_over['checklist'])} DL={len(handed_over['delegation'])} HT={len(handed_over['help_ticket'])}"
         ))
     except Exception as e:
         logger.error(_safe_console_text(f"Error querying task lists: {e}"))
@@ -1795,7 +1843,7 @@ def dashboard_home(request):
         delegation_qs = []
         help_ticket_qs = []
 
-    # Select which tasks to display
+    # Which tab
     if selected == 'delegation':
         tasks = delegation_qs
     elif selected == 'help_ticket':
@@ -1803,14 +1851,14 @@ def dashboard_home(request):
     else:
         tasks = checklist_qs
 
-    # Sample tasks for debug
+    # Optional tiny debug
     if tasks:
         for i, task in enumerate(tasks[:3], start=1):
             tdt = task.planned_date.astimezone(IST) if task.planned_date else None
             handover_info = " (HANDOVER)" if getattr(task, 'is_handover', False) else ""
             logger.info(_safe_console_text(
                 f"  - Sample task {i}: '{getattr(task, 'task_name', getattr(task, 'title', ''))}' "
-                f"planned for {tdt.strftime('%Y-%m-%d %H:%M IST') if tdt else 'No date'}{handover_info}"
+                f"planned {tdt.strftime('%Y-%m-%d %H:%M IST') if tdt else 'No date'}{handover_info}"
             ))
 
     return render(request, 'dashboard/dashboard.html', {
@@ -1818,7 +1866,8 @@ def dashboard_home(request):
         'pending_tasks': pending_tasks,
         'tasks':         tasks,
         'selected':      selected,
-        'prev_time':     "00:00",  # intentionally light; heavy aggregation removed
+        'prev_time':     "00:00",   # (aggregates omitted for speed here)
         'curr_time':     "00:00",
         'today_only':    today_only,
+        'handed_over':   handed_over,   # <<< for your partial card
     })
