@@ -391,6 +391,10 @@ LOGGING = {
         "apps.tasks": {"handlers": ["tasks_file", "console"], "level": "DEBUG" if DEBUG else "INFO", "propagate": False},
         "apps.tasks.views": {"handlers": ["bulk_upload_file", "console"], "level": "INFO", "propagate": False},
         "apps.tasks.signals": {"handlers": ["tasks_file"], "level": "INFO", "propagate": False},
+
+        # ---- Added so leave notifications show up in logs ----
+        "apps.leave": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},
+        "apps.leave.services.notifications": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},
     },
 }
 
