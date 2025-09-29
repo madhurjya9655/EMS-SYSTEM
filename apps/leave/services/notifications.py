@@ -9,7 +9,7 @@ from urllib.parse import urljoin
 
 from django.conf import settings
 from django.core import signing
-from django.core.mail import EmailMultiAlternatives
+from django.core.mail import EmailMultiAlternatives, get_connection
 from django.template.loader import get_template
 from django.urls import reverse
 from django.utils import timezone
@@ -30,6 +30,7 @@ IST = ZoneInfo("Asia/Kolkata")
 TOKEN_SALT = getattr(settings, "LEAVE_DECISION_TOKEN_SALT", "leave-action-v1")
 TOKEN_MAX_AGE_SECONDS = getattr(settings, "LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)
 
+
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
@@ -41,8 +42,10 @@ def _site_base() -> str:
     ).strip()
     return base.rstrip("/") + "/"
 
+
 def _abs_url(path: str) -> str:
     return urljoin(_site_base(), path.lstrip("/"))
+
 
 def _format_ist(dt) -> str:
     try:
@@ -50,31 +53,75 @@ def _format_ist(dt) -> str:
     except Exception:
         return str(dt)
 
+
 def _email_enabled() -> bool:
     try:
         return bool(getattr(settings, "FEATURES", {}).get("EMAIL_NOTIFICATIONS", True))
     except Exception:
         return True
 
+
 def _render_pair(html_tpl: str, txt_tpl: str, context: Dict) -> Tuple[str, str]:
     html = get_template(html_tpl).render(context)
     txt = get_template(txt_tpl).render(context)
     return html, txt
 
-def _send(subject: str, to_addr: str, cc: List[str], reply_to: List[str], html: str, txt: str) -> None:
+
+def _send(subject: str, to_addr: str, cc: List[str], reply_to: List[str], html: str, txt: str) -> bool:
+    """
+    Send an email and log success/failure with full context.
+    Returns True on success, False on any failure.
+    """
     if not to_addr:
-        logger.warning("Leave email suppressed: empty TO address.")
-        return
-    msg = EmailMultiAlternatives(
-        subject=subject,
-        body=txt,
-        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
-        to=[to_addr],
-        cc=cc or None,
-        reply_to=reply_to or None,
-    )
-    msg.attach_alternative(html, "text/html")
-    msg.send(fail_silently=getattr(settings, "EMAIL_FAIL_SILENTLY", True))
+        logger.warning("Leave email suppressed: empty TO address. subject=%r cc=%s", subject, cc)
+        return False
+
+    from_email = getattr(settings, "LEAVE_EMAIL_FROM", None) or getattr(settings, "DEFAULT_FROM_EMAIL", None)
+    fail_silently = getattr(settings, "EMAIL_FAIL_SILENTLY", True)
+    backend_name = getattr(settings, "EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+
+    # Log what we are about to do (masked password)
+    try:
+        host = getattr(settings, "EMAIL_HOST", None)
+        port = getattr(settings, "EMAIL_PORT", None)
+        user = getattr(settings, "EMAIL_HOST_USER", None)
+        use_tls = getattr(settings, "EMAIL_USE_TLS", None)
+        use_ssl = getattr(settings, "EMAIL_USE_SSL", None)
+        logger.info(
+            "Leave email attempt: backend=%s host=%s port=%s user=%s TLS=%s SSL=%s "
+            "from=%s to=%s cc=%s reply_to=%s subject=%r fail_silently=%s",
+            backend_name, host, port, user, use_tls, use_ssl, from_email, to_addr, cc, reply_to, subject, fail_silently
+        )
+    except Exception:
+        pass
+
+    try:
+        # Use an explicit connection so we can log open/close events
+        with get_connection() as conn:
+            msg = EmailMultiAlternatives(
+                subject=subject,
+                body=txt,
+                from_email=from_email,
+                to=[to_addr],
+                cc=cc or None,
+                reply_to=reply_to or None,
+                connection=conn,
+            )
+            msg.attach_alternative(html, "text/html")
+            sent = msg.send(fail_silently=fail_silently)
+
+        if sent:
+            logger.info("Leave email sent OK: to=%s cc=%s subject=%r", to_addr, cc, subject)
+            return True
+        else:
+            # Django returns the number of successfully delivered messages; 0 means failure
+            logger.error("Leave email send returned 0: to=%s cc=%s subject=%r", to_addr, cc, subject)
+            return False
+    except Exception as exc:
+        # If fail_silently=True, Django would suppress; we still log here.
+        logger.exception("Leave email send FAILED: to=%s cc=%s subject=%r error=%s", to_addr, cc, subject, exc)
+        return False
+
 
 def _already_sent_recent(leave: LeaveRequest, kind_hint: str | None = None, within_seconds: int = 90) -> bool:
     """Light duplicate suppression using EMAIL_SENT audits."""
@@ -89,6 +136,7 @@ def _already_sent_recent(leave: LeaveRequest, kind_hint: str | None = None, with
     except Exception:
         return False
 
+
 def _dedupe_lower(emails: Iterable[str]) -> List[str]:
     seen = set()
     out: List[str] = []
@@ -102,10 +150,12 @@ def _dedupe_lower(emails: Iterable[str]) -> List[str]:
         out.append(low)
     return out
 
+
 @dataclass
 class _TokenLinks:
     approve: Optional[str]
     reject: Optional[str]
+
 
 def _build_token_links(leave: LeaveRequest, recipient_email: str) -> _TokenLinks:
     """Create one-click links bound to the recipient's address."""
@@ -123,8 +173,9 @@ def _build_token_links(leave: LeaveRequest, recipient_email: str) -> _TokenLinks
     reject_token = signing.dumps({**payload_base, "action": "reject"}, salt=TOKEN_SALT)
 
     approve_url = _abs_url(reverse("leave:leave_action_via_token", args=[approve_token])) + "?a=APPROVED"
-    reject_url  = _abs_url(reverse("leave:leave_action_via_token", args=[reject_token])) + "?a=REJECTED"
+    reject_url = _abs_url(reverse("leave:leave_action_via_token", args=[reject_token])) + "?a=REJECTED"
     return _TokenLinks(approve=approve_url, reject=reject_url)
+
 
 def _duration_days_ist(leave: LeaveRequest) -> float:
     """Inclusive day count in IST, respecting half-day."""
@@ -139,11 +190,13 @@ def _duration_days_ist(leave: LeaveRequest) -> float:
         return 0.5
     return float(days)
 
+
 def _employee_display_name(user) -> str:
     try:
         return (getattr(user, "get_full_name", lambda: "")() or user.username or "").strip()
     except Exception:
         return (getattr(user, "username", "") or "").strip()
+
 
 def _manager_display_name(leave: LeaveRequest, manager_email: str) -> Optional[str]:
     em = (manager_email or "").strip().lower()
@@ -161,6 +214,7 @@ def _manager_display_name(leave: LeaveRequest, manager_email: str) -> Optional[s
     except Exception:
         pass
     return None
+
 
 def _default_cc_emails_for_employee(emp: User) -> List[str]:
     """
@@ -191,6 +245,7 @@ def _default_cc_emails_for_employee(emp: User) -> List[str]:
         pass
     return _dedupe_lower(out)
 
+
 def _resolve_recipients(
     leave: LeaveRequest,
     manager_email: Optional[str],
@@ -204,11 +259,9 @@ def _resolve_recipients(
       • legacy ApproverMapping.cc_person.email
       • any explicit cc_list provided by caller
     All lowercased & deduped.
-
-    If no RP 'to' is found, we FALL BACK to using the first available CC as 'to',
-    so emails are not silently dropped.
     """
     # Selected CCs by the employee (per-request)
+    selected_ccs: List[str] = []
     try:
         selected_ccs = [
             (u.email or "").strip().lower() for u in leave.cc_users.all() if getattr(u, "email", None)
@@ -224,40 +277,32 @@ def _resolve_recipients(
 
     merged_cc = _dedupe_lower([*explicit, *selected_ccs, *defaults])
 
-    # 1) Explicit manager email
     if manager_email:
         return manager_email.strip().lower(), merged_cc
 
-    # 2) Snapshot on leave instance
+    # Prefer model snapshot
     if getattr(leave, "reporting_person", None) and getattr(leave.reporting_person, "email", None):
         to_addr = leave.reporting_person.email.strip().lower()
+        # include legacy snapshot on the leave row as well (rare but safe)
         legacy_on_leave = []
-        if getattr(leave, "cc_person", None) and getattr(leave.cc_person, "email", None):
+        if getattr(leave, "cc_person", None) and getattr(leave, "cc_person").email:
             legacy_on_leave.append(leave.cc_person.email.strip().lower())
         cc = _dedupe_lower([*merged_cc, *legacy_on_leave])
         return to_addr, cc
 
-    # 3) Dynamic routing
-    to_addr = ""
+    # Fallback: dynamic routing
     try:
         from apps.users.routing import recipients_for_leave
         emp_email = (leave.employee_email or getattr(leave.employee, "email", "") or "").strip().lower()
         mapping = recipients_for_leave(emp_email) or {}
         to_addr = (mapping.get("to") or "").strip().lower()
         dynamic_cc = [e.strip().lower() for e in (mapping.get("cc") or []) if e]
-        merged_cc = _dedupe_lower([*merged_cc, *dynamic_cc])
+        cc = _dedupe_lower([*merged_cc, *dynamic_cc])
+        return to_addr, cc
     except Exception:
-        logger.warning("Could not resolve dynamic recipients for leave id=%s", getattr(leave, "id", None))
+        logger.warning("Could not resolve recipients for leave id=%s", getattr(leave, "id", None))
+        return "", merged_cc
 
-    # 4) Fallback to first CC as TO if still missing
-    if not to_addr and merged_cc:
-        to_addr, merged_cc = merged_cc[0], merged_cc[1:]
-        logger.info(
-            "Recipient fallback: using first CC '%s' as TO for leave #%s because no RP mapping was found.",
-            to_addr, getattr(leave, "id", None)
-        )
-
-    return to_addr, merged_cc
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -271,6 +316,7 @@ def send_leave_request_email(
 ) -> None:
     """Send the initial leave request to the Reporting Person (TO) and CC (admin + selected)."""
     if not _email_enabled():
+        logger.info("Email disabled via FEATURES.EMAIL_NOTIFICATIONS; skipping request email for leave #%s.", leave.id)
         return
 
     # Light duplicate suppression (unless force=True)
@@ -280,7 +326,7 @@ def send_leave_request_email(
 
     to_addr, cc = _resolve_recipients(leave, manager_email, cc_list)
     if not to_addr:
-        logger.warning("Request email suppressed: no recipient could be resolved for leave #%s.", leave.id)
+        logger.warning("Request email suppressed: no RP email for leave #%s.", leave.id)
         return
 
     tokens = _build_token_links(leave, to_addr)
@@ -288,7 +334,7 @@ def send_leave_request_email(
     # Approval page (login) with hint
     approval_page_url = _abs_url(reverse("leave:approval_page", args=[leave.id]))
     approve_url = f"{approval_page_url}?a=APPROVED"
-    reject_url  = f"{approval_page_url}?a=REJECTED"
+    reject_url = f"{approval_page_url}?a=REJECTED"
 
     employee_name = leave.employee_name or _employee_display_name(leave.employee)
     manager_name = _manager_display_name(leave, to_addr)
@@ -346,11 +392,15 @@ def send_leave_request_email(
     html, txt = _render_pair("email/leave_applied.html", "email/leave_applied.txt", ctx)
     reply_to = [e for e in [ctx["employee_email"]] if e]
 
-    _send(subject, to_addr, cc=list(cc or []), reply_to=reply_to, html=html, txt=txt)
+    ok = _send(subject, to_addr, cc=list(cc or []), reply_to=reply_to, html=html, txt=txt)
+    if not ok:
+        logger.error("Leave request email NOT delivered for leave #%s (see earlier logs for details).", leave.id)
+
 
 def send_leave_decision_email(leave: LeaveRequest) -> None:
     """Send the approve/reject decision email to the employee."""
     if not _email_enabled():
+        logger.info("Email disabled via FEATURES.EMAIL_NOTIFICATIONS; skipping decision email for leave #%s.", leave.id)
         return
 
     # Light suppression
@@ -406,16 +456,20 @@ def send_leave_decision_email(leave: LeaveRequest) -> None:
     except Exception:
         pass
 
-    _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
+    ok = _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
+    if not ok:
+        logger.error("Leave decision email NOT delivered for leave #%s (see earlier logs for details).", leave.id)
+
 
 def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
     """Send handover notification to the delegate about assigned tasks."""
     if not _email_enabled():
+        logger.info("Email disabled via FEATURES.EMAIL_NOTIFICATIONS; skipping handover email for leave #%s.", leave.id)
         return
 
     to_addr = (assignee.email or "").strip()
     if not to_addr:
-        logger.warning(f"Handover email suppressed: assignee {assignee} has no email")
+        logger.warning("Handover email suppressed: assignee %s has no email", assignee)
         return
 
     if not handovers:
@@ -461,11 +515,15 @@ def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
     html, txt = _render_pair("email/leave_handover.html", "email/leave_handover.txt", ctx)
     reply_to = [e for e in [ctx["employee_email"]] if e]
 
-    _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
+    ok = _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
+    if not ok:
+        logger.error("Handover email NOT delivered for leave #%s (see earlier logs for details).", leave.id)
+
 
 def send_delegation_reminder_email(reminder) -> None:
     """Send reminder email for delegated task."""
     if not _email_enabled():
+        logger.info("Email disabled via FEATURES.EMAIL_NOTIFICATIONS; skipping delegation reminder email.")
         return
 
     handover = reminder.leave_handover
@@ -474,7 +532,7 @@ def send_delegation_reminder_email(reminder) -> None:
 
     to_addr = (assignee.email or "").strip()
     if not to_addr:
-        logger.warning(f"Reminder email suppressed: assignee {assignee} has no email")
+        logger.warning("Reminder email suppressed: assignee %s has no email", assignee)
         return
 
     employee_name = leave.employee_name or _employee_display_name(leave.employee)
@@ -506,4 +564,6 @@ def send_delegation_reminder_email(reminder) -> None:
     html, txt = _render_pair("email/delegation_reminder.html", "email/delegation_reminder.txt", ctx)
     reply_to = [e for e in [ctx["employee_email"]] if e]
 
-    _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
+    ok = _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
+    if not ok:
+        logger.error("Delegation reminder email NOT delivered (handover id=%s).", handover.id)
