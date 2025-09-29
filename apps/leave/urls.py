@@ -1,4 +1,3 @@
-# apps/leave/urls.py
 from __future__ import annotations
 
 from django.urls import path
@@ -13,7 +12,9 @@ urlpatterns = [
     path("my/", views.my_leaves, name="my_leaves"),
     path("apply/", views.apply_leave, name="apply_leave"),
     path("delete/<int:pk>/", views.delete_leave, name="delete_leave"),
-    path("bulk-delete/", views.bulk_delete_leaves, name="bulk_delete"),
+    # Bulk delete — keep both names for backward compatibility
+    path("bulk-delete/", views.bulk_delete_leaves, name="bulk_delete_leaves"),
+    path("bulk-delete/", views.bulk_delete_leaves, name="bulk_delete"),  # alias to fix NoReverseMatch
 
     # Manager queue & actions
     path("manager/pending/", views.manager_pending, name="manager_pending"),

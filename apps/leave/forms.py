@@ -9,7 +9,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from zoneinfo import ZoneInfo
 
-from .models import LeaveRequest, LeaveStatus, LeaveType, CCConfiguration
+from .models import LeaveRequest, LeaveStatus, LeaveType
 
 IST = ZoneInfo("Asia/Kolkata")
 User = get_user_model()
@@ -74,14 +74,7 @@ class LeaveRequestForm(forms.ModelForm):
         help_text="Allowed: PDF, images, DOC/DOCX/TXT (max 10 MB).",
     )
 
-    # Multi-CC field - only admin-configured options
-    cc_users = forms.ModelMultipleChoiceField(
-        queryset=User.objects.none(),
-        required=False,
-        label="Additional CC Recipients",
-        help_text="Select additional people to be notified about your leave request (admin-configured options only).",
-        widget=forms.CheckboxSelectMultiple(attrs={"class": "form-check-input"}),
-    )
+    # (Removed cc_users field — no longer exposed on the apply form)
 
     # Task handover fields
     delegate_to = forms.ModelChoiceField(
@@ -141,17 +134,6 @@ class LeaveRequestForm(forms.ModelForm):
         except Exception:
             pass
 
-        # CC choices - ONLY from admin-configured CC options
-        cc_qs = User.objects.filter(
-            id__in=CCConfiguration.objects.filter(is_active=True).values_list('user_id', flat=True)
-        ).order_by("first_name", "last_name", "username")
-
-        # Exclude self from CC options
-        if self.employee:
-            cc_qs = cc_qs.exclude(pk=getattr(self.employee, "pk", None))
-
-        self.fields["cc_users"].queryset = cc_qs
-
         # Delegate choices (active users with email), exclude self
         delegate_qs = User.objects.filter(is_active=True) \
             .exclude(email__isnull=True).exclude(email__exact="") \
@@ -182,24 +164,6 @@ class LeaveRequestForm(forms.ModelForm):
             end_dt = now + timedelta(days=7)
 
         self._load_handover_choices(start_dt, end_dt)
-
-        # Customize CC field help text to show it's admin-controlled
-        cc_configs = CCConfiguration.objects.filter(is_active=True).select_related('user').order_by('sort_order', 'department')
-        if cc_configs.exists():
-            dept_groups = {}
-            for config in cc_configs:
-                dept = config.department or "Other"
-                if dept not in dept_groups:
-                    dept_groups[dept] = []
-                dept_groups[dept].append(config.display_label)
-
-            help_parts = ["Admin-configured CC options:"]
-            for dept, labels in dept_groups.items():
-                help_parts.append(f"• {dept}: {', '.join(labels[:3])}")
-                if len(labels) > 3:
-                    help_parts.append(f"  (and {len(labels) - 3} more)")
-
-            self.fields["cc_users"].help_text = " ".join(help_parts)
 
     def _load_handover_choices(self, start_at, end_at):
         """Query user's tasks in the window and present as choices."""
@@ -269,7 +233,8 @@ class LeaveRequestForm(forms.ModelForm):
         model = LeaveRequest
         fields = [
             "leave_type", "start_at", "end_at", "is_half_day", "reason", "attachment",
-            "cc_users", "delegate_to", "handover_checklist", "handover_delegation",
+            # (cc_users removed)
+            "delegate_to", "handover_checklist", "handover_delegation",
             "handover_help_ticket", "handover_message",
         ]
 
@@ -295,25 +260,7 @@ class LeaveRequestForm(forms.ModelForm):
         dt = self.cleaned_data.get("end_at")
         return _naive_to_ist(dt)
 
-    def clean_cc_users(self):
-        """Ensure CC users are only from admin-configured options"""
-        cc_users = self.cleaned_data.get('cc_users', [])
-        if not cc_users:
-            return cc_users
-
-        # Verify all selected users are in the admin-configured CC list
-        allowed_user_ids = set(
-            CCConfiguration.objects.filter(is_active=True).values_list('user_id', flat=True)
-        )
-
-        for user in cc_users:
-            if user.id not in allowed_user_ids:
-                raise forms.ValidationError(
-                    f"User '{user.get_full_name() or user.username}' is not available for CC selection. "
-                    "Only admin-configured options are allowed."
-                )
-
-        return cc_users
+    # (clean_cc_users removed)
 
     def _overlaps_existing(self, start_at, end_at) -> bool:
         """Detect overlap with user's PENDING/APPROVED leaves."""
@@ -371,7 +318,7 @@ class LeaveRequestForm(forms.ModelForm):
 
         if commit:
             obj.save()
-            # Important: Save the many-to-many relationships after the main object
+            # still safe to call; there are no M2M fields on this form now
             self.save_m2m()
 
         return obj
