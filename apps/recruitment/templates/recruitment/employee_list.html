@@ -32,6 +32,8 @@
   .cc-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-left: 8px; }
   .cc-active { background-color: #10b981; }
   .cc-inactive { background-color: #ef4444; }
+  .cc-label { font-size: .875rem; }
+  .badge-role { background: #eef2ff; color: #3730a3; }
 </style>
 
 <div class="card">
@@ -45,8 +47,8 @@
             <th>Mobile Number</th>
             <th>MD Name</th>
             <th class="col-wide">To Reporting officer</th>
-            <th>CC Email</th>
-            <th>CC Available</th>
+            <th class="col-wide">Default CC (Mapping)</th>
+            <th>In CC Options?</th>
             <th>Employee Designation</th>
             <th class="text-end">Actions</th>
           </tr>
@@ -59,17 +61,29 @@
             <td>{{ r.mobile|default:"—" }}</td>
             <td>{{ r.md_name|default:"—" }}</td>
             <td class="col-wide">{{ r.reporting_officer|default:"—" }}</td>
-            <td>{{ r.cc_email|default:"—" }}</td>
+
+            {# Default CC is the single cc_person from ApproverMapping (optional) #}
+            <td class="col-wide">
+              {% if r.cc_label %}
+                <span class="cc-label">{{ r.cc_label }}</span>
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+
+            {# Whether THIS employee is available as a CC option for others #}
             <td>
               {% if r.cc_config_active %}
-                <span class="cc-indicator cc-active" title="Available for CC selection"></span>
+                <span class="cc-indicator cc-active" title="Available in multi-CC selection"></span>
                 Active
               {% else %}
-                <span class="cc-indicator cc-inactive" title="Not available for CC selection"></span>
+                <span class="cc-indicator cc-inactive" title="Not available in multi-CC selection"></span>
                 Inactive
               {% endif %}
             </td>
+
             <td>{{ r.designation|default:"—" }}</td>
+
             <td class="text-end">
               {% if request.user.is_superuser %}
                 <a class="btn btn-sm btn-light border"
@@ -83,7 +97,7 @@
                       onsubmit="return confirm('Delete {{ r.name|escapejs }} ({{ r.email|escapejs }})? This cannot be undone.');">
                   {% csrf_token %}
                   <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                  <button type="submit" class="btn btn-sm btn-outline-danger">
+                  <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete employee">
                     <i class="fa fa-trash"></i>
                   </button>
                 </form>
@@ -139,8 +153,9 @@
               <input type="text" class="form-control" name="reporting_officer" placeholder="Full name or email">
             </div>
             <div class="col-md-6">
-              <label class="form-label">CC Email</label>
-              <input type="email" class="form-control" name="cc_email" placeholder="optional">
+              <label class="form-label">Default CC (optional)</label>
+              <input type="email" class="form-control" name="cc_email" placeholder="single default CC (mapping)">
+              <div class="form-text">Employees can still add multiple CCs from the CC Options pool per request.</div>
             </div>
 
             <div class="col-md-6">
@@ -151,14 +166,14 @@
             <div class="col-md-6">
               <div class="form-check mt-4">
                 <input class="form-check-input" type="checkbox" name="add_to_cc_config" id="addToCcConfig" checked>
-                <label class="form-check-label" for="addToCcConfig">Make available for CC selection</label>
-                <small class="form-text text-muted">Add this user to the CC configuration list</small>
+                <label class="form-check-label" for="addToCcConfig">Make available in CC Options</label>
+                <small class="form-text text-muted">Adds this user to the global CC pool employees can select from.</small>
               </div>
             </div>
           </div>
 
           <div class="form-text mt-3">
-            After saving, you can set the approver mapping via <em>Edit Mapping</em> and manage CC availability via <em>Manage CC Options</em>.
+            After saving, you can set the approver mapping via <em>Edit Mapping</em> and manage the global CC pool via <em>Manage CC Options</em>.
           </div>
         </div>
 
@@ -178,10 +193,10 @@
 <div class="alert alert-info mt-3">
   <h6>CC Configuration Notes:</h6>
   <ul class="mb-0">
-    <li>Only users marked as "Active" in CC configuration can be selected for leave CC</li>
-    <li>Use <strong>Manage CC Options</strong> to control who employees can CC on leave requests</li>
-    <li>Use <strong>Assign CC per Employee</strong> to set the default CC person for each employee</li>
-    <li>CC configuration is separate from approver mapping and provides fine-grained control</li>
+    <li><strong>Default CC (Mapping)</strong> is optional and remains a single person tied to the employee’s mapping.</li>
+    <li><strong>CC Options</strong> is the global pool from which employees can choose <em>multiple</em> CCs per leave request.</li>
+    <li>Use <strong>Manage CC Options</strong> to control who appears in that global pool.</li>
+    <li>Use <strong>Assign CC per Employee</strong> to set a default CC person if needed.</li>
   </ul>
 </div>
 {% endif %}

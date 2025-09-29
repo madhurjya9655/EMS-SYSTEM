@@ -18,9 +18,9 @@
 
 <div class="alert alert-info">
   <strong>Admins only.</strong>
-  Select a CC person for each employee.  
-  <code>— No change —</code> leaves the current value as-is.  
-  Choose <code>— Clear CC —</code> to remove the existing CC.
+  Select <u>one or more</u> CC people for each employee.<br>
+  Leaving a row untouched = <code>No change</code>.<br>
+  Tick <code>Clear all CC</code> to remove existing defaults for that employee.
 </div>
 
 <div class="card">
@@ -38,8 +38,8 @@
                 <tr>
                   <th style="min-width: 220px;">Employee</th>
                   <th>Email</th>
-                  <th style="min-width: 360px;">CC Person</th>
-                  <th class="text-end" style="width: 120px;">Status</th>
+                  <th style="min-width: 520px;">Default CC People</th>
+                  <th class="text-end" style="width: 160px;">Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -49,26 +49,64 @@
                       <div class="fw-semibold">{{ row.name }}</div>
                       <div class="text-muted small">ID: {{ row.id }}</div>
                     </td>
+
                     <td class="text-muted">{{ row.email|default:"—" }}</td>
+
                     <td>
-                      <select
-                        class="form-select"
-                        name="row-{{ row.id }}-cc_user_id"
-                        aria-label="Select CC for {{ row.name }}"
-                      >
-                        {# IMPORTANT: empty value = skip/no change #}
-                        <option value="" selected>— No change —</option>
-                        {# value 0 = clear #}
-                        <option value="0">— Clear CC —</option>
-                        {% for uid, label in cc_choices %}
-                          <option value="{{ uid }}"
-                            {% if row.current_cc and row.current_cc.id == uid %}selected{% endif %}
-                          >{{ label }}</option>
-                        {% endfor %}
-                      </select>
+                      <div class="d-lg-flex align-items-start gap-3">
+                        <!-- Checkbox list; if none changed, no param is posted => "No change" -->
+                        <div class="border rounded p-2" style="max-height: 220px; overflow:auto; min-width: 340px;">
+                          {% for uid, label in cc_choices %}
+                            <div class="form-check mb-1">
+                              <input
+                                class="form-check-input"
+                                type="checkbox"
+                                id="emp{{ row.id }}-cc-{{ uid }}"
+                                name="row-{{ row.id }}-cc_user_ids"
+                                value="{{ uid }}"
+                                {% if uid in row.current_cc_ids %}checked{% endif %}>
+                              <label class="form-check-label" for="emp{{ row.id }}-cc-{{ uid }}">{{ label }}</label>
+                            </div>
+                          {% endfor %}
+                        </div>
+
+                        <div class="small text-muted flex-grow-1">
+                          <div class="mb-2">
+                            <strong>Currently:</strong>
+                            {% if row.current_cc_labels %}
+                              {% for lbl in row.current_cc_labels %}
+                                <span class="badge bg-secondary me-1">{{ lbl }}</span>
+                              {% endfor %}
+                            {% else %}
+                              <span class="text-muted">None</span>
+                            {% endif %}
+                          </div>
+
+                          <div class="form-check">
+                            <input class="form-check-input"
+                                   type="checkbox"
+                                   id="clear-{{ row.id }}"
+                                   name="row-{{ row.id }}-clear"
+                                   value="1">
+                            <label class="form-check-label" for="clear-{{ row.id }}">
+                              Clear all CC
+                            </label>
+                          </div>
+
+                          <div class="mt-2 d-flex gap-2">
+                            <button class="btn btn-sm btn-outline-secondary"
+                                    type="button"
+                                    onclick="toggleRow('{{ row.id }}', true)">Select all</button>
+                            <button class="btn btn-sm btn-outline-secondary"
+                                    type="button"
+                                    onclick="toggleRow('{{ row.id }}', false)">Select none</button>
+                          </div>
+                        </div>
+                      </div>
                     </td>
+
                     <td class="text-end">
-                      {% if row.current_cc %}
+                      {% if row.current_cc_labels %}
                         <span class="badge bg-success">Assigned</span>
                       {% else %}
                         <span class="badge bg-secondary">None</span>
@@ -93,4 +131,13 @@
     {% endif %}
   </div>
 </div>
+
+<script>
+function toggleRow(empId, checked) {
+  const boxes = document.querySelectorAll(
+    'input[name="row-' + empId + '-cc_user_ids"]'
+  );
+  boxes.forEach(cb => cb.checked = checked);
+}
+</script>
 {% endblock %}

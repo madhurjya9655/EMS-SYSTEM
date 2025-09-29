@@ -310,34 +310,30 @@ def _schedule_10am_email_for_delegation(obj: Delegation) -> None:
 
 
 # ---------------------------------------------------------------------
-# FIRST OCCURRENCE: force 19:00 IST on create (for recurring series only)
+# CHECKLIST: force planned datetime to 19:00 IST (shift Sun/holidays)
 # ---------------------------------------------------------------------
 @receiver(pre_save, sender=Checklist)
-def force_first_occurrence_time(sender, instance: Checklist, **kwargs):
+def force_checklist_planned_time(sender, instance: Checklist, **kwargs):
     """
-    First occurrence of a RECURRING checklist must be at 19:00 IST
-    on the planned DATE (do NOT shift off Sundays/holidays).
-    One-time (non-recurring) checklists keep the time the user set.
+    Checklist (one-time or recurring):
+      • planned datetime MUST be 19:00 IST
+      • if Sunday/holiday → shift to next working day (still 19:00 IST)
     """
     try:
-        # Only when creating (no PK yet) and mode is recurring
-        if instance.pk is not None:
-            return
-        m = normalize_mode(getattr(instance, "mode", None))
-        if m not in RECURRING_MODES:
-            return
         if not instance.planned_date:
             return
-
-        # Compute IST date from whatever timezone, then set time to 19:00 IST
         dt = instance.planned_date
+        tz = timezone.get_current_timezone()
         if timezone.is_naive(dt):
-            dt = timezone.make_aware(dt, timezone.get_current_timezone())
+            dt = timezone.make_aware(dt, tz)
         dt_ist = dt.astimezone(IST)
-        new_ist = IST.localize(datetime.combine(dt_ist.date(), dt_time(19, 0, 0)))
-        instance.planned_date = new_ist.astimezone(timezone.get_current_timezone())
+        d = dt_ist.date()
+        if not is_working_day(d):
+            d = next_working_day(d)
+        new_ist = IST.localize(datetime.combine(d, dt_time(19, 0, 0)))
+        instance.planned_date = new_ist.astimezone(tz)
     except Exception as e:
-        logger.error(_utils._safe_console_text(f"force_first_occurrence_time failed: {e}"))
+        logger.error(_utils._safe_console_text(f"force_checklist_planned_time failed: {e}"))
 
 
 # ---------------------------------------------------------------------

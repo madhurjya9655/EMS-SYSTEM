@@ -69,6 +69,13 @@ class EmployeeListView(LoginRequiredMixin, ListView):
             combo = f"{first} {last}".strip()
             return combo or (u.username or "").strip()
 
+        def label_with_email(u: User | None) -> str:
+            if not u:
+                return ""
+            nm = full_name(u)
+            em = (u.email or "").strip()
+            return f"{nm} ({em})" if em else nm
+
         rows = []
         for u in users:
             prof: Profile | None = getattr(u, "profile", None)
@@ -82,11 +89,8 @@ class EmployeeListView(LoginRequiredMixin, ListView):
                 rp_name = full_name(rp) or (rp.username or "")
                 rp_email = (rp.email or "").strip()
 
-            # CC email (single, from ApproverMapping)
-            cc_email = ""
-            if mapping and mapping.cc_person:
-                cc = mapping.cc_person
-                cc_email = (cc.email or "").strip()
+            # Default CC label (single, from ApproverMapping)
+            cc_label = label_with_email(mapping.cc_person) if (mapping and mapping.cc_person) else ""
 
             # "MD Name" — mirror Reporting officer (as per requirement)
             md_name = rp_name
@@ -99,7 +103,7 @@ class EmployeeListView(LoginRequiredMixin, ListView):
                     "mobile": (getattr(prof, "phone", None) or ""),
                     "md_name": md_name,
                     "reporting_officer": f"{rp_name} ({rp_email})" if rp_name or rp_email else "",
-                    "cc_email": cc_email,
+                    "cc_label": cc_label,
                     "cc_config_active": cc_config.is_active if cc_config else False,
                     # Use role as designation if no explicit designation field exists
                     "designation": (getattr(prof, "role", "") or ""),
@@ -340,5 +344,6 @@ def offer_letter(request, pk):
     context = {"candidate": candidate, "date": date.today()}
     html = render_to_string("recruitment/offer_letter.html", context)
     resp = HttpResponse(html, content_type="application/msword")
+    # FIX: close the f-string quote properly
     resp["Content-Disposition"] = f'attachment; filename="OfferLetter_{candidate.name}.doc"'
     return resp

@@ -181,18 +181,25 @@
       <table class="table table-modern mb-0">
         <thead>
           <tr>
-            <th width="40">
-              <input type="checkbox" class="checkbox-custom" id="selectAll">
-            </th>
-            <th>#</th><th>Type</th><th>From</th><th>To</th><th>Half-day</th><th>Reason</th><th>Days</th><th>Status</th><th>Approver</th><th>Applied</th><th width="100">Actions</th>
+            <th width="40"><input type="checkbox" class="checkbox-custom" id="selectAll"></th>
+            <th>#</th>
+            <th>Type</th>
+            <th>From</th>
+            <th>To</th>
+            <th>Half-day</th>
+            <th>Reason</th>
+            <th>Days</th>
+            <th>Status</th>
+            <th>Approver</th>
+            <th>CC</th>
+            <th>Applied</th>
+            <th width="100">Actions</th>
           </tr>
         </thead>
         <tbody>
           {% for lr in leaves %}
             <tr>
-              <td>
-                <input type="checkbox" class="checkbox-custom leave-checkbox" value="{{ lr.id }}">
-              </td>
+              <td><input type="checkbox" class="checkbox-custom leave-checkbox" value="{{ lr.id }}"></td>
               <td class="text-muted fw-medium">#{{ lr.id }}</td>
               <td><span class="badge bg-light text-dark">{{ lr.leave_type.name }}</span></td>
               <td class="text-nowrap">{% if lr.start_at %}{{ lr.start_at|date:"M d, H:i" }}{% else %}—{% endif %}</td>
@@ -234,6 +241,18 @@
                 {% else %}
                   <span class="text-muted">—</span>
                 {% endif %}
+              </td>
+              <td class="text-nowrap">
+                {% with ccs=lr.cc_users.all %}
+                  {% if ccs %}
+                    {% for u in ccs %}
+                      <span class="badge rounded-pill text-bg-secondary me-1 mb-1"
+                            title="{{ u.email|default_if_none:'' }}">{{ u.get_full_name|default:u.username }}</span>
+                    {% endfor %}
+                  {% else %}
+                    <span class="text-muted small">—</span>
+                  {% endif %}
+                {% endwith %}
               </td>
               <td class="text-nowrap text-muted">{{ lr.applied_at|date:"M d, H:i" }}</td>
               <td>

@@ -68,7 +68,13 @@
             {{ form.reason|as_crispy_field }}
             {{ form.attachment|as_crispy_field }}
 
-            {# NOTE: CC chooser removed intentionally. Admins manage CC on Employees page. #}
+            {# Multi-CC (admin configured options only) #}
+            <div class="mb-3">
+              {{ form.cc_users|as_crispy_field }}
+              <div class="form-text">
+                You can CC multiple colleagues (from admin-configured options). They’ll receive the initial leave request email.
+              </div>
+            </div>
 
             <hr class="my-4">
 
@@ -127,12 +133,12 @@
       <div class="card mt-3">
         <div class="card-body">
           <h6 class="card-title mb-3">Task Handover</h6>
-        <ul class="mb-0 small text-muted" style="padding-left: 1.2rem;">
-          <li>Select a colleague to temporarily cover your tasks during leave.</li>
-          <li>Only tasks due or in progress during your leave period are shown.</li>
-          <li>Original task ownership is preserved - tasks return to you after leave.</li>
-          <li>The selected colleague will receive an email with task details and your message.</li>
-        </ul>
+          <ul class="mb-0 small text-muted" style="padding-left: 1.2rem;">
+            <li>Select a colleague to temporarily cover your tasks during leave.</li>
+            <li>Only tasks due or in progress during your leave period are shown.</li>
+            <li>Original task ownership is preserved — tasks return to you after leave.</li>
+            <li>The selected colleague will receive an email with task details and your message.</li>
+          </ul>
         </div>
       </div>
     </div>

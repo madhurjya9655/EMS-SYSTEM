@@ -1,4 +1,3 @@
-# apps/leave/models.py
 from __future__ import annotations
 
 import hashlib
@@ -70,8 +69,8 @@ class ApproverMapping(models.Model):
     """
     Only Admin should edit this table.
 
-    Defines the employee -> (reporting_person, cc_person) mapping that is reused in
-    Leave approvals, Sales module approvals, and other workflows.
+    Defines the employee -> (reporting_person, cc_person/default_cc_users) mapping
+    reused in Leave approvals, Sales approvals, and other workflows.
     """
     employee = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="approver_mapping"
@@ -80,9 +79,17 @@ class ApproverMapping(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="reports_for_approval",
         null=True, blank=True
     )
+    # Legacy single CC (kept for backward compatibility)
     cc_person = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="cc_for_approval",
         null=True, blank=True
+    )
+    # NEW: Multiple default CC users per employee (admin-managed)
+    default_cc_users = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        related_name="default_cc_for",
+        help_text="Multiple default CC recipients (admin-managed)."
     )
     updated_at = models.DateTimeField(auto_now=True)
     notes = models.TextField(blank=True)
@@ -93,7 +100,43 @@ class ApproverMapping(models.Model):
         verbose_name_plural = "Approver Mappings"
 
     def __str__(self) -> str:
-        return f"{self.employee} → RP:{self.reporting_person} CC:{self.cc_person}"
+        cc_count = self.default_cc_users.count()
+        return f"{self.employee} → RP:{self.reporting_person} CC:{self.cc_person or '-'} (+{cc_count} more)"
+
+    # Backward-compatible resolver
+    @staticmethod
+    def resolve_for(user: User) -> Tuple[Optional[User], Optional[User]]:
+        """
+        Returns (reporting_person, single_cc_person_for_legacy_use)
+        """
+        try:
+            m = ApproverMapping.objects.select_related("reporting_person", "cc_person").get(employee=user)
+            if m.cc_person:
+                return m.reporting_person, m.cc_person
+            # If legacy is empty, fallback to first of default_cc_users (if any)
+            first_cc = m.default_cc_users.first()
+            return m.reporting_person, first_cc
+        except ApproverMapping.DoesNotExist:
+            return None, None
+
+    # New resolver with multiple CCs
+    @staticmethod
+    def resolve_multi_for(user: User) -> Tuple[Optional[User], List[User]]:
+        """
+        Returns (reporting_person, list_of_cc_users)
+        """
+        try:
+            m = (ApproverMapping.objects
+                 .select_related("reporting_person", "cc_person")
+                 .prefetch_related("default_cc_users")
+                 .get(employee=user))
+            ccs: List[User] = list(m.default_cc_users.all())
+            # include legacy single if present and not already in list
+            if m.cc_person and m.cc_person not in ccs:
+                ccs.append(m.cc_person)
+            return m.reporting_person, ccs
+        except ApproverMapping.DoesNotExist:
+            return None, []
 
 
 class CCConfiguration(models.Model):
@@ -204,6 +247,7 @@ class LeaveRequest(models.Model):
         related_name="leave_requests_to_approve",
         help_text="Reporting Person (manager) who must approve.",
     )
+    # Legacy single CC snapshot (kept for backward compatibility)
     cc_person = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True, blank=True,
@@ -318,11 +362,13 @@ class LeaveRequest(models.Model):
 
     @staticmethod
     def resolve_routing_for(user: User) -> Tuple[Optional[User], Optional[User]]:
-        try:
-            mapping = ApproverMapping.objects.select_related("reporting_person", "cc_person").get(employee=user)
-            return mapping.reporting_person, mapping.cc_person
-        except ApproverMapping.DoesNotExist:
-            return None, None
+        # Backward-compatible wrapper
+        return ApproverMapping.resolve_for(user)
+
+    @staticmethod
+    def resolve_routing_multi_for(user: User) -> Tuple[Optional[User], List[User]]:
+        # New multi-cc resolver
+        return ApproverMapping.resolve_multi_for(user)
 
     def _snapshot_employee_details(self) -> None:
         user: User = self.employee
@@ -349,11 +395,12 @@ class LeaveRequest(models.Model):
             pass
         self.employee_designation = designation
 
-        rp, cc = self.resolve_routing_for(user)
+        # Snapshot manager + legacy single cc for backward compatibility.
+        rp, cc_single = self.resolve_routing_for(user)
         if rp:
             self.reporting_person = rp
-        if cc:
-            self.cc_person = cc
+        if cc_single:
+            self.cc_person = cc_single
 
     def _validate_apply_cutoff(self) -> None:
         now = now_ist()
@@ -853,10 +900,35 @@ def get_handed_over_tasks_for_user(user: User) -> dict:
 # Signals (emails + audits)
 # ---------------------------------------------------------------------------
 
+def _collect_admin_cc_emails(employee: User) -> List[str]:
+    rp, cc_users = LeaveRequest.resolve_routing_multi_for(employee)
+    emails = []
+    for u in cc_users:
+        if u and u.email:
+            emails.append(u.email)
+    # de-duplicate while preserving order
+    seen = set()
+    ordered = []
+    for e in emails:
+        e_low = e.strip().lower()
+        if e_low and e_low not in seen:
+            seen.add(e_low)
+            ordered.append(e)
+    return ordered
+
+
 def _safe_send_request_email(leave: LeaveRequest) -> None:
     try:
         from apps.leave.services.notifications import send_leave_request_email
-        send_leave_request_email(leave)
+        # Manager
+        manager_email = leave.reporting_person.email if (leave.reporting_person and leave.reporting_person.email) else None
+        # Admin-managed default CCs (multi) + legacy single via resolver
+        admin_cc_list = _collect_admin_cc_emails(leave.employee)
+        # User-selected extra CCs
+        extra_cc_emails = [u.email for u in leave.cc_users.all() if u.email]
+        # Merge + normalize
+        all_cc = list({*(e.strip().lower() for e in admin_cc_list + extra_cc_emails)})
+        send_leave_request_email(leave, manager_email=manager_email, cc_list=all_cc)
         LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT)
     except Exception:
         logger.exception("Failed to send leave request email")

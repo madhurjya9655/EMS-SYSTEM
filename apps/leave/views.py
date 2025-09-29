@@ -1,7 +1,7 @@
-# apps/leave/views.py
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from datetime import timedelta, date
@@ -14,6 +14,8 @@ from django.contrib.auth.decorators import login_required
 from django.core import signing
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
+from django.db.models import ManyToManyField
+from django.db.utils import OperationalError
 from django.http import HttpRequest, HttpResponse, HttpResponseForbidden, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -297,113 +299,128 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         form = LeaveRequestForm(request.POST, request.FILES, user=request.user)
         if form.is_valid():
-            try:
-                with transaction.atomic():
-                    lr = form.save(commit=True)
+            # ---- Robust insert: retry entire transaction if SQLite is busy ----
+            max_attempts = 5
+            base_sleep = 0.25  # seconds
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    with transaction.atomic():
+                        lr = form.save(commit=True)
 
-                    cd = form.cleaned_data
-                    delegate_to = cd.get("delegate_to")
-                    ho_msg = (cd.get("handover_message") or "").strip()
+                        cd = form.cleaned_data
+                        delegate_to = cd.get("delegate_to")
+                        ho_msg = (cd.get("handover_message") or "").strip()
 
-                    def _to_int_list(vals):
-                        out: List[int] = []
-                        for v in (vals or []):
+                        def _to_int_list(vals):
+                            out: List[int] = []
+                            for v in (vals or []):
+                                try:
+                                    out.append(int(v))
+                                except (TypeError, ValueError):
+                                    continue
+                            return out
+
+                        cl_ids = _to_int_list(cd.get("handover_checklist"))
+                        dg_ids = _to_int_list(cd.get("handover_delegation"))
+                        ht_ids = _to_int_list(cd.get("handover_help_ticket"))
+
+                        handovers_created = []
+                        if delegate_to and (cl_ids or dg_ids or ht_ids):
+                            handovers = []
+                            ef_start = lr.start_date
+                            ef_end = lr.end_date
+                            for tid in cl_ids:
+                                handovers.append(
+                                    LeaveHandover(
+                                        leave_request=lr,
+                                        original_assignee=request.user,
+                                        new_assignee=delegate_to,
+                                        task_type=HandoverTaskType.CHECKLIST,
+                                        original_task_id=tid,
+                                        message=ho_msg,
+                                        effective_start_date=ef_start,
+                                        effective_end_date=ef_end,
+                                        is_active=True,
+                                    )
+                                )
+                            for tid in dg_ids:
+                                handovers.append(
+                                    LeaveHandover(
+                                        leave_request=lr,
+                                        original_assignee=request.user,
+                                        new_assignee=delegate_to,
+                                        task_type=HandoverTaskType.DELEGATION,
+                                        original_task_id=tid,
+                                        message=ho_msg,
+                                        effective_start_date=ef_start,
+                                        effective_end_date=ef_end,
+                                        is_active=True,
+                                    )
+                                )
+                            for tid in ht_ids:
+                                handovers.append(
+                                    LeaveHandover(
+                                        leave_request=lr,
+                                        original_assignee=request.user,
+                                        new_assignee=delegate_to,
+                                        task_type=HandoverTaskType.HELP_TICKET,
+                                        original_task_id=tid,
+                                        message=ho_msg,
+                                        effective_start_date=ef_start,
+                                        effective_end_date=ef_end,
+                                        is_active=True,
+                                    )
+                                )
+                            if handovers:
+                                handovers_created = LeaveHandover.objects.bulk_create(handovers, ignore_conflicts=True)
+
+                        # ---------------- Email dispatch (sync or Celery) ----------------
+                        def _send_emails():
                             try:
-                                out.append(int(v))
-                            except (TypeError, ValueError):
-                                continue
-                        return out
+                                use_async = bool(getattr(settings, "ENABLE_CELERY_EMAIL", False)) and bool(send_leave_emails_async)
 
-                    cl_ids = _to_int_list(cd.get("handover_checklist"))
-                    dg_ids = _to_int_list(cd.get("handover_delegation"))
-                    ht_ids = _to_int_list(cd.get("handover_help_ticket"))
+                                if use_async:
+                                    # Celery path
+                                    send_leave_emails_async.delay(lr.id)
+                                elif send_leave_request_email:
+                                    # Synchronous fallback
+                                    _send_leave_emails_sync(lr)
 
-                    handovers_created = []
-                    if delegate_to and (cl_ids or dg_ids or ht_ids):
-                        handovers = []
-                        ef_start = lr.start_date
-                        ef_end = lr.end_date
-                        for tid in cl_ids:
-                            handovers.append(
-                                LeaveHandover(
-                                    leave_request=lr,
-                                    original_assignee=request.user,
-                                    new_assignee=delegate_to,
-                                    task_type=HandoverTaskType.CHECKLIST,
-                                    original_task_id=tid,
-                                    message=ho_msg,
-                                    effective_start_date=ef_start,
-                                    effective_end_date=ef_end,
-                                    is_active=True,
-                                )
-                            )
-                        for tid in dg_ids:
-                            handovers.append(
-                                LeaveHandover(
-                                    leave_request=lr,
-                                    original_assignee=request.user,
-                                    new_assignee=delegate_to,
-                                    task_type=HandoverTaskType.DELEGATION,
-                                    original_task_id=tid,
-                                    message=ho_msg,
-                                    effective_start_date=ef_start,
-                                    effective_end_date=ef_end,
-                                    is_active=True,
-                                )
-                            )
-                        for tid in ht_ids:
-                            handovers.append(
-                                LeaveHandover(
-                                    leave_request=lr,
-                                    original_assignee=request.user,
-                                    new_assignee=delegate_to,
-                                    task_type=HandoverTaskType.HELP_TICKET,
-                                    original_task_id=tid,
-                                    message=ho_msg,
-                                    effective_start_date=ef_start,
-                                    effective_end_date=ef_end,
-                                    is_active=True,
-                                )
-                            )
-                        if handovers:
-                            handovers_created = LeaveHandover.objects.bulk_create(handovers, ignore_conflicts=True)
+                                if handovers_created:
+                                    use_async_ho = bool(getattr(settings, "ENABLE_CELERY_EMAIL", False)) and bool(send_handover_emails_async)
+                                    if use_async_ho:
+                                        handover_ids = [h.id for h in handovers_created if h.id]
+                                        if handover_ids:
+                                            send_handover_emails_async.delay(lr.id, handover_ids)
+                                    elif send_handover_email:
+                                        _send_handover_emails_sync(lr, handovers_created)
+                            except Exception as e:
+                                logger.error(f"Failed to send emails for leave {lr.id}: {e}")
 
-                # ---------------- Email dispatch (sync or Celery) ----------------
-                def _send_emails():
-                    try:
-                        use_async = bool(getattr(settings, "ENABLE_CELERY_EMAIL", False)) and bool(send_leave_emails_async)
+                        transaction.on_commit(_send_emails)
+                        # ----------------------------------------------------------------
 
-                        if use_async:
-                            # Celery path
-                            send_leave_emails_async.delay(lr.id)
-                        elif send_leave_request_email:
-                            # Synchronous fallback
-                            _send_leave_emails_sync(lr)
+                    # If we reached here, the transaction succeeded -> messages + redirect
+                    if handovers_created:
+                        messages.success(request, f"Leave application submitted with {len(handovers_created)} task handovers. Email notifications are being sent.")
+                    else:
+                        messages.success(request, "Leave application submitted successfully. Email notifications are being sent.")
+                    return redirect("leave:dashboard")
 
-                        if handovers_created:
-                            use_async_ho = bool(getattr(settings, "ENABLE_CELERY_EMAIL", False)) and bool(send_handover_emails_async)
-                            if use_async_ho:
-                                handover_ids = [h.id for h in handovers_created if h.id]
-                                if handover_ids:
-                                    send_handover_emails_async.delay(lr.id, handover_ids)
-                            elif send_handover_email:
-                                _send_handover_emails_sync(lr, handovers_created)
-                    except Exception as e:
-                        logger.error(f"Failed to send emails for leave {lr.id}: {e}")
-
-                transaction.on_commit(_send_emails)
-                # ----------------------------------------------------------------
-
-                if handovers_created:
-                    messages.success(request, f"Leave application submitted with {len(handovers_created)} task handovers. Email notifications are being sent.")
-                else:
-                    messages.success(request, "Leave application submitted successfully. Email notifications are being sent.")
-
-                return redirect("leave:dashboard")
-
-            except Exception as e:
-                logger.exception("apply_leave failed to create leave and/or handover")
-                messages.error(request, f"Could not submit the leave: {str(e)}. Please try again.")
+                except OperationalError as e:
+                    # Only retry for 'database is locked'
+                    if "database is locked" in str(e).lower() and attempt < max_attempts:
+                        sleep_s = base_sleep * (2 ** (attempt - 1))
+                        logger.warning(f"SQLite busy on apply_leave (attempt {attempt}/{max_attempts}); retrying in {sleep_s:.2f}s.")
+                        time.sleep(sleep_s)
+                        continue
+                    logger.exception("apply_leave failed due to OperationalError on attempt %s", attempt)
+                    messages.error(request, "Database is busy. Please try again.")
+                    break
+                except Exception as e:
+                    logger.exception("apply_leave failed to create leave and/or handover")
+                    messages.error(request, f"Could not submit the leave: {str(e)}. Please try again.")
+                    break
         else:
             messages.error(request, "Please fix the errors below.")
     else:
@@ -422,17 +439,37 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
 
 def _send_leave_emails_sync(leave: LeaveRequest):
     try:
+        # Per-request CCs chosen by employee
         cc_emails = [user.email for user in leave.cc_users.all() if user.email]
-        manager_email = None
-        admin_cc_list = []
 
+        # Manager
+        manager_email = None
         if leave.reporting_person and leave.reporting_person.email:
             manager_email = leave.reporting_person.email
 
-        if leave.cc_person and leave.cc_person.email:
+        # Admin-managed defaults (M2M) + legacy
+        admin_cc_list: List[str] = []
+        try:
+            # Use mapping-based resolver to fetch default CC users (includes legacy if not duplicated)
+            _rp, default_cc_users = LeaveRequest.resolve_routing_multi_for(leave.employee)
+            admin_cc_list.extend([u.email for u in default_cc_users if getattr(u, "email", None)])
+        except Exception:
+            pass
+
+        # Additionally include legacy snapshot on the Leave (if present)
+        if leave.cc_person and getattr(leave.cc_person, "email", None):
             admin_cc_list.append(leave.cc_person.email)
 
-        all_cc = list(set(admin_cc_list + cc_emails))
+        # Merge + normalize
+        all_cc = []
+        seen = set()
+        for e in (admin_cc_list + cc_emails):
+            if not e:
+                continue
+            low = e.strip().lower()
+            if low and low not in seen:
+                seen.add(low)
+                all_cc.append(low)
 
         send_leave_request_email(leave, manager_email=manager_email, cc_list=all_cc)
 
@@ -1122,7 +1159,14 @@ def cc_config_remove(request: HttpRequest, pk: int) -> HttpResponse:
 @login_required
 def cc_assign(request: HttpRequest) -> HttpResponse:
     """
-    Admin: assign per-employee CC (ApproverMapping.cc_person) using active CC options.
+    Admin: assign per-employee default CC recipients.
+
+    Supports BOTH:
+      • Legacy: ApproverMapping.cc_person (FK)
+      • New:    ApproverMapping.default_cc_users (M2M -> User)
+
+    Template uses a multi-select. For legacy FK, only the first selected user
+    will be saved (others are ignored). "Clear all CC" works in both cases.
     """
     if not getattr(request.user, "is_superuser", False):
         return HttpResponseForbidden("Admins only.")
@@ -1156,60 +1200,109 @@ def cc_assign(request: HttpRequest) -> HttpResponse:
         for m in ApproverMapping.objects.select_related("employee", "cc_person").filter(employee__in=employees)
     }
 
+    # Detect presence of M2M field default_cc_users
+    has_m2m = hasattr(ApproverMapping, "default_cc_users") and (
+        isinstance(getattr(ApproverMapping, "default_cc_users"), ManyToManyField)
+        or hasattr(getattr(ApproverMapping, "default_cc_users"), "through")
+    )
+
     if request.method == "POST":
         updated = 0
         with transaction.atomic():
             for emp in employees:
-                key = f"row-{emp.id}-cc_user_id"
-                raw = (request.POST.get(key) or "").strip()
                 mapping = mappings.get(emp.id)
-                before_id = getattr(mapping, "cc_person_id", None)
 
-                if raw == "":  # no change submitted for this row -> skip
+                ids_param = f"row-{emp.id}-cc_user_ids"
+                clear_param = f"row-{emp.id}-clear"
+
+                # If neither key posted => No change for this row
+                if ids_param not in request.POST and clear_param not in request.POST:
                     continue
 
-                if raw == "0":  # clear CC
-                    if mapping and mapping.cc_person_id is not None:
+                # Ensure mapping exists
+                if mapping is None:
+                    mapping = ApproverMapping.objects.create(employee=emp)
+                    mappings[emp.id] = mapping
+
+                # Clear all CC
+                if request.POST.get(clear_param) == "1":
+                    if has_m2m:
+                        mapping.default_cc_users.set([])
+                    else:
                         mapping.cc_person = None
                         mapping.save(update_fields=["cc_person", "updated_at"])
-                        updated += 1
+                    updated += 1
                     continue
 
-                try:
-                    cc_user_id = int(raw)
-                except ValueError:
-                    continue
+                # Set to selected list (may be empty => clears M2M / FK)
+                selected_ids: List[int] = []
+                for raw in request.POST.getlist(ids_param):
+                    try:
+                        selected_ids.append(int(raw))
+                    except (TypeError, ValueError):
+                        pass
 
-                if before_id == cc_user_id:
-                    continue
-
-                if not mapping:
-                    mapping = ApproverMapping.objects.create(employee=emp, cc_person_id=cc_user_id)
-                    mappings[emp.id] = mapping
+                if has_m2m:
+                    mapping.default_cc_users.set(selected_ids)
                     updated += 1
                 else:
-                    mapping.cc_person_id = cc_user_id
-                    mapping.save(update_fields=["cc_person", "updated_at"])
-                    updated += 1
+                    if selected_ids:
+                        first_id = selected_ids[0]
+                        if mapping.cc_person_id != first_id:
+                            mapping.cc_person_id = first_id
+                            mapping.save(update_fields=["cc_person", "updated_at"])
+                            updated += 1
+                    else:
+                        if mapping.cc_person_id is not None:
+                            mapping.cc_person = None
+                            mapping.save(update_fields=["cc_person", "updated_at"])
+                            updated += 1
 
         messages.success(request, f"Updated {updated} employee(s).")
         return redirect("leave:cc_assign")
 
-    # Build rows for template
+    # Build rows for template (preselect + badges)
+    id_to_label = dict(choices)
     rows = []
     for emp in employees:
         mapping = mappings.get(emp.id)
+        current_ids: List[int] = []
+        current_labels: List[str] = []
+
+        if mapping:
+            if has_m2m:
+                try:
+                    current_ids = list(mapping.default_cc_users.values_list("id", flat=True))
+                except Exception:
+                    current_ids = []
+            else:
+                if mapping.cc_person_id:
+                    current_ids = [mapping.cc_person_id]
+
+        for cid in current_ids:
+            lbl = id_to_label.get(cid)
+            if not lbl:
+                try:
+                    u = User.objects.filter(id=cid).only("first_name", "last_name", "username").first()
+                    if u:
+                        lbl = u.get_full_name() or u.username
+                except Exception:
+                    lbl = None
+            if lbl:
+                current_labels.append(lbl)
+
         rows.append(
             {
                 "id": emp.id,
                 "name": (emp.get_full_name() or emp.username),
                 "email": emp.email,
-                "current_cc": mapping.cc_person if mapping else None,
+                "current_cc_ids": current_ids,
+                "current_cc_labels": current_labels,
             }
         )
 
     ctx = {
         "rows": rows,
-        "cc_choices": choices,  # list of (user_id, label)
+        "cc_choices": choices,
     }
     return render(request, "leave/cc_assign.html", ctx)

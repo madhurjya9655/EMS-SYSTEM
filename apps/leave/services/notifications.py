@@ -14,13 +14,14 @@ from django.template.loader import get_template
 from django.urls import reverse
 from django.utils import timezone
 
+from django.contrib.auth import get_user_model
 from apps.leave.models import (
     LeaveRequest,
     LeaveDecisionAudit,
     DecisionAction,
     LeaveHandover,
+    ApproverMapping,
 )
-from django.contrib.auth import get_user_model
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -28,6 +29,7 @@ User = get_user_model()
 IST = ZoneInfo("Asia/Kolkata")
 TOKEN_SALT = getattr(settings, "LEAVE_DECISION_TOKEN_SALT", "leave-action-v1")
 TOKEN_MAX_AGE_SECONDS = getattr(settings, "LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)
+
 
 # ---------------------------------------------------------------------------
 # Utilities
@@ -40,8 +42,10 @@ def _site_base() -> str:
     ).strip()
     return base.rstrip("/") + "/"
 
+
 def _abs_url(path: str) -> str:
     return urljoin(_site_base(), path.lstrip("/"))
+
 
 def _format_ist(dt) -> str:
     try:
@@ -49,16 +53,19 @@ def _format_ist(dt) -> str:
     except Exception:
         return str(dt)
 
+
 def _email_enabled() -> bool:
     try:
         return bool(getattr(settings, "FEATURES", {}).get("EMAIL_NOTIFICATIONS", True))
     except Exception:
         return True
 
+
 def _render_pair(html_tpl: str, txt_tpl: str, context: Dict) -> Tuple[str, str]:
     html = get_template(html_tpl).render(context)
     txt = get_template(txt_tpl).render(context)
     return html, txt
+
 
 def _send(subject: str, to_addr: str, cc: List[str], reply_to: List[str], html: str, txt: str) -> None:
     if not to_addr:
@@ -75,6 +82,7 @@ def _send(subject: str, to_addr: str, cc: List[str], reply_to: List[str], html: 
     msg.attach_alternative(html, "text/html")
     msg.send(fail_silently=getattr(settings, "EMAIL_FAIL_SILENTLY", True))
 
+
 def _already_sent_recent(leave: LeaveRequest, kind_hint: str | None = None, within_seconds: int = 90) -> bool:
     """Light duplicate suppression using EMAIL_SENT audits."""
     try:
@@ -88,10 +96,26 @@ def _already_sent_recent(leave: LeaveRequest, kind_hint: str | None = None, with
     except Exception:
         return False
 
+
+def _dedupe_lower(emails: Iterable[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for e in emails or []:
+        if not e:
+            continue
+        low = (e or "").strip().lower()
+        if not low or low in seen:
+            continue
+        seen.add(low)
+        out.append(low)
+    return out
+
+
 @dataclass
 class _TokenLinks:
     approve: Optional[str]
     reject: Optional[str]
+
 
 def _build_token_links(leave: LeaveRequest, recipient_email: str) -> _TokenLinks:
     """Create one-click links bound to the recipient's address."""
@@ -109,8 +133,9 @@ def _build_token_links(leave: LeaveRequest, recipient_email: str) -> _TokenLinks
     reject_token = signing.dumps({**payload_base, "action": "reject"}, salt=TOKEN_SALT)
 
     approve_url = _abs_url(reverse("leave:leave_action_via_token", args=[approve_token])) + "?a=APPROVED"
-    reject_url  = _abs_url(reverse("leave:leave_action_via_token", args=[reject_token])) + "?a=REJECTED"
+    reject_url = _abs_url(reverse("leave:leave_action_via_token", args=[reject_token])) + "?a=REJECTED"
     return _TokenLinks(approve=approve_url, reject=reject_url)
+
 
 def _duration_days_ist(leave: LeaveRequest) -> float:
     """Inclusive day count in IST, respecting half-day."""
@@ -125,11 +150,13 @@ def _duration_days_ist(leave: LeaveRequest) -> float:
         return 0.5
     return float(days)
 
+
 def _employee_display_name(user) -> str:
     try:
         return (getattr(user, "get_full_name", lambda: "")() or user.username or "").strip()
     except Exception:
         return (getattr(user, "username", "") or "").strip()
+
 
 def _manager_display_name(leave: LeaveRequest, manager_email: str) -> Optional[str]:
     em = (manager_email or "").strip().lower()
@@ -148,6 +175,37 @@ def _manager_display_name(leave: LeaveRequest, manager_email: str) -> Optional[s
         pass
     return None
 
+
+def _default_cc_emails_for_employee(emp: User) -> List[str]:
+    """
+    Collect default CC from ApproverMapping:
+      - ApproverMapping.default_cc_users (M2M)
+      - legacy ApproverMapping.cc_person.email if present
+    Lowercased, deduped, falsy filtered.
+    """
+    out: List[str] = []
+    try:
+        mapping = (
+            ApproverMapping.objects.select_related("cc_person")
+            .prefetch_related("default_cc_users")
+            .filter(employee=emp)
+            .first()
+        )
+        if mapping:
+            out.extend(
+                [
+                    u.email.strip().lower()
+                    for u in mapping.default_cc_users.all()
+                    if getattr(u, "email", None)
+                ]
+            )
+            if getattr(mapping, "cc_person", None) and getattr(mapping.cc_person, "email", None):
+                out.append(mapping.cc_person.email.strip().lower())
+    except Exception:
+        pass
+    return _dedupe_lower(out)
+
+
 def _resolve_recipients(
     leave: LeaveRequest,
     manager_email: Optional[str],
@@ -155,26 +213,41 @@ def _resolve_recipients(
 ) -> Tuple[str, List[str]]:
     """
     Return (to, cc) using explicit args > model snapshot > routing fallback.
-    Also merges user-selected cc_users from the leave.
+    CCs are a merge of:
+      • per-request leave.cc_users
+      • ApproverMapping.default_cc_users for the employee
+      • legacy ApproverMapping.cc_person.email
+      • any explicit cc_list provided by caller
+    All lowercased & deduped.
     """
-    # Selected CCs by the employee
-    selected_ccs = []
+    # Selected CCs by the employee (per-request)
+    selected_ccs: List[str] = []
     try:
-        selected_ccs = [e.email.strip().lower() for e in leave.cc_users.all() if getattr(e, "email", None)]
+        selected_ccs = [
+            (u.email or "").strip().lower() for u in leave.cc_users.all() if getattr(u, "email", None)
+        ]
     except Exception:
         selected_ccs = []
 
+    # Admin defaults from mapping (M2M + legacy single)
+    defaults = _default_cc_emails_for_employee(leave.employee)
+
+    # Explicit list from caller (if any)
+    explicit = [(e or "").strip().lower() for e in (cc_list or []) if e]
+
+    merged_cc = _dedupe_lower([*explicit, *selected_ccs, *defaults])
+
     if manager_email:
-        merged = list({*(cc_list or []), *selected_ccs})
-        return manager_email.strip().lower(), merged
+        return manager_email.strip().lower(), merged_cc
 
     # Prefer model snapshot
     if getattr(leave, "reporting_person", None) and getattr(leave.reporting_person, "email", None):
         to_addr = leave.reporting_person.email.strip().lower()
-        cc = []
+        # include legacy snapshot on the leave row as well (rare but safe)
+        legacy_on_leave = []
         if getattr(leave, "cc_person", None) and getattr(leave.cc_person, "email", None):
-            cc.append(leave.cc_person.email.strip().lower())
-        cc = list({*cc, *selected_ccs})
+            legacy_on_leave.append(leave.cc_person.email.strip().lower())
+        cc = _dedupe_lower([*merged_cc, *legacy_on_leave])
         return to_addr, cc
 
     # Fallback: dynamic routing
@@ -183,12 +256,13 @@ def _resolve_recipients(
         emp_email = (leave.employee_email or getattr(leave.employee, "email", "") or "").strip().lower()
         mapping = recipients_for_leave(emp_email) or {}
         to_addr = (mapping.get("to") or "").strip().lower()
-        cc = [e.strip().lower() for e in (mapping.get("cc") or []) if e]
-        cc = list({*cc, *selected_ccs})
+        dynamic_cc = [e.strip().lower() for e in (mapping.get("cc") or []) if e]
+        cc = _dedupe_lower([*merged_cc, *dynamic_cc])
         return to_addr, cc
     except Exception:
         logger.warning("Could not resolve recipients for leave id=%s", getattr(leave, "id", None))
-        return "", selected_ccs
+        return "", merged_cc
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -219,7 +293,7 @@ def send_leave_request_email(
     # Approval page (login) with hint
     approval_page_url = _abs_url(reverse("leave:approval_page", args=[leave.id]))
     approve_url = f"{approval_page_url}?a=APPROVED"
-    reject_url  = f"{approval_page_url}?a=REJECTED"
+    reject_url = f"{approval_page_url}?a=REJECTED"
 
     employee_name = leave.employee_name or _employee_display_name(leave.employee)
     manager_name = _manager_display_name(leave, to_addr)
@@ -278,6 +352,7 @@ def send_leave_request_email(
     reply_to = [e for e in [ctx["employee_email"]] if e]
 
     _send(subject, to_addr, cc=list(cc or []), reply_to=reply_to, html=html, txt=txt)
+
 
 def send_leave_decision_email(leave: LeaveRequest) -> None:
     """Send the approve/reject decision email to the employee."""
@@ -339,6 +414,7 @@ def send_leave_decision_email(leave: LeaveRequest) -> None:
 
     _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
 
+
 def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
     """Send handover notification to the delegate about assigned tasks."""
     if not _email_enabled():
@@ -393,6 +469,7 @@ def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
     reply_to = [e for e in [ctx["employee_email"]] if e]
 
     _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
+
 
 def send_delegation_reminder_email(reminder) -> None:
     """Send reminder email for delegated task."""
