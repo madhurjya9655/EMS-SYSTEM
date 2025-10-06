@@ -1,13 +1,12 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\common\templatetags\group_tags.py
+# apps/users/templatetags/users_group_tags.py
+from __future__ import annotations
 from django import template
 
 register = template.Library()
 
-
-@register.filter
-def has_group(user, group_name):
-    """Check if user belongs to a group"""
-    if not user or not getattr(user, "is_authenticated", False):
+@register.filter(name="has_group")
+def has_group(user, group_name: str) -> bool:
+    if not getattr(user, "is_authenticated", False):
         return False
     if not group_name:
         return False
@@ -16,14 +15,9 @@ def has_group(user, group_name):
     except Exception:
         return False
 
-
 @register.filter(name="has_any_group")
 def has_any_group(user, csv_group_names: str) -> bool:
-    """
-    True if the user belongs to ANY of the comma-separated group names.
-    Example: {{ user|has_any_group:"Manager,Finance,HR" }}
-    """
-    if not user or not getattr(user, "is_authenticated", False):
+    if not getattr(user, "is_authenticated", False):
         return False
     if not csv_group_names:
         return False

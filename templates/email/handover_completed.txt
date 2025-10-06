@@ -1,0 +1,8 @@
+Hi,
+
+{{ task_title }} ({{ task_type }}) that was delegated to {{ delegate_name }} has been completed.
+{% if task_url %}View task: {{ task_url }}{% endif %}
+
+Delegated during {{ employee_name }}’s leave (ID: #{{ leave_id }}).
+
+— EMS

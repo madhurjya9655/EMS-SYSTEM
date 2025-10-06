@@ -1,4 +1,3 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\management\commands\generate_recurring_tasks.py
 # apps/tasks/management/commands/generate_recurring_tasks.py
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ from apps.tasks.models import Checklist
 from apps.tasks.recurrence import (
     normalize_mode,
     RECURRING_MODES,
-    get_next_planned_date,     # ALWAYS 19:00 IST on next working day
+    get_next_planned_date,     # ALWAYS 19:00 IST on next working day (Sun/holiday → shift)
 )
 from apps.tasks.utils import send_checklist_assignment_to_user
 
@@ -78,7 +77,7 @@ def _send_recur_email(obj: Checklist) -> None:
         complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
         subject = f"✅ Task Reminder: {obj.task_name} scheduled for {pretty_date}, {pretty_time}"
 
-        # This uses your utils.py which now includes the “message/instructions” block.
+        # This uses utils.py which includes the message/instructions block
         send_checklist_assignment_to_user(
             task=obj,
             complete_url=complete_url,
@@ -150,7 +149,11 @@ class Command(BaseCommand):
             m = normalize_mode(s["mode"])
             if m not in RECURRING_MODES:
                 continue
-            freq = max(int(s["frequency"] or 1), 1)
+            # Clamp to >=1
+            try:
+                freq = max(int(s["frequency"] or 1), 1)
+            except Exception:
+                freq = 1
 
             # Latest occurrence (any status), use as the stepping base
             last = (
@@ -166,7 +169,7 @@ class Command(BaseCommand):
             safety = 0
             cur_dt = last.planned_date
             while safety < 730:  # ~2 years safety
-                # FINAL RULE: ALWAYS 19:00 IST on working day
+                # FINAL RULE: ALWAYS 19:00 IST on next working day
                 next_dt = get_next_planned_date(cur_dt, m, freq)
                 if not next_dt:
                     break

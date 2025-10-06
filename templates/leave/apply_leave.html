@@ -1,14 +1,13 @@
 {% extends "base.html" %}
-{% load crispy_forms_tags %}
-{% load static %}
+{% load tz humanize static crispy_forms_tags %}
 
 {% block title %}Apply Leave{% endblock %}
 
 {% block content %}
-<div class="container py-4">
+<div class="container-fluid px-0">
 
   {% if messages %}
-    <div class="mb-3">
+    <div class="container mb-3">
       {% for message in messages %}
         <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
           {{ message }}
@@ -17,124 +16,198 @@
     </div>
   {% endif %}
 
-  <div class="d-flex align-items-center justify-content-between mb-4">
-    <div class="d-flex align-items-center gap-3">
-      {% if employee_header.photo_url %}
-        <img src="{{ employee_header.photo_url }}" alt="Photo" width="64" height="64"
-             style="border-radius:50%;object-fit:cover;border:1px solid #e5e7eb;">
-      {% else %}
-        <div class="d-flex align-items-center justify-content-center bg-secondary-subtle"
-             style="width:64px;height:64px;border-radius:50%;border:1px solid #e5e7eb;">
-          <span class="fw-bold text-secondary">
-            {{ employee_header.name|default:user.username|slice:":1"|upper }}
-          </span>
+  <div class="card shadow-sm mb-4">
+    <div class="card-body">
+      <div class="d-flex align-items-center">
+        <div class="me-3">
+          {% if employee_header.photo_url %}
+            <img src="{{ employee_header.photo_url }}" alt="Photo" class="rounded-circle" style="width:64px;height:64px;object-fit:cover;">
+          {% else %}
+            <div class="rounded-circle bg-light d-flex align-items-center justify-content-center" style="width:64px;height:64px;">
+              <i class="fas fa-user text-secondary"></i>
+            </div>
+          {% endif %}
         </div>
-      {% endif %}
-      <div>
-        <h4 class="mb-1">Apply Leave</h4>
-        <div class="small text-muted">
-          {{ employee_header.name|default:user.get_username }}
-          {% if employee_header.email %} • {{ employee_header.email }}{% endif %}
-          {% if employee_header.designation %} • {{ employee_header.designation }}{% endif %}
+        <div class="flex-grow-1">
+          <div class="fw-semibold fs-5 mb-1">{{ employee_header.name|default:user.get_username }}</div>
+          <div class="text-muted small">
+            <span class="me-3"><i class="fa-solid fa-id-badge me-1"></i>{{ employee_header.designation|default:"—" }}</span>
+            <span><i class="fa-solid fa-envelope me-1"></i>{{ employee_header.email|default:"—" }}</span>
+          </div>
+          <div class="text-muted small mt-1">IST now: {{ now_ist|date:"Y-m-d H:i" }}</div>
         </div>
-        <div class="small text-muted">IST now: {{ now_ist|date:"Y-m-d H:i" }}</div>
+        <div>
+          <a class="btn btn-outline-secondary" href="{% url 'leave:dashboard' %}">Back to Dashboard</a>
+        </div>
       </div>
-    </div>
-    <div>
-      <a class="btn btn-outline-secondary" href="{% url 'leave:dashboard' %}">Back to Dashboard</a>
     </div>
   </div>
 
-  <div class="row g-3">
-    <!-- Form -->
-    <div class="col-12 col-lg-8">
-      <div class="card mb-3">
-        <div class="card-body">
-          <h6 class="card-title mb-3">Leave Details</h6>
+  <div class="card shadow-sm">
+    <div class="card-header bg-white">
+      <h5 class="mb-0"><i class="fa-solid fa-calendar-day me-2"></i>Apply for Leave</h5>
+    </div>
+    <div class="card-body">
+      <form method="post" enctype="multipart/form-data" novalidate>
+        {% csrf_token %}
 
-          <form method="post" enctype="multipart/form-data" novalidate>
-            {% csrf_token %}
-            {{ form.leave_type|as_crispy_field }}
-            <div class="row">
-              <div class="col-md-6">{{ form.start_at|as_crispy_field }}</div>
-              <div class="col-md-6">{{ form.end_at|as_crispy_field }}</div>
-            </div>
-            <div class="form-check mb-3">
-              {{ form.is_half_day }}
-              <label class="form-check-label" for="{{ form.is_half_day.id_for_label }}">Half day</label>
-            </div>
-            {{ form.reason|as_crispy_field }}
-            {{ form.attachment|as_crispy_field }}
+        {% if form.non_field_errors %}
+          <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+        {% endif %}
 
-            <!-- cc_users section removed -->
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label">Duration</label>
+            {{ form.duration_type }}
+            {% if form.duration_type.errors %}<div class="invalid-feedback d-block">{{ form.duration_type.errors|striptags }}</div>{% endif %}
+          </div>
 
-            <hr class="my-4">
+          <div class="col-md-4">
+            <label class="form-label" for="{{ form.leave_type.id_for_label }}">Leave Type</label>
+            {{ form.leave_type }}
+            {% if form.leave_type.errors %}<div class="invalid-feedback d-block">{{ form.leave_type.errors|striptags }}</div>{% endif %}
+          </div>
 
-            <h6 class="mb-2">Task Handover (optional)</h6>
-            <p class="text-muted small mb-3">
-              If you want someone to cover your tasks during this leave, pick a colleague and select the tasks below.
-              The lists show items due/in-progress within the chosen period. Submit the form after setting your dates to refresh the lists.
-            </p>
+          <div class="col-md-4"></div>
+        </div>
 
-            {{ form.delegate_to|as_crispy_field }}
-            <div class="row">
-              <div class="col-md-4">
-                {{ form.handover_checklist|as_crispy_field }}
-              </div>
-              <div class="col-md-4">
-                {{ form.handover_delegation|as_crispy_field }}
-              </div>
-              <div class="col-md-4">
-                {{ form.handover_help_ticket|as_crispy_field }}
-              </div>
-            </div>
+        <div class="row g-3 mt-1">
+          <div class="col-md-6">
+            <label class="form-label" for="{{ form.start_at.id_for_label }}">Start Date (IST)</label>
+            {{ form.start_at }}
+            <div class="form-text">Date only. For Full Day we’ll use 09:30 → 18:00.</div>
+            {% if form.start_at.errors %}<div class="invalid-feedback d-block">{{ form.start_at.errors|striptags }}</div>{% endif %}
+          </div>
 
-            {{ form.handover_message|as_crispy_field }}
-
-            <div class="d-flex justify-content-between mt-3">
-              <a href="{% url 'leave:dashboard' %}" class="btn btn-light">Cancel</a>
-              <button type="submit" class="btn btn-primary">Submit Application</button>
-            </div>
-          </form>
-
-          <div class="mt-3 small text-muted">
-            Note: Overlapping with existing pending/approved leaves is blocked.
+          <div class="col-md-6">
+            <label class="form-label" for="{{ form.end_at.id_for_label }}">End Date (IST)</label>
+            {{ form.end_at }}
+            <div class="form-text">End must be on/after start date.</div>
+            {% if form.end_at.errors %}<div class="invalid-feedback d-block">{{ form.end_at.errors|striptags }}</div>{% endif %}
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- Rules / Tips -->
-    <div class="col-12 col-lg-4">
-      <div class="card">
-        <div class="card-body">
-          <h6 class="card-title mb-3">Rules (IST)</h6>
-          <ul class="mb-3" style="padding-left: 1.2rem;">
-            <li>Same-day leave must be applied <strong>before 09:30 AM</strong>.</li>
-            <li>After <strong>10:00 AM</strong>, applying for today is blocked.</li>
-            <li>Half-day must be on a single date and be ≤ <strong>6 hours</strong>.</li>
-            <li>Manager approval/rejection for today's leaves is locked after <strong>10:00 AM</strong>.</li>
-            <li>Recurring tasks still generate, but if you are on leave they'll be skipped for you.</li>
-          </ul>
-          <p class="small text-muted mb-0">
-            Attachments are optional. Supported: PDF, PNG, JPG, JPEG, WEBP, HEIC, DOC, DOCX (max 10&nbsp;MB).
-          </p>
+        {# Half Day time slot (shown only when duration=HALF) #}
+        <div id="half-day-slot" class="mt-2" style="display:none;">
+          <div class="row g-3">
+            <div class="col-md-6">{{ form.from_time|as_crispy_field }}</div>
+            <div class="col-md-6">{{ form.to_time|as_crispy_field }}</div>
+          </div>
+          <div class="form-text">Half-day should be ≤ 6 hours and on a single date.</div>
         </div>
-      </div>
 
-      <div class="card mt-3">
-        <div class="card-body">
-          <h6 class="card-title mb-3">Task Handover</h6>
-          <ul class="mb-0 small text-muted" style="padding-left: 1.2rem;">
-            <li>Select a colleague to temporarily cover your tasks during leave.</li>
-            <li>Only tasks due or in progress during your leave period are shown.</li>
-            <li>Original task ownership is preserved — tasks return to you after leave.</li>
-            <li>The selected colleague will receive an email with task details and your message.</li>
-          </ul>
+        <div class="row g-3 mt-1">
+          <div class="col-md-12">
+            <label class="form-label" for="{{ form.reason.id_for_label }}">Reason</label>
+            {{ form.reason }}
+            {% if form.reason.errors %}<div class="invalid-feedback d-block">{{ form.reason.errors|striptags }}</div>{% endif %}
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label" for="{{ form.attachment.id_for_label }}">Attachment (optional)</label>
+            {{ form.attachment }}
+            <div class="form-text">Allowed: PDF, PNG, JPG, JPEG, WEBP, HEIC, DOC, DOCX. Max 10MB.</div>
+            {% if form.attachment.errors %}<div class="invalid-feedback d-block">{{ form.attachment.errors|striptags }}</div>{% endif %}
+          </div>
         </div>
-      </div>
+
+        <hr class="my-4">
+        <h6 class="mb-2">Task Handover (optional)</h6>
+        <p class="text-muted small mb-3">
+          Pick a colleague and select tasks due during your leave. They’ll receive an email with details.
+        </p>
+
+        {% if form.delegate_to %}{{ form.delegate_to|as_crispy_field }}{% endif %}
+
+        <div class="row g-3">
+          {% if form.handover_checklist %}
+          <div class="col-md-4">
+            <label class="form-label">{{ form.handover_checklist.label }}</label>
+            <div class="handover-list form-control">
+              {% for cb in form.handover_checklist %}
+                <div class="form-check">
+                  {{ cb.tag }}
+                  <label class="form-check-label" for="{{ cb.id_for_label }}">{{ cb.choice_label }}</label>
+                </div>
+              {% empty %}
+                <div class="text-muted small">No checklist tasks in range.</div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+
+          {% if form.handover_delegation %}
+          <div class="col-md-4">
+            <label class="form-label">{{ form.handover_delegation.label }}</label>
+            <div class="handover-list form-control">
+              {% for cb in form.handover_delegation %}
+                <div class="form-check">
+                  {{ cb.tag }}
+                  <label class="form-check-label" for="{{ cb.id_for_label }}">{{ cb.choice_label }}</label>
+                </div>
+              {% empty %}
+                <div class="text-muted small">No delegation tasks in range.</div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+
+          {% if form.handover_help_ticket %}
+          <div class="col-md-4">
+            <label class="form-label">{{ form.handover_help_ticket.label }}</label>
+            <div class="handover-list form-control">
+              {% for cb in form.handover_help_ticket %}
+                <div class="form-check">
+                  {{ cb.tag }}
+                  <label class="form-check-label" for="{{ cb.id_for_label }}">{{ cb.choice_label }}</label>
+                </div>
+              {% empty %}
+                <div class="text-muted small">No help tickets in range.</div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+        </div>
+
+        {% if form.handover_message %}
+          <div id="handover-message-wrap" class="mt-3">
+            {{ form.handover_message|as_crispy_field }}
+          </div>
+        {% endif %}
+
+        <div class="d-flex justify-content-end mt-4">
+          <a href="{% url 'leave:my_leaves' %}" class="btn btn-outline-secondary me-2">
+            <i class="fa-solid fa-list me-1"></i> My Leaves
+          </a>
+          <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-paper-plane me-1"></i> Submit Leave
+          </button>
+        </div>
+      </form>
     </div>
   </div>
 
 </div>
+
+<script>
+(function () {
+  const radios = document.getElementsByName("duration_type");
+  const halfSlot = document.getElementById("half-day-slot");
+
+  function update() {
+    let val = "FULL";
+    for (const r of radios) { if (r.checked) { val = r.value; break; } }
+    if (halfSlot) halfSlot.style.display = (val === "HALF") ? "" : "none";
+  }
+
+  for (const r of radios) r.addEventListener("change", update);
+  update();
+})();
+</script>
+
+<style>
+.handover-list { max-height: 180px; overflow: auto; padding: 8px 10px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; }
+.handover-list .form-check { margin-bottom: 6px; }
+#handover-message-wrap { clear: both; }
+</style>
 {% endblock %}

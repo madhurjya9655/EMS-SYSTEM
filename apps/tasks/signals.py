@@ -24,45 +24,61 @@ IST = pytz.timezone("Asia/Kolkata")
 SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
 # ---------------------------------------------------------------------
-# Import recurrence helpers – prefer recurrence_utils, fallback to recurrence.
-# Also provide a local get_next_planned_date if not available.
+# Import recurrence helpers – prefer recurrence_utils (final rules).
+# Fallback to old recurrence (legacy), then to local minimal versions.
 # ---------------------------------------------------------------------
 _normalize_mode = None
-_is_working_day = None
-_next_working_day = None
 _RECURRING_MODES = None
-_get_next_planned_date = None
+_compute_next_same_time = None
+_compute_next_fixed_7pm = None
 
-# 1) Try recurrence_utils (what your views.py uses)
 try:
-    from .recurrence_utils import normalize_mode, is_working_day, next_working_day, RECURRING_MODES  # type: ignore
+    # New module with final rules (no working-day shifts, 7pm helper)
+    from .recurrence_utils import (
+        normalize_mode,
+        RECURRING_MODES,
+        get_next_same_time as _compute_next_same_time,
+        get_next_fixed_7pm as _compute_next_fixed_7pm,
+    )  # type: ignore
     _normalize_mode = normalize_mode
-    _is_working_day = is_working_day
-    _next_working_day = next_working_day
     _RECURRING_MODES = RECURRING_MODES
-    try:
-        from .recurrence_utils import get_next_planned_date as _get_next_planned_date  # type: ignore
-    except Exception:
-        _get_next_planned_date = None
 except Exception:
     pass
 
-# 2) Fallback to old recurrence module (what your original signals used)
-if _normalize_mode is None or _is_working_day is None or _next_working_day is None or _RECURRING_MODES is None:
+if _normalize_mode is None or _RECURRING_MODES is None:
     try:
-        from .recurrence import normalize_mode, is_working_day, next_working_day, RECURRING_MODES  # type: ignore
+        # Legacy module (kept only as a fallback)
+        from .recurrence import normalize_mode, RECURRING_MODES, get_next_planned_date as _legacy_next  # type: ignore
         _normalize_mode = normalize_mode
-        _is_working_day = is_working_day
-        _next_working_day = next_working_day
         _RECURRING_MODES = RECURRING_MODES
-        try:
-            from .recurrence import get_next_planned_date as _get_next_planned_date  # type: ignore
-        except Exception:
-            _get_next_planned_date = None
+
+        def _compute_next_fixed_7pm(prev_dt: datetime, mode: str, frequency: int, *, end_date=None):
+            # legacy get_next_planned_date already pins to 19:00 IST in that module
+            return _legacy_next(prev_dt, mode, frequency)
+
+        # Same-time helper fallback (keeps time)
+        def _compute_next_same_time(prev_dt: datetime, mode: str, frequency: int, *, end_date=None):
+            m = _normalize_mode(mode)
+            if not m:
+                return None
+            step = max(int(frequency or 1), 1)
+            tz = timezone.get_current_timezone()
+            if timezone.is_naive(prev_dt):
+                prev_dt = timezone.make_aware(prev_dt, tz)
+            prev_ist = prev_dt.astimezone(IST)
+            if m == "Daily":
+                nxt = prev_ist + relativedelta(days=step)
+            elif m == "Weekly":
+                nxt = prev_ist + relativedelta(weeks=step)
+            elif m == "Monthly":
+                nxt = prev_ist + relativedelta(months=step)
+            else:
+                nxt = prev_ist + relativedelta(years=step)
+            return nxt.astimezone(tz)
     except Exception:
         pass
 
-# 3) Absolute last resort: provide local implementations
+# Absolute last-resort defaults
 if _RECURRING_MODES is None:
     _RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
 
@@ -75,73 +91,8 @@ def _normalize_mode_local(mode):
 if _normalize_mode is None:
     _normalize_mode = _normalize_mode_local
 
-# If we cannot import these from either module, we still need a basic working-day notion.
-if _is_working_day is None:
-    from apps.settings.models import Holiday
-    def _is_working_day(d):
-        # Sunday = 6
-        if d.weekday() == 6:
-            return False
-        try:
-            return not Holiday.objects.filter(date=d).exists()
-        except Exception:
-            return d.weekday() != 6
-
-if _next_working_day is None:
-    def _next_working_day(d):
-        cur = d
-        # small safety loop
-        for _ in range(0, 90):
-            if _is_working_day(cur):
-                return cur
-            cur = cur + timedelta(days=1)
-        return cur
-
-# Canonical local get_next_planned_date:
-# - move by freq (Daily/Weekly/Monthly/Yearly)
-# - shift to next working day if needed
-# - set time to 19:00 IST
-def _get_next_planned_date_local(prev_dt: datetime, mode: str, frequency: int | None) -> datetime | None:
-    m = _normalize_mode(mode)
-    if not m:
-        return None
-    try:
-        step = int(frequency or 1)
-    except Exception:
-        step = 1
-    step = max(1, min(step, 10))
-
-    # Make prev_dt aware in project TZ
-    tz = timezone.get_current_timezone()
-    if timezone.is_naive(prev_dt):
-        prev_dt = timezone.make_aware(prev_dt, tz)
-
-    # Work in IST for date arithmetic alignment
-    cur_ist = prev_dt.astimezone(IST)
-    if m == "Daily":
-        cur_ist = cur_ist + relativedelta(days=step)
-    elif m == "Weekly":
-        cur_ist = cur_ist + relativedelta(weeks=step)
-    elif m == "Monthly":
-        cur_ist = cur_ist + relativedelta(months=step)
-    elif m == "Yearly":
-        cur_ist = cur_ist + relativedelta(years=step)
-
-    # Shift to next working day (date-level), then pin to 19:00 IST
-    next_date = _next_working_day(cur_ist.date())
-    planned_ist = IST.localize(datetime.combine(next_date, dt_time(19, 0, 0)))
-    return planned_ist.astimezone(tz)
-
-# Choose the final function to use in this module
-if _get_next_planned_date is None:
-    get_next_planned_date = _get_next_planned_date_local
-else:
-    get_next_planned_date = _get_next_planned_date
-
 # Expose names we reference below
 normalize_mode = _normalize_mode
-is_working_day = _is_working_day
-next_working_day = _next_working_day
 RECURRING_MODES = _RECURRING_MODES
 
 # ---------------------------------------------------------------------
@@ -215,11 +166,12 @@ def _schedule_10am_email_for_checklist(obj: Checklist) -> None:
 
     def _send_now():
         complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
+        # Subject: recurring vs one-time checklist (based on mode presence)
+        prefix = "Recurring Checklist Generated" if normalize_mode(getattr(obj, "mode", None)) in RECURRING_MODES else "Checklist Assigned"
         _utils.send_checklist_assignment_to_user(
             task=obj,
             complete_url=complete_url,
-            subject_prefix="Checklist Assigned" if normalize_mode(getattr(obj, "mode", None)) not in RECURRING_MODES
-            else "Recurring Checklist Generated",
+            subject_prefix=prefix,
         )
 
     if not SEND_RECUR_EMAILS_ONLY_AT_10AM:
@@ -275,7 +227,6 @@ def _schedule_10am_email_for_delegation(obj: Delegation) -> None:
         return
 
     def _send_now():
-        # If your URL name differs, adjust here:
         complete_url = f"{SITE_URL}{reverse('tasks:complete_delegation', args=[obj.id])}"
         _utils.send_delegation_assignment_to_user(
             delegation=obj,
@@ -310,14 +261,14 @@ def _schedule_10am_email_for_delegation(obj: Delegation) -> None:
 
 
 # ---------------------------------------------------------------------
-# CHECKLIST: force planned datetime to 19:00 IST (shift Sun/holidays)
+# CHECKLIST: force planned datetime to 19:00 IST (NO working-day shift)
 # ---------------------------------------------------------------------
 @receiver(pre_save, sender=Checklist)
 def force_checklist_planned_time(sender, instance: Checklist, **kwargs):
     """
     Checklist (one-time or recurring):
-      • planned datetime MUST be 19:00 IST
-      • if Sunday/holiday → shift to next working day (still 19:00 IST)
+      • planned datetime MUST be 19:00 IST on the SAME date user chose
+      • NO shift off Sundays/holidays
     """
     try:
         if not instance.planned_date:
@@ -328,8 +279,6 @@ def force_checklist_planned_time(sender, instance: Checklist, **kwargs):
             dt = timezone.make_aware(dt, tz)
         dt_ist = dt.astimezone(IST)
         d = dt_ist.date()
-        if not is_working_day(d):
-            d = next_working_day(d)
         new_ist = IST.localize(datetime.combine(d, dt_time(19, 0, 0)))
         instance.planned_date = new_ist.astimezone(tz)
     except Exception as e:
@@ -337,35 +286,33 @@ def force_checklist_planned_time(sender, instance: Checklist, **kwargs):
 
 
 # ---------------------------------------------------------------------
-# DELEGATION: force planned datetime to 19:00 IST (shift Sun/holidays)
+# DELEGATION: force planned datetime to 19:00 IST (NO working-day shift)
 # ---------------------------------------------------------------------
 @receiver(pre_save, sender=Delegation)
 def force_delegation_planned_time(sender, instance: Delegation, **kwargs):
     """
-    Delegations are one-time tasks but MUST respect:
-      • planned datetime at 19:00 IST (regardless of user input time / date-only input)
-      • if planned day is Sunday/holiday → shift forward to next working day (time remains 19:00 IST)
+    Delegations are one-time and MUST respect:
+      • planned datetime at 19:00 IST on the SAME date (no shift)
     Applied on every save to keep integrity.
     """
     try:
         if not instance.planned_date:
             return
         dt = instance.planned_date
-        # normalize to aware in project tz
+        tz = timezone.get_current_timezone()
         if timezone.is_naive(dt):
-            dt = timezone.make_aware(dt, timezone.get_current_timezone())
+            dt = timezone.make_aware(dt, tz)
         dt_ist = dt.astimezone(IST)
         d = dt_ist.date()
-        if not is_working_day(d):
-            d = next_working_day(d)
         new_ist = IST.localize(datetime.combine(d, dt_time(19, 0, 0)))
-        instance.planned_date = new_ist.astimezone(timezone.get_current_timezone())
+        instance.planned_date = new_ist.astimezone(tz)
     except Exception as e:
         logger.error(_utils._safe_console_text(f"force_delegation_planned_time failed: {e}"))
 
 
 # ---------------------------------------------------------------------
-# CREATE NEXT RECURRING CHECKLIST (at fixed 19:00 IST on a working day)
+# CREATE NEXT RECURRING CHECKLIST
+# (exact stepped date at fixed 19:00 IST; NO working-day shift)
 # ---------------------------------------------------------------------
 @receiver(post_save, sender=Checklist)
 def create_next_recurring_checklist(sender, instance: Checklist, created: bool, **kwargs):
@@ -373,8 +320,8 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
     When a recurring checklist is marked 'Completed', create the next occurrence:
       • Valid only for modes in RECURRING_MODES
       • Trigger on update (not initial create)
-      • Next occurrence is scheduled via get_next_planned_date()
-        → ALWAYS 19:00 IST on a working day (Sun/holidays skipped)
+      • Next occurrence is scheduled at **19:00 IST** on the exact stepped date
+        (Daily/Weekly/Monthly/Yearly by frequency). **No Sunday/holiday shift**.
       • Prevent duplicates within a 1-minute window
       • Do NOT send email here; a generic 'created' handler will schedule the 10:00 email.
     """
@@ -401,8 +348,34 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
     if Checklist.objects.filter(status="Pending", planned_date__gt=now, **series_filter).exists():
         return
 
-    # Compute next planned date (fixed 19:00 IST, skips Sun/holidays)
-    next_dt = get_next_planned_date(instance.planned_date, instance.mode, instance.frequency)
+    # Compute next planned date (fixed 19:00 IST, NO working-day shift)
+    next_dt = None
+    try:
+        if _compute_next_fixed_7pm:
+            next_dt = _compute_next_fixed_7pm(instance.planned_date, instance.mode, instance.frequency)
+        else:
+            # As a minimal fallback: compute stepped date in IST and pin 19:00, no shift
+            tz = timezone.get_current_timezone()
+            prev = instance.planned_date
+            if timezone.is_naive(prev):
+                prev = timezone.make_aware(prev, tz)
+            prev_ist = prev.astimezone(IST)
+            m = normalize_mode(instance.mode)
+            step = max(int(instance.frequency or 1), 1)
+            if m == "Daily":
+                nxt_ist = prev_ist + relativedelta(days=step)
+            elif m == "Weekly":
+                nxt_ist = prev_ist + relativedelta(weeks=step)
+            elif m == "Monthly":
+                nxt_ist = prev_ist + relativedelta(months=step)
+            else:
+                nxt_ist = prev_ist + relativedelta(years=step)
+            d = nxt_ist.date()
+            next_dt = IST.localize(datetime.combine(d, dt_time(19, 0))).astimezone(tz)
+    except Exception as e:
+        logger.error(_utils._safe_console_text(f"Error calculating next recurrence for CL-{instance.id}: {e}"))
+        next_dt = None
+
     if not next_dt:
         logger.warning(_utils._safe_console_text(f"No next date for recurring checklist {instance.id}"))
         return
@@ -410,7 +383,30 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
     # Catch-up loop: ensure next occurrence lands in the future
     safety = 0
     while next_dt and next_dt <= now and safety < 730:  # ~2 years safety
-        next_dt = get_next_planned_date(next_dt, instance.mode, instance.frequency)
+        try:
+            if _compute_next_fixed_7pm:
+                next_dt = _compute_next_fixed_7pm(next_dt, instance.mode, instance.frequency)
+            else:
+                # replicate fallback stepping
+                tz = timezone.get_current_timezone()
+                prev = next_dt
+                if timezone.is_naive(prev):
+                    prev = timezone.make_aware(prev, tz)
+                prev_ist = prev.astimezone(IST)
+                m = normalize_mode(instance.mode)
+                step = max(int(instance.frequency or 1), 1)
+                if m == "Daily":
+                    nxt_ist = prev_ist + relativedelta(days=step)
+                elif m == "Weekly":
+                    nxt_ist = prev_ist + relativedelta(weeks=step)
+                elif m == "Monthly":
+                    nxt_ist = prev_ist + relativedelta(months=step)
+                else:
+                    nxt_ist = prev_ist + relativedelta(years=step)
+                d = nxt_ist.date()
+                next_dt = IST.localize(datetime.combine(d, dt_time(19, 0))).astimezone(tz)
+        except Exception:
+            break
         safety += 1
     if not next_dt:
         logger.warning(_utils._safe_console_text(f"Could not find a future date for series '{instance.task_name}'"))
@@ -434,7 +430,7 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                 task_name=instance.task_name,
                 message=instance.message,
                 assign_to=instance.assign_to,
-                planned_date=next_dt,  # FIXED 19:00 IST on a working day
+                planned_date=next_dt,  # FIXED 19:00 IST on stepped date (no shift)
                 priority=instance.priority,
                 attachment_mandatory=instance.attachment_mandatory,
                 mode=instance.mode,

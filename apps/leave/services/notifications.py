@@ -395,6 +395,12 @@ def send_leave_request_email(
     ok = _send(subject, to_addr, cc=list(cc or []), reply_to=reply_to, html=html, txt=txt)
     if not ok:
         logger.error("Leave request email NOT delivered for leave #%s (see earlier logs for details).", leave.id)
+    else:
+        try:
+            if LeaveDecisionAudit and DecisionAction:
+                LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT, extra={"kind": "request"})
+        except Exception:
+            logger.exception("Failed to log EMAIL_SENT (request) for leave #%s", leave.id)
 
 
 def send_leave_decision_email(leave: LeaveRequest) -> None:
@@ -445,12 +451,14 @@ def send_leave_decision_email(leave: LeaveRequest) -> None:
 
     reply_to: List[str] = []
     try:
+        # Prefer approver's email
         if getattr(leave.approver, "email", ""):
             reply_to.append(leave.approver.email)
         else:
-            # fallback so employee can reply to their manager/route
+            # Fallback: route replies to current RP mapping for the **employee email**
             from apps.users.routing import recipients_for_leave
-            routing = recipients_for_leave(ctx["employee_name"])
+            emp_email = (leave.employee_email or getattr(leave.employee, "email", "") or "").strip()
+            routing = recipients_for_leave(emp_email)
             if routing.get("to"):
                 reply_to.append(routing["to"])
     except Exception:
@@ -459,6 +467,12 @@ def send_leave_decision_email(leave: LeaveRequest) -> None:
     ok = _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
     if not ok:
         logger.error("Leave decision email NOT delivered for leave #%s (see earlier logs for details).", leave.id)
+    else:
+        try:
+            if LeaveDecisionAudit and DecisionAction:
+                LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT, extra={"kind": "decision"})
+        except Exception:
+            logger.exception("Failed to log EMAIL_SENT (decision) for leave #%s", leave.id)
 
 
 def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
@@ -518,6 +532,12 @@ def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
     ok = _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
     if not ok:
         logger.error("Handover email NOT delivered for leave #%s (see earlier logs for details).", leave.id)
+    else:
+        try:
+            if LeaveDecisionAudit and DecisionAction:
+                LeaveDecisionAudit.log(leave, DecisionAction.HANDOVER_EMAIL_SENT, extra={"assignee_id": getattr(assignee, "id", None)})
+        except Exception:
+            logger.exception("Failed to log HANDOVER_EMAIL_SENT for leave #%s", leave.id)
 
 
 def send_delegation_reminder_email(reminder) -> None:
@@ -567,3 +587,128 @@ def send_delegation_reminder_email(reminder) -> None:
     ok = _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
     if not ok:
         logger.error("Delegation reminder email NOT delivered (handover id=%s).", handover.id)
+    else:
+        try:
+            if LeaveDecisionAudit and DecisionAction:
+                LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT, extra={"kind": "handover_reminder", "handover_id": handover.id})
+        except Exception:
+            logger.exception("Failed to log EMAIL_SENT (handover_reminder) for leave #%s", leave.id)
+
+
+# ---------------------------------------------------------------------------
+# Task completion notifications
+# ---------------------------------------------------------------------------
+
+def _task_type_and_url(task) -> Tuple[str, Optional[str]]:
+    """
+    Infer (task_type_name, absolute_url_to_task_detail) from task instance.
+    Uses *detail* routes to match dashboard links.
+    """
+    task_type = "unknown"
+    url_path = None
+    try:
+        from apps.tasks.models import Checklist, Delegation, HelpTicket  # local import
+        if isinstance(task, Checklist):
+            task_type = "Checklist"
+            url_path = reverse("tasks:checklist_detail", args=[task.id])
+        elif isinstance(task, Delegation):
+            task_type = "Delegation"
+            url_path = reverse("tasks:delegation_detail", args=[task.id])
+        elif isinstance(task, HelpTicket):
+            task_type = "Help Ticket"
+            url_path = reverse("tasks:help_ticket_details", args=[task.id])
+    except Exception:
+        pass
+    return task_type, _abs_url(url_path) if url_path else None
+
+
+def _find_related_leave(task) -> Optional[LeaveRequest]:
+    """
+    Try to resolve the LeaveRequest via the most recent matching LeaveHandover.
+    """
+    try:
+        from apps.tasks.models import Checklist, Delegation, HelpTicket  # local import
+        if isinstance(task, Checklist):
+            tname = "checklist"
+        elif isinstance(task, Delegation):
+            tname = "delegation"
+        elif isinstance(task, HelpTicket):
+            tname = "help_ticket"
+        else:
+            return None
+        ho = (LeaveHandover.objects
+              .filter(task_type=tname, original_task_id=task.id)
+              .select_related("leave_request")
+              .order_by("-id")
+              .first())
+        return ho.leave_request if ho else None
+    except Exception:
+        return None
+
+
+def send_task_completion_email(original_assignee: User, delegate: User, task, context: Dict) -> None:
+    """
+    Notify the original assignee that a delegated/handed-over task has been completed by the delegate.
+    Templates:
+      templates/email/task_completed.html
+      templates/email/task_completed.txt
+    """
+    if not _email_enabled():
+        logger.info("Email disabled; skipping task completion email.")
+        return
+
+    to_addr = (getattr(original_assignee, "email", "") or "").strip()
+    if not to_addr:
+        logger.info("Task completion email suppressed: original assignee has no email.")
+        return
+
+    task_type, task_url = _task_type_and_url(task)
+    task_name = getattr(task, "task_name", None) or getattr(task, "title", f"{task_type} #{getattr(task, 'id', '')}")
+
+    completed_at = context.get("completed_at") or timezone.now()
+    planned_date = context.get("planned_date")
+
+    # Optional: attach leave info if resolvable
+    leave = _find_related_leave(task)
+
+    subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
+    subject = f"{subject_prefix}{task_type} Completed by {getattr(delegate, 'get_full_name', lambda: '')() or delegate.username}: {task_name}"
+
+    ctx = {
+        "site_url": _site_base().rstrip("/"),
+        "task_type": task_type,
+        "task_id": getattr(task, "id", None),
+        "task_name": task_name,
+        "task_url": task_url,
+        "delegate_name": (getattr(delegate, "get_full_name", lambda: "")() or delegate.username),
+        "delegate_email": (getattr(delegate, "email", "") or "").strip(),
+        "original_assignee_name": (getattr(original_assignee, "get_full_name", lambda: "")() or original_assignee.username),
+        "planned_date_ist": _format_ist(planned_date) if planned_date else None,
+        "completed_at_ist": _format_ist(completed_at),
+        # Optional leave context for visibility window
+        "leave_window": {
+            "exists": bool(leave),
+            "start_at_ist": _format_ist(leave.start_at) if leave else None,
+            "end_at_ist": _format_ist(leave.end_at) if leave else None,
+            "employee_name": getattr(leave, "employee_name", "") if leave else None,
+        },
+    }
+
+    html, txt = _render_pair("email/task_completed.html", "email/task_completed.txt", ctx)
+    reply_to = [ctx["delegate_email"]] if ctx["delegate_email"] else []
+
+    ok = _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
+    if not ok:
+        logger.error("Task completion email NOT delivered: task=%s to=%s", getattr(task, "id", None), to_addr)
+        return
+
+    # Best-effort audit on linked leave if available
+    try:
+        if leave and LeaveDecisionAudit and DecisionAction:
+            LeaveDecisionAudit.log(
+                leave,
+                DecisionAction.EMAIL_SENT,
+                extra={"kind": "task_completed", "task_type": task_type, "task_id": getattr(task, "id", None)}
+            )
+    except Exception:
+        logger.exception("Failed to log EMAIL_SENT (task_completed) for leave #%s", getattr(leave, "id", None))

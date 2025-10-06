@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Delegation Completed</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body { margin:0; padding:0; background:#f6f8fb; font-family:Arial,Helvetica,sans-serif; color:#1f2937; }
+    .wrapper { width:100%; background:#f6f8fb; padding:24px 0; }
+    .container { max-width:640px; margin:0 auto; background:#ffffff; border-radius:8px; overflow:hidden; box-shadow:0 1px 6px rgba(0,0,0,0.08); }
+    .header { background:#10b981; color:#ffffff; padding:16px 24px; font-size:18px; font-weight:bold; }
+    .content { padding:24px; }
+    .meta { width:100%; border-collapse:collapse; margin:12px 0 0; }
+    .meta th, .meta td { text-align:left; padding:8px 0; font-size:14px; vertical-align:top; }
+    .meta th { width:180px; color:#6b7280; font-weight:600; padding-right:16px; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#e7f9f3; color:#0f766e; }
+    .hr { height:1px; background:#e5e7eb; margin:16px 0; }
+    .msg { white-space:pre-wrap; color:#374151; font-size:14px; line-height:1.4; }
+    .cta-wrap { margin-top:20px; }
+    .cta { background:#10b981; color:#ffffff !important; text-decoration:none; padding:10px 16px; border-radius:6px; display:inline-block; font-weight:600; }
+    .footer { color:#6b7280; font-size:12px; padding:12px 24px 20px; }
+    a { color:#0d6efd; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        ✅ Delegation Completed
+      </div>
+      <div class="content">
+        <p style="margin:0 0 12px 0;">Hi{% if obj.assign_by %} {{ obj.assign_by.get_full_name|default:obj.assign_by.username }}{% endif %},</p>
+        <p style="margin:0 0 16px 0;">
+          <strong>{{ request_user.get_full_name|default:request_user.username }}</strong> has completed the delegated task:
+        </p>
+
+        <div style="font-size:16px; font-weight:700; margin-bottom:4px;">
+          {{ obj.task_name }}
+          {% if obj.priority %}<span class="badge" style="margin-left:6px;">Priority: {{ obj.priority }}</span>{% endif %}
+        </div>
+
+        <table class="meta" role="presentation" aria-hidden="true">
+          <tr>
+            <th>Task ID</th>
+            <td>DEG-{{ obj.id }}</td>
+          </tr>
+          <tr>
+            <th>Assignee</th>
+            <td>{% if obj.assign_to %}{{ obj.assign_to.get_full_name|default:obj.assign_to.username }}{% else %}—{% endif %}</td>
+          </tr>
+          <tr>
+            <th>Planned Date</th>
+            <td>{% if obj.planned_date %}{{ obj.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}</td>
+          </tr>
+          <tr>
+            <th>Completed At</th>
+            <td>{% if obj.completed_at %}{{ obj.completed_at|date:"d M, Y H:i" }}{% else %}—{% endif %}</td>
+          </tr>
+          <tr>
+            <th>Actual Duration</th>
+            <td>{% if obj.actual_duration_minutes %}{{ obj.actual_duration_minutes }} minutes{% else %}—{% endif %}</td>
+          </tr>
+          {% if obj.time_per_task_minutes %}
+          <tr>
+            <th>Estimated Time</th>
+            <td>{{ obj.time_per_task_minutes }} minutes</td>
+          </tr>
+          {% endif %}
+        </table>
+
+        {% if obj.doer_notes %}
+          <div class="hr"></div>
+          <div>
+            <div style="font-weight:600; margin-bottom:6px; color:#374151;">Doer Notes</div>
+            <div class="msg">{{ obj.doer_notes }}</div>
+          </div>
+        {% endif %}
+
+        <div class="cta-wrap">
+          <a class="cta" href="{{ view_url }}" target="_blank" rel="noopener">View Task</a>
+        </div>
+      </div>
+
+      <div class="footer">
+        Sent by {{ site_url }} • This is an automated notification. If you believe you received this in error, please contact your administrator.
+      </div>
+    </div>
+  </div>
+</body>
+</html>

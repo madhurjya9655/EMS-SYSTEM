@@ -66,6 +66,17 @@ IST = ZoneInfo("Asia/Kolkata")
 TOKEN_SALT = "leave-action-v1"
 TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 days
 
+# Keep allowed list in views too so summary widgets (balances etc.) stay in sync with the form
+ALLOWED_LEAVE_TYPE_NAMES = {
+    "Half Day",
+    "Compensatory Off",
+    "Leave Without Pay (If No Leave Balance)",
+    "Sick Leave",
+    "Casual Leave",
+    "Maternity Leave",
+    "Paternity Leave",
+}
+
 
 # -----------------------------------------------------------------------------#
 # Helpers                                                                      #
@@ -224,7 +235,8 @@ class BalanceRow:
 def _leave_balances_for_user(user) -> Tuple[List[BalanceRow], float]:
     year = now_ist().year
     rows: List[BalanceRow] = []
-    types = list(LeaveType.objects.all().order_by("name"))
+    # Show balances only for allowed types (mirrors form dropdown)
+    types = list(LeaveType.objects.filter(name__in=ALLOWED_LEAVE_TYPE_NAMES).order_by("name"))
 
     approved = (
         LeaveRequest.objects.filter(employee=user, status=LeaveStatus.APPROVED)
@@ -374,11 +386,20 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                             if handovers:
                                 handovers_created = LeaveHandover.objects.bulk_create(handovers, ignore_conflicts=True)
 
-                        # ---------------- Email dispatch (sync or Celery) ----------------
-                        def _send_emails():
+                        # ---------------- Apply handover + Email dispatch (sync or Celery) ----------------
+                        def _apply_and_send():
                             try:
-                                use_async = bool(getattr(settings, "ENABLE_CELERY_EMAIL", False)) and bool(send_leave_emails_async)
+                                # Apply the handover AFTER the handover rows exist (so dashboards update immediately)
+                                try:
+                                    from apps.leave.services.task_handover import apply_handover_for_leave
+                                    moved = apply_handover_for_leave(lr)
+                                    if moved:
+                                        logger.info("Leave %s handover applied; moved=%s", lr.id, moved)
+                                except Exception as e:
+                                    logger.exception("Failed applying handover for leave %s: %s", lr.id, e)
 
+                                # Emails
+                                use_async = bool(getattr(settings, "ENABLE_CELERY_EMAIL", False)) and bool(send_leave_emails_async)
                                 if use_async:
                                     # Celery path
                                     send_leave_emails_async.delay(lr.id)
@@ -395,9 +416,9 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                                     elif send_handover_email:
                                         _send_handover_emails_sync(lr, handovers_created)
                             except Exception as e:
-                                logger.error(f"Failed to send emails for leave {lr.id}: {e}")
+                                logger.error(f"Failed in post-commit apply+emails for leave {lr.id}: {e}")
 
-                        transaction.on_commit(_send_emails)
+                        transaction.on_commit(_apply_and_send)
                         # ----------------------------------------------------------------
 
                     # If we reached here, the transaction succeeded -> messages + redirect
@@ -1306,3 +1327,54 @@ def cc_assign(request: HttpRequest) -> HttpResponse:
         "cc_choices": choices,
     }
     return render(request, "leave/cc_assign.html", ctx)
+
+
+# -----------------------------------------------------------------------------#
+# NEW: Delegate dashboard widget — tasks handed over to the current user        #
+# -----------------------------------------------------------------------------#
+@has_permission("leave_list")
+@login_required
+def my_handovers_widget(request: HttpRequest) -> HttpResponse:
+    """
+    Compact widget listing tasks currently assigned to the user due to a leave handover.
+    Include this on any dashboard.
+    """
+    from .models import LeaveHandover, LeaveStatus  # local import to avoid cycles
+
+    today = timezone.localdate()
+    handovers = (
+        LeaveHandover.objects
+        .select_related("leave_request", "original_assignee")
+        .filter(
+            new_assignee=request.user,
+            is_active=True,
+            effective_start_date__lte=today,
+            effective_end_date__gte=today,
+            leave_request__status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED],
+        )
+        .order_by("effective_end_date", "id")
+    )
+
+    rows = []
+    for ho in handovers:
+        title = ho.get_task_title()
+        href = ho.get_task_url() or "#"
+        rows.append(
+            f"<tr>"
+            f"<td><a href='{href}'>{title}</a></td>"
+            f"<td class='text-nowrap'>{ho.get_task_type_display()}</td>"
+            f"<td class='text-nowrap'>{ho.original_assignee.get_full_name() or ho.original_assignee.username}</td>"
+            f"<td class='text-nowrap'>{ho.effective_end_date or ''}</td>"
+            f"</tr>"
+        )
+
+    html = (
+        "<div class='card mt-3'><div class='card-body'>"
+        "<h6 class='mb-2'>Tasks handed over to you</h6>"
+        "<div class='table-responsive'><table class='table table-sm align-middle'>"
+        "<thead><tr><th>Task</th><th>Type</th><th>Original Owner</th><th>Handover Ends</th></tr></thead>"
+        "<tbody>"
+        + ("".join(rows) if rows else "<tr><td colspan='4' class='text-muted'>No active handovers.</td></tr>")
+        + "</tbody></table></div></div></div>"
+    )
+    return HttpResponse(html)

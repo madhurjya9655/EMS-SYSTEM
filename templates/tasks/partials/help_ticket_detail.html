@@ -1,44 +1,79 @@
-<!-- templates/tasks/partials/help_ticket_detail.html -->
-<div class="card">
-    <div class="card-header">
-        <h5 class="card-title">HT-{{ obj.id }}: {{ obj.title }}</h5>
-        <span class="badge badge-{{ obj.status|lower }}">{{ obj.status }}</span>
+{% load static %}
+
+<div class="card shadow-sm">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <h5 class="card-title mb-0">
+      <i class="fas fa-ticket-alt me-2"></i>HT-{{ obj.id }}: {{ obj.title }}
+    </h5>
+    <div class="d-flex align-items-center gap-2">
+      <span class="badge
+        {% if obj.priority == 'High' %}bg-danger
+        {% elif obj.priority == 'Medium' %}bg-warning text-dark
+        {% else %}bg-success{% endif %}">
+        {{ obj.priority|default:"Low" }}
+      </span>
+      <span class="badge
+        {% if obj.status == 'Open' %}bg-primary
+        {% elif obj.status == 'In Progress' %}bg-warning text-dark
+        {% else %}bg-success{% endif %}">
+        {{ obj.status }}
+      </span>
     </div>
-    <div class="card-body">
-        <div class="row">
-            <div class="col-md-6">
-                <p><strong>Assigned To:</strong> {{ obj.assign_to.get_full_name|default:obj.assign_to.username }}</p>
-                <p><strong>Assigned By:</strong> {{ obj.assign_by.get_full_name|default:obj.assign_by.username }}</p>
-                <p><strong>Planned Date:</strong> {{ obj.planned_date|date:"Y-m-d H:i" }}</p>
-                <p><strong>Status:</strong> {{ obj.status }}</p>
-            </div>
-            <div class="col-md-6">
-                {% if obj.resolved_at %}
-                <p><strong>Resolved At:</strong> {{ obj.resolved_at|date:"Y-m-d H:i" }}</p>
-                {% endif %}
-                {% if obj.resolved_by %}
-                <p><strong>Resolved By:</strong> {{ obj.resolved_by.get_full_name|default:obj.resolved_by.username }}</p>
-                {% endif %}
-            </div>
-        </div>
-        {% if obj.description %}
-        <div class="mt-3">
-            <p><strong>Description:</strong></p>
-            <p>{{ obj.description|linebreaks }}</p>
-        </div>
+  </div>
+
+  <div class="card-body">
+    <div class="row gy-2">
+      <div class="col-md-6">
+        <p class="mb-1"><strong>Assigned To:</strong> {{ obj.assign_to.get_full_name|default:obj.assign_to.username }}</p>
+        <p class="mb-1"><strong>Assigned By:</strong> {{ obj.assign_by.get_full_name|default:obj.assign_by.username }}</p>
+        <p class="mb-1">
+          <strong>Created Date:</strong> {% if obj.created_at %}{{ obj.created_at|date:"d M, Y H:i" }}{% else %}—{% endif %}
+        </p>
+        <p class="mb-1">
+          <strong>Planned Date:</strong> {% if obj.planned_date %}{{ obj.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}
+        </p>
+      </div>
+
+      <div class="col-md-6">
+        {% if obj.actual_duration_minutes %}
+          <p class="mb-1"><strong>Actual Duration:</strong> {{ obj.actual_duration_minutes }} minutes</p>
         {% endif %}
-        {% if obj.resolved_notes %}
-        <div class="mt-3">
-            <p><strong>Resolution Notes:</strong></p>
-            <p>{{ obj.resolved_notes|linebreaks }}</p>
-        </div>
+        {% if obj.resolved_at %}
+          <p class="mb-1"><strong>Resolved At:</strong> {{ obj.resolved_at|date:"d M, Y H:i" }}</p>
         {% endif %}
-        {% if obj.status != "Closed" and obj.assign_to == request.user %}
-        <div class="mt-3">
-            <a href="{% url 'tasks:note_help_ticket' obj.pk %}" class="btn btn-success">
-                <i class="fas fa-check"></i> Add Notes & Close
-            </a>
-        </div>
+        {% if obj.resolved_by %}
+          <p class="mb-1"><strong>Resolved By:</strong> {{ obj.resolved_by.get_full_name|default:obj.resolved_by.username }}</p>
         {% endif %}
+      </div>
     </div>
+
+    {% if obj.description %}
+      <hr>
+      <p class="mb-1"><strong>Description:</strong></p>
+      <div class="border rounded p-2 bg-light">{{ obj.description|linebreaks }}</div>
+    {% endif %}
+
+    {% if obj.media_upload %}
+      <div class="mt-3">
+        <a href="{{ obj.media_upload.url }}" class="btn btn-sm btn-outline-primary" target="_blank">
+          <i class="fas fa-download"></i> Download Attachment
+        </a>
+      </div>
+    {% endif %}
+
+    {% if obj.resolved_notes %}
+      <div class="mt-3">
+        <p class="mb-1"><strong>Resolution Notes:</strong></p>
+        <div class="border rounded p-2">{{ obj.resolved_notes|linebreaks }}</div>
+      </div>
+    {% endif %}
+
+    {% if obj.status != "Closed" and obj.assign_to_id == request.user.id %}
+      <div class="mt-3 d-flex gap-2">
+        <a href="{% url 'tasks:note_help_ticket' obj.pk %}?next={{ request.get_full_path|urlencode }}" class="btn btn-success">
+          <i class="fas fa-check"></i> Add Notes & Close
+        </a>
+      </div>
+    {% endif %}
+  </div>
 </div>

@@ -1,38 +1,89 @@
-<!-- templates/tasks/partials/delegation_detail.html -->
-<div class="card">
-    <div class="card-header">
-        <h5 class="card-title">{{ obj.task_name }}</h5>
-        <span class="badge badge-{{ obj.priority|lower }}">{{ obj.priority }}</span>
+{% load static %}
+
+<div class="card shadow-sm">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <h5 class="card-title mb-0">
+      <i class="fas fa-tasks me-2"></i>{{ obj.task_name }}
+    </h5>
+    <div class="d-flex align-items-center gap-2">
+      {% with p=obj.priority %}
+        <span class="badge
+          {% if p == 'High' %}bg-danger
+          {% elif p == 'Medium' %}bg-warning text-dark
+          {% else %}bg-success{% endif %}">
+          {{ p|default:"Low" }}
+        </span>
+      {% endwith %}
+      <span class="badge
+        {% if obj.status == 'Pending' %}bg-warning text-dark
+        {% else %}bg-success{% endif %}">
+        {{ obj.status }}
+      </span>
     </div>
-    <div class="card-body">
-        <div class="row">
-            <div class="col-md-6">
-                <p><strong>Assigned To:</strong> {{ obj.assign_to.get_full_name|default:obj.assign_to.username }}</p>
-                <p><strong>Assigned By:</strong> {{ obj.assign_by.get_full_name|default:obj.assign_by.username }}</p>
-                <p><strong>Planned Date:</strong> {{ obj.planned_date|date:"Y-m-d H:i" }}</p>
-                <p><strong>Status:</strong> {{ obj.status }}</p>
-            </div>
-            <div class="col-md-6">
-                {% if obj.time_per_task_minutes %}
-                <p><strong>Estimated Time:</strong> {{ obj.time_per_task_minutes }} minutes</p>
-                {% endif %}
-                {% if obj.completed_at %}
-                <p><strong>Completed At:</strong> {{ obj.completed_at|date:"Y-m-d H:i" }}</p>
-                {% endif %}
-            </div>
-        </div>
-        {% if obj.message %}
-        <div class="mt-3">
-            <p><strong>Description:</strong></p>
-            <p>{{ obj.message|linebreaks }}</p>
-        </div>
+  </div>
+
+  <div class="card-body">
+    <div class="row gy-2">
+      <div class="col-md-6">
+        <p class="mb-1"><strong>Assigned To:</strong> {{ obj.assign_to.get_full_name|default:obj.assign_to.username }}</p>
+        <p class="mb-1"><strong>Assigned By:</strong> {{ obj.assign_by.get_full_name|default:obj.assign_by.username }}</p>
+        <p class="mb-1">
+          <strong>Planned Date:</strong>
+          {% if obj.planned_date %}{{ obj.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}
+        </p>
+        <p class="mb-1"><strong>Status:</strong> {{ obj.status }}</p>
+      </div>
+
+      <div class="col-md-6">
+        {% if obj.time_per_task_minutes %}
+          <p class="mb-1"><strong>Estimated Time:</strong> {{ obj.time_per_task_minutes }} minutes</p>
         {% endif %}
-        {% if obj.status == "Pending" and obj.assign_to == request.user %}
-        <div class="mt-3">
-            <a href="{% url 'tasks:complete_delegation' obj.pk %}" class="btn btn-success">
-                <i class="fas fa-check"></i> Complete Task
-            </a>
-        </div>
+        {% if obj.actual_duration_minutes %}
+          <p class="mb-1"><strong>Actual Duration:</strong> {{ obj.actual_duration_minutes }} minutes</p>
         {% endif %}
+        {% if obj.completed_at %}
+          <p class="mb-1"><strong>Completed At:</strong> {{ obj.completed_at|date:"d M, Y H:i" }}</p>
+        {% endif %}
+      </div>
     </div>
+
+    {% if obj.message %}
+      <hr>
+      <p class="mb-1"><strong>Description:</strong></p>
+      <div class="border rounded p-2 bg-light">{{ obj.message|linebreaks }}</div>
+    {% endif %}
+
+    {% if obj.doer_notes %}
+      <div class="mt-2">
+        <p class="mb-1"><strong>Doer Notes:</strong></p>
+        <div class="border rounded p-2">{{ obj.doer_notes|linebreaks }}</div>
+      </div>
+    {% endif %}
+
+    {% if obj.audio_recording %}
+      <div class="mt-3">
+        <label class="fw-bold">Audio Recording:</label>
+        <audio controls class="w-100">
+          <source src="{{ obj.audio_recording.url }}" type="audio/mpeg">
+          Your browser does not support the audio element.
+        </audio>
+      </div>
+    {% endif %}
+
+    {% if obj.doer_file %}
+      <div class="mt-3">
+        <a href="{{ obj.doer_file.url }}" class="btn btn-sm btn-outline-primary" target="_blank">
+          <i class="fas fa-download"></i> Download Completion File
+        </a>
+      </div>
+    {% endif %}
+
+    {% if obj.status == "Pending" and obj.assign_to_id == request.user.id %}
+      <div class="mt-3 d-flex gap-2">
+        <a href="{% url 'tasks:complete_delegation' obj.pk %}?next={{ request.get_full_path|urlencode }}" class="btn btn-success">
+          <i class="fas fa-check"></i> Complete Task
+        </a>
+      </div>
+    {% endif %}
+  </div>
 </div>

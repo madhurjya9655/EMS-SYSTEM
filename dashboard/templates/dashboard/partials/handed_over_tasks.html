@@ -1,159 +1,263 @@
-{# apps/dashboard/templates/dashboard/partials/handed_over_tasks.html #}
-{% load static %}
-{% with title=card_title|default:"Tasks handed over to you" %}
-<div class="card mb-3">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <div class="fw-semibold">
-      <i class="bi bi-arrow-left-right me-1"></i>{{ title }}
+{# templates/dashboard/partials/handed_over_tasks.html #}
+{# FRAGMENT ONLY — no {% extends %} here #}
+
+{% comment %}
+Two modes:
+
+A) Summary (default)
+B) Detailed (`?handover=1`) — shows the actual handed-over items with in-place actions.
+Links preserve the currently selected task_type & today_only flags.
+{% endcomment %}
+
+{% if request.GET.handover == '1' %}
+  {# -------------------- DETAILED MODE -------------------- #}
+  <div class="card mt-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <div class="fw-bold">
+        {{ card_title|default:"Tasks handed over to you (active today)" }} — Detailed
+      </div>
+      <div class="d-flex gap-2">
+        <a class="btn btn-sm btn-outline-secondary"
+           href="?{% if selected %}task_type={{ selected }}&{% endif %}{% if today_only %}today_only=1{% endif %}">
+          Back to summary
+        </a>
+      </div>
     </div>
-    <div class="text-muted small">
-      {% now "Y-m-d" %}
+
+    <div class="card-body p-0">
+
+      {# ========== CHECKLIST ========== #}
+      <div class="table-responsive">
+        <table class="table mb-0 align-middle">
+          <thead>
+            <tr>
+              <th style="width:70px">ID</th>
+              <th style="min-width:220px">Task Name</th>
+              <th>From</th>
+              <th style="min-width:180px">Planned Date</th>
+              <th>Status</th>
+              <th style="min-width:160px" class="text-end pe-3">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% if handed_over.checklist %}
+              {% for row in handed_over.checklist %}
+                {% with t=row.task ho=row.handover %}
+                  <tr>
+                    <td>{{ t.id }}</td>
+                    <td>
+                      {{ t.task_name|default:"—" }}
+                      <span class="badge bg-dark ms-1">Handover</span>
+                    </td>
+                    <td>
+                      {% if row.original_assignee %}
+                        {{ row.original_assignee.get_full_name|default:row.original_assignee.username }}
+                      {% else %}—{% endif %}
+                    </td>
+                    <td>
+                      {% if t.planned_date %}{{ t.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}
+                    </td>
+                    <td>
+                      {% if t.status == 'Pending' %}
+                        <span class="badge bg-warning text-dark">Pending</span>
+                      {% elif t.status == 'Completed' %}
+                        <span class="badge bg-success">Completed</span>
+                      {% else %}
+                        <span class="badge bg-secondary">{{ t.status|default:"—" }}</span>
+                      {% endif %}
+                    </td>
+                    <td class="text-end pe-3">
+                      {% if t.status == 'Pending' %}
+                        <a class="btn btn-success btn-sm"
+                           href="{% url 'tasks:complete_checklist' t.id %}?next={{ request.get_full_path|urlencode }}">✔ Complete</a>
+                      {% endif %}
+                      <a class="btn btn-outline-primary btn-sm"
+                         href="{% url 'tasks:checklist_detail' t.id %}"
+                         target="_blank">Open</a>
+                    </td>
+                  </tr>
+                {% endwith %}
+              {% endfor %}
+            {% else %}
+              <tr><td colspan="6" class="text-center text-muted py-3">No handed-over checklist tasks.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+
+      {# ========== DELEGATION ========== #}
+      <hr class="my-0">
+      <div class="table-responsive">
+        <table class="table mb-0 align-middle">
+          <thead>
+            <tr>
+              <th style="width:70px">ID</th>
+              <th style="min-width:220px">Task Name</th>
+              <th>From</th>
+              <th style="min-width:180px">Planned Date</th>
+              <th>Status</th>
+              <th style="min-width:160px" class="text-end pe-3">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% if handed_over.delegation %}
+              {% for row in handed_over.delegation %}
+                {% with t=row.task ho=row.handover %}
+                  <tr>
+                    <td>{{ t.id }}</td>
+                    <td>
+                      {{ t.task_name|default:"—" }}
+                      <span class="badge bg-dark ms-1">Handover</span>
+                    </td>
+                    <td>
+                      {% if row.original_assignee %}
+                        {{ row.original_assignee.get_full_name|default:row.original_assignee.username }}
+                      {% else %}—{% endif %}
+                    </td>
+                    <td>
+                      {% if t.planned_date %}{{ t.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}
+                    </td>
+                    <td>
+                      {% if t.status == 'Pending' %}
+                        <span class="badge bg-warning text-dark">Pending</span>
+                      {% elif t.status == 'Completed' %}
+                        <span class="badge bg-success">Completed</span>
+                      {% else %}
+                        <span class="badge bg-secondary">{{ t.status|default:"—" }}</span>
+                      {% endif %}
+                    </td>
+                    <td class="text-end pe-3">
+                      {% if t.status == 'Pending' %}
+                        <a class="btn btn-success btn-sm"
+                           href="{% url 'tasks:complete_delegation' t.id %}?next={{ request.get_full_path|urlencode }}">✔ Complete</a>
+                      {% endif %}
+                      <a class="btn btn-outline-primary btn-sm"
+                         href="{% url 'tasks:delegation_detail' t.id %}"
+                         target="_blank">Open</a>
+                    </td>
+                  </tr>
+                {% endwith %}
+              {% endfor %}
+            {% else %}
+              <tr><td colspan="6" class="text-center text-muted py-3">No handed-over delegation tasks.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+
+      {# ========== HELP TICKET ========== #}
+      <hr class="my-0">
+      <div class="table-responsive">
+        <table class="table mb-0 align-middle">
+          <thead>
+            <tr>
+              <th style="width:70px">ID</th>
+              <th style="min-width:220px">Title</th>
+              <th>From</th>
+              <th style="min-width:180px">Planned Date</th>
+              <th>Status</th>
+              <th style="min-width:200px" class="text-end pe-3">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% if handed_over.help_ticket %}
+              {% for row in handed_over.help_ticket %}
+                {% with t=row.task ho=row.handover %}
+                  <tr>
+                    <td>{{ t.id }}</td>
+                    <td>
+                      {{ t.title|default:"—" }}
+                      <span class="badge bg-dark ms-1">Handover</span>
+                    </td>
+                    <td>
+                      {% if row.original_assignee %}
+                        {{ row.original_assignee.get_full_name|default:row.original_assignee.username }}
+                      {% else %}—{% endif %}
+                    </td>
+                    <td>
+                      {% if t.planned_date %}{{ t.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}
+                    </td>
+                    <td>
+                      {% if t.status == 'Open' %}
+                        <span class="badge bg-primary">Open</span>
+                      {% elif t.status == 'In Progress' %}
+                        <span class="badge bg-warning text-dark">In&nbsp;Progress</span>
+                      {% elif t.status == 'Closed' %}
+                        <span class="badge bg-success">Closed</span>
+                      {% else %}
+                        <span class="badge bg-secondary">{{ t.status|default:"—" }}</span>
+                      {% endif %}
+                    </td>
+                    <td class="text-end pe-3">
+                      {% if t.status != 'Closed' %}
+                        <a class="btn btn-primary btn-sm"
+                           href="{% url 'tasks:note_help_ticket' t.id %}?next={{ request.get_full_path|urlencode }}">Note</a>
+                        <a class="btn btn-success btn-sm"
+                           href="{% url 'tasks:close_help_ticket' t.id %}?next={{ request.get_full_path|urlencode }}">✔ Close</a>
+                      {% endif %}
+                      <a class="btn btn-outline-primary btn-sm"
+                         href="{% url 'tasks:help_ticket_detail' t.id %}"
+                         target="_blank">Open</a>
+                    </td>
+                  </tr>
+                {% endwith %}
+              {% endfor %}
+            {% else %}
+              <tr><td colspan="6" class="text-center text-muted py-3">No handed-over help tickets.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+
     </div>
   </div>
 
-  {% if handed_over.checklist or handed_over.delegation or handed_over.help_ticket %}
-    <div class="list-group list-group-flush">
-
-      {# ---------- Checklist ---------- #}
-      {% if handed_over.checklist %}
-        <div class="list-group-item bg-light small fw-semibold">
-          Checklist
-          <span class="badge bg-secondary ms-1">{{ handed_over.checklist|length }}</span>
-        </div>
-        {% for row in handed_over.checklist %}
-          {% with ho=row.handover lr=row.leave_request oa=row.original_assignee %}
-          <div class="list-group-item">
-            <div class="d-flex justify-content-between align-items-start">
-              <div class="me-2">
-                {% if row.task_url %}
-                  <a href="{{ row.task_url }}" class="fw-semibold text-decoration-none">
-                    #{{ row.task.id }} — {{ row.task.task_name|default:row.task.title|default:"Checklist Task" }}
-                  </a>
-                {% else %}
-                  <span class="fw-semibold">
-                    #{{ row.task.id }} — {{ row.task.task_name|default:row.task.title|default:"Checklist Task" }}
-                  </span>
-                {% endif %}
-                <div class="text-muted small mt-1">
-                  From: {{ oa.get_full_name|default:oa.username }}
-                  <span class="mx-1">•</span>
-                  Leave: {{ lr.start_date }} → {{ lr.end_date }}
-                  {% if lr.is_half_day %}
-                    <span class="badge bg-info-subtle text-info-emphasis border ms-1">Half-day</span>
-                  {% endif %}
-                </div>
-                {% if row.handover_message %}
-                  <div class="small mt-1">
-                    <span class="text-muted">Note:</span> {{ row.handover_message }}
-                  </div>
-                {% endif %}
-              </div>
-              <div class="text-nowrap">
-                {% if ho.is_currently_active %}
-                  <span class="badge bg-success">Active</span>
-                {% else %}
-                  <span class="badge bg-secondary">Inactive</span>
-                {% endif %}
-              </div>
-            </div>
-          </div>
-          {% endwith %}
-        {% endfor %}
-      {% endif %}
-
-      {# ---------- Delegation ---------- #}
-      {% if handed_over.delegation %}
-        <div class="list-group-item bg-light small fw-semibold">
-          Delegation
-          <span class="badge bg-secondary ms-1">{{ handed_over.delegation|length }}</span>
-        </div>
-        {% for row in handed_over.delegation %}
-          {% with ho=row.handover lr=row.leave_request oa=row.original_assignee %}
-          <div class="list-group-item">
-            <div class="d-flex justify-content-between align-items-start">
-              <div class="me-2">
-                {% if row.task_url %}
-                  <a href="{{ row.task_url }}" class="fw-semibold text-decoration-none">
-                    #{{ row.task.id }} — {{ row.task.task_name|default:row.task.title|default:"Delegation Task" }}
-                  </a>
-                {% else %}
-                  <span class="fw-semibold">
-                    #{{ row.task.id }} — {{ row.task.task_name|default:row.task.title|default:"Delegation Task" }}
-                  </span>
-                {% endif %}
-                <div class="text-muted small mt-1">
-                  From: {{ oa.get_full_name|default:oa.username }}
-                  <span class="mx-1">•</span>
-                  Leave: {{ lr.start_date }} → {{ lr.end_date }}
-                </div>
-                {% if row.handover_message %}
-                  <div class="small mt-1">
-                    <span class="text-muted">Note:</span> {{ row.handover_message }}
-                  </div>
-                {% endif %}
-              </div>
-              <div class="text-nowrap">
-                {% if ho.is_currently_active %}
-                  <span class="badge bg-success">Active</span>
-                {% else %}
-                  <span class="badge bg-secondary">Inactive</span>
-                {% endif %}
-              </div>
-            </div>
-          </div>
-          {% endwith %}
-        {% endfor %}
-      {% endif %}
-
-      {# ---------- Help Tickets ---------- #}
-      {% if handed_over.help_ticket %}
-        <div class="list-group-item bg-light small fw-semibold">
-          Help Tickets
-          <span class="badge bg-secondary ms-1">{{ handed_over.help_ticket|length }}</span>
-        </div>
-        {% for row in handed_over.help_ticket %}
-          {% with ho=row.handover lr=row.leave_request oa=row.original_assignee %}
-          <div class="list-group-item">
-            <div class="d-flex justify-content-between align-items-start">
-              <div class="me-2">
-                {% if row.task_url %}
-                  <a href="{{ row.task_url }}" class="fw-semibold text-decoration-none">
-                    #{{ row.task.id }} — {{ row.task.title|default:"Help Ticket" }}
-                  </a>
-                {% else %}
-                  <span class="fw-semibold">
-                    #{{ row.task.id }} — {{ row.task.title|default:"Help Ticket" }}
-                  </span>
-                {% endif %}
-                <div class="text-muted small mt-1">
-                  From: {{ oa.get_full_name|default:oa.username }}
-                  <span class="mx-1">•</span>
-                  Leave: {{ lr.start_date }} → {{ lr.end_date }}
-                </div>
-                {% if row.handover_message %}
-                  <div class="small mt-1">
-                    <span class="text-muted">Note:</span> {{ row.handover_message }}
-                  </div>
-                {% endif %}
-              </div>
-              <div class="text-nowrap">
-                {% if ho.is_currently_active %}
-                  <span class="badge bg-success">Active</span>
-                {% else %}
-                  <span class="badge bg-secondary">Inactive</span>
-                {% endif %}
-              </div>
-            </div>
-          </div>
-          {% endwith %}
-        {% endfor %}
-      {% endif %}
-
+{% else %}
+  {# -------------------- SUMMARY MODE -------------------- #}
+  <div class="card mt-4">
+    <div class="card-header fw-bold">
+      {{ card_title|default:"Tasks handed over to you (active today)" }}
     </div>
-  {% else %}
-    <div class="card-body text-muted small">
-      No tasks have been handed over to you right now.
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table mb-0 align-middle">
+          <thead>
+            <tr>
+              <th style="min-width:220px">Type</th>
+              <th class="text-center" style="width:120px">Count</th>
+              <th style="width:160px" class="text-center">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% with cl=handed_over.checklist dl=handed_over.delegation ht=handed_over.help_ticket %}
+              <tr>
+                <td>Checklist <span class="badge bg-dark ms-1">Handover</span></td>
+                <td class="text-center">{{ cl|length|default:"0" }}</td>
+                <td class="text-center">
+                  <a class="btn btn-sm btn-outline-primary"
+                     href="?task_type=checklist{% if today_only %}&today_only=1{% endif %}&handover=1">View</a>
+                </td>
+              </tr>
+              <tr>
+                <td>Delegation <span class="badge bg-dark ms-1">Handover</span></td>
+                <td class="text-center">{{ dl|length|default:"0" }}</td>
+                <td class="text-center">
+                  <a class="btn btn-sm btn-outline-primary"
+                     href="?task_type=delegation{% if today_only %}&today_only=1{% endif %}&handover=1">View</a>
+                </td>
+              </tr>
+              <tr>
+                <td>Help Ticket <span class="badge bg-dark ms-1">Handover</span></td>
+                <td class="text-center">{{ ht|length|default:"0" }}</td>
+                <td class="text-center">
+                  <a class="btn btn-sm btn-outline-primary"
+                     href="?task_type=help_ticket{% if today_only %}&today_only=1{% endif %}&handover=1">View</a>
+                </td>
+              </tr>
+            {% endwith %}
+          </tbody>
+        </table>
+      </div>
     </div>
-  {% endif %}
-</div>
-{% endwith %}
+  </div>
+{% endif %}

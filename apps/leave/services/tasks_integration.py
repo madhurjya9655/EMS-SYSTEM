@@ -31,16 +31,15 @@ the 'apps.tasks' logger channel.
 """
 
 from datetime import datetime, date, time, timedelta
-from typing import Iterable, Optional
+from typing import Optional
 
 import logging
 from django.apps import apps
-from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
+from django.conf import settings
 
 try:
-    # Python 3.9+
     from zoneinfo import ZoneInfo
 except Exception:  # pragma: no cover
     ZoneInfo = None  # type: ignore
@@ -49,12 +48,14 @@ except Exception:  # pragma: no cover
 
 IST = ZoneInfo(getattr(settings, "TIME_ZONE", "Asia/Kolkata")) if ZoneInfo else None
 
+
 def _aware(dt: datetime) -> datetime:
     """Ensure tz-aware (IST-preferred)."""
     if timezone.is_aware(dt):
         return dt
     tz = IST or timezone.get_current_timezone()
     return timezone.make_aware(dt, tz)
+
 
 def _to_ist(dt: Optional[datetime]) -> Optional[datetime]:
     if not dt:
@@ -64,13 +65,16 @@ def _to_ist(dt: Optional[datetime]) -> Optional[datetime]:
     except Exception:
         return dt
 
+
 def _ist_date(dt: Optional[datetime]) -> Optional[date]:
     if not dt:
         return None
     return _to_ist(dt).date()
 
+
 def _date_only(dt: datetime) -> date:
     return _aware(dt).astimezone(IST or timezone.get_current_timezone()).date()
+
 
 def _datespan_inclusive_ist(start_dt: datetime, end_dt: datetime) -> list[date]:
     s = _ist_date(start_dt)
@@ -86,17 +90,20 @@ def _datespan_inclusive_ist(start_dt: datetime, end_dt: datetime) -> list[date]:
         cur = cur + timedelta(days=1)
     return out
 
+
 # ---- Logging ----------------------------------------------------------------
 
 logger = logging.getLogger("apps.tasks")
 
 # ---- Optional models ---------------------------------------------------------
 
+
 def _get_holiday_model():
     try:
         return apps.get_model("settings", "Holiday")
     except Exception:
         return None
+
 
 def _get_checklist_model():
     """
@@ -108,16 +115,17 @@ def _get_checklist_model():
     for name in candidates:
         try:
             M = apps.get_model("tasks", name)
-            field = _planned_date_field(M)
+            pd_field = _planned_date_field(M)
             have_assignee = any(
-                a in {f.name for f in M._meta.get_fields()}
-                for a in ("assign_to", "assignee", "user", "owner")
+                n in {f.name for f in M._meta.get_fields()}
+                for n in ("assign_to", "assignee", "user", "owner")
             )
-            if field and have_assignee:
+            if pd_field and have_assignee:
                 return M
         except Exception:
             continue
     return None
+
 
 # ---- Field/attr helpers ------------------------------------------------------
 
@@ -133,12 +141,14 @@ def _planned_date_field(model) -> Optional[str]:
             return name
     return None
 
+
 def _is_datetime_field(model, field_name: str) -> bool:
     try:
         f = model._meta.get_field(field_name)
         return f.get_internal_type() in {"DateTimeField", "DateTimeFieldProxy"}
     except Exception:
         return False
+
 
 def _mode_value(obj) -> str:
     """Return mode string if present (Daily/Weekly/Monthly/Yearly), else ''."""
@@ -147,6 +157,7 @@ def _mode_value(obj) -> str:
         if v:
             return str(v)
     return ""
+
 
 def _assignee_filter_kwargs(model, user_id: int) -> dict:
     """Return a filter dict to match 'assigned to' user across naming variants."""
@@ -159,6 +170,7 @@ def _assignee_filter_kwargs(model, user_id: int) -> dict:
         if n in {f.name for f in model._meta.fields}:
             return {n: user_id}  # Django allows FK equality by pk
     return {}
+
 
 def _set_status_skipped(obj) -> bool:
     """
@@ -194,6 +206,7 @@ def _set_status_skipped(obj) -> bool:
         logger.exception("Failed to mark object as skipped: %r", obj)
     return False
 
+
 # ---- Working-day helper ------------------------------------------------------
 
 def _holiday_dates_in_range(start_date: date, end_date: date) -> set[date]:
@@ -215,6 +228,7 @@ def _holiday_dates_in_range(start_date: date, end_date: date) -> set[date]:
         logger.exception("Failed to fetch Holiday list; falling back to Mon–Fri.")
         return set()
 
+
 def next_working_day(dt: datetime) -> datetime:
     """
     Compute the next working day AFTER `dt` (strictly later) using the holiday list if available,
@@ -230,9 +244,11 @@ def next_working_day(dt: datetime) -> datetime:
         d += timedelta(days=1)
     return _aware(datetime.combine(d, time(0, 0)))
 
+
 # ---- Leave checks used by schedulers/assignment pipelines -------------------
 
 from apps.leave.models import LeaveRequest, LeaveStatus  # noqa: E402
+
 
 def _pending_applied_before_930_for_day(leave: LeaveRequest, target_day: date) -> bool:
     """
@@ -259,6 +275,7 @@ def _pending_applied_before_930_for_day(leave: LeaveRequest, target_day: date) -
     )
     return applied <= anchor_930
 
+
 def is_user_on_leave_for_date(user, target_day: date) -> bool:
     """
     Returns True if the user is considered 'on leave' for target_day (IST):
@@ -279,6 +296,7 @@ def is_user_on_leave_for_date(user, target_day: date) -> bool:
             return True
     return False
 
+
 def should_skip_assignment(user, planned_dt) -> bool:
     """
     Convenience wrapper for pipelines that have a datetime planned_dt.
@@ -291,6 +309,7 @@ def should_skip_assignment(user, planned_dt) -> bool:
         return is_user_on_leave_for_date(user, d)
     except Exception:
         return False
+
 
 # ---- Bulk adjustment for already-planned tasks (post-approval hook) ---------
 
@@ -341,7 +360,10 @@ def apply_leave_to_tasks(leave) -> None:
         qs = Checklist.objects.filter(**assign_filter).filter(**filters_range)
         total = qs.count()
         if total == 0:
-            logger.info("Task integration: no tasks in window %s..%s for user id=%s", start_date, end_date, leave.employee_id)
+            logger.info(
+                "Task integration: no tasks in window %s..%s for user id=%s",
+                start_date, end_date, leave.employee_id
+            )
             return
 
         logger.info("Task integration: processing %s task(s) for leave id=%s", total, getattr(leave, "id", None))

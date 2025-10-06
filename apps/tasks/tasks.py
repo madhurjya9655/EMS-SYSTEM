@@ -1,21 +1,23 @@
-# apps/tasks/tasks.py
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import timedelta, datetime, time as dt_time
+from typing import Tuple
 
 import pytz
 from celery import shared_task
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
 
 from .models import Checklist
-from .recurrence import (
+# ✅ Final recurrence rules (WORKING-DAY SHIFT; 19:00 IST on next stepped working day)
+from .recurrence_utils import (
     RECURRING_MODES,
     normalize_mode,
-    get_next_planned_date,
+    get_next_planned_date,  # shifts Sun/holiday → next working day @ 19:00 IST
 )
 from .utils import (
     _safe_console_text,
@@ -32,11 +34,29 @@ SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", Tru
 SEND_RECUR_EMAILS_ONLY_AT_10AM = getattr(settings, "SEND_RECUR_EMAILS_ONLY_AT_10AM", False)
 
 
+# -------------------------------
+# General IST helpers
+# -------------------------------
+def _now_ist() -> datetime:
+    return timezone.now().astimezone(IST)
+
+def _ist_day_bounds(for_dt_ist: datetime) -> Tuple[datetime, datetime]:
+    """
+    Return (start_aware, end_aware) in PROJECT TZ for the IST day containing for_dt_ist.
+    """
+    start_ist = IST.localize(datetime.combine(for_dt_ist.date(), dt_time(0, 0)))
+    end_ist = IST.localize(datetime.combine(for_dt_ist.date(), dt_time(23, 59, 59, 999999)))
+    return (start_ist.astimezone(timezone.get_current_timezone()),
+            end_ist.astimezone(timezone.get_current_timezone()))
+
 def _within_10am_ist_window(leeway_minutes: int = 5) -> bool:
-    now_ist = timezone.now().astimezone(IST)
+    now_ist = _now_ist()
     anchor = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
     return (anchor - timedelta(minutes=leeway_minutes)) <= now_ist <= (anchor + timedelta(minutes=leeway_minutes))
 
+def _is_after_10am_ist() -> bool:
+    now_ist = _now_ist()
+    return now_ist.time() >= dt_time(10, 0)
 
 def _should_send_recur_email_now() -> bool:
     if not SEND_EMAILS_FOR_AUTO_RECUR:
@@ -46,16 +66,21 @@ def _should_send_recur_email_now() -> bool:
     return _within_10am_ist_window()
 
 
+# -------------------------------
+# Recurrence generator (optional)
+# -------------------------------
 def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False) -> int:
     """
     Ensure exactly one future Pending exists for a recurring checklist 'series'.
     Series key fields: assign_to_id, task_name, mode, frequency, group_name.
+
     Rules:
       • Never generate if any Pending exists (past or future). Next only after completion.
       • Compute next from the latest Completed occurrence's planned_date.
-      • Preserve planned time-of-day and skip Sundays/holidays (handled by get_next_planned_date()).
+      • Next planned is **19:00 IST** on the next working day (Sun/holidays shifted).
       • Dupe guard ±1 minute.
-      • Send email to assignee for every generated occurrence.
+      • Send email to assignee for every generated occurrence (when allowed by knobs).
+
     Returns: number of items created (0/1).
     """
     now = timezone.now()
@@ -75,7 +100,7 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
         # No completed item yet → nothing to generate.
         return 0
 
-    # Compute next (preserves time, shifts to working day)
+    # Compute next (19:00 IST + shift to working day)
     next_dt = get_next_planned_date(completed.planned_date, series["mode"], series["frequency"] or 1)
 
     # Catch-up loop to strictly move into the future
@@ -103,14 +128,14 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
         ))
         return 0
 
-    # Create + email
+    # Create + email (assignee-only)
     with transaction.atomic():
         obj = Checklist.objects.create(
             assign_by=completed.assign_by,
             task_name=completed.task_name,
             message=completed.message,
             assign_to=completed.assign_to,
-            planned_date=next_dt,  # PRESERVED time-of-day (delay computed against this)
+            planned_date=next_dt,  # 19:00 IST (shifted to working day)
             priority=completed.priority,
             attachment_mandatory=completed.attachment_mandatory,
             mode=completed.mode,
@@ -155,13 +180,9 @@ def generate_recurring_checklists(self, user_id: int | None = None, dry_run: boo
     """
     Idempotent generator for recurring CHECKLIST tasks.
     Safe to run hourly or daily (e.g., via celery beat or cron).
-
-    • Scans distinct recurring 'series' (assign_to, task_name, mode, frequency, group_name).
-    • For each series, generates NEXT only after the current is completed.
-    • Preserves planned time-of-day; dashboards handle 10:00 IST visibility separately.
-    • Logs per-user counts to help diagnose “only first occurrence created” issues.
+    NOTE: If you've enabled auto-creation on completion via signals,
+          this task is optional / can serve as a safety net.
     """
-    now = timezone.now()
     filters = {"mode__in": RECURRING_MODES}
     if user_id:
         filters["assign_to_id"] = user_id
@@ -189,13 +210,13 @@ def generate_recurring_checklists(self, user_id: int | None = None, dry_run: boo
         if created:
             per_user[s["assign_to_id"]] = per_user.get(s["assign_to_id"], 0) + created
 
-    # Helpful logs for user-wise verification (e.g., dinesh@ case)
+    # Helpful logs for user-wise verification
     if per_user:
         for uid, count in per_user.items():
             logger.info(_safe_console_text(f"[RECUR GEN] user_id={uid} → created {count} next occurrence(s)"))
     else:
         logger.info(_safe_console_text(
-            f"[RECUR GEN] No new items created at {now.astimezone(IST):%Y-%m-%d %H:%M IST} "
+            f"[RECUR GEN] No new items created at {_now_ist():%Y-%m-%d %H:%M IST} "
             f"(dry_run={dry_run}, user_id={user_id})"
         ))
 
@@ -228,3 +249,133 @@ def audit_recurring_health(self) -> dict:
 
     logger.info(_safe_console_text(f"[RECUR AUDIT] OK series: {ok}, Stuck series: {stuck}"))
     return {"ok": ok, "stuck": stuck, "details": details}
+
+
+# -------------------------------
+# 10:00 IST daily due mailer
+# -------------------------------
+def _sent_key(model: str, obj_id: int, day_ist_str: str) -> str:
+    return f"due_mail_sent:{model}:{obj_id}:{day_ist_str}"
+
+def _mark_sent_for_today(model: str, obj_id: int) -> None:
+    today_ist = _now_ist().date().isoformat()
+    key = _sent_key(model, obj_id, today_ist)
+    # expire at next 03:00 IST (covers restarts in the same day reasonably well if using Redis)
+    now_ist = _now_ist()
+    next3 = (now_ist + timedelta(days=1)).replace(hour=3, minute=0, second=0, microsecond=0)
+    ttl_seconds = int((next3 - now_ist).total_seconds())
+    cache.set(key, True, ttl_seconds)
+
+def _already_sent_today(model: str, obj_id: int) -> bool:
+    today_ist = _now_ist().date().isoformat()
+    return bool(cache.get(_sent_key(model, obj_id, today_ist), False))
+
+def _send_checklist_email(obj: Checklist) -> None:
+    try:
+        complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
+        send_checklist_assignment_to_user(
+            task=obj,
+            complete_url=complete_url,
+            subject_prefix="New Checklist Task Assigned",
+        )
+        logger.info(_safe_console_text(f"[DUE@10] Checklist {obj.id} mailed to user_id={obj.assign_to_id}"))
+    except Exception as e:
+        logger.error(_safe_console_text(f"[DUE@10] Checklist {obj.id} email failure: {e}"))
+
+def _send_delegation_email(obj) -> None:
+    """
+    Send delegation assignment; if helper is missing, reuse checklist sender with different subject.
+    """
+    try:
+        try:
+            from .utils import send_delegation_assignment_to_user  # type: ignore
+            complete_url = f"{SITE_URL}{reverse('tasks:complete_delegation', args=[obj.id])}"
+            send_delegation_assignment_to_user(
+                delegation=obj,
+                complete_url=complete_url,
+                subject_prefix="New Delegation Task Assigned",
+            )
+        except Exception:
+            from .utils import send_checklist_assignment_to_user  # fallback
+            try:
+                complete_url = f"{SITE_URL}{reverse('tasks:complete_delegation', args=[obj.id])}"
+            except Exception:
+                complete_url = SITE_URL
+            send_checklist_assignment_to_user(
+                task=obj,
+                complete_url=complete_url,
+                subject_prefix="New Delegation Task Assigned",
+            )
+        logger.info(_safe_console_text(f"[DUE@10] Delegation {obj.id} mailed to user_id={obj.assign_to_id}"))
+    except Exception as e:
+        logger.error(_safe_console_text(f"[DUE@10] Delegation {obj.id} email failure: {e}"))
+
+def _fetch_delegations_due_today(start_dt, end_dt):
+    """
+    Import lazily to avoid circulars. Works whether planned_date is DateTimeField or
+    you filter by date equivalently.
+    """
+    try:
+        from .models import Delegation  # type: ignore
+    except Exception:
+        return []
+
+    # Primary: DateTimeField window
+    qs = Delegation.objects.filter(status="Pending", planned_date__gte=start_dt, planned_date__lte=end_dt)
+    if qs.exists():
+        return list(qs)
+
+    # Fallback: filter by IST date equality if schema differs
+    try:
+        today_ist = _now_ist().date()
+        qs2 = Delegation.objects.filter(status="Pending", planned_date__date=today_ist)
+        return list(qs2)
+    except Exception:
+        return list(qs)
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=30)
+def send_due_today_assignments(self) -> dict:
+    """
+    Send assignment emails for *today's* Checklist & Delegation at/after 10:00 IST.
+    Re-entrant & de-duplicated per item per day via cache keys.
+    Safe to run every few minutes between 10:00–10:10 IST, or hourly.
+    """
+    if not _is_after_10am_ist():
+        logger.info(_safe_console_text("[DUE@10] Skipped: before 10:00 IST"))
+        return {"sent": 0, "checklists": 0, "delegations": 0, "skipped_before_10": True}
+
+    now_ist = _now_ist()
+    start_dt, end_dt = _ist_day_bounds(now_ist)
+
+    # Checklists due today, still pending
+    cl_qs = Checklist.objects.filter(status="Pending", planned_date__gte=start_dt, planned_date__lte=end_dt)
+    # Delegations due today, still pending
+    delegations = _fetch_delegations_due_today(start_dt, end_dt)
+
+    sent = 0
+    cl_sent = 0
+    de_sent = 0
+
+    # Checklist fan-out
+    for obj in cl_qs.iterator():
+        if _already_sent_today("Checklist", obj.id):
+            continue
+        _send_checklist_email(obj)
+        _mark_sent_for_today("Checklist", obj.id)
+        sent += 1
+        cl_sent += 1
+
+    # Delegation fan-out
+    for obj in delegations:
+        if _already_sent_today("Delegation", obj.id):
+            continue
+        _send_delegation_email(obj)
+        _mark_sent_for_today("Delegation", obj.id)
+        sent += 1
+        de_sent += 1
+
+    logger.info(_safe_console_text(
+        f"[DUE@10] Completed fan-out at {now_ist:%Y-%m-%d %H:%M IST}: "
+        f"checklists={cl_sent}, delegations={de_sent}, total={sent}"
+    ))
+    return {"sent": sent, "checklists": cl_sent, "delegations": de_sent, "skipped_before_10": False}

@@ -14,6 +14,23 @@
     @media (max-width: 992px) { .comment-input { max-width: 100%; } }
     .lock-pill { font-size: 12px; border-radius: 999px; padding: 2px 8px; }
     .text-truncate-280 { max-width: 280px; display: inline-block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* --- NEW: action cell alignment tweaks --- */
+    td.actions-cell {
+      vertical-align: middle;
+    }
+    .actions-wrap{
+      display:inline-flex;
+      align-items:center;
+      justify-content:flex-end;
+      gap:.5rem;
+      flex-wrap:wrap;
+    }
+    .actions-wrap form{ margin:0; }
+    .actions-wrap .btn{ line-height:1.2; }
+    @media (max-width: 576px){
+      .actions-wrap{ justify-content:flex-start; }
+    }
   </style>
 </head>
 <body class="bg-light">
@@ -121,27 +138,29 @@
                            type="text" name="decision_comment" placeholder="Optional comment">
                   </td>
 
-                  <td class="text-end">
-                    <a class="btn btn-outline-primary btn-sm me-2"
-                       href="{% url 'leave:approval_page' lr.id %}?next={{ request.get_full_path|urlencode }}">
-                      Open
-                    </a>
+                  <td class="text-end actions-cell">
+                    <div class="actions-wrap">
+                      <a class="btn btn-outline-primary btn-sm"
+                         href="{% url 'leave:approval_page' lr.id %}?next={{ request.get_full_path|urlencode }}">
+                        Open
+                      </a>
 
-                    <form id="approve-{{ lr.id }}" class="d-inline" method="post"
-                          action="{% url 'leave:manager_decide_approve' lr.id %}?next={{ request.get_full_path|urlencode }}">
-                      {% csrf_token %}
-                      <button class="btn btn-sm btn-success me-1" type="submit" title="Approve" data-approve>
-                        Approve
-                      </button>
-                    </form>
+                      <form id="approve-{{ lr.id }}" method="post"
+                            action="{% url 'leave:manager_decide_approve' lr.id %}?next={{ request.get_full_path|urlencode }}">
+                        {% csrf_token %}
+                        <button class="btn btn-success btn-sm" type="submit" title="Approve" data-approve>
+                          Approve
+                        </button>
+                      </form>
 
-                    <form id="reject-{{ lr.id }}" class="d-inline" method="post"
-                          action="{% url 'leave:manager_decide_reject' lr.id %}?next={{ request.get_full_path|urlencode }}">
-                      {% csrf_token %}
-                      <button class="btn btn-sm btn-danger" type="submit" title="Reject" data-reject>
-                        Reject
-                      </button>
-                    </form>
+                      <form id="reject-{{ lr.id }}" method="post"
+                            action="{% url 'leave:manager_decide_reject' lr.id %}?next={{ request.get_full_path|urlencode }}">
+                        {% csrf_token %}
+                        <button class="btn btn-danger btn-sm" type="submit" title="Reject" data-reject>
+                          Reject
+                        </button>
+                      </form>
+                    </div>
                   </td>
                 </tr>
               {% endfor %}
@@ -179,29 +198,20 @@
   }
 
   function todayIST(d) {
-    // returns yyyy-mm-dd for the IST date of d
     const parts = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit' })
-      .formatToParts(d).reduce((a,p)=>{a[p.type]=p.value;return a;},{});
+      .formatToParts(d).reduce((a,p)=>{a[p.type]=p.value;return a;}, {});
     return `${parts.year}-${parts.month}-${parts.day}`;
   }
 
   function at10amIST(d) {
-    // returns a Date object representing 10:00 IST on the same calendar date as d (IST)
+    // IST = UTC+05:30, so 10:00 IST == 04:30 UTC on same calendar date
     const parts = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit' })
-      .formatToParts(d).reduce((a,p)=>{a[p.type]=p.value;return a;},{});
-    const iso = `${parts.year}-${parts.month}-${parts.day}T10:00:00`;
-    // Interpret iso as in tz by building from components
-    // We’ll create a Date at UTC then shift by IST offset at that local time
-    const t = new Date(iso + 'Z'); // temp
-    // Compute IST offset at that moment
-    const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
-    // Since DST doesn't affect IST, a simpler approach: IST = UTC+5:30
-    const utc = Date.UTC(parseInt(parts.year), parseInt(parts.month)-1, parseInt(parts.day), 4, 30, 0); // 10:00 IST == 04:30 UTC
+      .formatToParts(d).reduce((a,p)=>{a[p.type]=p.value;return a;}, {});
+    const utc = Date.UTC(parseInt(parts.year), parseInt(parts.month)-1, parseInt(parts.day), 4, 30, 0);
     return new Date(utc);
   }
 
   function parseISO(s) {
-    // safe parse even if no timezone suffix (Django |date:"c" includes offset)
     const d = new Date(s);
     return isNaN(d.getTime()) ? null : d;
   }
@@ -210,13 +220,9 @@
     const s = parseISO(startISO);
     const e = parseISO(endISO);
     if (!s || !e) return false;
-
-    // Convert s/e to IST calendar dates (yyyy-mm-dd)
     const sDay = todayIST(s);
     const eDay = todayIST(e);
     const tDay = todayIST(now);
-
-    // Inclusive by calendar day
     return (sDay <= tDay && tDay <= eDay);
   }
 
@@ -224,12 +230,10 @@
     const now = new Date();
     $now.textContent = fmtIST(now);
 
-    // Build 10:00 AM threshold for TODAY (IST)
     const cutoff = at10amIST(now);
     const lockedNow = now.getTime() >= cutoff.getTime();
 
     if (!lockedNow) {
-      // Show countdown
       const ms = cutoff.getTime() - now.getTime();
       const mm = Math.floor(ms / 60000);
       const ss = Math.floor((ms % 60000) / 1000);
@@ -240,7 +244,6 @@
       $cta.className = 'text-danger fw-semibold';
     }
 
-    // For each row, if it includes TODAY (IST) and we are past cutoff -> disable Approve/Reject
     document.querySelectorAll('tr[data-row="leave"]').forEach(tr => {
       const sISO = tr.getAttribute('data-start-iso');
       const eISO = tr.getAttribute('data-end-iso');
@@ -256,7 +259,6 @@
       if ($reject)  { $reject.disabled  = locked;  }
       if ($pill)    { $pill.classList.toggle('d-none', !locked); }
 
-      // Add title tooltip for clarity
       if (locked) {
         if ($approve) $approve.title = 'Locked after 10:00 AM IST for same-day leaves';
         if ($reject)  $reject.title  = 'Locked after 10:00 AM IST for same-day leaves';
