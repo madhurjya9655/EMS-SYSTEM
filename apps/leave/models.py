@@ -1,3 +1,4 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\leave\models.py
 from __future__ import annotations
 
 import hashlib
@@ -560,6 +561,28 @@ class LeaveHandoverQuerySet(models.QuerySet):
         """Get tasks currently assigned to user due to handovers"""
         return self.active_now().for_assignee(user)
 
+    def expired(self) -> "LeaveHandoverQuerySet":
+        """Handovers that should be deactivated because their window is past or leave is not active."""
+        today = timezone.now().date()
+        return self.filter(
+            is_active=True
+        ).filter(
+            models.Q(effective_end_date__lt=today) |
+            ~models.Q(leave_request__status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED])
+        )
+
+    def deactivate_expired(self) -> int:
+        """
+        Deactivate all expired handovers and stop their reminders.
+        Returns number of handovers deactivated.
+        """
+        ids = list(self.expired().values_list("id", flat=True))
+        if not ids:
+            return 0
+        updated = LeaveHandover.objects.filter(id__in=ids, is_active=True).update(is_active=False)
+        DelegationReminder.objects.filter(leave_handover_id__in=ids, is_active=True).update(is_active=False)
+        return int(updated)
+
 
 class LeaveHandover(models.Model):
     objects = LeaveHandoverQuerySet.as_manager()
@@ -657,6 +680,25 @@ class LeaveHandover(models.Model):
         if not self.effective_end_date and self.leave_request:
             self.effective_end_date = self.leave_request.end_date
         super().save(*args, **kwargs)
+
+    def deactivate_if_expired(self) -> bool:
+        """
+        Deactivate this handover (and its reminders) if it's no longer valid.
+        Returns True if it was deactivated.
+        """
+        if not self.is_active:
+            return False
+        today = timezone.now().date()
+        expired = (
+            (self.effective_end_date and self.effective_end_date < today) or
+            (self.leave_request and self.leave_request.status not in [LeaveStatus.PENDING, LeaveStatus.APPROVED])
+        )
+        if expired:
+            self.is_active = False
+            self.save(update_fields=["is_active", "updated_at"])
+            DelegationReminder.objects.filter(leave_handover=self, is_active=True).update(is_active=False)
+            return True
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -897,6 +939,27 @@ def get_handed_over_tasks_for_user(user: User) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Cleanup utility (for scheduler/management command)
+# ---------------------------------------------------------------------------
+
+def deactivate_expired_handovers() -> int:
+    """
+    Deactivate all expired LeaveHandover rows and stop their DelegationReminder rows.
+    A handover is considered expired when:
+      • effective_end_date is in the past (IST date), or
+      • the linked leave is not in PENDING/APPROVED.
+    Returns the number of handovers deactivated.
+    """
+    try:
+        count = LeaveHandover.objects.deactivate_expired()
+        logger.info("Expired handovers deactivated: %s", count)
+        return count
+    except Exception:
+        logger.exception("Failed during deactivate_expired_handovers()")
+        return 0
+
+
+# ---------------------------------------------------------------------------
 # Signals (emails + audits)
 # ---------------------------------------------------------------------------
 
@@ -987,9 +1050,25 @@ from django.dispatch import receiver
 def _on_leave_created(sender, instance: LeaveRequest, created: bool, **kwargs) -> None:
     if not created:
         return
-    LeaveDecisionAudit.log(instance, DecisionAction.APPLIED)
-    _safe_send_request_email(instance)
 
-    # Send handover emails if there are any handovers
-    if LeaveHandover.objects.filter(leave_request=instance).exists():
-        _safe_send_handover_emails(instance)
+    # Defer all side-effects until after the transaction commits to avoid SQLite locks
+    def _after_commit():
+        try:
+            LeaveDecisionAudit.log(instance, DecisionAction.APPLIED)
+        except Exception:
+            logger.exception("Failed to log APPLIED for leave %s", getattr(instance, "id", None))
+        try:
+            _safe_send_request_email(instance)
+        except Exception:
+            logger.exception("Failed to queue/send request email for leave %s", getattr(instance, "id", None))
+        try:
+            if LeaveHandover.objects.filter(leave_request=instance).exists():
+                _safe_send_handover_emails(instance)
+        except Exception:
+            logger.exception("Failed to queue/send handover emails for leave %s", getattr(instance, "id", None))
+
+    try:
+        transaction.on_commit(_after_commit)
+    except Exception:
+        # Fallback: execute immediately (still better than dropping the event)
+        _after_commit()

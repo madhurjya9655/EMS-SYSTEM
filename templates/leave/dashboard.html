@@ -393,7 +393,7 @@ function executeBulkDelete() {
   form.method = 'POST';
   form.action = '{% url "leave:bulk_delete" %}';
 
-  const csrf = document.querySelector('#deleteForm [name=csrfmiddlewaretoken]');
+  const csrf = document.querySelector('#deleteForm [name=csrfmiddlewaretoken]'); // reuse token
   if (csrf) {
     const csrfInput = document.createElement('input');
     csrfInput.type = 'hidden';

@@ -1,0 +1,40 @@
+Hello,
+
+{{ employee_name }}{% if employee_designation %} ({{ employee_designation }}){% endif %} has applied for leave.
+
+Leave Details
+-------------
+Leave ID: {{ leave_id }}
+Type: {{ leave_type }}
+Duration: {% if is_half_day %}Half-day (0.5 day){% else %}{{ duration_days }} days{% endif %}
+From (IST): {{ start_at_ist }}
+To (IST):   {{ end_at_ist }}
+{% if reason %}Reason: {{ reason }}{% endif %}
+
+{% if has_handovers %}
+Task Handover Summary
+---------------------
+Tasks delegated during this leave:
+
+{% for handover in handover_summary %}• {{ handover.task_title }} ({{ handover.task_type }} #{{ handover.task_id }})
+  → Assigned to: {{ handover.assignee_name }}{% if handover.task_url %}
+  → Task link: {{ handover.task_url }}{% endif %}{% if handover.message %}
+  → Instructions: "{{ handover.message }}"{% endif %}
+
+{% endfor %}
+Separate handover emails have been sent to the assignees.
+{% endif %}
+
+Actions
+-------
+Approve (approval page): {{ approve_url }}
+Reject  (approval page): {{ reject_url }}
+
+{% if token_approve_url or token_reject_url %}
+One-click (secure; expires in 7 days; one-time use)
+{% if token_approve_url %}Approve via secure link: {{ token_approve_url }}{% endif %}
+{% if token_reject_url %}Reject via secure link:  {{ token_reject_url }}{% endif %}
+{% endif %}
+
+— EMS
+{% if site_url %}Open EMS: {{ site_url }}{% endif %}

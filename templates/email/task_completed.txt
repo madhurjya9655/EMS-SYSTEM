@@ -1,0 +1,19 @@
+{{ task_type }} Completed
+
+Hello {{ original_assignee_name }},
+
+The {{ task_type|default:"Task" }} "{{ task_name }}" (ID: {{ task_id }}) was completed by {{ delegate_name }}{% if delegate_email %} <{{ delegate_email }}>{% endif %}.
+
+Details:
+{% if planned_date_ist %}- Planned Date: {{ planned_date_ist }}
+{% endif %}- Completed At: {{ completed_at_ist }}
+
+{% if task_url %}View task: {{ task_url }}
+{% endif %}
+
+{% if leave_window.exists %}Handover Context:
+- Leave Owner: {{ leave_window.employee_name }}
+- Handover Window: {{ leave_window.start_at_ist }} -> {{ leave_window.end_at_ist }}
+
+{% endif %}— EMS Notification
+{{ site_url }}

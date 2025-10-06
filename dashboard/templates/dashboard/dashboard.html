@@ -23,23 +23,23 @@
             <tbody>
               <tr>
                 <td>Checklist</td>
-                <td class="text-center">{{ week_score.checklist.previous }}</td>
-                <td class="text-center">{{ week_score.checklist.current }}</td>
+                <td class="text-center">{{ week_score.checklist.previous|default:"0" }}</td>
+                <td class="text-center">{{ week_score.checklist.current|default:"0" }}</td>
               </tr>
               <tr>
                 <td>Delegation</td>
-                <td class="text-center">{{ week_score.delegation.previous }}</td>
-                <td class="text-center">{{ week_score.delegation.current }}</td>
+                <td class="text-center">{{ week_score.delegation.previous|default:"0" }}</td>
+                <td class="text-center">{{ week_score.delegation.current|default:"0" }}</td>
               </tr>
               <tr>
                 <td>Help Ticket</td>
-                <td class="text-center">{{ week_score.help_ticket.previous }}</td>
-                <td class="text-center">{{ week_score.help_ticket.current }}</td>
+                <td class="text-center">{{ week_score.help_ticket.previous|default:"0" }}</td>
+                <td class="text-center">{{ week_score.help_ticket.current|default:"0" }}</td>
               </tr>
               <tr>
                 <td>Time Spent</td>
-                <td class="text-center">{{ prev_time }}</td>
-                <td class="text-center">{{ curr_time }}</td>
+                <td class="text-center">{{ prev_time|default:"00:00" }}</td>
+                <td class="text-center">{{ curr_time|default:"00:00" }}</td>
               </tr>
             </tbody>
           </table>
@@ -53,9 +53,9 @@
         <div class="card-body p-0">
           <table class="table mb-0">
             <tbody>
-              <tr><td>Checklist</td><td class="text-end">{{ pending_tasks.checklist }}</td></tr>
-              <tr><td>Delegation</td><td class="text-end">{{ pending_tasks.delegation }}</td></tr>
-              <tr><td>Help Ticket</td><td class="text-end">{{ pending_tasks.help_ticket }}</td></tr>
+              <tr><td>Checklist</td><td class="text-end">{{ pending_tasks.checklist|default:"0" }}</td></tr>
+              <tr><td>Delegation</td><td class="text-end">{{ pending_tasks.delegation|default:"0" }}</td></tr>
+              <tr><td>Help Ticket</td><td class="text-end">{{ pending_tasks.help_ticket|default:"0" }}</td></tr>
             </tbody>
           </table>
         </div>
@@ -177,6 +177,8 @@
                           <span class="badge bg-success">
                             {% if task.status == 'Closed' %}Closed{% else %}Completed{% endif %}
                           </span>
+                        {% elif task.status == 'Skipped' %}
+                          <span class="badge bg-secondary">Skipped</span>
                         {% else %}
                           <span class="badge bg-secondary">{{ task.status }}</span>
                         {% endif %}
@@ -283,8 +285,8 @@
       <div class="modal-body">
         {% if not selected or selected == 'checklist' %}
           <div class="row g-3">
-            <div class="col-md-6"><label class="fw-bold">Task Name:</label><p class="mb-0">{{ task.task_name }}</p></div>
-            <div class="col-md-6"><label class="fw-bold">Status:</label><p class="mb-0"><span class="badge bg-{% if task.status == 'Pending' %}warning{% else %}success{% endif %}">{{ task.status }}</span></p></div>
+            <div class="col-md-6"><label class="fw-bold">Task Name:</label><p class="mb-0">{{ task.task_name|default:"—" }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Status:</label><p class="mb-0"><span class="badge bg-{% if task.status == 'Pending' %}warning{% else %}success{% endif %}">{{ task.status|default:"—" }}</span></p></div>
             <div class="col-md-6"><label class="fw-bold">Assigned By:</label><p class="mb-0">{{ task.assign_by.get_full_name|default:task.assign_by.username }}</p></div>
             <div class="col-md-6"><label class="fw-bold">Assigned To:</label><p class="mb-0">{{ task.assign_to.get_full_name|default:task.assign_to.username }}</p></div>
             <div class="col-md-6"><label class="fw-bold">Planned Date:</label><p class="mb-0">{{ task.planned_date|date:"d M, Y H:i" }}</p></div>
@@ -298,8 +300,8 @@
 
         {% elif selected == 'delegation' %}
           <div class="row g-3">
-            <div class="col-md-6"><label class="fw-bold">Task Title:</label><p class="mb-0">{{ task.task_name }}</p></div>
-            <div class="col-md-6"><label class="fw-bold">Status:</label><p class="mb-0"><span class="badge bg-{% if task.status == 'Pending' %}warning{% else %}success{% endif %}">{{ task.status }}</span></p></div>
+            <div class="col-md-6"><label class="fw-bold">Task Title:</label><p class="mb-0">{{ task.task_name|default:"—" }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Status:</label><p class="mb-0"><span class="badge bg-{% if task.status == 'Pending' %}warning{% else %}success{% endif %}">{{ task.status|default:"—" }}</span></p></div>
             <div class="col-md-6"><label class="fw-bold">Assigned By:</label><p class="mb-0">{{ task.assign_by.get_full_name|default:task.assign_by.username }}</p></div>
             <div class="col-md-6"><label class="fw-bold">Assigned To:</label><p class="mb-0">{{ task.assign_to.get_full_name|default:task.assign_to.username }}</p></div>
             <div class="col-md-6"><label class="fw-bold">Planned Date:</label><p class="mb-0">{{ task.planned_date|date:"d M, Y H:i" }}</p></div>
@@ -326,7 +328,7 @@
 
         {% else %}
           <div class="row g-3">
-            <div class="col-md-6"><label class="fw-bold">Subject:</label><p class="mb-0">{{ task.title }}</p></div>
+            <div class="col-md-6"><label class="fw-bold">Subject:</label><p class="mb-0">{{ task.title|default:"—" }}</p></div>
             <div class="col-md-6"><label class="fw-bold">Status:</label>
               <p class="mb-0">
                 {% if task.status == 'Open' %}
@@ -344,7 +346,7 @@
             <div class="col-md-6"><label class="fw-bold">Assigned To:</label><p class="mb-0">{{ task.assign_to.get_full_name|default:task.assign_to.username }}</p></div>
             <div class="col-md-6"><label class="fw-bold">Created:</label><p class="mb-0">{{ task.created_at|date:"d M, Y H:i" }}</p></div>
             <div class="col-md-6"><label class="fw-bold">Planned Date:</label><p class="mb-0">{{ task.planned_date|date:"d M, Y H:i" }}</p></div>
-            <div class="col-md-6"><label class="fw-bold">Priority:</label><p class="mb-0"><span class="badge bg-{% if task.priority == 'High' %}danger{% elif task.priority == 'Medium' %}warning{% else %}success{% endif %}">{{ task.priority }}</span></p></div>
+            <div class="col-md-6"><label class="fw-bold">Priority:</label><p class="mb-0"><span class="badge bg-{% if task.priority == 'High' %}danger{% elif task.priority == 'Medium' %}warning{% else %}success{% endif %}">{{ task.priority|default:"Low" }}</span></p></div>
             <div class="col-md-6"><label class="fw-bold">Actual Duration:</label><p class="mb-0">{% if task.actual_duration_minutes %}{{ task.actual_duration_minutes }} min{% else %}—{% endif %}</p></div>
             <div class="col-12"><label class="fw-bold">Message:</label>
               <p class="mb-0">
@@ -364,27 +366,41 @@
         {% endif %}
       </div>
 
+      {# ======= UPDATED FOOTER WITH "VIEW FULL TASK" ======= #}
       <div class="modal-footer">
         {% if not selected or selected == 'checklist' %}
           {% if task.status == 'Pending' %}
             <a href="{% url 'tasks:complete_checklist' task.id %}?next={{ request.get_full_path|urlencode }}"
                class="btn btn-success"><i class="fas fa-check"></i> Complete</a>
           {% endif %}
+          <a href="{% url 'tasks:checklist_detail' task.id %}" class="btn btn-outline-primary">
+            <i class="fas fa-external-link-alt"></i> View full task
+          </a>
+
         {% elif selected == 'delegation' %}
           {% if task.status == 'Pending' %}
             <a href="{% url 'tasks:complete_delegation' task.id %}?next={{ request.get_full_path|urlencode }}"
                class="btn btn-success"><i class="fas fa-check"></i> Complete</a>
           {% endif %}
-        {% elif selected == 'help_ticket' %}
+          <a href="{% url 'tasks:delegation_detail' task.id %}" class="btn btn-outline-primary">
+            <i class="fas fa-external-link-alt"></i> View full task
+          </a>
+
+        {% else %}
           {% if task.status != 'Closed' %}
             <a href="{% url 'tasks:note_help_ticket' task.id %}?next={{ request.get_full_path|urlencode }}"
                class="btn btn-primary"><i class="fas fa-sticky-note"></i> Add Note</a>
             <a href="{% url 'tasks:close_help_ticket' task.id %}?next={{ request.get_full_path|urlencode }}"
                class="btn btn-success"><i class="fas fa-check"></i> Close Ticket</a>
           {% endif %}
+          <a href="{% url 'tasks:help_ticket_detail' task.id %}" class="btn btn-outline-primary">
+            <i class="fas fa-external-link-alt"></i> View full task
+          </a>
         {% endif %}
+
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
       </div>
+      {# ======= /UPDATED FOOTER ======= #}
 
     </div>
   </div>

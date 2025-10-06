@@ -1,7 +1,7 @@
 # apps/leave/forms.py
 from __future__ import annotations
 
-from datetime import timedelta, time, datetime
+from datetime import timedelta, time, datetime, date
 from typing import Optional, List, Tuple
 
 from django import forms
@@ -18,10 +18,23 @@ ALLOWED_ATTACHMENT_EXTS = {
     ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".doc", ".docx", ".txt"
 }
 
+# IMPORTANT: We do NOT expose a "Half Day" leave type anymore.
+SOP_ALLOWED_TYPE_NAMES = [
+    "Compensatory Off",
+    "Leave Without Pay",
+    "Sick Leave",
+    "Casual Leave",
+    "Maternity Leave",
+    "Paternity Leave",
+]
 
-def _naive_to_ist(dt):
-    if not dt:
-        return dt
+HALF_DAY_DEFAULT_FROM = time(9, 30)
+HALF_DAY_DEFAULT_TO   = time(18, 0)
+FULL_DAY_DEFAULT_FROM = time(9, 30)
+FULL_DAY_DEFAULT_TO   = time(18, 0)
+
+
+def _aware_ist(dt: datetime) -> datetime:
     if timezone.is_naive(dt):
         return timezone.make_aware(dt, IST)
     return timezone.localtime(dt, IST)
@@ -32,33 +45,60 @@ def _choices(items: List[Tuple[int, str]]) -> List[Tuple[str, str]]:
 
 
 class LeaveRequestForm(forms.ModelForm):
+    """
+    UI contract:
+      • duration_type = FULL / HALF (radio)
+      • start_at, end_at are DATE-ONLY fields in the form (we compose datetimes in clean())
+      • for HALF, we also show from_time / to_time
+    """
+
+    # Which kind of leave duration?
+    DURATION_CHOICES = (("FULL", "Full Day"), ("HALF", "Half Day"))
+    duration_type = forms.ChoiceField(
+        choices=DURATION_CHOICES,
+        initial="FULL",
+        widget=forms.RadioSelect(attrs={"id": "id_duration_type"}),
+        label="Duration",
+        required=True,
+    )
+
+    # Leave type (no "Half Day" here)
     leave_type = forms.ModelChoiceField(
         queryset=LeaveType.objects.none(),
         required=True,
         empty_label="-- Select Type --",
         label="Leave Type",
-        widget=forms.Select(attrs={"class": "form-select"}),
+        widget=forms.Select(attrs={"class": "form-select", "id": "id_leave_type"}),
     )
 
-    start_at = forms.DateTimeField(
+    # DATE-ONLY inputs (no time UI)
+    start_at = forms.DateField(
         required=True,
-        label="From (IST)",
-        widget=forms.DateTimeInput(attrs={"type": "datetime-local", "class": "form-control"}),
-        help_text="Start date & time (IST).",
+        label="Start Date (IST)",
+        widget=forms.DateInput(attrs={"type": "date", "class": "form-control", "id": "id_start_at"}),
+        help_text="Start date (IST).",
     )
-
-    end_at = forms.DateTimeField(
+    end_at = forms.DateField(
         required=True,
-        label="To (IST)",
-        widget=forms.DateTimeInput(attrs={"type": "datetime-local", "class": "form-control"}),
-        help_text="End date & time (IST).",
+        label="End Date (IST)",
+        widget=forms.DateInput(attrs={"type": "date", "class": "form-control", "id": "id_end_at"}),
+        help_text="End date (IST).",
     )
 
-    is_half_day = forms.BooleanField(
+    # Half-day specific time slot
+    from_time = forms.TimeField(
         required=False,
-        label="Half-day",
-        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
-        help_text="For a half-day, keep start & end on the same date and within 6 hours.",
+        label="From Time (Half Day)",
+        initial=HALF_DAY_DEFAULT_FROM,
+        widget=forms.TimeInput(attrs={"type": "time", "class": "form-control", "id": "id_from_time"}),
+        help_text="Used only when Duration is Half Day (defaults to 09:30).",
+    )
+    to_time = forms.TimeField(
+        required=False,
+        label="To Time (Half Day)",
+        initial=HALF_DAY_DEFAULT_TO,
+        widget=forms.TimeInput(attrs={"type": "time", "class": "form-control", "id": "id_to_time"}),
+        help_text="Used only when Duration is Half Day (defaults to 18:00).",
     )
 
     reason = forms.CharField(
@@ -74,8 +114,6 @@ class LeaveRequestForm(forms.ModelForm):
         help_text="Allowed: PDF, images, DOC/DOCX/TXT (max 10 MB).",
     )
 
-    # (Removed cc_users field — no longer exposed on the apply form)
-
     # Task handover fields
     delegate_to = forms.ModelChoiceField(
         queryset=User.objects.none(),
@@ -85,7 +123,6 @@ class LeaveRequestForm(forms.ModelForm):
         widget=forms.Select(attrs={"class": "form-select"}),
         empty_label="---------",
     )
-
     handover_checklist = forms.MultipleChoiceField(
         required=False,
         label="Checklist tasks to hand over",
@@ -93,48 +130,58 @@ class LeaveRequestForm(forms.ModelForm):
         widget=forms.CheckboxSelectMultiple(attrs={"class": "form-check-input"}),
         help_text="Only tasks due or in progress in the leave period are listed.",
     )
-
     handover_delegation = forms.MultipleChoiceField(
         required=False,
         label="Delegation tasks to hand over",
         choices=[],
         widget=forms.CheckboxSelectMultiple(attrs={"class": "form-check-input"}),
     )
-
     handover_help_ticket = forms.MultipleChoiceField(
         required=False,
         label="Help tickets to hand over",
         choices=[],
         widget=forms.CheckboxSelectMultiple(attrs={"class": "form-check-input"}),
     )
-
     handover_message = forms.CharField(
         required=False,
         label="Handover message (optional)",
         widget=forms.Textarea(attrs={"rows": 2, "placeholder": "Any instructions for the delegate", "class": "form-control"}),
     )
 
+    class Meta:
+        model = LeaveRequest
+        fields = [
+            "duration_type",
+            "leave_type",
+            "start_at", "end_at",
+            "from_time", "to_time",
+            "reason", "attachment",
+            "delegate_to", "handover_checklist", "handover_delegation",
+            "handover_help_ticket", "handover_message",
+        ]
+
+    # ------------------------------------------------------------------ init
     def __init__(self, *args, user: Optional[User] = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.user = user
 
-        # Always refresh the list so newly seeded/added types show up
-        self.fields["leave_type"].queryset = LeaveType.objects.all().order_by("name")
+        # Only SOP-allowed leave types
+        self.fields["leave_type"].queryset = LeaveType.objects.filter(
+            name__in=SOP_ALLOWED_TYPE_NAMES
+        ).order_by("name")
 
-        # Prefer instance.employee if editing; otherwise, use provided user
+        # Select employee
         if self.instance and getattr(self.instance, "employee_id", None):
             self.employee = self.instance.employee
         else:
             self.employee = user
-
-        # Ensure instance has employee before model.save() triggers upload_to/snapshots
         try:
             if self.instance and not getattr(self.instance, "employee_id", None) and self.employee:
                 self.instance.employee = self.employee
         except Exception:
             pass
 
-        # Delegate choices (active users with email), exclude self
+        # delegate choices
         delegate_qs = User.objects.filter(is_active=True) \
             .exclude(email__isnull=True).exclude(email__exact="") \
             .order_by("first_name", "last_name", "username")
@@ -142,31 +189,29 @@ class LeaveRequestForm(forms.ModelForm):
             delegate_qs = delegate_qs.exclude(pk=getattr(self.employee, "pk", None))
         self.fields["delegate_to"].queryset = delegate_qs
 
-        # Load handover choices - get dates from form data or default to a week from now
-        start_dt = end_dt = None
-
+        # handover choices (based on dates if present)
+        start_d: Optional[date] = None
+        end_d: Optional[date] = None
         if self.data:
-            # Form submitted with data - extract dates
-            start_raw = self.data.get("start_at")
-            end_raw = self.data.get("end_at")
             try:
-                if start_raw:
-                    start_dt = _naive_to_ist(datetime.fromisoformat(start_raw.replace('T', ' ')))
-                if end_raw:
-                    end_dt = _naive_to_ist(datetime.fromisoformat(end_raw.replace('T', ' ')))
+                sd = self.data.get("start_at")
+                ed = self.data.get("end_at")
+                if sd:
+                    start_d = datetime.fromisoformat(sd).date()
+                if ed:
+                    end_d = datetime.fromisoformat(ed).date()
             except Exception:
                 pass
+        if not start_d or not end_d:
+            now = timezone.localtime(timezone.now(), IST).date()
+            start_d, end_d = now, now + timedelta(days=7)
+        self._load_handover_choices(
+            timezone.make_aware(datetime.combine(start_d, time.min), IST),
+            timezone.make_aware(datetime.combine(end_d,   time.max), IST),
+        )
 
-        if not start_dt or not end_dt:
-            # Default to show tasks for next week to demonstrate functionality
-            now = timezone.now()
-            start_dt = now
-            end_dt = now + timedelta(days=7)
-
-        self._load_handover_choices(start_dt, end_dt)
-
+    # ------------------------------------------------------------- choices load
     def _load_handover_choices(self, start_at, end_at):
-        """Query user's tasks in the window and present as choices."""
         if not self.employee:
             self.fields["handover_checklist"].choices = []
             self.fields["handover_delegation"].choices = []
@@ -179,94 +224,55 @@ class LeaveRequestForm(forms.ModelForm):
             date_str = planned.strftime('%m/%d') if planned else 'No date'
             return f"#{getattr(obj, 'id', '—')} • {title} ({date_str})"
 
-        # Checklist tasks
         cl_items: List[Tuple[int, str]] = []
         try:
             from apps.tasks.models import Checklist
-            # Get all pending tasks for this user
             q = Checklist.objects.filter(assign_to=self.employee, status='Pending')
-
-            # If we have a specific date range, filter by it, otherwise show all pending
-            if start_at and end_at and (end_at - start_at).days < 30:  # Only filter if reasonable date range
-                q = q.filter(planned_date__range=(start_at - timedelta(days=1), end_at + timedelta(days=1)))
-
+            q = q.filter(planned_date__range=(start_at - timedelta(days=1), end_at + timedelta(days=1)))
             cl_items = [(t.id, _fmt(t, "task_name")) for t in q.order_by("-planned_date", "-id")[:50]]
-        except Exception as e:
-            print(f"Error loading checklist tasks: {e}")
+        except Exception:
             cl_items = []
 
-        # Delegation tasks
         dg_items: List[Tuple[int, str]] = []
         try:
             from apps.tasks.models import Delegation
             q = Delegation.objects.filter(assign_to=self.employee, status='Pending')
-
-            if start_at and end_at and (end_at - start_at).days < 30:
-                q = q.filter(planned_date__range=(start_at - timedelta(days=1), end_at + timedelta(days=1)))
-
+            q = q.filter(planned_date__range=(start_at - timedelta(days=1), end_at + timedelta(days=1)))
             dg_items = [(t.id, _fmt(t, "task_name")) for t in q.order_by("-planned_date", "-id")[:50]]
-        except Exception as e:
-            print(f"Error loading delegation tasks: {e}")
+        except Exception:
             dg_items = []
 
-        # Help tickets
         ht_items: List[Tuple[int, str]] = []
         try:
             from apps.tasks.models import HelpTicket
-            q = HelpTicket.objects.filter(assign_to=self.employee)
-            q = q.exclude(status__in=["Done", "CLOSED", "COMPLETED", "Completed", "Closed"])
-
-            if start_at and end_at and (end_at - start_at).days < 30:
-                q = q.filter(planned_date__range=(start_at - timedelta(days=1), end_at + timedelta(days=1)))
-
+            q = HelpTicket.objects.filter(assign_to=self.employee).exclude(
+                status__in=["Done", "CLOSED", "COMPLETED", "Completed", "Closed"]
+            )
+            q = q.filter(planned_date__range=(start_at - timedelta(days=1), end_at + timedelta(days=1)))
             ht_items = [(t.id, _fmt(t, "title")) for t in q.order_by("-planned_date", "-id")[:50]]
-        except Exception as e:
-            print(f"Error loading help tickets: {e}")
+        except Exception:
             ht_items = []
 
-        # Set choices
         self.fields["handover_checklist"].choices = _choices(cl_items)
         self.fields["handover_delegation"].choices = _choices(dg_items)
         self.fields["handover_help_ticket"].choices = _choices(ht_items)
 
-    class Meta:
-        model = LeaveRequest
-        fields = [
-            "leave_type", "start_at", "end_at", "is_half_day", "reason", "attachment",
-            # (cc_users removed)
-            "delegate_to", "handover_checklist", "handover_delegation",
-            "handover_help_ticket", "handover_message",
-        ]
-
+    # --------------------------------------------------------------- validators
     def clean_attachment(self):
         f = self.cleaned_data.get("attachment")
         if not f:
             return f
         name = (getattr(f, "name", "") or "").lower()
-        ext = ""
-        if "." in name:
-            ext = name[name.rfind("."):]
+        ext = name[name.rfind("."):] if "." in name else ""
         if ext not in ALLOWED_ATTACHMENT_EXTS:
             raise forms.ValidationError("Unsupported file type. Upload PDF, image, DOC/DOCX, or TXT.")
-        if getattr(f, "size", 0) and f.size > 10 * 1024 * 1024:  # 10 MB
+        if getattr(f, "size", 0) and f.size > 10 * 1024 * 1024:
             raise forms.ValidationError("File too large. Max 10 MB.")
         return f
 
-    def clean_start_at(self):
-        dt = self.cleaned_data.get("start_at")
-        return _naive_to_ist(dt)
-
-    def clean_end_at(self):
-        dt = self.cleaned_data.get("end_at")
-        return _naive_to_ist(dt)
-
-    # (clean_cc_users removed)
-
     def _overlaps_existing(self, start_at, end_at) -> bool:
-        """Detect overlap with user's PENDING/APPROVED leaves."""
-        if not self.employee:
+        if not hasattr(self, "employee") or not self.employee:
             return False
-
         qs = (
             LeaveRequest.objects.filter(employee=self.employee)
             .exclude(pk=self.instance.pk or 0)
@@ -277,48 +283,73 @@ class LeaveRequestForm(forms.ModelForm):
     def clean(self):
         cleaned = super().clean()
 
-        start_at: Optional[timezone.datetime] = cleaned.get("start_at")
-        end_at: Optional[timezone.datetime] = cleaned.get("end_at")
-        is_half_day: bool = bool(cleaned.get("is_half_day"))
+        dur = (cleaned.get("duration_type") or "FULL").upper()
+        leave_type = cleaned.get("leave_type")
 
-        if not start_at or not end_at:
+        start_d: Optional[date] = cleaned.get("start_at")
+        end_d:   Optional[date] = cleaned.get("end_at")
+
+        if not leave_type or not start_d or not end_d:
             return cleaned
 
-        # Ensure tz-aware & IST-normalized
-        start_at = _naive_to_ist(start_at)
-        end_at = _naive_to_ist(end_at)
-        cleaned["start_at"] = start_at
-        cleaned["end_at"] = end_at
+        if end_d < start_d:
+            self.add_error("end_at", "End date must be on or after Start date.")
 
-        # Basic order check
-        if end_at <= start_at:
-            self.add_error("end_at", "End must be after Start.")
+        # Compose aware datetimes
+        if dur == "HALF":
+            f = cleaned.get("from_time") or HALF_DAY_DEFAULT_FROM
+            t = cleaned.get("to_time")   or HALF_DAY_DEFAULT_TO
 
-        # Half-day constraints
-        if is_half_day:
-            if start_at.date() != end_at.date():
-                self.add_error("is_half_day", "Half-day must start and end on the same calendar date.")
-            if (end_at - start_at) > timedelta(hours=6):
-                self.add_error("is_half_day", "Half-day duration should be ≤ 6 hours.")
+            if start_d != end_d:
+                self.add_error("end_at", "Half-day must be on a single calendar date.")
+            try:
+                start_dt = _aware_ist(datetime.combine(start_d, f))
+                end_dt   = _aware_ist(datetime.combine(end_d,   t))
+            except Exception:
+                start_dt = _aware_ist(datetime.combine(start_d, HALF_DAY_DEFAULT_FROM))
+                end_dt   = _aware_ist(datetime.combine(end_d,   HALF_DAY_DEFAULT_TO))
 
-        # Prevent overlaps
+            if end_dt <= start_dt:
+                self.add_error("to_time", "Half-day 'To Time' must be after 'From Time'.")
+            if (end_dt - start_dt) > timedelta(hours=6):
+                self.add_error("to_time", "Half-day duration should be ≤ 6 hours.")
+
+            cleaned["is_half_day"] = True
+            cleaned["start_at"] = start_dt
+            cleaned["end_at"]   = end_dt
+
+        else:
+            # FULL DAY: No time UI → normalize to defaults 09:30 → 18:00
+            start_dt = _aware_ist(datetime.combine(start_d, FULL_DAY_DEFAULT_FROM))
+            end_dt   = _aware_ist(datetime.combine(end_d,   FULL_DAY_DEFAULT_TO))
+
+            if end_dt <= start_dt:
+                self.add_error("end_at", "End must be after Start.")
+
+            cleaned["is_half_day"] = False
+            cleaned["start_at"] = start_dt
+            cleaned["end_at"]   = end_dt
+
+        # Overlap check
         try:
-            if self._overlaps_existing(start_at, end_at):
+            if self._overlaps_existing(cleaned["start_at"], cleaned["end_at"]):
                 self.add_error(None, "You already have a pending/approved leave that overlaps this period.")
         except forms.ValidationError as e:
             self.add_error(None, e)
 
         return cleaned
 
+    # -------------------------------------------------------------------- save
     def save(self, commit: bool = True) -> LeaveRequest:
         obj: LeaveRequest = super().save(commit=False)
 
-        if self.employee and not getattr(obj, "employee_id", None):
+        if hasattr(self, "employee") and self.employee and not getattr(obj, "employee_id", None):
             obj.employee = self.employee
+
+        # Ensure consistency
+        obj.is_half_day = bool(self.cleaned_data.get("is_half_day"))
 
         if commit:
             obj.save()
-            # still safe to call; there are no M2M fields on this form now
             self.save_m2m()
-
         return obj

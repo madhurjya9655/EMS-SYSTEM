@@ -28,8 +28,9 @@ urlpatterns = [
     # Profile photo upload
     path("upload-photo/", views.upload_photo, name="upload_photo"),
 
-    # Lightweight widget (for dashboards)
+    # Lightweight widgets (for dashboards)
     path("manager/widget/", views.manager_widget, name="manager_widget"),
+    path("widgets/my-handovers/", views.my_handovers_widget, name="my_handovers_widget"),
 
     # Approver mapping editor (admin)
     path("approver/<int:user_id>/", views.approver_mapping_edit, name="approver_mapping_edit"),

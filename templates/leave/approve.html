@@ -5,7 +5,6 @@
 
 {% block content %}
 <div class="container my-4">
-  <h3 class="mb-3">Leave Approval</h3>
 
   {# Flash messages #}
   {% if messages %}
@@ -15,6 +14,18 @@
   {% endif %}
 
   <div class="card">
+    <!-- Blue header with employee name -->
+    <div class="card-header bg-primary text-white">
+      <div class="d-flex align-items-center justify-content-between">
+        <h5 class="mb-0 fw-semibold">
+          Leave Request — <span class="fw-bold">{{ employee_full_name }}</span>
+        </h5>
+        {% if employee_email %}
+          <small class="opacity-75">{{ employee_email }}</small>
+        {% endif %}
+      </div>
+    </div>
+
     <div class="card-body">
       <div class="row g-3">
         <div class="col-md-6">
@@ -27,7 +38,13 @@
           {% endif %}
         </div>
         <div class="col-md-6">
-          <p class="mb-1"><strong>Type:</strong> {{ leave_type_name }}</p>
+          <p class="mb-1">
+            <strong>Type:</strong>
+            {{ leave_type_name }}
+            {% if is_half_day %}
+              <span class="badge bg-dark ms-1">Half Day</span>
+            {% endif %}
+          </p>
           <p class="mb-1"><strong>From (IST):</strong> {{ from_ist|date:"Y-m-d H:i" }}</p>
           <p class="mb-1"><strong>To (IST):</strong> {{ to_ist|date:"Y-m-d H:i" }}</p>
           <p class="mb-1"><strong>Half-day:</strong> {{ is_half_day|yesno:"Yes,No" }}</p>

@@ -1,3 +1,4 @@
+# apps/tasks/bulk_upload.py
 from __future__ import annotations
 
 import logging
@@ -24,13 +25,14 @@ from .utils import (
     send_delegation_assignment_to_user,
     send_admin_bulk_summary,
 )
-from .recurrence import preserve_first_occurrence_time
+# ⬇️ Use the same utility the rest of the app now uses
+from .recurrence_utils import preserve_first_occurrence_time
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
 # -----------------------------
-# Constants
+# Constants / knobs
 # -----------------------------
 IST = pytz.timezone("Asia/Kolkata")
 ASSIGN_HOUR = 10
@@ -39,6 +41,12 @@ RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
 
 BULK_BATCH_SIZE = 500
 SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
+
+# Email policy knobs (aligned with signals/tasks)
+SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
+# If True, checklist/delegation emails for created items will be scheduled by signals at ~10:00 IST.
+# Bulk upload will NOT blast immediate emails in that case (to avoid double-notify).
+SEND_RECUR_EMAILS_ONLY_AT_10AM = getattr(settings, "SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
 
 
 # -----------------------------
@@ -306,6 +314,7 @@ def _build_checklist_from_row(row, assign_by_user):
     task_name = _clean_str(row.get("Task Name"))
     assign_to_username = _clean_str(row.get("Assign To"))
     planned_dt = parse_datetime_flexible(row.get("Planned Date"))
+    # Pin & normalize first occurrence per final rule helper
     planned_dt = preserve_first_occurrence_time(planned_dt) if planned_dt else None
 
     priority = (_clean_str(row.get("Priority")) or "Low").title()
@@ -338,7 +347,8 @@ def _build_checklist_from_row(row, assign_by_user):
         notify_to=_user_cache.get_user(_clean_str(row.get("Notify To"))),
         auditor=_user_cache.get_user(_clean_str(row.get("Auditor"))),
         set_reminder=parse_bool(row.get("Set Reminder")),
-        reminder_mode=_SYN_MODE.get(_clean_str(row.get("Reminder Mode")).lower(), _clean_str(row.get("Reminder Mode")).title()) if parse_bool(row.get("Set Reminder")) else None,
+        reminder_mode=_SYN_MODE.get(_clean_str(row.get("Reminder Mode")).lower(),
+                                    _clean_str(row.get("Reminder Mode")).title()) if parse_bool(row.get("Set Reminder")) else None,
         reminder_frequency=parse_int(row.get("Reminder Frequency"), default=1) if parse_bool(row.get("Set Reminder")) else None,
         reminder_starting_time=_parse_time_flexible(row.get("Reminder Starting Time")) if parse_bool(row.get("Set Reminder")) else None,
         checklist_auto_close=parse_bool(row.get("Checklist Auto Close")),
@@ -399,7 +409,9 @@ def _parse_time_flexible(val):
 # -----------------------------
 def process_checklist_bulk_upload(file, assign_by_user, *, send_emails: bool = True):
     """
-    Parse file → create Checklist tasks → send assignee emails in background.
+    Parse file → create Checklist tasks → optionally email.
+    NOTE: If SEND_RECUR_EMAILS_ONLY_AT_10AM is True, assignee emails are NOT sent here;
+          post_save signals will schedule them for ~10:00 IST on the planned date.
     Returns: (created_objects, errors)
     """
     try:
@@ -427,8 +439,13 @@ def process_checklist_bulk_upload(file, assign_by_user, *, send_emails: bool = T
         if connection.vendor == "sqlite":
             time.sleep(0.01)  # allow locks to settle
 
-    if created and send_emails:
-        _kick_off_bulk_emails_async([o.id for o in created if getattr(o, "id", None)], task_type="Checklist")
+    # Email behavior:
+    # - If 10AM gating is ON, rely on signals; don't send immediately here.
+    # - If gating is OFF and caller asked for emails, send immediately to assignees.
+    if created:
+        if send_emails and SEND_EMAILS_FOR_AUTO_RECUR and not SEND_RECUR_EMAILS_ONLY_AT_10AM:
+            _kick_off_bulk_emails_async([o.id for o in created if getattr(o, "id", None)], task_type="Checklist")
+        # Always send admin preview/snapshot (non-blocking)
         _send_admin_preview_async(
             f"✅ Bulk Upload: {len(created)} Checklist Tasks Created",
             created[:10],
@@ -440,7 +457,8 @@ def process_checklist_bulk_upload(file, assign_by_user, *, send_emails: bool = T
 
 def process_delegation_bulk_upload(file, assign_by_user, *, send_emails: bool = True):
     """
-    Parse file → create Delegation tasks → send assignee emails in background.
+    Parse file → create Delegation tasks → optionally email.
+    NOTE: If SEND_RECUR_EMAILS_ONLY_AT_10AM is True, post_save signals will schedule the assignee email at ~10:00 IST.
     Returns: (created_objects, errors)
     """
     try:
@@ -468,8 +486,9 @@ def process_delegation_bulk_upload(file, assign_by_user, *, send_emails: bool = 
         if connection.vendor == "sqlite":
             time.sleep(0.01)
 
-    if created and send_emails:
-        _kick_off_bulk_emails_async([o.id for o in created if getattr(o, "id", None)], task_type="Delegation")
+    if created:
+        if send_emails and SEND_EMAILS_FOR_AUTO_RECUR and not SEND_RECUR_EMAILS_ONLY_AT_10AM:
+            _kick_off_bulk_emails_async([o.id for o in created if getattr(o, "id", None)], task_type="Delegation")
         _send_admin_preview_async(
             f"✅ Bulk Upload: {len(created)} Delegation Tasks Created",
             created[:10],

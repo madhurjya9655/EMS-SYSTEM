@@ -1,35 +1,100 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\management\commands\roll_recurrences.py
 # apps/tasks/management/commands/roll_recurrences.py
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, time as dt_time
+from typing import Optional
 
 import pytz
+from dateutil.relativedelta import relativedelta
 from django.core.management.base import BaseCommand
-from django.utils import timezone
 from django.db import transaction
+from django.utils import timezone
 
 from apps.tasks.models import Checklist, Delegation
-from apps.tasks.recurrence import (
-    get_next_planned_datetime,  # canonical function (19:00 IST on working day)
-    RECURRING_MODES,
-)
+from apps.settings.models import Holiday
 
 logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
+
+RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
+EVENING_HOUR = 19
+EVENING_MINUTE = 0
+
+
+# ------------------------------ helpers ------------------------------ #
+def _is_working_day(d) -> bool:
+    try:
+        # Sunday = 6
+        return d.weekday() != 6 and not Holiday.objects.filter(date=d).exists()
+    except Exception:
+        return d.weekday() != 6
+
+
+def _next_working_day(d):
+    cur = d
+    for _ in range(0, 90):
+        if _is_working_day(cur):
+            return cur
+        cur = cur + timedelta(days=1)
+    return cur
+
+
+def _aware_in_project_tz(dt: datetime) -> datetime:
+    tz = timezone.get_current_timezone()
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, tz)
+    return dt.astimezone(tz)
+
+
+def get_next_planned_datetime(prev_dt: datetime, mode: str, frequency: int | None) -> Optional[datetime]:
+    """
+    FINAL RULE for this command:
+      • Step the DATE by Daily/Weekly/Monthly/Yearly with freq (1..10).
+      • Shift to the **next working day** (Mon–Sat, not a Holiday).
+      • Pin the TIME to **19:00 IST** (7 PM).
+      • Return as aware datetime in the project timezone.
+
+    This mirrors the “skip Sundays/holidays” requirement so 10:00 AM dashboard/email
+    naturally aligns to the next working day’s 7 PM plan.
+    """
+    if (mode or "") not in RECURRING_MODES:
+        return None
+
+    try:
+        step = int(frequency or 1)
+    except Exception:
+        step = 1
+    step = max(1, min(step, 10))
+
+    base = _aware_in_project_tz(prev_dt)
+    cur_ist = base.astimezone(IST)
+
+    if mode == "Daily":
+        cur_ist = cur_ist + relativedelta(days=step)
+    elif mode == "Weekly":
+        cur_ist = cur_ist + relativedelta(weeks=step)
+    elif mode == "Monthly":
+        cur_ist = cur_ist + relativedelta(months=step)
+    elif mode == "Yearly":
+        cur_ist = cur_ist + relativedelta(years=step)
+
+    # Shift date to next working day, then pin to 19:00 IST
+    next_date = _next_working_day(cur_ist.date())
+    next_ist = IST.localize(datetime.combine(next_date, dt_time(EVENING_HOUR, EVENING_MINUTE)))
+    return next_ist.astimezone(timezone.get_current_timezone())
 
 
 def _has_field(model, field_name: str) -> bool:
     return any(getattr(f, "name", None) == field_name for f in model._meta.get_fields())
 
 
+# ------------------------------ command ------------------------------ #
 class Command(BaseCommand):
     help = (
         "Roll due recurring CHECKLIST tasks only (no pre-creation).\n"
         "• Creates the next occurrence ONLY when it is due now (<= current IST time).\n"
-        "• Next occurrence is scheduled by recurrence rules (19:00 IST on next working day).\n"
-        "• If the calculated date is Sunday/holiday, it shifts to the next working day (same 19:00 IST).\n"
+        "• Next occurrence is scheduled at 19:00 IST on the next working day (Sun/holidays skipped).\n"
         "• Delegations are treated as one-time by policy and are not rolled."
     )
 
@@ -45,7 +110,6 @@ class Command(BaseCommand):
             action="store_true",
             help="Show what would be done without making changes.",
         )
-        # Kept for backward compatibility; ignored by the roll logic now
         parser.add_argument(
             "--days-ahead",
             type=int,
@@ -108,7 +172,9 @@ class Command(BaseCommand):
     def _roll_due_checklists(self, opts, dry_run: bool) -> int:
         """
         Create the next occurrence only when it is due (<= now in IST).
-        Uses get_next_planned_datetime (which enforces 19:00 IST on working days).
+        Uses get_next_planned_datetime() here which enforces:
+          - 19:00 IST
+          - shift Sun/holidays to the next working day
         """
         user_id = opts.get("user_id")
         now_ist = timezone.now().astimezone(IST)
@@ -125,11 +191,16 @@ class Command(BaseCommand):
         created_count = 0
 
         for s in series:
-            latest = Checklist.objects.filter(**s).order_by("-planned_date", "-id").first()
+            latest = (
+                Checklist.objects
+                .filter(**s)
+                .order_by("-planned_date", "-id")
+                .first()
+            )
             if not latest:
                 continue
 
-            # Compute the next scheduled occurrence using the canonical function
+            # Compute the next scheduled occurrence using the canonical rules above
             next_dt = get_next_planned_datetime(latest.planned_date, latest.mode, latest.frequency)
             if not next_dt:
                 continue
@@ -138,7 +209,7 @@ class Command(BaseCommand):
             if next_dt.astimezone(IST) > now_ist:
                 continue
 
-            # Dupe guard (±1 minute)
+            # Do not create if any pending of the same series already exists at that timestamp (±1 min)
             exists = Checklist.objects.filter(
                 assign_to_id=s["assign_to_id"],
                 task_name=s["task_name"],
@@ -165,14 +236,14 @@ class Command(BaseCommand):
                         assign_by=getattr(latest, "assign_by", None),
                         task_name=latest.task_name,
                         assign_to=latest.assign_to,
-                        planned_date=next_dt,  # computed at 19:00 IST on a working day
+                        planned_date=next_dt,  # computed at 19:00 IST on next working day
                         priority=getattr(latest, "priority", None),
                         attachment_mandatory=getattr(latest, "attachment_mandatory", False),
                         mode=latest.mode,
                         frequency=latest.frequency,
                         status="Pending",
                     )
-                    # Optional fields mirrored when present on the model
+                    # Mirror optional fields when present
                     for opt in (
                         "message",
                         "time_per_task_minutes",
@@ -239,10 +310,7 @@ class Command(BaseCommand):
             if user_id:
                 f["assign_to_id"] = user_id
 
-            invalid = (
-                model.objects.filter(mode__isnull=False)
-                .exclude(mode__in=[m for m in RECURRING_MODES])
-            )
+            invalid = model.objects.filter(mode__isnull=False).exclude(mode__in=RECURRING_MODES)
             for obj in invalid:
                 issues.append(f"{name} {obj.id}: invalid mode '{obj.mode}'")
 
@@ -251,9 +319,10 @@ class Command(BaseCommand):
                 issues.append(f"{name} {obj.id}: missing frequency for mode '{obj.mode}'")
 
         _series_issues(Checklist, "Checklist")
-        # Delegation should be one-time; flag any with a mode set
+
+        # Delegations should be one-time; flag any with a mode set
         bad_delegations = Delegation.objects.exclude(mode__isnull=True).exclude(mode__exact="")
         for d in bad_delegations:
-            issues.append(f"Delegation {d.id}: has recurring fields but delegations are one-time only")
+            issues.append("Delegation {}: has recurring fields but delegations are one-time only".format(d.id))
 
         return issues

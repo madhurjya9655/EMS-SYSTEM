@@ -1,10 +1,22 @@
 {% extends "base.html" %}
-{% load tz humanize static %}
+{% load tz humanize static crispy_forms_tags %}
 
 {% block title %}Apply Leave{% endblock %}
 
 {% block content %}
 <div class="container-fluid px-0">
+
+  {# flash messages #}
+  {% if messages %}
+    <div class="container mb-3">
+      {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
+          {{ message }}
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
   <!-- Employee header -->
   <div class="card shadow-sm mb-4">
     <div class="card-body">
@@ -19,11 +31,17 @@
           {% endif %}
         </div>
         <div class="flex-grow-1">
-          <div class="fw-semibold fs-5 mb-1">{{ employee_header.name }}</div>
+          <div class="fw-semibold fs-5 mb-1">{{ employee_header.name|default:user.get_username }}</div>
           <div class="text-muted small">
             <span class="me-3"><i class="fa-solid fa-id-badge me-1"></i>{{ employee_header.designation|default:"—" }}</span>
-            <span><i class="fa-solid fa-envelope me-1"></i>{{ employee_header.email }}</span>
+            <span><i class="fa-solid fa-envelope me-1"></i>{{ employee_header.email|default:"—" }}</span>
           </div>
+          <div class="text-muted small mt-1">
+            IST now: {{ now_ist|date:"Y-m-d H:i" }}
+          </div>
+        </div>
+        <div>
+          <a class="btn btn-outline-secondary" href="{% url 'leave:dashboard' %}">Back to Dashboard</a>
         </div>
       </div>
     </div>
@@ -38,11 +56,8 @@
       <form method="post" enctype="multipart/form-data" novalidate>
         {% csrf_token %}
 
-        <!-- Non-field errors -->
         {% if form.non_field_errors %}
-          <div class="alert alert-danger">
-            {{ form.non_field_errors }}
-          </div>
+          <div class="alert alert-danger">{{ form.non_field_errors }}</div>
         {% endif %}
 
         <div class="row g-3">
@@ -55,7 +70,7 @@
           <div class="col-md-4">
             <label class="form-label" for="{{ form.start_at.id_for_label }}">Start Date &amp; Time</label>
             {{ form.start_at }}
-            <div class="form-text">Timezone: IST ({{ "now"|timezone:"Asia/Kolkata"|date:"T" }})</div>
+            <div class="form-text">Timezone: IST</div>
             {% if form.start_at.errors %}<div class="invalid-feedback d-block">{{ form.start_at.errors|striptags }}</div>{% endif %}
           </div>
 
@@ -65,16 +80,27 @@
             <div class="form-text">Ensure end is after start.</div>
             {% if form.end_at.errors %}<div class="invalid-feedback d-block">{{ form.end_at.errors|striptags }}</div>{% endif %}
           </div>
+        </div>
 
-          <div class="col-md-12">
-            <div class="form-check">
-              {{ form.is_half_day }}
-              <label class="form-check-label" for="{{ form.is_half_day.id_for_label }}">Half day</label>
+        {# Half Day time slot (visible only when Type == "Half Day") #}
+        <div id="half-day-slot" class="mt-2" style="display:none;">
+          <div class="row g-3">
+            <div class="col-md-6">
+              {{ form.half_day_start_time|as_crispy_field }}
             </div>
-            <div class="form-text">Half-day must be the same date and ≤ 6 hours.</div>
-            {% if form.is_half_day.errors %}<div class="invalid-feedback d-block">{{ form.is_half_day.errors|striptags }}</div>{% endif %}
+            <div class="col-md-6">
+              {{ form.half_day_end_time|as_crispy_field }}
+            </div>
           </div>
+          <div class="form-text">
+            Defaults to 09:30 → 18:00. You may shorten for a partial day (max 6 hours).
+          </div>
+        </div>
 
+        {# Old checkbox hidden (server infers is_half_day from type) #}
+        {# <div style="display:none;">{{ form.is_half_day }}</div> #}
+
+        <div class="row g-3 mt-1">
           <div class="col-md-12">
             <label class="form-label" for="{{ form.reason.id_for_label }}">Reason</label>
             {{ form.reason }}
@@ -84,10 +110,25 @@
           <div class="col-md-6">
             <label class="form-label" for="{{ form.attachment.id_for_label }}">Attachment (optional)</label>
             {{ form.attachment }}
-            <div class="form-text">Allowed: PDF, JPG, PNG, DOC, TXT. Max 10MB.</div>
+            <div class="form-text">Allowed: PDF, PNG, JPG, JPEG, WEBP, HEIC, DOC, DOCX. Max 10MB.</div>
             {% if form.attachment.errors %}<div class="invalid-feedback d-block">{{ form.attachment.errors|striptags }}</div>{% endif %}
           </div>
         </div>
+
+        {# Optional handover block (renders only if fields exist) #}
+        <hr class="my-4">
+        <h6 class="mb-2">Task Handover (optional)</h6>
+        <p class="text-muted small mb-3">
+          Pick a colleague and select tasks due during your leave. They’ll receive an email with details.
+        </p>
+
+        {% if form.delegate_to %}{{ form.delegate_to|as_crispy_field }}{% endif %}
+        <div class="row">
+          <div class="col-md-4">{% if form.handover_checklist %}{{ form.handover_checklist|as_crispy_field }}{% endif %}</div>
+          <div class="col-md-4">{% if form.handover_delegation %}{{ form.handover_delegation|as_crispy_field }}{% endif %}</div>
+          <div class="col-md-4">{% if form.handover_help_ticket %}{{ form.handover_help_ticket|as_crispy_field }}{% endif %}</div>
+        </div>
+        {% if form.handover_message %}{{ form.handover_message|as_crispy_field }}{% endif %}
 
         <div class="d-flex justify-content-end mt-4">
           <a href="{% url 'leave:my_leaves' %}" class="btn btn-outline-secondary me-2">
@@ -100,5 +141,66 @@
       </form>
     </div>
   </div>
+
+  <div class="row mt-3">
+    <div class="col-lg-6">
+      <div class="card">
+        <div class="card-body">
+          <h6 class="card-title mb-2">Rules (IST)</h6>
+          <ul class="mb-0 small text-muted" style="padding-left:1.2rem;">
+            <li>Same-day leave must be applied <strong>before 09:30 AM</strong>.</li>
+            <li>After <strong>10:00 AM</strong>, applying for today is blocked.</li>
+            <li>Half-day must be on a single date and ≤ <strong>6 hours</strong>.</li>
+            <li>Manager decisions on today’s leaves are locked after <strong>10:00 AM</strong>.</li>
+            <li>Recurring tasks overlapping your leave may be auto-skipped or rescheduled.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6 mt-3 mt-lg-0">
+      <div class="card">
+        <div class="card-body">
+          <h6 class="card-title mb-2">Attachments</h6>
+          <p class="small text-muted mb-0">
+            Optional. Supported: PDF, PNG, JPG, JPEG, WEBP, HEIC, DOC, DOCX (max 10&nbsp;MB).
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
+
+{# Toggle the half-day slot when “Half Day” is selected #}
+<script>
+(function() {
+  const select = document.getElementById("id_leave_type");
+  const slot = document.getElementById("half-day-slot");
+  const startT = document.getElementById("id_half_day_start_time");
+  const endT = document.getElementById("id_half_day_end_time");
+
+  function isHalfDaySelected() {
+    if (!select) return false;
+    const opt = select.options[select.selectedIndex];
+    const label = (opt ? opt.text : "").trim().toLowerCase();
+    return label === "half day";
+  }
+
+  function ensureDefaultsIfEmpty() {
+    if (startT && !startT.value) startT.value = "09:30";
+    if (endT && !endT.value) endT.value = "18:00";
+  }
+
+  function toggleSlot() {
+    const half = isHalfDaySelected();
+    if (slot) slot.style.display = half ? "" : "none";
+    if (half) ensureDefaultsIfEmpty();
+  }
+
+  if (select) {
+    select.addEventListener("change", toggleSlot);
+    toggleSlot();
+  }
+})();
+</script>
 {% endblock %}

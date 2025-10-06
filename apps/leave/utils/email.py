@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Iterable
+from typing import List
 
 from django.conf import settings
 
