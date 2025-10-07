@@ -1,10 +1,11 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\dashboard\views.py
 from __future__ import annotations
 
 from datetime import timedelta, datetime, time as dt_time, date
 import logging
 import sys
+from zoneinfo import ZoneInfo
 
-import pytz
 from dateutil.relativedelta import relativedelta
 
 from django.contrib.auth.decorators import login_required
@@ -21,8 +22,8 @@ logger = logging.getLogger(__name__)
 # Canonical recurring modes
 RECURRING_MODES = ['Daily', 'Weekly', 'Monthly', 'Yearly']
 
-# Timezones / anchors
-IST = pytz.timezone('Asia/Kolkata')
+# Timezones / anchors (use ZoneInfo — no pytz)
+IST = ZoneInfo('Asia/Kolkata')
 
 # FINAL SPEC:
 # - Planned time for recurrences: 19:00 IST (7 PM)
@@ -99,8 +100,9 @@ def _ist_date(dt: datetime) -> date | None:
     if not dt:
         return None
     if timezone.is_aware(dt):
-        return dt.astimezone(IST).date()
-    return IST.localize(dt).date()
+        return timezone.localtime(dt, IST).date()
+    aware = timezone.make_aware(dt, IST)
+    return aware.date()
 
 
 def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> datetime | None:
@@ -123,11 +125,11 @@ def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> datet
         step = 1
     step = max(1, min(step, 10))
 
-    tz = timezone.get_current_timezone()
+    project_tz = timezone.get_current_timezone()
     if timezone.is_naive(prev_dt):
-        prev_dt = timezone.make_aware(prev_dt, tz)
+        prev_dt = timezone.make_aware(prev_dt, project_tz)
 
-    cur_ist = prev_dt.astimezone(IST)
+    cur_ist = timezone.localtime(prev_dt, IST)
 
     if mode == 'Daily':
         cur_ist = cur_ist + relativedelta(days=step)
@@ -142,7 +144,7 @@ def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> datet
     cur_ist = cur_ist.replace(hour=EVENING_HOUR, minute=EVENING_MINUTE, second=0, microsecond=0)
 
     # IMPORTANT: No working-day shift here; exact stepped date.
-    return cur_ist.astimezone(tz)
+    return timezone.make_naive(cur_ist, IST).replace(tzinfo=None).astimezone(project_tz) if hasattr(cur_ist, "astimezone") else cur_ist.astimezone(project_tz)
 
 
 # ---------- Checklist visibility gating ----------
@@ -157,7 +159,11 @@ def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     if not task_dt:
         return False
 
-    dt_ist = task_dt.astimezone(IST) if timezone.is_aware(task_dt) else IST.localize(task_dt)
+    if timezone.is_aware(task_dt):
+        dt_ist = timezone.localtime(task_dt, IST)
+    else:
+        dt_ist = timezone.make_aware(task_dt, IST)
+
     task_date = dt_ist.date()
     today = now_ist.date()
 
@@ -395,11 +401,11 @@ def dashboard_home(request):
     - Help Tickets: appear immediately (no 10:00 gating).
     - Original owner's block: recently “Completed by delegate”.
     """
-    now_ist = timezone.now().astimezone(IST)
+    now_ist = timezone.localtime(timezone.now(), IST)
     today_ist = now_ist.date()
 
     project_tz = timezone.get_current_timezone()
-    now_project_tz = now_ist.astimezone(project_tz)
+    now_project_tz = timezone.localtime(now_ist, project_tz)
 
     logger.info(_safe_console_text(f"Dashboard accessed by {request.user.username} at {now_ist.strftime('%Y-%m-%d %H:%M:%S IST')}"))
 
@@ -464,8 +470,14 @@ def dashboard_home(request):
     today_only = (request.GET.get('today') == '1' or request.GET.get('today_only') == '1')
 
     # Build IST-aligned bounds once
-    start_today_proj = timezone.make_aware(datetime.combine(today_ist, dt_time.min), IST).astimezone(project_tz)
-    end_today_proj = timezone.make_aware(datetime.combine(today_ist, dt_time.max), IST).astimezone(project_tz)
+    start_today_proj = timezone.localtime(
+        timezone.make_aware(datetime.combine(today_ist, dt_time.min), IST),
+        project_tz
+    )
+    end_today_proj = timezone.localtime(
+        timezone.make_aware(datetime.combine(today_ist, dt_time.max), IST),
+        project_tz
+    )
 
     # Handover tasks for this user (IST "today")
     handover_incoming = _get_handover_tasks_for_user(request.user, today_ist)
@@ -699,8 +711,7 @@ def dashboard_home(request):
             cb_dls = [t for t in cb_dls if getattr(t, "updated_at", since_dt) >= since_dt]
             cb_hts = [t for t in cb_hts if getattr(t, "updated_at", getattr(t, "resolved_at", since_dt)) >= since_dt]
 
-            # Compose rows (we don't know exact delegate here cheaply without extra joins; skip delegate name in UI or fetch via map)
-            # Build a map handover by task id to attach message and delegate
+            # Compose rows
             ho_map = {}
             for h in recent_handover:
                 ho_map[h.original_task_id] = h
@@ -725,7 +736,7 @@ def dashboard_home(request):
     # sample log
     if tasks:
         for i, task in enumerate(tasks[:3], start=1):
-            tdt = task.planned_date.astimezone(IST) if task.planned_date else None
+            tdt = timezone.localtime(task.planned_date, IST) if task.planned_date else None
             handover_info = " (HANDOVER)" if getattr(task, 'is_handover', False) else ""
             logger.info(_safe_console_text(
                 f"  sample {i}: '{getattr(task, 'task_name', getattr(task, 'title', ''))}' "

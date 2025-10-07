@@ -41,3 +41,31 @@ class WeeklyCommitment(models.Model):
 
     def __str__(self):
         return f"{self.user} - {self.week_start}"
+
+
+class WeeklyScore(models.Model):
+    """
+    Stores the last-week completion percentage for a user and marks that we mailed them.
+    Used to avoid duplicate 'Congratulations' emails for the same (user, week).
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="weekly_scores")
+    week_start = models.DateField()  # Monday of the week just evaluated
+    score = models.DecimalField(max_digits=5, decimal_places=2)  # e.g., 92.50
+    mailed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Weekly Score"
+        verbose_name_plural = "Weekly Scores"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "week_start"],
+                name="uniq_weekly_score_user_week",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["user", "week_start"], name="idx_ws_user_week"),
+            models.Index(fields=["week_start"], name="idx_ws_week"),
+        ]
+
+    def __str__(self):
+        return f"{self.user} – {self.week_start} – {self.score}%"

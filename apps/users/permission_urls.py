@@ -1,3 +1,5 @@
+# apps/users/permission_urls.py
+
 PERMISSION_URLS = {
     # -----------------------
     # Leave
@@ -65,12 +67,12 @@ PERMISSION_URLS = {
     # -----------------------
     # Clients (optional area; map to your actual URL names if present)
     # -----------------------
-    "manage_clients_add": "clients:add",                      # adjust if app exists
-    "manage_clients_list": "clients:list",                    # adjust if app exists
-    "manage_clients_edit": "clients:edit",                    # adjust if app exists
-    "manage_clients_delete": "clients:delete",                # adjust if app exists
-    "manage_clients_upload": "clients:upload",                # adjust if app exists
-    "manage_clients_upload_dndrnd": "clients:upload_dndrnd",  # adjust if app exists
+    "manage_clients_add": "clients:add",
+    "manage_clients_list": "clients:list",
+    "manage_clients_edit": "clients:edit",
+    "manage_clients_delete": "clients:delete",
+    "manage_clients_upload": "clients:upload",
+    "manage_clients_upload_dndrnd": "clients:upload_dndrnd",
 
     # -----------------------
     # Customer Group (optional; adjust if present)

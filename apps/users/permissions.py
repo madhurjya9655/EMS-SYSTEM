@@ -7,18 +7,22 @@ from functools import wraps
 from typing import Any, Iterable, Set
 
 from django import template
+from django.apps import apps as django_apps
+from django.conf import settings
 from django.contrib.auth.views import redirect_to_login
 from django.http import HttpResponseForbidden
-from django.apps import apps as django_apps
 
 register = template.Library()
 logger = logging.getLogger(__name__)
+
+# Toggle debug logging for permissions via settings
+PERMISSION_DEBUG = bool(getattr(settings, "PERMISSION_DEBUG_ENABLED", False))
 
 # Optional import used by helpers (safe if the file is absent)
 try:
     from .permission_urls import PERMISSION_URLS  # noqa: F401
 except Exception:  # pragma: no cover
-    PERMISSION_URLS = {}
+    PERMISSION_URLS = {}  # type: ignore
 
 # -----------------------------------------------------------------------------
 # Public: PERMISSIONS_STRUCTURE describes all possible app-level permissions.
@@ -27,9 +31,7 @@ PERMISSIONS_STRUCTURE = {
     "Leave": [
         ("leave_apply", "Leave Apply"),
         ("leave_list", "Leave List"),
-        # NEW: needed by /leave/manager/... endpoints (approval queue & decide)
         ("leave_pending_manager", "Manager Approvals"),
-        # Admin-only utility (UI entry can use this, views still enforce superuser)
         ("leave_cc_admin", "Manage CC (Admin)"),
     ],
     "Checklist": [
@@ -234,33 +236,42 @@ def _user_permission_codes(user) -> Set[str]:
     - Group-based grants
     - ApproverMapping-based grants
     - Expanded synonym permissions
-    
+
     Returns a set of lowercased permission codes.
     """
     if getattr(user, "is_superuser", False):
         # Superusers get all permissions - return a special wildcard
         return {"*"}
-        
+
     profile = getattr(user, "profile", None)
     raw = getattr(profile, "permissions", []) if profile else []
     codes = _normalize_raw(raw)
 
-    # Log raw permissions for debugging
-    logger.debug("Raw permissions for user %s: %s", getattr(user, "username", "unknown"), sorted(codes))
+    # Debug: raw permissions
+    if PERMISSION_DEBUG:
+        logger.debug(
+            "Raw permissions for user %s: %s",
+            getattr(user, "username", getattr(user, "email", "unknown")),
+            sorted(codes),
+        )
 
-    # Add grants implied by Django auth groups (e.g., "Manager")
+    # Grants via Django groups (e.g., "Manager")
     codes |= _codes_from_groups(user)
 
-    # Add dynamic RP grants from ApproverMapping
+    # Dynamic RP grant via ApproverMapping
     codes |= _codes_from_mapping(user)
 
-    # Apply permission synonyms
+    # Apply synonyms
     expanded = _expand_synonyms(codes)
-    
-    if expanded != codes:
-        logger.debug("Expanded permissions for user %s: %s", getattr(user, "username", "unknown"), 
-                 sorted(expanded - codes))
-    
+
+    # Debug: expanded delta
+    if PERMISSION_DEBUG and expanded != codes:
+        logger.debug(
+            "Expanded permissions for user %s: %s",
+            getattr(user, "username", getattr(user, "email", "unknown")),
+            sorted(expanded - codes),
+        )
+
     return expanded
 
 
@@ -311,9 +322,9 @@ def has_permission(*required: str):
 
             logger.warning(
                 "Permission denied: user=%s, required=%s, has=%s",
-                getattr(user, "username", "unknown"),
+                getattr(user, "username", getattr(user, "email", "unknown")),
                 sorted(need),
-                sorted(have)
+                sorted(have),
             )
             return HttpResponseForbidden("403 Forbidden: You don't have permission to access this page.")
         return _wrapped
@@ -354,25 +365,22 @@ def user_has_any_permission(user, csv_codes: str) -> bool:
 def user_has_module_permission(user, module_name: str) -> bool:
     """
     Check if user has any permission in a given module.
-    Usage: {% if user|has_module_permission:'Leave' %}
+    Usage: {% if user|has_module_permission:'Leave' %} ... {% endif %}
     """
     if not getattr(user, "is_authenticated", False):
         return False
     if getattr(user, "is_superuser", False):
         return True
-    
-    module = module_name.strip()
+
+    module = (module_name or "").strip()
     if not module or module not in PERMISSIONS_STRUCTURE:
         return False
-    
+
     user_perms = _user_permission_codes(user)
     if {"*", "all"} & user_perms:
         return True
-        
-    # Get all permission codes for this module
+
     module_perms = {code.lower() for code, _ in PERMISSIONS_STRUCTURE[module]}
-    
-    # Check if user has any of these permissions
     return bool(user_perms & module_perms)
 
 
@@ -384,16 +392,16 @@ def permissions_context(request):
     Adds permission-related context to all templates.
     Add to settings.TEMPLATES context_processors.
     """
-    if not hasattr(request, 'user') or not request.user.is_authenticated:
+    if not hasattr(request, "user") or not request.user.is_authenticated:
         return {}
-        
+
     user_perms = _user_permission_codes(request.user)
-    
+
     # Calculate module access for sidebar
     module_access = {}
     for module_name in PERMISSIONS_STRUCTURE.keys():
         module_access[module_name] = user_has_module_permission(request.user, module_name)
-    
+
     # Create permission checks for specific features
     sidebar_flags = {
         "show_manager_approvals": bool(
@@ -406,12 +414,11 @@ def permissions_context(request):
         "can_add_checklist": "add_checklist" in user_perms or getattr(request.user, "is_superuser", False),
         "can_view_delegation": "list_delegation" in user_perms or getattr(request.user, "is_superuser", False),
         "can_add_delegation": "add_delegation" in user_perms or getattr(request.user, "is_superuser", False),
-        # Convenience flag to surface CC admin links in UI (still admin-gated in views)
         "can_manage_cc": "leave_cc_admin" in user_perms or getattr(request.user, "is_superuser", False),
     }
-    
+
     return {
-        'user_permissions': user_perms,
-        'module_access': module_access,
-        **sidebar_flags
+        "user_permissions": user_perms,
+        "module_access": module_access,
+        **sidebar_flags,
     }

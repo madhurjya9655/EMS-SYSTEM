@@ -378,16 +378,19 @@ LOGGING = {
     "loggers": {
         "django": {"handlers": ["file"], "level": "INFO", "propagate": False},
         "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
+
+        # Quiet by default in prod (INFO); DEBUG only when you enable it.
         "apps.users.permissions": {
-            "handlers": ["permissions_file", "console"],
+            "handlers": ["permissions_file"] + (["console"] if DEBUG else []),
             "level": "DEBUG" if DEBUG else "INFO",
             "propagate": False,
         },
         "apps.users.middleware": {
-            "handlers": ["permissions_file", "console"],
+            "handlers": ["permissions_file"] + (["console"] if DEBUG else []),
             "level": "DEBUG" if DEBUG else "INFO",
             "propagate": False,
         },
+
         "apps.tasks": {"handlers": ["tasks_file", "console"], "level": "DEBUG" if DEBUG else "INFO", "propagate": False},
         "apps.tasks.views": {"handlers": ["bulk_upload_file", "console"], "level": "INFO", "propagate": False},
         "apps.tasks.signals": {"handlers": ["tasks_file"], "level": "INFO", "propagate": False},
@@ -617,7 +620,9 @@ LEAVE_ROUTING_FILE = str(BASE_DIR / "apps" / "users" / "data" / "leave_routing.j
 # PERMISSION SYSTEM SETTINGS
 # -----------------------------------------------------------------------------
 PERMISSION_DENIED_REDIRECT = "dashboard:home"
-PERMISSION_DEBUG_ENABLED = DEBUG
+# NEW: can be toggled via env; defaults to off in prod/Render,
+# on in local DEBUG. Use PERMISSION_DEBUG_ENABLED=1 to force logs.
+PERMISSION_DEBUG_ENABLED = env_bool("PERMISSION_DEBUG_ENABLED", DEBUG and not ON_RENDER)
 
 # -----------------------------------------------------------------------------
 # CELERY CONFIGURATION  (Updated)
