@@ -33,3 +33,6 @@ ems-software-*.json
 
 # --- Node/Front-end (if any) ---
 node_modules/
+celerybeat-schedule*
+db/*.sqlite3
+media/

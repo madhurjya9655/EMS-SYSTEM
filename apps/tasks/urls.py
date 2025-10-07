@@ -1,6 +1,8 @@
+# apps/tasks/urls.py
 from django.urls import path
 from . import views
 from .views_reports import recurring_report
+from .views_cron import weekly_congrats_hook  # <-- NEW import
 
 app_name = "tasks"
 
@@ -13,8 +15,7 @@ urlpatterns = [
     path("checklist/complete/<int:pk>/",  views.complete_checklist,    name="complete_checklist"),
     path("checklist/reassign/<int:pk>/",  views.reassign_checklist,    name="reassign_checklist"),
 
-    # ✅ Details routes (names kept for reverse() used in emails)
-    # We intentionally use the plural view functions with singular route names.
+    # Details routes (kept for reverse() in emails)
     path("checklist/<int:pk>/",           views.checklist_details,     name="checklist_detail"),
 
     # Delegation
@@ -25,7 +26,7 @@ urlpatterns = [
     path("delegation/reassign/<int:pk>/", views.reassign_delegation,   name="reassign_delegation"),
     path("delegation/complete/<int:pk>/", views.complete_delegation,   name="complete_delegation"),
 
-    # ✅ Details route (name kept for reverse() used in emails)
+    # Delegation details
     path("delegation/<int:pk>/",          views.delegation_details,    name="delegation_detail"),
 
     # FMS
@@ -44,7 +45,7 @@ urlpatterns = [
     path("help_ticket/edit/<int:pk>/",      views.edit_help_ticket,      name="edit_help_ticket"),
     path("help_ticket/delete/<int:pk>/",    views.delete_help_ticket,    name="delete_help_ticket"),
 
-    # Help Ticket completion / notes (existing views)
+    # Help Ticket completion / notes
     path("help_ticket/complete/<int:pk>/",  views.complete_help_ticket,  name="complete_help_ticket"),
     path("help_ticket/note/<int:pk>/",      views.note_help_ticket,      name="note_help_ticket"),
 
@@ -53,4 +54,13 @@ urlpatterns = [
 
     # Recurring Report
     path("reports/recurring/",              recurring_report,            name="recurring_report"),
+
+    # ---------- NEW: secure HTTP cron hook ----------
+    # POST to this endpoint from Render Cron Job:
+    #   curl -fsS -X POST "$SITE_URL/internal/cron/weekly-congrats/$CRON_SECRET/"
+    path(
+        "internal/cron/weekly-congrats/<str:token>/",
+        weekly_congrats_hook,
+        name="cron_weekly_congrats",
+    ),
 ]

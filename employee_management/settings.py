@@ -36,6 +36,7 @@ def env_int(name: str, default: int = 0) -> int:
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-__dev-only-use-this__")
 DEBUG = env_bool("DEBUG", True)
 SITE_URL = os.getenv("SITE_URL", "https://ems-system-d26q.onrender.com")
+CRON_SECRET = os.getenv("CRON_SECRET", "")  # <--- for HTTP cron hook
 ON_RENDER = bool(os.environ.get("RENDER"))
 
 ALLOWED_HOSTS = env_list(
