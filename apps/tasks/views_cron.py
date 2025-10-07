@@ -12,6 +12,12 @@ def weekly_congrats_hook(request, token: str):
     """
     Secure, CSRF-exempt HTTP hook that triggers weekly congrats emails.
     Protected by a shared-secret token in the URL.
+
+    Endpoint (POST):
+      /tasks/internal/cron/weekly-congrats/<token>/
+
+    Env var expected in settings:
+      CRON_SECRET
     """
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
@@ -20,10 +26,10 @@ def weekly_congrats_hook(request, token: str):
     if not expected or token != expected:
         return HttpResponseForbidden("Forbidden")
 
-    # optional feature flag guard
+    # Optional feature flag guard
     if not getattr(settings, "FEATURE_EMAIL_NOTIFICATIONS", True):
         return JsonResponse({"ok": True, "skipped": True, "reason": "feature_flag_off"})
 
-    summary = send_weekly_congratulations_mails()
-    # summary usually looks like: {"sent": X, "skipped": Y, "users": N, "window": "...."}
-    return JsonResponse({"ok": True, **(summary or {})})
+    summary = send_weekly_congratulations_mails() or {}
+    # example summary: {"sent": X, "skipped": Y, "users": N, "window": "...."}
+    return JsonResponse({"ok": True, **summary})

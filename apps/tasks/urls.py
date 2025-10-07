@@ -56,8 +56,8 @@ urlpatterns = [
     path("reports/recurring/",              recurring_report,            name="recurring_report"),
 
     # ---------- NEW: secure HTTP cron hook ----------
-    # POST to this endpoint from Render Cron Job:
-    #   curl -fsS -X POST "$SITE_URL/internal/cron/weekly-congrats/$CRON_SECRET/"
+    # POST from Render Cron Job:
+    #   curl -fsS -X POST "$SITE_URL/tasks/internal/cron/weekly-congrats/$CRON_SECRET/"
     path(
         "internal/cron/weekly-congrats/<str:token>/",
         weekly_congrats_hook,
