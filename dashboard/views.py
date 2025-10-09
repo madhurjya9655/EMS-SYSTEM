@@ -409,41 +409,40 @@ def dashboard_home(request):
 
     logger.info(_safe_console_text(f"Dashboard accessed by {request.user.username} at {now_ist.strftime('%Y-%m-%d %H:%M:%S IST')}"))
 
-    # Week windows (Mon..Sun) for scorecards
-    start_current = today_ist - timedelta(days=today_ist.weekday())
-    start_prev = start_current - timedelta(days=7)
-    end_prev = start_current - timedelta(days=1)
+    # Week windows (Mon..Sun) for scorecards (date-only)
+    start_current = today_ist - timedelta(days=today_ist.weekday())  # Monday this week
+    start_prev = start_current - timedelta(days=7)                    # Monday last week
+    end_prev = start_current - timedelta(days=1)                      # Sunday last week
 
-    curr_start_dt, curr_end_dt = span_bounds(start_current, today_ist)
-    prev_start_dt, prev_end_dt = span_bounds(start_prev, end_prev)
-
-    # Weekly scores
+    # ---------- Weekly scores (DATE-ONLY filters; safe for DateField/DateTimeField) ----------
     try:
+        # Checklist & Delegation: use __date transforms (works on DateTimeField)
         curr_chk = Checklist.objects.filter(
-            assign_to=request.user, planned_date__gte=curr_start_dt,
-            planned_date__lt=curr_end_dt, status='Completed',
+            assign_to=request.user, status='Completed',
+            planned_date__date__gte=start_current, planned_date__date__lte=today_ist,
         ).count()
         prev_chk = Checklist.objects.filter(
-            assign_to=request.user, planned_date__gte=prev_start_dt,
-            planned_date__lt=prev_end_dt, status='Completed',
+            assign_to=request.user, status='Completed',
+            planned_date__date__gte=start_prev, planned_date__date__lte=end_prev,
         ).count()
 
         curr_del = Delegation.objects.filter(
-            assign_to=request.user, planned_date__gte=curr_start_dt,
-            planned_date__lt=curr_end_dt, status='Completed',
+            assign_to=request.user, status='Completed',
+            planned_date__date__gte=start_current, planned_date__date__lte=today_ist,
         ).count()
         prev_del = Delegation.objects.filter(
-            assign_to=request.user, planned_date__gte=prev_start_dt,
-            planned_date__lt=prev_end_dt, status='Completed',
+            assign_to=request.user, status='Completed',
+            planned_date__date__gte=start_prev, planned_date__date__lte=end_prev,
         ).count()
 
+        # HelpTicket.planned_date may be a DateField → filter by dates directly (no __date).
         curr_help = HelpTicket.objects.filter(
-            assign_to=request.user, planned_date__gte=curr_start_dt,
-            planned_date__lt=curr_end_dt, status='Closed',
+            assign_to=request.user, status='Closed',
+            planned_date__gte=start_current, planned_date__lte=today_ist,
         ).count()
         prev_help = HelpTicket.objects.filter(
-            assign_to=request.user, planned_date__gte=prev_start_dt,
-            planned_date__lt=prev_end_dt, status='Closed',
+            assign_to=request.user, status='Closed',
+            planned_date__gte=start_prev, planned_date__lte=end_prev,
         ).count()
     except Exception as e:
         logger.error(_safe_console_text(f"Error calculating weekly scores: {e}"))

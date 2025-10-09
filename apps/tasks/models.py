@@ -191,18 +191,8 @@ class Checklist(models.Model):
         self.full_clean()
         super().save(*args, **kwargs)
 
-        # trigger completion email if transitioned into a done state
-        if (old_status != 'Completed') and (self.status == 'Completed'):
-            handover = _active_handover_for(self, 'checklist')
-            if handover:
-                ctx = {
-                    "task_type": "Checklist",
-                    "task_id": self.id,
-                    "task_name": self.task_name,
-                    "completed_at": self.completed_at or timezone.now(),
-                    "planned_date": self.planned_date,
-                }
-                _send_task_completion(handover.original_assignee, handover.new_assignee, self, ctx)
+        # COMPLETION EMAILS DISABLED: No emails on completion for checklist.
+        # (Recurring creation & dashboard logic remain handled elsewhere.)
 
     def __str__(self):
         return f"{self.task_name} → {self.assign_to}"
@@ -300,17 +290,7 @@ class Delegation(models.Model):
         self.full_clean()
         super().save(*args, **kwargs)
 
-        if (old_status != 'Completed') and (self.status == 'Completed'):
-            handover = _active_handover_for(self, 'delegation')
-            if handover:
-                ctx = {
-                    "task_type": "Delegation",
-                    "task_id": self.id,
-                    "task_name": self.task_name,
-                    "completed_at": self.completed_at or timezone.now(),
-                    "planned_date": self.planned_date,
-                }
-                _send_task_completion(handover.original_assignee, handover.new_assignee, self, ctx)
+        # COMPLETION EMAILS DISABLED: No emails on completion for delegation.
 
     def __str__(self):
         return f"{self.task_name} → {self.assign_to}"
@@ -435,17 +415,7 @@ class HelpTicket(models.Model):
         self.full_clean()
         super().save(*args, **kwargs)
 
-        if (old_status != 'Closed') and (self.status == 'Closed'):
-            handover = _active_handover_for(self, 'help_ticket')
-            if handover:
-                ctx = {
-                    "task_type": "Help Ticket",
-                    "task_id": self.id,
-                    "task_name": self.title,
-                    "completed_at": self.resolved_at or timezone.now(),
-                    "planned_date": self.planned_date,
-                }
-                _send_task_completion(handover.original_assignee, handover.new_assignee, self, ctx)
+        # COMPLETION EMAILS DISABLED: No emails on closing help tickets.
 
     def __str__(self):
         return f"{self.title} → {self.assign_to}"

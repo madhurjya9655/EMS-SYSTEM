@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="x-apple-disable-message-reformatting">
   <meta name="color-scheme" content="light only">
-  <title>Leave Request — {{ employee_name }}</title>
+  <title>Leave Request — {{ employee_name }} ({{ leave_type }})</title>
 </head>
 <body style="margin:0;padding:0;background:#f6f8fb;">
   <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f6f8fb;">
@@ -14,7 +14,7 @@
           <!-- Header -->
           <tr>
             <td style="background:#0b5ed7;color:#ffffff;padding:18px 24px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
-              <div style="font-size:18px;font-weight:700;">Leave Request</div>
+              <div style="font-size:18px;font-weight:700;">Leave Request — {{ employee_name }} ({{ leave_type }})</div>
               <div style="opacity:0.9;font-size:13px;margin-top:4px;">
                 To: {% if manager_name %}{{ manager_name }}{% else %}Manager{% endif %} ({{ manager_email|default:"not set" }})
                 {% if cc_list and cc_list|length %} &nbsp;•&nbsp; CC: {{ cc_list|join:", " }}{% endif %}

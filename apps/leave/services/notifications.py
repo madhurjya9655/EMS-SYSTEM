@@ -338,9 +338,12 @@ def send_leave_request_email(
 
     employee_name = leave.employee_name or _employee_display_name(leave.employee)
     manager_name = _manager_display_name(leave, to_addr)
+    leave_type_name = getattr(leave.leave_type, "name", str(leave.leave_type))
 
-    subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
-    subject = f"{subject_prefix}Leave Request — {employee_name} ({_format_ist(leave.start_at)} to {_format_ist(leave.end_at)})"
+    # SUBJECT FORMAT CHANGE:
+    # Old: "[EMS] Leave Request — {employee_name} ({start} to {end})"
+    # New: "Leave Request - Employee Name ( Leave Type )"
+    subject = f"Leave Request - {employee_name} ({leave_type_name})"
 
     # Collect handover summary for email
     handover_summary = []
@@ -365,7 +368,7 @@ def send_leave_request_email(
     ctx = {
         "site_url": _site_base().rstrip("/"),
         "leave_id": leave.id,
-        "leave_type": getattr(leave.leave_type, "name", str(leave.leave_type)),
+        "leave_type": leave_type_name,
         "start_at_ist": _format_ist(leave.start_at),
         "end_at_ist": _format_ist(leave.end_at),
         "reason": leave.reason or "",

@@ -25,14 +25,11 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
-from django.core.mail import EmailMultiAlternatives  # <-- added
-
 from apps.users.permissions import has_permission
 from apps.settings.models import Holiday
 
-# >>> NEW: pull in handover + email utilities
-from apps.leave.models import LeaveHandover, LeaveStatus  # <-- added
-from apps.leave.services.notifications import send_task_completion_email  # <-- added
+# >>> NEW: pull in handover utilities
+from apps.leave.models import LeaveHandover, LeaveStatus  # <-- kept (used elsewhere)
 
 from .forms import (
     BulkUploadForm,
@@ -493,88 +490,6 @@ class UserCache:
 
 user_cache = UserCache()
 can_create = lambda u: u.is_superuser or u.groups.filter(name__in=["Admin", "Manager", "EA", "CEO"]).exists()
-
-
-# ---------- NEW: tiny helper to notify completion ----------
-def _email_task_completion(*, task_type: str, obj, request, actual_minutes: int):
-    """
-    Send a short plain-text email when a task is completed.
-    Targets: assignee (primary) and assigner (CC if different).
-    """
-    try:
-        subject = f"{task_type} Completed: {getattr(obj, 'task_name', getattr(obj, 'title', 'Task'))}"
-        assignee_email = getattr(obj.assign_to, "email", None) if getattr(obj, "assign_to", None) else None
-        assigner_email = getattr(obj.assign_by, "email", None) if getattr(obj, "assign_by", None) else None
-        recipients = [e for e in [assignee_email] if e]
-        cc = []
-        if assigner_email and assigner_email not in recipients:
-            cc.append(assigner_email)
-
-        # Build a useful link back
-        try:
-            if task_type == "Checklist":
-                view_url = f"{site_url}{reverse('tasks:checklist_detail', args=[obj.id])}"
-            elif task_type == "Delegation":
-                view_url = f"{site_url}{reverse('tasks:delegation_detail', args=[obj.id])}"
-            else:
-                view_url = f"{site_url}{reverse('tasks:help_ticket_details', args=[obj.id])}"
-        except Exception:
-            view_url = site_url
-
-        lines = [
-            f"{task_type} ID: {obj.id}",
-            f"Title: {getattr(obj, 'task_name', getattr(obj, 'title', '-'))}",
-            f"Completed by: {request.user.get_full_name() or request.user.username}",
-            f"Planned: {obj.planned_date.strftime('%d %b, %Y %H:%M') if obj.planned_date else '-'}",
-            f"Actual Duration (mins): {actual_minutes}",
-            f"Status: {obj.status}",
-            "",
-            f"View details: {view_url}",
-        ]
-        body = "\n".join(lines)
-
-        if not recipients:
-            return  # nothing to send
-
-        msg = EmailMultiAlternatives(
-            subject=subject,
-            body=body,
-            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
-            to=recipients,
-            cc=cc or None,
-        )
-        msg.send(fail_silently=True)
-    except Exception as e:
-        logger.warning("Completion email failed for %s %s: %s", task_type, getattr(obj, "id", "?"), e)
-# -----------------------------------------------------------
-
-# ---------- NEW: notify original assignee if this task was handed over ------
-def _notify_original_assignee_if_handover(obj, request):
-    """
-    If there's an *active* handover for this task where the current user
-    is the delegate, send the 'task completed' email to the original assignee.
-    """
-    try:
-        ho = (
-            LeaveHandover.objects
-            .filter(new_assignee=request.user, original_task_id=obj.id, is_active=True)
-            .select_related("leave_request", "original_assignee")
-            .order_by("-id")
-            .first()
-        )
-        if ho and ho.leave_request and ho.leave_request.status == LeaveStatus.APPROVED and ho.original_assignee:
-            send_task_completion_email(
-                original_assignee=ho.original_assignee,
-                delegate=request.user,
-                task=obj,
-                context={
-                    "completed_at": timezone.now(),
-                    "planned_date": getattr(obj, "planned_date", None),
-                },
-            )
-    except Exception as e:
-        logger.warning("handover completion email failed for task %s: %s", getattr(obj, "id", None), e)
-# ---------------------------------------------------------------------------
 
 
 @robust_db_operation()
@@ -1101,10 +1016,6 @@ def complete_checklist(request, pk):
             inst.completed_at = now
             inst.actual_duration_minutes = actual_minutes
             inst.save()
-            # NEW: notify by email (local)
-            _email_task_completion(task_type="Checklist", obj=inst, request=request, actual_minutes=actual_minutes)
-            # NEW: notify original assignee if this was a handover
-            _notify_original_assignee_if_handover(inst, request)   # <-- added
             return None, inst
 
     for attempt in range(3):
@@ -1282,10 +1193,6 @@ def complete_delegation(request, pk):
             inst.completed_at = now
             inst.actual_duration_minutes = actual_minutes
             inst.save()
-            # NEW: notify by email (local)
-            _email_task_completion(task_type="Delegation", obj=inst, request=request, actual_minutes=actual_minutes)
-            # NEW: notify original assignee if this was a handover
-            _notify_original_assignee_if_handover(inst, request)  # <-- added
         messages.success(request, f"Delegation task '{obj.task_name}' marked as completed successfully!")
     except Exception as e:
         logger.error("Error completing delegation %s: %s", pk, e)
@@ -1485,9 +1392,6 @@ def complete_help_ticket(request, pk):
             ticket.actual_duration_minutes = max(mins, 0)
         ticket.save()
 
-        # NEW: notify original assignee if this was a handover
-        _notify_original_assignee_if_handover(ticket, request)  # <-- added
-
         messages.success(request, f"Help ticket '{ticket.title}' marked as completed.")
         return redirect(request.GET.get("next", reverse("tasks:assigned_to_me")))
 
@@ -1510,26 +1414,6 @@ def note_help_ticket(request, pk):
                 mins = int((ticket.resolved_at - ticket.planned_date).total_seconds() // 60)
                 ticket.actual_duration_minutes = max(mins, 0)
         ticket.save()
-
-        if ticket.status == "Closed":
-            recipients = []
-            if ticket.assign_to and ticket.assign_to.email:
-                recipients.append(ticket.assign_to.email)
-            if ticket.assign_by and ticket.assign_by.email and ticket.assign_by.email not in recipients:
-                recipients.append(ticket.assign_by.email)
-            if recipients:
-                from django.template.loader import render_to_string
-                subject = f"Help Ticket Closed: {ticket.title}"
-                html_message = render_to_string("email/help_ticket_closed.html", {"ticket": ticket, "assign_by": ticket.assign_by, "assign_to": ticket.assign_to})
-                try:
-                    msg = EmailMultiAlternatives(subject, html_message, getattr(settings, "DEFAULT_FROM_EMAIL", None), recipients)
-                    msg.attach_alternative(html_message, "text/html")
-                    msg.send(fail_silently=True)
-                except Exception:
-                    pass
-
-            # NEW: notify original assignee if this was a handover
-            _notify_original_assignee_if_handover(ticket, request)  # <-- added
 
         messages.success(request, f"Note saved for HT-{ticket.id}.")
         return redirect(request.GET.get("next", reverse("tasks:assigned_to_me")))
@@ -1691,9 +1575,6 @@ def close_help_ticket(request, pk: int):
         mins = int((now - ticket.planned_date).total_seconds() // 60)
         ticket.actual_duration_minutes = max(mins, 0)
     ticket.save()
-
-    # NEW: notify original assignee if this was a handover
-    _notify_original_assignee_if_handover(ticket, request)  # <-- added
 
     messages.success(request, f"Help ticket '{ticket.title}' marked as completed.")
     return redirect(request.GET.get("next", reverse("tasks:assigned_to_me")))

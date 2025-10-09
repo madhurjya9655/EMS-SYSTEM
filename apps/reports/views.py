@@ -89,6 +89,7 @@ def percent_not_completed(planned: int, completed: int) -> float:
 def list_doer_tasks(request):
     """
     Report of checklist tasks, with bulk and single delete.
+    Adds optional Status filter (All/Pending/Completed).
     """
     # ---- handle deletes ----
     if request.method == "POST":
@@ -124,6 +125,13 @@ def list_doer_tasks(request):
     # ---- filtering (GET) ----
     form = PCReportFilterForm(request.GET or None, user=request.user)
     items = Checklist.objects.select_related('assign_by', 'assign_to').order_by('planned_date', 'id')
+
+    # Optional status filter (kept local to this view to avoid changing shared form)
+    status = (request.GET.get("status") or "").strip()
+    valid_status = {"Pending", "Completed"}
+    if status in valid_status:
+        items = items.filter(status=status)
+
     if form.is_valid():
         d = form.cleaned_data
         if d.get('doer'):
@@ -139,7 +147,16 @@ def list_doer_tasks(request):
         elif d.get('date_to'):
             _, e = day_bounds(d['date_to'])
             items = items.filter(planned_date__lt=e)
-    return render(request, 'reports/list_doer_tasks.html', {'form': form, 'items': items})
+
+    return render(
+        request,
+        'reports/list_doer_tasks.html',
+        {
+            'form': form,
+            'items': items,
+            'current_status': status,  # so template can keep the selected option
+        }
+    )
 
 
 @login_required

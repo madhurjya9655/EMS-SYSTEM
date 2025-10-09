@@ -34,6 +34,17 @@
             {{ form.date_to.label_tag }}
             {{ form.date_to|add_class:"form-control" }}
           </div>
+
+          <!-- NEW: Status filter (All / Pending / Completed) -->
+          <div class="col-md-3">
+            <label for="id_status" class="form-label">Status</label>
+            <select id="id_status" name="status" class="form-select">
+              <option value="" {% if not current_status %}selected{% endif %}>All</option>
+              <option value="Pending" {% if current_status == "Pending" %}selected{% endif %}>Pending</option>
+              <option value="Completed" {% if current_status == "Completed" %}selected{% endif %}>Completed</option>
+            </select>
+          </div>
+
           <div class="col-12 text-end">
             <button type="submit" class="btn btn-primary">FILTER</button>
             <a href="{% url 'reports:doer_tasks' %}" class="btn btn-warning">RESET FILTER</a>
