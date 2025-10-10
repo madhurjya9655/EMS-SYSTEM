@@ -1,3 +1,4 @@
+# apps/leave/views.py
 from __future__ import annotations
 
 import logging
@@ -14,7 +15,7 @@ from django.contrib.auth.decorators import login_required
 from django.core import signing
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import ManyToManyField
+from django.db.models import ManyToManyField, Q
 from django.db.utils import OperationalError
 from django.http import HttpRequest, HttpResponse, HttpResponseForbidden, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
@@ -66,17 +67,18 @@ IST = ZoneInfo("Asia/Kolkata")
 TOKEN_SALT = "leave-action-v1"
 TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 days
 
-# Keep allowed list in views too so summary widgets (balances etc.) stay in sync with the form
+# Keep allowed list in views too so summary widgets (balances etc.) stay in sync with the form.
+# Half-day is a *duration*, not a leave type, so it is intentionally NOT listed.
 ALLOWED_LEAVE_TYPE_NAMES = {
-    "Half Day",
     "Compensatory Off",
+    "Leave Without Pay",
     "Leave Without Pay (If No Leave Balance)",
     "Sick Leave",
     "Casual Leave",
     "Maternity Leave",
     "Paternity Leave",
+    "Personal Leave",  # make sure this LeaveType exists in DB
 }
-
 
 # -----------------------------------------------------------------------------#
 # Helpers                                                                      #
@@ -85,14 +87,12 @@ def now_ist():
     """Return current time localized to IST."""
     return timezone.localtime(timezone.now(), IST)
 
-
 def _model_has_field(model, name: str) -> bool:
     try:
         model._meta.get_field(name)
         return True
     except Exception:
         return False
-
 
 def _employee_header(user) -> Dict[str, Optional[str]]:
     """
@@ -135,7 +135,6 @@ def _employee_header(user) -> Dict[str, Optional[str]]:
         logger.exception("Failed to load Profile for user id=%s", getattr(user, "id", None))
         return header
 
-
 def _routing_for_leave(leave: LeaveRequest) -> Tuple[str, List[str]]:
     """
     Resolve routing from admin-controlled mapping.
@@ -146,7 +145,6 @@ def _routing_for_leave(leave: LeaveRequest) -> Tuple[str, List[str]]:
     manager_email = (r.get("to") or "").strip().lower()
     cc_list = [e.strip().lower() for e in (r.get("cc") or []) if e]
     return manager_email, cc_list
-
 
 def _role_for_email(leave: LeaveRequest, email: str) -> Optional[str]:
     """
@@ -163,14 +161,12 @@ def _role_for_email(leave: LeaveRequest, email: str) -> Optional[str]:
         return "cc"
     return None
 
-
 def _can_manage(request_user, leave: LeaveRequest) -> bool:
     if not getattr(request_user, "is_authenticated", False):
         return False
     if getattr(request_user, "is_superuser", False):
         return True
     return leave.reporting_person_id == getattr(request_user, "id", None)
-
 
 def _safe_next_url(request: HttpRequest, default_name: str) -> str:
     nxt = (request.GET.get("next") or request.POST.get("next") or "").strip()
@@ -181,13 +177,72 @@ def _safe_next_url(request: HttpRequest, default_name: str) -> str:
     except Exception:
         return "/"
 
-
 def _client_ip(request: HttpRequest) -> Optional[str]:
     xff = request.META.get("HTTP_X_FORWARDED_FOR")
     if xff:
         return xff.split(",")[0].strip()
     return request.META.get("REMOTE_ADDR")
 
+# ---------------------- TASK AUTO-SKIP (NEW) -------------------------------- #
+def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = True) -> Dict[str, int]:
+    """
+    Immediately mark scheduled tasks as skipped for the leave window.
+    • Runs on leave creation (before approval).
+    • For half-day, only tasks whose planned_date falls inside [start_at, end_at) are skipped.
+    • If exclude_handover=True, tasks explicitly handed over for this leave are NOT skipped.
+    Returns per-model counts of rows updated.
+    """
+    counts = {"checklist": 0, "delegation": 0, "help_ticket": 0, "fms": 0}
+    try:
+        start_at = leave.start_at
+        end_at = leave.end_at
+
+        from apps.tasks.models import Checklist, Delegation, HelpTicket, FMS
+
+        exclude_ids = {"checklist": [], "delegation": [], "help_ticket": []}
+        if exclude_handover:
+            try:
+                handovers = (
+                    LeaveHandover.objects
+                    .filter(leave_request=leave, is_active=True)
+                    .only("task_type", "original_task_id")
+                )
+                for ho in handovers:
+                    exclude_ids.get(ho.task_type, []).append(ho.original_task_id)
+            except Exception:
+                pass
+
+        dt_window = Q(planned_date__gte=start_at) & Q(planned_date__lt=end_at)
+
+        q = Checklist.objects.filter(assign_to=leave.employee, status='Pending').filter(dt_window)
+        if exclude_ids["checklist"]:
+            q = q.exclude(id__in=exclude_ids["checklist"])
+        counts["checklist"] = int(q.update(is_skipped_due_to_leave=True))
+
+        q = Delegation.objects.filter(assign_to=leave.employee, status='Pending').filter(dt_window)
+        if exclude_ids["delegation"]:
+            q = q.exclude(id__in=exclude_ids["delegation"])
+        counts["delegation"] = int(q.update(is_skipped_due_to_leave=True))
+
+        q = HelpTicket.objects.filter(assign_to=leave.employee)\
+                              .exclude(status__in=['Closed', 'COMPLETED', 'Completed', 'Done'])\
+                              .filter(dt_window)
+        if exclude_ids["help_ticket"]:
+            q = q.exclude(id__in=exclude_ids["help_ticket"])
+        counts["help_ticket"] = int(q.update(is_skipped_due_to_leave=True))
+
+        ist_dates = leave.ist_dates() if hasattr(leave, "ist_dates") else []
+        if ist_dates:
+            counts["fms"] = int(
+                FMS.objects.filter(assign_to=leave.employee, planned_date__in=ist_dates)
+                .update(is_skipped_due_to_leave=True)
+            )
+
+        logger.info("Auto-skip applied for leave %s: %s", leave.id, counts)
+    except Exception:
+        logger.exception("Auto-skip failed for leave %s", getattr(leave, "id", None))
+    return counts
+# -----------------------------------------------------------------------------#
 
 # ---- blocked days math (IST, inclusive) -------------------------------------#
 def _datespan_ist(start_dt, end_dt) -> List[date]:
@@ -204,7 +259,6 @@ def _datespan_ist(start_dt, end_dt) -> List[date]:
         cur = cur + timedelta(days=1)
     return out
 
-
 def _blocked_days_in_year_ist(leave: LeaveRequest, year: int) -> float:
     span = _datespan_ist(leave.start_at, leave.end_at)
     days_in_year = [d for d in span if d.year == year]
@@ -214,7 +268,6 @@ def _blocked_days_in_year_ist(leave: LeaveRequest, year: int) -> float:
         return 0.5
     return float(len(set(days_in_year)))
 
-
 def _blocked_days_total_ist(leave: LeaveRequest) -> float:
     span = _datespan_ist(leave.start_at, leave.end_at)
     if not span:
@@ -223,7 +276,6 @@ def _blocked_days_total_ist(leave: LeaveRequest) -> float:
         return 0.5
     return float(len(set(span)))
 
-
 @dataclass
 class BalanceRow:
     type_name: str
@@ -231,11 +283,9 @@ class BalanceRow:
     used_days: float
     remaining_days: float
 
-
 def _leave_balances_for_user(user) -> Tuple[List[BalanceRow], float]:
     year = now_ist().year
     rows: List[BalanceRow] = []
-    # Show balances only for allowed types (mirrors form dropdown)
     types = list(LeaveType.objects.filter(name__in=ALLOWED_LEAVE_TYPE_NAMES).order_by("name"))
 
     approved = (
@@ -264,7 +314,6 @@ def _leave_balances_for_user(user) -> Tuple[List[BalanceRow], float]:
             )
         )
     return rows, total_remaining
-
 
 # -----------------------------------------------------------------------------#
 # Views                                                                         #
@@ -300,7 +349,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             "now_ist": now,
         },
     )
-
 
 @has_permission("leave_apply")
 @login_required
@@ -386,10 +434,14 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                             if handovers:
                                 handovers_created = LeaveHandover.objects.bulk_create(handovers, ignore_conflicts=True)
 
+                        # ---------------- NEW: Auto-skip tasks immediately ----------------
+                        skip_counts = _auto_skip_tasks_for_leave(lr, exclude_handover=True)
+                        logger.info("Skip counts for leave %s: %s", lr.id, skip_counts)
+                        # -------------------------------------------------------------------
+
                         # ---------------- Apply handover + Email dispatch (sync or Celery) ----------------
                         def _apply_and_send():
                             try:
-                                # Apply the handover AFTER the handover rows exist (so dashboards update immediately)
                                 try:
                                     from apps.leave.services.task_handover import apply_handover_for_leave
                                     moved = apply_handover_for_leave(lr)
@@ -398,13 +450,10 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                                 except Exception as e:
                                     logger.exception("Failed applying handover for leave %s: %s", lr.id, e)
 
-                                # Emails
                                 use_async = bool(getattr(settings, "ENABLE_CELERY_EMAIL", False)) and bool(send_leave_emails_async)
                                 if use_async:
-                                    # Celery path
                                     send_leave_emails_async.delay(lr.id)
                                 elif send_leave_request_email:
-                                    # Synchronous fallback
                                     _send_leave_emails_sync(lr)
 
                                 if handovers_created:
@@ -421,7 +470,6 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                         transaction.on_commit(_apply_and_send)
                         # ----------------------------------------------------------------
 
-                    # If we reached here, the transaction succeeded -> messages + redirect
                     if handovers_created:
                         messages.success(request, f"Leave application submitted with {len(handovers_created)} task handovers. Email notifications are being sent.")
                     else:
@@ -429,7 +477,6 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                     return redirect("leave:dashboard")
 
                 except OperationalError as e:
-                    # Only retry for 'database is locked'
                     if "database is locked" in str(e).lower() and attempt < max_attempts:
                         sleep_s = base_sleep * (2 ** (attempt - 1))
                         logger.warning(f"SQLite busy on apply_leave (attempt {attempt}/{max_attempts}); retrying in {sleep_s:.2f}s.")
@@ -457,31 +504,24 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
         },
     )
 
-
 def _send_leave_emails_sync(leave: LeaveRequest):
     try:
-        # Per-request CCs chosen by employee
         cc_emails = [user.email for user in leave.cc_users.all() if user.email]
 
-        # Manager
         manager_email = None
         if leave.reporting_person and leave.reporting_person.email:
             manager_email = leave.reporting_person.email
 
-        # Admin-managed defaults (M2M) + legacy
         admin_cc_list: List[str] = []
         try:
-            # Use mapping-based resolver to fetch default CC users (includes legacy if not duplicated)
             _rp, default_cc_users = LeaveRequest.resolve_routing_multi_for(leave.employee)
             admin_cc_list.extend([u.email for u in default_cc_users if getattr(u, "email", None)])
         except Exception:
             pass
 
-        # Additionally include legacy snapshot on the Leave (if present)
         if leave.cc_person and getattr(leave.cc_person, "email", None):
             admin_cc_list.append(leave.cc_person.email)
 
-        # Merge + normalize
         all_cc = []
         seen = set()
         for e in (admin_cc_list + cc_emails):
@@ -501,7 +541,6 @@ def _send_leave_emails_sync(leave: LeaveRequest):
 
     except Exception as e:
         logger.error(f"Failed to send leave emails sync for leave {leave.id}: {e}")
-
 
 def _send_handover_emails_sync(leave: LeaveRequest, handovers: List[LeaveHandover]):
     try:
@@ -524,12 +563,10 @@ def _send_handover_emails_sync(leave: LeaveRequest, handovers: List[LeaveHandove
     except Exception as e:
         logger.error(f"Failed to send handover emails sync for leave {leave.id}: {e}")
 
-
 @has_permission("leave_list")
 @login_required
 def my_leaves(request: HttpRequest) -> HttpResponse:
     return redirect("leave:dashboard")
-
 
 @has_permission("leave_pending_manager")
 @login_required
@@ -540,7 +577,6 @@ def manager_pending(request: HttpRequest) -> HttpResponse:
         .order_by("start_at")
     )
     return render(request, "leave/manager_pending.html", {"leaves": leaves})
-
 
 def _build_approval_context(leave: LeaveRequest) -> Dict[str, object]:
     emp = leave.employee
@@ -567,7 +603,6 @@ def _build_approval_context(leave: LeaveRequest) -> Dict[str, object]:
         "attachment": getattr(leave, "attachment", None),
     }
 
-
 @has_permission("leave_pending_manager")
 @login_required
 @require_GET
@@ -578,7 +613,6 @@ def approval_page(request: HttpRequest, pk: int) -> HttpResponse:
     ctx = _build_approval_context(leave)
     ctx["next_url"] = _safe_next_url(request, "leave:manager_pending")
     return render(request, "leave/approve.html", ctx)
-
 
 @has_permission("leave_pending_manager")
 @login_required
@@ -606,7 +640,6 @@ def manager_decide_approve(request: HttpRequest, pk: int) -> HttpResponse:
         messages.error(request, "Could not approve the leave. Please try again.")
     return redirect(_safe_next_url(request, "leave:manager_pending"))
 
-
 @has_permission("leave_pending_manager")
 @login_required
 @require_POST
@@ -632,7 +665,6 @@ def manager_decide_reject(request: HttpRequest, pk: int) -> HttpResponse:
         logger.exception("Reject failed for leave %s", leave.pk)
         messages.error(request, "Could not reject the leave. Please try again.")
     return redirect(_safe_next_url(request, "leave:manager_pending"))
-
 
 # -----------------------------------------------------------------------------#
 # Delete functionality                                                          #
@@ -662,7 +694,6 @@ def delete_leave(request: HttpRequest, pk: int) -> HttpResponse:
         messages.error(request, "Failed to delete leave request. Please try again.")
 
     return redirect("leave:dashboard")
-
 
 @has_permission("leave_list")
 @login_required
@@ -710,7 +741,6 @@ def bulk_delete_leaves(request: HttpRequest) -> HttpResponse:
         messages.error(request, "Failed to delete leave requests. Please try again.")
 
     return redirect("leave:dashboard")
-
 
 # -----------------------------------------------------------------------------#
 # One-click Token Decision (CONFIRMATION + POST)                                #
@@ -867,7 +897,6 @@ class TokenDecisionView(View):
         messages.success(request, f"Leave for {leave.employee.get_full_name() or leave.employee.username} has been {leave.get_status_display()}.")
         return render(request, self.template_done, {"leave": leave})
 
-
 # -----------------------------------------------------------------------------#
 # Profile Photo Upload                                                          #
 # -----------------------------------------------------------------------------#
@@ -898,7 +927,6 @@ def upload_photo(request: HttpRequest) -> HttpResponse:
         messages.error(request, "Could not save photo. Please try again.")
 
     return redirect("leave:dashboard")
-
 
 # -----------------------------------------------------------------------------#
 # Optional lightweight widget for manager dashboards                            #
@@ -937,7 +965,6 @@ def manager_widget(request: HttpRequest) -> HttpResponse:
     )
     return HttpResponse(html)
 
-
 def _csrf_input(request: HttpRequest) -> str:
     from django.middleware.csrf import get_token
     try:
@@ -945,7 +972,6 @@ def _csrf_input(request: HttpRequest) -> str:
         return f"<input type='hidden' name='csrfmiddlewaretoken' value='{token}'>"
     except Exception:
         return ""
-
 
 # -----------------------------------------------------------------------------#
 # Approver Mapping – editor (summary + dedicated field pages)                   #
@@ -956,7 +982,6 @@ def _user_label(u) -> str:
     name = (getattr(u, "get_full_name", lambda: "")() or u.username or "").strip()
     email = (getattr(u, "email", "") or "").strip()
     return f"{name} ({email})" if email else name
-
 
 @login_required
 def approver_mapping_edit(request: HttpRequest, user_id: int) -> HttpResponse:
@@ -978,7 +1003,6 @@ def approver_mapping_edit(request: HttpRequest, user_id: int) -> HttpResponse:
         "next_url": _safe_next_url(request, "recruitment:employee_list"),
     }
     return render(request, "leave/approver_mapping_edit.html", ctx)
-
 
 @login_required
 @require_POST
@@ -1014,7 +1038,6 @@ def approver_mapping_save(request: HttpRequest) -> HttpResponse:
 
     messages.success(request, "Approver mapping saved.")
     return redirect(next_url)
-
 
 @login_required
 def approver_mapping_edit_field(request: HttpRequest, user_id: int, field: str) -> HttpResponse:
@@ -1079,16 +1102,13 @@ def approver_mapping_edit_field(request: HttpRequest, user_id: int, field: str) 
     }
     return render(request, "leave/approver_mapping_field_edit.html", ctx)
 
-
 @login_required
 def approver_mapping_edit_reporting(request: HttpRequest, user_id: int) -> HttpResponse:
     return approver_mapping_edit_field(request, user_id, "reporting")
 
-
 @login_required
 def approver_mapping_edit_cc(request: HttpRequest, user_id: int) -> HttpResponse:
     return approver_mapping_edit_field(request, user_id, "cc")
-
 
 # -----------------------------------------------------------------------------#
 # CC Config (admin-only) + per-employee CC assignment                           #
@@ -1097,13 +1117,11 @@ class _CCAddForm(forms.Form):
     user = forms.ModelChoiceField(
         queryset=get_user_model().objects.filter(is_active=True).order_by("first_name", "last_name", "username")
     )
-
     def clean_user(self):
         u = self.cleaned_data["user"]
         if not getattr(u, "email", ""):
             raise forms.ValidationError("Selected user must have an email.")
         return u
-
 
 @login_required
 def cc_config(request: HttpRequest) -> HttpResponse:
@@ -1140,7 +1158,6 @@ def cc_config(request: HttpRequest) -> HttpResponse:
 
     return render(request, "leave/cc_config.html", {"rows": rows, "add_form": add_form})
 
-
 @login_required
 @require_POST
 @transaction.atomic
@@ -1161,7 +1178,6 @@ def cc_config_add(request: HttpRequest) -> HttpResponse:
         messages.info(request, "User already exists in CC options.")
     return redirect("leave:cc_config")
 
-
 @login_required
 @require_POST
 @transaction.atomic
@@ -1176,25 +1192,17 @@ def cc_config_remove(request: HttpRequest, pk: int) -> HttpResponse:
         messages.info(request, "Entry not found.")
     return redirect("leave:cc_config")
 
-
 @login_required
 def cc_assign(request: HttpRequest) -> HttpResponse:
     """
     Admin: assign per-employee default CC recipients.
-
-    Supports BOTH:
-      • Legacy: ApproverMapping.cc_person (FK)
-      • New:    ApproverMapping.default_cc_users (M2M -> User)
-
-    Template uses a multi-select. For legacy FK, only the first selected user
-    will be saved (others are ignored). "Clear all CC" works in both cases.
+    Supports BOTH legacy FK and new M2M.
     """
     if not getattr(request.user, "is_superuser", False):
         return HttpResponseForbidden("Admins only.")
 
     User = get_user_model()
 
-    # Active CC options (choices)
     active_cc = list(
         CCConfiguration.objects.filter(is_active=True)
         .select_related("user")
@@ -1208,20 +1216,17 @@ def cc_assign(request: HttpRequest) -> HttpResponse:
             label = f"{label} — {opt.department}"
         choices.append((opt.user.id, label))
 
-    # Employees to show
     employees = list(
         User.objects.filter(is_active=True)
         .only("id", "first_name", "last_name", "username", "email")
         .order_by("first_name", "last_name", "username")
     )
 
-    # Preload mappings
     mappings = {
         m.employee_id: m
         for m in ApproverMapping.objects.select_related("employee", "cc_person").filter(employee__in=employees)
     }
 
-    # Detect presence of M2M field default_cc_users
     has_m2m = hasattr(ApproverMapping, "default_cc_users") and (
         isinstance(getattr(ApproverMapping, "default_cc_users"), ManyToManyField)
         or hasattr(getattr(ApproverMapping, "default_cc_users"), "through")
@@ -1236,16 +1241,13 @@ def cc_assign(request: HttpRequest) -> HttpResponse:
                 ids_param = f"row-{emp.id}-cc_user_ids"
                 clear_param = f"row-{emp.id}-clear"
 
-                # If neither key posted => No change for this row
                 if ids_param not in request.POST and clear_param not in request.POST:
                     continue
 
-                # Ensure mapping exists
                 if mapping is None:
                     mapping = ApproverMapping.objects.create(employee=emp)
                     mappings[emp.id] = mapping
 
-                # Clear all CC
                 if request.POST.get(clear_param) == "1":
                     if has_m2m:
                         mapping.default_cc_users.set([])
@@ -1255,7 +1257,6 @@ def cc_assign(request: HttpRequest) -> HttpResponse:
                     updated += 1
                     continue
 
-                # Set to selected list (may be empty => clears M2M / FK)
                 selected_ids: List[int] = []
                 for raw in request.POST.getlist(ids_param):
                     try:
@@ -1282,7 +1283,6 @@ def cc_assign(request: HttpRequest) -> HttpResponse:
         messages.success(request, f"Updated {updated} employee(s).")
         return redirect("leave:cc_assign")
 
-    # Build rows for template (preselect + badges)
     id_to_label = dict(choices)
     rows = []
     for emp in employees:
@@ -1327,7 +1327,6 @@ def cc_assign(request: HttpRequest) -> HttpResponse:
         "cc_choices": choices,
     }
     return render(request, "leave/cc_assign.html", ctx)
-
 
 # -----------------------------------------------------------------------------#
 # NEW: Delegate dashboard widget — tasks handed over to the current user        #

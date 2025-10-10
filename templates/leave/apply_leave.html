@@ -73,16 +73,19 @@
 
         <div class="row g-3 mt-1">
           <div class="col-md-6">
-            <label class="form-label" for="{{ form.start_at.id_for_label }}">Start Date (IST)</label>
+            <label class="form-label" for="{{ form.start_at.id_for_label }}">Date (IST)</label>
             {{ form.start_at }}
-            <div class="form-text">Date only. For Full Day we’ll use 09:30 → 18:00.</div>
+            <div class="form-text">
+              For <strong>Full Day</strong> we’ll use <code>09:30 → 18:00</code>.
+              For <strong>Half Day</strong> pick your time range below (on this same date).
+            </div>
             {% if form.start_at.errors %}<div class="invalid-feedback d-block">{{ form.start_at.errors|striptags }}</div>{% endif %}
           </div>
 
-          <div class="col-md-6">
+          <div id="end-date-col" class="col-md-6">
             <label class="form-label" for="{{ form.end_at.id_for_label }}">End Date (IST)</label>
             {{ form.end_at }}
-            <div class="form-text">End must be on/after start date.</div>
+            <div class="form-text">End must be on/after start date (Full Day only).</div>
             {% if form.end_at.errors %}<div class="invalid-feedback d-block">{{ form.end_at.errors|striptags }}</div>{% endif %}
           </div>
         </div>
@@ -93,7 +96,9 @@
             <div class="col-md-6">{{ form.from_time|as_crispy_field }}</div>
             <div class="col-md-6">{{ form.to_time|as_crispy_field }}</div>
           </div>
-          <div class="form-text">Half-day should be ≤ 6 hours and on a single date.</div>
+          <div class="form-text">
+            Half Day can be <strong>any time range within 09:30–18:00</strong> on the selected date.
+          </div>
         </div>
 
         <div class="row g-3 mt-1">
@@ -106,7 +111,7 @@
           <div class="col-md-6">
             <label class="form-label" for="{{ form.attachment.id_for_label }}">Attachment (optional)</label>
             {{ form.attachment }}
-            <div class="form-text">Allowed: PDF, PNG, JPG, JPEG, WEBP, HEIC, DOC, DOCX. Max 10MB.</div>
+            <div class="form-text">Allowed: PDF, PNG, JPG, JPEG, WEBP, HEIC, DOC, DOCX, TXT. Max 10MB.</div>
             {% if form.attachment.errors %}<div class="invalid-feedback d-block">{{ form.attachment.errors|striptags }}</div>{% endif %}
           </div>
         </div>
@@ -193,14 +198,39 @@
 (function () {
   const radios = document.getElementsByName("duration_type");
   const halfSlot = document.getElementById("half-day-slot");
+  const endCol = document.getElementById("end-date-col");
+  const startInput = document.getElementById("id_start_at");
+  const endInput = document.getElementById("id_end_at");
+
+  function setEndToStart() {
+    if (startInput && endInput && startInput.value) {
+      endInput.value = startInput.value;
+    }
+  }
 
   function update() {
     let val = "FULL";
     for (const r of radios) { if (r.checked) { val = r.value; break; } }
     if (halfSlot) halfSlot.style.display = (val === "HALF") ? "" : "none";
+
+    if (endCol && endInput) {
+      if (val === "HALF") {
+        endCol.style.display = "none";
+        endInput.setAttribute("disabled", "disabled");
+        setEndToStart();
+      } else {
+        endCol.style.display = "";
+        endInput.removeAttribute("disabled");
+      }
+    }
   }
 
   for (const r of radios) r.addEventListener("change", update);
+  if (startInput) startInput.addEventListener("change", function () {
+    // keep end date in sync while in HALF mode
+    for (const r of radios) { if (r.checked && r.value === "HALF") { setEndToStart(); break; } }
+  });
+
   update();
 })();
 </script>

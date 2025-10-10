@@ -1,4 +1,4 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\leave\models.py
+# apps/leave/models.py
 from __future__ import annotations
 
 import hashlib
@@ -20,6 +20,10 @@ User = get_user_model()
 
 # Single source of truth for all time-gated rules (IST)
 IST = pytz.timezone("Asia/Kolkata")
+
+# Working window (used for Half Day guards)
+WORK_START_IST = time(9, 30)
+WORK_END_IST   = time(18, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -403,39 +407,56 @@ class LeaveRequest(models.Model):
         if cc_single:
             self.cc_person = cc_single
 
+    def _is_half_window_by_times(self) -> bool:
+        """
+        Infer 'half-day' from the actual requested window (used during form validation
+        where is_half_day flag may not be on the instance yet).
+        """
+        try:
+            same_date = _ist_date(self.start_at) == _ist_date(self.end_at)
+            short_enough = (self.end_at - self.start_at) <= timedelta(hours=6)
+            return bool(same_date and short_enough)
+        except Exception:
+            return False
+
     def _validate_apply_cutoff(self) -> None:
+        """
+        Time rules (IST):
+        • Past dates are not allowed.
+        • **Full Day only**: same-day application blocked at/after 10:00 AM.
+        • **Half Day**: NO same-day time gating anymore (user can select any range
+          within 09:30–18:00; this is enforced in clean()).
+        """
         now = now_ist()
         start_day = _ist_date(self.start_at)
 
         if start_day < now.date():
             raise ValidationError("You cannot apply for leave for past dates.")
 
-        if start_day == now.date():
-            gate_0930 = datetime.combine(now.date(), time(9, 30), tzinfo=IST)
+        # Determine if this request is effectively half-day by its window,
+        # because during ModelForm validation `is_half_day` may still be False.
+        is_half = self.is_half_day or self._is_half_window_by_times()
+
+        if start_day == now.date() and not is_half:
             gate_1000 = datetime.combine(now.date(), time(10, 0), tzinfo=IST)
             if now >= gate_1000:
                 raise ValidationError(
-                    "You cannot apply for leave after 10:00 AM because 10:00 AM recurring tasks will get assigned automatically."
+                    "You cannot apply for Full Day leave after 10:00 AM IST for the same day."
                 )
-            if now > gate_0930:
-                raise ValidationError("Same-day leaves must be applied before 09:30 AM IST.")
 
     def _validate_decision_cutoff(self, new_status: str) -> None:
-        if new_status not in (LeaveStatus.APPROVED, LeaveStatus.REJECTED):
-            return
-        now = now_ist()
-        today = now.date()
-        if self.includes_ist_date(today):
-            gate_1000 = datetime.combine(today, time(10, 0), tzinfo=IST)
-            if now >= gate_1000:
-                raise ValidationError("Approvals/Rejections are locked after 10:00 AM IST for today's leaves.")
+        """
+        Manager approval/rejection is allowed ANYTIME per new requirement.
+        Retained as a no-op to keep call sites intact.
+        """
+        return  # no time restriction
 
     def _recompute_blocked_days(self) -> None:
         days = self.ist_dates()
         if not days:
             self.blocked_days = 0.0
             return
-        if self.is_half_day and len(days) == 1:
+        if (self.is_half_day or self._is_half_window_by_times()) and len(days) == 1:
             self.blocked_days = 0.5
         else:
             self.blocked_days = float(len(days))
@@ -455,15 +476,27 @@ class LeaveRequest(models.Model):
         if self.end_at <= self.start_at:
             raise ValidationError({"end_at": "End must be after Start."})
 
-        if self.is_half_day:
+        # Treat as half-day if either flag is set OR the window indicates a half span
+        is_half = self.is_half_day or self._is_half_window_by_times()
+
+        if is_half:
             if _ist_date(self.start_at) != _ist_date(self.end_at):
                 raise ValidationError({"is_half_day": "Half-day must start and end on the same calendar date."})
+
+            # ≤ 6 hours
             if (self.end_at - self.start_at) > timedelta(hours=6):
                 raise ValidationError({"is_half_day": "Half-day duration should be ≤ 6 hours."})
+
+            # Must be inside the working window 09:30–18:00 IST
+            s_local = timezone.localtime(self.start_at, IST).time()
+            e_local = timezone.localtime(self.end_at, IST).time()
+            if s_local < WORK_START_IST or e_local > WORK_END_IST:
+                raise ValidationError({"is_half_day": "Half-day time must be within 09:30–18:00 IST."})
 
         if not self.pk:
             self._validate_apply_cutoff()
 
+        # NEW: Managers can approve/reject anytime (no cutoff)
         if self.status in (LeaveStatus.APPROVED, LeaveStatus.REJECTED):
             self._validate_decision_cutoff(self.status)
 
@@ -600,7 +633,7 @@ class LeaveHandover(models.Model):
     original_task_id = models.PositiveIntegerField()
     message = models.TextField(blank=True)
 
-    # Effective dates are set from leave request dates
+    # Effective dates are set from leave request if not already set
     effective_start_date = models.DateField(null=True, blank=True)
     effective_end_date = models.DateField(null=True, blank=True)
 

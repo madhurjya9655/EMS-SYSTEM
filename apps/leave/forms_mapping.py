@@ -5,7 +5,6 @@ from typing import Optional, Iterable
 
 from django import forms
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
 
 from .models import ApproverMapping
 
@@ -66,13 +65,10 @@ class ApproverMappingForm(forms.ModelForm):
         """
         super().__init__(*args, **kwargs)
 
-        # Choices: active users, show only those with (or allowed without) emails.
-        # RP/CC must have email; for employee display it's fine, but we reuse the same queryset.
+        # Choices: active users (for display) and only-with-email (for RP/CC lists)
         base_qs = User.objects.filter(is_active=True).order_by(
             "first_name", "last_name", "username", "id"
         )
-
-        # RP / CC / Multi-CC should only list users that have an email to avoid invalid picks
         email_qs = base_qs.exclude(email__isnull=True).exclude(email__exact="")
 
         self.fields["employee"].queryset = base_qs
@@ -92,9 +88,7 @@ class ApproverMappingForm(forms.ModelForm):
                 self.instance.default_cc_users.values_list("pk", flat=True)
             )
 
-    # ---------------------------
-    # Validation
-    # ---------------------------
+    # --------------------------- Validation ---------------------------
     def clean(self):
         cleaned = super().clean()
 
@@ -153,9 +147,7 @@ class ApproverMappingForm(forms.ModelForm):
 
         return cleaned
 
-    # ---------------------------
-    # Save
-    # ---------------------------
+    # --------------------------- Save ---------------------------
     def save(self, commit: bool = True) -> ApproverMapping:
         """
         Ensure `instance.employee` is set (for create flows where the field is disabled)

@@ -82,6 +82,9 @@ class Checklist(models.Model):
     priority = models.CharField(max_length=10, choices=[('Low', 'Low'), ('Medium', 'Medium'), ('High', 'High')])
     attachment_mandatory = models.BooleanField(default=False)
 
+    # NEW: this task occurrence was auto-skipped due to an employee leave window
+    is_skipped_due_to_leave = models.BooleanField(default=False, db_index=True)
+
     mode = models.CharField(
         max_length=10,
         choices=[
@@ -142,6 +145,7 @@ class Checklist(models.Model):
             models.Index(fields=['assign_to', 'task_name', 'mode', 'frequency', 'group_name']),
             models.Index(fields=['assign_to', 'status', 'planned_date']),
             models.Index(fields=['status', 'planned_date']),
+            models.Index(fields=['is_skipped_due_to_leave', 'planned_date']),
         ]
 
     # ---- Dashboard helper (no import of HandoverTaskMixin to avoid cycles)
@@ -219,6 +223,9 @@ class Delegation(models.Model):
 
     time_per_task_minutes = models.PositiveIntegerField(default=0, blank=True, null=True)
 
+    # NEW: skip flag
+    is_skipped_due_to_leave = models.BooleanField(default=False, db_index=True)
+
     mode = models.CharField(
         max_length=10,
         choices=[
@@ -246,6 +253,7 @@ class Delegation(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=['assign_to', 'status', 'planned_date']),
+            models.Index(fields=['is_skipped_due_to_leave', 'planned_date']),
         ]
 
     # ---- Dashboard helper (no mixin import)
@@ -329,8 +337,17 @@ class FMS(models.Model):
     priority = models.CharField(max_length=10, choices=[('Low', 'Low'), ('Medium', 'Medium'), ('High', 'High')])
     estimated_minutes = models.PositiveIntegerField(default=0)
 
+    # NEW: skip flag (harmless for FMS; used by reports if needed)
+    is_skipped_due_to_leave = models.BooleanField(default=False, db_index=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['assign_to', 'status', 'planned_date']),
+            models.Index(fields=['is_skipped_due_to_leave', 'planned_date']),
+        ]
 
     def __str__(self):
         return f"{self.task_name} → {self.assign_to}"
@@ -366,12 +383,16 @@ class HelpTicket(models.Model):
 
     actual_duration_minutes = models.PositiveIntegerField(null=True, blank=True)
 
+    # NEW: skip flag
+    is_skipped_due_to_leave = models.BooleanField(default=False, db_index=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         indexes = [
             models.Index(fields=['assign_to', 'status', 'planned_date']),
+            models.Index(fields=['is_skipped_due_to_leave', 'planned_date']),
         ]
 
     # ---- Dashboard helper

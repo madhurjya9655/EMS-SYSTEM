@@ -18,20 +18,23 @@ ALLOWED_ATTACHMENT_EXTS = {
     ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".doc", ".docx", ".txt"
 }
 
-# IMPORTANT: We do NOT expose a "Half Day" leave type anymore.
+# These are the leave types shown in the dropdown.
 SOP_ALLOWED_TYPE_NAMES = [
     "Compensatory Off",
     "Leave Without Pay",
+    "Leave Without Pay (If No Leave Balance)",
     "Sick Leave",
     "Casual Leave",
     "Maternity Leave",
     "Paternity Leave",
+    "Personal Leave",
 ]
 
-HALF_DAY_DEFAULT_FROM = time(9, 30)
-HALF_DAY_DEFAULT_TO   = time(18, 0)
-FULL_DAY_DEFAULT_FROM = time(9, 30)
-FULL_DAY_DEFAULT_TO   = time(18, 0)
+# Working-day anchors (IST)
+WORK_FROM  = time(9, 30)
+WORK_TO    = time(18, 0)
+FULL_DAY_DEFAULT_FROM = WORK_FROM
+FULL_DAY_DEFAULT_TO   = WORK_TO
 
 
 def _aware_ist(dt: datetime) -> datetime:
@@ -44,15 +47,19 @@ def _choices(items: List[Tuple[int, str]]) -> List[Tuple[str, str]]:
     return [(str(i), s) for i, s in items]
 
 
+def _now_ist() -> datetime:
+    return timezone.localtime(timezone.now(), IST)
+
+
 class LeaveRequestForm(forms.ModelForm):
     """
-    UI contract:
+    New UI contract:
       • duration_type = FULL / HALF (radio)
-      • start_at, end_at are DATE-ONLY fields in the form (we compose datetimes in clean())
-      • for HALF, we also show from_time / to_time
+      • For HALF:   one Date + From/To time (any range inside 09:30–18:00)
+      • For FULL:   Start Date required; End Date optional (defaults to Start)
     """
 
-    # Which kind of leave duration?
+    # Duration
     DURATION_CHOICES = (("FULL", "Full Day"), ("HALF", "Half Day"))
     duration_type = forms.ChoiceField(
         choices=DURATION_CHOICES,
@@ -71,40 +78,41 @@ class LeaveRequestForm(forms.ModelForm):
         widget=forms.Select(attrs={"class": "form-select", "id": "id_leave_type"}),
     )
 
-    # DATE-ONLY inputs (no time UI)
+    # DATE INPUTS
+    # Start date is always present. End date is optional (used for multi-day Full Day).
     start_at = forms.DateField(
         required=True,
-        label="Start Date (IST)",
+        label="Start Date (IST) / Date (Half Day)",
         widget=forms.DateInput(attrs={"type": "date", "class": "form-control", "id": "id_start_at"}),
-        help_text="Start date (IST).",
+        help_text="For Full Day we’ll use 09:30 → 18:00. For Half Day, pick your time range below on the same date.",
     )
     end_at = forms.DateField(
-        required=True,
-        label="End Date (IST)",
+        required=False,   # <-- optional now
+        label="End Date (IST – Full Day only)",
         widget=forms.DateInput(attrs={"type": "date", "class": "form-control", "id": "id_end_at"}),
-        help_text="End date (IST).",
+        help_text="Optional for Full Day. If empty, it becomes a single day.",
     )
 
     # Half-day specific time slot
     from_time = forms.TimeField(
         required=False,
         label="From Time (Half Day)",
-        initial=HALF_DAY_DEFAULT_FROM,
+        initial=WORK_FROM,
         widget=forms.TimeInput(attrs={"type": "time", "class": "form-control", "id": "id_from_time"}),
-        help_text="Used only when Duration is Half Day (defaults to 09:30).",
+        help_text="Only when Duration = Half Day. Must be within 09:30–18:00.",
     )
     to_time = forms.TimeField(
         required=False,
         label="To Time (Half Day)",
-        initial=HALF_DAY_DEFAULT_TO,
+        initial=WORK_TO,
         widget=forms.TimeInput(attrs={"type": "time", "class": "form-control", "id": "id_to_time"}),
-        help_text="Used only when Duration is Half Day (defaults to 18:00).",
+        help_text="Only when Duration = Half Day. Must be within 09:30–18:00.",
     )
 
     reason = forms.CharField(
         required=True,
         label="Reason",
-        widget=forms.Textarea(attrs={"rows": 3, "placeholder": "e.g., Medical Checkup", "class": "form-control"}),
+        widget=forms.Textarea(attrs={"rows": 3, "placeholder": "e.g., Medical checkup / personal work", "class": "form-control"}),
     )
 
     attachment = forms.FileField(
@@ -165,7 +173,7 @@ class LeaveRequestForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.user = user
 
-        # Only SOP-allowed leave types
+        # Only SOP-allowed leave types (includes Personal Leave)
         self.fields["leave_type"].queryset = LeaveType.objects.filter(
             name__in=SOP_ALLOWED_TYPE_NAMES
         ).order_by("name")
@@ -202,9 +210,10 @@ class LeaveRequestForm(forms.ModelForm):
                     end_d = datetime.fromisoformat(ed).date()
             except Exception:
                 pass
-        if not start_d or not end_d:
-            now = timezone.localtime(timezone.now(), IST).date()
-            start_d, end_d = now, now + timedelta(days=7)
+        if not start_d:
+            start_d = timezone.localtime(timezone.now(), IST).date()
+        if not end_d:
+            end_d = start_d
         self._load_handover_choices(
             timezone.make_aware(datetime.combine(start_d, time.min), IST),
             timezone.make_aware(datetime.combine(end_d,   time.max), IST),
@@ -285,50 +294,54 @@ class LeaveRequestForm(forms.ModelForm):
 
         dur = (cleaned.get("duration_type") or "FULL").upper()
         leave_type = cleaned.get("leave_type")
-
         start_d: Optional[date] = cleaned.get("start_at")
         end_d:   Optional[date] = cleaned.get("end_at")
 
-        if not leave_type or not start_d or not end_d:
-            return cleaned
+        if not leave_type or not start_d:
+            return cleaned  # field-level errors will be shown
 
-        if end_d < start_d:
-            self.add_error("end_at", "End date must be on or after Start date.")
+        now_ist = _now_ist()
 
-        # Compose aware datetimes
+        # HALF DAY: one date + free range inside 09:30–18:00
         if dur == "HALF":
-            f = cleaned.get("from_time") or HALF_DAY_DEFAULT_FROM
-            t = cleaned.get("to_time")   or HALF_DAY_DEFAULT_TO
+            f = cleaned.get("from_time") or WORK_FROM
+            t = cleaned.get("to_time")   or WORK_TO
 
-            if start_d != end_d:
-                self.add_error("end_at", "Half-day must be on a single calendar date.")
-            try:
-                start_dt = _aware_ist(datetime.combine(start_d, f))
-                end_dt   = _aware_ist(datetime.combine(end_d,   t))
-            except Exception:
-                start_dt = _aware_ist(datetime.combine(start_d, HALF_DAY_DEFAULT_FROM))
-                end_dt   = _aware_ist(datetime.combine(end_d,   HALF_DAY_DEFAULT_TO))
+            # Must be same calendar date (UI only sends one date anyway)
+            end_d = start_d
 
-            if end_dt <= start_dt:
+            # Validate range within work hours and order
+            if not (WORK_FROM <= f < WORK_TO) or not (WORK_FROM < t <= WORK_TO):
+                self.add_error("from_time", "Half-day time must be within 09:30–18:00.")
+                self.add_error("to_time", "Half-day time must be within 09:30–18:00.")
+            if t <= f:
                 self.add_error("to_time", "Half-day 'To Time' must be after 'From Time'.")
-            if (end_dt - start_dt) > timedelta(hours=6):
-                self.add_error("to_time", "Half-day duration should be ≤ 6 hours.")
+
+            start_dt = _aware_ist(datetime.combine(start_d, f))
+            end_dt   = _aware_ist(datetime.combine(end_d,   t))
 
             cleaned["is_half_day"] = True
             cleaned["start_at"] = start_dt
             cleaned["end_at"]   = end_dt
+            return cleaned
 
-        else:
-            # FULL DAY: No time UI → normalize to defaults 09:30 → 18:00
-            start_dt = _aware_ist(datetime.combine(start_d, FULL_DAY_DEFAULT_FROM))
-            end_dt   = _aware_ist(datetime.combine(end_d,   FULL_DAY_DEFAULT_TO))
+        # FULL DAY: start date required; end date optional
+        if end_d and end_d < start_d:
+            self.add_error("end_at", "End date must be on or after Start date.")
+            return cleaned
 
-            if end_dt <= start_dt:
-                self.add_error("end_at", "End must be after Start.")
+        if not end_d:
+            end_d = start_d
 
-            cleaned["is_half_day"] = False
-            cleaned["start_at"] = start_dt
-            cleaned["end_at"]   = end_dt
+        start_dt = _aware_ist(datetime.combine(start_d, FULL_DAY_DEFAULT_FROM))
+        end_dt   = _aware_ist(datetime.combine(end_d,   FULL_DAY_DEFAULT_TO))
+
+        if end_dt <= start_dt:
+            self.add_error("end_at", "End must be after Start.")
+
+        cleaned["is_half_day"] = False
+        cleaned["start_at"] = start_dt
+        cleaned["end_at"]   = end_dt
 
         # Overlap check
         try:
@@ -346,7 +359,6 @@ class LeaveRequestForm(forms.ModelForm):
         if hasattr(self, "employee") and self.employee and not getattr(obj, "employee_id", None):
             obj.employee = self.employee
 
-        # Ensure consistency
         obj.is_half_day = bool(self.cleaned_data.get("is_half_day"))
 
         if commit:

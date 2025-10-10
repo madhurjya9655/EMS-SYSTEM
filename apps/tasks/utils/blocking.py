@@ -38,7 +38,7 @@ IST = ZoneInfo("Asia/Kolkata") if ZoneInfo else timezone.get_current_timezone()
 logger = logging.getLogger("apps.tasks.blocking")
 
 # Default “assignment anchor” used by is_user_blocked(…date…)
-ASSIGN_ANCHOR_IST = time(10, 0)   # 10:00 IST
+ASSIGN_ANCHOR_IST = time(10, 0)        # 10:00 IST
 SAME_DAY_PENDING_GATE_IST = time(9, 30)  # 09:30 IST
 
 
@@ -67,16 +67,13 @@ def _ist_date_from_dt(dt: datetime) -> date:
 
 def _inside_inclusive_window(when_ist: datetime, start_at: datetime, end_at: datetime) -> bool:
     """
-    Check if 'when_ist' lies inside [start_at, end_at) in IST.
-    We treat the end as *exclusive* by a microsecond for instant checks.
+    Check if 'when_ist' lies inside [start_at, end_at) in IST (end exclusive).
     """
     s = _to_ist(start_at) or start_at
     e = _to_ist(end_at) or end_at
-    # normalize ordering just in case
     if e < s:
         s, e = e, s
-    # treat end as exclusive
-    return s <= when_ist < (e - timedelta(microseconds=0))
+    return s <= when_ist < e
 
 
 # ------------------------- rule helpers -------------------------
@@ -138,7 +135,7 @@ def is_user_blocked_at(user, when_dt_ist: datetime) -> bool:
             if not _inside_inclusive_window(when_dt_ist, lr.start_at, lr.end_at):
                 continue
 
-            status = (getattr(lr, "status", None) or "").upper()
+            status = str(getattr(lr, "status", "")).upper()
 
             if status == "APPROVED":
                 return True
