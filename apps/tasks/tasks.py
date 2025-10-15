@@ -59,10 +59,16 @@ def _is_after_10am_ist() -> bool:
     return now_ist.time() >= dt_time(10, 0)
 
 def _should_send_recur_email_now() -> bool:
+    """
+    Controls immediate email at the moment a new recurring instance is generated.
+    If SEND_RECUR_EMAILS_ONLY_AT_10AM=True, we skip immediate send and rely on
+    the daily 10:00 IST fan-out (send_due_today_assignments) on the DUE DAY.
+    """
     if not SEND_EMAILS_FOR_AUTO_RECUR:
         return False
     if not SEND_RECUR_EMAILS_ONLY_AT_10AM:
         return True
+    # Only send immediately if we’re around 10:00; otherwise 10:00 fan-out will handle it.
     return _within_10am_ist_window()
 
 
@@ -333,6 +339,23 @@ def _fetch_delegations_due_today(start_dt, end_dt):
     except Exception:
         return list(qs)
 
+def _fetch_checklists_due_today(start_dt, end_dt):
+    """
+    Same resilience for Checklist: handle DateTimeField or DateField-like filtering.
+    """
+    # Primary: DateTimeField window
+    qs = Checklist.objects.filter(status="Pending", planned_date__gte=start_dt, planned_date__lte=end_dt)
+    if qs.exists():
+        return list(qs)
+
+    # Fallback by date equality
+    try:
+        today_ist = _now_ist().date()
+        qs2 = Checklist.objects.filter(status="Pending", planned_date__date=today_ist)
+        return list(qs2)
+    except Exception:
+        return list(qs)
+
 @shared_task(bind=True, max_retries=2, default_retry_delay=30)
 def send_due_today_assignments(self) -> dict:
     """
@@ -347,9 +370,9 @@ def send_due_today_assignments(self) -> dict:
     now_ist = _now_ist()
     start_dt, end_dt = _ist_day_bounds(now_ist)
 
-    # Checklists due today, still pending
-    cl_qs = Checklist.objects.filter(status="Pending", planned_date__gte=start_dt, planned_date__lte=end_dt)
-    # Delegations due today, still pending
+    # Checklists due today, still pending (robust to DateField/DateTimeField)
+    checklists = _fetch_checklists_due_today(start_dt, end_dt)
+    # Delegations due today, still pending (robust)
     delegations = _fetch_delegations_due_today(start_dt, end_dt)
 
     sent = 0
@@ -357,7 +380,7 @@ def send_due_today_assignments(self) -> dict:
     de_sent = 0
 
     # Checklist fan-out
-    for obj in cl_qs.iterator():
+    for obj in checklists:
         if _already_sent_today("Checklist", obj.id):
             continue
         _send_checklist_email(obj)

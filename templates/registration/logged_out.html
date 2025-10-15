@@ -1,20 +1,41 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Logged Out{% endblock %}
+{% block title %}Signed Out — BOS Lakshya{% endblock %}
 
 {% block content %}
-<div class="container text-center py-5">
-  <img src="{% static 'images/bos logo.png' %}"
-       alt="BOS EMS Logo"
-       style="height:80px; margin-bottom:1.5rem;">
+<style>
+  :root{ --primary:#3b82f6; }
+  .logout-wrap{
+    min-height: calc(100vh - var(--header-height, 0px));
+    display:flex;align-items:center;justify-content:center;background:#f6f8fb;padding:2rem 1rem;
+  }
+  .logout-card{
+    width:100%;max-width:560px;background:#fff;border:1px solid #e5e7eb;border-radius:16px;
+    box-shadow:0 12px 40px rgba(2,6,23,.08);overflow:hidden;text-align:center;
+  }
+  .logout-head{
+    background: linear-gradient(135deg, var(--primary) 0%, #60a5fa 100%);
+    color:#fff;padding:1.25rem 1rem
+  }
+  .logout-body{padding:2rem 2rem 1.5rem}
+  .logout-logo{height:60px;margin-bottom:.75rem;border-radius:10px}
+  .btn-primary{background:var(--primary);border-color:var(--primary);font-weight:700;border-radius:10px;padding:.65rem 1rem}
+  .btn-primary:hover{filter:brightness(.95)}
+</style>
 
-  <div class="alert alert-success shadow-sm">
-    <strong>Success!</strong> You have been logged out.
+<div class="logout-wrap">
+  <div class="logout-card">
+    <div class="logout-head">
+      <img src="{% static 'images/bos logo.png' %}" alt="BOS Lakshya Logo" class="logout-logo">
+      <h5 class="m-0 fw-bold">You are logged out</h5>
+    </div>
+    <div class="logout-body">
+      <div class="alert alert-success shadow-sm mb-3">
+        <strong>Success!</strong> You have been logged out safely.
+      </div>
+      <a href="{% url 'login' %}" class="btn btn-primary w-100">Sign in again</a>
+    </div>
   </div>
-
-  <a href="{% url 'login' %}" class="btn btn-primary mt-3">
-    Sign in again
-  </a>
 </div>
 {% endblock %}

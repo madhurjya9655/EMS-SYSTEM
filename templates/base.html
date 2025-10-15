@@ -6,7 +6,7 @@
   <meta http-equiv="x-ua-compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>{% block title %}BOS EMS{% endblock %}</title>
+  <title>{% block title %}BOS Lakshya{% endblock %}</title>
 
   <!-- Favicons -->
   <link rel="shortcut icon" href="{% static 'favicon.ico' %}">
@@ -14,11 +14,11 @@
   <link rel="icon" type="image/png" sizes="32x32" href="{% static 'icons/favicon-32.png' %}">
   <link rel="icon" type="image/png" sizes="16x16" href="{% static 'icons/favicon-16.png' %}">
 
-  <!-- Fonts -->
+  <!-- Fonts (clean, professional) -->
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 
   <!-- Vendor CSS -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
@@ -33,101 +33,162 @@
   {% block head_extra %}{% endblock %}
 
   <style>
+    /* =========================
+       THEME (one consistent color)
+       ========================= */
     :root{
-      --primary:#4f46e5; --primary-light:#6366f1; --primary-dark:#3730a3;
-      --sidebar-width:280px; --header-height:70px;
-    }
-    *{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f8fafc}
+      --primary:#3b82f6;          /* single brand color used everywhere */
+      --bg:#f6f8fb;
+      --surface:#ffffff;
+      --text:#0f172a;
+      --muted:#64748b;
+      --border:#e5e7eb;
 
-    /* Header */
+      --radius:12px;
+      --radius-sm:8px;
+
+      --header-h:72px;
+      --sidebar-w:280px;
+
+      --shadow-1:0 1px 3px rgba(0,0,0,.06);
+      --shadow-2:0 8px 24px rgba(2,6,23,.08);
+    }
+    @media (prefers-color-scheme: dark){
+      :root{
+        --bg:#0b1220;
+        --surface:#0f172a;
+        --text:#e5e7eb;
+        --muted:#a3aab8;
+        --border:#1f2a3a;
+        --shadow-1:0 1px 3px rgba(0,0,0,.45);
+        --shadow-2:0 10px 30px rgba(0,0,0,.5);
+      }
+    }
+
+    /* Base */
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;background:var(--bg);color:var(--text);
+      font-family:"Plus Jakarta Sans",system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+      -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+    }
+    a{color:inherit;text-decoration:none}
+
+    /* Focus */
+    :focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:6px}
+
+    /* -------------------------
+       HEADER (solid brand color)
+       ------------------------- */
     .header{
-      position:fixed;inset:0 0 auto 0;height:var(--header-height);
-      background:linear-gradient(135deg,var(--primary) 0%,var(--primary-light) 100%);
-      z-index:1000;box-shadow:0 4px 20px rgba(79,70,229,.15);
-      display:flex;align-items:center;padding:0 2rem;justify-content:space-between
+      position:fixed;inset:0 0 auto 0;height:var(--header-h);
+      background:var(--primary);
+      color:#fff;z-index:1000;display:flex;align-items:center;justify-content:space-between;
+      padding:0 1.25rem;border-bottom:1px solid rgba(255,255,255,.18);
+      box-shadow:var(--shadow-2);
     }
-    .logo{display:flex;align-items:center;gap:12px;color:#fff}
+    .logo{display:flex;align-items:center;gap:.75rem}
     .logo-icon{
-      width:40px;height:40px;background:rgba(255,255,255,.2);border-radius:10px;
-      display:flex;align-items:center;justify-content:center;font-weight:700;backdrop-filter:blur(10px)
+      width:40px;height:40px;border-radius:10px;display:grid;place-items:center;
+      background:rgba(255,255,255,.18);
     }
-    .logo-icon img{max-width:32px;max-height:32px;border-radius:7px}
-    .logo-text{font-size:1.25rem;font-weight:600}
-    .header-actions{display:flex;align-items:center;gap:1.5rem}
+    .logo-icon img{max-width:28px;max-height:28px;border-radius:6px}
+    .logo-text{font-weight:700;font-size:1.05rem;letter-spacing:.2px}
 
+    .header-actions{display:flex;align-items:center;gap:.75rem}
     .branch-select{
-      background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#fff;
-      padding:.6rem 1.2rem;border-radius:8px;font-size:.9rem;backdrop-filter:blur(10px);min-width:160px
+      background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.35);
+      color:#fff;padding:.5rem .8rem;border-radius:10px;font-size:.9rem;min-width:160px
     }
-    .branch-select option{background:var(--primary);color:#fff}
-
-    .user-menu{display:flex;align-items:center;gap:.8rem;color:#fff;font-size:.9rem}
-    .user-avatar{width:36px;height:36px;background:rgba(255,255,255,.2);border-radius:50%;
-      display:flex;align-items:center;justify-content:center;backdrop-filter:blur(10px)}
-
+    .branch-select option{background:#111827;color:#fff}
+    .user-menu{display:flex;align-items:center;gap:.6rem}
+    .user-avatar{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.18)}
     .logout-btn{
-      background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.3);color:#fff;
-      padding:.6rem 1.2rem;border-radius:8px;font-size:.85rem;backdrop-filter:blur(10px);transition:.2s
+      background:#fff;border:1px solid #fff;color:var(--primary);font-weight:600;
+      padding:.5rem .9rem;border-radius:10px;font-size:.85rem;box-shadow:var(--shadow-1)
     }
-    .logout-btn:hover{background:rgba(255,255,255,.2);transform:translateY(-1px)}
+    .logout-btn:hover{background:#f8fafc}
 
-    .mobile-toggle{display:none;background:none;border:none;color:#fff;font-size:1.3rem;cursor:pointer}
+    .mobile-toggle{display:none;background:none;border:none;color:#fff;font-size:1.15rem;cursor:pointer}
 
-    /* Sidebar */
+    /* -------------------------
+       SIDEBAR (clean + consistent)
+       ------------------------- */
     .sidebar{
-      position:fixed;top:var(--header-height);left:0;width:var(--sidebar-width);
-      height:calc(100vh - var(--header-height));background:#fff;
-      box-shadow:4px 0 20px rgba(0,0,0,.08);overflow-y:auto;transition:transform .3s ease;z-index:900
+      position:fixed;top:var(--header-h);left:0;width:var(--sidebar-w);
+      height:calc(100vh - var(--header-h));
+      background:var(--surface);border-right:1px solid var(--border);box-shadow:var(--shadow-1);
+      overflow-y:auto;z-index:900;transition:transform .25s ease;
     }
     .sidebar.collapsed{transform:translateX(-100%)}
-
-    .nav-section{padding:1.5rem 0;border-bottom:1px solid #f1f5f9}
+    .nav-section{padding:1rem 0}
     .nav-item{
-      display:block;padding:.8rem 1.5rem;color:#64748b;text-decoration:none;font-size:.9rem;
-      font-weight:500;transition:color .2s ease, background .2s ease, transform .15s ease;
-      width:100%;text-align:left;border:none;background:none;position:relative
+      display:block;border:none;background:none;width:100%;text-align:left;
+      padding:.75rem 1rem;margin:.15rem .75rem;border-radius:10px;
+      color:var(--muted);font-weight:600;font-size:.93rem;
+      transition:background .2s ease,color .2s ease,transform .15s ease;
     }
-    .nav-item:hover{background:#f8fafc;color:var(--primary);transform:translateX(4px)}
+    .nav-item i{width:18px;margin-right:.6rem}
+    .nav-item:hover{background:#eef4ff;color:var(--primary);transform:translateX(2px)}
     .nav-item.active,.nav-item[aria-current="page"]{
-      background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%);
-      color:var(--primary);border-right:3px solid var(--primary)
+      background:#e7efff;color:var(--primary);border-left:3px solid var(--primary);
+      padding-left: calc(1rem - 3px);
     }
-    .nav-item i{width:20px;margin-right:.8rem;font-size:1rem}
-    .nav-item .chevron{float:right;font-size:.75rem;transition:transform .2s}
 
-    .submenu{background:#f8fafc;border-left:2px solid #e2e8f0;margin-left:1rem;display:none}
-    .submenu .nav-item{padding:.6rem 2.5rem;font-size:.85rem;color:#64748b}
+    .submenu{display:none;margin:.2rem .6rem .6rem 1.1rem;border-left:2px solid var(--border);padding:.2rem 0}
+    .submenu .nav-item{margin:.1rem .25rem;padding:.6rem 1rem;font-weight:500}
 
-    /* Main area */
-    .main-content{margin-left:var(--sidebar-width);margin-top:var(--header-height);padding:2rem;min-height:calc(100vh - var(--header-height));transition:margin-left .3s ease}
+    /* -------------------------
+       MAIN
+       ------------------------- */
+    .main-content{
+      margin-left:var(--sidebar-w);margin-top:var(--header-h);
+      padding:1.5rem;min-height:calc(100vh - var(--header-h));
+      transition:margin-left .25s ease;
+    }
     .main-content.expanded{margin-left:0}
 
-    .page-header{background:#fff;padding:2rem;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.08);margin-bottom:2rem;border:1px solid #f1f5f9}
-    .page-title{font-size:1.8rem;font-weight:700;color:#1e293b;margin-bottom:.5rem}
+    .page-header{
+      background:var(--surface);border:1px solid var(--border);
+      border-radius:var(--radius);padding:1.25rem 1.25rem;box-shadow:var(--shadow-1);margin-bottom:1rem;
+    }
+    .page-title{margin:0;font-size:1.5rem;font-weight:700;color:var(--text)}
+
+    /* Alerts */
+    .alert{border-radius:10px;border:1px solid var(--border)}
+    .alert-info{background:#eef4ff}
 
     /* Footer */
-    footer{background:#fff;border-top:1px solid #f1f5f9;text-align:center;padding:1.5rem;color:#64748b;font-size:.9rem;margin-top:2rem}
+    footer{
+      background:var(--surface);border-top:1px solid var(--border);
+      text-align:center;padding:1rem;color:var(--muted);font-size:.92rem;margin-top:1.25rem
+    }
 
-    /* Overlay */
-    .sidebar-overlay{display:none;position:fixed;top:var(--header-height);left:0;width:100vw;height:100vh;background:rgba(0,0,0,.12);z-index:899}
+    /* Overlay (mobile) */
+    .sidebar-overlay{display:none;position:fixed;top:var(--header-h);left:0;width:100vw;height:100vh;background:rgba(0,0,0,.25);z-index:899}
     .sidebar.show ~ .sidebar-overlay,.sidebar-overlay.show{display:block}
 
     /* Skip link */
     .skip-link{position:absolute;left:-9999px;top:-9999px}
     .skip-link:focus{left:1rem;top:1rem;background:#111827;color:#fff;padding:.5rem .75rem;border-radius:.5rem;z-index:1100}
 
+    /* Reduced motion */
     @media (prefers-reduced-motion: reduce){
       *{scroll-behavior:auto !important}
       .nav-item:hover{transform:none}
+      .sidebar,.main-content{transition:none}
     }
+
+    /* Responsive */
+    @media (max-width:1024px){ :root{ --sidebar-w:260px } }
     @media (max-width:768px){
       .mobile-toggle{display:block}
       .branch-select,.user-menu span:first-child{display:none}
       .sidebar{transform:translateX(-100%)}
       .sidebar.show{transform:translateX(0)}
       .main-content{margin-left:0;padding:1rem}
-      .page-header{padding:1.5rem}
+      .page-header{padding:1rem}
     }
   </style>
 </head>
@@ -142,14 +203,13 @@
           <i class="fas fa-bars" aria-hidden="true"></i>
         </button>
         <div class="logo-icon">
-          <img src="{% static 'images/bos logo.png' %}" alt="BOS EMS logo" loading="lazy" decoding="async">
+          <img src="{% static 'images/bos logo.png' %}" alt="BOS Lakshya logo" loading="lazy" decoding="async">
         </div>
-        <span class="logo-text">BOS EMS</span>
+        <span class="logo-text">BOS Lakshya</span>
       </div>
 
       <div class="header-actions">
         <label class="visually-hidden" for="branchSelect">Branch</label>
-        <!-- Disabled since it's decorative for now; remove "disabled" when wired -->
         <select class="branch-select" id="branchSelect" aria-label="Select branch" disabled>
           <option>All Branches</option>
           <option>Branch 1</option>
@@ -163,7 +223,7 @@
 
         <form method="post" action="{% url 'logout' %}" style="margin:0;" aria-label="Logout">
           {% csrf_token %}
-          <button class="logout-btn" type="submit" aria-label="Logout from BOS EMS">
+          <button class="logout-btn" type="submit" aria-label="Logout from BOS Lakshya">
             <i class="fas fa-sign-out-alt" aria-hidden="true"></i> Logout
           </button>
         </form>
@@ -182,14 +242,14 @@
         <a href="{% url 'recruitment:employee_list' %}"
            class="nav-item {% if request.resolver_match.app_name == 'recruitment' and request.resolver_match.url_name == 'employee_list' %}active{% endif %}"
            {% if request.resolver_match.app_name == 'recruitment' and request.resolver_match.url_name == 'employee_list' %}aria-current="page"{% endif %}>
-          <i class="fas fa-users" aria-hidden="true"></i> Employees
+          <i class="fas fa-users" aria-hidden="true"></i> BOS Achievers
         </a>
         {% endif %}
 
         {# --- Leave Register --- #}
         {% if user|has_any_permission:"leave_list,leave_apply,leave_pending_manager" or user|has_group:"Manager" or user|has_group:"HR" or user.is_superuser %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="leaveSubmenu" data-submenu-toggle>
-          <i class="fas fa-calendar-day" aria-hidden="true"></i> Leave Register <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <i class="fas fa-calendar-day" aria-hidden="true"></i> BOS Vishraam Register (विश्राम रजिस्टर) <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
         <div class="submenu" id="leaveSubmenu" role="group" aria-label="Leave Register">
           {% if user|has_any_permission:"leave_list,leave_apply" %}
@@ -216,19 +276,19 @@
 
         {% if user|has_any_permission:"add_checklist,list_checklist" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="checklistSubmenu" data-submenu-toggle>
-          <i class="fas fa-clipboard-list" aria-hidden="true"></i> Checklist <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <i class="fas fa-clipboard-list" aria-hidden="true"></i> BOS Lakshya Suchi (लक्ष्य सूची) <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
         <div class="submenu" id="checklistSubmenu" role="group" aria-label="Checklist">
           {% if user|has_permission:"add_checklist" %}
           <a href="{% url 'tasks:add_checklist' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_checklist' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_checklist' %}aria-current="page"{% endif %}>
-            <i class="fas fa-clipboard-plus" aria-hidden="true"></i> Add Checklist
+            <i class="fas fa-clipboard-plus" aria-hidden="true"></i> Add BOS Lakshya Suchi (लक्ष्य सूची)
           </a>
           {% endif %}
           {% if user|has_permission:"list_checklist" %}
           <a href="{% url 'tasks:list_checklist' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}aria-current="page"{% endif %}>
-            <i class="fas fa-clipboard-list" aria-hidden="true"></i> List Checklist
+            <i class="fas fa-clipboard-list" aria-hidden="true"></i> List BOS Lakshya Suchi (लक्ष्य सूची)
           </a>
           {% endif %}
         </div>
@@ -243,19 +303,19 @@
 
         {% if user|has_any_permission:"add_delegation,list_delegation" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="delegationSubmenu" data-submenu-toggle>
-          <i class="fas fa-users-cog" aria-hidden="true"></i> Delegation <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <i class="fas fa-users-cog" aria-hidden="true"></i> BOS Responsibility Tracker <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
         <div class="submenu" id="delegationSubmenu" role="group" aria-label="Delegation">
           {% if user|has_permission:"add_delegation" %}
           <a href="{% url 'tasks:add_delegation' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_delegation' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_delegation' %}aria-current="page"{% endif %}>
-            <i class="fas fa-user-plus" aria-hidden="true"></i> Add Delegation
+            <i class="fas fa-user-plus" aria-hidden="true"></i> Add BOS Responsibility Tracker
           </a>
           {% endif %}
           {% if user|has_permission:"list_delegation" %}
           <a href="{% url 'tasks:list_delegation' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_delegation' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_delegation' %}aria-current="page"{% endif %}>
-            <i class="fas fa-user-clock" aria-hidden="true"></i> List Delegation
+            <i class="fas fa-user-clock" aria-hidden="true"></i> List BOS Responsibility Tracker
           </a>
           {% endif %}
         </div>
@@ -263,7 +323,7 @@
 
         {% if user|has_any_permission:"add_ticket,list_all_tickets,assigned_to_me,assigned_by_me" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="ticketsSubmenu" data-submenu-toggle>
-          <i class="fas fa-ticket-alt" aria-hidden="true"></i> Tickets <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <i class="fas fa-ticket-alt" aria-hidden="true"></i> BOS Sahayata Desk <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
         <div class="submenu" id="ticketsSubmenu" role="group" aria-label="Tickets">
           {% if user|has_permission:"add_ticket" %}
@@ -275,7 +335,7 @@
           {% if user|has_permission:"list_all_tickets" %}
           <a href="{% url 'tasks:list_help_ticket' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_help_ticket' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_help_ticket' %}aria-current="page"{% endif %}>
-            <i class="fas fa-list" aria-hidden="true"></i> List All Tickets
+            <i class="fas fa-list" aria-hidden="true"></i> List All BOS Sahayata Desk
           </a>
           {% endif %}
           {% if user|has_permission:"assigned_to_me" %}
@@ -295,7 +355,7 @@
 
         {% if user|has_any_permission:"petty_cash_list,petty_cash_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="pettyCashSubmenu" data-submenu-toggle>
-          <i class="fas fa-wallet" aria-hidden="true"></i> Petty Cash <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <i class="fas fa-wallet" aria-hidden="true"></i> BOS Petty Cash Ledger <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
         <div class="submenu" id="pettyCashSubmenu" role="group" aria-label="Petty Cash">
           {% if user|has_permission:"petty_cash_list" %}
@@ -327,7 +387,7 @@
 
         {% if user|has_any_permission:"reimbursement_list,reimbursement_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="reimbursementSubmenu" data-submenu-toggle>
-          <i class="fas fa-receipt" aria-hidden="true"></i> Reimbursement <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <i class="fas fa-receipt" aria-hidden="true"></i> BOS Reimburse Log <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
         <div class="submenu" id="reimbursementSubmenu" role="group" aria-label="Reimbursement">
           {% if user|has_any_permission:"reimbursement_list,reimbursement_apply" %}
@@ -365,7 +425,7 @@
           {% if user|has_permission:"weekly_mis_score" %}
           <a href="{% url 'reports:weekly_mis_score' %}" class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'weekly_mis_score' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'weekly_mis_score' %}aria-current="page"{% endif %}>
-            <i class="fas fa-calendar-week" aria-hidden="true"></i> Weekly MIS Score
+            <i class="fas fa-calendar-week" aria-hidden="true"></i> BOS Weekly Pulse - Tracking
           </a>
           {% endif %}
           {% if user|has_permission:"performance_score" %}

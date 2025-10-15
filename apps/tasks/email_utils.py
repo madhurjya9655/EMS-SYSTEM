@@ -309,15 +309,9 @@ def send_checklist_assignment_to_user(
 ) -> None:
     """
     User-facing email for Checklist (assignee-only).
-    Rule: if assigner == assignee (self-assign), do NOT email (assigner must never receive emails).
+    NOTE: Assignee must receive the email even if assigner == assignee.
     """
-    try:
-        if getattr(task, "assign_by_id", None) and task.assign_by_id == task.assign_to_id:
-            logger.info("Checklist email suppressed (self-assign) for CL-%s", getattr(task, "id", "?"))
-            return
-    except Exception:
-        pass
-
+    # ← removed self-assign suppression so assignees always get their mail
     to_email = getattr(getattr(task, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
@@ -337,7 +331,7 @@ def send_checklist_assignment_to_user(
         "cta_text": "Open the task and mark it complete when done.",
         # extra details
         "task_message": getattr(task, "message", "") or "",
-        "instructions": getattr(task, "message", "") or "",  # <-- added normalized key
+        "instructions": getattr(task, "message", "") or "",  # normalized key
         "task_frequency": (
             f"{getattr(task, 'mode', '')} (Every {getattr(task, 'frequency', '')})"
             if getattr(task, "mode", None) and getattr(task, "frequency", None)
@@ -364,15 +358,9 @@ def send_delegation_assignment_to_user(
 ) -> None:
     """
     User-facing email for Delegation (assignee-only).
-    Rule: if assigner == assignee (self-assign), do NOT email.
+    NOTE: Assignee must receive the email even if assigner == assignee.
     """
-    try:
-        if getattr(delegation, "assign_by_id", None) and delegation.assign_by_id == delegation.assign_to_id:
-            logger.info("Delegation email suppressed (self-assign) for DL-%s", getattr(delegation, "id", "?"))
-            return
-    except Exception:
-        pass
-
+    # ← removed self-assign suppression so assignees always get their mail
     to_email = getattr(getattr(delegation, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
@@ -390,7 +378,7 @@ def send_delegation_assignment_to_user(
         "assignee_name": _display_name(getattr(delegation, "assign_to", None)),
         "complete_url": complete_url,
         "cta_text": "Open the task and mark it complete when done.",
-        "instructions": getattr(delegation, "message", "") or "",  # <-- added normalized key
+        "instructions": getattr(delegation, "message", "") or "",
         "task_frequency": (
             f"{getattr(delegation, 'mode', '')} (Every {getattr(delegation, 'frequency', '')})"
             if getattr(delegation, "mode", None) and getattr(delegation, "frequency", None)
@@ -415,15 +403,9 @@ def send_help_ticket_assignment_to_user(
 ) -> None:
     """
     User-facing email for Help Ticket (assignee-only).
-    Rule: if assigner == assignee (self-assign), do NOT email.
+    NOTE: Assignee must receive the email even if assigner == assignee.
     """
-    try:
-        if getattr(ticket, "assign_by_id", None) and ticket.assign_by_id == ticket.assign_to_id:
-            logger.info("Help-ticket email suppressed (self-assign) for HT-%s", getattr(ticket, "id", "?"))
-            return
-    except Exception:
-        pass
-
+    # ← removed self-assign suppression so assignees always get their mail
     to_email = getattr(getattr(ticket, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
@@ -442,7 +424,7 @@ def send_help_ticket_assignment_to_user(
         "complete_url": complete_url,
         "cta_text": "Open the ticket to add notes or close it when resolved.",
         "task_message": getattr(ticket, "description", "") or "",
-        "instructions": getattr(ticket, "description", "") or "",  # <-- added normalized key
+        "instructions": getattr(ticket, "description", "") or "",
         "estimated_minutes": getattr(ticket, "estimated_minutes", 0) or 0,
         "site_url": SITE_URL,
         "task_id": ticket.id,

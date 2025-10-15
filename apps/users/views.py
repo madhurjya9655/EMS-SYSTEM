@@ -14,6 +14,7 @@ from django.urls import NoReverseMatch, reverse, reverse_lazy
 from django.views.decorators.http import require_POST
 from django.db import transaction
 from django.db.models import ProtectedError
+from django.utils.http import url_has_allowed_host_and_scheme  # NEW
 
 from .forms import CustomAuthForm, ProfileForm, UserForm
 from .models import Profile
@@ -33,47 +34,55 @@ class CustomLoginView(LoginView):
     """
     Login view with "Remember me" and smart post-login routing:
 
-    - Superuser → dashboard
-    - Otherwise → first URL from PERMISSION_URLS the user has access to
+    - If ?next= is present and safe → honor it.
+    - Else Superuser → dashboard
+    - Else → first URL from PERMISSION_URLS the user has access to
     - Fallback → dashboard
+
+    "Remember me" controls the session expiry securely:
+      • checked  -> persistent session (uses settings.SESSION_COOKIE_AGE)
+      • unchecked-> session cookie (expires at browser close)
     """
     template_name = "registration/login.html"
     authentication_form = CustomAuthForm
     redirect_authenticated_user = True
 
     def form_valid(self, form):
-        remember = self.request.POST.get("remember")
-        # Session lifetime: 2 weeks if remembered, else session cookie
-        self.request.session.set_expiry(1209600 if remember else 0)
+        # --- Remember me (server-side) ---
+        remember_checked = bool(self.request.POST.get("remember"))
+        # None → Django uses settings.SESSION_COOKIE_AGE (persistent)
+        # 0    → expire at browser close (session cookie)
+        self.request.session.set_expiry(None if remember_checked else 0)
         return super().form_valid(form)
 
     def get_success_url(self) -> str:
+        # 1) Honor a safe ?next=
+        nxt = self.request.POST.get("next") or self.request.GET.get("next")
+        if nxt and url_has_allowed_host_and_scheme(nxt, allowed_hosts={self.request.get_host()}):
+            return nxt
+
+        # 2) Superuser → dashboard
         user = self.request.user
         if getattr(user, "is_superuser", False):
             return reverse_lazy("dashboard:home")
 
-        # Permissions come from Profile.permissions via helper
+        # 3) Permissions-based landing route
         user_codes = _user_permission_codes(user)
-
-        # In PERMISSION_URLS order, route to the first available URL
         for code, url_name in PERMISSION_URLS.items():
             if code.lower() in user_codes:
                 try:
                     return reverse(url_name)
                 except NoReverseMatch:
-                    # URL not present in this deployment; try next mapping
                     continue
 
-        # Fallback
+        # 4) Fallback
         return reverse_lazy("dashboard:home")
 
 
 @login_required
 @user_passes_test(admin_only)
 def list_users(request: HttpRequest) -> HttpResponse:
-    """
-    Admin: list users.
-    """
+    """Admin: list users."""
     users = User.objects.order_by("first_name", "last_name", "username")
     return render(request, "users/list_user.html", {"users": users})
 

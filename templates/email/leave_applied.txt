@@ -3,7 +3,6 @@ Hello,
 {{ employee_name }}{% if employee_designation %} ({{ employee_designation }}){% endif %} has applied for leave.
 
 Reporting Person: {% if manager_name %}{{ manager_name }}{% else %}Manager{% endif %}{% if manager_email %} <{{ manager_email }}>{% endif %}
-{% if cc_list and cc_list|length %}CC: {{ cc_list|join:", " }}{% endif %}
 
 Leave Details
 -------------
