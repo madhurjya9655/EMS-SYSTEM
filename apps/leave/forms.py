@@ -18,16 +18,11 @@ ALLOWED_ATTACHMENT_EXTS = {
     ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".doc", ".docx", ".txt"
 }
 
-# These are the leave types shown in the dropdown.
+# These are the ONLY leave types shown in the dropdown (per client).
 SOP_ALLOWED_TYPE_NAMES = [
-    "Compensatory Off",
-    "Leave Without Pay",
-    "Leave Without Pay (If No Leave Balance)",
-    "Sick Leave",
     "Casual Leave",
     "Maternity Leave",
-    "Paternity Leave",
-    "Personal Leave",
+    "Compensatory Off",
 ]
 
 # Working-day anchors (IST)
@@ -82,7 +77,7 @@ class LeaveRequestForm(forms.ModelForm):
     # Start date is always present. End date is optional (used for multi-day Full Day).
     start_at = forms.DateField(
         required=True,
-        label="Start Date (IST) / Date (Half Day)",
+        label="Date (IST)",
         widget=forms.DateInput(attrs={"type": "date", "class": "form-control", "id": "id_start_at"}),
         help_text="For Full Day we’ll use 09:30 → 18:00. For Half Day, pick your time range below on the same date.",
     )
@@ -173,7 +168,7 @@ class LeaveRequestForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.user = user
 
-        # Only SOP-allowed leave types (includes Personal Leave)
+        # Only client-allowed leave types (3 types)
         self.fields["leave_type"].queryset = LeaveType.objects.filter(
             name__in=SOP_ALLOWED_TYPE_NAMES
         ).order_by("name")

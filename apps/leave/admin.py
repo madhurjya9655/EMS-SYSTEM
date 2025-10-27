@@ -10,6 +10,7 @@ from django.conf import settings
 from django.contrib import admin, messages
 from django.contrib.admin.options import TabularInline
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.http import HttpRequest, HttpResponse, HttpResponseForbidden
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
@@ -29,6 +30,9 @@ from .models import (
 
 User = get_user_model()
 IST = ZoneInfo("Asia/Kolkata")
+
+# Restrict LeaveType to only these names
+ALLOWED_LEAVE_TYPE_NAMES = {"Casual Leave", "Maternity Leave", "Compensatory Off"}
 
 
 # ---------------------------------------------------------------------
@@ -560,13 +564,29 @@ class ApproverMappingAdmin(admin.ModelAdmin):
 
 
 # ---------------------------------------------------------------------
-# LeaveType admin (simple)
+# LeaveType admin (restricted to allowed names)
 # ---------------------------------------------------------------------
 @admin.register(LeaveType)
 class LeaveTypeAdmin(admin.ModelAdmin):
     list_display = ("name", "default_days")
     search_fields = ("name",)
     ordering = ("name",)
+
+    def has_add_permission(self, request):
+        # allow adding, but we gate the actual name in save_model
+        return super().has_add_permission(request)
+
+    def has_delete_permission(self, request, obj=None):
+        # optional: allow delete, but you likely don't want to delete the 3 canonical rows
+        return super().has_delete_permission(request, obj)
+
+    def save_model(self, request, obj: LeaveType, form, change):
+        # enforce canonical names
+        if obj.name not in ALLOWED_LEAVE_TYPE_NAMES:
+            raise ValidationError(
+                "Only these Leave Types are allowed: Casual Leave, Maternity Leave, Compensatory Off."
+            )
+        super().save_model(request, obj, form, change)
 
 
 # ---------------------------------------------------------------------

@@ -71,13 +71,8 @@ TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 days
 # Half-day is a *duration*, not a leave type, so it is intentionally NOT listed.
 ALLOWED_LEAVE_TYPE_NAMES = {
     "Compensatory Off",
-    "Leave Without Pay",
-    "Leave Without Pay (If No Leave Balance)",
-    "Sick Leave",
     "Casual Leave",
     "Maternity Leave",
-    "Paternity Leave",
-    "Personal Leave",  # make sure this LeaveType exists in DB
 }
 
 # -----------------------------------------------------------------------------#
@@ -684,7 +679,7 @@ def delete_leave(request: HttpRequest, pk: int) -> HttpResponse:
         return redirect("leave:dashboard")
 
     leave_type = leave.leave_type.name
-    start_date = leave.start_at.strftime("%B %d, %Y")
+    start_date = leave.start_at.strftime("%B  %d, %Y")
 
     try:
         leave.delete()

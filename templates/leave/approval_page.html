@@ -6,7 +6,7 @@
 {% block content %}
 <style>
   .card { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px 18px; }
-  /* message variants (was inline style with {% if %} …) */
+  /* message variants */
   .msg { border-color:#e2e8f0; margin-bottom:12px; }
   .msg-error   { background:#fff1f2; border-color:#fecdd3; }
   .msg-success { background:#ecfdf5; border-color:#bbf7d0; }
@@ -128,7 +128,7 @@
           <a href="{% url 'leave:manager_pending' %}" class="btn btn-secondary">Back to My Pending</a>
         </div>
         <p class="meta" style="margin-top:8px;">
-          Note: same-day decisions are blocked after <strong>10:00 AM IST</strong>.
+          Manager approval for current-day leaves has <strong>no time limit</strong> (client rule).
         </p>
       </form>
     </div>
