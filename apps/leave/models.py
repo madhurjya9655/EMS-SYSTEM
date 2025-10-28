@@ -419,37 +419,24 @@ class LeaveRequest(models.Model):
         except Exception:
             return False
 
-    def _validate_apply_cutoff(self) -> None:
+    def _validate_apply_rules(self) -> None:
         """
-        Time rules (IST):
+        Application rules (IST):
         • Past dates are not allowed.
-        • **Full Day only**: same-day application blocked at/after 10:00 AM.
-        • **Half Day**: NO same-day time gating anymore (user can select any range
-          within 09:30–18:00; this is enforced in clean()).
+        • Same-day applications are allowed at any time (no cut-off).
+        • Half-day is still limited to ≤ 6 hours within working window (handled below).
         """
         now = now_ist()
         start_day = _ist_date(self.start_at)
-
         if start_day < now.date():
             raise ValidationError("You cannot apply for leave for past dates.")
 
-        # Determine if this request is effectively half-day by its window,
-        # because during ModelForm validation `is_half_day` may still be False.
-        is_half = self.is_half_day or self._is_half_window_by_times()
-
-        if start_day == now.date() and not is_half:
-            gate_1000 = datetime.combine(now.date(), time(10, 0), tzinfo=IST)
-            if now >= gate_1000:
-                raise ValidationError(
-                    "You cannot apply for Full Day leave after 10:00 AM IST for the same day."
-                )
-
     def _validate_decision_cutoff(self, new_status: str) -> None:
         """
-        Manager approval/rejection is allowed ANYTIME per new requirement.
-        Retained as a no-op to keep call sites intact.
+        Manager approval/rejection is allowed ANYTIME per requirement.
+        (No-op retained to keep call sites intact.)
         """
-        return  # no time restriction
+        return
 
     def _recompute_blocked_days(self) -> None:
         days = self.ist_dates()
@@ -464,6 +451,22 @@ class LeaveRequest(models.Model):
     def _snapshot_dates(self) -> None:
         self.start_date = _ist_date(self.start_at) if self.start_at else None
         self.end_date = _ist_date(self.end_at - timedelta(microseconds=1)) if self.end_at else None
+
+    def _validate_no_overlap(self) -> None:
+        """
+        Disallow overlaps against existing PENDING/APPROVED leaves for the same employee.
+        """
+        s_date = _ist_date(self.start_at)
+        e_date = _ist_date(self.end_at - timedelta(microseconds=1))
+        conflict = (
+            LeaveRequest.objects
+            .filter(employee=self.employee, status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED])
+            .exclude(pk=self.pk)
+            .filter(start_date__lte=e_date, end_date__gte=s_date)
+            .exists()
+        )
+        if conflict:
+            raise ValidationError("This leave overlaps with an existing leave request.")
 
     def clean(self) -> None:
         super().clean()
@@ -493,10 +496,14 @@ class LeaveRequest(models.Model):
             if s_local < WORK_START_IST or e_local > WORK_END_IST:
                 raise ValidationError({"is_half_day": "Half-day time must be within 09:30–18:00 IST."})
 
+        # Application rules (no time cut-offs; only 'no past date')
         if not self.pk:
-            self._validate_apply_cutoff()
+            self._validate_apply_rules()
 
-        # NEW: Managers can approve/reject anytime (no cutoff)
+        # Disallow overlaps
+        self._validate_no_overlap()
+
+        # Managers can approve/reject anytime (no cutoff)
         if self.status in (LeaveStatus.APPROVED, LeaveStatus.REJECTED):
             self._validate_decision_cutoff(self.status)
 

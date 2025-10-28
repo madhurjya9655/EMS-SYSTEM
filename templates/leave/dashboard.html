@@ -35,6 +35,12 @@
   .rule-icon { color:#3b82f6; margin-top:.125rem; }
   .photo-upload-area { border:2px dashed #d1d5db; border-radius:8px; padding:1rem; text-align:center; background:#f9fafb; }
   .photo-upload-area:hover { border-color:#3b82f6; background:#eff6ff; }
+  .disclaimer { font-size: .825rem; color:#6b7280; }
+
+  /* badges for balance card */
+  .lb-chip { display:inline-flex; align-items:center; gap:.5rem; background:#f8fafc; border:1px solid #e5e7eb; border-radius:9999px; padding:.4rem .8rem; margin:.25rem; font-weight:600; }
+  .lb-chip .dot { width:.55rem; height:.55rem; border-radius:9999px; display:inline-block; }
+  .dot-blue { background:#3b82f6; } .dot-amber { background:#f59e0b; } .dot-pink { background:#ec4899; }
 </style>
 {% endblock %}
 
@@ -93,29 +99,22 @@
     </div>
   </div>
 
+  <!-- Leave Balance (numbers removed entirely) -->
   <div class="col-lg-4">
     <div class="card h-100">
       <div class="card-body">
-        <h6 class="card-title fw-semibold mb-3">
+        <h6 class="card-title fw-semibold mb-1">
           <i class="fas fa-chart-pie text-success me-2"></i>Leave Balance ({{ now_ist|date:"Y" }})
         </h6>
+        <div class="disclaimer mb-3">For display only. The system does not lock actions based on these numbers.</div>
+
         {% if balances %}
-          <div class="row g-2">
+          <div>
             {% for row in balances %}
-              <div class="col-12">
-                <div class="stat-card {% if 'Casual' in row.type_name %}casual{% elif 'Earned' in row.type_name %}earned{% else %}sick{% endif %}">
-                  <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                      <div class="fw-semibold">{{ row.type_name }}</div>
-                      <small class="text-muted">{{ row.used_days|floatformat:"-1" }}/{{ row.default_days }} used</small>
-                    </div>
-                    <div class="text-end">
-                      <div class="h5 mb-0 fw-bold">{{ row.remaining_days|floatformat:"-1" }}</div>
-                      <small class="text-muted">days left</small>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <span class="lb-chip">
+                <span class="dot {% if 'Casual' in row.type_name %}dot-blue{% elif 'Compensatory' in row.type_name %}dot-amber{% else %}dot-pink{% endif %}"></span>
+                {{ row.type_name }}
+              </span>
             {% endfor %}
           </div>
         {% else %}
@@ -133,11 +132,39 @@
         <h6 class="card-title fw-semibold mb-3">
           <i class="fas fa-list-check text-warning me-2"></i>Leave Rules (IST)
         </h6>
-        <!-- UPDATED: Rules panel as per client. Removed old 'Task blocking' and manager time lock. -->
-        <div class="rule-item"><i class="fas fa-clock rule-icon"></i><div><strong>Full-day leave:</strong> Apply before <strong>10:00 AM</strong> for the same day.</div></div>
-        <div class="rule-item"><i class="fas fa-circle-half-stroke rule-icon"></i><div><strong>Half-day leave:</strong> Can apply anytime before your shift starts.</div></div>
-        <div class="rule-item"><i class="fas fa-user-tie rule-icon"></i><div><strong>Manager approval:</strong> No time limit for current day decisions.</div></div>
-        <div class="rule-item"><i class="fas fa-briefcase rule-icon"></i><div><strong>Compensatory Off:</strong> Apply within <strong>7 days</strong> of extra work.</div></div>
+
+        <!-- Final client rules – display only -->
+        <div class="rule-item">
+          <i class="fas fa-rectangle-list rule-icon"></i>
+          <div><strong>Leave types:</strong> Casual Leave, Maternity Leave, Compensatory Off.</div>
+        </div>
+
+        <div class="rule-item">
+          <i class="fas fa-calendar-check rule-icon"></i>
+          <div><strong>Application:</strong> Employees can apply anytime before the day ends, including the same day. No cut-off after 09:30.</div>
+        </div>
+
+        <div class="rule-item">
+          <i class="fas fa-user-tie rule-icon"></i>
+          <div><strong>Approval:</strong> Managers can approve or reject anytime during the day. No time lock.</div>
+        </div>
+
+        <div class="rule-item">
+          <i class="fas fa-rotate rule-icon"></i>
+          <div><strong>Tasks on leave days:</strong> Recurring tasks auto-skip on leave days (pending or approved). Managers may reassign manually; otherwise they remain unassigned for that day.</div>
+        </div>
+
+        <div class="rule-item">
+          <i class="fas fa-circle-half-stroke rule-icon"></i>
+          <div><strong>Half-day:</strong> Up to 6 hours within the same date (within 09:30–18:00). Scheduler applies partial skip.</div>
+        </div>
+
+        <div class="rule-item">
+          <i class="fas fa-shield-check rule-icon"></i>
+          <div><strong>Validation:</strong> Overlapping leave requests are not allowed. All actions are audited with timestamps and roles.</div>
+        </div>
+
+        <div class="disclaimer mt-2">These rules are reflected in the UI; no automatic locking of usage days is performed.</div>
       </div>
     </div>
   </div>

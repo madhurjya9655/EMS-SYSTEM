@@ -18,7 +18,7 @@ ALLOWED_ATTACHMENT_EXTS = {
     ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".doc", ".docx", ".txt"
 }
 
-# These are the ONLY leave types shown in the dropdown (per client).
+# Only these three appear in the UI.
 SOP_ALLOWED_TYPE_NAMES = [
     "Casual Leave",
     "Maternity Leave",
@@ -48,10 +48,10 @@ def _now_ist() -> datetime:
 
 class LeaveRequestForm(forms.ModelForm):
     """
-    New UI contract:
+    UI contract:
       • duration_type = FULL / HALF (radio)
-      • For HALF:   one Date + From/To time (any range inside 09:30–18:00)
-      • For FULL:   Start Date required; End Date optional (defaults to Start)
+      • HALF:   one Date + From/To time (any range inside 09:30–18:00)
+      • FULL:   Start Date required; End Date optional (defaults to Start)
     """
 
     # Duration
@@ -74,7 +74,6 @@ class LeaveRequestForm(forms.ModelForm):
     )
 
     # DATE INPUTS
-    # Start date is always present. End date is optional (used for multi-day Full Day).
     start_at = forms.DateField(
         required=True,
         label="Date (IST)",
@@ -82,7 +81,7 @@ class LeaveRequestForm(forms.ModelForm):
         help_text="For Full Day we’ll use 09:30 → 18:00. For Half Day, pick your time range below on the same date.",
     )
     end_at = forms.DateField(
-        required=False,   # <-- optional now
+        required=False,  # optional for Full Day
         label="End Date (IST – Full Day only)",
         widget=forms.DateInput(attrs={"type": "date", "class": "form-control", "id": "id_end_at"}),
         help_text="Optional for Full Day. If empty, it becomes a single day.",
@@ -294,8 +293,6 @@ class LeaveRequestForm(forms.ModelForm):
 
         if not leave_type or not start_d:
             return cleaned  # field-level errors will be shown
-
-        now_ist = _now_ist()
 
         # HALF DAY: one date + free range inside 09:30–18:00
         if dur == "HALF":
