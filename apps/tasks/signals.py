@@ -1,4 +1,3 @@
-# apps/tasks/signals.py
 from __future__ import annotations
 
 import logging
@@ -18,6 +17,9 @@ from django.utils import timezone
 from .models import Checklist, Delegation, HelpTicket
 from . import utils as _utils  # email helpers & console-safe logging
 
+# NEW: for working-day (holiday/Sunday) shifts on recurrence
+from apps.settings.models import Holiday
+
 logger = logging.getLogger(__name__)
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -25,7 +27,6 @@ SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
 # ---------------------------------------------------------------------
 # Import recurrence helpers – prefer recurrence_utils (final rules).
-# Fallback to old recurrence (legacy), then to local minimal versions.
 # ---------------------------------------------------------------------
 _normalize_mode = None
 _RECURRING_MODES = None
@@ -33,13 +34,14 @@ _compute_next_same_time = None
 _compute_next_fixed_7pm = None
 
 try:
-    # New module with final rules (no working-day shifts, 7pm helper)
+    # New module with final rules (helpers that pin 7 PM)
     from .recurrence_utils import (
         normalize_mode,
         RECURRING_MODES,
         get_next_same_time as _compute_next_same_time,
         get_next_fixed_7pm as _compute_next_fixed_7pm,
     )  # type: ignore
+
     _normalize_mode = normalize_mode
     _RECURRING_MODES = RECURRING_MODES
 except Exception:
@@ -47,17 +49,33 @@ except Exception:
 
 if _normalize_mode is None or _RECURRING_MODES is None:
     try:
-        # Legacy module (kept only as a fallback)
-        from .recurrence import normalize_mode, RECURRING_MODES, get_next_planned_date as _legacy_next  # type: ignore
+        # Legacy module fallback
+        from .recurrence import (
+            normalize_mode,
+            RECURRING_MODES,
+            get_next_planned_date as _legacy_next,
+        )  # type: ignore
+
         _normalize_mode = normalize_mode
         _RECURRING_MODES = RECURRING_MODES
 
-        def _compute_next_fixed_7pm(prev_dt: datetime, mode: str, frequency: int, *, end_date=None):
+        def _compute_next_fixed_7pm(
+            prev_dt: datetime,
+            mode: str,
+            frequency: int,
+            *,
+            end_date=None,
+        ):
             # legacy get_next_planned_date already pins to 19:00 IST in that module
             return _legacy_next(prev_dt, mode, frequency)
 
-        # Same-time helper fallback (keeps time)
-        def _compute_next_same_time(prev_dt: datetime, mode: str, frequency: int, *, end_date=None):
+        def _compute_next_same_time(
+            prev_dt: datetime,
+            mode: str,
+            frequency: int,
+            *,
+            end_date=None,
+        ):
             m = _normalize_mode(mode)
             if not m:
                 return None
@@ -82,16 +100,18 @@ if _normalize_mode is None or _RECURRING_MODES is None:
 if _RECURRING_MODES is None:
     _RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
 
+
 def _normalize_mode_local(mode):
     if not mode:
         return None
     s = str(mode).strip().title()
     return s if s in _RECURRING_MODES else None
 
+
 if _normalize_mode is None:
     _normalize_mode = _normalize_mode_local
 
-# Expose names we reference below
+# Expose names used below
 normalize_mode = _normalize_mode
 RECURRING_MODES = _RECURRING_MODES
 
@@ -117,11 +137,14 @@ def _within_10am_ist_window(leeway_minutes: int = 5) -> bool:
     """True if now (IST) is within [10:00 - leeway, 10:00 + leeway]."""
     now_ist = timezone.now().astimezone(IST)
     anchor = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
-    return (anchor - timedelta(minutes=leeway_minutes)) <= now_ist <= (anchor + timedelta(minutes=leeway_minutes))
+    return (anchor - timedelta(minutes=leeway_minutes)) <= now_ist <= (
+        anchor + timedelta(minutes=leeway_minutes)
+    )
 
 
 def _spawn_delayed(send_at_utc: datetime, fn, *, name: str = "recur-email"):
     """Sleep until `send_at_utc` (UTC) and then call `fn` in a daemon thread."""
+
     def _runner():
         try:
             while True:
@@ -133,11 +156,39 @@ def _spawn_delayed(send_at_utc: datetime, fn, *, name: str = "recur-email"):
             fn()
         except Exception as e:
             logger.error(_utils._safe_console_text(f"Delayed checklist email failed: {e}"))
+
     Thread(target=_runner, name=name, daemon=True).start()
 
 
 # ---------------------------------------------------------------------
-# 10:00 IST email schedulers
+# Working-day helpers (skip Sunday & holidays) for recurrence
+# ---------------------------------------------------------------------
+def _is_working_day(d):
+    # Sunday == 6
+    if d.weekday() == 6:
+        return False
+    return not Holiday.objects.filter(date=d).exists()
+
+
+def _shift_to_next_working_day_7pm(ist_dt: datetime) -> datetime:
+    """
+    Given an IST datetime, shift the DATE forward while it's not a working day.
+    Return 19:00 IST of that shifted date, converted back to project TZ.
+    """
+    tz = timezone.get_current_timezone()
+    base_ist = ist_dt.astimezone(IST)
+    d = base_ist.date()
+    for _ in range(120):  # safety
+        if _is_working_day(d):
+            new_ist = IST.localize(datetime.combine(d, dt_time(19, 0)))
+            return new_ist.astimezone(tz)
+        d = d + timedelta(days=1)
+    # Fallback: just pin 19:00 of original date
+    return IST.localize(datetime.combine(base_ist.date(), dt_time(19, 0))).astimezone(tz)
+
+
+# ---------------------------------------------------------------------
+# 10:00 IST email schedulers (subjects adjusted to "Today’s …")
 # ---------------------------------------------------------------------
 def _schedule_10am_email_for_checklist(obj: Checklist) -> None:
     """
@@ -150,28 +201,31 @@ def _schedule_10am_email_for_checklist(obj: Checklist) -> None:
     # Never email the assigner (including self-assign)
     try:
         if obj.assign_by_id and obj.assign_by_id == obj.assign_to_id:
-            logger.info(_utils._safe_console_text(
-                f"Checklist email suppressed for CL-{obj.id}: assigner == assignee."
-            ))
+            logger.info(
+                _utils._safe_console_text(
+                    f"Checklist email suppressed for CL-{obj.id}: assigner == assignee."
+                )
+            )
             return
     except Exception:
         pass
 
     to_email = (getattr(getattr(obj, "assign_to", None), "email", "") or "").strip()
     if not to_email:
-        logger.info(_utils._safe_console_text(
-            f"Checklist email skipped for CL-{obj.id}: assignee has no email."
-        ))
+        logger.info(
+            _utils._safe_console_text(
+                f"Checklist email skipped for CL-{obj.id}: assignee has no email."
+            )
+        )
         return
 
     def _send_now():
         complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
-        # Subject: recurring vs one-time checklist (based on mode presence)
-        prefix = "Recurring Checklist Generated" if normalize_mode(getattr(obj, "mode", None)) in RECURRING_MODES else "Checklist Assigned"
+        subject_prefix = f"Today’s Checklist – {obj.task_name}"
         _utils.send_checklist_assignment_to_user(
             task=obj,
             complete_url=complete_url,
-            subject_prefix=prefix,
+            subject_prefix=subject_prefix,
         )
 
     if not SEND_RECUR_EMAILS_ONLY_AT_10AM:
@@ -193,11 +247,17 @@ def _schedule_10am_email_for_checklist(obj: Checklist) -> None:
             _on_commit(_send_now)
         elif now_ist < anchor_ist:
             anchor_utc = anchor_ist.astimezone(pytz.UTC)
-            _on_commit(lambda: _spawn_delayed(anchor_utc, _send_now, name=f"cl-10am-email-{obj.id}"))
+            _on_commit(
+                lambda: _spawn_delayed(anchor_utc, _send_now, name=f"cl-10am-email-{obj.id}")
+            )
         else:
             _on_commit(_send_now)
     except Exception as e:
-        logger.error(_utils._safe_console_text(f"Checklist email scheduling failed for {obj.id}: {e}"))
+        logger.error(
+            _utils._safe_console_text(
+                f"Checklist email scheduling failed for {obj.id}: {e}"
+            )
+        )
         _on_commit(_send_now)
 
 
@@ -212,26 +272,31 @@ def _schedule_10am_email_for_delegation(obj: Delegation) -> None:
     # Never email the assigner (including self-assign)
     try:
         if obj.assign_by_id and obj.assign_by_id == obj.assign_to_id:
-            logger.info(_utils._safe_console_text(
-                f"Delegation email suppressed for DL-{obj.id}: assigner == assignee."
-            ))
+            logger.info(
+                _utils._safe_console_text(
+                    f"Delegation email suppressed for DL-{obj.id}: assigner == assignee."
+                )
+            )
             return
     except Exception:
         pass
 
     to_email = (getattr(getattr(obj, "assign_to", None), "email", "") or "").strip()
     if not to_email:
-        logger.info(_utils._safe_console_text(
-            f"Delegation email skipped for DL-{obj.id}: assignee has no email."
-        ))
+        logger.info(
+            _utils._safe_console_text(
+                f"Delegation email skipped for DL-{obj.id}: assignee has no email."
+            )
+        )
         return
 
     def _send_now():
         complete_url = f"{SITE_URL}{reverse('tasks:complete_delegation', args=[obj.id])}"
+        subject_prefix = f"Today’s Delegation – {obj.task_name} (due 7 PM)"
         _utils.send_delegation_assignment_to_user(
             delegation=obj,
             complete_url=complete_url,
-            subject_prefix="Delegation Assigned",
+            subject_prefix=subject_prefix,
         )
 
     if not SEND_RECUR_EMAILS_ONLY_AT_10AM:
@@ -252,23 +317,73 @@ def _schedule_10am_email_for_delegation(obj: Delegation) -> None:
             _on_commit(_send_now)
         elif now_ist < anchor_ist:
             anchor_utc = anchor_ist.astimezone(pytz.UTC)
-            _on_commit(lambda: _spawn_delayed(anchor_utc, _send_now, name=f"dl-10am-email-{obj.id}"))
+            _on_commit(
+                lambda: _spawn_delayed(anchor_utc, _send_now, name=f"dl-10am-email-{obj.id}")
+            )
         else:
             _on_commit(_send_now)
     except Exception as e:
-        logger.error(_utils._safe_console_text(f"Delegation email scheduling failed for {obj.id}: {e}"))
+        logger.error(
+            _utils._safe_console_text(
+                f"Delegation email scheduling failed for {obj.id}: {e}"
+            )
+        )
         _on_commit(_send_now)
 
 
+# NEW: immediate assignment email for delegations (so user gets mail as soon as task is added)
+def _send_delegation_assignment_immediate(obj: Delegation) -> None:
+    """
+    One-time "New Delegation Assigned" email, sent immediately after creation.
+    Daily / 10:00 AM reminders are handled separately.
+    """
+    if not SEND_EMAILS_FOR_AUTO_RECUR:
+        return
+
+    try:
+        if obj.assign_by_id and obj.assign_by_id == obj.assign_to_id:
+            logger.info(
+                _utils._safe_console_text(
+                    f"Immediate delegation email suppressed for DL-{obj.id}: assigner == assignee."
+                )
+            )
+            return
+    except Exception:
+        pass
+
+    to_email = (getattr(getattr(obj, "assign_to", None), "email", "") or "").strip()
+    if not to_email:
+        logger.info(
+            _utils._safe_console_text(
+                f"Immediate delegation email skipped for DL-{obj.id}: assignee has no email."
+            )
+        )
+        return
+
+    def _send_now():
+        try:
+            complete_url = f"{SITE_URL}{reverse('tasks:complete_delegation', args=[obj.id])}"
+        except Exception:
+            complete_url = SITE_URL
+
+        _utils.send_delegation_assignment_to_user(
+            delegation=obj,
+            complete_url=complete_url,
+            subject_prefix=f"New Delegation Assigned – {obj.task_name}",
+        )
+
+    _on_commit(_send_now)
+
+
 # ---------------------------------------------------------------------
-# CHECKLIST: force planned datetime to 19:00 IST (NO working-day shift)
+# CHECKLIST: force planned datetime to 19:00 IST (NO shift on save)
 # ---------------------------------------------------------------------
 @receiver(pre_save, sender=Checklist)
 def force_checklist_planned_time(sender, instance: Checklist, **kwargs):
     """
     Checklist (one-time or recurring):
       • planned datetime MUST be 19:00 IST on the SAME date user chose
-      • NO shift off Sundays/holidays
+      • NO shift off Sundays/holidays at entry time
     """
     try:
         if not instance.planned_date:
@@ -286,14 +401,13 @@ def force_checklist_planned_time(sender, instance: Checklist, **kwargs):
 
 
 # ---------------------------------------------------------------------
-# DELEGATION: force planned datetime to 19:00 IST (NO working-day shift)
+# DELEGATION: force planned datetime to 19:00 IST (NO shift on save)
 # ---------------------------------------------------------------------
 @receiver(pre_save, sender=Delegation)
 def force_delegation_planned_time(sender, instance: Delegation, **kwargs):
     """
     Delegations are one-time and MUST respect:
-      • planned datetime at 19:00 IST on the SAME date (no shift)
-    Applied on every save to keep integrity.
+      • planned datetime at 19:00 IST on the SAME date (no shift on save)
     """
     try:
         if not instance.planned_date:
@@ -312,7 +426,7 @@ def force_delegation_planned_time(sender, instance: Delegation, **kwargs):
 
 # ---------------------------------------------------------------------
 # CREATE NEXT RECURRING CHECKLIST
-# (exact stepped date at fixed 19:00 IST; NO working-day shift)
+# (stepped date → then shift to next working day @ 19:00 IST)
 # ---------------------------------------------------------------------
 @receiver(post_save, sender=Checklist)
 def create_next_recurring_checklist(sender, instance: Checklist, created: bool, **kwargs):
@@ -320,8 +434,8 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
     When a recurring checklist is marked 'Completed', create the next occurrence:
       • Valid only for modes in RECURRING_MODES
       • Trigger on update (not initial create)
-      • Next occurrence is scheduled at **19:00 IST** on the exact stepped date
-        (Daily/Weekly/Monthly/Yearly by frequency). **No Sunday/holiday shift**.
+      • Next occurrence is scheduled at 19:00 IST on the stepped date,
+        then SHIFTED to the next working day (skip Sunday/holidays)
       • Prevent duplicates within a 1-minute window
       • Do NOT send email here; a generic 'created' handler will schedule the 10:00 email.
     """
@@ -348,13 +462,17 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
     if Checklist.objects.filter(status="Pending", planned_date__gt=now, **series_filter).exists():
         return
 
-    # Compute next planned date (fixed 19:00 IST, NO working-day shift)
+    # Compute next planned date at fixed 19:00 IST (no shift yet)
     next_dt = None
     try:
         if _compute_next_fixed_7pm:
-            next_dt = _compute_next_fixed_7pm(instance.planned_date, instance.mode, instance.frequency)
+            next_dt = _compute_next_fixed_7pm(
+                instance.planned_date,
+                instance.mode,
+                instance.frequency,
+            )
         else:
-            # As a minimal fallback: compute stepped date in IST and pin 19:00, no shift
+            # Minimal fallback: compute stepped date in IST and pin 19:00
             tz = timezone.get_current_timezone()
             prev = instance.planned_date
             if timezone.is_naive(prev):
@@ -372,12 +490,22 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                 nxt_ist = prev_ist + relativedelta(years=step)
             d = nxt_ist.date()
             next_dt = IST.localize(datetime.combine(d, dt_time(19, 0))).astimezone(tz)
+        # NOW: shift to next working day (Sunday/holiday) and pin 19:00
+        next_dt = _shift_to_next_working_day_7pm(next_dt)
     except Exception as e:
-        logger.error(_utils._safe_console_text(f"Error calculating next recurrence for CL-{instance.id}: {e}"))
+        logger.error(
+            _utils._safe_console_text(
+                f"Error calculating next recurrence for CL-{instance.id}: {e}"
+            )
+        )
         next_dt = None
 
     if not next_dt:
-        logger.warning(_utils._safe_console_text(f"No next date for recurring checklist {instance.id}"))
+        logger.warning(
+            _utils._safe_console_text(
+                f"No next date for recurring checklist {instance.id}"
+            )
+        )
         return
 
     # Catch-up loop: ensure next occurrence lands in the future
@@ -385,9 +513,12 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
     while next_dt and next_dt <= now and safety < 730:  # ~2 years safety
         try:
             if _compute_next_fixed_7pm:
-                next_dt = _compute_next_fixed_7pm(next_dt, instance.mode, instance.frequency)
+                tmp = _compute_next_fixed_7pm(
+                    next_dt,
+                    instance.mode,
+                    instance.frequency,
+                )
             else:
-                # replicate fallback stepping
                 tz = timezone.get_current_timezone()
                 prev = next_dt
                 if timezone.is_naive(prev):
@@ -404,12 +535,17 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                 else:
                     nxt_ist = prev_ist + relativedelta(years=step)
                 d = nxt_ist.date()
-                next_dt = IST.localize(datetime.combine(d, dt_time(19, 0))).astimezone(tz)
+                tmp = IST.localize(datetime.combine(d, dt_time(19, 0))).astimezone(tz)
+            next_dt = _shift_to_next_working_day_7pm(tmp)
         except Exception:
             break
         safety += 1
     if not next_dt:
-        logger.warning(_utils._safe_console_text(f"Could not find a future date for series '{instance.task_name}'"))
+        logger.warning(
+            _utils._safe_console_text(
+                f"Could not find a future date for series '{instance.task_name}'"
+            )
+        )
         return
 
     # Duplicate guard (±1 minute window)
@@ -420,7 +556,11 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
         **series_filter,
     ).exists()
     if dupe_exists:
-        logger.info(_utils._safe_console_text(f"Duplicate prevented for '{instance.task_name}' at {next_dt}"))
+        logger.info(
+            _utils._safe_console_text(
+                f"Duplicate prevented for '{instance.task_name}' at {next_dt}"
+            )
+        )
         return
 
     try:
@@ -430,7 +570,7 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                 task_name=instance.task_name,
                 message=instance.message,
                 assign_to=instance.assign_to,
-                planned_date=next_dt,  # FIXED 19:00 IST on stepped date (no shift)
+                planned_date=next_dt,  # shifted to next working day @ 19:00 IST
                 priority=instance.priority,
                 attachment_mandatory=instance.attachment_mandatory,
                 mode=instance.mode,
@@ -457,9 +597,13 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                     f"'{new_obj.task_name}' at {new_obj.planned_date}"
                 )
             )
-        # Do NOT send email directly here — the generic created handler below will schedule @ 10:00 IST.
+        # Do NOT send email directly here — the generic created handler will schedule @ 10:00 IST.
     except Exception as e:
-        logger.error(_utils._safe_console_text(f"Failed to create recurring checklist for {instance.id}: {e}"))
+        logger.error(
+            _utils._safe_console_text(
+                f"Failed to create recurring checklist for {instance.id}: {e}"
+            )
+        )
 
 
 # ---------------------------------------------------------------------
@@ -467,10 +611,6 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
 # ---------------------------------------------------------------------
 @receiver(post_save, sender=Checklist)
 def schedule_checklist_email_on_create(sender, instance: Checklist, created: bool, **kwargs):
-    """
-    For BOTH first occurrences and auto-created recurrences:
-    schedule (or send) the assignee email at ~10:00 IST on the planned date.
-    """
     if not created:
         return
     try:
@@ -480,15 +620,18 @@ def schedule_checklist_email_on_create(sender, instance: Checklist, created: boo
 
 
 # ---------------------------------------------------------------------
-# DELEGATION: On creation, schedule the 10:00 IST email (day-of)
+# DELEGATION: On creation, immediate assignment email + 10:00 IST email
 # ---------------------------------------------------------------------
 @receiver(post_save, sender=Delegation)
 def schedule_delegation_email_on_create(sender, instance: Delegation, created: bool, **kwargs):
-    """
-    Delegations are one-time; send the assignee email at ~10:00 IST on the planned date.
-    """
     if not created:
         return
+    # 1) Immediate "New Delegation Assigned" email
+    try:
+        _on_commit(lambda: _send_delegation_assignment_immediate(instance))
+    except Exception:
+        _send_delegation_assignment_immediate(instance)
+    # 2) Existing behaviour – schedule day-of 10:00 AM reminder
     try:
         _on_commit(lambda: _schedule_10am_email_for_delegation(instance))
     except Exception:
@@ -500,25 +643,28 @@ def schedule_delegation_email_on_create(sender, instance: Delegation, created: b
 # ---------------------------------------------------------------------
 @receiver(post_save, sender=HelpTicket)
 def send_help_ticket_email_on_create(sender, instance: HelpTicket, created: bool, **kwargs):
-    """
-    HelpTicket emails go out immediately at time of assignment (no 10:00 gating).
-    """
     if not created:
         return
+
+    def _send_now():
+        try:
+            complete_url = f"{SITE_URL}{reverse('tasks:help_ticket_detail', args=[instance.id])}"
+        except Exception:
+            complete_url = SITE_URL
+        _utils.send_help_ticket_assignment_to_user(
+            ticket=instance,
+            complete_url=complete_url,
+            subject_prefix="Help Ticket Assigned",
+        )
+
     try:
-        def _send_now():
-            try:
-                complete_url = f"{SITE_URL}{reverse('tasks:help_ticket_detail', args=[instance.id])}"
-            except Exception:
-                complete_url = SITE_URL
-            _utils.send_help_ticket_assignment_to_user(
-                ticket=instance,
-                complete_url=complete_url,
-                subject_prefix="Help Ticket Assigned",
-            )
         _on_commit(_send_now)
     except Exception as e:
-        logger.error(_utils._safe_console_text(f"HelpTicket email send failed for HT-{getattr(instance, 'id', '?')}: {e}"))
+        logger.error(
+            _utils._safe_console_text(
+                f"HelpTicket email send failed for HT-{getattr(instance, 'id', '?')}: {e}"
+            )
+        )
 
 
 # ---------------------------------------------------------------------
@@ -527,38 +673,50 @@ def send_help_ticket_email_on_create(sender, instance: HelpTicket, created: bool
 @receiver(post_save, sender=Checklist)
 def log_checklist_completion(sender, instance, created, **kwargs):
     if not created and instance.status == "Completed":
-        logger.info(_utils._safe_console_text(
-            f"Checklist {instance.id} '{instance.task_name}' completed by {instance.assign_to}"
-        ))
+        logger.info(
+            _utils._safe_console_text(
+                f"Checklist {instance.id} '{instance.task_name}' completed by {instance.assign_to}"
+            )
+        )
 
 
 @receiver(post_save, sender=Delegation)
 def log_delegation_completion(sender, instance, created, **kwargs):
     if not created and instance.status == "Completed":
-        logger.info(_utils._safe_console_text(
-            f"Delegation {instance.id} '{instance.task_name}' completed by {instance.assign_to}"
-        ))
+        logger.info(
+            _utils._safe_console_text(
+                f"Delegation {instance.id} '{instance.task_name}' completed by {instance.assign_to}"
+            )
+        )
 
 
 @receiver(post_save, sender=HelpTicket)
 def log_helpticket_completion(sender, instance, created, **kwargs):
     if not created and instance.status == "Closed":
-        logger.info(_utils._safe_console_text(
-            f"Help Ticket {instance.id} '{instance.title}' closed by {instance.assign_to}"
-        ))
+        logger.info(
+            _utils._safe_console_text(
+                f"Help Ticket {instance.id} '{instance.title}' closed by {instance.assign_to}"
+            )
+        )
 
 
 @receiver(post_save, sender=Checklist)
 def log_checklist_creation(sender, instance, created, **kwargs):
     if created:
-        logger.debug(_utils._safe_console_text(
-            f"Created checklist {instance.id} '{instance.task_name}' for {instance.assign_to} at {instance.planned_date}"
-        ))
+        logger.debug(
+            _utils._safe_console_text(
+                f"Created checklist {instance.id} '{instance.task_name}' "
+                f"for {instance.assign_to} at {instance.planned_date}"
+            )
+        )
 
 
 @receiver(post_save, sender=Delegation)
 def log_delegation_creation(sender, instance, created, **kwargs):
     if created:
-        logger.debug(_utils._safe_console_text(
-            f"Created delegation {instance.id} '{instance.task_name}' for {instance.assign_to} at {instance.planned_date}"
-        ))
+        logger.debug(
+            _utils._safe_console_text(
+                f"Created delegation {instance.id} '{instance.task_name}' "
+                f"for {instance.assign_to} at {instance.planned_date}"
+            )
+        )

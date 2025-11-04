@@ -1,4 +1,3 @@
-<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\tasks\list_delegation.html -->
 {% extends "base.html" %}
 {% load static %}
 {% block title %}Delegations{% endblock %}
@@ -95,7 +94,14 @@
                      aria-label="Select row DEG{{ d.id }}">
             </td>
 
-            <td>{{ d.task_name }}</td>
+            <td>
+              {{ d.task_name }}
+              {% if d.set_reminder and d.reminder_time %}
+                <span class="ms-1" title="Reminder set for {{ d.reminder_time|date:'d M, Y H:i' }}">
+                  ⏰
+                </span>
+              {% endif %}
+            </td>
 
             <td>
               {% if d.assign_by %}
@@ -343,6 +349,33 @@
               <a href="{{ d.doer_file.url }}" target="_blank" class="btn btn-sm btn-outline-success">
                 <i class="fas fa-download me-1" aria-hidden="true"></i> Download Completion File
               </a>
+            </p>
+          </div>
+          {% endif %}
+
+          {# Reminder details using new fields #}
+          {% if d.set_reminder and d.reminder_time %}
+          <div class="col-12">
+            <hr>
+            <label class="fw-bold">Reminder:</label>
+            <p>
+              <span class="badge bg-info text-dark">
+                {{ d.reminder_status }}
+              </span>
+            </p>
+          </div>
+          <div class="col-md-6">
+            <label class="fw-bold">Reminder Time:</label>
+            <p>{{ d.reminder_time|date:"d M, Y H:i" }}</p>
+          </div>
+          <div class="col-md-6">
+            <label class="fw-bold">Reminder Sent At:</label>
+            <p>
+              {% if d.reminder_sent_at %}
+                {{ d.reminder_sent_at|date:"d M, Y H:i" }}
+              {% else %}
+                —
+              {% endif %}
             </p>
           </div>
           {% endif %}

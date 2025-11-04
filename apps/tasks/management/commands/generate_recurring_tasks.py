@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta, time as dt_time, date
 
 import pytz
 from django.conf import settings
@@ -18,6 +18,10 @@ from apps.tasks.recurrence import (
     get_next_planned_date,     # ALWAYS 19:00 IST on next working day (Sun/holiday → shift)
 )
 from apps.tasks.utils import send_checklist_assignment_to_user
+
+# >>> NEW: imports for blocking checks
+from apps.settings.models import Holiday
+from apps.leave.models import LeaveRequest
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +49,32 @@ def _to_ist(dt: datetime) -> datetime:
     if timezone.is_naive(dt):
         dt = timezone.make_aware(dt, timezone.get_current_timezone())
     return dt.astimezone(IST)
+
+
+# >>> NEW: helpers for blocking logic
+def _is_holiday(d: date) -> bool:
+    return d.weekday() == 6 or Holiday.objects.filter(date=d).exists()
+
+
+def _is_user_on_leave(user_id: int, d: date) -> bool:
+    try:
+        # use the model helper to keep semantics identical
+        user = None
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        user = User.objects.filter(id=user_id).first()
+        return bool(user and LeaveRequest.is_user_blocked_on(user, d))
+    except Exception:
+        return False
+
+
+def _push_to_next_allowed_date(user_id: int, d: date) -> date:
+    """Advance date until it's not a Sunday/holiday and not within user's leave window."""
+    for _ in range(0, 120):
+        if (not _is_holiday(d)) and (not _is_user_on_leave(user_id, d)):
+            return d
+        d += timedelta(days=1)
+    return d
 
 
 def _within_10am_ist_window(leeway_minutes: int = EMAIL_WINDOW_MINUTES) -> bool:
@@ -92,11 +122,12 @@ class Command(BaseCommand):
     help = (
         "Recurring Checklist generator & 10:00 reminder sender.\n"
         "Rules:\n"
-        "• Next occurrence is always on a working day at 19:00 IST (Sun/holiday → next working day at 19:00).\n"
+        "• Next occurrence is always on a working day at 19:00 IST (Sun/holiday → shift).\n"
         "• Generation is independent of completion (missed tasks remain; next still appears).\n"
         "• Emails are sent at ~10:00 IST on the planned day (subject shows date/time).\n"
         "• Dashboard 10:00 gating handled in views/templates.\n"
         "• Idempotent dupe-guard (±1 minute) on planned_date.\n"
+        "• NEW: Skip/shift occurrences that fall inside assignee leave windows (PENDING/APPROVED).\n"
     )
 
     def add_arguments(self, parser):
@@ -174,6 +205,12 @@ class Command(BaseCommand):
                 if not next_dt:
                     break
 
+                # >>> NEW: push away from leave windows as well
+                next_ist = _to_ist(next_dt)
+                safe_date = _push_to_next_allowed_date(s["assign_to_id"], next_ist.date())
+                if safe_date != next_ist.date():
+                    next_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(timezone.get_current_timezone())
+
                 next_dt_ist = _to_ist(next_dt)
                 next_date = next_dt_ist.date()
 
@@ -208,7 +245,7 @@ class Command(BaseCommand):
                                 task_name=last.task_name,
                                 message=last.message,
                                 assign_to=last.assign_to,
-                                planned_date=next_dt,  # fixed 19:00 IST; shifted to working day if needed
+                                planned_date=next_dt,  # fixed 19:00 IST; shifted to allowed day if needed
                                 priority=last.priority,
                                 attachment_mandatory=last.attachment_mandatory,
                                 mode=last.mode,

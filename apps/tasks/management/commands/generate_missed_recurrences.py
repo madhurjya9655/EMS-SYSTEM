@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta, time as dt_time, date
 
 import pytz
 from django.conf import settings
@@ -19,6 +19,10 @@ from apps.tasks.recurrence import (
 from apps.tasks.utils import (
     send_checklist_assignment_to_user,
 )
+
+# >>> NEW: imports for blocking checks
+from apps.settings.models import Holiday
+from apps.leave.models import LeaveRequest
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +55,29 @@ def _within_10am_ist_window(leeway_minutes: int = EMAIL_WINDOW_MINUTES) -> bool:
     return (anchor - timedelta(minutes=leeway_minutes)) <= now_ist <= (anchor + timedelta(minutes=leeway_minutes))
 
 
+# >>> NEW: helpers
+def _is_holiday(d: date) -> bool:
+    return d.weekday() == 6 or Holiday.objects.filter(date=d).exists()
+
+
+def _is_user_on_leave(user_id: int, d: date) -> bool:
+    try:
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        user = User.objects.filter(id=user_id).first()
+        return bool(user and LeaveRequest.is_user_blocked_on(user, d))
+    except Exception:
+        return False
+
+
+def _push_to_next_allowed_date(user_id: int, d: date) -> date:
+    for _ in range(0, 120):
+        if (not _is_holiday(d)) and (not _is_user_on_leave(user_id, d)):
+            return d
+        d += timedelta(days=1)
+    return d
+
+
 def _assignee_email_or_none(obj: Checklist) -> str | None:
     try:
         email = (obj.assign_to.email or "").strip()
@@ -63,7 +90,8 @@ class Command(BaseCommand):
     help = (
         "Ensure exactly one FUTURE 'Pending' checklist per recurring series exists.\n"
         "Next recurrences are scheduled at 19:00 IST on working days (Sun/holidays skipped), "
-        "per the final product rule. Dashboard handles 10:00 IST visibility gating."
+        "per the final product rule. Dashboard handles 10:00 IST visibility gating.\n"
+        "NEW: Skip/shift occurrences that fall inside assignee leave windows (Pending/Approved).\n"
     )
 
     def add_arguments(self, parser):
@@ -137,6 +165,12 @@ class Command(BaseCommand):
             if not next_planned:
                 continue
 
+            # >>> NEW: push away from leave/holiday if needed
+            next_ist = next_planned.astimezone(IST)
+            safe_date = _push_to_next_allowed_date(instance.assign_to_id, next_ist.date())
+            if safe_date != next_ist.date():
+                next_planned = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(timezone.get_current_timezone())
+
             # Dupe guard (±1 minute window)
             dupe = Checklist.objects.filter(
                 assign_to_id=instance.assign_to_id,
@@ -164,7 +198,7 @@ class Command(BaseCommand):
                         assign_by=instance.assign_by,
                         task_name=instance.task_name,
                         assign_to=instance.assign_to,
-                        planned_date=next_planned,  # 19:00 IST (final rule)
+                        planned_date=next_planned,  # 19:00 IST (final rule) and shifted off leave/holiday
                         priority=instance.priority,
                         attachment_mandatory=instance.attachment_mandatory,
                         mode=instance.mode,
@@ -200,30 +234,21 @@ class Command(BaseCommand):
 
                 # Email policy (assignee-only), matching other auto-recur flows
                 if send_emails and SEND_EMAILS_FOR_AUTO_RECUR:
-                    if not (new_obj.assign_by_id and new_obj.assign_by_id == new_obj.assign_to_id):
-                        assignee_email = _assignee_email_or_none(new_obj)
-                        if assignee_email:
-                            if (not SEND_RECUR_EMAILS_ONLY_AT_10AM) or _within_10am_ist_window():
-                                try:
-                                    complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
-                                    send_checklist_assignment_to_user(
-                                        task=new_obj,
-                                        complete_url=complete_url,
-                                        subject_prefix="Recurring Checklist Generated",
-                                    )
-                                    logger.info(_safe_console_text(
-                                        f"Sent recur email for CL-{new_obj.id} to user_id={new_obj.assign_to_id}"
-                                    ))
-                                except Exception as e:
-                                    logger.exception("Email failure for recurring checklist %s: %s", new_obj.id, e)
-                        else:
-                            logger.info(_safe_console_text(
-                                f"Skip email for CL-{new_obj.id}: assignee has no email."
-                            ))
-                    else:
-                        logger.info(_safe_console_text(
-                            f"Skip email for CL-{new_obj.id}: assigner == assignee (self-assign)."
-                        ))
+                    assignee_email = _assignee_email_or_none(new_obj)
+                    if assignee_email:
+                        if (not SEND_RECUR_EMAILS_ONLY_AT_10AM) or _within_10am_ist_window():
+                            try:
+                                complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
+                                send_checklist_assignment_to_user(
+                                    task=new_obj,
+                                    complete_url=complete_url,
+                                    subject_prefix="Recurring Checklist Generated",
+                                )
+                                logger.info(_safe_console_text(
+                                    f"Sent recur email for CL-{new_obj.id} to user_id={new_obj.assign_to_id}"
+                                ))
+                            except Exception as e:
+                                logger.exception("Email failure for recurring checklist %s: %s", new_obj.id, e)
 
             except Exception as e:
                 logger.exception("Failed to create recurrence for %s: %s", instance.task_name, e)

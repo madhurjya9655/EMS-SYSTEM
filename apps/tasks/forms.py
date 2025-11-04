@@ -41,13 +41,28 @@ class ChecklistForm(forms.ModelForm):
     class Meta:
         model = Checklist
         fields = [
-            "assign_by", "task_name", "assign_to", "planned_date",
-            "priority", "attachment_mandatory", "mode", "frequency",
-            "time_per_task_minutes", "remind_before_days", "message",
-            "media_upload", "assign_pc", "group_name", "notify_to", "auditor",
-            "set_reminder", "reminder_mode", "reminder_frequency",
+            "assign_by",
+            "task_name",
+            "assign_to",
+            "planned_date",
+            "priority",
+            "attachment_mandatory",
+            "mode",
+            "frequency",
+            "time_per_task_minutes",
+            "remind_before_days",
+            "message",
+            "media_upload",
+            "assign_pc",
+            "group_name",
+            "notify_to",
+            "auditor",
+            "set_reminder",
+            "reminder_mode",
+            "reminder_frequency",
             "reminder_starting_time",
-            "checklist_auto_close", "checklist_auto_close_days",
+            "checklist_auto_close",
+            "checklist_auto_close_days",
         ]
         widgets = {
             "assign_by": forms.Select(attrs={"class": "form-select"}),
@@ -57,12 +72,24 @@ class ChecklistForm(forms.ModelForm):
             "attachment_mandatory": forms.CheckboxInput(attrs={"class": "form-check-input"}),
             "mode": forms.Select(attrs={"class": "form-select"}),
             "frequency": forms.NumberInput(attrs={"class": "form-control", "min": "1", "placeholder": "e.g., 1"}),
-            "time_per_task_minutes": forms.NumberInput(attrs={"class": "form-control", "min": "0", "placeholder": "Minutes"}),
-            "remind_before_days": forms.NumberInput(attrs={"class": "form-control", "min": "0", "placeholder": "Days"}),
-            "message": forms.Textarea(attrs={"class": "form-control", "rows": 3, "placeholder": "Task description or instructions"}),
+            "time_per_task_minutes": forms.NumberInput(
+                attrs={"class": "form-control", "min": "0", "placeholder": "Minutes"}
+            ),
+            "remind_before_days": forms.NumberInput(
+                attrs={"class": "form-control", "min": "0", "placeholder": "Days"}
+            ),
+            "message": forms.Textarea(
+                attrs={
+                    "class": "form-control",
+                    "rows": 3,
+                    "placeholder": "Task description or instructions",
+                }
+            ),
             "media_upload": forms.ClearableFileInput(attrs={"class": "form-control"}),
             "assign_pc": forms.Select(attrs={"class": "form-select"}),
-            "group_name": forms.TextInput(attrs={"class": "form-control", "placeholder": "Group or category name"}),
+            "group_name": forms.TextInput(
+                attrs={"class": "form-control", "placeholder": "Group or category name"}
+            ),
             "notify_to": forms.Select(attrs={"class": "form-select"}),
             "auditor": forms.Select(attrs={"class": "form-select"}),
             "set_reminder": forms.CheckboxInput(attrs={"class": "form-check-input"}),
@@ -80,13 +107,11 @@ class ChecklistForm(forms.ModelForm):
             if fld in self.fields:
                 self.fields[fld].queryset = active_users
 
-        # Mark a few fields as optional in the UI
         for fld in ("assign_pc", "notify_to", "auditor", "media_upload", "group_name", "message"):
             if fld in self.fields:
                 self.fields[fld].required = False
 
     def clean_planned_date(self):
-        # Views handle time normalization; just return the value
         return self.cleaned_data["planned_date"]
 
     def clean(self):
@@ -97,7 +122,12 @@ class ChecklistForm(forms.ModelForm):
         if mode and mode != "" and (not freq or int(freq) < 1):
             self.add_error("frequency", "Frequency must be at least 1 when a recurrence mode is selected.")
 
-        for field_name in ("time_per_task_minutes", "remind_before_days", "reminder_frequency", "checklist_auto_close_days"):
+        for field_name in (
+            "time_per_task_minutes",
+            "remind_before_days",
+            "reminder_frequency",
+            "checklist_auto_close_days",
+        ):
             val = cleaned.get(field_name)
             if val is not None and int(val) < 0:
                 self.add_error(field_name, "Must be a non-negative number.")
@@ -107,7 +137,10 @@ class ChecklistForm(forms.ModelForm):
                 self.add_error("reminder_mode", "Reminder mode is required when reminders are enabled.")
             rf = cleaned.get("reminder_frequency")
             if not rf or int(rf) < 1:
-                self.add_error("reminder_frequency", "Reminder frequency must be at least 1 when reminders are enabled.")
+                self.add_error(
+                    "reminder_frequency",
+                    "Reminder frequency must be at least 1 when reminders are enabled.",
+                )
 
         return cleaned
 
@@ -119,7 +152,11 @@ class CompleteChecklistForm(forms.ModelForm):
         widgets = {
             "doer_file": forms.ClearableFileInput(attrs={"class": "form-control"}),
             "doer_notes": forms.Textarea(
-                attrs={"class": "form-control", "rows": 4, "placeholder": "Add any notes about completing this task..."}
+                attrs={
+                    "class": "form-control",
+                    "rows": 4,
+                    "placeholder": "Add any notes about completing this task...",
+                }
             ),
         }
 
@@ -133,9 +170,11 @@ class CompleteChecklistForm(forms.ModelForm):
 # Delegation
 # -----------------------------
 class DelegationForm(forms.ModelForm):
-    # Use plain text input so Flatpickr fully controls date & time in the template
     planned_date = forms.DateTimeField(
-        widget=forms.DateTimeInput(attrs={"class": "form-control", "placeholder": "YYYY-MM-DD HH:MM"}),
+        input_formats=["%Y-%m-%d %H:%M"],
+        widget=forms.DateTimeInput(
+            attrs={"class": "form-control", "placeholder": "YYYY-MM-DD HH:MM", "id": "id_planned_date"}
+        ),
         help_text="Select date and time for this delegation",
     )
     audio_recording = forms.FileField(
@@ -150,24 +189,47 @@ class DelegationForm(forms.ModelForm):
         widget=forms.NumberInput(attrs={"class": "form-control", "placeholder": "Minutes"}),
     )
 
+    # New behaviour: just a boolean toggle – reminders themselves are always 10:00 AM IST daily
+    set_reminder = forms.BooleanField(
+        required=False,
+        label="Send daily reminder at 10:00 AM",
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input", "id": "id_set_reminder"}),
+        help_text="If enabled, the assignee gets an email every day at 10:00 AM IST until this delegation is completed.",
+    )
+
     class Meta:
         model = Delegation
         fields = [
-            "assign_by", "task_name", "assign_to",
-            "planned_date", "priority",
-            "attachment_mandatory", "audio_recording",
-            "time_per_task_minutes", "mode", "frequency",
+            "assign_by",
+            "task_name",
+            "assign_to",
+            "planned_date",
+            "priority",
+            "attachment_mandatory",
+            "audio_recording",
+            "time_per_task_minutes",
+            "mode",
+            "frequency",
             "message",
+            "set_reminder",
         ]
         widgets = {
             "assign_by": forms.Select(attrs={"class": "form-select"}),
-            "task_name": forms.TextInput(attrs={"class": "form-control", "placeholder": "Enter delegation task name"}),
+            "task_name": forms.TextInput(
+                attrs={"class": "form-control", "placeholder": "Enter delegation task name"}
+            ),
             "assign_to": forms.Select(attrs={"class": "form-select"}),
             "priority": forms.Select(attrs={"class": "form-select"}),
             "attachment_mandatory": forms.CheckboxInput(attrs={"class": "form-check-input"}),
             "mode": forms.Select(attrs={"class": "form-select"}),
             "frequency": forms.NumberInput(attrs={"class": "form-control", "min": "1"}),
-            "message": forms.Textarea(attrs={"class": "form-control", "rows": 3, "placeholder": "Delegation description or instructions"}),
+            "message": forms.Textarea(
+                attrs={
+                    "class": "form-control",
+                    "rows": 3,
+                    "placeholder": "Delegation description or instructions",
+                }
+            ),
         }
 
     def __init__(self, *args, **kwargs):
@@ -196,6 +258,7 @@ class DelegationForm(forms.ModelForm):
         if tpt is not None and int(tpt) < 0:
             self.add_error("time_per_task_minutes", "Time per task must be non-negative.")
 
+        # No reminder_time here; when set_reminder=True, reminders go via the management command at 10:00 AM IST.
         return cleaned
 
 
@@ -206,7 +269,11 @@ class CompleteDelegationForm(forms.ModelForm):
         widgets = {
             "doer_file": forms.ClearableFileInput(attrs={"class": "form-control"}),
             "doer_notes": forms.Textarea(
-                attrs={"class": "form-control", "rows": 4, "placeholder": "Add any notes about completing this delegation..."}
+                attrs={
+                    "class": "form-control",
+                    "rows": 4,
+                    "placeholder": "Add any notes about completing this delegation...",
+                }
             ),
         }
 
@@ -224,12 +291,15 @@ class BulkUploadForm(forms.ModelForm):
     Minimal model-backed form so your upload can be audited (if BulkUpload model persists entries).
     If you don't want DB persistence, switch this to a simple forms.Form with the same fields/validation.
     """
+
     class Meta:
         model = BulkUpload
         fields = ["form_type", "csv_file"]
         widgets = {
             "form_type": forms.Select(attrs={"class": "form-select"}),
-            "csv_file": forms.ClearableFileInput(attrs={"class": "form-control", "accept": ".csv,.xlsx,.xls"}),
+            "csv_file": forms.ClearableFileInput(
+                attrs={"class": "form-control", "accept": ".csv,.xlsx,.xls"}
+            ),
         }
 
     def __init__(self, *args, **kwargs):
@@ -246,7 +316,6 @@ class BulkUploadForm(forms.ModelForm):
         if ext not in allowed_extensions:
             raise ValidationError(f"Invalid file type. Allowed: {', '.join(sorted(allowed_extensions))}")
 
-        # 10 MB guard
         size = getattr(csv_file, "size", None)
         if size and size > 10 * 1024 * 1024:
             raise ValidationError("File too large (max 10MB).")
@@ -280,18 +349,22 @@ class HelpTicketForm(forms.ModelForm):
             "estimated_minutes",
             "planned_date",
         ]
-        widgets = {
-            "title": forms.TextInput(attrs={"class": "form-control", "placeholder": "Enter ticket title"}),
-            "assign_to": forms.Select(attrs={"class": "form-select"}),
-            "description": forms.Textarea(
-                attrs={"class": "form-control", "rows": 4, "placeholder": "Describe the issue or request in detail..."}
-            ),
-            "priority": forms.Select(attrs={"class": "form-select"}),
-            "status": forms.Select(attrs={"class": "form-select"}),
-            "estimated_minutes": forms.NumberInput(
-                attrs={"class": "form-control", "min": "0", "placeholder": "Estimated time in minutes"}
-            ),
-        }
+    widgets = {
+        "title": forms.TextInput(attrs={"class": "form-control", "placeholder": "Enter ticket title"}),
+        "assign_to": forms.Select(attrs={"class": "form-select"}),
+        "description": forms.Textarea(
+            attrs={
+                "class": "form-control",
+                "rows": 4,
+                "placeholder": "Describe the issue or request in detail...",
+            }
+        ),
+        "priority": forms.Select(attrs={"class": "form-select"}),
+        "status": forms.Select(attrs={"class": "form-select"}),
+        "estimated_minutes": forms.NumberInput(
+            attrs={"class": "form-control", "min": "0", "placeholder": "Estimated time in minutes"}
+        ),
+    }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -335,7 +408,9 @@ class HelpTicketForm(forms.ModelForm):
 class ChecklistFilterForm(forms.Form):
     keyword = forms.CharField(
         required=False,
-        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "Search task name or message..."}),
+        widget=forms.TextInput(
+            attrs={"class": "form-control", "placeholder": "Search task name or message..."}
+        ),
     )
     assign_to = forms.ModelChoiceField(
         queryset=User.objects.filter(is_active=True).order_by("username"),

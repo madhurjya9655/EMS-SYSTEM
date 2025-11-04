@@ -14,7 +14,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="{% static 'icons/favicon-32.png' %}">
   <link rel="icon" type="image/png" sizes="16x16" href="{% static 'icons/favicon-16.png' %}">
 
-  <!-- Fonts (clean, professional) -->
+  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
@@ -34,12 +34,15 @@
 
   <style>
     /* =========================
-       THEME (one consistent color)
+       THEME TOKENS
        ========================= */
     :root{
-      --primary:#3b82f6;          /* single brand color used everywhere */
+      --primary:#3b82f6;
+
       --bg:#f6f8fb;
       --surface:#ffffff;
+      --surface-alt:#f9fafb;
+
       --text:#0f172a;
       --muted:#64748b;
       --border:#e5e7eb;
@@ -50,18 +53,22 @@
       --header-h:72px;
       --sidebar-w:280px;
 
-      --shadow-1:0 1px 3px rgba(0,0,0,.06);
-      --shadow-2:0 8px 24px rgba(2,6,23,.08);
+      --shadow-1:0 1px 3px rgba(15,23,42,.08);
+      --shadow-2:0 8px 24px rgba(15,23,42,.14);
     }
+
     @media (prefers-color-scheme: dark){
       :root{
-        --bg:#0b1220;
-        --surface:#0f172a;
+        --bg:#020617;
+        --surface:#020617;
+        --surface-alt:#020617;
+
         --text:#e5e7eb;
-        --muted:#a3aab8;
-        --border:#1f2a3a;
-        --shadow-1:0 1px 3px rgba(0,0,0,.45);
-        --shadow-2:0 10px 30px rgba(0,0,0,.5);
+        --muted:#9ca3af;
+        --border:#1f2933;
+
+        --shadow-1:0 1px 3px rgba(0,0,0,.7);
+        --shadow-2:0 10px 30px rgba(0,0,0,.8);
       }
     }
 
@@ -69,126 +76,383 @@
     *{box-sizing:border-box}
     html,body{height:100%}
     body{
-      margin:0;background:var(--bg);color:var(--text);
+      margin:0;
+      background:var(--bg);
+      color:var(--text);
       font-family:"Plus Jakarta Sans",system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-      -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+      overflow-x:hidden;   /* prevent horizontal scroll on mobile */
     }
     a{color:inherit;text-decoration:none}
+    a:hover{text-decoration:none}
 
     /* Focus */
-    :focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:6px}
+    :focus-visible{
+      outline:2px solid var(--primary);
+      outline-offset:2px;
+      border-radius:6px;
+    }
 
-    /* -------------------------
-       HEADER (solid brand color)
-       ------------------------- */
+    /* =========================
+       HEADER
+       ========================= */
     .header{
-      position:fixed;inset:0 0 auto 0;height:var(--header-h);
+      position:fixed;
+      inset:0 0 auto 0;
+      height:var(--header-h);
       background:var(--primary);
-      color:#fff;z-index:1000;display:flex;align-items:center;justify-content:space-between;
-      padding:0 1.25rem;border-bottom:1px solid rgba(255,255,255,.18);
+      color:#fff;
+      z-index:1000;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding:0 .9rem 0 1rem;
+      border-bottom:1px solid rgba(255,255,255,.18);
       box-shadow:var(--shadow-2);
     }
     .logo{display:flex;align-items:center;gap:.75rem}
     .logo-icon{
-      width:40px;height:40px;border-radius:10px;display:grid;place-items:center;
-      background:rgba(255,255,255,.18);
+      width:40px;height:40px;
+      border-radius:10px;
+      display:grid;place-items:center;
+      background:rgba(255,255,255,.15);
     }
     .logo-icon img{max-width:28px;max-height:28px;border-radius:6px}
     .logo-text{font-weight:700;font-size:1.05rem;letter-spacing:.2px}
 
-    .header-actions{display:flex;align-items:center;gap:.75rem}
+    .header-actions{
+      display:flex;
+      align-items:center;
+      gap:.75rem;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
     .branch-select{
-      background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.35);
-      color:#fff;padding:.5rem .8rem;border-radius:10px;font-size:.9rem;min-width:160px
+      background:rgba(255,255,255,.14);
+      border:1px solid rgba(255,255,255,.35);
+      color:#fff;
+      padding:.45rem .8rem;
+      border-radius:10px;
+      font-size:.86rem;
+      min-width:150px;
     }
     .branch-select option{background:#111827;color:#fff}
-    .user-menu{display:flex;align-items:center;gap:.6rem}
-    .user-avatar{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.18)}
+
+    .user-menu{display:flex;align-items:center;gap:.6rem;font-size:.9rem}
+    .user-avatar{
+      width:34px;height:34px;
+      border-radius:50%;
+      display:grid;place-items:center;
+      background:rgba(255,255,255,.18);
+    }
+
     .logout-btn{
-      background:#fff;border:1px solid #fff;color:var(--primary);font-weight:600;
-      padding:.5rem .9rem;border-radius:10px;font-size:.85rem;box-shadow:var(--shadow-1)
+      background:#fff;
+      border:1px solid #fff;
+      color:var(--primary);
+      font-weight:600;
+      padding:.45rem .9rem;
+      border-radius:10px;
+      font-size:.86rem;
+      box-shadow:var(--shadow-1);
+      white-space:nowrap;
     }
     .logout-btn:hover{background:#f8fafc}
 
-    .mobile-toggle{display:none;background:none;border:none;color:#fff;font-size:1.15rem;cursor:pointer}
+    .mobile-toggle{
+      display:none;
+      background:none;
+      border:none;
+      color:#fff;
+      font-size:1.15rem;
+      cursor:pointer;
+    }
 
-    /* -------------------------
-       SIDEBAR (clean + consistent)
-       ------------------------- */
+    /* =========================
+       SIDEBAR
+       ========================= */
     .sidebar{
-      position:fixed;top:var(--header-h);left:0;width:var(--sidebar-w);
+      position:fixed;
+      top:var(--header-h);
+      left:0;
+      width:var(--sidebar-w);
       height:calc(100vh - var(--header-h));
-      background:var(--surface);border-right:1px solid var(--border);box-shadow:var(--shadow-1);
-      overflow-y:auto;z-index:900;transition:transform .25s ease;
+      background:var(--surface);
+      border-right:1px solid var(--border);
+      box-shadow:var(--shadow-1);
+      overflow-y:auto;
+      z-index:900;
+      transition:transform .25s ease;
     }
     .sidebar.collapsed{transform:translateX(-100%)}
+
     .nav-section{padding:1rem 0}
     .nav-item{
-      display:block;border:none;background:none;width:100%;text-align:left;
-      padding:.75rem 1rem;margin:.15rem .75rem;border-radius:10px;
-      color:var(--muted);font-weight:600;font-size:.93rem;
+      display:block;
+      border:none;
+      background:none;
+      width:100%;
+      text-align:left;
+      padding:.75rem 1rem;
+      margin:.15rem .75rem;
+      border-radius:10px;
+      color:var(--muted);
+      font-weight:600;
+      font-size:.93rem;
       transition:background .2s ease,color .2s ease,transform .15s ease;
+      cursor:pointer;
     }
     .nav-item i{width:18px;margin-right:.6rem}
-    .nav-item:hover{background:#eef4ff;color:var(--primary);transform:translateX(2px)}
-    .nav-item.active,.nav-item[aria-current="page"]{
-      background:#e7efff;color:var(--primary);border-left:3px solid var(--primary);
-      padding-left: calc(1rem - 3px);
+    .nav-item:hover{
+      background:#eef4ff;
+      color:var(--primary);
+      transform:translateX(2px);
+    }
+    .nav-item.active,
+    .nav-item[aria-current="page"]{
+      background:#e7efff;
+      color:var(--primary);
+      border-left:3px solid var(--primary);
+      padding-left:calc(1rem - 3px);
     }
 
-    .submenu{display:none;margin:.2rem .6rem .6rem 1.1rem;border-left:2px solid var(--border);padding:.2rem 0}
-    .submenu .nav-item{margin:.1rem .25rem;padding:.6rem 1rem;font-weight:500}
+    .submenu{
+      display:none;
+      margin:.2rem .6rem .6rem 1.1rem;
+      border-left:2px solid var(--border);
+      padding:.2rem 0;
+    }
+    .submenu .nav-item{
+      margin:.1rem .25rem;
+      padding:.6rem 1rem;
+      font-weight:500;
+      font-size:.9rem;
+    }
 
-    /* -------------------------
+    @media (prefers-color-scheme: dark){
+      .nav-item:hover{
+        background:rgba(148,163,184,.15);
+        color:#e5e7eb;
+      }
+      .nav-item.active,
+      .nav-item[aria-current="page"]{
+        background:rgba(37,99,235,.22);
+        color:#e5e7eb;
+        border-left-color:#60a5fa;
+      }
+    }
+
+    /* =========================
        MAIN
-       ------------------------- */
+       ========================= */
     .main-content{
-      margin-left:var(--sidebar-w);margin-top:var(--header-h);
-      padding:1.5rem;min-height:calc(100vh - var(--header-h));
+      margin-left:var(--sidebar-w);
+      margin-top:var(--header-h);
+      padding:1.5rem;
+      min-height:calc(100vh - var(--header-h));
       transition:margin-left .25s ease;
     }
     .main-content.expanded{margin-left:0}
 
     .page-header{
-      background:var(--surface);border:1px solid var(--border);
-      border-radius:var(--radius);padding:1.25rem 1.25rem;box-shadow:var(--shadow-1);margin-bottom:1rem;
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      padding:1.25rem 1.25rem;
+      box-shadow:var(--shadow-1);
+      margin-bottom:1rem;
     }
-    .page-title{margin:0;font-size:1.5rem;font-weight:700;color:var(--text)}
+    .page-title{
+      margin:0;
+      font-size:1.5rem;
+      font-weight:700;
+      color:var(--text);
+    }
+
+    /* Cards & content blocks */
+    .card{
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow-1);
+    }
+    .card-header{
+      background:var(--surface-alt);
+      border-bottom:1px solid var(--border);
+    }
 
     /* Alerts */
     .alert{border-radius:10px;border:1px solid var(--border)}
     .alert-info{background:#eef4ff}
+    @media (prefers-color-scheme: dark){
+      .alert-info{background:rgba(148,163,184,.18);color:var(--text);}
+    }
 
     /* Footer */
     footer{
-      background:var(--surface);border-top:1px solid var(--border);
-      text-align:center;padding:1rem;color:var(--muted);font-size:.92rem;margin-top:1.25rem
+      background:var(--surface);
+      border-top:1px solid var(--border);
+      text-align:center;
+      padding:1rem;
+      color:var(--muted);
+      font-size:.92rem;
+      margin-top:1.25rem;
     }
 
     /* Overlay (mobile) */
-    .sidebar-overlay{display:none;position:fixed;top:var(--header-h);left:0;width:100vw;height:100vh;background:rgba(0,0,0,.25);z-index:899}
-    .sidebar.show ~ .sidebar-overlay,.sidebar-overlay.show{display:block}
+    .sidebar-overlay{
+      display:none;
+      position:fixed;
+      top:var(--header-h);
+      left:0;
+      width:100vw;
+      height:100vh;
+      background:rgba(0,0,0,.25);
+      z-index:899;
+    }
+    .sidebar.show ~ .sidebar-overlay,
+    .sidebar-overlay.show{display:block}
 
     /* Skip link */
-    .skip-link{position:absolute;left:-9999px;top:-9999px}
-    .skip-link:focus{left:1rem;top:1rem;background:#111827;color:#fff;padding:.5rem .75rem;border-radius:.5rem;z-index:1100}
+    .skip-link{
+      position:absolute;
+      left:-9999px;
+      top:-9999px;
+    }
+    .skip-link:focus{
+      left:1rem;
+      top:1rem;
+      background:#111827;
+      color:#fff;
+      padding:.5rem .75rem;
+      border-radius:.5rem;
+      z-index:1100;
+    }
+
+    /* =========================
+       FORMS & BUTTONS
+       ========================= */
+    .form-label{font-weight:500;color:var(--text);}
+    .form-text{color:var(--muted);font-size:.8rem;}
+
+    .form-control,
+    .form-select{
+      background:var(--surface);
+      color:var(--text);
+      border:1px solid var(--border);
+      border-radius:var(--radius-sm);
+      font-size:.9rem;
+    }
+    .form-control:focus,
+    .form-select:focus{
+      border-color:var(--primary);
+      box-shadow:0 0 0 1px rgba(59,130,246,.35);
+    }
+    .form-control::placeholder{color:var(--muted);opacity:.75;}
+
+    @media (prefers-color-scheme: dark){
+      .form-control,
+      .form-select{
+        background:#020617;
+        color:var(--text);
+        border-color:var(--border);
+      }
+      .form-control:disabled,
+      .form-select:disabled,
+      .form-control[readonly]{
+        background:#020617;
+        color:var(--muted);
+      }
+    }
+
+    .btn-primary{
+      background:var(--primary);
+      border-color:var(--primary);
+      border-radius:10px;
+      font-weight:600;
+      font-size:.9rem;
+      padding:.45rem 1.1rem;
+      box-shadow:var(--shadow-1);
+    }
+    .btn-primary:hover{
+      background:#2563eb;
+      border-color:#2563eb;
+    }
+    .btn-outline-secondary{
+      border-radius:10px;
+      font-size:.9rem;
+    }
+
+    /* =========================
+       GENERIC RESPONSIVE HELPERS
+       (tabs / button groups / tables)
+       ========================= */
+
+    /* Make nav-tabs (page-level tab buttons) wrap nicely on phones */
+    .nav-tabs{
+      border-bottom:1px solid var(--border);
+      flex-wrap:nowrap;
+      overflow-x:auto;
+      gap:.25rem;
+    }
+    .nav-tabs .nav-link{
+      white-space:nowrap;
+    }
+
+    @media (max-width:576px){
+      .nav-tabs{
+        flex-wrap:wrap;
+        overflow-x:hidden;
+      }
+      .nav-tabs .nav-link{
+        flex:1 1 100%;
+        text-align:center;
+      }
+
+      /* Button toolbars / groups (like +Add Employee, Manage CC Options) */
+      .btn-toolbar,
+      .btn-group{
+        flex-wrap:wrap;
+        width:100%;
+      }
+      .btn-group>.btn{
+        flex:1 1 100%;
+        margin-bottom:.4rem;
+      }
+
+      /* Tables inside pages: allow horizontal scroll instead of breaking layout */
+      .table-responsive{overflow-x:auto;}
+    }
+
+    /* =========================
+       RESPONSIVE
+       ========================= */
+    @media (max-width:1024px){
+      :root{ --sidebar-w:260px }
+      .header{padding:0 .75rem}
+    }
+
+    @media (max-width:768px){
+      .mobile-toggle{display:block}
+      .branch-select{display:none}
+      .user-menu span:first-child{display:none}
+
+      .sidebar{transform:translateX(-100%)}
+      .sidebar.show{transform:translateX(0)}
+
+      .main-content{
+        margin-left:0;
+        padding:1rem;
+      }
+      .page-header{padding:1rem}
+    }
 
     /* Reduced motion */
     @media (prefers-reduced-motion: reduce){
       *{scroll-behavior:auto !important}
       .nav-item:hover{transform:none}
       .sidebar,.main-content{transition:none}
-    }
-
-    /* Responsive */
-    @media (max-width:1024px){ :root{ --sidebar-w:260px } }
-    @media (max-width:768px){
-      .mobile-toggle{display:block}
-      .branch-select,.user-menu span:first-child{display:none}
-      .sidebar{transform:translateX(-100%)}
-      .sidebar.show{transform:translateX(0)}
-      .main-content{margin-left:0;padding:1rem}
-      .page-header{padding:1rem}
     }
   </style>
 </head>
@@ -204,7 +468,7 @@
         </button>
         <div class="logo-icon">
           <img src="{% static 'images/bos logo.png' %}" alt="BOS Lakshya logo" loading="lazy" decoding="async">
-        </div>
+          </div>
         <span class="logo-text">BOS Lakshya</span>
       </div>
 
@@ -242,16 +506,16 @@
         <a href="{% url 'recruitment:employee_list' %}"
            class="nav-item {% if request.resolver_match.app_name == 'recruitment' and request.resolver_match.url_name == 'employee_list' %}active{% endif %}"
            {% if request.resolver_match.app_name == 'recruitment' and request.resolver_match.url_name == 'employee_list' %}aria-current="page"{% endif %}>
-          <i class="fas fa-users" aria-hidden="true"></i> BOS Achievers
+          <i class="fas fa-users" aria-hidden="true"></i> BOS Employees (Achievers)
         </a>
         {% endif %}
 
-        {# --- Leave Register --- #}
+        {# --- Leave Application --- #}
         {% if user|has_any_permission:"leave_list,leave_apply,leave_pending_manager" or user|has_group:"Manager" or user|has_group:"HR" or user.is_superuser %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="leaveSubmenu" data-submenu-toggle>
-          <i class="fas fa-calendar-day" aria-hidden="true"></i> BOS Vishraam Register (विश्राम रजिस्टर) <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <i class="fas fa-calendar-day" aria-hidden="true"></i> Leave Application (Vishram Register) <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="leaveSubmenu" role="group" aria-label="Leave Register">
+        <div class="submenu" id="leaveSubmenu" role="group" aria-label="Leave Application">
           {% if user|has_any_permission:"leave_list,leave_apply" %}
           <a href="{% url 'leave:dashboard' %}"
              class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'dashboard' %}active{% endif %}"
@@ -276,19 +540,19 @@
 
         {% if user|has_any_permission:"add_checklist,list_checklist" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="checklistSubmenu" data-submenu-toggle>
-          <i class="fas fa-clipboard-list" aria-hidden="true"></i> BOS Lakshya Suchi (लक्ष्य सूची) <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <i class="fas fa-clipboard-list" aria-hidden="true"></i> Checklist (Lakshya Suchi) <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
         <div class="submenu" id="checklistSubmenu" role="group" aria-label="Checklist">
           {% if user|has_permission:"add_checklist" %}
           <a href="{% url 'tasks:add_checklist' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_checklist' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_checklist' %}aria-current="page"{% endif %}>
-            <i class="fas fa-clipboard-plus" aria-hidden="true"></i> Add BOS Lakshya Suchi (लक्ष्य सूची)
+            <i class="fas fa-clipboard-plus" aria-hidden="true"></i> Add Checklist (Lakshya Suchi)
           </a>
           {% endif %}
           {% if user|has_permission:"list_checklist" %}
           <a href="{% url 'tasks:list_checklist' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}aria-current="page"{% endif %}>
-            <i class="fas fa-clipboard-list" aria-hidden="true"></i> List BOS Lakshya Suchi (लक्ष्य सूची)
+            <i class="fas fa-clipboard-list" aria-hidden="true"></i> List Checklist (Lakshya Suchi)
           </a>
           {% endif %}
         </div>
@@ -303,19 +567,19 @@
 
         {% if user|has_any_permission:"add_delegation,list_delegation" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="delegationSubmenu" data-submenu-toggle>
-          <i class="fas fa-users-cog" aria-hidden="true"></i> BOS Responsibility Tracker <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <i class="fas fa-users-cog" aria-hidden="true"></i> Delegation (Responsibility) <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
         <div class="submenu" id="delegationSubmenu" role="group" aria-label="Delegation">
           {% if user|has_permission:"add_delegation" %}
           <a href="{% url 'tasks:add_delegation' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_delegation' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_delegation' %}aria-current="page"{% endif %}>
-            <i class="fas fa-user-plus" aria-hidden="true"></i> Add BOS Responsibility Tracker
+            <i class="fas fa-user-plus" aria-hidden="true"></i> Add Delegation (Responsibility)
           </a>
           {% endif %}
           {% if user|has_permission:"list_delegation" %}
           <a href="{% url 'tasks:list_delegation' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_delegation' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_delegation' %}aria-current="page"{% endif %}>
-            <i class="fas fa-user-clock" aria-hidden="true"></i> List BOS Responsibility Tracker
+            <i class="fas fa-user-clock" aria-hidden="true"></i> List Delegation (Responsibility)
           </a>
           {% endif %}
         </div>
@@ -323,19 +587,19 @@
 
         {% if user|has_any_permission:"add_ticket,list_all_tickets,assigned_to_me,assigned_by_me" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="ticketsSubmenu" data-submenu-toggle>
-          <i class="fas fa-ticket-alt" aria-hidden="true"></i> BOS Sahayata Desk <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <i class="fas fa-ticket-alt" aria-hidden="true"></i> Help Ticket (Sahayata Desk) <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="ticketsSubmenu" role="group" aria-label="Tickets">
+        <div class="submenu" id="ticketsSubmenu" role="group" aria-label="Help Tickets">
           {% if user|has_permission:"add_ticket" %}
           <a href="{% url 'tasks:add_help_ticket' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_help_ticket' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_help_ticket' %}aria-current="page"{% endif %}>
-            <i class="fas fa-plus-circle" aria-hidden="true"></i> Add Ticket
+            <i class="fas fa-plus-circle" aria-hidden="true"></i> Add Help Ticket
           </a>
           {% endif %}
           {% if user|has_permission:"list_all_tickets" %}
           <a href="{% url 'tasks:list_help_ticket' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_help_ticket' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_help_ticket' %}aria-current="page"{% endif %}>
-            <i class="fas fa-list" aria-hidden="true"></i> List All BOS Sahayata Desk
+            <i class="fas fa-list" aria-hidden="true"></i> List All Help Tickets (Sahayata Desk)
           </a>
           {% endif %}
           {% if user|has_permission:"assigned_to_me" %}
@@ -575,7 +839,7 @@
         try{
           const safe = /^(GET|HEAD|OPTIONS|TRACE)$/i.test(this._method || 'GET');
           if (this._isSameOrigin && !safe) {
-            const token = getCookie(CSRF_COOKIE);
+            const token = getCookie('csrftoken');
             if (token) this.setRequestHeader('X-CSRFToken', token);
           }
         }catch(_e){}
@@ -645,7 +909,7 @@
         }
       });
 
-      // Auto-open the correct submenu (based on the server-rendered active link)
+      // Auto-open submenu of current active item
       (function(){
         const active = document.querySelector('.nav-item.active');
         if (!active) return;
@@ -673,7 +937,6 @@
         document.querySelectorAll('[data-sidebar-toggle]').forEach(el=>{
           el.addEventListener('click', ()=>{
             if (window.innerWidth>768) {
-              // store the state AFTER toggle
               setTimeout(()=>{
                 const nowCollapsed = sidebar?.classList.contains('collapsed');
                 localStorage.setItem(KEY, nowCollapsed ? '1' : '0');

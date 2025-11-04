@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% load static %}
-{% block title %}Add Delegation{% endblock %}
+{% block title %}Edit Delegation{% endblock %}
 
 {% block content %}
   <!-- Flatpickr CSS/JS -->
@@ -11,23 +11,8 @@
   <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 
   <div class="page-header mb-4">
-    <h2>Add Delegation</h2>
+    <h2>Edit Delegation</h2>
   </div>
-
-  {% if form.errors %}
-  <div class="alert alert-danger">
-    <ul class="mb-0">
-      {% for field in form %}
-        {% for error in field.errors %}
-          <li><strong>{{ field.label }}:</strong> {{ error }}</li>
-        {% endfor %}
-      {% endfor %}
-      {% for error in form.non_field_errors %}
-        <li>{{ error }}</li>
-      {% endfor %}
-    </ul>
-  </div>
-  {% endif %}
 
   <form method="post" enctype="multipart/form-data" class="container-fluid">
     {% csrf_token %}
@@ -35,15 +20,10 @@
       <!-- LEFT COLUMN -->
       <div class="col-md-6">
         <div class="mb-3">
-          {{ form.planned_date.label_tag }}
-          <div class="input-group">
-            {{ form.planned_date }}
-            <button class="btn btn-outline-secondary" type="button" id="btn_planned_date">
-              <i class="fa-regular fa-calendar"></i>
-            </button>
-          </div>
+          {{ form.planned_date.label_tag }}{{ form.planned_date }}
           <div class="form-text">
-            Delegations appear once their planned time arrives. (Sundays are disabled in the picker.)
+            Delegations appear once their planned time arrives.
+            (Sundays are disabled here in the picker.)
           </div>
         </div>
 
@@ -72,14 +52,6 @@
       <!-- RIGHT COLUMN -->
       <div class="col-md-6">
         <div class="mb-3">
-          {{ form.task_name.label_tag }}{{ form.task_name }}
-        </div>
-
-        <div class="mb-3">
-          {{ form.assign_by.label_tag }}{{ form.assign_by }}
-        </div>
-
-        <div class="mb-3">
           {{ form.assign_to.label_tag }}{{ form.assign_to }}
         </div>
 
@@ -91,29 +63,43 @@
           {{ form.attachment_mandatory }}{{ form.attachment_mandatory.label_tag }}
         </div>
 
-        <div class="form-check mb-2">
+        <!-- Set Reminder toggle -->
+        <div class="form-check mb-3">
           {{ form.set_reminder }}{{ form.set_reminder.label_tag }}
         </div>
 
-        <div id="delegation_reminder_info" class="alert alert-info py-2 px-3" style="display:none;">
-          Once enabled, the assignee will receive a reminder email
-          <strong>every day at 10:00 AM IST</strong> until this delegation is completed.
+        <!-- Reminder block -->
+        <div id="delegation_reminder_fields" class="border p-3 mb-3" style="display:none;">
+          <div class="row g-3">
+            <div class="col-md-6">
+              {{ form.reminder_mode.label_tag }}{{ form.reminder_mode }}
+            </div>
+            <div class="col-md-6">
+              {{ form.reminder_frequency.label_tag }}{{ form.reminder_frequency }}
+            </div>
+            <div class="col-md-6">
+              {{ form.reminder_starting_time.label_tag }}{{ form.reminder_starting_time }}
+            </div>
+          </div>
+          <div class="form-text mt-2">
+            Configure reminder mode, how often to remind, and at what time to start
+            sending reminders for this delegation.
+          </div>
         </div>
       </div>
     </div>
 
     <div class="text-end mt-4">
-      <button type="submit" class="btn btn-primary">Submit</button>
+      <button type="submit" class="btn btn-primary">Update</button>
     </div>
   </form>
 
   <script>
     document.addEventListener('DOMContentLoaded', function () {
       // Flatpickr for planned_date (disable Sundays)
-      var plannedPicker = null;
-      var plannedEl = document.getElementById('id_planned_date');
-      if (plannedEl) {
-        plannedPicker = flatpickr(plannedEl, {
+      var el = document.getElementById('id_planned_date');
+      if (el) {
+        flatpickr(el, {
           enableTime: true,
           time_24hr: true,
           minuteIncrement: 5,
@@ -128,22 +114,15 @@
         });
       }
 
-      var plannedBtn = document.getElementById('btn_planned_date');
-      if (plannedBtn && plannedPicker) {
-        plannedBtn.addEventListener('click', function () {
-          plannedPicker.open();
-        });
-      }
-
-      // Show/hide reminder info when checkbox toggled
+      // Show/hide reminder block
       const rem = document.getElementById('id_set_reminder');
-      const info = document.getElementById('delegation_reminder_info');
-      if (rem && info) {
+      const box = document.getElementById('delegation_reminder_fields');
+      if (rem && box) {
         const sync = () => {
-          info.style.display = rem.checked ? 'block' : 'none';
+          box.style.display = rem.checked ? 'block' : 'none';
         };
         rem.addEventListener('change', sync);
-        sync();
+        sync(); // initial state
       }
     });
   </script>

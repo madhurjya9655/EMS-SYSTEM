@@ -6,79 +6,118 @@
 {% endblock %}
 
 {% block content %}
-<div class="page-header mb-4">
-  <h1 class="h3">
-    {% if current_tab == 'edit' %}Edit{% else %}New{% endif %} Help Ticket
-  </h1>
-</div>
+  <!-- Flatpickr CSS/JS for calendar icon + picker -->
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css"
+  />
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 
-<div class="card">
-  <div class="card-body">
-    <form method="post" enctype="multipart/form-data">
-      {% csrf_token %}
-
-      {# Non-field errors #}
-      {% if form.non_field_errors %}
-        <div class="alert alert-danger">
-          {{ form.non_field_errors }}
-        </div>
-      {% endif %}
-
-      <div class="mb-3">
-        <label for="{{ form.title.id_for_label }}" class="form-label">Subject</label>
-        {{ form.title }}
-        {{ form.title.errors }}
-      </div>
-
-      <div class="mb-3">
-        <label for="{{ form.assign_to.id_for_label }}" class="form-label">Problem Solver</label>
-        {{ form.assign_to }}
-        {{ form.assign_to.errors }}
-      </div>
-
-      <div class="mb-3">
-        <label for="{{ form.description.id_for_label }}" class="form-label">Description</label>
-        {{ form.description }}
-        {{ form.description.errors }}
-      </div>
-
-      <div class="row">
-        <div class="col-md-4 mb-3">
-          <label for="{{ form.priority.id_for_label }}" class="form-label">Priority</label>
-          {{ form.priority }}
-          {{ form.priority.errors }}
-        </div>
-        <div class="col-md-4 mb-3">
-          <label for="{{ form.status.id_for_label }}" class="form-label">Status</label>
-          {{ form.status }}
-          {{ form.status.errors }}
-        </div>
-        <div class="col-md-4 mb-3">
-          <label for="{{ form.estimated_minutes.id_for_label }}" class="form-label">Est. Minutes</label>
-          {{ form.estimated_minutes }}
-          {{ form.estimated_minutes.errors }}
-        </div>
-      </div>
-
-      <div class="mb-3">
-        <label for="{{ form.planned_date.id_for_label }}" class="form-label">Planned Date</label>
-        {{ form.planned_date }}
-        {{ form.planned_date.errors }}
-      </div>
-
-      <div class="mb-3">
-        <label for="{{ form.media_upload.id_for_label }}" class="form-label">Attachment</label>
-        {{ form.media_upload }}
-        {{ form.media_upload.errors }}
-      </div>
-
-      <div class="text-end">
-        <button type="submit" class="btn btn-primary">
-          {% if current_tab == 'edit' %}Update{% else %}Create{% endif %}
-        </button>
-        <a href="{% url 'tasks:list_help_ticket' %}" class="btn btn-secondary">Cancel</a>
-      </div>
-    </form>
+  <div class="page-header mb-4">
+    <h1 class="h3">
+      {% if current_tab == 'edit' %}Edit{% else %}New{% endif %} Help Ticket
+    </h1>
   </div>
-</div>
+
+  <div class="card">
+    <div class="card-body">
+      <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+
+        {# Non-field errors #}
+        {% if form.non_field_errors %}
+          <div class="alert alert-danger">
+            {{ form.non_field_errors }}
+          </div>
+        {% endif %}
+
+        <div class="mb-3">
+          <label for="{{ form.title.id_for_label }}" class="form-label">Subject</label>
+          {{ form.title }}
+          {{ form.title.errors }}
+        </div>
+
+        <div class="mb-3">
+          <label for="{{ form.assign_to.id_for_label }}" class="form-label">Problem Solver</label>
+          {{ form.assign_to }}
+          {{ form.assign_to.errors }}
+        </div>
+
+        <div class="mb-3">
+          <label for="{{ form.description.id_for_label }}" class="form-label">Description</label>
+          {{ form.description }}
+          {{ form.description.errors }}
+        </div>
+
+        <div class="row">
+          <div class="col-md-4 mb-3">
+            <label for="{{ form.priority.id_for_label }}" class="form-label">Priority</label>
+            {{ form.priority }}
+            {{ form.priority.errors }}
+          </div>
+          <div class="col-md-4 mb-3">
+            <label for="{{ form.status.id_for_label }}" class="form-label">Status</label>
+            {{ form.status }}
+            {{ form.status.errors }}
+          </div>
+          <div class="col-md-4 mb-3">
+            <label for="{{ form.estimated_minutes.id_for_label }}" class="form-label">Est. Minutes</label>
+            {{ form.estimated_minutes }}
+            {{ form.estimated_minutes.errors }}
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label for="{{ form.planned_date.id_for_label }}" class="form-label">Planned Date</label>
+          <div class="input-group">
+            {{ form.planned_date }}
+            <span class="input-group-text" id="planned_date_icon" style="cursor:pointer;">📅</span>
+          </div>
+          {{ form.planned_date.errors }}
+        </div>
+
+        <div class="mb-3">
+          <label for="{{ form.media_upload.id_for_label }}" class="form-label">Attachment</label>
+          {{ form.media_upload }}
+          {{ form.media_upload.errors }}
+        </div>
+
+        <div class="text-end">
+          <button type="submit" class="btn btn-primary">
+            {% if current_tab == 'edit' %}Update{% else %}Create{% endif %}
+          </button>
+          <a href="{% url 'tasks:list_help_ticket' %}" class="btn btn-secondary">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      const plannedInput = document.getElementById('id_planned_date');
+      let plannedPicker = null;
+
+      if (plannedInput) {
+        // Initialize Flatpickr on planned_date
+        plannedPicker = flatpickr('#id_planned_date', {
+          enableTime: true,
+          time_24hr: true,
+          minuteIncrement: 5,
+          dateFormat: 'Y-m-d H:i',
+        });
+
+        // Calendar icon opens the picker (or focuses input)
+        const icon = document.getElementById('planned_date_icon');
+        if (icon) {
+          icon.addEventListener('click', function () {
+            if (plannedPicker && plannedPicker.open) {
+              plannedPicker.open();
+            } else {
+              plannedInput.focus();
+            }
+          });
+        }
+      }
+    });
+  </script>
 {% endblock %}

@@ -74,7 +74,10 @@
         <div class="row g-3 mt-1">
           <div class="col-md-6">
             <label class="form-label" for="{{ form.start_at.id_for_label }}">Date (IST)</label>
-            {{ form.start_at }}
+            <div class="input-group">
+              {{ form.start_at }}
+              <span class="input-group-text" id="start_date_icon" style="cursor:pointer;">📅</span>
+            </div>
             <div class="form-text">
               For <strong>Full Day</strong> we’ll use <code>09:30 → 18:00</code>.
               For <strong>Half Day</strong> pick your time range below (on this same date).
@@ -84,7 +87,10 @@
 
           <div id="end-date-col" class="col-md-6">
             <label class="form-label" for="{{ form.end_at.id_for_label }}">End Date (IST)</label>
-            {{ form.end_at }}
+            <div class="input-group">
+              {{ form.end_at }}
+              <span class="input-group-text" id="end_date_icon" style="cursor:pointer;">📅</span>
+            </div>
             <div class="form-text">End must be on/after start date (Full Day only).</div>
             {% if form.end_at.errors %}<div class="invalid-feedback d-block">{{ form.end_at.errors|striptags }}</div>{% endif %}
           </div>
@@ -194,24 +200,79 @@
 
 </div>
 
+{# Flatpickr CSS/JS for calendar picker #}
+<link
+  rel="stylesheet"
+  href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css"
+/>
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+
 <script>
-(function () {
+document.addEventListener('DOMContentLoaded', function () {
   const radios = document.getElementsByName("duration_type");
   const halfSlot = document.getElementById("half-day-slot");
   const endCol = document.getElementById("end-date-col");
   const startInput = document.getElementById("id_start_at");
   const endInput = document.getElementById("id_end_at");
 
+  // --- Flatpickr date pickers ---
+  let startPicker = null;
+  let endPicker = null;
+
+  if (startInput) {
+    startPicker = flatpickr("#id_start_at", {
+      dateFormat: "Y-m-d"
+    });
+    const startIcon = document.getElementById("start_date_icon");
+    if (startIcon) {
+      startIcon.addEventListener("click", function () {
+        if (startPicker && startPicker.open) {
+          startPicker.open();
+        } else {
+          startInput.focus();
+        }
+      });
+    }
+  }
+
+  if (endInput) {
+    endPicker = flatpickr("#id_end_at", {
+      dateFormat: "Y-m-d"
+    });
+    const endIcon = document.getElementById("end_date_icon");
+    if (endIcon) {
+      endIcon.addEventListener("click", function () {
+        if (endPicker && endPicker.open) {
+          endPicker.open();
+        } else {
+          endInput.focus();
+        }
+      });
+    }
+  }
+
+  // --- Existing HALF/FULL logic ---
   function setEndToStart() {
     if (startInput && endInput && startInput.value) {
       endInput.value = startInput.value;
+      if (endPicker) {
+        endPicker.setDate(startInput.value, false);
+      }
     }
   }
 
   function update() {
     let val = "FULL";
-    for (const r of radios) { if (r.checked) { val = r.value; break; } }
-    if (halfSlot) halfSlot.style.display = (val === "HALF") ? "" : "none";
+    for (const r of radios) {
+      if (r.checked) {
+        val = r.value;
+        break;
+      }
+    }
+
+    if (halfSlot) {
+      halfSlot.style.display = (val === "HALF") ? "" : "none";
+    }
 
     if (endCol && endInput) {
       if (val === "HALF") {
@@ -225,14 +286,24 @@
     }
   }
 
-  for (const r of radios) r.addEventListener("change", update);
-  if (startInput) startInput.addEventListener("change", function () {
-    // keep end date in sync while in HALF mode
-    for (const r of radios) { if (r.checked && r.value === "HALF") { setEndToStart(); break; } }
-  });
+  for (const r of radios) {
+    r.addEventListener("change", update);
+  }
+
+  if (startInput) {
+    startInput.addEventListener("change", function () {
+      // keep end date in sync while in HALF mode
+      for (const r of radios) {
+        if (r.checked && r.value === "HALF") {
+          setEndToStart();
+          break;
+        }
+      }
+    });
+  }
 
   update();
-})();
+});
 </script>
 
 <style>

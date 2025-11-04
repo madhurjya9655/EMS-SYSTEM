@@ -19,7 +19,13 @@
         </div>
 
         <div class="mb-3">
-          {{ form.planned_date.label_tag }}{{ form.planned_date }}
+          {{ form.planned_date.label_tag }}
+          <div class="input-group">
+            {{ form.planned_date }}
+            <span class="input-group-text" id="planned_date_icon" style="cursor:pointer;">
+              📅
+            </span>
+          </div>
           <div class="form-text">
             Visible on the dashboard at/after <strong>10:00 IST</strong> on the due day.
             Delay is calculated from the actual planned time.
@@ -149,8 +155,10 @@
       }
 
       // Flatpickr on planned_date: enable time (24h), disable Sundays (0)
-      if (document.getElementById('id_planned_date')) {
-        flatpickr("#id_planned_date", {
+      const plannedInput = document.getElementById('id_planned_date');
+      let plannedPicker = null;
+      if (plannedInput) {
+        plannedPicker = flatpickr("#id_planned_date", {
           enableTime: true,
           time_24hr: true,
           minuteIncrement: 5,
@@ -159,6 +167,18 @@
             date => date.getDay() === 0
           ]
         });
+
+        // Calendar icon opens the picker
+        const icon = document.getElementById('planned_date_icon');
+        if (icon) {
+          icon.addEventListener('click', function() {
+            if (plannedPicker && plannedPicker.open) {
+              plannedPicker.open();
+            } else {
+              plannedInput.focus();
+            }
+          });
+        }
       }
     });
   </script>

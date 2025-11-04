@@ -1,4 +1,3 @@
-# apps/tasks/models.py
 from datetime import timedelta
 from django.db import models
 from django.contrib.auth import get_user_model
@@ -248,12 +247,21 @@ class Delegation(models.Model):
     doer_notes = models.TextField(blank=True, null=True)
 
     actual_duration_minutes = models.PositiveIntegerField(null=True, blank=True)
+
+    # NEW: one-shot reminder configuration for Delegation
+    set_reminder = models.BooleanField(default=False)
+    # Absolute reminder time (when the reminder should fire)
+    reminder_time = models.DateTimeField(null=True, blank=True)
+    # When the reminder was actually sent (for status / de-duplication)
+    reminder_sent_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         indexes = [
             models.Index(fields=['assign_to', 'status', 'planned_date']),
             models.Index(fields=['is_skipped_due_to_leave', 'planned_date']),
+            models.Index(fields=['status', 'set_reminder', 'reminder_time']),
         ]
 
     # ---- Dashboard helper (no mixin import)
@@ -274,7 +282,26 @@ class Delegation(models.Model):
     def is_recurring(self):
         return False
 
+    @property
+    def reminder_status(self) -> str:
+        """
+        Helper for templates / UI:
+
+        - "Not Set"    → no reminder configured
+        - "Active"     → reminder configured, not yet fired
+        - "Triggered"  → reminder fired but task still pending
+        - "Completed"  → task completed (regardless of reminder)
+        """
+        if not self.set_reminder or not self.reminder_time:
+            return "Not Set"
+        if self.status == "Completed":
+            return "Completed"
+        if self.reminder_sent_at:
+            return "Triggered"
+        return "Active"
+
     def clean(self):
+        # Delegations are non-recurring; blank out any mode/frequency
         self.mode = None
         self.frequency = None
         super().clean()
@@ -294,6 +321,11 @@ class Delegation(models.Model):
         # auto set completion timestamp
         if self.status == 'Completed' and not self.completed_at:
             self.completed_at = timezone.now()
+
+        # If reminder is disabled, clear the reminder_time so scheduler ignores it
+        if not self.set_reminder:
+            self.reminder_time = None
+            # reminder_sent_at kept as audit if already fired
 
         self.full_clean()
         super().save(*args, **kwargs)

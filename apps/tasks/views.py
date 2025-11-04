@@ -28,8 +28,8 @@ from django.utils import timezone
 from apps.users.permissions import has_permission
 from apps.settings.models import Holiday
 
-# >>> NEW: pull in handover utilities
-from apps.leave.models import LeaveHandover, LeaveStatus  # <-- kept (used elsewhere)
+# >>> NEW: import LeaveRequest for blocking checks (immediate leave blocking)
+from apps.leave.models import LeaveHandover, LeaveStatus, LeaveRequest  # <-- added LeaveRequest
 
 from .forms import (
     BulkUploadForm,
@@ -58,6 +58,7 @@ ASSIGN_HOUR = 10
 ASSIGN_MINUTE = 0
 
 SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
+SEND_RECUR_EMAILS_ONLY_AT_10AM = getattr(settings, "SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
 RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
 
 BULK_BATCH_SIZE = 500
@@ -156,6 +157,17 @@ def next_working_day(d: date) -> date:
     return d
 
 
+# >>> NEW: helper — next working day that also skips the assignee's leave window
+def next_working_day_skip_leaves(assign_to: User, d: date) -> date:
+    """Advance to next date that is not Sunday/holiday and not blocked by user's leave."""
+    # Protect against runaway loops
+    for _ in range(0, 120):
+        if is_working_day(d) and not LeaveRequest.is_user_blocked_on(assign_to, d):
+            return d
+        d += timedelta(days=1)
+    return d
+
+
 def day_bounds(d: date):
     tz = timezone.get_current_timezone()
     start = timezone.make_aware(datetime.combine(d, dt_time.min), tz)
@@ -233,11 +245,11 @@ def _get_handover_rows_for_user(user, today_date):
     handovers = (
         LeaveHandover.objects
         .filter(
-            new_assignee=user,
-            is_active=True,
-            effective_start_date__lte=today_date,
-            effective_end_date__gte=today_date,
-            leave_request__status="APPROVED",
+                new_assignee=user,
+                is_active=True,
+                effective_start_date__lte=today_date,
+                effective_end_date__gte=today_date,
+                leave_request__status="APPROVED",
         )
         .select_related("leave_request", "original_assignee", "new_assignee")
         .order_by("id")
@@ -291,7 +303,21 @@ def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     if task_date > today:
         return False
     anchor_10am = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
-    return (now_ist >= dt_ist) or (now_ist >= anchor_10am)
+    return (now_ist >= anchor_10am)
+
+# NEW: apply same dashboard gating for delegations & help tickets
+def _should_show_today_or_past(task_dt: datetime, now_ist: datetime) -> bool:
+    if not task_dt:
+        return False
+    dt_ist = task_dt.astimezone(IST) if timezone.is_aware(task_dt) else IST.localize(task_dt)
+    d = dt_ist.date()
+    today = now_ist.date()
+    if d < today:
+        return True
+    if d > today:
+        return False
+    anchor_10am = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
+    return now_ist >= anchor_10am
 
 
 def parse_datetime_flexible(value):
@@ -517,6 +543,13 @@ def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, star
                 continue
             planned_dt = preserve_first_occurrence_time(planned_dt)
 
+            # Enforce holiday/leave blocking for bulk uploads (shift forward)
+            planned_ist_date = planned_dt.astimezone(IST).date()
+            safe_date = next_working_day_skip_leaves(assign_to, planned_ist_date)
+            if safe_date != planned_ist_date:
+                # Move to next valid date at 19:00 IST
+                planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(timezone.get_current_timezone())
+
             message = _clean_str(row.get("Message"))
             priority = (_clean_str(row.get("Priority")) or "Low").title()
             if priority not in ["Low", "Medium", "High"]:
@@ -635,6 +668,12 @@ def process_delegation_batch_excel_ultra_optimized(batch_df, assign_by_user, sta
                 continue
             planned_dt = preserve_first_occurrence_time(planned_dt)
 
+            # Shift to next safe day (holiday + leave)
+            planned_ist_date = planned_dt.astimezone(IST).date()
+            safe_date = next_working_day_skip_leaves(assign_to, planned_ist_date)
+            if safe_date != planned_ist_date:
+                planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(timezone.get_current_timezone())
+
             priority = (_clean_str(row.get("Priority")) or "Low").title()
             if priority not in ["Low", "Medium", "High"]:
                 priority = "Low"
@@ -737,6 +776,13 @@ def process_delegation_bulk_upload_excel_friendly(file, assign_by_user):
 
 
 def _send_bulk_emails_by_ids(task_ids, *, task_type: str):
+    """
+    NOTE: We now respect SEND_RECUR_EMAILS_ONLY_AT_10AM.
+    If True (default), we DO NOT send immediate assignee emails here; 10AM schedulers/signals will handle it.
+    """
+    if SEND_RECUR_EMAILS_ONLY_AT_10AM:
+        return  # skip immediate fan-out; rely on 10 AM flow
+
     Model = Checklist if task_type == "Checklist" else Delegation
     CHUNK = 100
     for i in range(0, len(task_ids), CHUNK):
@@ -753,14 +799,14 @@ def _send_bulk_emails_by_ids(task_ids, *, task_type: str):
                     send_checklist_assignment_to_user(
                         task=task,
                         complete_url=complete_url,
-                        subject_prefix="Bulk Upload - Checklist Assigned",
+                        subject_prefix=f"Today’s Checklist – {task.task_name}",
                     )
                 else:
                     complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[task.id])}"
                     send_delegation_assignment_to_user(
                         delegation=task,
                         complete_url=complete_url,
-                        subject_prefix="Bulk Upload - Delegation Assigned",
+                        subject_prefix=f"Today’s Delegation – {task.task_name} (due 7 PM)",
                     )
             except Exception as e:
                 logger.error("Failed to send email for %s %s: %s", task_type, getattr(task, "id", "?"), e)
@@ -904,19 +950,29 @@ def add_checklist(request):
         form = ChecklistForm(request.POST, request.FILES)
         if form.is_valid():
             planned_date = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
+            assignee = form.cleaned_data.get("assign_to")
+
+            # hard-block holidays and leave
+            ist_day = planned_date.astimezone(IST).date() if planned_date else None
+            if ist_day and not is_working_day(ist_day):
+                messages.error(request, "This day is holiday")
+                return render(request, "tasks/add_checklist.html", {"form": form})
+            if assignee and ist_day and LeaveRequest.is_user_blocked_on(assignee, ist_day):
+                messages.error(request, "Assignee is on leave during this period.")
+                return render(request, "tasks/add_checklist.html", {"form": form})
+
             obj = form.save(commit=False)
             obj.planned_date = planned_date
             obj.save()
             form.save_m2m()
 
-            complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
+            # DO NOT send assignee email immediately; 10 AM scheduler will do it.
             try:
-                send_checklist_assignment_to_user(task=obj, complete_url=complete_url, subject_prefix="New Checklist Task Assigned")
                 send_checklist_admin_confirmation(task=obj, subject_prefix="Checklist Task Assignment")
             except Exception as e:
-                logger.error("Assignment emails failed: %s", e)
+                logger.error("Admin confirmation email failed: %s", e)
 
-            messages.success(request, f"Checklist task '{obj.task_name}' created and assigned successfully!")
+            messages.success(request, f"Checklist task '{obj.task_name}' created and will notify the assignee at 10:00 AM on the due day.")
             return redirect("tasks:list_checklist")
     else:
         form = ChecklistForm(initial={"assign_by": request.user})
@@ -931,24 +987,33 @@ def edit_checklist(request, pk):
         form = ChecklistForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
             planned_date = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
+            assignee = form.cleaned_data.get("assign_to")
+
+            # block rescheduling to holidays / leave
+            ist_day = planned_date.astimezone(IST).date() if planned_date else None
+            if ist_day and not is_working_day(ist_day):
+                messages.error(request, "This day is holiday")
+                return render(request, "tasks/add_checklist.html", {"form": form})
+            if assignee and ist_day and LeaveRequest.is_user_blocked_on(assignee, ist_day):
+                messages.error(request, "Assignee is on leave during this period.")
+                return render(request, "tasks/add_checklist.html", {"form": form})
+
             obj2 = form.save(commit=False)
             obj2.planned_date = planned_date
             obj2.save()
             form.save_m2m()
 
-            complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj2.id])}"
+            # Do not email assignee immediately; only admin confirmations + old-assignee notice if changed
             try:
                 if old_assignee and obj2.assign_to_id != old_assignee.id:
                     send_checklist_unassigned_notice(task=obj2, old_user=old_assignee)
-                    send_checklist_assignment_to_user(task=obj2, complete_url=complete_url, subject_prefix="Checklist Task Reassigned")
                     send_checklist_admin_confirmation(task=obj2, subject_prefix="Checklist Task Reassigned")
                 else:
-                    send_checklist_assignment_to_user(task=obj2, complete_url=complete_url, subject_prefix="Checklist Task Updated")
                     send_checklist_admin_confirmation(task=obj2, subject_prefix="Checklist Task Updated")
             except Exception as e:
                 logger.error("Update emails failed: %s", e)
 
-            messages.success(request, f"Checklist task '{obj2.task_name}' updated successfully!")
+            messages.success(request, f"Checklist task '{obj2.task_name}' updated successfully! Assignee will be notified at 10:00 AM on the due day.")
             return redirect("tasks:list_checklist")
     else:
         form = ChecklistForm(instance=obj)
@@ -976,16 +1041,15 @@ def reassign_checklist(request, pk):
             obj.assign_to = User.objects.get(pk=uid)
             obj.save()
 
-            complete_url = f"{site_url}{reverse('tasks:complete_checklist', args=[obj.id])}"
+            # No immediate assignee email; keep old-assignee notice + admin confirmation
             try:
-                send_checklist_assignment_to_user(task=obj, complete_url=complete_url, subject_prefix="Checklist Task Reassigned")
                 if old_assignee and old_assignee.id != obj.assign_to_id:
                     send_checklist_unassigned_notice(task=obj, old_user=old_assignee)
                 send_checklist_admin_confirmation(task=obj, subject_prefix="Checklist Task Reassigned")
             except Exception as e:
                 logger.error("Reassignment emails failed: %s", e)
 
-            messages.success(request, f"Task reassigned to {obj.assign_to.get_full_name() or obj.assign_to.username}")
+            messages.success(request, f"Task reassigned to {obj.assign_to.get_full_name() or obj.assign_to.username} (assignee will be notified at 10:00 AM on the due day).")
             return redirect("tasks:list_checklist")
     return render(request, "tasks/reassign_checklist.html", {"object": obj, "all_users": User.objects.filter(is_active=True).order_by("username")})
 
@@ -1046,19 +1110,25 @@ def add_delegation(request):
         form = DelegationForm(request.POST, request.FILES)
         if form.is_valid():
             planned_dt = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
+            assignee = form.cleaned_data.get("assign_to")
+
+            # hard-block holidays and leave
+            ist_day = planned_dt.astimezone(IST).date() if planned_dt else None
+            if ist_day and not is_working_day(ist_day):
+                messages.error(request, "This day is holiday")
+                return render(request, "tasks/add_delegation.html", {"form": form})
+            if assignee and ist_day and LeaveRequest.is_user_blocked_on(assignee, ist_day):
+                messages.error(request, "Assignee is on leave during this period.")
+                return render(request, "tasks/add_delegation.html", {"form": form})
+
             obj = form.save(commit=False)
             obj.planned_date = planned_dt
             obj.mode = None
             obj.frequency = None
             obj.save()
 
-            complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[obj.id])}"
-            try:
-                send_delegation_assignment_to_user(delegation=obj, complete_url=complete_url, subject_prefix="New Delegation Task Assigned")
-            except Exception as e:
-                logger.error("Delegation assignment email failed: %s", e)
-
-            messages.success(request, f"Delegation task '{obj.task_name}' created and assigned successfully!")
+            # DO NOT email assignee immediately; 10 AM scheduler handles it.
+            messages.success(request, f"Delegation task '{obj.task_name}' created. Assignee will be notified at 10:00 AM on the due day.")
             return redirect("tasks:list_delegation")
     else:
         form = DelegationForm(initial={"assign_by": request.user})
@@ -1132,12 +1202,23 @@ def edit_delegation(request, pk):
         form = DelegationForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
             planned_dt = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
+            assignee = form.cleaned_data.get("assign_to")
+
+            # block rescheduling to holidays / leave
+            ist_day = planned_dt.astimezone(IST).date() if planned_dt else None
+            if ist_day and not is_working_day(ist_day):
+                messages.error(request, "This day is holiday")
+                return render(request, "tasks/add_delegation.html", {"form": form})
+            if assignee and ist_day and LeaveRequest.is_user_blocked_on(assignee, ist_day):
+                messages.error(request, "Assignee is on leave during this period.")
+                return render(request, "tasks/add_delegation.html", {"form": form})
+
             obj2 = form.save(commit=False)
             obj2.planned_date = planned_dt
             obj2.mode = None
             obj2.frequency = None
             obj2.save()
-            messages.success(request, f"Delegation task '{obj2.task_name}' updated successfully!")
+            messages.success(request, f"Delegation task '{obj2.task_name}' updated successfully! Assignee will be notified at 10:00 AM on the due day.")
             return redirect("tasks:list_delegation")
     else:
         form = DelegationForm(instance=obj)
@@ -1154,50 +1235,79 @@ def delete_delegation(request, pk):
     return render(request, "tasks/confirm_delete.html", {"object": obj, "type": "Delegation"})
 
 
+# >>> complete view for delegations
+@login_required
+def complete_delegation(request, pk):
+    obj = get_object_or_404(Delegation, pk=pk)
+    if obj.assign_to_id and obj.assign_to_id != request.user.id and not (request.user.is_staff or request.user.is_superuser):
+        messages.error(request, "You are not the assignee of this task.")
+        return redirect(request.GET.get("next", "dashboard:home"))
+
+    if request.method == "GET":
+        form = CompleteDelegationForm(instance=obj)
+        return render(request, "tasks/complete_delegation.html", {"form": form, "object": obj})
+
+    def _complete_once():
+        with transaction.atomic():
+            current = Delegation.objects.select_for_update(nowait=True).get(pk=pk)
+            form = CompleteDelegationForm(request.POST, request.FILES, instance=current)
+            if current.attachment_mandatory and not request.FILES.get("doer_file") and not current.doer_file:
+                form.add_error("doer_file", "Attachment is required for this task.")
+            if not form.is_valid():
+                return form, None
+            now = timezone.now()
+            actual_minutes = _minutes_between(now, current.planned_date) if current.planned_date else 0
+            inst = form.save(commit=False)
+            inst.status = "Completed"
+            inst.completed_at = now
+            inst.actual_duration_minutes = actual_minutes
+            inst.save()
+            return None, inst
+
+    for attempt in range(3):
+        try:
+            invalid_form, completed = _complete_once()
+            if invalid_form:
+                return render(request, "tasks/complete_delegation.html", {"form": invalid_form, "object": obj})
+            break
+        except OperationalError as e:
+            if "locked" in str(e).lower() and attempt < 2:
+                time.sleep(0.1 * (2 ** attempt))
+                continue
+            logger.error("complete_delegation failed after retries: %s", e)
+            messages.error(request, "The task completion is taking longer than expected. Please try again.")
+            return redirect(request.GET.get("next", "dashboard:home"))
+        except Exception as e:
+            logger.error("Unexpected completion error (delegation): %s", e)
+            messages.error(request, "An unexpected error occurred. Please try again.")
+            return redirect(request.GET.get("next", "dashboard:home"))
+
+    messages.success(request, f"✅ Delegation '{completed.task_name}' completed successfully!")
+    return redirect(request.GET.get("next", "dashboard:home"))
+
+
+# >>> reassign view for delegations (no immediate assignee email)
 @has_permission("list_delegation")
 def reassign_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
     if request.method == "POST":
         uid = request.POST.get("assign_to")
         if uid:
+            old_assignee = obj.assign_to
             obj.assign_to = User.objects.get(pk=uid)
             obj.save()
-            messages.success(request, "Delegation task reassigned successfully!")
+
+            messages.success(
+                request,
+                f"Delegation task reassigned to {obj.assign_to.get_full_name() or obj.assign_to.username} (assignee will be notified at 10:00 AM on the due day)."
+            )
             return redirect("tasks:list_delegation")
-    return render(request, "tasks/reassign_delegation.html", {"object": obj, "all_users": User.objects.filter(is_active=True).order_by("username")})
 
-
-@login_required
-def complete_delegation(request, pk):
-    obj = get_object_or_404(Delegation, pk=pk)
-    if obj.assign_to_id and obj.assign_to_id != request.user.id and not (request.user.is_staff or request.user.is_superuser):
-        messages.error(request, "You are not the assignee of this task.")
-        return redirect(request.GET.get("next") or (reverse("dashboard:home") + "?task_type=delegation"))
-
-    if request.method == "GET":
-        form = CompleteDelegationForm(instance=obj)
-        return render(request, "tasks/complete_delegation.html", {"form": form, "object": obj})
-
-    try:
-        with transaction.atomic():
-            obj = Delegation.objects.select_for_update().get(pk=pk)
-            form = CompleteDelegationForm(request.POST, request.FILES, instance=obj)
-            if obj.attachment_mandatory and not request.FILES.get("doer_file") and not obj.doer_file:
-                form.add_error("doer_file", "Attachment is required for this task.")
-            if not form.is_valid():
-                return render(request, "tasks/complete_delegation.html", {"form": form, "object": obj})
-            now = timezone.now()
-            actual_minutes = _minutes_between(now, obj.planned_date) if obj.planned_date else 0
-            inst = form.save(commit=False)
-            inst.status = "Completed"
-            inst.completed_at = now
-            inst.actual_duration_minutes = actual_minutes
-            inst.save()
-        messages.success(request, f"Delegation task '{obj.task_name}' marked as completed successfully!")
-    except Exception as e:
-        logger.error("Error completing delegation %s: %s", pk, e)
-        messages.error(request, "An error occurred while completing the task. Please try again.")
-    return redirect(request.GET.get("next") or (reverse("dashboard:home") + "?task_type=delegation"))
+    return render(
+        request,
+        "tasks/reassign_delegation.html",
+        {"object": obj, "all_users": User.objects.filter(is_active=True).order_by("username")}
+    )
 
 
 @login_required
@@ -1210,13 +1320,21 @@ def add_help_ticket(request):
             if planned_date_local and not is_working_day(planned_date_local):
                 messages.error(request, "This is holiday date, you can not add on this day.")
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "add", "can_create": can_create(request.user)})
+
+            # block help tickets on leave windows as well
+            assignee = form.cleaned_data.get("assign_to")
+            if assignee and planned_date_local and LeaveRequest.is_user_blocked_on(assignee, planned_date_local):
+                messages.error(request, "Assignee is on leave during this period.")
+                return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "add", "can_create": can_create(request.user)})
+
             ticket = form.save(commit=False)
             ticket.assign_by = request.user
             ticket.save()
 
             complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
             try:
-                send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="New Help Ticket Assigned")
+                # Help tickets remain immediate-email
+                send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Assigned")
                 send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Assignment")
             except Exception as e:
                 logger.error("Help-ticket assignment emails failed: %s", e)
@@ -1239,6 +1357,12 @@ def edit_help_ticket(request, pk):
             planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
             if planned_date_local and not is_working_day(planned_date_local):
                 messages.error(request, "This is holiday date, you can not add on this day.")
+                return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "edit", "can_create": can_create(request.user)})
+
+            # block on leave
+            assignee = form.cleaned_data.get("assign_to")
+            if assignee and planned_date_local and LeaveRequest.is_user_blocked_on(assignee, planned_date_local):
+                messages.error(request, "Assignee is on leave during this period.")
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "edit", "can_create": can_create(request.user)})
 
             ticket = form.save()
@@ -1485,9 +1609,10 @@ def bulk_upload(request):
             messages.success(
                 request,
                 f"Bulk Upload Complete: Created {count_created} {task_type_name} task(s) in {processing_time}s. "
-                f"Assignment emails are being sent in the background."
+                f"Assignees will be notified at 10:00 AM on the due day."
             )
 
+            # Respect 10AM-only policy when configured (default True)
             kick_off_bulk_emails_async(created_tasks, task_type_name)
 
             try:
@@ -1656,6 +1781,7 @@ def dashboard_home(request):
     handed_over = _get_handover_rows_for_user(request.user, today_ist)
 
     try:
+        # CHECKLISTS
         if today_only:
             base_checklists = list(
                 Checklist.objects
@@ -1697,6 +1823,7 @@ def dashboard_home(request):
                 if getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist)
             ]
 
+        # DELEGATIONS
         if today_only:
             base_delegations = list(
                 Delegation.objects.filter(
@@ -1724,6 +1851,12 @@ def dashboard_home(request):
         else:
             delegation_qs = base_delegations
 
+        if not today_only:
+            delegation_qs = [d for d in delegation_qs if getattr(d, 'is_handover', False) or _should_show_today_or_past(d.planned_date, now_ist)]
+        else:
+            delegation_qs = [d for d in delegation_qs if _ist_date(d.planned_date) == today_ist and (getattr(d, 'is_handover', False) or _should_show_today_or_past(d.planned_date, now_ist))]
+
+        # HELP TICKETS
         if today_only:
             base_help = list(
                 HelpTicket.objects.filter(
@@ -1751,6 +1884,11 @@ def dashboard_home(request):
         else:
             help_ticket_qs = base_help
 
+        if not today_only:
+            help_ticket_qs = [h for h in help_ticket_qs if getattr(h, 'is_handover', False) or _should_show_today_or_past(h.planned_date, now_ist)]
+        else:
+            help_ticket_qs = [h for h in help_ticket_qs if _ist_date(h.planned_date) == today_ist and (getattr(h, 'is_handover', False) or _should_show_today_or_past(h.planned_date, now_ist))]
+
         logger.info(_safe_console_text(
             f"Dashboard filtering for {request.user.username}: today_only={today_only} | "
             f"checklists={len(checklist_qs)} delegations={len(delegation_qs)} help_tickets={len(help_ticket_qs)} | "
@@ -1762,6 +1900,7 @@ def dashboard_home(request):
         delegation_qs = []
         help_ticket_qs = []
 
+    selected = request.GET.get('task_type')
     if selected == 'delegation':
         tasks = delegation_qs
     elif selected == 'help_ticket':

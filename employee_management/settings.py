@@ -1,3 +1,4 @@
+# employee_management/settings.py
 import os
 import sqlite3
 from pathlib import Path
