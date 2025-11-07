@@ -1,0 +1,25 @@
+Manager Action on Reimbursement #{{ request_id }}
+
+Hello {{ employee_name }},
+
+{% if decision == "approve" %}
+Your reimbursement request has been APPROVED by your manager.
+{% elif decision == "reject" %}
+Your reimbursement request has been REJECTED by your manager.
+{% else %}
+Your manager has requested CLARIFICATION on your reimbursement request.
+{% endif %}
+
+Total Amount: ₹ {{ total_amount }}
+Current Status: {{ status_label }}
+
+{% if manager_comment %}
+Manager Comment:
+{{ manager_comment }}
+{% endif %}
+
+View details:
+{{ detail_url }}
+
+Regards,
+BOS Lakshya

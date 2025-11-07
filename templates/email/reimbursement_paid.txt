@@ -1,0 +1,16 @@
+Reimbursement Paid - #{{ request_id }}
+
+Hello {{ employee_name }},
+
+Your reimbursement request has been marked as PAID.
+
+Total Amount: ₹ {{ total_amount }}
+Status: {{ status_label }}
+Paid At: {{ paid_at }}
+Payment Reference: {{ payment_reference|default:"-" }}
+
+View details:
+{{ detail_url }}
+
+Regards,
+BOS Lakshya

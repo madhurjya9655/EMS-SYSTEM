@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+{% block title %}Reimbursement Settings & Approver Mapping{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Reimbursement – Settings & Approver Mapping</h2>
+</div>
+
+<div class="row">
+  <!-- LEFT COLUMN: SETTINGS + BULK APPLY -->
+  <div class="col-md-4">
+    <!-- Reimbursement Settings -->
+    <div class="card mb-3">
+      <div class="card-header">Reimbursement Settings</div>
+      <div class="card-body">
+        <form method="post">
+          {% csrf_token %}
+
+          <!-- Admin / Finance / Management emails -->
+          <h6 class="text-muted">Email Recipients</h6>
+          <div class="mb-3">
+            {{ settings_form.admin_emails.label_tag }}
+            {{ settings_form.admin_emails }}
+            {% if settings_form.admin_emails.help_text %}
+              <div class="form-text">{{ settings_form.admin_emails.help_text }}</div>
+            {% endif %}
+            {% if settings_form.admin_emails.errors %}
+              <div class="text-danger small">{{ settings_form.admin_emails.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="mb-3">
+            {{ settings_form.finance_emails.label_tag }}
+            {{ settings_form.finance_emails }}
+            {% if settings_form.finance_emails.help_text %}
+              <div class="form-text">{{ settings_form.finance_emails.help_text }}</div>
+            {% endif %}
+            {% if settings_form.finance_emails.errors %}
+              <div class="text-danger small">{{ settings_form.finance_emails.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="mb-3">
+            {{ settings_form.management_emails.label_tag }}
+            {{ settings_form.management_emails }}
+            {% if settings_form.management_emails.help_text %}
+              <div class="form-text">{{ settings_form.management_emails.help_text }}</div>
+            {% endif %}
+            {% if settings_form.management_emails.errors %}
+              <div class="text-danger small">{{ settings_form.management_emails.errors }}</div>
+            {% endif %}
+          </div>
+
+          <hr class="my-3">
+
+          <!-- Workflow / policy flags -->
+          <h6 class="text-muted">Workflow & Policy</h6>
+          <div class="form-check mb-2">
+            {{ settings_form.require_management_approval }}
+            {{ settings_form.require_management_approval.label_tag }}
+            {% if settings_form.require_management_approval.help_text %}
+              <div class="form-text">{{ settings_form.require_management_approval.help_text }}</div>
+            {% endif %}
+            {% if settings_form.require_management_approval.errors %}
+              <div class="text-danger small">{{ settings_form.require_management_approval.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="form-check mb-2">
+            {{ settings_form.daily_digest_enabled }}
+            {{ settings_form.daily_digest_enabled.label_tag }}
+            {% if settings_form.daily_digest_enabled.help_text %}
+              <div class="form-text">{{ settings_form.daily_digest_enabled.help_text }}</div>
+            {% endif %}
+            {% if settings_form.daily_digest_enabled.errors %}
+              <div class="text-danger small">{{ settings_form.daily_digest_enabled.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="mb-3">
+            {{ settings_form.digest_hour_local.label_tag }}
+            {{ settings_form.digest_hour_local }}
+            {% if settings_form.digest_hour_local.help_text %}
+              <div class="form-text">{{ settings_form.digest_hour_local.help_text }}</div>
+            {% endif %}
+            {% if settings_form.digest_hour_local.errors %}
+              <div class="text-danger small">{{ settings_form.digest_hour_local.errors }}</div>
+            {% endif %}
+          </div>
+
+          <hr class="my-3">
+
+          <!-- Global approval chain (Level-1 / Level-2 + CC/BCC) -->
+          <h6 class="text-muted">Approval Chain (Email Routing)</h6>
+          <div class="mb-3">
+            {{ settings_form.approver_level1_email.label_tag }}
+            {{ settings_form.approver_level1_email }}
+            {% if settings_form.approver_level1_email.help_text %}
+              <div class="form-text">{{ settings_form.approver_level1_email.help_text }}</div>
+            {% endif %}
+            {% if settings_form.approver_level1_email.errors %}
+              <div class="text-danger small">{{ settings_form.approver_level1_email.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="mb-3">
+            {{ settings_form.approver_level2_email.label_tag }}
+            {{ settings_form.approver_level2_email }}
+            {% if settings_form.approver_level2_email.help_text %}
+              <div class="form-text">{{ settings_form.approver_level2_email.help_text }}</div>
+            {% endif %}
+            {% if settings_form.approver_level2_email.errors %}
+              <div class="text-danger small">{{ settings_form.approver_level2_email.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="mb-3">
+            {{ settings_form.approver_cc_emails.label_tag }}
+            {{ settings_form.approver_cc_emails }}
+            {% if settings_form.approver_cc_emails.help_text %}
+              <div class="form-text">{{ settings_form.approver_cc_emails.help_text }}</div>
+            {% endif %}
+            {% if settings_form.approver_cc_emails.errors %}
+              <div class="text-danger small">{{ settings_form.approver_cc_emails.errors }}</div>
+            {% endif %}
+          </div>
+          <div class="mb-3">
+            {{ settings_form.approver_bcc_emails.label_tag }}
+            {{ settings_form.approver_bcc_emails }}
+            {% if settings_form.approver_bcc_emails.help_text %}
+              <div class="form-text">{{ settings_form.approver_bcc_emails.help_text }}</div>
+            {% endif %}
+            {% if settings_form.approver_bcc_emails.errors %}
+              <div class="text-danger small">{{ settings_form.approver_bcc_emails.errors }}</div>
+            {% endif %}
+          </div>
+
+          <button type="submit" name="save_settings" value="1" class="btn btn-primary w-100">
+            Save Settings
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Bulk apply manager / finance -->
+    <div class="card mb-3">
+      <div class="card-header">Bulk Apply Manager / Finance</div>
+      <div class="card-body">
+        <form method="post">
+          {% csrf_token %}
+          {{ bulk_form.non_field_errors }}
+
+          <div class="form-check mb-2">
+            {{ bulk_form.apply_manager_to_all }}
+            {{ bulk_form.apply_manager_to_all.label_tag }}
+            {% if bulk_form.apply_manager_to_all.errors %}
+              <div class="text-danger small">{{ bulk_form.apply_manager_to_all.errors }}</div>
+            {% endif %}
+          </div>
+
+          <div class="mb-3">
+            {{ bulk_form.manager_for_all.label_tag }}
+            {{ bulk_form.manager_for_all }}
+            {% if bulk_form.manager_for_all.errors %}
+              <div class="text-danger small">{{ bulk_form.manager_for_all.errors }}</div>
+            {% endif %}
+          </div>
+
+          <div class="form-check mb-2">
+            {{ bulk_form.apply_finance_to_all }}
+            {{ bulk_form.apply_finance_to_all.label_tag }}
+            {% if bulk_form.apply_finance_to_all.errors %}
+              <div class="text-danger small">{{ bulk_form.apply_finance_to_all.errors }}</div>
+            {% endif %}
+          </div>
+
+          <div class="mb-3">
+            {{ bulk_form.finance_for_all.label_tag }}
+            {{ bulk_form.finance_for_all }}
+            {% if bulk_form.finance_for_all.errors %}
+              <div class="text-danger small">{{ bulk_form.finance_for_all.errors }}</div>
+            {% endif %}
+          </div>
+
+          <button type="submit" name="apply_bulk" value="1" class="btn btn-outline-primary w-100">
+            Apply Bulk Mapping
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT COLUMN: PER-EMPLOYEE MAPPING GRID -->
+  <div class="col-md-8">
+    <div class="card mb-3">
+      <div class="card-header">
+        Per-Employee Approver Mapping
+      </div>
+      <div class="card-body">
+        <form method="post">
+          {% csrf_token %}
+          <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th>Employee</th>
+                  <th>Role</th>
+                  <th>Manager</th>
+                  <th>Finance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in rows %}
+                {% with user=row.user mapping=row.mapping %}
+                <tr>
+                  <td>
+                    {{ user.get_full_name|default:user.username }}
+                    <div class="small text-muted">{{ user.email }}</div>
+                  </td>
+                  <td>
+                    {% if user.profile %}
+                      {{ user.profile.role }}
+                    {% else %}
+                      <span class="text-muted small">-</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    <select name="manager_{{ user.id }}" class="form-select form-select-sm">
+                      <option value="">-- None --</option>
+                      {% for u in all_users_for_select %}
+                      <option value="{{ u.id }}"
+                        {% if mapping and mapping.manager and mapping.manager.id == u.id %}selected{% endif %}>
+                        {{ u.get_full_name|default:u.username }}
+                      </option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                  <td>
+                    <select name="finance_{{ user.id }}" class="form-select form-select-sm">
+                      <option value="">-- None --</option>
+                      {% for u in all_users_for_select %}
+                      <option value="{{ u.id }}"
+                        {% if mapping and mapping.finance and mapping.finance.id == u.id %}selected{% endif %}>
+                        {{ u.get_full_name|default:u.username }}
+                      </option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                </tr>
+                {% endwith %}
+                {% empty %}
+                <tr>
+                  <td colspan="4" class="text-center text-muted py-3">
+                    No users found.
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <button type="submit" name="save_mappings" value="1" class="btn btn-primary mt-2">
+            Save Mappings
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

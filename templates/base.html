@@ -82,10 +82,23 @@
       font-family:"Plus Jakarta Sans",system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
       -webkit-font-smoothing:antialiased;
       -moz-osx-font-smoothing:grayscale;
-      overflow-x:hidden;   /* prevent horizontal scroll on mobile */
+      overflow-x:hidden;
     }
     a{color:inherit;text-decoration:none}
     a:hover{text-decoration:none}
+
+    /* Utility: visually hidden (for accessibility labels) */
+    .visually-hidden{
+      position:absolute !important;
+      width:1px;
+      height:1px;
+      padding:0;
+      margin:-1px;
+      overflow:hidden;
+      clip:rect(0,0,0,0);
+      white-space:nowrap;
+      border:0;
+    }
 
     /* Focus */
     :focus-visible{
@@ -205,7 +218,7 @@
     }
     .nav-item i{width:18px;margin-right:.6rem}
     .nav-item:hover{
-      background:#eef4ff;
+      background:#eef2ff;
       color:var(--primary);
       transform:translateX(2px);
     }
@@ -270,7 +283,6 @@
       color:var(--text);
     }
 
-    /* Cards & content blocks */
     .card{
       background:var(--surface);
       border:1px solid var(--border);
@@ -282,14 +294,15 @@
       border-bottom:1px solid var(--border);
     }
 
-    /* Alerts */
     .alert{border-radius:10px;border:1px solid var(--border)}
     .alert-info{background:#eef4ff}
     @media (prefers-color-scheme: dark){
       .alert-info{background:rgba(148,163,184,.18);color:var(--text);}
+      .alert-success{background:rgba(22,163,74,.25);color:#bbf7d0;}
+      .alert-warning{background:rgba(234,179,8,.25);color:#facc15;}
+      .alert-danger,.alert-error{background:rgba(220,38,38,.25);color:#fecaca;}
     }
 
-    /* Footer */
     footer{
       background:var(--surface);
       border-top:1px solid var(--border);
@@ -300,7 +313,6 @@
       margin-top:1.25rem;
     }
 
-    /* Overlay (mobile) */
     .sidebar-overlay{
       display:none;
       position:fixed;
@@ -314,7 +326,6 @@
     .sidebar.show ~ .sidebar-overlay,
     .sidebar-overlay.show{display:block}
 
-    /* Skip link */
     .skip-link{
       position:absolute;
       left:-9999px;
@@ -330,9 +341,6 @@
       z-index:1100;
     }
 
-    /* =========================
-       FORMS & BUTTONS
-       ========================= */
     .form-label{font-weight:500;color:var(--text);}
     .form-text{color:var(--muted);font-size:.8rem;}
 
@@ -384,12 +392,6 @@
       font-size:.9rem;
     }
 
-    /* =========================
-       GENERIC RESPONSIVE HELPERS
-       (tabs / button groups / tables)
-       ========================= */
-
-    /* Make nav-tabs (page-level tab buttons) wrap nicely on phones */
     .nav-tabs{
       border-bottom:1px solid var(--border);
       flex-wrap:nowrap;
@@ -409,8 +411,6 @@
         flex:1 1 100%;
         text-align:center;
       }
-
-      /* Button toolbars / groups (like +Add Employee, Manage CC Options) */
       .btn-toolbar,
       .btn-group{
         flex-wrap:wrap;
@@ -420,14 +420,9 @@
         flex:1 1 100%;
         margin-bottom:.4rem;
       }
-
-      /* Tables inside pages: allow horizontal scroll instead of breaking layout */
       .table-responsive{overflow-x:auto;}
     }
 
-    /* =========================
-       RESPONSIVE
-       ========================= */
     @media (max-width:1024px){
       :root{ --sidebar-w:260px }
       .header{padding:0 .75rem}
@@ -448,7 +443,6 @@
       .page-header{padding:1rem}
     }
 
-    /* Reduced motion */
     @media (prefers-reduced-motion: reduce){
       *{scroll-behavior:auto !important}
       .nav-item:hover{transform:none}
@@ -468,7 +462,7 @@
         </button>
         <div class="logo-icon">
           <img src="{% static 'images/bos logo.png' %}" alt="BOS Lakshya logo" loading="lazy" decoding="async">
-          </div>
+        </div>
         <span class="logo-text">BOS Lakshya</span>
       </div>
 
@@ -649,27 +643,41 @@
         </div>
         {% endif %}
 
-        {% if user|has_any_permission:"reimbursement_list,reimbursement_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
+        {# --- BOS REIMBURSE LOG --- #}
+        {% if user|has_any_permission:"reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="reimbursementSubmenu" data-submenu-toggle>
           <i class="fas fa-receipt" aria-hidden="true"></i> BOS Reimburse Log <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
         <div class="submenu" id="reimbursementSubmenu" role="group" aria-label="Reimbursement">
-          {% if user|has_any_permission:"reimbursement_list,reimbursement_apply" %}
+          {% if user|has_any_permission:"reimbursement_apply,reimbursement_list" %}
           <a href="{% url 'reimbursement:my_reimbursements' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'my_reimbursements' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'my_reimbursements' %}aria-current="page"{% endif %}>
             <i class="fas fa-file-medical" aria-hidden="true"></i> My Requests
           </a>
           {% endif %}
-          {% if user|has_group:"Manager" %}
+
+          {% if user|has_permission:"reimbursement_manager_pending" %}
           <a href="{% url 'reimbursement:manager_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'manager_pending' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'manager_pending' %}aria-current="page"{% endif %}>
             <i class="fas fa-check-square" aria-hidden="true"></i> Manager Approvals
           </a>
           {% endif %}
-          {% if user|has_group:"Finance" %}
+
+          {% if user|has_permission:"reimbursement_finance_pending" %}
           <a href="{% url 'reimbursement:finance_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}aria-current="page"{% endif %}>
             <i class="fas fa-wallet" aria-hidden="true"></i> Finance Approvals
+          </a>
+          {% endif %}
+
+          {% if user|has_permission:"reimbursement_admin" %}
+          <a href="{% url 'reimbursement:admin_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'admin_requests' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'admin_requests' %}aria-current="page"{% endif %}>
+            <i class="fas fa-list-alt" aria-hidden="true"></i> Admin – Bills & Requests
+          </a>
+          <a href="{% url 'reimbursement:approver_mapping_admin' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'approver_mapping_admin' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'approver_mapping_admin' %}aria-current="page"{% endif %}>
+            <i class="fas fa-user-shield" aria-hidden="true"></i> Approver Mapping
           </a>
           {% endif %}
         </div>
@@ -782,7 +790,6 @@
           crossorigin="anonymous"></script>
 
   <script>
-    // --- CSRF helpers ---
     function getCookie(name){
       const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
       return m ? decodeURIComponent(m.pop()) : null;
@@ -790,7 +797,6 @@
     const CSRF_COOKIE = 'csrftoken';
 
     document.addEventListener('DOMContentLoaded', () => {
-      // Ensure CSRF in any POST form
       document.querySelectorAll('form[method="post"]').forEach(form => {
         const hasToken = form.querySelector('input[name="csrfmiddlewaretoken"]');
         if (!hasToken) {
@@ -847,7 +853,6 @@
       };
     })();
 
-    // --- Sidebar & submenu ---
     function toggleSidebar(){
       const sidebar=document.getElementById('sidebar'),
             overlay=document.querySelector('[data-sidebar-overlay]'),
@@ -878,7 +883,6 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-      // Toggle handlers
       document.querySelectorAll('[data-sidebar-toggle]').forEach(el=>{
         el.addEventListener('click', toggleSidebar);
       });
@@ -889,7 +893,6 @@
         btn.addEventListener('click', () => toggleSubmenu(btn));
       });
 
-      // Responsive state corrections
       window.addEventListener('resize',()=>{
         const sidebar=document.getElementById('sidebar'),
               overlay=document.querySelector('[data-sidebar-overlay]'),
@@ -909,7 +912,6 @@
         }
       });
 
-      // Auto-open submenu of current active item
       (function(){
         const active = document.querySelector('.nav-item.active');
         if (!active) return;
@@ -925,7 +927,6 @@
         }
       })();
 
-      // Persist sidebar collapsed state on desktop
       try{
         const sidebar = document.getElementById('sidebar');
         const main = document.getElementById('mainContent');

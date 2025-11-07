@@ -1,0 +1,145 @@
+{# templates/reimbursement/edit_request.html #}
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Edit Reimbursement Request{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>
+    Edit Reimbursement Request
+    {% if object %}
+      #{{ object.id }}
+    {% endif %}
+  </h2>
+  <div>
+    <a href="{% url 'reimbursement:expense_inbox' %}" class="btn btn-outline-secondary btn-sm">
+      Expense Inbox
+    </a>
+    <a href="{% url 'reimbursement:my_reimbursements' %}" class="btn btn-outline-secondary btn-sm">
+      My Requests
+    </a>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-lg-7">
+    <div class="card mb-3">
+      <div class="card-header">
+        Request Details
+      </div>
+      <div class="card-body">
+        <form method="post">
+          {% csrf_token %}
+
+          {# If your form has an employee_note or similar field, render it explicitly #}
+          {% if form.employee_note %}
+            <div class="mb-3">
+              {{ form.employee_note.label_tag }}
+              {{ form.employee_note }}
+              {% if form.employee_note.help_text %}
+                <div class="form-text">{{ form.employee_note.help_text }}</div>
+              {% endif %}
+              {% if form.employee_note.errors %}
+                <div class="text-danger small">{{ form.employee_note.errors }}</div>
+              {% endif %}
+            </div>
+          {% endif %}
+
+          {# Expense items multi-select #}
+          {% if form.expense_items %}
+            <div class="mb-3">
+              {{ form.expense_items.label_tag }}
+              {{ form.expense_items }}
+              {% if form.expense_items.help_text %}
+                <div class="form-text">{{ form.expense_items.help_text }}</div>
+              {% endif %}
+              {% if form.expense_items.errors %}
+                <div class="text-danger small">{{ form.expense_items.errors }}</div>
+              {% endif %}
+            </div>
+          {% endif %}
+
+          {# Render any remaining fields generically #}
+          {% for field in form %}
+            {% if field.name != "employee_note" and field.name != "expense_items" %}
+              <div class="mb-3">
+                {{ field.label_tag }}
+                {{ field }}
+                {% if field.help_text %}
+                  <div class="form-text">{{ field.help_text }}</div>
+                {% endif %}
+                {% if field.errors %}
+                  <div class="text-danger small">{{ field.errors }}</div>
+                {% endif %}
+              </div>
+            {% endif %}
+          {% endfor %}
+
+          <div class="mt-3">
+            <button type="submit" class="btn btn-primary">
+              Save Changes
+            </button>
+            <a href="{% url 'reimbursement:my_reimbursements' %}"
+               class="btn btn-outline-secondary ms-2">
+              Cancel
+            </a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    {% if object %}
+      <div class="card mb-3">
+        <div class="card-header">
+          Current Summary
+        </div>
+        <div class="card-body">
+          <table class="table table-sm mb-0">
+            <tr>
+              <th style="width:40%;">Status</th>
+              <td>{{ object.get_status_display }}</td>
+            </tr>
+            <tr>
+              <th>Submitted On</th>
+              <td>
+                {% if object.submitted_at %}
+                  {{ object.submitted_at|date:"Y-m-d H:i" }}
+                {% else %}
+                  {{ object.created_at|date:"Y-m-d H:i" }}
+                {% endif %}
+              </td>
+            </tr>
+            <tr>
+              <th>Total Amount</th>
+              <td>₹{{ object.total_amount|floatformat:2 }}</td>
+            </tr>
+            <tr>
+              <th>Manager</th>
+              <td>
+                {% if object.manager %}
+                  {{ object.manager.get_full_name|default:object.manager.username }}
+                {% else %}
+                  -
+                {% endif %}
+              </td>
+            </tr>
+            <tr>
+              <th>Management</th>
+              <td>
+                {% if object.management %}
+                  {{ object.management.get_full_name|default:object.management.username }}
+                {% else %}
+                  -
+                {% endif %}
+              </td>
+            </tr>
+          </table>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

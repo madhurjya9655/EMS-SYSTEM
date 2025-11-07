@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Admin – Reimbursement Status Summary{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Admin – Status Summary</h2>
+  <div>
+    <a href="{% url 'reimbursement:admin_requests' %}" class="btn btn-outline-secondary btn-sm">
+      Back to Requests
+    </a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    Totals by status
+  </div>
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>Status</th>
+            <th>Total Amount</th>
+            <th># Requests</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td>{{ status_labels.row.status|default:status_labels[row.status] }}</td>
+            <td>{{ row.total_amount }}</td>
+            <td>{{ row.request_count }}</td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="3" class="text-center text-muted py-3">
+              No reimbursement data available.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+
+{% block title %}Reimbursement Settings & Approvers{% endblock %}
+
+{% block content %}
+<h2>Reimbursement – Settings & Approver Mapping</h2>
+
+<form method="post">
+  {% csrf_token %}
+
+  <div class="row">
+    <div class="col-md-4 mb-3">
+      <div class="card h-100">
+        <div class="card-header">Email & Policy Settings</div>
+        <div class="card-body">
+          <div class="mb-3">
+            {{ settings_form.admin_emails.label_tag }}
+            {{ settings_form.admin_emails }}
+            <small class="form-text text-muted">
+              Comma-separated emails that receive admin summaries.
+            </small>
+            {{ settings_form.admin_emails.errors }}
+          </div>
+          <div class="mb-3">
+            {{ settings_form.finance_emails.label_tag }}
+            {{ settings_form.finance_emails }}
+            <small class="form-text text-muted">
+              Default finance recipients for notifications.
+            </small>
+            {{ settings_form.finance_emails.errors }}
+          </div>
+          <div class="mb-3">
+            {{ settings_form.management_emails.label_tag }}
+            {{ settings_form.management_emails }}
+            <small class="form-text text-muted">
+              Default management recipients for notifications.
+            </small>
+            {{ settings_form.management_emails.errors }}
+          </div>
+          <div class="form-check mb-2">
+            {{ settings_form.require_management_approval }}
+            {{ settings_form.require_management_approval.label_tag }}
+            {{ settings_form.require_management_approval.errors }}
+          </div>
+          <div class="form-check mb-2">
+            {{ settings_form.daily_digest_enabled }}
+            {{ settings_form.daily_digest_enabled.label_tag }}
+            {{ settings_form.daily_digest_enabled.errors }}
+          </div>
+          <div class="mb-3">
+            {{ settings_form.digest_hour_local.label_tag }}
+            {{ settings_form.digest_hour_local }}
+            <small class="form-text text-muted">
+              Hour of day (0–23, IST) to send digest when enabled.
+            </small>
+            {{ settings_form.digest_hour_local.errors }}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-8 mb-3">
+      <div class="card h-100">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Approver Mapping (Manager & Finance per Employee)</span>
+          <div class="d-flex align-items-center">
+            <span class="me-2 small text-muted">Set same for everyone:</span>
+            <select name="global_manager" class="form-select form-select-sm me-1" style="width:auto;">
+              <option value="">Manager (leave unchanged)</option>
+              {% for u in users %}
+              <option value="{{ u.id }}">
+                {{ u.get_full_name|default:u.username }}
+              </option>
+              {% endfor %}
+            </select>
+            <select name="global_finance" class="form-select form-select-sm me-1" style="width:auto;">
+              <option value="">Finance (leave unchanged)</option>
+              {% for u in users %}
+              <option value="{{ u.id }}">
+                {{ u.get_full_name|default:u.username }}
+              </option>
+              {% endfor %}
+            </select>
+            <button type="submit"
+                    name="apply_global"
+                    value="1"
+                    class="btn btn-sm btn-outline-primary">
+              Apply to All
+            </button>
+          </div>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive" style="max-height: 500px; overflow-y: auto;">
+            <table class="table table-sm mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Employee</th>
+                  <th>Role</th>
+                  <th>Manager</th>
+                  <th>Finance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for u in users %}
+                <tr>
+                  <td>
+                    {{ u.get_full_name|default:u.username }}
+                    {% if u.email %}
+                      <div class="small text-muted">{{ u.email }}</div>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if u.profile %}
+                      {{ u.profile.role }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                  <td>
+                    <select name="user-{{ u.id }}-manager" class="form-select form-select-sm">
+                      <option value="">— None —</option>
+                      {% for candidate in users %}
+                      <option value="{{ candidate.id }}"
+                        {% if mappings.u.id and mappings.u.id.manager and mappings.u.id.manager.id == candidate.id %}
+                          selected
+                        {% elif mappings.u.id is not defined %}
+                        {% endif %}>
+                      {% endfor %}
+                    </select>
+                  </td>
+                  <td>
+                    <select name="user-{{ u.id }}-finance" class="form-select form-select-sm">
+                      <option value="">— None —</option>
+                      {% for candidate in users %}
+                      <option value="{{ candidate.id }}"
+                        {% if mappings.u.id and mappings.u.id.finance and mappings.u.id.finance.id == candidate.id %}
+                          selected
+                        {% endif %}>
+                        {{ candidate.get_full_name|default:candidate.username }}
+                      </option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card-footer text-end">
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "email/base_email.html" %}
+{% block content %}
+<p>Hi {{ employee_name }},</p>
+
+{% if decision == "approve" %}
+  <p>Your reimbursement request <strong>#{{ request_id }}</strong> has been
+  <strong>approved by your manager</strong>.</p>
+{% elif decision == "reject" %}
+  <p>Your reimbursement request <strong>#{{ request_id }}</strong> has been
+  <strong>rejected by your manager</strong>.</p>
+{% else %}
+  <p>Your manager has requested <strong>clarification</strong> on your reimbursement
+  request <strong>#{{ request_id }}</strong>.</p>
+{% endif %}
+
+<table cellpadding="0" cellspacing="0" border="0" style="width:100%; max-width:600px; border-collapse:collapse;">
+  <tr>
+    <td style="padding:4px 0;"><strong>Total Amount:</strong></td>
+    <td style="padding:4px 0;">₹ {{ total_amount }}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0;"><strong>Current Status:</strong></td>
+    <td style="padding:4px 0;">{{ status_label }}</td>
+  </tr>
+</table>
+
+{% if manager_comment %}
+  <p><strong>Manager Comment:</strong></p>
+  <p style="white-space:pre-line;">{{ manager_comment }}</p>
+{% endif %}
+
+<p>
+  You can view the full details here:<br>
+  <a href="{{ detail_url }}">{{ detail_url }}</a>
+</p>
+
+<p>Regards,<br>BOS Lakshya</p>
+{% endblock %}

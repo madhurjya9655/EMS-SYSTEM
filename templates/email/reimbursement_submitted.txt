@@ -1,0 +1,22 @@
+Reimbursement Request Submitted
+
+Employee: {{ employee_name }}
+Employee Email: {{ employee_email|default:"-" }}
+Request ID: #{{ request_id }}
+Total Amount: ₹ {{ total_amount }}
+Status: {{ status_label }}
+Submitted At: {{ submitted_at }}
+
+{% if employee_note %}
+Employee Note:
+{{ employee_note }}
+{% endif %}
+
+Review this request:
+{{ detail_url }}
+
+To: {{ manager_to }}
+CC: {{ admin_cc|join:", " }}
+
+Regards,
+BOS Lakshya

@@ -46,8 +46,20 @@ PERMISSION_URLS = {
     # -----------------------
     # Reimbursement
     # -----------------------
+    # Employee
     "reimbursement_apply": "reimbursement:my_reimbursements",
     "reimbursement_list": "reimbursement:my_reimbursements",
+    # Manager
+    "reimbursement_manager_pending": "reimbursement:manager_queue",
+    "reimbursement_manager_review": "reimbursement:manager_queue",
+    # Management
+    "reimbursement_management_pending": "reimbursement:management_queue",
+    "reimbursement_management_review": "reimbursement:management_queue",
+    # Finance
+    "reimbursement_finance_pending": "reimbursement:finance_queue",
+    "reimbursement_finance_review": "reimbursement:finance_queue",
+    # Admin console (Bills Summary as primary landing)
+    "reimbursement_admin": "reimbursement:admin_bills_summary",
 
     # -----------------------
     # Reports

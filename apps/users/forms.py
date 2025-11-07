@@ -10,16 +10,19 @@ from .permissions import PERMISSIONS_STRUCTURE
 UserModel = get_user_model()
 
 DEPARTMENT_CHOICES = [
-    ('', 'Select One'),
-    ('FINANCE', 'FINANCE'),
-    ('MARKETING', 'MARKETING'),
-    ('MDO TEAM', 'MDO TEAM'),
-    ('SALES OPERATION TEAM', 'SALES OPERATION TEAM'),
+    ("", "Select One"),
+    ("FINANCE", "FINANCE"),
+    ("MARKETING", "MARKETING"),
+    ("MDO TEAM", "MDO TEAM"),
+    ("SALES OPERATION TEAM", "SALES OPERATION TEAM"),
 ]
 
 
 def get_permission_choices():
-    # Preserve the order defined in PERMISSIONS_STRUCTURE
+    """
+    Flatten PERMISSIONS_STRUCTURE into a single list of (code, label) tuples,
+    preserving the order defined in PERMISSIONS_STRUCTURE.
+    """
     choices = []
     for perms in PERMISSIONS_STRUCTURE.values():
         choices.extend(perms)
@@ -28,13 +31,13 @@ def get_permission_choices():
 
 class CustomAuthForm(AuthenticationForm):
     error_messages = {
-        'invalid_login': "Please enter a correct username and password.",
-        'inactive':      "Your account is inactive; please contact the administrator.",
+        "invalid_login": "Please enter a correct username and password.",
+        "inactive": "Your account is inactive; please contact the administrator.",
     }
 
     def clean(self):
-        username = self.cleaned_data.get('username')
-        password = self.cleaned_data.get('password')
+        username = self.cleaned_data.get("username")
+        password = self.cleaned_data.get("password")
         if username and password:
             try:
                 user = UserModel._default_manager.get_by_natural_key(username)
@@ -43,8 +46,8 @@ class CustomAuthForm(AuthenticationForm):
             else:
                 if user.check_password(password) and not user.is_active:
                     raise forms.ValidationError(
-                        self.error_messages['inactive'],
-                        code='inactive',
+                        self.error_messages["inactive"],
+                        code="inactive",
                     )
         return super().clean()
 
@@ -54,27 +57,31 @@ class UserForm(forms.ModelForm):
     - On create: password required.
     - On edit: password optional; if left blank, keep existing password.
     """
+
     password = forms.CharField(widget=forms.PasswordInput, required=True)
 
     class Meta:
         model = UserModel
-        fields = ['first_name', 'last_name', 'username', 'email', 'password']
+        fields = ["first_name", "last_name", "username", "email", "password"]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         # Make password optional on edit (instance exists)
         if self.instance and self.instance.pk:
-            self.fields['password'].required = False
-            self.fields['password'].help_text = "Leave empty to keep the current password."
+            self.fields["password"].required = False
+            self.fields["password"].help_text = "Leave empty to keep the current password."
 
         # Basic Bootstrap classes
         for name, field in self.fields.items():
-            if not isinstance(field.widget, (forms.CheckboxInput, forms.RadioSelect, forms.FileInput)):
-                field.widget.attrs.setdefault('class', 'form-control')
+            if not isinstance(
+                field.widget,
+                (forms.CheckboxInput, forms.RadioSelect, forms.FileInput),
+            ):
+                field.widget.attrs.setdefault("class", "form-control")
 
     def clean_username(self):
-        username = self.cleaned_data['username']
+        username = self.cleaned_data["username"]
         qs = UserModel.objects.filter(username=username)
         if self.instance and self.instance.pk:
             qs = qs.exclude(pk=self.instance.pk)
@@ -83,7 +90,7 @@ class UserForm(forms.ModelForm):
         return username
 
     def clean_email(self):
-        email = self.cleaned_data['email']
+        email = self.cleaned_data["email"]
         if email:
             qs = UserModel.objects.filter(email=email)
             if self.instance and self.instance.pk:
@@ -96,10 +103,10 @@ class UserForm(forms.ModelForm):
         """
         Allow blank password on edit.
         """
-        pwd = self.cleaned_data.get('password', '')
+        pwd = self.cleaned_data.get("password", "")
         if self.instance and self.instance.pk:
             # Optional on edit
-            return pwd or ''
+            return pwd or ""
         # Required on create
         if not pwd:
             raise forms.ValidationError("Please set an initial password.")
@@ -110,48 +117,57 @@ class ProfileForm(forms.ModelForm):
     department = forms.ChoiceField(
         choices=DEPARTMENT_CHOICES,
         required=False,
-        label="Department"
+        label="Department",
     )
     permissions = forms.MultipleChoiceField(
         choices=get_permission_choices(),
         required=False,
-        widget=forms.CheckboxSelectMultiple(attrs={'class': 'form-check-input'}),
-        label="Permissions"
+        widget=forms.CheckboxSelectMultiple(attrs={"class": "form-check-input"}),
+        label="Permissions",
     )
 
     class Meta:
         model = Profile
         fields = [
-            'phone',
-            'role',
-            'branch',
-            'department',
-            'team_leader',
-            'permissions'
+            "phone",
+            "role",
+            "branch",
+            "department",
+            "team_leader",
+            "permissions",
         ]
 
     def __init__(self, *args, **kwargs):
+        """
+        Important fix:
+        Use self.instance (set by super().__init__) to pre-populate permissions
+        when editing a user, so checkboxes are correctly checked.
+        """
         super().__init__(*args, **kwargs)
 
         # Make selects/inputs pretty
-        self.fields['role'].widget.attrs.setdefault('class', 'form-select')
-        self.fields['team_leader'].widget.attrs.setdefault('class', 'form-select')
-        for name in ('phone', 'branch'):
-            self.fields[name].widget.attrs.setdefault('class', 'form-control')
+        self.fields["role"].widget.attrs.setdefault("class", "form-select")
+        self.fields["team_leader"].widget.attrs.setdefault("class", "form-select")
+        for name in ("phone", "branch"):
+            self.fields[name].widget.attrs.setdefault("class", "form-control")
 
         # Narrow team_leader choices to active users, ordered nicely
-        if hasattr(self.fields['team_leader'], 'queryset'):
-            self.fields['team_leader'].queryset = (
-                self.fields['team_leader'].queryset.filter(is_active=True).order_by('first_name', 'last_name', 'username')
+        if hasattr(self.fields["team_leader"], "queryset"):
+            self.fields["team_leader"].queryset = (
+                self.fields["team_leader"]
+                .queryset.filter(is_active=True)
+                .order_by("first_name", "last_name", "username")
             )
 
-        # Pre-populate permissions when editing
-        instance = kwargs.get('instance', None)
-        if instance and getattr(instance, 'pk', None) and getattr(instance, 'permissions', None):
-            self.initial['permissions'] = instance.permissions
+        # ✅ FIX: use self.instance instead of kwargs.get('instance')
+        instance = getattr(self, "instance", None)
+        if instance and getattr(instance, "pk", None) and getattr(instance, "permissions", None):
+            # This will make pf.permissions.value contain the list of codes,
+            # which your template checks with:  code in pf.permissions.value
+            self.initial["permissions"] = instance.permissions
 
     def clean_phone(self):
-        phone = (self.cleaned_data.get('phone') or '').strip()
+        phone = (self.cleaned_data.get("phone") or "").strip()
         qs = Profile.objects.filter(phone=phone)
         if self.instance and self.instance.pk:
             qs = qs.exclude(pk=self.instance.pk)
@@ -167,11 +183,10 @@ class ProfileForm(forms.ModelForm):
     def save(self, commit: bool = True) -> Profile:
         """
         When commit=True and role == 'Admin', ensure linked User is staff.
-        (We will also add a post_save signal to cover saves done outside this form.)
+        Also ensure permissions is stored as a list in Profile.permissions.
         """
         instance: Profile = super().save(commit=False)
-        # Ensure permissions field is stored as a list
-        instance.permissions = self.cleaned_data.get('permissions') or []
+        instance.permissions = self.cleaned_data.get("permissions") or []
 
         if commit:
             instance.save()

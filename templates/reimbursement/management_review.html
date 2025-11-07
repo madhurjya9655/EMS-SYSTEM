@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Manager Review – Reimbursement #{{ object.id }}{% endblock %}
+{% block title %}Management Review – Reimbursement #{{ object.id }}{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h2>Manager Review – Request #{{ object.id }}</h2>
+  <h2>Management Review – Request #{{ object.id }}</h2>
   <div>
-    <a href="{% url 'reimbursement:manager_pending' %}" class="btn btn-outline-secondary btn-sm">
-      Back to Manager Queue
+    <a href="{% url 'reimbursement:management_pending' %}" class="btn btn-outline-secondary btn-sm">
+      Back to Management Queue
     </a>
   </div>
 </div>
@@ -18,7 +18,7 @@
 
   <div class="col-md-4">
     <div class="card mb-3">
-      <div class="card-header">Manager Decision</div>
+      <div class="card-header">Management Decision</div>
       <div class="card-body">
         <form method="post">
           {% csrf_token %}
@@ -30,10 +30,10 @@
             {% endif %}
           </div>
           <div class="mb-3">
-            {{ form.manager_comment.label_tag }}
-            {{ form.manager_comment }}
-            {% if form.manager_comment.errors %}
-              <div class="text-danger small">{{ form.manager_comment.errors }}</div>
+            {{ form.management_comment.label_tag }}
+            {{ form.management_comment }}
+            {% if form.management_comment.errors %}
+              <div class="text-danger small">{{ form.management_comment.errors }}</div>
             {% endif %}
           </div>
           <button type="submit" class="btn btn-primary w-100">

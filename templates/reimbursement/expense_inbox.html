@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Expense Inbox{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Expense Inbox</h2>
+  <div>
+    <a href="{% url 'reimbursement:my_reimbursements' %}" class="btn btn-outline-secondary btn-sm">
+      My Requests
+    </a>
+    <a href="{% url 'reimbursement:create_request' %}" class="btn btn-primary btn-sm">
+      New Reimbursement Request
+    </a>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-md-4">
+    <div class="card mb-3">
+      <div class="card-header">Add Expense</div>
+      <div class="card-body">
+        <form method="post" enctype="multipart/form-data">
+          {% csrf_token %}
+          {% for field in form %}
+            <div class="mb-3">
+              {{ field.label_tag }}
+              {{ field }}
+              {% if field.help_text %}
+                <div class="form-text">{{ field.help_text }}</div>
+              {% endif %}
+              {% if field.errors %}
+                <div class="text-danger small">{{ field.errors }}</div>
+              {% endif %}
+            </div>
+          {% endfor %}
+          <button type="submit" class="btn btn-primary w-100">Save Expense</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-8">
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Your Expenses</span>
+        <small class="text-muted">Draft + submitted expenses</small>
+      </div>
+      <div class="card-body">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover align-middle">
+            <thead class="table-light">
+              <tr>
+                <th>Date</th>
+                <th>Category</th>
+                <th>Vendor</th>
+                <th>Amount</th>
+                <th>Status</th>
+                <th>Bill</th>
+                <th style="width:120px;">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in items %}
+              <tr>
+                <td>{{ item.date|date:"Y-m-d" }}</td>
+                <td>{{ item.get_category_display }}</td>
+                <td>{{ item.vendor|default:"-" }}</td>
+                <td>{{ item.amount }}</td>
+                <td>
+                  <span class="badge bg-light text-dark">
+                    {{ item.get_status_display }}
+                  </span>
+                </td>
+                <td>
+                  {% if item.receipt_file %}
+                    <a href="{% url 'reimbursement:receipt_expense' item.id %}" target="_blank" class="btn btn-sm btn-outline-secondary">
+                      View
+                    </a>
+                  {% else %}
+                    <span class="text-muted small">No file</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if not item.is_locked %}
+                    <a href="{% url 'reimbursement:expense_edit' item.id %}" class="btn btn-sm btn-outline-primary me-1">
+                      Edit
+                    </a>
+                    <a href="{% url 'reimbursement:expense_delete' item.id %}" class="btn btn-sm btn-outline-danger">
+                      Delete
+                    </a>
+                  {% else %}
+                    <span class="text-muted small">Locked</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% empty %}
+              <tr>
+                <td colspan="7" class="text-center text-muted py-3">
+                  No expenses yet. Use the form on the left to add your first expense.
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="mt-2">
+          <a href="{% url 'reimbursement:create_request' %}" class="btn btn-outline-primary btn-sm">
+            Create Reimbursement Request from Selected Expenses
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

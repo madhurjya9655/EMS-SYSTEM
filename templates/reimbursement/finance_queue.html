@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Finance Reimbursement Queue{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Finance Reimbursement Queue</h2>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    Requests pending finance review / payment
+  </div>
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>ID</th>
+            <th>Employee</th>
+            <th>Submitted</th>
+            <th>Status</th>
+            <th>Total Amount</th>
+            <th>Manager</th>
+            <th>Management</th>
+            <th style="width:120px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for req in requests %}
+          <tr>
+            <td>#{{ req.id }}</td>
+            <td>{{ req.created_by.get_full_name|default:req.created_by.username }}</td>
+            <td>{{ req.submitted_at|default:req.created_at|date:"Y-m-d H:i" }}</td>
+            <td>
+              <span class="badge bg-light text-dark">
+                {{ req.get_status_display }}
+              </span>
+            </td>
+            <td>{{ req.total_amount }}</td>
+            <td>
+              {% if req.manager %}
+                {{ req.manager.get_full_name|default:req.manager.username }}
+              {% else %}
+                <span class="text-muted small">Not set</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if req.management %}
+                {{ req.management.get_full_name|default:req.management.username }}
+              {% else %}
+                <span class="text-muted small">-</span>
+              {% endif %}
+            </td>
+            <td>
+              <a href="{% url 'reimbursement:finance_review' req.id %}" class="btn btn-sm btn-outline-primary">
+                Review / Pay
+              </a>
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="8" class="text-center text-muted py-3">
+              No reimbursement requests pending for finance.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

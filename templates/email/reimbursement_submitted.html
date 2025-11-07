@@ -1,0 +1,49 @@
+{% extends "email/base_email.html" %}
+{% block content %}
+<p>Hi,</p>
+
+<p>
+  A new reimbursement request has been submitted by
+  <strong>{{ employee_name }}</strong>.
+</p>
+
+<table cellpadding="0" cellspacing="0" border="0" style="width:100%; max-width:600px; border-collapse:collapse;">
+  <tr>
+    <td style="padding:4px 0;"><strong>Request ID:</strong></td>
+    <td style="padding:4px 0;">#{{ request_id }}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0;"><strong>Employee Email:</strong></td>
+    <td style="padding:4px 0;">{{ employee_email|default:"-" }}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0;"><strong>Total Amount:</strong></td>
+    <td style="padding:4px 0;">₹ {{ total_amount }}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0;"><strong>Status:</strong></td>
+    <td style="padding:4px 0;">{{ status_label }}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0;"><strong>Submitted At:</strong></td>
+    <td style="padding:4px 0;">{{ submitted_at }}</td>
+  </tr>
+</table>
+
+{% if employee_note %}
+  <p><strong>Employee Note:</strong></p>
+  <p style="white-space:pre-line;">{{ employee_note }}</p>
+{% endif %}
+
+<p>
+  You can review this request here:<br>
+  <a href="{{ detail_url }}">{{ detail_url }}</a>
+</p>
+
+<p>
+  This email was sent to: <strong>{{ manager_to }}</strong><br>
+  CC: {{ admin_cc|join:", " }}
+</p>
+
+<p>Regards,<br>BOS Lakshya</p>
+{% endblock %}

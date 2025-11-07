@@ -1,0 +1,35 @@
+{% extends "email/base_email.html" %}
+{% block content %}
+<p>Hi {{ employee_name }},</p>
+
+<p>
+  Good news! Your reimbursement request <strong>#{{ request_id }}</strong> has been
+  <strong>marked as Paid</strong>.
+</p>
+
+<table cellpadding="0" cellspacing="0" border="0" style="width:100%; max-width:600px; border-collapse:collapse;">
+  <tr>
+    <td style="padding:4px 0;"><strong>Total Amount:</strong></td>
+    <td style="padding:4px 0;">₹ {{ total_amount }}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0;"><strong>Status:</strong></td>
+    <td style="padding:4px 0;">{{ status_label }}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0;"><strong>Paid At:</strong></td>
+    <td style="padding:4px 0;">{{ paid_at }}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0;"><strong>Payment Reference:</strong></td>
+    <td style="padding:4px 0;">{{ payment_reference|default:"-" }}</td>
+  </tr>
+</table>
+
+<p>
+  You can view the full details here:<br>
+  <a href="{{ detail_url }}">{{ detail_url }}</a>
+</p>
+
+<p>Regards,<br>BOS Lakshya</p>
+{% endblock %}

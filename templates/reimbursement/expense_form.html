@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Expense{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header">Edit Expense</div>
+  <div class="card-body">
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <div class="mb-3">
+        {{ form.date.label_tag }} {{ form.date }}
+        {{ form.date.errors }}
+      </div>
+      <div class="mb-3">
+        {{ form.category.label_tag }} {{ form.category }}
+        {{ form.category.errors }}
+      </div>
+      <div class="mb-3">
+        {{ form.amount.label_tag }} {{ form.amount }}
+        {{ form.amount.errors }}
+      </div>
+      <div class="mb-3">
+        {{ form.vendor.label_tag }} {{ form.vendor }}
+        {{ form.vendor.errors }}
+      </div>
+      <div class="mb-3">
+        {{ form.description.label_tag }} {{ form.description }}
+        {{ form.description.errors }}
+      </div>
+      <div class="mb-3">
+        {{ form.receipt_file.label_tag }} {{ form.receipt_file }}
+        {{ form.receipt_file.errors }}
+      </div>
+      <button type="submit" class="btn btn-primary">Save Changes</button>
+      <a href="{% url 'reimbursement:expense_inbox' %}" class="btn btn-secondary">Cancel</a>
+    </form>
+  </div>
+</div>
+{% endblock %}

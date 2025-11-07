@@ -57,8 +57,20 @@ PERMISSIONS_STRUCTURE = {
         ("list_sales_plan", "List Sales Plan"),
     ],
     "Reimbursement": [
-        ("reimbursement_apply", "Reimbursement Apply"),
-        ("reimbursement_list", "Reimbursement List"),
+        # Employee
+        ("reimbursement_apply", "Reimbursement Apply (My Inbox / New)"),
+        ("reimbursement_list", "Reimbursement List (My Requests)"),
+        # Manager
+        ("reimbursement_manager_pending", "Manager Queue (Pending Requests)"),
+        ("reimbursement_manager_review", "Manager Review (Single Request)"),
+        # Management (optional; only if you use these views)
+        ("reimbursement_management_pending", "Management Queue (Pending Requests)"),
+        ("reimbursement_management_review", "Management Review (Single Request)"),
+        # Finance
+        ("reimbursement_finance_pending", "Finance Queue (Pending Requests)"),
+        ("reimbursement_finance_review", "Finance Review (Single Request)"),
+        # Admin console (Bills / Requests / Employee / Status / Mapping)
+        ("reimbursement_admin", "Admin – Reimbursement Console"),
     ],
     "Reports": [
         ("doer_tasks", "Doer Tasks"),

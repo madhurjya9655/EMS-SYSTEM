@@ -1,0 +1,162 @@
+{# templates/reimbursement/create_request.html #}
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Create Reimbursement Request{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Create Reimbursement Request</h2>
+  <div>
+    <a href="{% url 'reimbursement:expense_inbox' %}" class="btn btn-outline-secondary btn-sm">
+      Expense Inbox
+    </a>
+    <a href="{% url 'reimbursement:my_reimbursements' %}" class="btn btn-outline-secondary btn-sm ms-2">
+      My Requests
+    </a>
+  </div>
+</div>
+
+<div class="row">
+  <!-- LEFT: expense selection table -->
+  <div class="col-lg-8">
+    <div class="card mb-3">
+      <div class="card-header">
+        Select Expenses
+      </div>
+      <div class="card-body p-0">
+        <p class="px-3 pt-3 mb-0 text-muted">
+          Select one or more expenses from your inbox to include in this request.
+        </p>
+
+        <div class="table-responsive mt-2">
+          <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th style="width:4%;"></th>
+                <th style="width:16%;">Date</th>
+                <th style="width:18%;">Category</th>
+                <th style="width:18%;">Vendor</th>
+                <th style="width:14%;" class="text-end">Amount</th>
+                <th style="width:10%;">Bill</th>
+                <th style="width:20%;">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% if rows %}
+                {% for row in rows %}
+                  <tr class="{% if not row.selectable %}text-muted{% endif %}">
+                    <td>
+                      {% if row.selectable %}
+                        <input type="checkbox"
+                               name="expense_items"
+                               value="{{ row.item.id }}"
+                               form="reimb-form">
+                      {% endif %}
+                    </td>
+                    <td>{{ row.item.date|date:"Y-m-d" }}</td>
+                    <td>{{ row.item.get_category_display }}</td>
+                    <td>{{ row.item.vendor|default:"-" }}</td>
+                    <td class="text-end">₹{{ row.item.amount|floatformat:2 }}</td>
+                    <td>
+                      {% if row.item.receipt_file %}
+                        <a href="{% url 'reimbursement:receipt_expense' row.item.id %}"
+                           target="_blank"
+                           class="btn btn-sm btn-outline-secondary">
+                          View
+                        </a>
+                      {% else %}
+                        -
+                      {% endif %}
+                    </td>
+                    <td>
+                      <span class="badge
+                                   {% if row.status_class == 'success' %}bg-success
+                                   {% elif row.status_class == 'danger' %}bg-danger
+                                   {% elif row.status_class == 'warning' %}bg-warning text-dark
+                                   {% else %}bg-secondary{% endif %}">
+                        {{ row.status_label }}
+                      </span>
+                    </td>
+                  </tr>
+                {% endfor %}
+              {% else %}
+                <tr>
+                  <td colspan="7" class="text-center text-muted py-4">
+                    You don't have any expenses in your inbox yet.
+                  </td>
+                </tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: request details + submit -->
+  <div class="col-lg-4">
+    <form method="post" id="reimb-form">
+      {% csrf_token %}
+      <div class="card mb-3">
+        <div class="card-header">
+          Request Details
+        </div>
+        <div class="card-body">
+          <h6 class="text-muted">Manager (auto-routed)</h6>
+          {% if manager %}
+            <p class="mb-3">
+              {{ manager.get_full_name|default:manager.username }}
+            </p>
+          {% else %}
+            <div class="alert alert-warning py-2">
+              No reimbursement manager is configured for your account.
+              Please contact Admin to set up Approver Mapping before submitting.
+            </div>
+          {% endif %}
+
+          <h6 class="text-muted mt-3">Finance (auto-routed)</h6>
+          {% if finance_emails %}
+            <p class="mb-3 small text-muted">
+              Finance recipients: {{ finance_emails|join:", " }}<br>
+              Managed by Admin in Reimbursement Settings.
+            </p>
+          {% else %}
+            <p class="mb-3 small text-muted">
+              Finance recipients are managed by Admin in Reimbursement Settings.
+            </p>
+          {% endif %}
+
+          <h6 class="text-muted mt-3">Employee note</h6>
+          {{ form.employee_note }}
+          {% if form.employee_note.errors %}
+            <div class="text-danger small mt-1">
+              {{ form.employee_note.errors }}
+            </div>
+          {% endif %}
+        </div>
+
+        <div class="card-footer d-flex justify-content-between align-items-center">
+          <small class="text-muted">
+            Select at least one expense before submitting.
+          </small>
+          <button type="submit" class="btn btn-primary">
+            Submit Request
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  // Require at least one expense to be selected
+  document.getElementById("reimb-form").addEventListener("submit", function (e) {
+    const boxes = document.querySelectorAll('input[name="expense_items"]:checked');
+    if (!boxes.length) {
+      e.preventDefault();
+      alert("Please select at least one expense to submit.");
+    }
+  });
+</script>
+{% endblock %}

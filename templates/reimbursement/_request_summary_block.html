@@ -1,0 +1,97 @@
+{# Partial: request summary + lines for review screens #}
+<div class="card mb-3">
+  <div class="card-header">Request Summary</div>
+  <div class="card-body">
+    <dl class="row mb-0">
+      <dt class="col-sm-4">Employee</dt>
+      <dd class="col-sm-8">
+        {{ request_obj.created_by.get_full_name|default:request_obj.created_by.username }}
+        <div class="small text-muted">{{ request_obj.created_by.email }}</div>
+      </dd>
+
+      <dt class="col-sm-4">Submitted On</dt>
+      <dd class="col-sm-8">
+        {{ request_obj.submitted_at|default:request_obj.created_at|date:"Y-m-d H:i" }}
+      </dd>
+
+      <dt class="col-sm-4">Status</dt>
+      <dd class="col-sm-8">
+        <span class="badge bg-light text-dark">
+          {{ request_obj.get_status_display }}
+        </span>
+      </dd>
+
+      <dt class="col-sm-4">Manager</dt>
+      <dd class="col-sm-8">
+        {% if request_obj.manager %}
+          {{ request_obj.manager.get_full_name|default:request_obj.manager.username }}
+        {% else %}
+          <span class="text-muted small">Not set</span>
+        {% endif %}
+      </dd>
+
+      <dt class="col-sm-4">Management</dt>
+      <dd class="col-sm-8">
+        {% if request_obj.management %}
+          {{ request_obj.management.get_full_name|default:request_obj.management.username }}
+        {% else %}
+          <span class="text-muted small">Not set</span>
+        {% endif %}
+      </dd>
+
+      <dt class="col-sm-4">Total Amount</dt>
+      <dd class="col-sm-8">
+        {{ request_obj.total_amount }}
+      </dd>
+    </dl>
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-header">Included Expenses</div>
+  <div class="card-body">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>#</th>
+            <th>Date</th>
+            <th>Category</th>
+            <th>Vendor</th>
+            <th>Description</th>
+            <th>Amount</th>
+            <th>Receipt</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for line in request_obj.lines.all %}
+          <tr>
+            <td>{{ forloop.counter }}</td>
+            <td>{{ line.expense_item.date|date:"Y-m-d" }}</td>
+            <td>{{ line.expense_item.get_category_display }}</td>
+            <td>{{ line.expense_item.vendor|default:"-" }}</td>
+            <td class="small">{{ line.description|default:"-" }}</td>
+            <td>{{ line.amount }}</td>
+            <td>
+              {% if line.receipt_file or line.expense_item.receipt_file %}
+                <a href="{% url 'reimbursement:receipt_line' line.id %}"
+                   target="_blank" class="btn btn-sm btn-outline-secondary">
+                  View
+                </a>
+              {% else %}
+                <span class="text-muted small">No file</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="7" class="text-center text-muted py-3">
+              No expense lines attached.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

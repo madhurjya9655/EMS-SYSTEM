@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block title %}Manager Review – #{{ request_obj.pk }}{% endblock %}
+
+{% block content %}
+<h2>Manager Review – Reimbursement #{{ request_obj.pk }}</h2>
+
+<div class="mb-3">
+  <a href="{% url 'reimbursement:manager_pending' %}" class="btn btn-secondary">Back to Queue</a>
+  <a href="{% url 'reimbursement:reimbursement_detail' request_obj.pk %}" class="btn btn-outline-primary ms-2">
+    View Details
+  </a>
+</div>
+
+<div class="card mb-3">
+  <div class="card-header">Summary</div>
+  <div class="card-body">
+    <p><strong>Employee:</strong>
+      {{ request_obj.created_by.get_full_name|default:request_obj.created_by.username }}
+    </p>
+    <p><strong>Total amount:</strong>
+      ₹ {{ request_obj.total_amount|floatformat:2 }}
+    </p>
+    <p><strong>Submitted:</strong>
+      {{ request_obj.submitted_at|date:"Y-m-d H:i" }}
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">Action</div>
+  <div class="card-body">
+    <form method="post">
+      {% csrf_token %}
+      <div class="mb-3">
+        {{ form.decision.label_tag }} {{ form.decision }}
+        {{ form.decision.errors }}
+      </div>
+      <div class="mb-3">
+        {{ form.comment.label_tag }} {{ form.comment }}
+        {{ form.comment.errors }}
+      </div>
+      {% if form.non_field_errors %}
+        <div class="alert alert-danger">
+          {{ form.non_field_errors }}
+        </div>
+      {% endif %}
+      <button type="submit" class="btn btn-primary">Submit</button>
+      <a href="{% url 'reimbursement:manager_pending' %}" class="btn btn-secondary">Cancel</a>
+    </form>
+  </div>
+</div>
+{% endblock %}

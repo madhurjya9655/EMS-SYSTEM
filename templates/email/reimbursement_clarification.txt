@@ -1,0 +1,21 @@
+Clarification Needed - Reimbursement #{{ request_id }}
+
+Hello {{ employee_name }},
+
+{{ requested_by }} has requested CLARIFICATION on your reimbursement request.
+
+Total Amount: ₹ {{ total_amount }}
+Current Status: {{ status_label }}
+
+{% if clarification_message %}
+Clarification Details:
+{{ clarification_message }}
+{% endif %}
+
+Please update your reimbursement and resubmit as needed.
+
+View details:
+{{ detail_url }}
+
+Regards,
+BOS Lakshya

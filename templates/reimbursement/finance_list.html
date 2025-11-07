@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block title %}Finance Reimbursements Queue{% endblock %}
+
+{% block content %}
+<h2>Reimbursements – Finance Queue</h2>
+
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>#</th>
+            <th>Employee</th>
+            <th>Submitted</th>
+            <th class="text-end">Amount</th>
+            <th>Status</th>
+            <th>Payment Ref</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in requests %}
+          <tr>
+            <td>{{ r.pk }}</td>
+            <td>{{ r.created_by.get_full_name|default:r.created_by.username }}</td>
+            <td>{{ r.submitted_at|date:"Y-m-d H:i" }}</td>
+            <td class="text-end">₹ {{ r.total_amount|floatformat:2 }}</td>
+            <td>{{ r.get_status_display }}</td>
+            <td>{{ r.finance_payment_reference|default:"-" }}</td>
+            <td class="text-end">
+              <a href="{% url 'reimbursement:finance_review' r.pk %}"
+                 class="btn btn-sm btn-outline-primary">Process</a>
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="7" class="text-center py-3">No pending requests.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
