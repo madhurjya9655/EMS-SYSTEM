@@ -1,4 +1,3 @@
-# apps/reimbursement/urls.py
 from django.urls import path
 
 from . import views
@@ -7,7 +6,7 @@ app_name = "reimbursement"
 
 urlpatterns = [
     # ------------------------------------------------------------------
-    # Employee: Expense inbox (upload + list + edit/delete)
+    # Employee: Upload expenses (upload form) + edit/delete
     # ------------------------------------------------------------------
     path(
         "expenses/",
@@ -43,13 +42,13 @@ urlpatterns = [
         views.MyReimbursementsView.as_view(),
         name="my_reimbursements",
     ),
-    # NEW: bulk delete from "My Requests"
+    # Bulk delete from "My Requests"
     path(
         "bulk-delete/",
         views.ReimbursementBulkDeleteView.as_view(),
         name="bulk_delete",
     ),
-    # edit & delete single request
+    # Edit & delete single request
     path(
         "request/<int:pk>/edit/",
         views.ReimbursementRequestUpdateView.as_view(),

@@ -48,7 +48,7 @@
                 {{ req.get_status_display }}
               </span>
             </td>
-            <td>{{ req.total_amount }}</td>
+            <td>₹{{ req.total_amount|floatformat:2 }}</td>
             <td>
               {% if req.manager %}
                 {{ req.manager.get_full_name|default:req.manager.username }}

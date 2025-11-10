@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Bulk Upload{% endblock %}
+
 {% block content %}
 <div class="page-header mb-4"><h2>Bulk Upload</h2></div>
 
@@ -26,18 +27,24 @@
     <hr class="my-4">
 
     <div class="d-flex flex-wrap gap-2 mb-3">
-      <a href="{% url 'tasks:download_checklist_template' %}" class="btn btn-outline-secondary">Download Checklist Template</a>
-      <a href="{% url 'tasks:download_delegation_template' %}" class="btn btn-outline-secondary">Download Delegation Template</a>
+      <a href="{% url 'tasks:download_checklist_template' %}" class="btn btn-outline-secondary">
+        Download Checklist Template
+      </a>
+      <a href="{% url 'tasks:download_delegation_template' %}" class="btn btn-outline-secondary">
+        Download Delegation Template
+      </a>
     </div>
 
     <div class="accordion" id="bulkHelp">
       <div class="accordion-item">
         <h2 class="accordion-header" id="bulkHelpHead">
-          <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#bulkHelpBody" aria-expanded="false" aria-controls="bulkHelpBody">
+          <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#bulkHelpBody" aria-expanded="false" aria-controls="bulkHelpBody">
             Format &amp; Rules
           </button>
         </h2>
-        <div id="bulkHelpBody" class="accordion-collapse collapse" aria-labelledby="bulkHelpHead" data-bs-parent="#bulkHelp">
+        <div id="bulkHelpBody" class="accordion-collapse collapse" aria-labelledby="bulkHelpHead"
+             data-bs-parent="#bulkHelp">
           <div class="accordion-body">
             <div class="row g-4">
               <div class="col-md-6">
@@ -49,12 +56,19 @@
               <div class="col-md-6">
                 <h6 class="mb-2">Date &amp; time</h6>
                 <ul class="mb-0">
-                  <li><strong>Preferred</strong> date: <code>YYYY-MM-DD</code> (ISO)</li>
-                  <li><strong>Checklist “Planned Date”</strong>: <code>YYYY-MM-DD HH:MM</code> (24-hour)
-                      or Excel style <code>M/D/YYYY HH:MM</code> (e.g. <code>8/16/2025 17:00</code>).
-                      If you use slashes without AM/PM, pick a format that’s not ambiguous.</li>
-                  <li><strong>Delegation “Planned Date”</strong>: <code>YYYY-MM-DD HH:MM</code> (24-hour)
-                      or <code>M/D/YYYY HH:MM</code>. We keep your time-of-day and shift to the next working day if it lands on a holiday/Sunday.</li>
+                  <li><strong>Preferred</strong> date format: <code>YYYY-MM-DD</code> (ISO).</li>
+                  <li>
+                    <strong>Checklist “Planned Date”</strong>:
+                    <code>YYYY-MM-DD HH:MM</code> (24-hour) or Excel style
+                    <code>M/D/YYYY HH:MM</code>. The system ultimately treats the due time as
+                    <strong>7:00 PM IST</strong> on that date for dashboard/reminders.
+                  </li>
+                  <li>
+                    <strong>Delegation “Planned Date”</strong>:
+                    <code>YYYY-MM-DD HH:MM</code> or <code>M/D/YYYY HH:MM</code>.
+                    For delegations the selected date is treated as a one-time due date at
+                    <strong>7:00 PM IST</strong> (time-of-day you enter is ignored).
+                  </li>
                 </ul>
               </div>
 
@@ -67,24 +81,32 @@
                     </thead>
                     <tbody>
                       <tr><td>Task Name</td><td>Yes</td><td>Task title</td></tr>
-                      <tr><td>Message</td><td>No</td><td>Optional details</td></tr>
+                      <tr><td>Message</td><td>No</td><td>Optional details / instructions</td></tr>
                       <tr><td>Assign To</td><td>Yes</td><td><em>Username</em> of assignee</td></tr>
-                      <tr><td>Planned Date</td><td>Yes</td><td>Datetime as above (keeps your time-of-day, shifts to next working day if holiday/Sunday)</td></tr>
+                      <tr>
+                        <td>Planned Date</td>
+                        <td>Yes</td>
+                        <td>
+                          Datetime as above. Internally the task is pinned to <strong>7:00 PM IST</strong> on that date.
+                          Recurring checklists that land on Sundays/holidays will have their future
+                          occurrences shifted to the next working day at 7:00 PM IST.
+                        </td>
+                      </tr>
                       <tr><td>Priority</td><td>No</td><td>Low, Medium, High (default Low)</td></tr>
-                      <tr><td>Mode</td><td>No</td><td>Daily, Weekly, Monthly, Yearly</td></tr>
-                      <tr><td>Frequency</td><td>No</td><td>Integer interval for Mode (blank = 0 / non-recurring)</td></tr>
-                      <tr><td>Time per Task (minutes)</td><td>No</td><td>Integer (blank = 0)</td></tr>
-                      <tr><td>Reminder Before Days</td><td>No</td><td>Integer (blank = 0)</td></tr>
+                      <tr><td>Mode</td><td>No</td><td>Daily, Weekly, Monthly, Yearly (for recurring checklists)</td></tr>
+                      <tr><td>Frequency</td><td>No</td><td>Integer interval for Mode (blank = non-recurring)</td></tr>
+                      <tr><td>Time per Task (minutes)</td><td>No</td><td>Integer</td></tr>
+                      <tr><td>Reminder Before Days</td><td>No</td><td>Integer</td></tr>
                       <tr><td>Assign PC</td><td>No</td><td>Username</td></tr>
                       <tr><td>Group Name</td><td>No</td><td>Text</td></tr>
                       <tr><td>Notify To</td><td>No</td><td>Username</td></tr>
                       <tr><td>Auditor</td><td>No</td><td>Username</td></tr>
                       <tr><td>Set Reminder</td><td>No</td><td>Yes/No</td></tr>
                       <tr><td>Reminder Mode</td><td>No</td><td>Daily/Weekly/Monthly/Yearly</td></tr>
-                      <tr><td>Reminder Frequency</td><td>No</td><td>Integer (blank defaults to <code>1</code> when Set Reminder is Yes)</td></tr>
+                      <tr><td>Reminder Frequency</td><td>No</td><td>Integer</td></tr>
                       <tr><td>Reminder Starting Time</td><td>No</td><td>HH:MM (24-hour)</td></tr>
                       <tr><td>Checklist Auto Close</td><td>No</td><td>Yes/No</td></tr>
-                      <tr><td>Checklist Auto Close Days</td><td>No</td><td>Integer (blank = 0)</td></tr>
+                      <tr><td>Checklist Auto Close Days</td><td>No</td><td>Integer</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -103,13 +125,22 @@
                       <tr>
                         <td>Planned Date</td>
                         <td>Yes</td>
-                        <td>Datetime (<code>YYYY-MM-DD HH:MM</code> or <code>M/D/YYYY HH:MM</code>).
-                            Keeps your time-of-day; shifts to next working day if holiday/Sunday.</td>
+                        <td>
+                          Datetime (<code>YYYY-MM-DD HH:MM</code> or <code>M/D/YYYY HH:MM</code>).
+                          The system treats this as a <strong>one-time</strong> due date at
+                          <strong>7:00 PM IST</strong> on that day (time-of-day value is ignored).
+                        </td>
                       </tr>
                       <tr><td>Priority</td><td>No</td><td>Low, Medium, High (default Low)</td></tr>
-                      <tr><td>Mode</td><td>No</td><td>Daily, Weekly, Monthly, Yearly</td></tr>
-                      <tr><td>Frequency</td><td>No</td><td>Integer interval (blank = 0 / non-recurring)</td></tr>
-                      <tr><td>Time per Task (minutes)</td><td>No</td><td>Integer (blank = 0)</td></tr>
+                      <tr>
+                        <td>Mode / Frequency</td>
+                        <td>No</td>
+                        <td>
+                          Currently <strong>ignored</strong>. Delegations are handled as one-time tasks only;
+                          recurrence settings are not used.
+                        </td>
+                      </tr>
+                      <tr><td>Time per Task (minutes)</td><td>No</td><td>Integer</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -118,10 +149,16 @@
               <div class="col-12">
                 <h6 class="mb-2">Holiday rules</h6>
                 <ul class="mb-0">
-                  <li>Dates added in <em>Settings → Holiday List</em> (incl. monthly Saturday-offs) are treated as non-working.</li>
-                  <li><strong>Checklist:</strong> If the selected/uploaded date is a holiday/Sunday, it moves to the next working day <em>and keeps your chosen time-of-day (IST)</em>.</li>
-                  <li><strong>Delegation:</strong> If the selected/uploaded datetime is a holiday/Sunday, it moves to the next working day <em>and keeps your chosen time-of-day (IST)</em>.</li>
-                  <li>If the shifted date is also a holiday, it continues forward until a working day is found.</li>
+                  <li>Dates in <em>Settings → Holiday List</em> (including Saturday-offs) are treated as non-working.</li>
+                  <li>
+                    First occurrences (from forms or bulk upload) can fall on any day,
+                    including Sundays / holidays.
+                  </li>
+                  <li>
+                    For <strong>recurring checklists</strong>, if the next occurrence falls on a Sunday/holiday,
+                    it is moved to the next working day at <strong>7:00 PM IST</strong>.
+                  </li>
+                  <li>Delegations are one-time; they are not automatically re-scheduled or rolled.</li>
                 </ul>
               </div>
 

@@ -26,4 +26,4 @@ CONTACT
 If you have questions, contact {{ employee_name }} at {{ employee_email }}.
 
 ---
-This is an automated reminder from the EMS system.
+This is an automated reminder from BOS Lakshya.

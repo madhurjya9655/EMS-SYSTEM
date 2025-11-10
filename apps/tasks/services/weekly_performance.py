@@ -1,3 +1,4 @@
+# apps/tasks/services/weekly_performance.py
 from __future__ import annotations
 
 from datetime import datetime, date, time, timedelta
@@ -11,7 +12,11 @@ from django.utils import timezone
 
 from apps.tasks.models import Checklist, Delegation
 from apps.reports.models import WeeklyScore
-from apps.tasks.utils import _send_email, _safe_console_text, SITE_URL  # reuse existing mail util
+from apps.tasks.utils import (
+    send_html_email,
+    _safe_console_text,
+    SITE_URL,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -47,6 +52,10 @@ def _already_mailed(user: User, week_start: date) -> bool:
 
 
 def _send_congrats_email(user: User, score: Decimal, week_start: date, week_end: date) -> bool:
+    """
+    Send the 'congratulations' email using the unified HTML helper.
+    Returns True on success, False on failure.
+    """
     if not getattr(user, "email", ""):
         return False
 
@@ -58,9 +67,17 @@ def _send_congrats_email(user: User, score: Decimal, week_start: date, week_end:
         "week_end": week_end,
         "site_url": SITE_URL,
     }
-    html = render_to_string("email/congratulations_mail.html", ctx)
+
     try:
-        return _send_email(subject, [user.email], html)
+        # Prefer template-based rendering (the template can use the context above)
+        # Fallback HTML is handled by send_html_email if template rendering fails.
+        send_html_email(
+            subject=subject,
+            template_name="email/congratulations_mail.html",
+            context=ctx,
+            to=[user.email],
+        )
+        return True
     except Exception as e:
         logger.error(_safe_console_text(f"Congrats email failed for {user}: {e}"))
         return False

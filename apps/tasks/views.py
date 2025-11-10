@@ -19,7 +19,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.staticfiles import finders
 from django.db import transaction, OperationalError, connection, close_old_connections
-from django.db.models import Q
+from django.db.models import Q, Sum
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -1184,11 +1184,21 @@ def list_delegation(request):
         today = timezone.localdate()
         qs = qs.filter(planned_date__date=today)
 
+    # Summary for list_delegation.html header cards
+    agg = qs.aggregate(
+        assign_time=Sum("time_per_task_minutes"),
+        actual_time=Sum("actual_duration_minutes"),
+    )
+    assign_time = agg.get("assign_time") or 0
+    actual_time = agg.get("actual_time") or 0
+
     ctx = {
         "items": qs,
         "current_tab": "delegation",
         "users": User.objects.filter(is_active=True).order_by("username"),
         "priority_choices": Delegation._meta.get_field("priority").choices,
+        "assign_time": assign_time,
+        "actual_time": actual_time,
     }
     if request.GET.get("partial"):
         return render(request, "tasks/partial_list_delegation.html", ctx)

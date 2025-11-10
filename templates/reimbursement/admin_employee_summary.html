@@ -36,7 +36,7 @@
               {% endif %}
             </td>
             <td>{{ row.created_by__email|default:"-" }}</td>
-            <td>{{ row.total_amount }}</td>
+            <td>₹{{ row.total_amount|floatformat:2 }}</td>
             <td>{{ row.request_count }}</td>
           </tr>
           {% empty %}

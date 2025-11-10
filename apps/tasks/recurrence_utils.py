@@ -80,7 +80,9 @@ def preserve_first_occurrence_time(planned_dt: Optional[datetime]) -> Optional[d
         return None
     ist_base = _to_ist(planned_dt)
     d = ist_base.date()
-    fixed_ist = IST.localize(datetime.combine(d, dt_time(DEFAULT_EVENING_HOUR, DEFAULT_EVENING_MINUTE)))
+    fixed_ist = IST.localize(
+        datetime.combine(d, dt_time(DEFAULT_EVENING_HOUR, DEFAULT_EVENING_MINUTE))
+    )
     return _from_ist(fixed_ist)
 
 
@@ -102,6 +104,10 @@ def get_next_same_time(
     *,
     end_date: Optional[date] = None,
 ) -> Optional[datetime]:
+    """
+    Step forward by mode/frequency, shift to next working day if needed,
+    and pin to DEFAULT_EVENING_HOUR (19:00 IST).
+    """
     m = normalize_mode(mode)
     if m not in RECURRING_MODES:
         return None
@@ -111,7 +117,9 @@ def get_next_same_time(
         nxt_date = next_working_day(nxt_date)
     if end_date and nxt_date > end_date:
         return None
-    nxt_ist = IST.localize(datetime.combine(nxt_date, dt_time(DEFAULT_EVENING_HOUR, DEFAULT_EVENING_MINUTE)))
+    nxt_ist = IST.localize(
+        datetime.combine(nxt_date, dt_time(DEFAULT_EVENING_HOUR, DEFAULT_EVENING_MINUTE))
+    )
     return _from_ist(nxt_ist)
 
 
@@ -122,6 +130,12 @@ def get_next_fixed_7pm(
     *,
     end_date: Optional[date] = None,
 ) -> Optional[datetime]:
+    """
+    Same as get_next_same_time in current rules:
+    - step by mode/frequency
+    - shift Sunday/holiday → next working day
+    - pin 19:00 IST
+    """
     m = normalize_mode(mode)
     if m not in RECURRING_MODES:
         return None
@@ -131,8 +145,22 @@ def get_next_fixed_7pm(
         nxt_date = next_working_day(nxt_date)
     if end_date and nxt_date > end_date:
         return None
-    nxt_ist = IST.localize(datetime.combine(nxt_date, dt_time(DEFAULT_EVENING_HOUR, DEFAULT_EVENING_MINUTE)))
+    nxt_ist = IST.localize(
+        datetime.combine(nxt_date, dt_time(DEFAULT_EVENING_HOUR, DEFAULT_EVENING_MINUTE))
+    )
     return _from_ist(nxt_ist)
+
+
+def get_next_planned_date(
+    prev_planned: datetime,
+    mode: str,
+    frequency: int,
+) -> Optional[datetime]:
+    """
+    Backwards-compat wrapper used by Celery / older code.
+    Semantics: same as get_next_fixed_7pm (working-day shift, 19:00 IST).
+    """
+    return get_next_fixed_7pm(prev_planned, mode, frequency)
 
 
 def compute_next_planned_datetime(
@@ -143,12 +171,15 @@ def compute_next_planned_datetime(
     end_date: Optional[date] = None,
     force_7pm: bool = False,
 ) -> Optional[datetime]:
+    # Current rules always pin to 7 PM; end_date is applied inside get_next_fixed_7pm.
     return get_next_fixed_7pm(prev_planned, mode, frequency, end_date=end_date)
 
 
 def visibility_anchor_ist(due_planned: datetime) -> datetime:
     due_ist = _to_ist(due_planned)
-    anchor = IST.localize(datetime.combine(due_ist.date(), dt_time(VISIBILITY_HOUR, VISIBILITY_MINUTE)))
+    anchor = IST.localize(
+        datetime.combine(due_ist.date(), dt_time(VISIBILITY_HOUR, VISIBILITY_MINUTE))
+    )
     return anchor
 
 
@@ -196,7 +227,9 @@ class DashboardCutoff:
     def _same_ist_date(self, planned_date: datetime) -> bool:
         return _to_ist(planned_date).date() == self.now_ist.date()
 
-    def should_show_checklist(self, *, planned_date: datetime, is_recurring: bool, today_only: bool) -> bool:
+    def should_show_checklist(
+        self, *, planned_date: datetime, is_recurring: bool, today_only: bool
+    ) -> bool:
         if today_only and not self._same_ist_date(planned_date):
             return False
         return is_checklist_visible_now(planned_date, now=self.now_ist)
@@ -212,7 +245,9 @@ class DashboardCutoff:
 
 def extract_ist_wallclock(dt: datetime) -> Tuple[date, dt_time]:
     dt_ist = _to_ist(dt)
-    return dt_ist.date(), dt_time(dt_ist.hour, dt_ist.minute, dt_ist.second, dt_ist.microsecond)
+    return dt_ist.date(), dt_time(
+        dt_ist.hour, dt_ist.minute, dt_ist.second, dt_ist.microsecond
+    )
 
 
 def ist_wallclock_to_project_tz(d: date, t: dt_time) -> datetime:
@@ -228,6 +263,7 @@ __all__ = [
     "preserve_first_occurrence_time",
     "get_next_same_time",
     "get_next_fixed_7pm",
+    "get_next_planned_date",
     "compute_next_planned_datetime",
     "visibility_anchor_ist",
     "is_recurring_visible_now",

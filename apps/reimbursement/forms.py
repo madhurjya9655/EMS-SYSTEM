@@ -13,6 +13,7 @@ from .models import (
     ReimbursementSettings,
     Reimbursement,
     REIMBURSEMENT_CATEGORY_CHOICES,
+    GST_TYPE_CHOICES,
 )
 
 User = get_user_model()
@@ -32,7 +33,10 @@ class DateInput(forms.DateInput):
 
 class ExpenseItemForm(forms.ModelForm):
     """
-    Form for employees to upload individual expenses (bills) into their inbox.
+    Form for employees to upload individual expenses (bills).
+
+    - Vendor field is kept in the model (for old data) but hidden from the form.
+    - New field gst_type: GST Bill / Non GST Bill.
     """
 
     class Meta:
@@ -41,8 +45,8 @@ class ExpenseItemForm(forms.ModelForm):
             "date",
             "category",
             "amount",
-            "vendor",
             "description",
+            "gst_type",
             "receipt_file",
         ]
         widgets = {
@@ -59,18 +63,16 @@ class ExpenseItemForm(forms.ModelForm):
                     "placeholder": "Amount",
                 }
             ),
-            "vendor": forms.TextInput(
-                attrs={
-                    "class": "form-control",
-                    "placeholder": "Vendor / Merchant (optional)",
-                }
-            ),
             "description": forms.Textarea(
                 attrs={
                     "class": "form-control",
                     "rows": 3,
                     "placeholder": "Description (optional)",
                 }
+            ),
+            "gst_type": forms.RadioSelect(
+                attrs={"class": "form-check-input"},
+                choices=GST_TYPE_CHOICES,
             ),
             "receipt_file": forms.FileInput(
                 attrs={
@@ -85,6 +87,11 @@ class ExpenseItemForm(forms.ModelForm):
         """
         self.user = kwargs.pop("user", None)
         super().__init__(*args, **kwargs)
+
+        # UI labels / defaults
+        self.fields["category"].label = "Type of Expense"
+        self.fields["gst_type"].label = "Bill Type"
+        self.fields["gst_type"].initial = "non_gst"
 
 
 class ExpenseStatusFilterForm(forms.Form):
@@ -274,8 +281,8 @@ class FinanceProcessForm(forms.ModelForm):
         required=False,
         initial=False,
         widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
-        label="Mark as Paid",
-        help_text="Tick this box to mark the reimbursement as paid.",
+        label="Mark as Claim Settled",  # renamed for Finance language
+        help_text="Tick this box to mark the reimbursement as Claim Settled (Paid).",
     )
 
     class Meta:
@@ -295,7 +302,7 @@ class FinanceProcessForm(forms.ModelForm):
             "finance_payment_reference": forms.TextInput(
                 attrs={
                     "class": "form-control",
-                    "placeholder": "Payment reference / transaction ID (required if marking as Paid).",
+                    "placeholder": "Payment reference / transaction ID (required if marking as Claim Settled).",
                 }
             ),
         }
@@ -307,7 +314,7 @@ class FinanceProcessForm(forms.ModelForm):
         if mark_paid and not ref:
             self.add_error(
                 "finance_payment_reference",
-                "Payment reference is required when marking as Paid.",
+                "Payment reference is required when marking as Claim Settled.",
             )
         return cleaned
 

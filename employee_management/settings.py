@@ -21,9 +21,11 @@ def env_list(name: str, default_csv: str = "") -> List[str]:
     raw = os.getenv(name, default_csv) or ""
     return [part.strip() for part in raw.split(",") if part.strip()]
 
+
 def env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name, str(default))
     return str(raw).lower() in ("1", "true", "yes", "on")
+
 
 def env_int(name: str, default: int = 0) -> int:
     try:
@@ -31,13 +33,14 @@ def env_int(name: str, default: int = 0) -> int:
     except (ValueError, TypeError):
         return default
 
+
 # -----------------------------------------------------------------------------
 # CORE
 # -----------------------------------------------------------------------------
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-__dev-only-use-this__")
 DEBUG = env_bool("DEBUG", True)
 SITE_URL = os.getenv("SITE_URL", "https://ems-system-d26q.onrender.com")
-CRON_SECRET = os.getenv("CRON_SECRET", "")  # <--- for HTTP cron hook
+CRON_SECRET = os.getenv("CRON_SECRET", "")  # for HTTP cron hook
 ON_RENDER = bool(os.environ.get("RENDER"))
 
 ALLOWED_HOSTS = env_list(
@@ -51,7 +54,11 @@ CSRF_TRUSTED_ORIGINS = env_list(
 )
 
 if DEBUG:
-    for local_origin in ("http://localhost:8000", "http://127.0.0.1:8000", "http://0.0.0.0:8000"):
+    for local_origin in (
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://0.0.0.0:8000",
+    ):
         if local_origin not in CSRF_TRUSTED_ORIGINS:
             CSRF_TRUSTED_ORIGINS.append(local_origin)
 
@@ -91,7 +98,6 @@ THIRD_PARTY_APPS = [
 LOCAL_APPS = [
     "apps.common",
     "apps.recruitment",
-    # IMPORTANT: use the AppConfig so signals (emails/audits) are registered
     "apps.leave.apps.LeaveConfig",
     "apps.core",
     "apps.sales",
@@ -117,14 +123,12 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
-    # Add these new middleware entries after authentication middleware
-    "apps.users.middleware.PermissionEnforcementMiddleware",  # URL permission enforcement
-    "apps.users.middleware.PermissionDebugMiddleware",        # Permission debugging
+    "apps.users.middleware.PermissionEnforcementMiddleware",
+    "apps.users.middleware.PermissionDebugMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-# IMPORTANT: your project package is "employee_management"
 ROOT_URLCONF = "employee_management.urls"
 WSGI_APPLICATION = "employee_management.wsgi.application"
 
@@ -137,7 +141,6 @@ _template_options = {
         "django.template.context_processors.request",
         "django.contrib.auth.context_processors.auth",
         "django.contrib.messages.context_processors.messages",
-        # Add this new context processor
         "apps.users.permissions.permissions_context",
     ],
     "builtins": [
@@ -204,7 +207,7 @@ DATABASE_CONNECTION_POOLING = False
 CONN_MAX_AGE = 0
 
 # -----------------------------------------------------------------------------
-# SQLITE ROBUSTNESS (PRAGMAs + decoding)
+# SQLITE ROBUSTNESS
 # -----------------------------------------------------------------------------
 def _robust_sqlite_decoder(val):
     if val is None:
@@ -233,14 +236,24 @@ def _robust_sqlite_decoder(val):
     except Exception:
         return None
 
+
 try:
     for dt_type in [
-        "timestamp", "datetime", "timestamptz", "timestamp with time zone",
-        "date", "time", "TIMESTAMP", "DATETIME", "DATE", "TIME",
+        "timestamp",
+        "datetime",
+        "timestamptz",
+        "timestamp with time zone",
+        "date",
+        "time",
+        "TIMESTAMP",
+        "DATETIME",
+        "DATE",
+        "TIME",
     ]:
         sqlite3.register_converter(dt_type, _robust_sqlite_decoder)
 except Exception:
     pass
+
 
 def _configure_sqlite_connection(sender, connection, **kwargs):
     if connection.vendor != "sqlite":
@@ -290,10 +303,12 @@ def _configure_sqlite_connection(sender, connection, **kwargs):
     except Exception:
         pass
 
+
 connection_created.connect(_configure_sqlite_connection)
 
 try:
     from django.db.backends.sqlite3.operations import DatabaseOperations
+
     _orig_convert = DatabaseOperations.convert_datetimefield_value
 
     def safe_convert_datetimefield_value(self, value, expression, connection):
@@ -334,7 +349,10 @@ LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
-        "verbose": {"format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}", "style": "{"},
+        "verbose": {
+            "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
+            "style": "{",
+        },
         "simple": {"format": "{levelname} {asctime} {message}", "style": "{"},
         "detailed": {
             "format": "[{asctime}] {levelname} {name} {module}.{funcName}:{lineno} - {message}",
@@ -380,8 +398,6 @@ LOGGING = {
     "loggers": {
         "django": {"handlers": ["file"], "level": "INFO", "propagate": False},
         "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
-
-        # Quiet by default in prod (INFO); DEBUG only when you enable it.
         "apps.users.permissions": {
             "handlers": ["permissions_file"] + (["console"] if DEBUG else []),
             "level": "DEBUG" if DEBUG else "INFO",
@@ -392,14 +408,31 @@ LOGGING = {
             "level": "DEBUG" if DEBUG else "INFO",
             "propagate": False,
         },
-
-        "apps.tasks": {"handlers": ["tasks_file", "console"], "level": "DEBUG" if DEBUG else "INFO", "propagate": False},
-        "apps.tasks.views": {"handlers": ["bulk_upload_file", "console"], "level": "INFO", "propagate": False},
-        "apps.tasks.signals": {"handlers": ["tasks_file"], "level": "INFO", "propagate": False},
-
-        # ---- Added so leave notifications show up in logs ----
-        "apps.leave": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},
-        "apps.leave.services.notifications": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},
+        "apps.tasks": {
+            "handlers": ["tasks_file", "console"],
+            "level": "DEBUG" if DEBUG else "INFO",
+            "propagate": False,
+        },
+        "apps.tasks.views": {
+            "handlers": ["bulk_upload_file", "console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.tasks.signals": {
+            "handlers": ["tasks_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.leave": {
+            "handlers": ["file", "console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.leave.services.notifications": {
+            "handlers": ["file", "console"],
+            "level": "INFO",
+            "propagate": False,
+        },
     },
 }
 
@@ -426,14 +459,18 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 STORAGES = {
-    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"
+    },
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
 }
 
-WHITENOISE_MAX_AGE = 60 * 60 * 24 * 365  # 1 year
+WHITENOISE_MAX_AGE = 60 * 60 * 24 * 365
 
 MEDIA_URL = "/media/"
-MEDIA_ROOT = os.getenv("MEDIA_ROOT") or ("/var/data/media" if ON_RENDER else str(BASE_DIR / "media"))
+MEDIA_ROOT = os.getenv("MEDIA_ROOT") or (
+    "/var/data/media" if ON_RENDER else str(BASE_DIR / "media")
+)
 Path(MEDIA_ROOT).mkdir(parents=True, exist_ok=True)
 
 # -----------------------------------------------------------------------------
@@ -447,27 +484,40 @@ LOGOUT_REDIRECT_URL = "login"
 # -----------------------------------------------------------------------------
 # EMAIL
 # -----------------------------------------------------------------------------
-EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend"
+)
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = env_int("EMAIL_PORT", 587)
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", False)
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "EMS System <no-reply@example.com>")
+DEFAULT_FROM_EMAIL = os.getenv(
+    "DEFAULT_FROM_EMAIL",
+    EMAIL_HOST_USER or "BOS Lakshya <no-reply@example.com>",
+)
+
+# dedicated override for reimbursement module (used in notifications)
+REIMBURSEMENT_EMAIL_FROM = os.getenv(
+    "REIMBURSEMENT_EMAIL_FROM",
+    DEFAULT_FROM_EMAIL,
+)
+
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 30)
 EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
 
 SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", True)
 SEND_RECUR_EMAILS_ONLY_AT_10AM = env_bool("SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
 
-EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "[EMS] ")
+EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "[BOS Lakshya] ")
 
-# ----- Leave-specific email / token settings ---------------------------------
 LEAVE_EMAIL_FROM = os.getenv("LEAVE_EMAIL_FROM", DEFAULT_FROM_EMAIL)
 LEAVE_EMAIL_REPLY_TO_EMPLOYEE = env_bool("LEAVE_EMAIL_REPLY_TO_EMPLOYEE", True)
 LEAVE_DECISION_TOKEN_SALT = os.getenv("LEAVE_DECISION_TOKEN_SALT", "leave-action-v1")
-LEAVE_DECISION_TOKEN_MAX_AGE = env_int("LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)  # 7 days
+LEAVE_DECISION_TOKEN_MAX_AGE = env_int(
+    "LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7
+)
 
 # -----------------------------------------------------------------------------
 # SECURITY (Prod)
@@ -478,12 +528,16 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = True
 
     SECURE_HSTS_SECONDS = env_int("SECURE_HSTS_SECONDS", 31536000)
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", True)
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool(
+        "SECURE_HSTS_INCLUDE_SUBDOMAINS", True
+    )
     SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", True)
 
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = "DENY"
-    SECURE_REFERRER_POLICY = os.getenv("SECURE_REFERRER_POLICY", "strict-origin-when-cross-origin")
+    SECURE_REFERRER_POLICY = os.getenv(
+        "SECURE_REFERRER_POLICY", "strict-origin-when-cross-origin"
+    )
 
 # -----------------------------------------------------------------------------
 # THIRD-PARTY
@@ -516,11 +570,17 @@ TASK_LIST_PAGE_SIZE = env_int("TASK_LIST_PAGE_SIZE", 50)
 # PERFORMANCE / CACHING
 # -----------------------------------------------------------------------------
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
-SESSION_COOKIE_AGE = 60 * 60 * 24 * 7  # 1 week
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 7
 
-FILE_UPLOAD_MAX_MEMORY_SIZE = env_int("FILE_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 * 1024)
-DATA_UPLOAD_MAX_MEMORY_SIZE = env_int("DATA_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 * 1024)
-DATA_UPLOAD_MAX_NUMBER_FIELDS = env_int("DATA_UPLOAD_MAX_NUMBER_FIELDS", 2000)
+FILE_UPLOAD_MAX_MEMORY_SIZE = env_int(
+    "FILE_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 * 1024
+)
+DATA_UPLOAD_MAX_MEMORY_SIZE = env_int(
+    "DATA_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 * 1024
+)
+DATA_UPLOAD_MAX_NUMBER_FIELDS = env_int(
+    "DATA_UPLOAD_MAX_NUMBER_FIELDS", 2000
+)
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 if REDIS_URL:
@@ -558,8 +618,12 @@ if ON_RENDER:
 
     WEB_CONCURRENCY = env_int("WEB_CONCURRENCY", 2)
     MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
-    FILE_UPLOAD_MAX_MEMORY_SIZE = min(FILE_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024)
-    DATA_UPLOAD_MAX_MEMORY_SIZE = min(DATA_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024)
+    FILE_UPLOAD_MAX_MEMORY_SIZE = min(
+        FILE_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024
+    )
+    DATA_UPLOAD_MAX_MEMORY_SIZE = min(
+        DATA_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024
+    )
     EMAIL_FAIL_SILENTLY = True
 
 # -----------------------------------------------------------------------------
@@ -577,18 +641,24 @@ if DEBUG:
 # CUSTOM SETTINGS VALIDATION
 # -----------------------------------------------------------------------------
 def validate_email_settings():
-    if not DEBUG and EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend":
+    if (
+        not DEBUG
+        and EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend"
+    ):
         if not EMAIL_HOST_USER or not EMAIL_HOST_PASSWORD:
             import warnings
+
             warnings.warn(
                 "Email credentials not configured. Email functionality may not work.",
                 RuntimeWarning,
             )
 
+
 def validate_required_dirs():
     required_dirs = [MEDIA_ROOT, STATIC_ROOT, LOGS_DIR]
     for dir_path in required_dirs:
         Path(dir_path).mkdir(parents=True, exist_ok=True)
+
 
 validate_email_settings()
 validate_required_dirs()
@@ -610,31 +680,44 @@ FEATURES = {
 # -----------------------------------------------------------------------------
 TASK_PRIORITIES = [("Low", "Low"), ("Medium", "Medium"), ("High", "High")]
 TASK_STATUSES = [("Pending", "Pending"), ("Completed", "Completed")]
-RECURRING_MODES = [("Daily", "Daily"), ("Weekly", "Weekly"), ("Monthly", "Monthly"), ("Yearly", "Yearly")]
-HELP_TICKET_STATUSES = [("Open", "Open"), ("In Progress", "In Progress"), ("Closed", "Closed")]
+RECURRING_MODES = [
+    ("Daily", "Daily"),
+    ("Weekly", "Weekly"),
+    ("Monthly", "Monthly"),
+    ("Yearly", "Yearly"),
+]
+HELP_TICKET_STATUSES = [
+    ("Open", "Open"),
+    ("In Progress", "In Progress"),
+    ("Closed", "Closed"),
+]
 
 # -----------------------------------------------------------------------------
-# LEAVE ROUTING FILE (used by the Routing Map admin page)
+# LEAVE ROUTING FILE
 # -----------------------------------------------------------------------------
-LEAVE_ROUTING_FILE = str(BASE_DIR / "apps" / "users" / "data" / "leave_routing.json")
+LEAVE_ROUTING_FILE = str(
+    BASE_DIR / "apps" / "users" / "data" / "leave_routing.json"
+)
 
 # -----------------------------------------------------------------------------
 # PERMISSION SYSTEM SETTINGS
 # -----------------------------------------------------------------------------
 PERMISSION_DENIED_REDIRECT = "dashboard:home"
-# NEW: can be toggled via env; defaults to off in prod/Render,
-# on in local DEBUG. Use PERMISSION_DEBUG_ENABLED=1 to force logs.
-PERMISSION_DEBUG_ENABLED = env_bool("PERMISSION_DEBUG_ENABLED", DEBUG and not ON_RENDER)
+PERMISSION_DEBUG_ENABLED = env_bool(
+    "PERMISSION_DEBUG_ENABLED", DEBUG and not ON_RENDER
+)
 
 # -----------------------------------------------------------------------------
-# CELERY CONFIGURATION  (Updated)
+# CELERY CONFIGURATION
 # -----------------------------------------------------------------------------
-# Toggle whether email notifications use Celery (async) or run in-process (sync)
 ENABLE_CELERY_EMAIL = env_bool("ENABLE_CELERY_EMAIL", False)
 
-# Use a real broker when enabled; defaults are Redis URIs (override with env).
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/1")
+CELERY_BROKER_URL = os.getenv(
+    "CELERY_BROKER_URL", "redis://127.0.0.1:6379/0"
+)
+CELERY_RESULT_BACKEND = os.getenv(
+    "CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/1"
+)
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
@@ -646,6 +729,5 @@ CELERY_TASK_SOFT_TIME_LIMIT = 60
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
 
-# Add django-celery-beat to INSTALLED_APPS if present
-if 'django_celery_beat' not in INSTALLED_APPS:
-    INSTALLED_APPS.append('django_celery_beat')
+if "django_celery_beat" not in INSTALLED_APPS:
+    INSTALLED_APPS.append("django_celery_beat")

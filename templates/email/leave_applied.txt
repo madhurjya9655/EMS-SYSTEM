@@ -38,5 +38,5 @@ One-click (secure; expires in 7 days; one-time use)
 {% if token_reject_url %}Reject via secure link:  {{ token_reject_url }}{% endif %}
 {% endif %}
 
-— EMS
+— BOS Lakshya
 {% if site_url %}Open EMS: {{ site_url }}{% endif %}

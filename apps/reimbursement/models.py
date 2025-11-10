@@ -15,12 +15,23 @@ logger = logging.getLogger(__name__)
 
 UserModel = settings.AUTH_USER_MODEL
 
-# Shared category choices (used by legacy + new models)
+# ---------------------------------------------------------------------------
+# Shared choices
+# ---------------------------------------------------------------------------
+
+# Category choices (used by legacy + new models)
 REIMBURSEMENT_CATEGORY_CHOICES = [
-    ("travel", "Travel"),
-    ("meal", "Meal"),
+    ("travel", "Travel Expenses"),
+    ("meal", "Food Expenses"),          # keep key 'meal' for old data, label changed
+    ("yard", "Yard Expenses"),
     ("office", "Office Supplies"),
     ("other", "Other"),
+]
+
+# GST bill type choices
+GST_TYPE_CHOICES = [
+    ("gst", "GST Bill"),
+    ("non_gst", "Non GST Bill"),
 ]
 
 
@@ -291,9 +302,6 @@ class ExpenseItem(models.Model):
     Later, multiple ExpenseItems can be attached to a ReimbursementRequest.
 
     NOTE: Files uploaded here are stored on the configured MEDIA storage.
-    We never delete the underlying file automatically from storage, even if
-    the ExpenseItem or ReimbursementLine is deleted, so the bill/receipt
-    always remains on the system unless an administrator removes it manually.
     """
 
     class Status(models.TextChoices):
@@ -319,6 +327,7 @@ class ExpenseItem(models.Model):
         decimal_places=2,
         help_text=_("Amount must be greater than 0."),
     )
+    # Vendor kept in DB for legacy, but no longer shown in forms/UI
     vendor = models.CharField(
         max_length=255,
         blank=True,
@@ -329,6 +338,12 @@ class ExpenseItem(models.Model):
         blank=True,
         default="",
         help_text=_("Short description of the expense."),
+    )
+    gst_type = models.CharField(
+        max_length=10,
+        choices=GST_TYPE_CHOICES,
+        default="non_gst",
+        help_text=_("Whether this bill is under GST or not (GST Bill / Non GST Bill)."),
     )
     receipt_file = models.FileField(
         upload_to=receipt_upload_path,
@@ -362,7 +377,7 @@ class ExpenseItem(models.Model):
     @property
     def is_locked(self) -> bool:
         """
-        Convenience: True if this item is attached/submitted and should not be edited
+        True if this item is attached/submitted and should not be edited
         except when the owning request is in clarification.
         """
         return self.status in {self.Status.ATTACHED, self.Status.SUBMITTED}
@@ -375,18 +390,6 @@ class ExpenseItem(models.Model):
 class ReimbursementRequest(models.Model):
     """
     A submitted reimbursement request composed of one or more ExpenseItems.
-
-    Status flow:
-      draft (optional, pre-submit)
-      → pending_manager
-      → pending_management (if required)
-      → pending_finance
-      → approved (ready to pay, optional)
-      → paid
-
-    At any approval stage, request can be marked as:
-      - rejected
-      - clarification_required (sent back to employee)
     """
 
     class Status(models.TextChoices):

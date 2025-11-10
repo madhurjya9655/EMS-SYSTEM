@@ -51,7 +51,7 @@
             <td>{{ line.expense_item.get_category_display }}</td>
             <td>{{ line.expense_item.vendor|default:"-" }}</td>
             <td class="small">{{ line.description|default:"-" }}</td>
-            <td>{{ line.amount }}</td>
+            <td>₹{{ line.amount|floatformat:2 }}</td>
             <td>
               {% if line.receipt_file or line.expense_item.receipt_file %}
                 <a href="{% url 'reimbursement:receipt_line' line.id %}" target="_blank"

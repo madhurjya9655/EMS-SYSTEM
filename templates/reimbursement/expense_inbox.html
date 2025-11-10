@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Expense Inbox{% endblock %}
+{% block title %}Upload Expenses{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h2>Expense Inbox</h2>
+  <h2>Upload Expenses</h2>
   <div>
     <a href="{% url 'reimbursement:my_reimbursements' %}" class="btn btn-outline-secondary btn-sm">
       My Requests
@@ -22,16 +22,39 @@
         <form method="post" enctype="multipart/form-data">
           {% csrf_token %}
           {% for field in form %}
-            <div class="mb-3">
-              {{ field.label_tag }}
-              {{ field }}
-              {% if field.help_text %}
-                <div class="form-text">{{ field.help_text }}</div>
-              {% endif %}
-              {% if field.errors %}
-                <div class="text-danger small">{{ field.errors }}</div>
-              {% endif %}
-            </div>
+            {% if field.name == "bill_type" or field.name == "gst_type" or field.name == "gst_bill" %}
+              {# Special aligned layout for GST Bill Type field #}
+              <div class="mb-3">
+                <label class="form-label d-block">Bill Type</label>
+                <div>
+                  {% for subwidget in field %}
+                    <div class="form-check">
+                      {{ subwidget.tag }}
+                      <label class="form-check-label" for="{{ subwidget.id_for_label }}">
+                        {{ subwidget.choice_label }}
+                      </label>
+                    </div>
+                  {% endfor %}
+                </div>
+                {% if field.help_text %}
+                  <div class="form-text">{{ field.help_text }}</div>
+                {% endif %}
+                {% if field.errors %}
+                  <div class="text-danger small">{{ field.errors }}</div>
+                {% endif %}
+              </div>
+            {% else %}
+              <div class="mb-3">
+                {{ field.label_tag }}
+                {{ field }}
+                {% if field.help_text %}
+                  <div class="form-text">{{ field.help_text }}</div>
+                {% endif %}
+                {% if field.errors %}
+                  <div class="text-danger small">{{ field.errors }}</div>
+                {% endif %}
+              </div>
+            {% endif %}
           {% endfor %}
           <button type="submit" class="btn btn-primary w-100">Save Expense</button>
         </form>

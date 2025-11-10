@@ -69,15 +69,18 @@ def _is_after_10am_ist() -> bool:
 def _should_send_recur_email_now() -> bool:
     """
     Controls immediate email at the moment a new recurring instance is generated.
-    If SEND_RECUR_EMAILS_ONLY_AT_10AM=True, we skip immediate send and rely on
-    the daily 10:00 IST fan-out (send_due_today_assignments) on the DUE DAY.
+
+    With SEND_RECUR_EMAILS_ONLY_AT_10AM=True (default), we NEVER send an email
+    here and rely entirely on the 10:00 IST fan-out (send_due_today_assignments)
+    on the DUE DAY. This matches the client's requirement:
+    - Emails for recurring checklists go only at 10 AM on the planned day.
     """
     if not SEND_EMAILS_FOR_AUTO_RECUR:
         return False
-    if not SEND_RECUR_EMAILS_ONLY_AT_10AM:
-        return True
-    # Only send immediately if we’re around 10:00; otherwise 10:00 fan-out will handle it.
-    return _within_10am_ist_window()
+    if SEND_RECUR_EMAILS_ONLY_AT_10AM:
+        return False
+    # If ever allowed, we’d send immediately on creation.
+    return True
 
 
 # -------------------------------
@@ -93,7 +96,7 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
       • Compute next from the latest Completed occurrence's planned_date.
       • Next planned is **19:00 IST** on the next working day (Sun/holidays shifted).
       • Dupe guard ±1 minute.
-      • Send email to assignee for every generated occurrence (when allowed by knobs).
+      • Emails are normally NOT sent here; 10:00 AM fan-out handles due-day emails.
 
     Returns: number of items created (0/1).
     """
@@ -147,7 +150,7 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
         )
         return 0
 
-    # Create + (maybe) email (assignee-only)
+    # Create (emails handled separately by 10 AM job)
     with transaction.atomic():
         obj = Checklist.objects.create(
             assign_by=completed.assign_by,
@@ -179,7 +182,6 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
     if _should_send_recur_email_now():
         try:
             complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
-            # SUBJECT updated to today's phrasing
             send_checklist_assignment_to_user(
                 task=obj,
                 complete_url=complete_url,
@@ -206,6 +208,7 @@ def generate_recurring_checklists(
     """
     Idempotent generator for recurring CHECKLIST tasks.
     Safe to run hourly or daily (e.g., via celery beat or cron).
+
     NOTE: If you've enabled auto-creation on completion via signals,
           this task is optional / can serve as a safety net.
     """

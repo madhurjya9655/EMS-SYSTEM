@@ -293,6 +293,22 @@ def _management_emails() -> List[str]:
         return []
 
 
+def _manager_email_actual(req: ReimbursementRequest) -> Optional[str]:
+    """
+    Return the real manager's email (not the global level-1 approver).
+    Used e.g. in Paid email CC.
+    """
+    try:
+        if req.manager and getattr(req.manager, "email", None):
+            return (req.manager.email or "").strip() or None
+        mapping = ReimbursementApproverMapping.for_employee(req.created_by)
+        if mapping and mapping.manager and getattr(mapping.manager, "email", None):
+            return (mapping.manager.email or "").strip() or None
+    except Exception:
+        logger.exception("Failed resolving manager email for reimbursement #%s", req.id)
+    return None
+
+
 def _recipients_for_manager(req: ReimbursementRequest) -> _Recipients:
     """
     TO (priority):
@@ -392,6 +408,123 @@ def _employee_email(req: ReimbursementRequest) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Expense line details for emails
+# ---------------------------------------------------------------------------
+
+
+def _lines_for_email(req: ReimbursementRequest) -> List[Dict[str, str]]:
+    """
+    Collect line-level data (category, date, description, amount, bill URL)
+    for use in HTML + text email bodies.
+    """
+    rows: List[Dict[str, str]] = []
+    try:
+        lines = (
+            req.lines.select_related("expense_item")
+            .filter(status=ReimbursementLine.Status.INCLUDED)
+            .order_by("id")
+        )
+        for line in lines:
+            item = line.expense_item
+            try:
+                category = item.get_category_display()
+            except Exception:
+                category = getattr(item, "category", "") or ""
+            try:
+                date_str = item.date.strftime("%d %b %Y")
+            except Exception:
+                date_str = str(getattr(item, "date", "") or "")
+            description = (line.description or getattr(item, "description", "") or "").strip() or "-"
+            amount = f"₹{_format_amount(line.amount or getattr(item, 'amount', None))}"
+            try:
+                bill_url = _abs_url(reverse("reimbursement:receipt_line", args=[line.id]))
+            except Exception:
+                bill_url = ""
+            rows.append(
+                {
+                    "category": category,
+                    "date": date_str,
+                    "description": description,
+                    "amount": amount,
+                    "bill_url": bill_url,
+                }
+            )
+    except Exception:
+        logger.exception("Failed building line details for reimbursement #%s", req.id)
+    return rows
+
+
+def _build_lines_table_html(req: ReimbursementRequest) -> str:
+    rows = _lines_for_email(req)
+    if not rows:
+        return """
+<p style="font-size:13px;color:#6b7280;margin:8px 0;">
+  No expense lines attached to this reimbursement.
+</p>
+        """.strip()
+
+    parts: List[str] = []
+    parts.append(
+        """
+<table style="border-collapse:collapse;width:100%;font-size:13px;margin:8px 0;">
+  <thead>
+    <tr>
+      <th style="border-bottom:1px solid #e5e7eb;padding:6px 4px;text-align:left;">Type of Expenses</th>
+      <th style="border-bottom:1px solid #e5e7eb;padding:6px 4px;text-align:left;">Date of Expenses</th>
+      <th style="border-bottom:1px solid #e5e7eb;padding:6px 4px;text-align:left;">Description</th>
+      <th style="border-bottom:1px solid #e5e7eb;padding:6px 4px;text-align:right;">Amount</th>
+      <th style="border-bottom:1px solid #e5e7eb;padding:6px 4px;text-align:left;">Bill Attachment</th>
+    </tr>
+  </thead>
+  <tbody>
+        """.strip()
+    )
+    for r in rows:
+        if r["bill_url"]:
+            bill_html = (
+                f'<a href="{r["bill_url"]}" '
+                'style="color:#2563eb;text-decoration:none;">View</a>'
+            )
+        else:
+            bill_html = "-"
+
+        parts.append(
+            f"""
+    <tr>
+      <td style="border-bottom:1px solid #f3f4f6;padding:6px 4px;">{r["category"]}</td>
+      <td style="border-bottom:1px solid #f3f4f6;padding:6px 4px;">{r["date"]}</td>
+      <td style="border-bottom:1px solid #f3f4f6;padding:6px 4px;">{r["description"]}</td>
+      <td style="border-bottom:1px solid #f3f4f6;padding:6px 4px;text-align:right;">{r["amount"]}</td>
+      <td style="border-bottom:1px solid #f3f4f6;padding:6px 4px;">{bill_html}</td>
+    </tr>
+            """.rstrip()
+        )
+    parts.append(
+        """
+  </tbody>
+</table>
+        """.strip()
+    )
+    return "\n".join(parts)
+
+
+def _build_lines_table_text(req: ReimbursementRequest) -> str:
+    rows = _lines_for_email(req)
+    if not rows:
+        return "No expense lines attached."
+
+    header = "Type of Expenses | Date of Expenses | Description | Amount | Bill Attachment"
+    sep = "-" * len(header)
+    lines: List[str] = [header, sep]
+    for r in rows:
+        bill = f"View: {r['bill_url']}" if r["bill_url"] else "-"
+        lines.append(
+            f"{r['category']} | {r['date']} | {r['description']} | {r['amount']} | {bill}"
+        )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Email-action links (Approve / Reject from email)
 # ---------------------------------------------------------------------------
 
@@ -452,7 +585,7 @@ def _management_action_buttons(req: ReimbursementRequest) -> str:
     approve_url = _build_action_url(req, role="management", decision="approved")
     reject_url = _build_action_url(req, role="management", decision="rejected")
     return f"""
-      <div style="margin:16px 0%;">
+      <div style="margin:16px 0;">
         <a href="{approve_url}"
            style="display:inline-block;padding:10px 16px;margin-right:8px;
                   background-color:#16a34a;color:#ffffff;text-decoration:none;
@@ -473,12 +606,14 @@ def _management_action_buttons(req: ReimbursementRequest) -> str:
 # Public API – individual email flows
 # ---------------------------------------------------------------------------
 
+
 def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: str = "") -> None:
     """
     On submit:
       - Notify manager / Level-1 approver (TO; prefers global approver email).
       - CC admin summary.
       - Email includes Approve / Reject buttons for the manager.
+      - Includes full expense table.
       - Uploaded bills are attached to this email.
     """
     if not _email_enabled():
@@ -491,7 +626,7 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
 
     emp_name = _employee_display_name(req.created_by)
     amt_str = _format_amount(req.total_amount)
-    subject = f"Reimbursement Request Submitted — {emp_name} — ₹{amt_str}"
+    subject = f"Reimbursement Request For – {emp_name} – ₹{amt_str}"
 
     mgr_recip = _recipients_for_manager(req)
     if not mgr_recip.to:
@@ -501,50 +636,50 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
         )
         return
 
-    detail_url = _abs_url(
-        reverse("reimbursement:reimbursement_detail", args=[req.id])
-    )
+    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
     submitted_at = req.submitted_at or req.created_at
     buttons_html = _manager_action_buttons(req)
     cc_str = ", ".join(mgr_recip.cc) if mgr_recip.cc else ""
+    lines_html = _build_lines_table_html(req)
+    lines_txt = _build_lines_table_text(req)
 
     html = f"""
 <html>
   <body style="font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif;background:#f3f4f6;padding:16px;">
-    <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:10px;
+    <div style="max-width:700px;margin:0 auto;background:#ffffff;border-radius:10px;
                 padding:20px;border:1px solid #e5e7eb;">
       <h2 style="margin-top:0;margin-bottom:12px;color:#111827;">
-        New Reimbursement Request from {emp_name}
+        Reimbursement Request For – {emp_name} – ₹{amt_str}
       </h2>
 
-      <p style="margin:0 0 8px 0;">A new reimbursement request has been submitted.</p>
+      <p style="margin:0 0 8px 0;">New Reimbursement Request from {emp_name}</p>
 
       <table style="font-size:14px;margin:8px 0 16px 0;">
-        <tr><td style="padding-right:8px;"><strong>Request ID:</strong></td><td>#{req.id}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Total Amount:</strong></td><td>₹{amt_str}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Status:</strong></td><td>{req.get_status_display()}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Submitted On:</strong></td><td>{submitted_at}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Employee Email:</strong></td><td>{_employee_email(req) or "-"}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Request ID -</strong></td><td>#{req.id}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Employee Name -</strong></td><td>{emp_name}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Date of Submission -</strong></td><td>{submitted_at}</td></tr>
       </table>
     """
 
     if employee_note:
         html += f"""
       <p style="font-size:14px;margin:0 0 12px 0;">
-        <strong>Employee Note:</strong><br>
-        {employee_note.replace('\n', '<br>')}
+        <strong>Employee Note -</strong><br>
+        {employee_note.replace("\\n", "<br>")}
       </p>
     """
 
-    html += f"""
-      <p style="font-size:14px;margin:12px 0;">
-        You can review full details in BOS Lakshya:
+    html += """
+      <h3 style="font-size:15px;margin:16px 0 6px 0;">Expense Details</h3>
+    """ + lines_html + f"""
+      <p style="font-size:14px;margin:16px 0 6px 0;">
+        You can also review this request in BOS Lakshya:
         <br>
         <a href="{detail_url}" style="color:#2563eb;text-decoration:none;">{detail_url}</a>
       </p>
 
       <p style="font-size:14px;margin:16px 0 6px 0;">
-        Or use the quick action buttons below (no login required):
+        Quick actions (no login required):
       </p>
 
       {buttons_html}
@@ -563,25 +698,28 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
     """
 
     txt_lines = [
-        f"New reimbursement request from {emp_name}",
+        f"Reimbursement Request For – {emp_name} – ₹{amt_str}",
         "",
-        f"Request ID: #{req.id}",
-        f"Total Amount: ₹{amt_str}",
-        f"Status: {req.get_status_display()}",
-        f"Submitted On: {submitted_at}",
-        f"Employee Email: {_employee_email(req) or '-'}",
+        f"New Reimbursement Request from {emp_name}",
+        "",
+        f"Request ID - #{req.id}",
+        f"Employee Name - {emp_name}",
+        f"Date of Submission - {submitted_at}",
         "",
     ]
     if employee_note:
         txt_lines.extend(
             [
-                "Employee Note:",
+                "Employee Note -",
                 employee_note,
                 "",
             ]
         )
     txt_lines.extend(
         [
+            "Expense Details:",
+            _build_lines_table_text(req),
+            "",
             "View in BOS Lakshya:",
             detail_url,
             "",
@@ -641,9 +779,7 @@ def send_reimbursement_admin_summary(req: ReimbursementRequest) -> None:
     amt_str = _format_amount(req.total_amount)
     subject = f"Reimbursement Submitted (Admin Summary) — {emp_name} — ₹{amt_str}"
 
-    detail_url = _abs_url(
-        reverse("reimbursement:reimbursement_detail", args=[req.id])
-    )
+    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
     submitted_at = req.submitted_at or req.created_at
 
     html = f"""
@@ -724,10 +860,11 @@ def _send_level2_notification(req: ReimbursementRequest) -> None:
     """
     After Level-1 (manager) approval:
       - Send mail to global Level-2 approver (approver_level2_email),
-      - CC approver_cc_emails (plus the employee),
+      - CC approver_cc_emails (and employee),
       - BCC approver_bcc_emails.
 
-    All actual email addresses are configured in ReimbursementSettings.
+    Subject / body follow the "Approved Reimbursement Request For – ..."
+    format defined in the spec.
     """
     if not _email_enabled():
         logger.info("Reimbursement emails disabled; skipping level2 notification for #%s.", req.id)
@@ -758,39 +895,49 @@ def _send_level2_notification(req: ReimbursementRequest) -> None:
 
     emp_name = _employee_display_name(req.created_by)
     amt_str = _format_amount(req.total_amount)
-    subject = f"Reimbursement Approved (Level-2) — {emp_name} — ₹{amt_str}"
 
-    detail_url = _abs_url(
-        reverse("reimbursement:reimbursement_detail", args=[req.id])
-    )
+    manager_name = _employee_display_name(req.manager) if req.manager else "Manager"
+    subject = f"Approved Reimbursement Request For – {emp_name} – ₹{amt_str}"
+
+    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
+    submitted_at = req.submitted_at or req.created_at
+    approved_at = req.manager_decided_at or timezone.now()
+
+    lines_html = _build_lines_table_html(req)
+    lines_txt = _build_lines_table_text(req)
 
     html = f"""
 <html>
   <body style="font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif;background:#f3f4f6;padding:16px;">
-    <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:10px;
+    <div style="max-width:700px;margin:0 auto;background:#ffffff;border-radius:10px;
                 padding:20px;border:1px solid #e5e7eb;">
       <h2 style="margin-top:0;margin-bottom:12px;color:#111827;">
-        Reimbursement Approved by Level-1
+        Approved Reimbursement Request For – {emp_name} – ₹{amt_str}
       </h2>
 
       <p style="margin:0 0 8px 0;">
-        A reimbursement request has been approved by the first approver and now requires your attention.
+        Reimbursement Approved By {manager_name}<br>
+        For {emp_name}
       </p>
 
       <table style="font-size:14px;margin:8px 0 16px 0;">
-        <tr><td style="padding-right:8px;"><strong>Request ID:</strong></td><td>#{req.id}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Employee:</strong></td><td>{emp_name}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Total Amount:</strong></td><td>₹{amt_str}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Current Status:</strong></td><td>{req.get_status_display()}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Employee Name -</strong></td><td>{emp_name}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Date of Submission -</strong></td><td>{submitted_at}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Manager Comment -</strong></td><td>{(req.manager_comment or '').replace("\\n", "<br>") if req.manager_comment else "-"}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Approver Name -</strong></td><td>{manager_name}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Date &amp; Time Approved -</strong></td><td>{approved_at}</td></tr>
       </table>
 
-      <p style="font-size:14px;margin:12px 0;">
+      <h3 style="font-size:15px;margin:16px 0 6px 0;">Expense Details</h3>
+      {lines_html}
+
+      <p style="font-size:14px;margin:16px 0 6px 0;">
         View full details in BOS Lakshya:<br>
         <a href="{detail_url}" style="color:#2563eb;text-decoration:none;">{detail_url}</a>
       </p>
 
       <p style="font-size:13px;margin-top:16px;color:#4b5563;">
-        Regards,<br>BOS Lakshya
+        Please process the above expenses for settlement.
       </p>
     </div>
   </body>
@@ -799,17 +946,28 @@ def _send_level2_notification(req: ReimbursementRequest) -> None:
 
     txt = "\n".join(
         [
-            "Reimbursement approved by Level-1 approver.",
+            f"Approved Reimbursement Request For – {emp_name} – ₹{amt_str}",
             "",
-            f"Request ID : #{req.id}",
-            f"Employee   : {emp_name}",
-            f"Total Amt  : ₹{amt_str}",
-            f"Status     : {req.get_status_display()}",
+            f"Reimbursement Approved By {manager_name}",
+            f"For {emp_name}",
+            "",
+            f"Employee Name - {emp_name}",
+            f"Date of Submission - {submitted_at}",
+            f"Manager Comment - {(req.manager_comment or '').strip() or '-'}",
+            f"Approver Name - {manager_name}",
+            f"Date & Time Approved - {approved_at}",
+            "",
+            "Expense Details:",
+            lines_txt,
             "",
             "View details:",
             detail_url,
+            "",
+            "Please process the above expenses for settlement.",
         ]
     )
+
+    attachments = _collect_receipt_files(req)
 
     ok = _send(
         subject=subject,
@@ -819,6 +977,7 @@ def _send_level2_notification(req: ReimbursementRequest) -> None:
         html=html,
         txt=txt,
         bcc=_dedupe_lower(bcc_list),
+        attachments=attachments,
     )
     if ok:
         try:
@@ -840,6 +999,10 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
     Additionally:
       - If decision == 'approved', trigger Level-2 notification email using
         global approver_level2_email / approver_cc_emails / approver_bcc_emails.
+
+    Behaviour per spec:
+      * If rejected → email goes only to employee (no CC).
+      * If approved / clarification → employee + admin CC.
     """
     if not _email_enabled():
         logger.info("Reimbursement emails disabled; skipping manager-action email for #%s.", req.id)
@@ -869,9 +1032,7 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
         subject = f"Clarification Requested by Manager — {emp_name} — ₹{amt_str}"
         decision_label = "Clarification Required"
 
-    detail_url = _abs_url(
-        reverse("reimbursement:reimbursement_detail", args=[req.id])
-    )
+    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
 
     html = f"""
 <html>
@@ -893,12 +1054,12 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
         html += f"""
       <p style="font-size:14px;margin:0 0 12px 0;">
         <strong>Manager Comment:</strong><br>
-        {req.manager_comment.replace('\n', '<br>')}
+        {req.manager_comment.replace("\\n", "<br>")}
       </p>
     """
 
     html += f"""
-      <p style="font-size:14px;margin:12px 0%;">
+      <p style="font-size:14px;margin:12px 0;">
         View full details:<br>
         <a href="{detail_url}" style="color:#2563eb;text-decoration:none;">{detail_url}</a>
       </p>
@@ -924,10 +1085,16 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
     txt_lines.extend(["View details:", detail_url])
     txt = "\n".join(txt_lines)
 
+    # Per spec: rejected → only employee, otherwise admin CC as well
+    if decision == "rejected":
+        cc_list: List[str] = []
+    else:
+        cc_list = _admin_emails()
+
     ok = _send(
         subject=subject,
         to_addr=emp_email,
-        cc=_admin_emails(),
+        cc=cc_list,
         reply_to=[],
         html=html,
         txt=txt,
@@ -943,7 +1110,7 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
         except Exception:
             logger.exception("Failed to log EMAIL_SENT (manager_%s) for reimbursement #%s", decision, req.id)
 
-    # If manager approved, also notify Level-2 approver
+    # If manager approved, also notify Level-2 approver (Finance team email)
     if decision == "approved":
         _send_level2_notification(req)
 
@@ -985,9 +1152,7 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
         subject = f"Clarification Requested by Management — {emp_name} — ₹{amt_str}"
         decision_label = "Clarification Required"
 
-    detail_url = _abs_url(
-        reverse("reimbursement:reimbursement_detail", args=[req.id])
-    )
+    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
 
     html = f"""
 <html>
@@ -998,7 +1163,7 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
         Management Decision for Reimbursement #{req.id}
       </h2>
 
-      <table style="font-size:14px;margin:8px 0 16px 0%;">
+      <table style="font-size:14px;margin:8px 0 16px 0;">
         <tr><td style="padding-right:8px;"><strong>Decision:</strong></td><td>{decision_label}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Total Amount:</strong></td><td>₹{amt_str}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Current Status:</strong></td><td>{status_label}</td></tr>
@@ -1009,7 +1174,7 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
         html += f"""
       <p style="font-size:14px;margin:0 0 12px 0;">
         <strong>Management Comment:</strong><br>
-        {req.management_comment.replace('\n', '<br>')}
+        {req.management_comment.replace("\\n", "<br>")}
       </p>
     """
 
@@ -1019,7 +1184,7 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
         <a href="{detail_url}" style="color:#2563eb;text-decoration:none;">{detail_url}</a>
       </p>
 
-      <p style="font-size:13px;margin-top:16px;color:#4b5563%;">
+      <p style="font-size:13px;margin-top:16px;color:#4b5563;">
         Regards,<br>BOS Lakshya
       </p>
     </div>
@@ -1065,7 +1230,8 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
 
 def send_reimbursement_paid(req: ReimbursementRequest) -> None:
     """
-    Notify employee + admin that reimbursement has been marked Paid.
+    Notify employee + admin + manager that reimbursement has been marked Paid
+    (Claim Settled).
     """
     if not _email_enabled():
         logger.info("Reimbursement emails disabled; skipping paid email for #%s.", req.id)
@@ -1084,9 +1250,7 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
     amt_str = _format_amount(req.total_amount)
     subject = f"Reimbursement Paid — {emp_name} — ₹{amt_str}"
 
-    detail_url = _abs_url(
-        reverse("reimbursement:reimbursement_detail", args=[req.id])
-    )
+    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
 
     html = f"""
 <html>
@@ -1137,7 +1301,12 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
     txt_lines.extend(["", "View request:", detail_url])
     txt = "\n".join(txt_lines)
 
-    cc = _admin_emails()
+    # CC admin + manager (per spec)
+    cc_list = _admin_emails()
+    mgr_email = _manager_email_actual(req)
+    if mgr_email:
+        cc_list.append(mgr_email)
+    cc = _dedupe_lower(cc_list)
 
     ok = _send(
         subject=subject,
@@ -1180,9 +1349,7 @@ def send_reimbursement_clarification(req: ReimbursementRequest, *, actor=None) -
     amt_str = _format_amount(req.total_amount)
     subject = f"Clarification Needed — Reimbursement #{req.id} — ₹{amt_str}"
 
-    detail_url = _abs_url(
-        reverse("reimbursement:reimbursement_detail", args=[req.id])
-    )
+    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
 
     try:
         if actor:
@@ -1211,7 +1378,7 @@ def send_reimbursement_clarification(req: ReimbursementRequest, *, actor=None) -
         Clarification Needed – Reimbursement #{req.id}
       </h2>
 
-      <table style="font-size:14px;margin:8px 0 16px 0%;">
+      <table style="font-size:14px;margin:8px 0 16px 0;">
         <tr><td style="padding-right:8px;"><strong>Requested By:</strong></td><td>{who}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Total Amount:</strong></td><td>₹{amt_str}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Current Status:</strong></td><td>{req.get_status_display()}</td></tr>
@@ -1222,17 +1389,17 @@ def send_reimbursement_clarification(req: ReimbursementRequest, *, actor=None) -
         html += f"""
       <p style="font-size:14px;margin:0 0 12px 0;">
         <strong>Clarification Details:</strong><br>
-        {clarification_msg.replace('\n', '<br>')}
+        {clarification_msg.replace("\\n", "<br>")}
       </p>
     """
 
     html += f"""
-      <p style="font-size:14px;margin:12px 0%;">
+      <p style="font-size:14px;margin:12px 0;">
         Please review and update your request:<br>
         <a href="{detail_url}" style="color:#2563eb;text-decoration:none;">{detail_url}</a>
       </p>
 
-      <p style="font-size:13px;margin-top:16px;color:#4b5563%;">
+      <p style="font-size:13px;margin-top:16px;color:#4b5563;">
         Regards,<br>BOS Lakshya
       </p>
     </div>

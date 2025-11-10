@@ -1,4 +1,4 @@
-BOS EMS - {{ kind|default:"Task" }} Assignment
+BOS Lakshya - {{ kind|default:"Task" }} Assignment
 
 Hello {{ assignee_name|default:"Team Member" }},
 
@@ -18,4 +18,4 @@ Assigned By: {{ assign_by_display|default:"System" }}
 {% endif %}Open:
 {{ complete_url|default:site_url|default:"" }}
 
-This is an automated notification from BOS EMS.
+This is an automated notification from BOS Lakshya.

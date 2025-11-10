@@ -2,14 +2,14 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}My Reimbursement Requests{% endblock %}
+{% block title %}My Requests{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h2>My Reimbursement Requests</h2>
+  <h2>My Requests</h2>
   <div class="d-flex gap-2">
     <a href="{% url 'reimbursement:expense_inbox' %}" class="btn btn-outline-secondary btn-sm">
-      Expense Inbox
+      Upload Expenses
     </a>
     <a href="{% url 'reimbursement:create_request' %}" class="btn btn-primary btn-sm">
       New Request
@@ -17,10 +17,45 @@
   </div>
 </div>
 
+{# Filter bar ----------------------------------------------------------- #}
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="get" class="row g-2 align-items-end">
+      <div class="col-sm-4 col-md-3">
+        <label class="form-label small mb-1">Status</label>
+        {{ filter_form.status }}
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <label class="form-label small mb-1">From date</label>
+        {{ filter_form.from_date }}
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <label class="form-label small mb-1">To date</label>
+        {{ filter_form.to_date }}
+      </div>
+      <div class="col-12 col-md-3 text-md-end mt-2 mt-md-0">
+        <button type="submit" class="btn btn-primary btn-sm me-2">
+          Apply Filter
+        </button>
+        {% if has_active_filter %}
+          <a href="?clear=1" class="btn btn-outline-secondary btn-sm">
+            Clear Filter
+          </a>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</div>
+
 <div class="card">
   <div class="card-header d-flex justify-content-between align-items-center">
-    <span>Your Requests</span>
+    <span>My Requests</span>
     <div class="d-flex align-items-center gap-3">
+      {% if has_active_filter %}
+        <span class="badge bg-info-subtle text-info-emphasis border d-none d-md-inline-block">
+          Filter active
+        </span>
+      {% endif %}
       <span class="text-muted small">Latest first</span>
       <button type="button"
               class="btn btn-outline-danger btn-sm"
@@ -46,13 +81,13 @@
                      aria-label="Select all requests">
             </th>
             <th style="width:6%;">ID</th>
-            <th style="width:16%;">Submitted On</th>
-            <th style="width:20%;">Status</th>
-            <th style="width:16%;">Manager</th>
-            <th style="width:16%;">Management</th>
-            <th style="width:14%;">Total Amount</th>
-            <th style="width:12%;">Paid On</th>
-            <th style="width:16%;" class="text-end">Actions</th>
+            <th style="width:18%;">Submitted On</th>
+            <th style="width:18%;">Status</th>
+            <th style="width:14%;">Manager</th>
+            <th style="width:14%;">Management</th>
+            <th style="width:10%;">Total Amount</th>
+            <th style="width:8%;">Paid On</th>
+            <th style="width:18%;" class="text-end">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -108,11 +143,7 @@
                     View
                   </a>
 
-                  <a href="{% url 'reimbursement:request_edit' req.id %}"
-                     class="btn btn-outline-secondary">
-                    Edit
-                  </a>
-
+                  {# Employee cannot edit: no Edit button here #}
                   <form method="post"
                         action="{% url 'reimbursement:request_delete' req.id %}"
                         class="d-inline mb-0">
@@ -149,7 +180,8 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
-        Are you sure you want to delete all selected reimbursement requests? Paid requests will never be deleted.
+        Are you sure you want to delete all selected reimbursement requests?
+        Paid requests will not be deleted.
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
@@ -201,7 +233,7 @@
           return;
         }
         const modalEl = document.getElementById('bulkDeleteModal');
-        if (!modalEl) {
+        if (!modalEl || typeof bootstrap === 'undefined') {
           if (confirm('Delete selected reimbursement requests?')) {
             form.submit();
           }

@@ -1,150 +1,224 @@
 {% extends "base.html" %}
 {% load static %}
-{% block title %}Add Delegation{% endblock %}
+
+{% block title %}Delegation Task{% endblock %}
 
 {% block content %}
-  <!-- Flatpickr CSS/JS -->
-  <link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css"
-  />
-  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+<div class="container mt-4">
+  <h2 class="mb-3">
+    {% if form.instance.pk %}
+      Edit Delegation Task
+    {% else %}
+      Add Delegation Task
+    {% endif %}
+  </h2>
 
-  <div class="page-header mb-4">
-    <h2>Add Delegation</h2>
-  </div>
-
-  {% if form.errors %}
-  <div class="alert alert-danger">
-    <ul class="mb-0">
-      {% for field in form %}
-        {% for error in field.errors %}
-          <li><strong>{{ field.label }}:</strong> {{ error }}</li>
-        {% endfor %}
+  {% if messages %}
+    <div class="mb-3">
+      {% for message in messages %}
+        <div class="alert alert-{{ message.tags }}">{{ message }}</div>
       {% endfor %}
-      {% for error in form.non_field_errors %}
-        <li>{{ error }}</li>
-      {% endfor %}
-    </ul>
-  </div>
+    </div>
   {% endif %}
 
-  <form method="post" enctype="multipart/form-data" class="container-fluid">
+  <form method="post" enctype="multipart/form-data" novalidate>
     {% csrf_token %}
-    <div class="row g-4">
-      <!-- LEFT COLUMN -->
-      <div class="col-md-6">
-        <div class="mb-3">
-          {{ form.planned_date.label_tag }}
-          <div class="input-group">
-            {{ form.planned_date }}
-            <button class="btn btn-outline-secondary" type="button" id="btn_planned_date">
-              <i class="fa-regular fa-calendar"></i>
-            </button>
-          </div>
-          <div class="form-text">
-            Delegations appear once their planned time arrives. (Sundays are disabled in the picker.)
-          </div>
-        </div>
 
-        <div class="mb-3">
-          {{ form.time_per_task_minutes.label_tag }}{{ form.time_per_task_minutes }}
-          <div class="form-text">
-            Estimated minutes for this delegation (for planning/scorecards).
-          </div>
-        </div>
-
-        <div class="mb-3">
-          {{ form.audio_recording.label_tag }}{{ form.audio_recording }}
-          <div class="form-text">
-            Optional audio recording with instructions for the assignee.
-          </div>
-        </div>
-
-        <div class="mb-3">
-          {{ form.message.label_tag }}{{ form.message }}
-          <div class="form-text">
-            Delegation description or instructions for the assignee.
-          </div>
-        </div>
+    {% if form.non_field_errors %}
+      <div class="alert alert-danger">
+        {{ form.non_field_errors }}
       </div>
+    {% endif %}
 
-      <!-- RIGHT COLUMN -->
-      <div class="col-md-6">
+    <div class="row">
+      <div class="col-md-8">
+
         <div class="mb-3">
-          {{ form.task_name.label_tag }}{{ form.task_name }}
+          {{ form.task_name.label_tag }} *
+          {{ form.task_name }}
+          {% if form.task_name.errors %}
+            <div class="text-danger small">{{ form.task_name.errors }}</div>
+          {% endif %}
         </div>
 
         <div class="mb-3">
-          {{ form.assign_by.label_tag }}{{ form.assign_by }}
+          {{ form.assign_to.label_tag }} *
+          {{ form.assign_to }}
+          {% if form.assign_to.errors %}
+            <div class="text-danger small">{{ form.assign_to.errors }}</div>
+          {% endif %}
         </div>
 
         <div class="mb-3">
-          {{ form.assign_to.label_tag }}{{ form.assign_to }}
+          {{ form.planned_date.label_tag }} *
+          {{ form.planned_date }}
+          <small class="form-text text-muted">
+            This will be treated as the due date at <strong>7:00 PM IST</strong> on the selected day.
+            (The time part is ignored; system always stores it as 7 PM IST.)
+          </small>
+          {% if form.planned_date.errors %}
+            <div class="text-danger small">{{ form.planned_date.errors }}</div>
+          {% endif %}
         </div>
 
+        {% if form.priority %}
         <div class="mb-3">
-          {{ form.priority.label_tag }}{{ form.priority }}
+          {{ form.priority.label_tag }}
+          {{ form.priority }}
+          {% if form.priority.errors %}
+            <div class="text-danger small">{{ form.priority.errors }}</div>
+          {% endif %}
         </div>
+        {% endif %}
 
+        {% if form.message %}
+        <div class="mb-3">
+          {{ form.message.label_tag }}
+          {{ form.message }}
+          {% if form.message.errors %}
+            <div class="text-danger small">{{ form.message.errors }}</div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if form.attachment %}
+        <div class="mb-3">
+          {{ form.attachment.label_tag }}
+          {{ form.attachment }}
+          {% if form.attachment.errors %}
+            <div class="text-danger small">{{ form.attachment.errors }}</div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if form.doer_file %}
+        <div class="mb-3">
+          {{ form.doer_file.label_tag }}
+          {{ form.doer_file }}
+          {% if form.doer_file.errors %}
+            <div class="text-danger small">{{ form.doer_file.errors }}</div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if form.time_per_task_minutes %}
+        <div class="mb-3">
+          {{ form.time_per_task_minutes.label_tag }}
+          {{ form.time_per_task_minutes }}
+          {% if form.time_per_task_minutes.errors %}
+            <div class="text-danger small">{{ form.time_per_task_minutes.errors }}</div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if form.attachment_mandatory %}
         <div class="form-check mb-3">
-          {{ form.attachment_mandatory }}{{ form.attachment_mandatory.label_tag }}
+          {{ form.attachment_mandatory }}
+          {{ form.attachment_mandatory.label_tag }}
+          {% if form.attachment_mandatory.errors %}
+            <div class="text-danger small">{{ form.attachment_mandatory.errors }}</div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+      </div>
+
+      <div class="col-md-4">
+
+        <div class="card mb-3">
+          <div class="card-header">
+            CC (Keep Others Informed)
+          </div>
+          <div class="card-body">
+            <small class="text-muted d-block mb-2">
+              Use this to CC Amreen, reporting officer, or colleagues who should be informed.
+            </small>
+
+            {% if form.cc_users %}
+              <div class="mb-3">
+                {{ form.cc_users.label_tag }}
+                {{ form.cc_users }}
+                {% if form.cc_users.help_text %}
+                  <small class="form-text text-muted">{{ form.cc_users.help_text }}</small>
+                {% endif %}
+                {% if form.cc_users.errors %}
+                  <div class="text-danger small">{{ form.cc_users.errors }}</div>
+                {% endif %}
+              </div>
+            {% endif %}
+
+            {% if form.notify_to %}
+              <div class="mb-3">
+                {{ form.notify_to.label_tag }}
+                {{ form.notify_to }}
+                <small class="form-text text-muted">
+                  Select reporting officer / colleague to keep in CC.
+                </small>
+                {% if form.notify_to.errors %}
+                  <div class="text-danger small">{{ form.notify_to.errors }}</div>
+                {% endif %}
+              </div>
+            {% endif %}
+
+            {% if form.cc or form.cc_emails or form.cc_list %}
+              <div class="mb-3">
+                {% if form.cc %}
+                  {{ form.cc.label_tag }}
+                  {{ form.cc }}
+                  {% if form.cc.errors %}
+                    <div class="text-danger small">{{ form.cc.errors }}</div>
+                  {% endif %}
+                {% endif %}
+                {% if form.cc_emails %}
+                  {{ form.cc_emails.label_tag }}
+                  {{ form.cc_emails }}
+                  {% if form.cc_emails.errors %}
+                    <div class="text-danger small">{{ form.cc_emails.errors }}</div>
+                  {% endif %}
+                {% endif %}
+                {% if form.cc_list %}
+                  {{ form.cc_list.label_tag }}
+                  {{ form.cc_list }}
+                  {% if form.cc_list.errors %}
+                    <div class="text-danger small">{{ form.cc_list.errors }}</div>
+                  {% endif %}
+                {% endif %}
+                <small class="form-text text-muted">
+                  You can enter multiple emails separated by commas.
+                </small>
+              </div>
+            {% endif %}
+          </div>
         </div>
 
-        <div class="form-check mb-2">
-          {{ form.set_reminder }}{{ form.set_reminder.label_tag }}
-        </div>
+        {# Any other extra fields still on the form #}
+        {% with 'task_name assign_to planned_date priority message attachment doer_file time_per_task_minutes attachment_mandatory cc_users notify_to cc cc_emails cc_list' as excluded %}
+          {% for field in form %}
+            {% if field.name not in excluded %}
+              <div class="mb-3">
+                {{ field.label_tag }}
+                {{ field }}
+                {% if field.help_text %}
+                  <small class="form-text text-muted">{{ field.help_text }}</small>
+                {% endif %}
+                {% if field.errors %}
+                  <div class="text-danger small">{{ field.errors }}</div>
+                {% endif %}
+              </div>
+            {% endif %}
+          {% endfor %}
+        {% endwith %}
 
-        <div id="delegation_reminder_info" class="alert alert-info py-2 px-3" style="display:none;">
-          Once enabled, the assignee will receive a reminder email
-          <strong>every day at 10:00 AM IST</strong> until this delegation is completed.
-        </div>
       </div>
     </div>
 
-    <div class="text-end mt-4">
-      <button type="submit" class="btn btn-primary">Submit</button>
+    <div class="mt-3">
+      <button type="submit" class="btn btn-primary">
+        {% if form.instance.pk %}Update Delegation{% else %}Create Delegation{% endif %}
+      </button>
+      <a href="{% url 'tasks:list_delegation' %}" class="btn btn-secondary ms-2">Cancel</a>
     </div>
+
   </form>
-
-  <script>
-    document.addEventListener('DOMContentLoaded', function () {
-      // Flatpickr for planned_date (disable Sundays)
-      var plannedPicker = null;
-      var plannedEl = document.getElementById('id_planned_date');
-      if (plannedEl) {
-        plannedPicker = flatpickr(plannedEl, {
-          enableTime: true,
-          time_24hr: true,
-          minuteIncrement: 5,
-          dateFormat: "Y-m-d H:i",
-          altInput: true,
-          altFormat: "Y-m-d H:i",
-          disable: [
-            function (date) {
-              return date.getDay() === 0; // Sunday
-            }
-          ]
-        });
-      }
-
-      var plannedBtn = document.getElementById('btn_planned_date');
-      if (plannedBtn && plannedPicker) {
-        plannedBtn.addEventListener('click', function () {
-          plannedPicker.open();
-        });
-      }
-
-      // Show/hide reminder info when checkbox toggled
-      const rem = document.getElementById('id_set_reminder');
-      const info = document.getElementById('delegation_reminder_info');
-      if (rem && info) {
-        const sync = () => {
-          info.style.display = rem.checked ? 'block' : 'none';
-        };
-        rem.addEventListener('change', sync);
-        sync();
-      }
-    });
-  </script>
+</div>
 {% endblock %}

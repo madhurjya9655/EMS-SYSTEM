@@ -1,4 +1,4 @@
-Welcome to the Employee Management System
+Welcome to the BOS Lakshya
 
 Hi {{ user.get_full_name|default:user.username }},
 
@@ -14,4 +14,4 @@ Next steps:
 - Change your password immediately from your profile/settings page.{% endif %}
 
 If you didn't expect this email, please contact your administrator.
-BOS EMS — {{ site_url }}
+BOS Lakshya — {{ site_url }}

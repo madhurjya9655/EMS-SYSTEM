@@ -9,6 +9,10 @@ User = get_user_model()
 
 
 def is_holiday_or_sunday(date_val):
+    """
+    Returns True if the given date is Sunday or a configured holiday.
+    Accepts date, datetime or anything with .date() / .weekday().
+    """
     if not date_val:
         return False
     if hasattr(date_val, "date"):
@@ -16,11 +20,12 @@ def is_holiday_or_sunday(date_val):
             date_val = date_val.date()
         except Exception:
             pass
-    return hasattr(date_val, "weekday") and date_val.weekday() == 6 or Holiday.objects.filter(date=date_val).exists()
+    return (hasattr(date_val, "weekday") and date_val.weekday() == 6) or Holiday.objects.filter(date=date_val).exists()
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers for handover + notifications
+# Shared helpers for handover + notifications (currently *not* firing any
+# completion emails, per client requirement).
 # ---------------------------------------------------------------------------
 
 def _active_handover_for(task_obj, task_type_name: str):
@@ -51,6 +56,8 @@ def _active_handover_for(task_obj, task_type_name: str):
 def _send_task_completion(original_assignee: User, delegate: User, task_obj, context: dict) -> None:
     """
     Fire-and-forget notification to original owner when delegate completes the task.
+    NOTE: Per latest client rules, generic completion emails are disabled, and this
+    helper is not called anywhere.
     """
     try:
         # Prefer the tasks.notifications service if present; fall back to leave.notifications
@@ -78,10 +85,13 @@ class Checklist(models.Model):
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='Pending')
     completed_at = models.DateTimeField(null=True, blank=True)
 
-    priority = models.CharField(max_length=10, choices=[('Low', 'Low'), ('Medium', 'Medium'), ('High', 'High')])
+    priority = models.CharField(
+        max_length=10,
+        choices=[('Low', 'Low'), ('Medium', 'Medium'), ('High', 'High')]
+    )
     attachment_mandatory = models.BooleanField(default=False)
 
-    # NEW: this task occurrence was auto-skipped due to an employee leave window
+    # This task occurrence was auto-skipped due to an employee leave window
     is_skipped_due_to_leave = models.BooleanField(default=False, db_index=True)
 
     mode = models.CharField(
@@ -109,10 +119,16 @@ class Checklist(models.Model):
     message = models.TextField(blank=True)
     media_upload = models.FileField(upload_to='checklist_media/', blank=True, null=True)
 
-    assign_pc = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='pc_checklists')
+    assign_pc = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='pc_checklists'
+    )
     group_name = models.CharField(max_length=100, blank=True)
-    notify_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='notify_checklists')
-    auditor = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='audit_checklists')
+    notify_to = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='notify_checklists'
+    )
+    auditor = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='audit_checklists'
+    )
 
     set_reminder = models.BooleanField(default=False)
     reminder_mode = models.CharField(
@@ -147,13 +163,11 @@ class Checklist(models.Model):
             models.Index(fields=['is_skipped_due_to_leave', 'planned_date']),
         ]
 
-    # ---- Dashboard helper (no import of HandoverTaskMixin to avoid cycles)
+    # ---- Dashboard helper (no import of mixins to avoid cycles)
     @classmethod
     def get_tasks_for_user(cls, user: User):
         original_tasks = cls.objects.filter(assign_to=user)
         try:
-            handovers = None
-            # Lazy import
             from apps.leave.models import LeaveHandover  # type: ignore
             handovers = LeaveHandover.objects.currently_assigned_to(user).filter(task_type='checklist')
             ids = [h.original_task_id for h in handovers]
@@ -194,8 +208,8 @@ class Checklist(models.Model):
         self.full_clean()
         super().save(*args, **kwargs)
 
-        # COMPLETION EMAILS DISABLED: No emails on completion for checklist.
-        # (Recurring creation & dashboard logic remain handled elsewhere.)
+        # COMPLETION EMAILS DISABLED:
+        # No "Task Completed" email for checklist as per client requirement.
 
     def __str__(self):
         return f"{self.task_name} → {self.assign_to}"
@@ -210,21 +224,33 @@ class Delegation(models.Model):
     task_name = models.CharField(max_length=200)
     assign_to = models.ForeignKey(User, on_delete=models.CASCADE, related_name='delegations')
 
+    # NEW: CC users who should be kept informed (they'll receive delegation emails)
+    cc_users = models.ManyToManyField(
+        User,
+        blank=True,
+        related_name='delegations_cc',
+        help_text="Optional users to keep in CC for this delegation.",
+    )
+
     planned_date = models.DateTimeField()
 
     STATUS_CHOICES = [('Pending', 'Pending'), ('Completed', 'Completed')]
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='Pending')
     completed_at = models.DateTimeField(null=True, blank=True)
 
-    priority = models.CharField(max_length=10, choices=[('Low', 'Low'), ('Medium', 'Medium'), ('High', 'High')])
+    priority = models.CharField(
+        max_length=10,
+        choices=[('Low', 'Low'), ('Medium', 'Medium'), ('High', 'High')]
+    )
     attachment_mandatory = models.BooleanField(default=False)
     audio_recording = models.FileField(upload_to='delegation_audio/', blank=True, null=True)
 
     time_per_task_minutes = models.PositiveIntegerField(default=0, blank=True, null=True)
 
-    # NEW: skip flag
+    # This occurrence was skipped due to leave
     is_skipped_due_to_leave = models.BooleanField(default=False, db_index=True)
 
+    # Kept for DB compatibility, but delegations are treated as one-time tasks
     mode = models.CharField(
         max_length=10,
         choices=[
@@ -240,7 +266,6 @@ class Delegation(models.Model):
     frequency = models.PositiveIntegerField(default=None, blank=True, null=True)
 
     description = models.TextField(default="", blank=True)
-
     message = models.TextField(blank=True)
 
     doer_file = models.FileField(upload_to='delegation_doer/', blank=True, null=True)
@@ -248,7 +273,7 @@ class Delegation(models.Model):
 
     actual_duration_minutes = models.PositiveIntegerField(null=True, blank=True)
 
-    # NEW: one-shot reminder configuration for Delegation
+    # One-shot / scheduled reminder configuration for Delegation
     set_reminder = models.BooleanField(default=False)
     # Absolute reminder time (when the reminder should fire)
     reminder_time = models.DateTimeField(null=True, blank=True)
@@ -264,7 +289,7 @@ class Delegation(models.Model):
             models.Index(fields=['status', 'set_reminder', 'reminder_time']),
         ]
 
-    # ---- Dashboard helper (no mixin import)
+    # ---- Dashboard helper
     @classmethod
     def get_tasks_for_user(cls, user: User):
         original_tasks = cls.objects.filter(assign_to=user)
@@ -280,6 +305,7 @@ class Delegation(models.Model):
         return original_tasks
 
     def is_recurring(self):
+        # Delegations are one-time tasks per current workflow
         return False
 
     @property
@@ -307,7 +333,7 @@ class Delegation(models.Model):
         super().clean()
 
     def save(self, *args, **kwargs):
-        # enforce non-recurring
+        # Enforce non-recurring
         self.mode = None
         self.frequency = None
 
@@ -318,7 +344,7 @@ class Delegation(models.Model):
             except type(self).DoesNotExist:
                 old_status = None
 
-        # auto set completion timestamp
+        # Auto set completion timestamp
         if self.status == 'Completed' and not self.completed_at:
             self.completed_at = timezone.now()
 
@@ -366,10 +392,13 @@ class FMS(models.Model):
     delay = models.IntegerField(default=0)
     doer_notes = models.TextField(blank=True, null=True)
     doer_file = models.FileField(upload_to='fms_doer/', blank=True, null=True)
-    priority = models.CharField(max_length=10, choices=[('Low', 'Low'), ('Medium', 'Medium'), ('High', 'High')])
+    priority = models.CharField(
+        max_length=10,
+        choices=[('Low', 'Low'), ('Medium', 'Medium'), ('High', 'High')]
+    )
     estimated_minutes = models.PositiveIntegerField(default=0)
 
-    # NEW: skip flag (harmless for FMS; used by reports if needed)
+    # Skip flag (harmless for FMS; used by reports if needed)
     is_skipped_due_to_leave = models.BooleanField(default=False, db_index=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -415,7 +444,7 @@ class HelpTicket(models.Model):
 
     actual_duration_minutes = models.PositiveIntegerField(null=True, blank=True)
 
-    # NEW: skip flag
+    # Skip flag
     is_skipped_due_to_leave = models.BooleanField(default=False, db_index=True)
 
     created_at = models.DateTimeField(auto_now_add=True)

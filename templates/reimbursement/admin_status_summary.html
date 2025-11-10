@@ -28,8 +28,8 @@
         <tbody>
           {% for row in rows %}
           <tr>
-            <td>{{ status_labels.row.status|default:status_labels[row.status] }}</td>
-            <td>{{ row.total_amount }}</td>
+            <td>{{ status_labels[row.status]|default:row.status }}</td>
+            <td>₹{{ row.total_amount|floatformat:2 }}</td>
             <td>{{ row.request_count }}</td>
           </tr>
           {% empty %}
