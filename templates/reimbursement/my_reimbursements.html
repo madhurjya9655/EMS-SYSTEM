@@ -1,28 +1,58 @@
 {% extends 'base.html' %}
 {% block title %}My Reimbursements{% endblock %}
-{% block content %}
-<h2>My Reimbursement Requests</h2>
 
-<table class="table table-sm align-middle">
-  <thead>
-    <tr>
-      <th>ID</th>
-      <th>Total Amount</th>
-      <th>Status</th>
-      <th>Submitted</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for r in requests %}
-      <tr>
-        <td><a href="{% url 'reimbursement:reimbursement_detail' r.id %}">#{{ r.id }}</a></td>
-        <td>₹{{ r.total_amount|floatformat:2 }}</td>
-        <td>{{ r.get_status_display }}</td>
-        <td>{{ r.submitted_at|default:r.created_at }}</td>
-      </tr>
-    {% empty %}
-      <tr><td colspan="4" class="text-muted">No requests.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+{% block content %}
+<div class="page-header d-flex align-items-center justify-content-between">
+  <h2 class="page-title m-0">My Reimbursement Requests</h2>
+
+  {% if perms.users.reimbursement_apply or user.is_superuser %}
+  <div class="btn-group" role="group" aria-label="Reimbursement actions">
+    <a class="btn btn-outline-secondary"
+       href="{% url 'reimbursement:expense_inbox' %}">
+      <i class="fas fa-file-upload me-1" aria-hidden="true"></i>
+      Upload Expenses
+    </a>
+    <a class="btn btn-primary"
+       href="{% url 'reimbursement:create_request' %}">
+      <i class="fas fa-plus-circle me-1" aria-hidden="true"></i>
+      New Reimbursement
+    </a>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-body table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Total Amount</th>
+          <th>Status</th>
+          <th>Submitted</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in requests %}
+          <tr>
+            <td><a href="{% url 'reimbursement:reimbursement_detail' r.id %}">#{{ r.id }}</a></td>
+            <td>₹{{ r.total_amount|floatformat:2 }}</td>
+            <td>{{ r.get_status_display }}</td>
+            <td>{{ r.submitted_at|default:r.created_at }}</td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="4" class="text-muted">
+              No requests yet.
+              {% if perms.users.reimbursement_apply or user.is_superuser %}
+                <a href="{% url 'reimbursement:expense_inbox' %}">Upload expenses</a>
+                and then <a href="{% url 'reimbursement:create_request' %}">create a reimbursement</a>.
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endblock %}
