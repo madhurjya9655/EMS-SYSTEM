@@ -1,4 +1,3 @@
-# apps/tasks/views.py
 import csv
 import pytz
 import re
@@ -972,7 +971,7 @@ def add_checklist(request):
             messages.success(request, f"Checklist task '{obj.task_name}' created and will notify the assignee at 10:00 AM on the due day.")
             return redirect("tasks:list_checklist")
     else:
-        form = ChecklistForm(initial({"assign_by": request.user}))
+        form = ChecklistForm(initial={"assign_by": request.user})
     return render(request, "tasks/add_checklist.html", {"form": form})
 
 
