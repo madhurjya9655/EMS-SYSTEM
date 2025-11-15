@@ -10,3 +10,4 @@ urlpatterns = [
     path("holidays/delete/<int:pk>/", views.holiday_delete, name="holiday_delete"),
     path("system-settings/", views.system_settings, name="system_settings"),
 ]
+

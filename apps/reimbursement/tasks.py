@@ -1,4 +1,3 @@
-# apps/reimbursement/tasks.py
 from __future__ import annotations
 
 import calendar
@@ -193,7 +192,7 @@ def send_monthly_admin_summary(target_month: date | None = None, dry_run: bool =
     settings_obj = ReimbursementSettings.get_solo()
     admin_emails = settings_obj.admin_email_list()
     if not admin_emails:
-        default_admin = getattr(settings, "DEFAULT_FROM_EMAIL", None)
+        default_admin = getattr(settings, "REIMBURSEMENT_EMAIL_FROM", None) or getattr(settings, "DEFAULT_FROM_EMAIL", None)
         if default_admin:
             admin_emails = [default_admin]
 
@@ -212,7 +211,8 @@ def send_monthly_admin_summary(target_month: date | None = None, dry_run: bool =
         print(txt_body)
         return
 
-    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None)
+    # Use Amreen as sender for the summary, falling back to DEFAULT_FROM_EMAIL
+    from_email = getattr(settings, "REIMBURSEMENT_EMAIL_FROM", None) or getattr(settings, "DEFAULT_FROM_EMAIL", None)
     to = [admin_emails[0]]
     cc = list(dict.fromkeys(admin_emails[1:]))
 

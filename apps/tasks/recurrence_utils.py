@@ -240,7 +240,17 @@ class DashboardCutoff:
         return is_delegation_visible_now(planned_date, now=self.now_ist)
 
     def should_show_help_ticket(self, *, planned_date: datetime, today_only: bool) -> bool:
-        return self.should_show_delegation(planned_date=planned_date, today_only=today_only)
+        """
+        Help Tickets are IMMEDIATE:
+        - Past dates: always visible
+        - Today: visible regardless of time (no 10:00 gate)
+        - Future: hidden
+        """
+        d = _to_ist(planned_date).date()
+        t = self.now_ist.date()
+        if today_only:
+            return d == t
+        return d <= t
 
 
 def extract_ist_wallclock(dt: datetime) -> Tuple[date, dt_time]:

@@ -1,9 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Holiday List{% endblock %}
+
 {% block content %}
 <div class="page-header mb-4"><h2>Holiday List</h2></div>
+
 <div class="card mb-5">
   <div class="card-body">
+    {# Inline add form #}
     <form method="post" class="row g-3 mb-4">
       {% csrf_token %}
       {{ add_form.non_field_errors }}
@@ -22,6 +25,7 @@
       </div>
     </form>
 
+    {# Upload form (CSV/XLS/XLSX); Sundays & duplicates are skipped, not blocking creation #}
     <form method="post" enctype="multipart/form-data" class="row g-3 mb-4">
       {% csrf_token %}
       {{ upload_form.non_field_errors }}
@@ -29,7 +33,10 @@
         {{ upload_form.file.label_tag }}
         {{ upload_form.file }}
         <div class="text-danger small">{{ upload_form.file.errors }}</div>
-        <div class="form-text">CSV or Excel with columns: <code>date</code> (YYYY-MM-DD) and <code>name</code>. Sundays are ignored.</div>
+        <div class="form-text">
+          CSV or Excel with columns: <code>date</code> (YYYY-MM-DD) and <code>name</code>.
+          Sundays and duplicates are ignored. Existing dates in DB are skipped.
+        </div>
       </div>
       <div class="col-auto">
         <button name="do_upload" value="1" class="btn btn-secondary">Upload</button>
@@ -40,18 +47,18 @@
       <thead><tr><th>Date</th><th>Name</th><th>Actions</th></tr></thead>
       <tbody>
         {% for h in holidays %}
-        <tr>
-          <td>{{ h.date }}</td>
-          <td>{{ h.name }}</td>
-          <td>
-            <form method="post" action="{% url 'settings:holiday_delete' h.pk %}" onsubmit="return confirm('Delete this holiday?');" style="display:inline;">
-              {% csrf_token %}
-              <button class="btn btn-sm btn-danger">Delete</button>
-            </form>
-          </td>
-        </tr>
+          <tr>
+            <td>{{ h.date }}</td>
+            <td>{{ h.name }}</td>
+            <td>
+              <form method="post" action="{% url 'settings:holiday_delete' h.pk %}" onsubmit="return confirm('Delete this holiday?');" style="display:inline;">
+                {% csrf_token %}
+                <button class="btn btn-sm btn-danger">Delete</button>
+              </form>
+            </td>
+          </tr>
         {% empty %}
-        <tr><td colspan="3">No holidays yet.</td></tr>
+          <tr><td colspan="3">No holidays yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>

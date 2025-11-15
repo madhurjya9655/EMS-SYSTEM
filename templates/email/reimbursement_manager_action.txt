@@ -2,9 +2,9 @@ Manager Action on Reimbursement #{{ request_id }}
 
 Hello {{ employee_name }},
 
-{% if decision == "approve" %}
+{% if decision == "approved" %}
 Your reimbursement request has been APPROVED by your manager.
-{% elif decision == "reject" %}
+{% elif decision == "rejected" %}
 Your reimbursement request has been REJECTED by your manager.
 {% else %}
 Your manager has requested CLARIFICATION on your reimbursement request.

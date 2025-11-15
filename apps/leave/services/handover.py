@@ -1,287 +1,176 @@
-# apps/leave/services/handover.py
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from typing import List, Iterable, Optional
-from datetime import datetime
+import logging
+from typing import Iterable, List, Optional
 
-import pytz
 from django.conf import settings
-from django.core.mail import EmailMultiAlternatives
+from django.core.mail import EmailMultiAlternatives, get_connection
 from django.template.loader import render_to_string
+from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import strip_tags
+from zoneinfo import ZoneInfo
 
-from apps.leave.models import LeaveRequest, LeaveHandover
+from apps.leave.models import LeaveHandover, LeaveRequest, LeaveStatus
 
-IST = pytz.timezone("Asia/Kolkata")
-
-
-@dataclass
-class HandoverItemDTO:
-    task_name: str
-    task_type: str
-    task_id: int | None
-    task_url: str | None
-    message: str | None
+logger = logging.getLogger(__name__)
+IST = ZoneInfo("Asia/Kolkata")
 
 
-def _format_ist(dt: datetime | None) -> str:
-    """Return compact IST date like '08 Feb 2025'."""
-    if not dt:
-        return ""
-    if timezone.is_aware(dt):
-        local = dt.astimezone(IST)
-    else:
-        local = IST.localize(dt)
-    return local.strftime("%d %b %Y")
+def _now_date_ist() -> timezone.datetime.date:
+    """Current date in IST (no time)."""
+    return timezone.localtime(timezone.now(), IST).date()
 
 
-def _safe_full_name(user) -> str:
-    try:
-        return (user.get_full_name() or user.username or "").strip()
-    except Exception:
-        return getattr(user, "username", "") or str(user)
-
-
-def _duration_days(leave: LeaveRequest) -> float:
-    """
-    Prefer the model's computed blocked_days (supports half-day as 0.5),
-    otherwise compute from ist_dates().
-    """
-    try:
-        if getattr(leave, "blocked_days", None):
-            return float(leave.blocked_days)
-    except Exception:
-        pass
-    try:
-        days = leave.ist_dates()
-        if not days:
-            return 0.0
-        return 0.5 if (leave.is_half_day and len(days) == 1) else float(len(days))
-    except Exception:
-        return 0.0
-
-
-def _items_from_handovers(handovers: Iterable[LeaveHandover]) -> List[HandoverItemDTO]:
-    items: List[HandoverItemDTO] = []
-    for ho in handovers:
-        # Try model helpers first; fall back to generic label
-        try:
-            task_title = ho.get_task_title()
-        except Exception:
-            task_title = f"{ho.get_task_type_display()} #{ho.original_task_id}"
-        try:
-            task_url = ho.get_task_url()
-        except Exception:
-            task_url = None
-
-        items.append(
-            HandoverItemDTO(
-                task_name=task_title,
-                task_type=str(ho.task_type),
-                task_id=int(ho.original_task_id) if ho.original_task_id is not None else None,
-                task_url=task_url or None,
-                message=(ho.message or None),
-            )
-        )
-    return items
-
-
-# -----------------------------------------------------------------------------#
-# Apply handover (safe, best-effort)                                           #
-# -----------------------------------------------------------------------------#
-def _try_apply_via_model_method(ho: LeaveHandover) -> bool:
-    """
-    If your LeaveHandover model implements a first-class method to do the move,
-    call it. We check common method names defensively.
-    """
-    for meth in ("apply", "apply_handover", "perform", "execute"):
-        fn = getattr(ho, meth, None)
-        if callable(fn):
-            try:
-                res = fn()  # should perform reassignment internally
-                return bool(res) if res is not None else True
-            except Exception:
-                import logging
-                logging.getLogger(__name__).exception("Handover.%s failed (id=%s)", meth, getattr(ho, "id", None))
-    return False
-
-
-def _try_apply_by_reassigning_task_object(ho: LeaveHandover) -> bool:
-    """
-    Generic fallback: obtain the task object (if model exposes it) and try to
-    set a likely assignee/owner field to the new assignee. This is deliberately
-    conservative and wrapped in try/except to never raise.
-    """
-    import logging
-    log = logging.getLogger(__name__)
-
-    task_obj = None
-    # Prefer explicit helper if model provides it
-    for getter in ("get_task_object", "fetch_task_object", "task_object"):
-        fn = getattr(ho, getter, None)
-        try:
-            task_obj = fn() if callable(fn) else (fn if fn else None)
-        except Exception:
-            task_obj = None
-        if task_obj is not None:
-            break
-    if task_obj is None:
-        # Last-ditch: if model exposes app/model/PK, you could look it up here.
-        # We keep it noop to avoid coupling to other apps.
+def _handover_is_effective(h: LeaveHandover, *, today_ist=None) -> bool:
+    """Check if a handover row is active for *today* and leave is still valid."""
+    if not h.is_active:
         return False
-
-    # Likely assignee field names in external apps
-    candidate_fields = (
-        "assignee",
-        "assigned_to",
-        "owner",
-        "user",
-        "agent",
-        "responsible",
-        "handler",
-        "staff",
-    )
-    new_user = getattr(ho, "new_assignee", None)
-    if not new_user:
+    if not h.leave_request or h.leave_request.status not in (LeaveStatus.PENDING, LeaveStatus.APPROVED):
         return False
+    today = today_ist or _now_date_ist()
+    if h.effective_start_date and today < h.effective_start_date:
+        return False
+    if h.effective_end_date and today > h.effective_end_date:
+        return False
+    return True
 
-    for field in candidate_fields:
-        if hasattr(task_obj, field):
-            try:
-                setattr(task_obj, field, new_user)
-                # Save with update_fields when possible
-                try:
-                    task_obj.save(update_fields=[field])
-                except Exception:
-                    task_obj.save()
-                return True
-            except Exception:
-                log.exception("Failed to set %s on %r for handover id=%s", field, task_obj, getattr(ho, "id", None))
 
-    return False
+def _set_task_assignee(task_obj, new_user) -> bool:
+    """
+    Safely move `assign_to` on a task-like model if the attribute exists.
+    Returns True if changed and saved.
+    """
+    try:
+        if not hasattr(task_obj, "assign_to"):
+            return False
+        current = getattr(task_obj, "assign_to", None)
+        if current == new_user:
+            return False
+        setattr(task_obj, "assign_to", new_user)
+        # Best effort set an audit-ish field if present
+        if hasattr(task_obj, "updated_at"):
+            setattr(task_obj, "updated_at", timezone.now())
+        task_obj.save(update_fields=["assign_to"] if "updated_at" not in task_obj.__dict__ else ["assign_to", "updated_at"])
+        return True
+    except Exception:
+        logger.exception("Failed to update task assignee for %s", task_obj)
+        return False
 
 
 def apply_handover_for_leave(leave: LeaveRequest) -> int:
     """
-    Apply all *active* handovers for the given leave. Returns the count of
-    handovers successfully applied (best-effort). Never raises.
+    Apply active handovers for a given leave (idempotent).
+    - Only moves tasks whose LeaveHandover is active *today* and the leave is PENDING/APPROVED.
+    - Returns count of tasks whose assignee actually changed.
     """
-    import logging
-    log = logging.getLogger(__name__)
-
-    moved = 0
     try:
-        handovers = (
-            LeaveHandover.objects.filter(leave_request=leave, is_active=True)
-            .select_related("new_assignee", "original_assignee")
-            .order_by("id")
+        moved = 0
+        today = _now_date_ist()
+        handovers: Iterable[LeaveHandover] = (
+            LeaveHandover.objects
+            .select_related("leave_request", "original_assignee", "new_assignee")
+            .filter(leave_request=leave, is_active=True)
         )
-        now = timezone.now()
-
         for ho in handovers:
-            applied = False
-
-            # 1) Prefer model-native method if available
-            try:
-                applied = _try_apply_via_model_method(ho)
-            except Exception:
-                log.exception("Model-method apply failed for handover id=%s", getattr(ho, "id", None))
-
-            # 2) Generic reassignment fallback if still not applied
-            if not applied:
-                try:
-                    applied = _try_apply_by_reassigning_task_object(ho)
-                except Exception:
-                    log.exception("Generic reassignment failed for handover id=%s", getattr(ho, "id", None))
-
-            # 3) Mark as applied if any approach worked
-            if applied:
-                try:
-                    # Common bookkeeping fields (tolerant if missing)
-                    if hasattr(ho, "applied_at"):
-                        ho.applied_at = now
-                    if hasattr(ho, "is_applied"):
-                        ho.is_applied = True
-                    # keep is_active=True for the effective period; do not auto-deactivate here
-                    ho.save(update_fields=[f for f in ("applied_at", "is_applied", "updated_at") if hasattr(ho, f)])
-                except Exception:
-                    # Save fallback
-                    try:
-                        ho.save()
-                    except Exception:
-                        log.exception("Failed to save post-apply state for handover id=%s", getattr(ho, "id", None))
+            if not _handover_is_effective(ho, today_ist=today):
+                continue
+            task = ho.get_task_object()
+            if not task:
+                continue
+            if _set_task_assignee(task, ho.new_assignee):
                 moved += 1
-
+        if moved:
+            logger.info("Handover applied for leave %s → moved %s task(s).", leave.id, moved)
+        return moved
     except Exception:
-        log.exception("apply_handover_for_leave failed for leave id=%s", getattr(leave, "id", None))
+        logger.exception("apply_handover_for_leave failed for leave %s", getattr(leave, "id", None))
+        return 0
 
-    return moved
+
+def _build_handover_email_context(leave: LeaveRequest, assignee, handovers: List[LeaveHandover]):
+    rows = []
+    for ho in handovers:
+        rows.append({
+            "type": ho.get_task_type_display(),
+            "title": ho.get_task_title(),
+            "url": ho.get_task_url(),
+            "from_name": ho.original_assignee.get_full_name() or ho.original_assignee.username,
+            "effective_end": ho.effective_end_date,
+            "message": ho.message or "",
+        })
+    ctx = {
+        "leave": leave,
+        "assignee": assignee,
+        "rows": rows,
+        "from_ist": timezone.localtime(leave.start_at, IST),
+        "to_ist": timezone.localtime(leave.end_at, IST),
+        "employee_name": leave.employee.get_full_name() or leave.employee.username,
+    }
+    return ctx
 
 
-# -----------------------------------------------------------------------------#
-# Email notifications                                                           #
-# -----------------------------------------------------------------------------#
-def send_handover_email(
-    leave: LeaveRequest,
-    assignee,
-    handovers: Iterable[LeaveHandover],
-    site_url: Optional[str] = None,
-) -> None:
+def send_handover_email(leave: LeaveRequest, assignee, handovers: List[LeaveHandover]) -> bool:
     """
-    Render and send the "leave_handover" email to a specific assignee, for all
-    of their handovers tied to a single LeaveRequest.
+    Send a single summary email to the assignee listing all tasks handed over
+    for this leave window. This signature matches usage from views and services.
 
-    Templates used:
-      templates/email/leave_handover.html
-      templates/email/leave_handover.txt
+    Returns True on success, False on failure. Failures are logged but never raised.
     """
     try:
-        # Resolve site base URL
-        base_url = (site_url or getattr(settings, "SITE_URL", "") or "").rstrip("/")
+        if not assignee or not getattr(assignee, "email", None):
+            logger.warning("Handover email skipped: no assignee email.")
+            return False
 
-        # Dates (prefer snapshots on LeaveRequest; they are IST-date aligned)
-        start_dt = getattr(leave, "start_at", None)
-        end_dt = getattr(leave, "end_at", None)
-        start_at_ist = _format_ist(start_dt)
-        end_at_ist = _format_ist(end_dt)
+        ctx = _build_handover_email_context(leave, assignee, handovers)
 
-        items = _items_from_handovers(handovers)
+        # Try to use a project template if present; otherwise render minimal inline HTML.
+        try:
+            html_body = render_to_string("leave/email_handover_summary.html", ctx)
+        except Exception:
+            # Fallback inline rendering
+            lines = [
+                f"<p>Hi {assignee.get_full_name() or assignee.username},</p>",
+                f"<p>The following task(s) were handed over to you while <strong>{ctx['employee_name']}</strong> is on leave ",
+                f"({ctx['from_ist']:%Y-%m-%d %H:%M} → {ctx['to_ist']:%Y-%m-%d %H:%M} IST):</p>",
+                "<ul>",
+            ]
+            for r in ctx["rows"]:
+                title = r["title"]
+                link = r["url"] or "#"
+                msg = f"<br><em>{r['message']}</em>" if r["message"] else ""
+                end = f" (until {r['effective_end']})" if r["effective_end"] else ""
+                lines.append(f"<li><strong>{r['type']}</strong>: <a href='{link}'>{title}</a>{end}{msg}</li>")
+            lines.append("</ul>")
+            lines.append("<p>Thanks.</p>")
+            html_body = "".join(lines)
 
-        ctx = {
-            "assignee_name": _safe_full_name(assignee),
-            "employee_name": _safe_full_name(leave.employee),
-            "employee_email": (getattr(leave, "employee_email", None) or getattr(leave.employee, "email", "") or ""),
-            "leave_type": getattr(leave.leave_type, "name", str(leave.leave_type)),
-            "start_at_ist": start_at_ist,
-            "end_at_ist": end_at_ist,
-            "duration_days": _duration_days(leave),
-            "is_half_day": bool(getattr(leave, "is_half_day", False)),
-            "handover_message": (getattr(leave, "handover_message", None) or ""),  # form may store message separately
-            "handovers": [asdict(i) for i in items],
-            "site_url": base_url,
-        }
+        text_body = strip_tags(html_body)
+        subject = f"[Handover] Tasks assigned to you for {ctx['employee_name']}’s leave"
 
-        subject = f"Task Handover: {_safe_full_name(leave.employee)} → You ({ctx['start_at_ist']} to {ctx['end_at_ist']})"
-
-        text_body = render_to_string("email/leave_handover.txt", ctx)
-        html_body = render_to_string("email/leave_handover.html", ctx)
-
-        to_email = getattr(assignee, "email", None)
-        if not to_email:
-            return  # no recipient address — silently skip
-
-        from_email = (
-            getattr(settings, "DEFAULT_FROM_EMAIL", None)
-            or getattr(settings, "SERVER_EMAIL", None)
-            or "no-reply@example.com"
+        # Respect EMAIL settings if configured; otherwise fallback to default connection.
+        conn = get_connection(
+            username=getattr(settings, "EMAIL_HOST_USER", None),
+            password=getattr(settings, "EMAIL_HOST_PASSWORD", None),
+            fail_silently=True,
         )
 
-        msg = EmailMultiAlternatives(subject, text_body, from_email, [to_email])
+        msg = EmailMultiAlternatives(
+            subject=subject,
+            body=text_body,
+            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None),
+            to=[assignee.email],
+            connection=conn,
+        )
         msg.attach_alternative(html_body, "text/html")
-        msg.send(fail_silently=True)
+        msg.send()
+
+        logger.info("Handover email sent to %s for leave %s (%d items).", assignee.email, leave.id, len(handovers))
+        return True
 
     except Exception:
-        # Never raise to caller — mirror your defensive pattern
-        import logging
-        logging.getLogger(__name__).exception("Failed sending handover email for leave id=%s", getattr(leave, "id", None))
+        logger.exception("Failed sending handover email for leave %s to %s", getattr(leave, "id", None), getattr(assignee, "email", None))
+        return False
+
+
+__all__ = ["apply_handover_for_leave", "send_handover_email"]

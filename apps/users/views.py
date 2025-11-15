@@ -12,14 +12,13 @@ from django.http import HttpRequest, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import NoReverseMatch, reverse, reverse_lazy
 from django.views.decorators.http import require_POST
-from django.db import transaction
-from django.db.models import ProtectedError
 from django.utils.http import url_has_allowed_host_and_scheme  # NEW
 
 from .forms import CustomAuthForm, ProfileForm, UserForm
 from .models import Profile
 from .permission_urls import PERMISSION_URLS
 from .permissions import PERMISSIONS_STRUCTURE, _user_permission_codes, permissions_context
+from .utils import soft_delete_user  # <-- use the safe soft-delete util
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -179,8 +178,8 @@ def edit_user(request: HttpRequest, pk: int) -> HttpResponse:
 @user_passes_test(admin_only)
 def delete_user(request: HttpRequest, pk: int) -> HttpResponse:
     """
-    Admin: confirm + delete user (POST only for the actual delete).
-    Prevents self-deletion for safety.
+    Admin: confirm + *soft delete* user (POST only for the actual delete).
+    Prevents self-deletion and protects superusers from non-superusers.
     """
     try:
         user = User.objects.get(pk=pk)
@@ -192,63 +191,20 @@ def delete_user(request: HttpRequest, pk: int) -> HttpResponse:
         if user == request.user:
             messages.error(request, "You cannot delete your own account!")
             return redirect("users:list_users")
+
         # Optional: block deletion of other superusers unless current user is also superuser
         if getattr(user, "is_superuser", False) and not getattr(request.user, "is_superuser", False):
             return HttpResponseForbidden("Only a superuser can delete another superuser.")
-        
+
         try:
-            # Forcefully delete related objects to ensure complete removal
-            from django.db import connection
-            
-            # Get the user ID before deletion for logging
-            user_id = user.id
             username = user.username
-            
-            # Force delete in raw SQL to bypass Django's protections
-            with transaction.atomic():
-                cursor = connection.cursor()
-                
-                # Delete profile first
-                cursor.execute("DELETE FROM users_profile WHERE user_id = %s", [user_id])
-                
-                # Delete from auth_user
-                cursor.execute("DELETE FROM auth_user WHERE id = %s", [user_id])
-                
-                # Additional deletions for other known related tables
-                # These are common Django tables that might have user relationships
-                try:
-                    cursor.execute("DELETE FROM django_admin_log WHERE user_id = %s", [user_id])
-                except Exception:
-                    pass
-                
-                try:
-                    cursor.execute("DELETE FROM auth_user_groups WHERE user_id = %s", [user_id])
-                except Exception:
-                    pass
-                
-                try:
-                    cursor.execute("DELETE FROM auth_user_user_permissions WHERE user_id = %s", [user_id])
-                except Exception:
-                    pass
-                
-                # Add any other app-specific tables that have user references
-                try:
-                    cursor.execute("DELETE FROM leave_leaverequest WHERE user_id = %s", [user_id])
-                except Exception:
-                    pass
-                
-                try:
-                    cursor.execute("DELETE FROM leave_leavedecisionaudit WHERE user_id = %s", [user_id])
-                except Exception:
-                    pass
-            
-            messages.success(request, f"User '{username}' completely deleted from the system.")
-            
+            # Use the safe soft-delete utility (anonymize + deactivate + purge sessions)
+            soft_delete_user(user, performed_by=request.user)
+            messages.success(request, f"User '{username}' deleted (soft) and anonymized.")
         except Exception as e:
-            # Handle any database errors
-            logger.error(f"Error deleting user {user.id}: {str(e)}")
-            messages.error(request, f"Could not delete user: {str(e)}")
-        
+            logger.error("Soft-delete failed for user %s: %s", user.pk, e)
+            messages.error(request, f"Could not delete user: {e}")
+
         return redirect("users:list_users")
 
     # GET → show confirm page
@@ -282,7 +238,7 @@ def debug_permissions(request: HttpRequest) -> HttpResponse:
     """
     user = request.user
     user_perms = _user_permission_codes(user)
-    
+
     # Map permissions to available URLs
     permission_urls = {}
     for code, url_name in PERMISSION_URLS.items():
@@ -299,14 +255,14 @@ def debug_permissions(request: HttpRequest) -> HttpResponse:
                     'url': None,
                     'error': 'URL not found'
                 }
-    
+
     # Get the reverse URL mapping for debugging
     url_to_perms = {}
     for code, url in PERMISSION_URLS.items():
         if url not in url_to_perms:
             url_to_perms[url] = []
         url_to_perms[url].append(code)
-    
+
     return render(request, 'users/debug_permissions.html', {
         'user': user,
         'is_superuser': user.is_superuser,

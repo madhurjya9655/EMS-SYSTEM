@@ -394,6 +394,7 @@ class ReimbursementRequest(models.Model):
 
     class Status(models.TextChoices):
         DRAFT = "draft", _("Draft")
+        PENDING_FINANCE_VERIFY = "pending_finance_verify", _("Pending Finance Verification")
         PENDING_MANAGER = "pending_manager", _("Pending Manager Approval")
         PENDING_MANAGEMENT = "pending_management", _("Pending Management Approval")
         PENDING_FINANCE = "pending_finance", _("Pending Finance Review")
@@ -416,7 +417,7 @@ class ReimbursementRequest(models.Model):
     status = models.CharField(
         max_length=32,
         choices=Status.choices,
-        default=Status.PENDING_MANAGER,
+        default=Status.PENDING_FINANCE_VERIFY,
         db_index=True,
     )
     total_amount = models.DecimalField(
@@ -472,7 +473,20 @@ class ReimbursementRequest(models.Model):
     )
     management_decided_at = models.DateTimeField(null=True, blank=True)
 
-    # Finance processing
+    # Finance verification + processing
+    verified_by = models.ForeignKey(
+        UserModel,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reimbursements_verified",
+        help_text=_("Finance user who verified the reimbursement."),
+    )
+    verified_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=_("When Finance marked this request as Verified."),
+    )
     finance_note = models.TextField(
         blank=True,
         default="",
@@ -550,7 +564,43 @@ class ReimbursementRequest(models.Model):
             self.submitted_at = timezone.now()
         super().save(*args, **kwargs)
 
-    # ---- Finance helper -----------------------------------------------------
+    # ---- Finance helpers ----------------------------------------------------
+
+    def mark_verified(
+        self,
+        *,
+        actor: Optional[models.Model] = None,
+        note: str = "",
+    ) -> None:
+        """
+        Mark as verified by Finance and log.
+        """
+        from_status = self.status
+        self.status = self.Status.PENDING_MANAGER
+        self.verified_by = actor if isinstance(actor, models.Model) else None
+        self.verified_at = timezone.now()
+        if note:
+            if self.finance_note:
+                self.finance_note = f"{self.finance_note}\n{note}"
+            else:
+                self.finance_note = note
+        self.save(
+            update_fields=[
+                "status",
+                "verified_by",
+                "verified_at",
+                "finance_note",
+                "updated_at",
+            ]
+        )
+        ReimbursementLog.log(
+            self,
+            ReimbursementLog.Action.VERIFIED,
+            actor=actor,
+            message="Finance verified the reimbursement.",
+            from_status=from_status,
+            to_status=self.status,
+        )
 
     def mark_paid(
         self,
@@ -655,6 +705,7 @@ class ReimbursementLine(models.Model):
             qs = ReimbursementLine.objects.filter(
                 expense_item_id=self.expense_item_id,
                 request__status__in={
+                    ReimbursementRequest.Status.PENDING_FINANCE_VERIFY,
                     ReimbursementRequest.Status.PENDING_MANAGER,
                     ReimbursementRequest.Status.PENDING_MANAGEMENT,
                     ReimbursementRequest.Status.PENDING_FINANCE,
@@ -702,6 +753,8 @@ class ReimbursementLog(models.Model):
     class Action(models.TextChoices):
         CREATED = "created", _("Created")
         SUBMITTED = "submitted", _("Submitted")
+        VERIFIED = "verified", _("Verified by Finance")
+        MANAGER_APPROVED = "manager_approved", _("Approved by Manager")
         STATUS_CHANGED = "status_changed", _("Status Changed")
         COMMENTED = "commented", _("Comment Added")
         CLARIFICATION_REQUESTED = "clarification_requested", _("Clarification Requested")

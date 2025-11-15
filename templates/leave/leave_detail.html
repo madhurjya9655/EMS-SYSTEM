@@ -1,28 +1,112 @@
 {% extends "base.html" %}
-{% block title %}Leave Detail{% endblock %}
+{% load tz %}
+{% block title %}Leave Request #{{ leave.pk }}{% endblock %}
+
 {% block content %}
 <div class="card mb-4">
   <div class="card-header">
     Leave Request #{{ leave.pk }}
   </div>
   <div class="card-body">
-    <p><strong>Type:</strong> {{ leave.leave_type.name }}</p>
-    <p><strong>Period:</strong> {{ leave.start_date }} – {{ leave.end_date }}</p>
-    <p><strong>Days:</strong> {{ leave.days }}</p>
-    <p><strong>Reason:</strong> {{ leave.reason }}</p>
-    <p><strong>Status:</strong>
-      {% if leave.status == 'PM' %}Manager Pending
-      {% elif leave.status == 'PH' %}HR Pending
-      {% elif leave.status == 'A' %}Approved
-      {% else %}Rejected{% endif %}
+    <div class="row g-3">
+      <div class="col-md-6">
+        <p><strong>Employee:</strong>
+          {{ leave.employee.get_full_name|default:leave.employee.username }}
+          {% if leave.employee.email %}<span class="text-muted">({{ leave.employee.email }})</span>{% endif %}
+        </p>
+        <p><strong>Leave Type:</strong> {{ leave.leave_type.name }}</p>
+        <p><strong>Status:</strong>
+          {% if leave.status == 'PENDING' %}
+            <span class="badge bg-warning text-dark">Pending</span>
+          {% elif leave.status == 'APPROVED' %}
+            <span class="badge bg-success">Approved</span>
+          {% elif leave.status == 'REJECTED' %}
+            <span class="badge bg-danger">Rejected</span>
+          {% else %}
+            <span class="badge bg-secondary">{{ leave.status }}</span>
+          {% endif %}
+        </p>
+      </div>
+      <div class="col-md-6">
+        <p>
+          <strong>From (IST):</strong>
+          {{ leave.start_at|localtime|date:"Y-m-d H:i" }}
+        </p>
+        <p>
+          <strong>To (IST):</strong>
+          {{ leave.end_at|localtime|date:"Y-m-d H:i" }}
+        </p>
+        <p>
+          <strong>Half-day:</strong>
+          {% if leave.is_half_day %}<span class="badge bg-info text-dark">Yes</span>{% else %}<span class="text-muted">No</span>{% endif %}
+        </p>
+        <p>
+          <strong>Blocked days (IST):</strong>
+          {{ leave.blocked_days|default:"—" }}
+        </p>
+      </div>
+    </div>
+
+    <hr class="my-3">
+
+    <p><strong>Reason:</strong><br>
+      {% if leave.reason %}{{ leave.reason }}{% else %}<span class="text-muted">—</span>{% endif %}
     </p>
-    {% if leave.manager_comment %}
-    <p><strong>Manager Comment:</strong> {{ leave.manager_comment }}</p>
+
+    {% if leave.attachment %}
+      <p><strong>Attachment:</strong>
+        <a href="{{ leave.attachment.url }}" target="_blank" rel="noopener" class="link-secondary">
+          Download
+        </a>
+      </p>
     {% endif %}
-    {% if leave.hr_comment %}
-    <p><strong>HR Comment:</strong> {{ leave.hr_comment }}</p>
-    {% endif %}
-    <a href="{% url 'my_leaves' %}" class="btn btn-secondary mt-3">Back</a>
+
+    <hr class="my-3">
+
+    <div class="row g-3">
+      <div class="col-md-6">
+        <p><strong>Reporting Person:</strong>
+          {% if leave.reporting_person %}
+            {{ leave.reporting_person.get_full_name|default:leave.reporting_person.username }}
+            {% if leave.reporting_person.email %}
+              <span class="text-muted">({{ leave.reporting_person.email }})</span>
+            {% endif %}
+          {% else %}
+            <span class="text-muted">—</span>
+          {% endif %}
+        </p>
+        <p><strong>Legacy CC:</strong>
+          {% if leave.cc_person %}
+            {{ leave.cc_person.get_full_name|default:leave.cc_person.username }}
+            {% if leave.cc_person.email %}
+              <span class="text-muted">({{ leave.cc_person.email }})</span>
+            {% endif %}
+          {% else %}
+            <span class="text-muted">—</span>
+          {% endif %}
+        </p>
+      </div>
+      <div class="col-md-6">
+        <p><strong>Decision:</strong>
+          {% if leave.is_decided %}
+            by {{ leave.approver.get_full_name|default:leave.approver.username|default:"—" }}
+            on {{ leave.decided_at|localtime|date:"Y-m-d H:i" }}
+          {% else %}
+            <span class="text-muted">Not decided</span>
+          {% endif %}
+        </p>
+        {% if leave.decision_comment %}
+          <p><strong>Decision Comment:</strong> {{ leave.decision_comment }}</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="mt-3">
+      <a href="{% url 'leave:dashboard' %}" class="btn btn-secondary">Back</a>
+      {% if perms.leave_pending_manager and leave.reporting_person_id == request.user.id and not leave.is_decided %}
+        <a href="{% url 'leave:approval_page' leave.id %}" class="btn btn-primary">Open Approval Page</a>
+      {% endif %}
+    </div>
   </div>
 </div>
 {% endblock %}

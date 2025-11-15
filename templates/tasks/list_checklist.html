@@ -9,10 +9,10 @@
   <div class="card-header d-flex justify-content-between align-items-center border-0">
     <h5 class="mb-0">Checklist Tasks</h5>
     <div class="d-flex gap-2">
-      <a href="{% url 'tasks:add_checklist' %}" class="btn btn-sm btn-primary">
+      <a href="{% url 'tasks:add_checklist' %}{% if request.META.QUERY_STRING %}?next={{ request.get_full_path|urlencode }}{% endif %}" class="btn btn-sm btn-primary">
         <i class="fas fa-plus me-1" aria-hidden="true"></i> Add Checklist
       </a>
-      <a href="{% url 'tasks:bulk_upload' %}" class="btn btn-sm btn-secondary">
+      <a href="{% url 'tasks:bulk_upload' %}{% if request.META.QUERY_STRING %}?next={{ request.get_full_path|urlencode }}{% endif %}" class="btn btn-sm btn-secondary">
         <i class="fas fa-file-upload me-1" aria-hidden="true"></i> Bulk Upload
       </a>
     </div>
@@ -107,6 +107,8 @@
   <form method="post" action="{% url 'tasks:list_checklist' %}" data-bulk>
     {% csrf_token %}
     <input type="hidden" name="action" value="bulk_delete">
+    <!-- preserve current filters for post-redirect -->
+    <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
 
     <table class="table table-bordered table-hover align-middle">
       <caption class="visually-hidden">Checklist task list with bulk actions</caption>
@@ -181,12 +183,12 @@
                   <span class="visually-hidden">Details</span>
                 </button>
 
-                <a href="{% url 'tasks:edit_checklist' obj.id %}" class="btn btn-sm btn-outline-secondary" title="Edit {{ obj.task_name }}">
+                <a href="{% url 'tasks:edit_checklist' obj.id %}?next={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-secondary" title="Edit {{ obj.task_name }}">
                   <i class="fas fa-edit" aria-hidden="true"></i>
                   <span class="visually-hidden">Edit</span>
                 </a>
 
-                <a href="{% url 'tasks:delete_checklist' obj.id %}" class="btn btn-sm btn-outline-danger" title="Delete {{ obj.task_name }}">
+                <a href="{% url 'tasks:delete_checklist' obj.id %}?next={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-danger" title="Delete {{ obj.task_name }}">
                   <i class="fas fa-trash-alt" aria-hidden="true"></i>
                   <span class="visually-hidden">Delete</span>
                 </a>
@@ -240,6 +242,7 @@
         {% csrf_token %}
         <input type="hidden" name="action" value="delete_series">
         <input type="hidden" name="pk" value="{{ obj.id }}">
+        <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
       </form>
     {% endfor %}
   {% endif %}
@@ -431,11 +434,11 @@
 
           <div class="modal-footer">
             {% if obj.status == 'Pending' %}
-            <a href="{% url 'tasks:complete_checklist' obj.id %}" class="btn btn-success">
+            <a href="{% url 'tasks:complete_checklist' obj.id %}?next={{ request.get_full_path|urlencode }}" class="btn btn-success">
               <i class="fas fa-check me-1" aria-hidden="true"></i> Complete Task
             </a>
             {% endif %}
-            <a href="{% url 'tasks:edit_checklist' obj.id %}" class="btn btn-primary">
+            <a href="{% url 'tasks:edit_checklist' obj.id %}?next={{ request.get_full_path|urlencode }}" class="btn btn-primary">
               <i class="fas fa-edit me-1" aria-hidden="true"></i> Edit Task
             </a>
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>

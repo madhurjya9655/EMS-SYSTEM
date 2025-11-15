@@ -51,7 +51,7 @@
 
       <div class="col-md-6">
         <div class="d-flex justify-content-between align-items-center">
-          <label class="form-label mb-0">CC person (optional)</label>
+          <label class="form-label mb-0">CC person (legacy, optional)</label>
           {% if request.user.is_superuser %}
             <a class="btn btn-sm btn-outline-primary"
                href="{% url 'leave:approver_mapping_edit_cc' employee_obj.id %}?next={{ next_url|urlencode }}">
@@ -62,12 +62,13 @@
         <input class="form-control mt-2"
                value="{% if mapping and mapping.cc_person %}{{ mapping.cc_person.get_full_name|default:mapping.cc_person.username }}{% if mapping.cc_person.email %} ({{ mapping.cc_person.email }}){% endif %}{% else %}—{% endif %}"
                disabled>
-        <div class="form-text">Also notified on new leave requests.</div>
+        <div class="form-text">Legacy single CC; multi-CC defaults are managed separately in “Assign CC”.</div>
       </div>
     </div>
 
-    <div class="mt-4">
+    <div class="mt-4 d-flex gap-2">
       <a href="{{ next_url|default:'/' }}" class="btn btn-outline-secondary">Done</a>
+      <a href="{% url 'leave:cc_assign' %}" class="btn btn-outline-primary">Open “Assign CC”</a>
     </div>
   </div>
 </div>

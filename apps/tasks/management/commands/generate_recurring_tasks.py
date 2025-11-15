@@ -1,4 +1,3 @@
-# apps/tasks/management/commands/generate_recurring_tasks.py
 from __future__ import annotations
 
 import logging
@@ -11,13 +10,13 @@ from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.tasks.models import Checklist
+from apps.tasks.models import Checklist, Delegation
 from apps.tasks.recurrence import (
     normalize_mode,
     RECURRING_MODES,
     get_next_planned_date,     # ALWAYS 19:00 IST on next working day (Sun/holiday → shift)
 )
-from apps.tasks.utils import send_checklist_assignment_to_user
+from apps.tasks.utils import send_checklist_assignment_to_user, send_delegation_assignment_to_user
 
 # >>> NEW: imports for blocking checks
 from apps.settings.models import Holiday
@@ -58,8 +57,6 @@ def _is_holiday(d: date) -> bool:
 
 def _is_user_on_leave(user_id: int, d: date) -> bool:
     try:
-        # use the model helper to keep semantics identical
-        user = None
         from django.contrib.auth import get_user_model
         User = get_user_model()
         user = User.objects.filter(id=user_id).first()
@@ -87,15 +84,14 @@ def _within_10am_ist_window(leeway_minutes: int = EMAIL_WINDOW_MINUTES) -> bool:
     return (anchor - timedelta(minutes=leeway_minutes)) <= now_ist <= (anchor + timedelta(minutes=leeway_minutes))
 
 
-def _send_recur_email(obj: Checklist) -> None:
+def _send_checklist_recur_email(obj: Checklist) -> None:
     """
-    Send an assignee-only email reminder for a planned task (no admin CC).
+    Send an assignee-only email reminder for a planned checklist (no admin CC).
     Only runs at ~10:00 IST if SEND_RECUR_EMAILS_ONLY_AT_10AM is True.
     """
     if not SEND_EMAILS_FOR_AUTO_RECUR:
         return
     if SEND_RECUR_EMAILS_ONLY_AT_10AM and not _within_10am_ist_window():
-        # Not in the 10:00 window -> skip quietly
         logger.info(_safe_console_text(f"Skip recur email for CL-{obj.id}: outside 10:00 IST window"))
         return
 
@@ -105,17 +101,58 @@ def _send_recur_email(obj: Checklist) -> None:
         pretty_time = planned_ist.strftime("%H:%M") if planned_ist else "N/A"
 
         complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
-        subject = f"✅ Task Reminder: {obj.task_name} scheduled for {pretty_date}, {pretty_time}"
+        subject = f"Today’s Checklist – {obj.task_name} (due {pretty_time})"
 
-        # This uses utils.py which includes the message/instructions block
         send_checklist_assignment_to_user(
             task=obj,
             complete_url=complete_url,
-            subject_prefix=subject,  # exact subject
+            subject_prefix=subject,
         )
         logger.info(_safe_console_text(f"Sent 10:00 reminder for CL-{obj.id} to user_id={obj.assign_to_id}"))
     except Exception as e:
         logger.error(_safe_console_text(f"Failed to send recurring reminder for CL-{obj.id}: {e}"))
+
+
+# >>> NEW: 10:00 AM Delegation reminders (one-time tasks)
+def _send_delegation_10am_emails(today_ist: date, user_id: int | None, dry_run: bool) -> int:
+    """
+    Sends 'Today’s Delegation – <task> (due 7 PM)' at ~10:00 IST
+    for all Pending delegations whose planned_date is TODAY (IST).
+    """
+    if not _within_10am_ist_window():
+        return 0
+
+    start_today_ist = IST.localize(datetime.combine(today_ist, dt_time.min))
+    end_today_ist = IST.localize(datetime.combine(today_ist, dt_time.max))
+    start_proj = start_today_ist.astimezone(timezone.get_current_timezone())
+    end_proj = end_today_ist.astimezone(timezone.get_current_timezone())
+
+    qs = Delegation.objects.filter(
+        status="Pending",
+        planned_date__gte=start_proj,
+        planned_date__lte=end_proj,
+    ).select_related("assign_to")
+
+    if user_id:
+        qs = qs.filter(assign_to_id=user_id)
+
+    sent = 0
+    for obj in qs:
+        try:
+            subject = f"Today’s Delegation – {obj.task_name} (due 7 PM)"
+            complete_url = f"{SITE_URL}{reverse('tasks:complete_delegation', args=[obj.id])}"
+            if not dry_run:
+                send_delegation_assignment_to_user(
+                    delegation=obj,
+                    complete_url=complete_url,
+                    subject_prefix=subject,
+                )
+            sent += 1
+        except Exception as e:
+            logger.error("Failed to send delegation 10AM email for DL-%s: %s", getattr(obj, "id", "?"), e)
+    if sent:
+        logger.info(_safe_console_text(f"Sent {sent} Delegation 10:00 reminders for {today_ist}"))
+    return sent
 
 
 class Command(BaseCommand):
@@ -125,9 +162,10 @@ class Command(BaseCommand):
         "• Next occurrence is always on a working day at 19:00 IST (Sun/holiday → shift).\n"
         "• Generation is independent of completion (missed tasks remain; next still appears).\n"
         "• Emails are sent at ~10:00 IST on the planned day (subject shows date/time).\n"
-        "• Dashboard 10:00 gating handled in views/templates.\n"
+        "• Dashboard 10:00 gating handled in views/templates (Checklists & Delegations); Help Tickets are immediate.\n"
         "• Idempotent dupe-guard (±1 minute) on planned_date.\n"
         "• NEW: Skip/shift occurrences that fall inside assignee leave windows (PENDING/APPROVED).\n"
+        "• NEW: Send 10:00 AM Delegation reminders for today’s delegations.\n"
     )
 
     def add_arguments(self, parser):
@@ -284,11 +322,10 @@ class Command(BaseCommand):
 
         # -------- 2) SEND 10:00 REMINDERS FOR TODAY'S TASKS --------
         if send_emails and SEND_EMAILS_FOR_AUTO_RECUR and (not SEND_RECUR_EMAILS_ONLY_AT_10AM or _within_10am_ist_window()):
-            # Fetch all PENDING tasks scheduled for TODAY IST @ any time (commonly 19:00)
+            # Checklists (recurring)
             start_today_ist = IST.localize(datetime.combine(today_ist, dt_time.min))
             end_today_ist = IST.localize(datetime.combine(today_ist, dt_time.max))
 
-            # Convert bounds to project TZ for querying
             start_proj = start_today_ist.astimezone(timezone.get_current_timezone())
             end_proj = end_today_ist.astimezone(timezone.get_current_timezone())
 
@@ -303,18 +340,19 @@ class Command(BaseCommand):
 
             for obj in email_qs.select_related("assign_to"):
                 if email_today_only:
-                    # Already bounded to today; send
                     if not dry_run:
-                        _send_recur_email(obj)
+                        _send_checklist_recur_email(obj)
                     email_total += 1
                     per_user_emailed[obj.assign_to_id] = per_user_emailed.get(obj.assign_to_id, 0) + 1
                 else:
-                    # Defensive (should not happen due to bounds)
                     if obj.planned_date.astimezone(IST).date() == today_ist:
                         if not dry_run:
-                            _send_recur_email(obj)
+                            _send_checklist_recur_email(obj)
                         email_total += 1
                         per_user_emailed[obj.assign_to_id] = per_user_emailed.get(obj.assign_to_id, 0) + 1
+
+            # >>> NEW: Delegations (one-time) — 10 AM reminders
+            email_total += _send_delegation_10am_emails(today_ist, user_id, dry_run)
 
         # -------- 3) Summaries --------
         if per_user_created:
@@ -323,17 +361,16 @@ class Command(BaseCommand):
         else:
             logger.info(_safe_console_text(f"[RECUR GEN] No new occurrences were needed today."))
 
-        if per_user_emailed:
+        if per_user_emailed or email_total:
             for uid, count in per_user_emailed.items():
-                logger.info(_safe_console_text(f"[RECUR MAIL] user_id={uid} → sent {count} reminder(s)"))
+                logger.info(_safe_console_text(f"[RECUR MAIL] user_id={uid} → sent {count} checklist reminder(s)"))
         else:
             if send_emails:
-                logger.info(_safe_console_text(f"[RECUR MAIL] No reminders sent (either outside 10:00 window or none due)."))
+                logger.info(_safe_console_text(f"[RECUR MAIL] No checklist reminders sent (outside window or none due)."))
 
-        # CLI summary line
-        parts = [f"Created {created_total} task(s)"]
+        parts = [f"Created {created_total} checklist occurrence(s)"]
         if send_emails:
-            parts.append(f"Emailed {email_total} reminder(s)")
+            parts.append(f"Emailed {email_total} reminder(s) (checklists + delegations)")
         if dry_run:
             msg = "[DRY RUN] " + ", ".join(parts)
             self.stdout.write(self.style.WARNING(msg))

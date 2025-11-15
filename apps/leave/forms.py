@@ -33,12 +33,14 @@ FULL_DAY_DEFAULT_TO   = WORK_TO
 
 
 def _aware_ist(dt: datetime) -> datetime:
+    """Ensure timezone-aware datetime in IST."""
     if timezone.is_naive(dt):
-        return timezone.make_aware(dt, IST)
+        return timezone.make_aware(dt, timezone=IST)
     return timezone.localtime(dt, IST)
 
 
 def _choices(items: List[Tuple[int, str]]) -> List[Tuple[str, str]]:
+    """Convert int ids to str for MultipleChoiceField values."""
     return [(str(i), s) for i, s in items]
 
 
@@ -50,7 +52,7 @@ class LeaveRequestForm(forms.ModelForm):
     """
     UI contract:
       • duration_type = FULL / HALF (radio)
-      • HALF:   one Date + From/To time (any range inside 09:30–18:00)
+      • HALF:   one Date + From/To time (any range inside 09:30–18:00, ≤ 6h)
       • FULL:   Start Date required; End Date optional (defaults to Start)
     """
 
@@ -172,7 +174,7 @@ class LeaveRequestForm(forms.ModelForm):
             name__in=SOP_ALLOWED_TYPE_NAMES
         ).order_by("name")
 
-        # Select employee
+        # Resolve employee (instance > provided user)
         if self.instance and getattr(self.instance, "employee_id", None):
             self.employee = self.instance.employee
         else:
@@ -183,7 +185,7 @@ class LeaveRequestForm(forms.ModelForm):
         except Exception:
             pass
 
-        # delegate choices
+        # Delegate choices
         delegate_qs = User.objects.filter(is_active=True) \
             .exclude(email__isnull=True).exclude(email__exact="") \
             .order_by("first_name", "last_name", "username")
@@ -199,23 +201,25 @@ class LeaveRequestForm(forms.ModelForm):
                 sd = self.data.get("start_at")
                 ed = self.data.get("end_at")
                 if sd:
-                    start_d = datetime.fromisoformat(sd).date()
+                    start_d = date.fromisoformat(sd)
                 if ed:
-                    end_d = datetime.fromisoformat(ed).date()
+                    end_d = date.fromisoformat(ed)
             except Exception:
+                # fall back to defaults below
                 pass
         if not start_d:
-            start_d = timezone.localtime(timezone.now(), IST).date()
+            start_d = _now_ist().date()
         if not end_d:
             end_d = start_d
+
         self._load_handover_choices(
-            timezone.make_aware(datetime.combine(start_d, time.min), IST),
-            timezone.make_aware(datetime.combine(end_d,   time.max), IST),
+            timezone.make_aware(datetime.combine(start_d, time.min), timezone=IST),
+            timezone.make_aware(datetime.combine(end_d,   time.max), timezone=IST),
         )
 
     # ------------------------------------------------------------- choices load
-    def _load_handover_choices(self, start_at, end_at):
-        if not self.employee:
+    def _load_handover_choices(self, start_at: datetime, end_at: datetime) -> None:
+        if not getattr(self, "employee", None):
             self.fields["handover_checklist"].choices = []
             self.fields["handover_delegation"].choices = []
             self.fields["handover_help_ticket"].choices = []
@@ -273,8 +277,8 @@ class LeaveRequestForm(forms.ModelForm):
             raise forms.ValidationError("File too large. Max 10 MB.")
         return f
 
-    def _overlaps_existing(self, start_at, end_at) -> bool:
-        if not hasattr(self, "employee") or not self.employee:
+    def _overlaps_existing(self, start_at: datetime, end_at: datetime) -> bool:
+        if not getattr(self, "employee", None):
             return False
         qs = (
             LeaveRequest.objects.filter(employee=self.employee)
@@ -294,7 +298,7 @@ class LeaveRequestForm(forms.ModelForm):
         if not leave_type or not start_d:
             return cleaned  # field-level errors will be shown
 
-        # HALF DAY: one date + free range inside 09:30–18:00
+        # HALF DAY: one date + free range inside 09:30–18:00, max 6h
         if dur == "HALF":
             f = cleaned.get("from_time") or WORK_FROM
             t = cleaned.get("to_time")   or WORK_TO
@@ -303,21 +307,25 @@ class LeaveRequestForm(forms.ModelForm):
             end_d = start_d
 
             # Validate range within work hours and order
-            if not (WORK_FROM <= f < WORK_TO) or not (WORK_FROM < t <= WORK_TO):
+            if not (WORK_FROM <= f < WORK_TO):
                 self.add_error("from_time", "Half-day time must be within 09:30–18:00.")
+            if not (WORK_FROM < t <= WORK_TO):
                 self.add_error("to_time", "Half-day time must be within 09:30–18:00.")
             if t <= f:
                 self.add_error("to_time", "Half-day 'To Time' must be after 'From Time'.")
 
+            # Enforce ≤ 6 hours for half-day
             start_dt = _aware_ist(datetime.combine(start_d, f))
             end_dt   = _aware_ist(datetime.combine(end_d,   t))
+            if end_dt - start_dt > timedelta(hours=6, minutes=0):
+                self.add_error("to_time", "Half-day duration cannot exceed 6 hours.")
 
             cleaned["is_half_day"] = True
             cleaned["start_at"] = start_dt
             cleaned["end_at"]   = end_dt
             return cleaned
 
-        # FULL DAY: start date required; end date optional
+        # FULL DAY: start date required; end date optional (defaults to start)
         if end_d and end_d < start_d:
             self.add_error("end_at", "End date must be on or after Start date.")
             return cleaned

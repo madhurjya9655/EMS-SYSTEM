@@ -22,7 +22,7 @@
             <th>Total Amount</th>
             <th>Manager</th>
             <th>Management</th>
-            <th style="width:120px;">Actions</th>
+            <th style="width:200px;">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -51,8 +51,15 @@
                 <span class="text-muted small">-</span>
               {% endif %}
             </td>
-            <td>
-              <a href="{% url 'reimbursement:finance_review' req.id %}" class="btn btn-sm btn-outline-primary">
+            <td class="d-flex gap-2">
+              {% if req.status == "pending_finance_verify" %}
+                <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}"
+                   class="btn btn-sm btn-outline-warning">
+                  Verify
+                </a>
+              {% endif %}
+              <a href="{% url 'reimbursement:finance_review' req.id %}?return={{ request.get_full_path|urlencode }}"
+                 class="btn btn-sm btn-outline-primary">
                 Review / Pay
               </a>
             </td>

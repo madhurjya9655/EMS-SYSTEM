@@ -1,4 +1,3 @@
-# employee_management/settings.py
 import os
 import sqlite3
 from pathlib import Path
@@ -498,10 +497,16 @@ DEFAULT_FROM_EMAIL = os.getenv(
     EMAIL_HOST_USER or "BOS Lakshya <no-reply@example.com>",
 )
 
-# dedicated override for reimbursement module (used in notifications)
+# ---- Reimbursement sender — Amreen ------------------------------------------
+REIMBURSEMENT_SENDER_EMAIL = os.getenv(
+    "REIMBURSEMENT_SENDER_EMAIL", "amreen@blueoceansteels.com"
+)
+REIMBURSEMENT_SENDER_NAME = os.getenv(
+    "REIMBURSEMENT_SENDER_NAME", "Amreen"
+)
 REIMBURSEMENT_EMAIL_FROM = os.getenv(
     "REIMBURSEMENT_EMAIL_FROM",
-    DEFAULT_FROM_EMAIL,
+    f"{REIMBURSEMENT_SENDER_NAME} <{REIMBURSEMENT_SENDER_EMAIL}>",
 )
 
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 30)

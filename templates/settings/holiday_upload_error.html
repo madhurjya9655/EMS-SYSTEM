@@ -8,7 +8,9 @@
   <div class="card-body">
     <div class="alert alert-danger mb-4">
       One or more rows in your file could not be processed.<br>
-      <strong>Tasks cannot be created on holidays or Sundays.</strong>
+      <strong>Tasks cannot be created on holidays or Sundays.</strong><br>
+      Please fix the listed rows and re-upload. Ensure your file has columns
+      <code>date</code> (YYYY-MM-DD) and <code>name</code>. Sundays and duplicate dates are not allowed.
     </div>
 
     {% if errors %}

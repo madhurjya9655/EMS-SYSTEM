@@ -1,10 +1,11 @@
+E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\users\list_user.html:
 {% extends "base.html" %}
 {% block title %}Users{% endblock %}
 
 {% block content %}
 <div class="page-header mb-4 d-flex justify-content-between align-items-center">
   <h2 class="page-title mb-0">List Users</h2>
-  <a href="{% url 'users:add_user' %}" class="btn btn-success">
+  <a href="{% url 'users:add_user' %}?next={{ request.get_full_path|urlencode }}" class="btn btn-success">
     <i class="fas fa-user-plus"></i> Add User
   </a>
 </div>
@@ -69,21 +70,21 @@
           <td>
             <div class="d-flex gap-2">
               {% if request.user.is_superuser %}
-                <a href="{% url 'users:edit_user' u.pk %}"
+                <a href="{% url 'users:edit_user' u.pk %}?next={{ request.get_full_path|urlencode }}"
                    class="btn btn-sm btn-primary"
                    title="Edit user">
                   <i class="fas fa-edit"></i>
                 </a>
               {% endif %}
 
-              <a href="{% url 'users:delete_user' u.pk %}"
+              <a href="{% url 'users:delete_user' u.pk %}?next={{ request.get_full_path|urlencode }}"
                  class="btn btn-sm btn-danger"
                  title="Delete user">
                 <i class="fas fa-trash"></i>
               </a>
 
               {% if request.user.is_superuser %}
-                <a href="{% url 'users:toggle_active' u.pk %}"
+                <a href="{% url 'users:toggle_active' u.pk %}?next={{ request.get_full_path|urlencode }}"
                    class="btn btn-sm {% if u.is_active %}btn-outline-secondary{% else %}btn-outline-success{% endif %}"
                    title="{% if u.is_active %}Deactivate{% else %}Activate{% endif %} user">
                   {% if u.is_active %}Deactivate{% else %}Activate{% endif %}

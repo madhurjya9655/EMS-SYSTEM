@@ -46,7 +46,8 @@
               {% endif %}
             </td>
             <td>
-              <a href="{% url 'reimbursement:manager_review' req.id %}" class="btn btn-sm btn-outline-primary">
+              <a href="{% url 'reimbursement:manager_review' req.id %}?return={{ request.get_full_path|urlencode }}"
+                 class="btn btn-sm btn-outline-primary">
                 Review
               </a>
             </td>

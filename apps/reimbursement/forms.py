@@ -319,6 +319,51 @@ class FinanceProcessForm(forms.ModelForm):
         return cleaned
 
 
+# ---------------------------
+# Finance verification (NEW)
+# ---------------------------
+
+# IMPORTANT: values align with FinanceVerifyView.post which accepts "verify" / "rejected"
+_FINANCE_VERIFY_CHOICES = [
+    ("verify", "Verify & Send to Manager"),
+    ("rejected", "Reject"),
+]
+
+
+class FinanceVerifyForm(forms.ModelForm):
+    """
+    First step Finance verification before manager approval.
+    """
+
+    decision = forms.ChoiceField(
+        choices=_FINANCE_VERIFY_CHOICES,
+        widget=forms.Select(attrs={"class": "form-select"}),
+        label="Finance Decision",
+    )
+
+    class Meta:
+        model = ReimbursementRequest
+        fields = [
+            "finance_note",
+        ]
+        widgets = {
+            "finance_note": forms.Textarea(
+                attrs={
+                    "class": "form-control",
+                    "rows": 3,
+                    "placeholder": "Optional note (visible to employee & approvers).",
+                }
+            ),
+        }
+
+    def save(self, commit=True) -> ReimbursementRequest:
+        obj: ReimbursementRequest = super().save(commit=False)
+        # The actual status transition and verified_by/verified_at will be handled in the view.
+        if commit:
+            obj.save(update_fields=["finance_note", "updated_at"])
+        return obj
+
+
 # ---------------------------------------------------------------------------
 # Admin: Settings & Approver mappings
 # ---------------------------------------------------------------------------

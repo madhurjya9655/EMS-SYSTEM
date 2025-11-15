@@ -6,7 +6,6 @@
 {% block content %}
 <div class="container my-4">
 
-  {# Flash messages #}
   {% if messages %}
     {% for message in messages %}
       <div class="alert alert-{% if message.tags %}{{ message.tags }}{% else %}info{% endif %}">{{ message }}</div>
@@ -14,7 +13,6 @@
   {% endif %}
 
   <div class="card">
-    <!-- Blue header with employee name -->
     <div class="card-header bg-primary text-white">
       <div class="d-flex align-items-center justify-content-between">
         <h5 class="mb-0 fw-semibold">
@@ -39,11 +37,8 @@
         </div>
         <div class="col-md-6">
           <p class="mb-1">
-            <strong>Type:</strong>
-            {{ leave_type_name }}
-            {% if is_half_day %}
-              <span class="badge bg-dark ms-1">Half Day</span>
-            {% endif %}
+            <strong>Type:</strong> {{ leave_type_name }}
+            {% if is_half_day %}<span class="badge bg-dark ms-1">Half Day</span>{% endif %}
           </p>
           <p class="mb-1"><strong>From (IST):</strong> {{ from_ist|date:"Y-m-d H:i" }}</p>
           <p class="mb-1"><strong>To (IST):</strong> {{ to_ist|date:"Y-m-d H:i" }}</p>
@@ -60,7 +55,7 @@
       {% if attachment %}
         <p class="mt-2">
           <a class="btn btn-outline-secondary btn-sm" href="{{ attachment.url }}" target="_blank" rel="noopener">
-            View Attachment
+            <i class="fa fa-paperclip me-1"></i> View Attachment
           </a>
         </p>
       {% endif %}
@@ -68,36 +63,31 @@
       {% if leave.is_decided %}
         <hr>
         <p class="text-muted mb-0">
-          This request is already <strong>{{ leave.get_status_display }}</strong>.
-          {% if leave.approver %} (by {{ leave.approver.get_full_name|default:leave.approver.username }}){% endif %}
+          This request is already <strong>{{ leave.get_status_display }}</strong>
+          {% if leave.approver %} (by {{ leave.approver.get_full_name|default:leave.approver.username }}){% endif %}.
         </p>
       {% else %}
         <hr>
         <div class="alert alert-warning py-2">
-          Approvals/Rejections for leaves that include <strong>today</strong> are locked after <strong>10:00 AM IST</strong>.
+          Decisions for leaves that include <strong>today</strong> are blocked after <strong>10:00 AM IST</strong>.
         </div>
 
-        <form method="post" action="{% url 'leave:manager_decide_approve' leave.id %}" class="mb-2">
+        <!-- Approve -->
+        <form method="post" action="{% url 'leave:manager_decide_approve' leave.id %}{% if next_url %}?next={{ next_url|urlencode }}{% endif %}" class="mb-2">
           {% csrf_token %}
           <div class="mb-2">
-            <label for="decision_comment" class="form-label">Decision comment (optional)</label>
-            <textarea id="decision_comment" name="decision_comment" rows="3" class="form-control"></textarea>
+            <label for="decision_comment_approve" class="form-label">Decision comment (optional)</label>
+            <input id="decision_comment_approve" type="text" name="decision_comment" class="form-control" placeholder="Add a note for the employee">
           </div>
-          {% if next_url %}
-            <input type="hidden" name="next" value="{{ next_url }}">
-          {% endif %}
-          <button type="submit" class="btn btn-success me-2">Approve</button>
-          <button type="button" class="btn btn-outline-danger"
-                  onclick="document.getElementById('reject-form').submit();">
-            Reject
+          <button type="submit" class="btn btn-success me-2"><i class="fa fa-check me-1"></i> Approve</button>
+          <button type="button" class="btn btn-outline-danger" onclick="document.getElementById('reject-form').submit();">
+            <i class="fa fa-times me-1"></i> Reject
           </button>
         </form>
 
-        <form id="reject-form" method="post" action="{% url 'leave:manager_decide_reject' leave.id %}">
+        <!-- Reject -->
+        <form id="reject-form" method="post" action="{% url 'leave:manager_decide_reject' leave.id %}{% if next_url %}?next={{ next_url|urlencode }}{% endif %}">
           {% csrf_token %}
-          {% if next_url %}
-            <input type="hidden" name="next" value="{{ next_url }}">
-          {% endif %}
           <input type="hidden" name="decision_comment" value="">
         </form>
       {% endif %}

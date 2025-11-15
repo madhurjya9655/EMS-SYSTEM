@@ -1,0 +1,82 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Task Handover Summary</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f8fafc;margin:0;padding:24px;color:#111827;}
+    .card{max-width:760px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.04);}
+    .hd{padding:18px 20px;border-bottom:1px solid #e5e7eb;}
+    .bd{padding:20px;}
+    .muted{color:#6b7280;}
+    .pill{display:inline-block;border-radius:999px;padding:2px 8px;font-size:12px;color:#fff;background:#3b82f6;}
+    table{width:100%;border-collapse:collapse;margin:12px 0;}
+    th, td{font-size:14px;text-align:left;padding:10px;border-bottom:1px solid #f1f5f9;vertical-align:top;}
+    th{background:#f8fafc;color:#374151;text-transform:uppercase;letter-spacing:.02em;font-weight:600;}
+    .small{font-size:12px;}
+    a{color:#2563eb;text-decoration:none;}
+    a:hover{text-decoration:underline;}
+    .footer{padding:16px 20px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:12px;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="hd">
+      <h1 style="margin:0;font-size:18px;">Task Handover Assigned to You</h1>
+      <div class="muted small">Leave window: {{ from_ist|date:"Y-m-d H:i" }} → {{ to_ist|date:"Y-m-d H:i" }} IST</div>
+    </div>
+    <div class="bd">
+      <p>Hi {{ assignee.get_full_name|default:assignee.username }},</p>
+      <p>
+        The following task(s) have been handed over to you while
+        <strong>{{ employee_name }}</strong> is on leave.
+      </p>
+
+      {% if rows %}
+        <table role="table" aria-label="Handover tasks">
+          <thead>
+            <tr>
+              <th style="width:22%;">Type</th>
+              <th>Task</th>
+              <th style="width:24%;">Owner</th>
+              <th style="width:22%;">Handover Ends</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in rows %}
+              <tr>
+                <td><span class="pill">{{ r.type }}</span></td>
+                <td>
+                  {% if r.url %}
+                    <a href="{{ r.url }}">{{ r.title }}</a>
+                  {% else %}
+                    {{ r.title }}
+                  {% endif %}
+                  {% if r.message %}
+                    <div class="small muted" style="margin-top:4px;">{{ r.message }}</div>
+                  {% endif %}
+                </td>
+                <td>{{ r.from_name }}</td>
+                <td>{{ r.effective_end|default:"—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="muted">No tasks were listed in this handover.</p>
+      {% endif %}
+
+      <p class="small muted" style="margin-top:12px;">
+        Tip: you can work these items from your dashboard as they’ll appear under “Tasks handed over to you”.
+      </p>
+    </div>
+
+    <div class="footer">
+      This is an automated notification for Leave #{{ leave.id }} ({{ leave.leave_type.name }}).
+      If you believe you received this in error, please contact the requester or your administrator.
+    </div>
+  </div>
+</body>
+</html>

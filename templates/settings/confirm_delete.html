@@ -2,16 +2,15 @@
 {% block title %}Confirm Delete{% endblock %}
 
 {% block content %}
-<div class="container py-5">
-  <div class="alert alert-danger border shadow-lg mx-auto" style="max-width: 480px;">
-    <h4 class="mb-3">Are you sure?</h4>
-    <p>
-      {% if type %}Delete <strong>{{ type }}</strong>?{% else %}Delete this record?{% endif %}
-    </p>
-    <form method="post" class="mt-4">
+<div class="page-header mb-4"><h2>Confirm Delete</h2></div>
+
+<div class="card border-danger">
+  <div class="card-body">
+    <p class="mb-3">Are you sure you want to delete this <strong>{{ type }}</strong>?</p>
+    <form method="post">
       {% csrf_token %}
-      <a href="javascript:history.back()" class="btn btn-secondary me-2">Cancel</a>
-      <button type="submit" class="btn btn-danger">Yes, Delete</button>
+      <button class="btn btn-danger">Yes, delete</button>
+      <a href="javascript:history.back()" class="btn btn-secondary">Cancel</a>
     </form>
   </div>
 </div>

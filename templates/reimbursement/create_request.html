@@ -36,10 +36,11 @@
                 <th style="width:4%;"></th>
                 <th style="width:14%;">Date</th>
                 <th style="width:16%;">Category</th>
-                <th style="width:18%;">Vendor</th>
-                <th style="width:14%;" class="text-end">Amount</th>
+                <th style="width:12%;">Bill Type</th>
+                <th style="width:16%;">Vendor</th>
+                <th style="width:12%;" class="text-end">Amount</th>
                 <th style="width:10%;">Bill</th>
-                <th style="width:24%;">Status</th>
+                <th style="width:16%;">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -56,6 +57,13 @@
                     </td>
                     <td>{{ row.item.date|date:"Y-m-d" }}</td>
                     <td>{{ row.item.get_category_display }}</td>
+                    <td>
+                      {% if row.item.gst_type %}
+                        {{ row.item.get_gst_type_display }}
+                      {% else %}
+                        -
+                      {% endif %}
+                    </td>
                     <td>{{ row.item.vendor|default:"-" }}</td>
                     <td class="text-end">₹{{ row.item.amount|floatformat:2 }}</td>
                     <td>
@@ -82,7 +90,7 @@
                 {% endfor %}
               {% else %}
                 <tr>
-                  <td colspan="7" class="text-center text-muted py-4">
+                  <td colspan="8" class="text-center text-muted py-4">
                     You don't have any expenses available to include yet.
                     <a href="{% url 'reimbursement:expense_inbox' %}">Upload an expense</a> first.
                   </td>

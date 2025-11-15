@@ -1,3 +1,4 @@
+E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\reports\list_doer_tasks.html:
 {% extends "base.html" %}
 {% load widget_tweaks %}
 
@@ -59,6 +60,7 @@
   <form id="bulkForm" method="post" novalidate>
     {% csrf_token %}
     <input type="hidden" name="action" id="bulkAction" value="">
+    <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <div>
@@ -145,6 +147,7 @@
     {% csrf_token %}
     <input type="hidden" name="action" value="delete_one">
     <input type="hidden" name="pk" id="singleDeletePk">
+    <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
   </form>
 
   <!-- Details Modals (trimmed) -->
@@ -166,7 +169,7 @@
               </div>
               <div class="modal-footer">
                   {% if item.status == 'Pending' %}
-                      <a href="{% url 'tasks:complete_checklist' item.id %}" class="btn btn-success">
+                      <a href="{% url 'tasks:complete_checklist' item.id %}?next={{ request.get_full_path|urlencode }}" class="btn btn-success">
                           <i class="fas fa-check"></i> Complete Task
                       </a>
                   {% endif %}

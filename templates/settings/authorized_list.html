@@ -1,32 +1,66 @@
 {% extends "base.html" %}
 {% block title %}Authorized Numbers{% endblock %}
+
 {% block content %}
-<div class="page-header mb-4"><h2>Authorized Numbers</h2></div>
-<div class="card mb-5">
-  <div class="card-body">
-    <form method="post" class="row g-3 mb-4">{% csrf_token %}
-      <div class="col-md-4">{{ form.label.label_tag }}{{ form.label }}</div>
-      <div class="col-md-4">{{ form.number.label_tag }}{{ form.number }}</div>
-      <div class="col-auto"><button class="btn btn-primary">Add</button></div>
-    </form>
-    <table class="table">
-      <thead><tr><th>Label</th><th>Number</th><th>Actions</th></tr></thead>
-      <tbody>
-        {% for num in numbers %}
-        <tr>
-          <td>{{ num.label }}</td>
-          <td>{{ num.number }}</td>
-          <td>
-            <a href="{% url 'settings:authorized_delete' num.pk %}" class="btn btn-sm btn-danger">
-              Delete
-            </a>
-          </td>
-        </tr>
-        {% empty %}
-        <tr><td colspan="3">No numbers yet.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+<div class="page-header mb-4">
+  <h2>Authorized Numbers</h2>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header"><strong>Add New</strong></div>
+      <div class="card-body">
+        <form method="post">
+          {% csrf_token %}
+          {{ form.non_field_errors }}
+          <div class="mb-3">
+            {{ form.label.label_tag }}{{ form.label }}
+            <div class="text-danger small">{{ form.label.errors }}</div>
+          </div>
+          <div class="mb-3">
+            {{ form.number.label_tag }}{{ form.number }}
+            <div class="text-danger small">{{ form.number.errors }}</div>
+          </div>
+          <button class="btn btn-primary">Add</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header"><strong>Existing Numbers</strong></div>
+      <div class="card-body p-0">
+        <table class="table mb-0">
+          <thead>
+            <tr>
+              <th>Label</th>
+              <th>Number</th>
+              <th>Added</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in items %}
+              <tr>
+                <td>{{ item.label }}</td>
+                <td>{{ item.number }}</td>
+                <td>{{ item.created_at|date:"Y-m-d H:i" }}</td>
+                <td class="text-end">
+                  <form method="post" action="{% url 'settings:authorized_delete' item.pk %}" onsubmit="return confirm('Delete this number?');">
+                    {% csrf_token %}
+                    <button class="btn btn-sm btn-danger">Delete</button>
+                  </form>
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="4" class="text-center text-muted py-4">No authorized numbers yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

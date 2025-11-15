@@ -95,6 +95,12 @@ urlpatterns = [
         views.FinanceQueueView.as_view(),
         name="finance_pending",
     ),
+    # explicit verify route (pre-manager step)
+    path(
+        "finance/<int:pk>/verify/",
+        views.FinanceVerifyView.as_view(),
+        name="finance_verify",
+    ),
     path(
         "finance/<int:pk>/review/",
         views.FinanceReviewView.as_view(),

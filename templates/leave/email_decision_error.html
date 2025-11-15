@@ -18,7 +18,7 @@
     <div class="hd"><h1 style="margin:0">We couldn’t complete that action</h1></div>
     <div class="bd">
       <div class="err">
-        {{ message|default:"This link is invalid, expired, or the action is blocked by business rules (e.g., after 10:00 AM IST for today’s leaves)." }}
+        {{ message|default:"This link is invalid or expired, or the action is blocked by current business rules." }}
       </div>
       <p>
         <a class="btn" href="{% url 'leave:manager_pending' %}">Back to Manager Queue</a>

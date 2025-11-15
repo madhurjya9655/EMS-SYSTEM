@@ -2,17 +2,26 @@
 {% block title %}My Reimbursements{% endblock %}
 {% block content %}
 <h2>My Reimbursement Requests</h2>
-<table class="table">
-  <thead><tr><th>Category</th><th>Amount</th><th>Status</th></tr></thead>
-  <tbody>
-    {% for r in items %}
+
+<table class="table table-sm align-middle">
+  <thead>
     <tr>
-      <td>{{ r.category }}</td>
-      <td>{{ r.amount }}</td>
-      <td>{{ r.status }}</td>
+      <th>ID</th>
+      <th>Total Amount</th>
+      <th>Status</th>
+      <th>Submitted</th>
     </tr>
+  </thead>
+  <tbody>
+    {% for r in requests %}
+      <tr>
+        <td><a href="{% url 'reimbursement:reimbursement_detail' r.id %}">#{{ r.id }}</a></td>
+        <td>₹{{ r.total_amount|floatformat:2 }}</td>
+        <td>{{ r.get_status_display }}</td>
+        <td>{{ r.submitted_at|default:r.created_at }}</td>
+      </tr>
     {% empty %}
-    <tr><td colspan="3">No requests.</td></tr>
+      <tr><td colspan="4" class="text-muted">No requests.</td></tr>
     {% endfor %}
   </tbody>
 </table>

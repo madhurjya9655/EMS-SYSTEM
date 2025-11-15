@@ -16,7 +16,7 @@ Review this request:
 {{ detail_url }}
 
 To: {{ manager_to }}
-CC: {{ admin_cc|join:", " }}
+CC: {% if admin_cc %}{{ admin_cc|join:", " }}{% else %}-{% endif %}
 
 Regards,
 BOS Lakshya

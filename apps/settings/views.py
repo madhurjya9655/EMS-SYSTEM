@@ -56,6 +56,8 @@ def holiday_list(request):
             if upload_form.is_valid():
                 file = upload_form.cleaned_data["file"]
                 ext = file.name.rsplit(".", 1)[-1].lower()
+
+                # ---- Read rows (CSV/Excel) ----
                 if ext in ("xls", "xlsx"):
                     xl = pd.read_excel(file)
                     rows = xl.to_dict("records")
@@ -68,36 +70,66 @@ def holiday_list(request):
                         except Exception:
                             continue
                     rows = list(csv.DictReader(io.StringIO(text)))
-                holiday_objs = []
-                failed_rows = []
+
+                # ---- Validate/collect; skip bad rows but keep good ones ----
+                to_create = []
+                problems = []  # per-row messages
                 seen_dates = set()
-                for idx, row in enumerate(rows, 2):
+
+                for idx, row in enumerate(rows, 2):  # header = row 1
                     date_val = row.get("date") or row.get("Date")
                     name_val = row.get("name") or row.get("Name")
+
                     try:
                         date_obj = pd.to_datetime(date_val).date()
-                        if date_obj.weekday() == 6:
-                            failed_rows.append(f"Row {idx}: {date_obj} is a Sunday")
-                            continue
-                        if not name_val:
-                            failed_rows.append(f"Row {idx}: missing name")
-                            continue
-                        if date_obj in seen_dates:
-                            failed_rows.append(f"Row {idx}: {date_obj} duplicate in file")
-                            continue
-                        if Holiday.objects.filter(date=date_obj).exists():
-                            failed_rows.append(f"Row {idx}: {date_obj} already exists")
-                            continue
-                        seen_dates.add(date_obj)
-                        holiday_objs.append(Holiday(date=date_obj, name=str(name_val).strip()))
                     except Exception as e:
-                        failed_rows.append(f"Row {idx}: Invalid ({date_val}) {str(e)}")
-                if failed_rows:
-                    messages.error(request, "Upload failed:<br>" + "<br>".join(failed_rows))
-                else:
+                        problems.append(f"Row {idx}: invalid date ({date_val}) – {e}")
+                        continue
+
+                    if not name_val or str(name_val).strip() == "":
+                        problems.append(f"Row {idx}: missing name for {date_obj}")
+                        continue
+
+                    # Skip Sundays (weekday() == 6) as per policy & UI text
+                    if date_obj.weekday() == 6:
+                        problems.append(f"Row {idx}: {date_obj} is Sunday (ignored)")
+                        continue
+
+                    # Skip duplicates inside this file
+                    if date_obj in seen_dates:
+                        problems.append(f"Row {idx}: {date_obj} duplicate in file (ignored)")
+                        continue
+
+                    # Skip if already present in DB
+                    if Holiday.objects.filter(date=date_obj).exists():
+                        problems.append(f"Row {idx}: {date_obj} already exists (ignored)")
+                        continue
+
+                    seen_dates.add(date_obj)
+                    to_create.append(Holiday(date=date_obj, name=str(name_val).strip()))
+
+                created_count = 0
+                if to_create:
                     with transaction.atomic():
-                        Holiday.objects.bulk_create(holiday_objs)
-                    messages.success(request, f"{len(holiday_objs)} holiday(s) uploaded successfully.")
+                        Holiday.objects.bulk_create(to_create)
+                    created_count = len(to_create)
+                    messages.success(request, f"{created_count} holiday(s) uploaded successfully.")
+
+                # Report problems (but do NOT block valid inserts)
+                if problems:
+                    # Show up to first 20 rows to keep UI tidy
+                    MAX_SHOW = 20
+                    shown = problems[:MAX_SHOW]
+                    extra = len(problems) - len(shown)
+                    msg = "Some rows were skipped:\n- " + "\n- ".join(shown)
+                    if extra > 0:
+                        msg += f"\n... and {extra} more."
+                    messages.warning(request, msg)
+
+                # If nothing created and we had problems, make it clear
+                if created_count == 0 and problems:
+                    messages.error(request, "No holidays were added from this file. Please fix the issues and re-upload.")
+
                 return redirect("settings:holiday_list")
     return render(request, "settings/holiday_list.html", {"holidays": holidays, "add_form": add_form, "upload_form": upload_form})
 

@@ -36,8 +36,6 @@
   .photo-upload-area { border:2px dashed #d1d5db; border-radius:8px; padding:1rem; text-align:center; background:#f9fafb; }
   .photo-upload-area:hover { border-color:#3b82f6; background:#eff6ff; }
   .disclaimer { font-size: .825rem; color:#6b7280; }
-
-  /* badges for balance card */
   .lb-chip { display:inline-flex; align-items:center; gap:.5rem; background:#f8fafc; border:1px solid #e5e7eb; border-radius:9999px; padding:.4rem .8rem; margin:.25rem; font-weight:600; }
   .lb-chip .dot { width:.55rem; height:.55rem; border-radius:9999px; display:inline-block; }
   .dot-blue { background:#3b82f6; } .dot-amber { background:#f59e0b; } .dot-pink { background:#ec4899; }
@@ -99,7 +97,7 @@
     </div>
   </div>
 
-  <!-- Leave Balance (numbers removed entirely) -->
+  <!-- Leave Balance (labels only, numbers are intentionally display-only) -->
   <div class="col-lg-4">
     <div class="card h-100">
       <div class="card-body">
@@ -133,7 +131,6 @@
           <i class="fas fa-list-check text-warning me-2"></i>Leave Rules (IST)
         </h6>
 
-        <!-- Final client rules – display only -->
         <div class="rule-item">
           <i class="fas fa-rectangle-list rule-icon"></i>
           <div><strong>Leave types:</strong> Casual Leave, Maternity Leave, Compensatory Off.</div>
@@ -141,30 +138,30 @@
 
         <div class="rule-item">
           <i class="fas fa-calendar-check rule-icon"></i>
-          <div><strong>Application:</strong> Employees can apply anytime before the day ends, including the same day. No cut-off after 09:30.</div>
+          <div><strong>Application:</strong> Employees can apply anytime before the day ends, including the same day.</div>
         </div>
 
         <div class="rule-item">
           <i class="fas fa-user-tie rule-icon"></i>
-          <div><strong>Approval:</strong> Managers can approve or reject anytime during the day. No time lock.</div>
+          <div><strong>Approval:</strong> Managers can approve or reject anytime.</div>
         </div>
 
         <div class="rule-item">
           <i class="fas fa-rotate rule-icon"></i>
-          <div><strong>Tasks on leave days:</strong> Recurring tasks auto-skip on leave days (pending or approved). Managers may reassign manually; otherwise they remain unassigned for that day.</div>
+          <div><strong>Tasks on leave days:</strong> Pending or approved leaves auto-skip planned tasks in the window. (Handed-over tasks are excluded from auto-skip.)</div>
         </div>
 
         <div class="rule-item">
           <i class="fas fa-circle-half-stroke rule-icon"></i>
-          <div><strong>Half-day:</strong> Up to 6 hours within the same date (within 09:30–18:00). Scheduler applies partial skip.</div>
+          <div><strong>Half-day:</strong> Up to 6 hours on the same date, within 09:30–18:00 IST.</div>
         </div>
 
         <div class="rule-item">
           <i class="fas fa-shield-check rule-icon"></i>
-          <div><strong>Validation:</strong> Overlapping leave requests are not allowed. All actions are audited with timestamps and roles.</div>
+          <div><strong>Validation:</strong> Overlapping requests are not allowed. All actions are audited.</div>
         </div>
 
-        <div class="disclaimer mt-2">These rules are reflected in the UI; no automatic locking of usage days is performed.</div>
+        <div class="disclaimer mt-2">These rules are reflected in the UI; usage days are not auto-locked.</div>
       </div>
     </div>
   </div>
@@ -227,7 +224,13 @@
         <tbody>
           {% for lr in leaves %}
             <tr>
-              <td><input type="checkbox" class="checkbox-custom leave-checkbox" value="{{ lr.id }}"></td>
+              <td>
+                {% if lr.status == 'PENDING' %}
+                  <input type="checkbox" class="checkbox-custom leave-checkbox" value="{{ lr.id }}">
+                {% else %}
+                  <input type="checkbox" class="checkbox-custom" disabled>
+                {% endif %}
+              </td>
               <td class="text-muted fw-medium">#{{ lr.id }}</td>
               <td><span class="badge bg-light text-dark">{{ lr.leave_type.name }}</span></td>
               <td class="text-nowrap">{% if lr.start_at %}{{ lr.start_at|date:"M d, H:i" }}{% else %}—{% endif %}</td>
@@ -253,7 +256,7 @@
                   </div>
                 {% endif %}
               </td>
-              <td class="fw-medium">{{ lr.blocked_days|floatformat:"-1" }}</td>
+              <td class="fw-medium">{{ lr.blocked_days|default_if_none:""|floatformat:"-1" }}</td>
               <td>
                 {% if lr.status == 'PENDING' %}
                   <span class="status-badge status-pending">Pending</span>
@@ -328,7 +331,8 @@
     </div>
     <div class="modal-footer">
       <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-      <form method="post" style="display:inline;" id="deleteForm">{% csrf_token %}
+      <form method="post" style="display:inline;" id="deleteForm" action="">
+        {% csrf_token %}
         <button type="submit" class="btn btn-danger"><i class="fas fa-trash me-1"></i>Delete</button>
       </form>
     </div>
@@ -354,7 +358,7 @@
 </div>
 
 <script>
-// --- Selection Management (no inline handlers) ---
+// --- Selection Management ---
 function toggleSelectAll() {
   const selectAll = document.getElementById('selectAll');
   document.querySelectorAll('.leave-checkbox').forEach(cb => { cb.checked = selectAll.checked; });
@@ -406,7 +410,7 @@ function confirmDelete(leaveId, leaveType, startDate) {
   wrap.append('Start Date: ' + startDate);
 
   const form = document.getElementById('deleteForm');
-  form.action = '/leave/delete/' + String(leaveId) + '/';
+  form.action = "{% url 'leave:delete_leave' 0 %}".replace('/0/', '/' + String(leaveId) + '/');
 
   const modal = new bootstrap.Modal(document.getElementById('deleteModal'));
   modal.show();
@@ -419,9 +423,9 @@ function executeBulkDelete() {
 
   const form = document.createElement('form');
   form.method = 'POST';
-  form.action = '{% url "leave:bulk_delete" %}';
+  form.action = "{% url 'leave:bulk_delete' %}";
 
-  const csrf = document.querySelector('#deleteForm [name=csrfmiddlewaretoken]'); // reuse token
+  const csrf = document.querySelector('#deleteForm [name=csrfmiddlewaretoken]');
   if (csrf) {
     const csrfInput = document.createElement('input');
     csrfInput.type = 'hidden';

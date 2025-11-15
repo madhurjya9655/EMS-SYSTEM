@@ -71,6 +71,18 @@
               <span class="text-muted">Not paid</span>
             {% endif %}
           </dd>
+
+          {% if request_obj.verified_at %}
+          <dt class="col-sm-4">Verified On</dt>
+          <dd class="col-sm-8">
+            {{ request_obj.verified_at|date:"Y-m-d H:i" }}
+            {% if request_obj.verified_by %}
+              <div class="text-muted small">
+                By: {{ request_obj.verified_by.get_full_name|default:request_obj.verified_by.username }}
+              </div>
+            {% endif %}
+          </dd>
+          {% endif %}
         </dl>
       </div>
     </div>
@@ -138,6 +150,7 @@
             <th>#</th>
             <th>Date</th>
             <th>Category</th>
+            <th>Bill Type</th>
             <th>Vendor</th>
             <th>Description</th>
             <th>Amount</th>
@@ -150,6 +163,13 @@
             <td>{{ forloop.counter }}</td>
             <td>{{ line.expense_item.date|date:"Y-m-d" }}</td>
             <td>{{ line.expense_item.get_category_display }}</td>
+            <td>
+              {% if line.expense_item.gst_type %}
+                {{ line.expense_item.get_gst_type_display }}
+              {% else %}
+                <span class="text-muted">-</span>
+              {% endif %}
+            </td>
             <td>{{ line.expense_item.vendor|default:"-" }}</td>
             <td class="small">{{ line.description|default:"-" }}</td>
             <td>₹{{ line.amount|floatformat:2 }}</td>
@@ -164,7 +184,7 @@
           </tr>
           {% empty %}
           <tr>
-            <td colspan="7" class="text-center text-muted py-3">
+            <td colspan="8" class="text-center text-muted py-3">
               No expense lines attached to this request.
             </td>
           </tr>
