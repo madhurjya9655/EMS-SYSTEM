@@ -49,13 +49,42 @@
           {% endif %}
         </div>
 
+        <!-- Planned Date + Time with blue-themed calendar icon -->
         <div class="mb-3">
           {{ form.planned_date.label_tag }} *
-          {{ form.planned_date }}
+
+          <!-- Keep Django’s real field (used for POST); hide it and mirror from the visible field -->
+          <div id="planned-date-wrapper">
+            {{ form.planned_date }}
+          </div>
+
+          <!-- Visible input with custom blue icon -->
+          <div class="input-group mt-2" id="planned-date-input-group" style="display:none;">
+            <input type="text" class="form-control" id="planned_date_display" placeholder="Select date & time" autocomplete="off">
+            <button class="input-group-text calendar-blue-btn" id="planned_date_btn" type="button" aria-label="Open calendar">
+              <!-- Inline SVG icon with blue theme -->
+              <svg class="calendar-blue-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="5" rx="2" ry="2" fill="#2f6fed"/>
+                <rect x="3" y="6.5" width="18" height="14.5" rx="3" ry="3" fill="#eef0ff" stroke="#cfd3ff"/>
+                <g fill="#8583ff">
+                  <rect x="6" y="10" width="3" height="2" rx="0.5"/>
+                  <rect x="10.5" y="10" width="3" height="2" rx="0.5"/>
+                  <rect x="15" y="10" width="3" height="2" rx="0.5"/>
+                  <rect x="6" y="13.5" width="3" height="2" rx="0.5"/>
+                  <rect x="10.5" y="13.5" width="3" height="2" rx="0.5"/>
+                  <rect x="15" y="13.5" width="3" height="2" rx="0.5"/>
+                </g>
+                <rect x="7" y="2" width="2" height="4" rx="1" fill="#eaf1ff"/>
+                <rect x="15" y="2" width="2" height="4" rx="1" fill="#eaf1ff"/>
+              </svg>
+            </button>
+          </div>
+
           <small class="form-text text-muted">
-            This will be treated as the due date at <strong>7:00 PM IST</strong> on the selected day.
-            (The time part is ignored; system always stores it as 7 PM IST.)
+            Visible on the dashboard at/after <strong>10:00 IST</strong> on the due day.
+            Delay is calculated from the actual planned time. (Sundays are disabled here.)
           </small>
+
           {% if form.planned_date.errors %}
             <div class="text-danger small">{{ form.planned_date.errors }}</div>
           {% endif %}
@@ -81,22 +110,12 @@
         </div>
         {% endif %}
 
-        {% if form.attachment %}
+        {% if form.audio_recording %}
         <div class="mb-3">
-          {{ form.attachment.label_tag }}
-          {{ form.attachment }}
-          {% if form.attachment.errors %}
-            <div class="text-danger small">{{ form.attachment.errors }}</div>
-          {% endif %}
-        </div>
-        {% endif %}
-
-        {% if form.doer_file %}
-        <div class="mb-3">
-          {{ form.doer_file.label_tag }}
-          {{ form.doer_file }}
-          {% if form.doer_file.errors %}
-            <div class="text-danger small">{{ form.doer_file.errors }}</div>
+          {{ form.audio_recording.label_tag }}
+          {{ form.audio_recording }}
+          {% if form.audio_recording.errors %}
+            <div class="text-danger small">{{ form.audio_recording.errors }}</div>
           {% endif %}
         </div>
         {% endif %}
@@ -147,52 +166,22 @@
               </div>
             {% endif %}
 
-            {% if form.notify_to %}
+            {% if form.cc_emails %}
               <div class="mb-3">
-                {{ form.notify_to.label_tag }}
-                {{ form.notify_to }}
-                <small class="form-text text-muted">
-                  Select reporting officer / colleague to keep in CC.
-                </small>
-                {% if form.notify_to.errors %}
-                  <div class="text-danger small">{{ form.notify_to.errors }}</div>
+                {{ form.cc_emails.label_tag }}
+                {{ form.cc_emails }}
+                {% if form.cc_emails.errors %}
+                  <div class="text-danger small">{{ form.cc_emails.errors }}</div>
                 {% endif %}
-              </div>
-            {% endif %}
-
-            {% if form.cc or form.cc_emails or form.cc_list %}
-              <div class="mb-3">
-                {% if form.cc %}
-                  {{ form.cc.label_tag }}
-                  {{ form.cc }}
-                  {% if form.cc.errors %}
-                    <div class="text-danger small">{{ form.cc.errors }}</div>
-                  {% endif %}
+                {% if form.cc_emails.help_text %}
+                  <small class="form-text text-muted">{{ form.cc_emails.help_text }}</small>
                 {% endif %}
-                {% if form.cc_emails %}
-                  {{ form.cc_emails.label_tag }}
-                  {{ form.cc_emails }}
-                  {% if form.cc_emails.errors %}
-                    <div class="text-danger small">{{ form.cc_emails.errors }}</div>
-                  {% endif %}
-                {% endif %}
-                {% if form.cc_list %}
-                  {{ form.cc_list.label_tag }}
-                  {{ form.cc_list }}
-                  {% if form.cc_list.errors %}
-                    <div class="text-danger small">{{ form.cc_list.errors }}</div>
-                  {% endif %}
-                {% endif %}
-                <small class="form-text text-muted">
-                  You can enter multiple emails separated by commas.
-                </small>
               </div>
             {% endif %}
           </div>
         </div>
 
-        {# Any other extra fields still on the form #}
-        {% with 'task_name assign_to planned_date priority message attachment doer_file time_per_task_minutes attachment_mandatory cc_users notify_to cc cc_emails cc_list' as excluded %}
+        {% with 'task_name assign_to planned_date priority message audio_recording time_per_task_minutes attachment_mandatory cc_users cc_emails mode frequency set_reminder' as excluded %}
           {% for field in form %}
             {% if field.name not in excluded %}
               <div class="mb-3">
@@ -221,4 +210,67 @@
 
   </form>
 </div>
+
+<!-- Flatpickr assets -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/material_blue.css">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+
+<style>
+  .calendar-blue-btn{
+    border-left: 0;
+    background: #f4f7ff;
+    cursor: pointer;
+  }
+  .calendar-blue-btn:hover{ background: #e9f0ff; }
+  #planned-date-input-group .form-control{ border-right: 0; }
+  #planned-date-input-group .input-group-text{
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+</style>
+
+<script>
+  (function () {
+    var realInput = document.getElementById('id_planned_date') ||
+                    document.querySelector('input[name="planned_date"]');
+    if (!realInput) return;
+
+    var inputGroup = document.getElementById('planned-date-input-group');
+    inputGroup.style.display = 'flex';
+    realInput.classList.add('d-none');
+
+    var displayInput = document.getElementById('planned_date_display');
+    var btn = document.getElementById('planned_date_btn');
+
+    var existing = (realInput.value || '').trim();
+    if (existing) { displayInput.value = existing; }
+
+    function disableSundays(date){ return date.getDay() === 0; }
+
+    var fp = flatpickr(displayInput, {
+      enableTime: true,
+      time_24hr: true,
+      dateFormat: "Y-m-d H:i",
+      defaultHour: 19,
+      defaultMinute: 0,
+      disable: [disableSundays],
+      allowInput: true,
+      clickOpens: true,
+      onChange: function(_, dateStr){ realInput.value = dateStr || ""; },
+      onClose: function(_, dateStr){ realInput.value = dateStr || ""; },
+      onReady: function(){
+        if (existing){ fp.setDate(existing, false, "Y-m-d H:i"); }
+        if (!realInput.value && displayInput.value){
+          realInput.value = displayInput.value;
+        }
+      }
+    });
+
+    btn.addEventListener('click', function(){ fp.open(); });
+    displayInput.addEventListener('blur', function(){
+      realInput.value = displayInput.value.trim();
+    });
+  })();
+</script>
 {% endblock %}
