@@ -11,8 +11,8 @@
       <p style="margin:0 0 16px 0;color:#6b7280;">Reimbursement #{{ request_obj.id }}</p>
     </div>
     <div>
-      {% if request.GET.return %}
-        <a href="{{ request.GET.return }}" class="btn btn-outline-secondary btn-sm">Back to Finance Queue</a>
+      {% if back_url %}
+        <a href="{{ back_url }}" class="btn btn-outline-secondary btn-sm">Back to Finance Queue</a>
       {% else %}
         <a href="{% url 'reimbursement:finance_pending' %}" class="btn btn-outline-secondary btn-sm">Back to Finance Queue</a>
       {% endif %}
@@ -106,15 +106,12 @@
 
   <form method="post" style="margin-top:16px;">
     {% csrf_token %}
-    <input type="hidden" name="return" value="{{ request.GET.return|default:request.POST.return }}">
+    <input type="hidden" name="return" value="{{ back_url }}">
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      <!-- Verify: moves to Pending Manager -->
       <button type="submit" name="decision" value="verified"
               style="padding:10px 14px;background:#16a34a;border:0;border-radius:6px;color:#fff;cursor:pointer;">
         Verify (Send to Manager)
       </button>
-
-      <!-- Reject: stays in rejected -->
       <button type="submit" name="decision" value="rejected"
               style="padding:10px 14px;background:#dc2626;border:0;border-radius:6px;color:#fff;cursor:pointer;">
         Reject

@@ -57,11 +57,12 @@
                    class="btn btn-sm btn-outline-warning">
                   Verify
                 </a>
+              {% else %}
+                <a href="{% url 'reimbursement:finance_review' req.id %}?return={{ request.get_full_path|urlencode }}"
+                   class="btn btn-sm btn-outline-primary">
+                  Review / Pay
+                </a>
               {% endif %}
-              <a href="{% url 'reimbursement:finance_review' req.id %}?return={{ request.get_full_path|urlencode }}"
-                 class="btn btn-sm btn-outline-primary">
-                Review / Pay
-              </a>
             </td>
           </tr>
           {% empty %}
