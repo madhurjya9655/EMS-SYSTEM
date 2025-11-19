@@ -8,16 +8,14 @@
   <meta name="color-scheme" content="light dark">
   <title>{% block title %}BOS Lakshya{% endblock %}</title>
 
-  <!-- Favicons -->
-  <link rel="shortcut icon" href="{% static 'favicon.ico' %}">
-  <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
-  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'icons/favicon-32.png' %}">
-  <link rel="icon" type="image/png" sizes="16x16" href="{% static 'icons/favicon-16.png' %}">
+  <!-- Favicons (only files that actually exist right now) -->
+  <link rel="icon" href="{% static 'favicon.ico' %}" type="image/x-icon">
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
+  <link rel="preload" as="style"
+        href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 
   <!-- Vendor CSS -->
@@ -213,7 +211,7 @@
       color:var(--muted);
       font-weight:600;
       font-size:.93rem;
-      transition:background .2s ease,color .2s ease,transform .15s ease;
+      transition:background .2s ease, color .2s ease, transform .15s ease;
       cursor:pointer;
     }
     .nav-item i{width:18px;margin-right:.6rem}
@@ -297,10 +295,10 @@
     .alert{border-radius:10px;border:1px solid var(--border)}
     .alert-info{background:#eef4ff}
     @media (prefers-color-scheme: dark){
-      .alert-info{background:rgba(148,163,184,.18);color:var(--text);}
-      .alert-success{background:rgba(22,163,74,.25);color:#bbf7d0;}
-      .alert-warning{background:rgba(234,179,8,.25);color:#facc15;}
-      .alert-danger,.alert-error{background:rgba(220,38,38,.25);color:#fecaca;}
+      .alert-info{background:rgba(148,163,184,.18);color:var(--text)}
+      .alert-success{background:rgba(22,163,74,.25);color:#bbf7d0}
+      .alert-warning{background:rgba(234,179,8,.25);color:#facc15}
+      .alert-danger,.alert-error{background:rgba(220,38,38,.25);color:#fecaca}
     }
 
     footer{
@@ -341,8 +339,8 @@
       z-index:1100;
     }
 
-    .form-label{font-weight:500;color:var(--text);}
-    .form-text{color:var(--muted);font-size:.8rem;}
+    .form-label{font-weight:500;color:var(--text)}
+    .form-text{color:var(--muted);font-size:.8rem}
 
     .form-control,
     .form-select{
@@ -357,7 +355,7 @@
       border-color:var(--primary);
       box-shadow:0 0 0 1px rgba(59,130,246,.35);
     }
-    .form-control::placeholder{color:var(--muted);opacity:.75;}
+    .form-control::placeholder{color:var(--muted);opacity:.75}
 
     @media (prefers-color-scheme: dark){
       .form-control,
@@ -398,29 +396,14 @@
       overflow-x:auto;
       gap:.25rem;
     }
-    .nav-tabs .nav-link{
-      white-space:nowrap;
-    }
+    .nav-tabs .nav-link{white-space:nowrap}
 
     @media (max-width:576px){
-      .nav-tabs{
-        flex-wrap:wrap;
-        overflow-x:hidden;
-      }
-      .nav-tabs .nav-link{
-        flex:1 1 100%;
-        text-align:center;
-      }
-      .btn-toolbar,
-      .btn-group{
-        flex-wrap:wrap;
-        width:100%;
-      }
-      .btn-group>.btn{
-        flex:1 1 100%;
-        margin-bottom:.4rem;
-      }
-      .table-responsive{overflow-x:auto;}
+      .nav-tabs{flex-wrap:wrap;overflow-x:hidden}
+      .nav-tabs .nav-link{flex:1 1 100%;text-align:center}
+      .btn-toolbar,.btn-group{flex-wrap:wrap;width:100%}
+      .btn-group>.btn{flex:1 1 100%;margin-bottom:.4rem}
+      .table-responsive{overflow-x:auto}
     }
 
     @media (max-width:1024px){
@@ -432,14 +415,9 @@
       .mobile-toggle{display:block}
       .branch-select{display:none}
       .user-menu span:first-child{display:none}
-
       .sidebar{transform:translateX(-100%)}
       .sidebar.show{transform:translateX(0)}
-
-      .main-content{
-        margin-left:0;
-        padding:1rem;
-      }
+      .main-content{margin-left:0;padding:1rem}
       .page-header{padding:1rem}
     }
 
@@ -504,7 +482,7 @@
         </a>
         {% endif %}
 
-        {# --- Leave Application --- #}
+        {# Leave Application #}
         {% if user|has_any_permission:"leave_list,leave_apply,leave_pending_manager" or user|has_group:"Manager" or user|has_group:"HR" or user.is_superuser %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="leaveSubmenu" data-submenu-toggle>
           <i class="fas fa-calendar-day" aria-hidden="true"></i> Leave Application (Vishram Register) <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
@@ -643,7 +621,6 @@
         </div>
         {% endif %}
 
-        {# --- BOS REIMBURSE LOG --- #}
         {% if user|has_any_permission:"reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="reimbursementSubmenu" data-submenu-toggle>
           <i class="fas fa-receipt" aria-hidden="true"></i> BOS Reimburse Log <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
@@ -655,21 +632,18 @@
             <i class="fas fa-file-medical" aria-hidden="true"></i> My Requests
           </a>
           {% endif %}
-
           {% if user|has_permission:"reimbursement_manager_pending" %}
           <a href="{% url 'reimbursement:manager_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'manager_pending' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'manager_pending' %}aria-current="page"{% endif %}>
             <i class="fas fa-check-square" aria-hidden="true"></i> Manager Approvals
           </a>
           {% endif %}
-
           {% if user|has_permission:"reimbursement_finance_pending" %}
           <a href="{% url 'reimbursement:finance_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}aria-current="page"{% endif %}>
             <i class="fas fa-wallet" aria-hidden="true"></i> Finance Approvals
           </a>
           {% endif %}
-
           {% if user|has_permission:"reimbursement_admin" %}
           <a href="{% url 'reimbursement:admin_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'admin_requests' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'admin_requests' %}aria-current="page"{% endif %}>
@@ -854,9 +828,9 @@
     })();
 
     function toggleSidebar(){
-      const sidebar=document.getElementById('sidebar'),
-            overlay=document.querySelector('[data-sidebar-overlay]'),
-            main=document.getElementById('mainContent');
+      const sidebar=document.getElementById('sidebar');
+      const overlay=document.querySelector('[data-sidebar-overlay]');
+      const main=document.getElementById('mainContent');
       if(!sidebar || !main) return;
       if(window.innerWidth<=768){
         sidebar.classList.toggle('show');
@@ -894,9 +868,9 @@
       });
 
       window.addEventListener('resize',()=>{
-        const sidebar=document.getElementById('sidebar'),
-              overlay=document.querySelector('[data-sidebar-overlay]'),
-              main=document.getElementById('mainContent');
+        const sidebar=document.getElementById('sidebar');
+        const overlay=document.querySelector('[data-sidebar-overlay]');
+        const main=document.getElementById('mainContent');
         if(!sidebar || !main) return;
         if(window.innerWidth>768){
           sidebar.classList.remove('show');
@@ -945,7 +919,7 @@
             }
           });
         });
-      }catch(_) {}
+      }catch(_e){}
     });
   </script>
 
