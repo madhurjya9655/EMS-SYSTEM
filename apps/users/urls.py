@@ -1,17 +1,20 @@
 # apps/users/urls.py
-from django.urls import path
-from .views import (
-    list_users, add_user, edit_user, delete_user, 
-    toggle_active, debug_permissions
-)
+from __future__ import annotations
 
-app_name = 'users'
+from django.urls import path
+
+from . import views
+
+app_name = "users"
 
 urlpatterns = [
-    path('',                list_users,      name='list_users'),
-    path('add/',            add_user,        name='add_user'),
-    path('<int:pk>/edit/',  edit_user,       name='edit_user'),
-    path('<int:pk>/delete/', delete_user,     name='delete_user'),
-    path('<int:pk>/toggle-active/', toggle_active, name='toggle_active'),
-    path('debug-permissions/', debug_permissions, name='debug_permissions'),
+    # User management (admin-only in views via decorators)
+    path("", views.list_users, name="list_users"),
+    path("add/", views.add_user, name="add_user"),
+    path("<int:pk>/edit/", views.edit_user, name="edit_user"),
+    path("<int:pk>/delete/", views.delete_user, name="delete_user"),
+    path("<int:pk>/toggle-active/", views.toggle_active, name="toggle_active"),
+
+    # Permission debugging (superuser-only in view)
+    path("debug-permissions/", views.debug_permissions, name="debug_permissions"),
 ]

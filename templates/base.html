@@ -370,7 +370,7 @@
       .form-select:disabled,
       .form-control[readonly]{
         background:#020617;
-        color:var(--muted);
+        color:#9ca3af;
       }
     }
 
@@ -673,7 +673,7 @@
           {% if user|has_permission:"reimbursement_admin" %}
           <a href="{% url 'reimbursement:admin_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'admin_requests' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'admin_requests' %}aria-current="page"{% endif %}>
-            <i class="fas fa-list-alt" aria-hidden="true"></i> Admin – Bills & Requests
+            <i class="fas fa-list-alt" aria-hidden="true"></i> Admin – All Requests
           </a>
           <a href="{% url 'reimbursement:approver_mapping_admin' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'approver_mapping_admin' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'approver_mapping_admin' %}aria-current="page"{% endif %}>

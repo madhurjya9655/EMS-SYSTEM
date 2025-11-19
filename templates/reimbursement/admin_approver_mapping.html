@@ -13,11 +13,12 @@
     <div class="card mb-3">
       <div class="card-header">Reimbursement Settings</div>
       <div class="card-body">
-        <form method="post">
+        <form method="post" novalidate>
           {% csrf_token %}
 
           <!-- Admin / Finance / Management emails -->
           <h6 class="text-muted">Email Recipients</h6>
+
           <div class="mb-3">
             {{ settings_form.admin_emails.label_tag }}
             {{ settings_form.admin_emails }}
@@ -28,6 +29,7 @@
               <div class="text-danger small">{{ settings_form.admin_emails.errors }}</div>
             {% endif %}
           </div>
+
           <div class="mb-3">
             {{ settings_form.finance_emails.label_tag }}
             {{ settings_form.finance_emails }}
@@ -38,6 +40,7 @@
               <div class="text-danger small">{{ settings_form.finance_emails.errors }}</div>
             {% endif %}
           </div>
+
           <div class="mb-3">
             {{ settings_form.management_emails.label_tag }}
             {{ settings_form.management_emails }}
@@ -52,7 +55,8 @@
           <hr class="my-3">
 
           <!-- Workflow / policy flags -->
-          <h6 class="text-muted">Workflow & Policy</h6>
+          <h6 class="text-muted">Workflow &amp; Policy</h6>
+
           <div class="form-check mb-2">
             {{ settings_form.require_management_approval }}
             {{ settings_form.require_management_approval.label_tag }}
@@ -63,6 +67,7 @@
               <div class="text-danger small">{{ settings_form.require_management_approval.errors }}</div>
             {% endif %}
           </div>
+
           <div class="form-check mb-2">
             {{ settings_form.daily_digest_enabled }}
             {{ settings_form.daily_digest_enabled.label_tag }}
@@ -73,6 +78,7 @@
               <div class="text-danger small">{{ settings_form.daily_digest_enabled.errors }}</div>
             {% endif %}
           </div>
+
           <div class="mb-3">
             {{ settings_form.digest_hour_local.label_tag }}
             {{ settings_form.digest_hour_local }}
@@ -88,6 +94,7 @@
 
           <!-- Global approval chain (Level-1 / Level-2 + CC/BCC) -->
           <h6 class="text-muted">Approval Chain (Email Routing)</h6>
+
           <div class="mb-3">
             {{ settings_form.approver_level1_email.label_tag }}
             {{ settings_form.approver_level1_email }}
@@ -98,6 +105,7 @@
               <div class="text-danger small">{{ settings_form.approver_level1_email.errors }}</div>
             {% endif %}
           </div>
+
           <div class="mb-3">
             {{ settings_form.approver_level2_email.label_tag }}
             {{ settings_form.approver_level2_email }}
@@ -108,6 +116,7 @@
               <div class="text-danger small">{{ settings_form.approver_level2_email.errors }}</div>
             {% endif %}
           </div>
+
           <div class="mb-3">
             {{ settings_form.approver_cc_emails.label_tag }}
             {{ settings_form.approver_cc_emails }}
@@ -118,6 +127,7 @@
               <div class="text-danger small">{{ settings_form.approver_cc_emails.errors }}</div>
             {% endif %}
           </div>
+
           <div class="mb-3">
             {{ settings_form.approver_bcc_emails.label_tag }}
             {{ settings_form.approver_bcc_emails }}
@@ -140,7 +150,7 @@
     <div class="card mb-3">
       <div class="card-header">Bulk Apply Manager / Finance</div>
       <div class="card-body">
-        <form method="post">
+        <form method="post" novalidate>
           {% csrf_token %}
           {{ bulk_form.non_field_errors }}
 
@@ -191,7 +201,7 @@
         Per-Employee Approver Mapping
       </div>
       <div class="card-body">
-        <form method="post">
+        <form method="post" novalidate>
           {% csrf_token %}
           <div class="table-responsive">
             <table class="table table-sm table-hover align-middle">
@@ -252,6 +262,7 @@
               </tbody>
             </table>
           </div>
+
           <button type="submit" name="save_mappings" value="1" class="btn btn-primary mt-2">
             Save Mappings
           </button>

@@ -4,11 +4,12 @@ import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Union
 from urllib.parse import urlencode, urljoin
 
 from django.conf import settings
 from django.core import signing
+        # NOTE: using EmailMultiAlternatives for HTML + attachments
 from django.core.mail import EmailMultiAlternatives, get_connection
 from django.urls import reverse
 from django.utils import timezone
@@ -118,66 +119,63 @@ def _ensure_cc_amreen(cc: Iterable[str] | None) -> List[str]:
         cc_list.extend(am)
     return _dedupe_lower(cc_list)
 
+def _as_list(value: Union[str, Iterable[str], None]) -> List[str]:
+    """
+    Normalize incoming recipient(s) to a lowercase, deduped list.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return _dedupe_lower([value])
+    try:
+        return _dedupe_lower(list(value))
+    except Exception:
+        return []
+
 def _send(
     subject: str,
-    to_addr: str,
-    cc: List[str],
-    reply_to: List[str],
+    to_addrs: Union[str, Iterable[str]],
+    *,
+    cc: Optional[Iterable[str]] = None,
+    reply_to: Optional[Iterable[str]] = None,
     html: str,
     txt: str,
-    *,
     attachments: Optional[Iterable] = None,
     bcc: Optional[Iterable[str]] = None,
 ) -> bool:
     """
     Send an email and log success/failure with full context.
-    Optionally attach uploaded bill files.
-    Returns True on success, False on any failure.
+    Supports multiple recipients in TO/CC/BCC.
+    Returns True on success, False on failure.
     """
-    if not to_addr:
+    to_list = _as_list(to_addrs)
+    cc_list = _as_list(cc)
+    bcc_list = _as_list(bcc)
+    reply_to_list = _as_list(reply_to) or _amreen_reply_to()
+
+    if not to_list and not cc_list and not bcc_list:
         logger.warning(
-            "Reimbursement email suppressed: empty TO address. subject=%r cc=%s bcc=%s",
-            subject,
-            cc,
-            list(bcc or []),
+            "Reimbursement email suppressed: no recipients. subject=%r", subject
         )
         return False
 
-    from_email = _amreen_from_email()  # <- use Amreen for all reimbursement mails
-    reply_to = reply_to or _amreen_reply_to()
+    from_email = _amreen_from_email()
 
-    fail_silently = getattr(settings, "EMAIL_FAIL_SILENTLY", True)
-    backend_name = getattr(
-        settings,
-        "EMAIL_BACKEND",
-        "django.core.mail.backends.smtp.EmailBackend",
-    )
-
-    bcc_list = list(bcc or [])
+    # Per requirement: do NOT fail silently for reimbursement emails.
+    fail_silently = False
 
     try:
+        backend_name = getattr(settings, "EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
         host = getattr(settings, "EMAIL_HOST", None)
         port = getattr(settings, "EMAIL_PORT", None)
         user = getattr(settings, "EMAIL_HOST_USER", None)
         use_tls = getattr(settings, "EMAIL_USE_TLS", None)
         use_ssl = getattr(settings, "EMAIL_USE_SSL", None)
         logger.info(
-            "Reimbursement email attempt: backend=%s host=%s port=%s user=%s "
-            "TLS=%s SSL=%s from=%s to=%s cc=%s bcc=%s reply_to=%s subject=%r "
-            "fail_silently=%s",
-            backend_name,
-            host,
-            port,
-            user,
-            use_tls,
-            use_ssl,
-            from_email,
-            to_addr,
-            cc,
-            bcc_list,
-            reply_to,
-            subject,
-            fail_silently,
+            "Reimbursement email attempt: backend=%s host=%s port=%s user=%s TLS=%s SSL=%s "
+            "from=%s to=%s cc=%s bcc=%s reply_to=%s subject=%r",
+            backend_name, host, port, user, use_tls, use_ssl,
+            from_email, to_list, cc_list, bcc_list, reply_to_list, subject
         )
     except Exception:
         pass
@@ -188,10 +186,10 @@ def _send(
                 subject=subject,
                 body=txt,
                 from_email=from_email,
-                to=[to_addr],
-                cc=cc or None,
+                to=to_list or None,
+                cc=cc_list or None,
                 bcc=bcc_list or None,
-                reply_to=reply_to or None,
+                reply_to=reply_to_list or None,
                 connection=conn,
             )
             msg.attach_alternative(html, "text/html")
@@ -210,29 +208,19 @@ def _send(
         if sent:
             logger.info(
                 "Reimbursement email sent OK: to=%s cc=%s bcc=%s subject=%r",
-                to_addr,
-                cc,
-                bcc_list,
-                subject,
+                to_list, cc_list, bcc_list, subject
             )
             return True
 
         logger.error(
             "Reimbursement email send returned 0: to=%s cc=%s bcc=%s subject=%r",
-            to_addr,
-            cc,
-            bcc_list,
-            subject,
+            to_list, cc_list, bcc_list, subject
         )
         return False
     except Exception as exc:
         logger.exception(
             "Reimbursement email send FAILED: to=%s cc=%s bcc=%s subject=%r error=%s",
-            to_addr,
-            cc,
-            bcc_list,
-            subject,
-            exc,
+            to_list, cc_list, bcc_list, subject, exc
         )
         return False
 
@@ -260,7 +248,7 @@ def _already_sent_recent(
 
 @dataclass
 class _Recipients:
-    to: Optional[str]
+    to: List[str]
     cc: List[str]
 
 def _default_settings() -> ReimbursementSettings:
@@ -284,80 +272,71 @@ def _management_emails() -> List[str]:
     except Exception:
         return []
 
-def _manager_email_actual(req: ReimbursementRequest) -> Optional[str]:
+def _manager_email_candidates(req: ReimbursementRequest) -> List[str]:
+    candidates: List[str] = []
     try:
+        settings_obj = _default_settings()
+        # Global L1 approver first (if set)
+        lvl1 = settings_obj.approver_level1()
+        if lvl1:
+            candidates.append(lvl1)
+
+        # Request's assigned manager
         if req.manager and getattr(req.manager, "email", None):
-            return (req.manager.email or "").strip() or None
+            candidates.append((req.manager.email or "").strip())
+
+        # Mapping fallback
         mapping = ReimbursementApproverMapping.for_employee(req.created_by)
-        if mapping and mapping.manager and getattr(mapping.manager, "email", None):
-            return (mapping.manager.email or "").strip() or None
+        if mapping and mapping.manager and mapping.manager.email:
+            candidates.append((mapping.manager.email or "").strip())
+
+        # Profile/team_leader fallback (if available)
+        profile = getattr(req.created_by, "profile", None)
+        if profile and getattr(profile, "team_leader", None) and profile.team_leader.email:
+            candidates.append((profile.team_leader.email or "").strip())
     except Exception:
-        logger.exception("Failed resolving manager email for reimbursement #%s", req.id)
-    return None
+        logger.exception("Failed resolving manager email candidates for reimbursement #%s", req.id)
+
+    return _dedupe_lower(candidates)
 
 def _recipients_for_manager(req: ReimbursementRequest) -> _Recipients:
     admin_cc = _admin_emails()
-    mgr_email = None
-
-    try:
-        settings_obj = _default_settings()
-        lvl1 = settings_obj.approver_level1()
-        if lvl1:
-            mgr_email = lvl1
-        elif req.manager and req.manager.email:
-            mgr_email = req.manager.email
-        else:
-            mapping = ReimbursementApproverMapping.for_employee(req.created_by)
-            if mapping and mapping.manager and mapping.manager.email:
-                mgr_email = mapping.manager.email
-            else:
-                profile = getattr(req.created_by, "profile", None)
-                if profile and getattr(profile, "team_leader", None) and profile.team_leader.email:
-                    mgr_email = profile.team_leader.email
-    except Exception:
-        logger.exception("Failed resolving manager recipients for reimbursement #%s", req.id)
-
+    mgr_list = _manager_email_candidates(req)
     return _Recipients(
-        to=(mgr_email or "").strip() or None,
+        to=mgr_list,
         cc=_dedupe_lower(admin_cc),
     )
 
 def _recipients_for_management(req: ReimbursementRequest) -> _Recipients:
     admin_cc = _admin_emails()
-    mgmt_email = None
-
+    mgmt_list: List[str] = []
     try:
+        # Direct management user on the request
         if req.management and getattr(req.management, "email", None):
-            mgmt_email = req.management.email
-        else:
-            mgmt_list = _management_emails()
-            if mgmt_list:
-                mgmt_email = mgmt_list[0]
+            mgmt_list.append((req.management.email or "").strip())
+        # Plus settings' management_emails
+        mgmt_list.extend(_management_emails())
     except Exception:
         logger.exception("Failed resolving management recipients for reimbursement #%s", req.id)
 
     return _Recipients(
-        to=(mgmt_email or "").strip() or None,
+        to=_dedupe_lower(mgmt_list),
         cc=_dedupe_lower(admin_cc),
     )
 
 def _recipients_for_finance(req: ReimbursementRequest) -> _Recipients:
     admin_cc = _admin_emails()
-    finance_email = None
-
+    finance_list: List[str] = []
     try:
         mapping = ReimbursementApproverMapping.for_employee(req.created_by)
         if mapping and mapping.finance and mapping.finance.email:
-            finance_email = mapping.finance.email
-        else:
-            fin_list = _finance_emails()
-            if fin_list:
-                finance_email = fin_list[0]
+            finance_list.append((mapping.finance.email or "").strip())
+        finance_list.extend(_finance_emails())
     except Exception:
         logger.exception("Failed resolving finance recipients for reimbursement #%s", req.id)
 
     return _Recipients(
-        to=(finance_email or "").strip() or None,
+        to=_dedupe_lower(finance_list),
         cc=_dedupe_lower(admin_cc),
     )
 
@@ -631,7 +610,7 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
 
     _send(
         subject=subject,
-        to_addr=fin_rec.to,
+        to_addrs=fin_rec.to,
         cc=fin_rec.cc,
         reply_to=reply_to,
         html=html,
@@ -664,6 +643,7 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
     lines_txt = _build_lines_table_text(req)
     buttons_html = _manager_action_buttons(req)
     cc_str = ", ".join(mgr_rec.cc) if mgr_rec.cc else ""
+    to_str = ", ".join(mgr_rec.to)
 
     html = f"""
 <html>
@@ -694,7 +674,7 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
       {buttons_html}
 
       <p style="font-size:12px;color:#6b7280;margin-top:16px;">
-        This email was sent to: {mgr_rec.to}
+        This email was sent to: {to_str}
         {(" | CC: " + cc_str) if cc_str else ""}
       </p>
 
@@ -734,7 +714,7 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
 
     _send(
         subject=subject,
-        to_addr=mgr_rec.to,
+        to_addrs=mgr_rec.to,
         cc=mgr_rec.cc,
         reply_to=[],  # defaults to Amreen via _send
         html=html,
@@ -809,7 +789,7 @@ def send_reimbursement_finance_rejected(req: ReimbursementRequest) -> None:
 
     _send(
         subject=subject,
-        to_addr=emp_email,
+        to_addrs=[emp_email],
         cc=_admin_emails(),
         reply_to=[],  # defaults to Amreen
         html=html,
@@ -845,6 +825,7 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
     submitted_at = req.submitted_at or req.created_at
     buttons_html = _manager_action_buttons(req)
     cc_str = ", ".join(mgr_recip.cc) if mgr_recip.cc else ""
+    to_str = ", ".join(mgr_recip.to)
     lines_html = _build_lines_table_html(req)
     lines_txt = _build_lines_table_text(req)
 
@@ -891,7 +872,7 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
       {buttons_html}
 
       <p style="font-size:12px;color:#6b7280;margin-top:16px;">
-        This email was sent to: {mgr_recip.to}
+        This email was sent to: {to_str}
         {(" | CC: " + cc_str) if cc_str else ""}
       </p>
 
@@ -944,7 +925,7 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
 
     _send(
         subject=subject,
-        to_addr=mgr_recip.to,
+        to_addrs=mgr_recip.to,
         cc=mgr_recip.cc,
         reply_to=reply_to,
         html=html,
@@ -1028,13 +1009,10 @@ def send_reimbursement_admin_summary(req: ReimbursementRequest) -> None:
         ]
     )
 
-    to_addr = admin_list[0]
-    cc = _dedupe_lower(admin_list[1:])
-
     _send(
         subject=subject,
-        to_addr=to_addr,
-        cc=cc,
+        to_addrs=admin_list,
+        cc=[],
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
@@ -1146,7 +1124,7 @@ def _send_level2_notification(req: ReimbursementRequest) -> None:
 
     _send(
         subject=subject,
-        to_addr=to_addr,
+        to_addrs=[to_addr],
         cc=cc_list,
         reply_to=[],  # defaults to Amreen
         html=html,
@@ -1242,7 +1220,7 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
 
     _send(
         subject=subject,
-        to_addr=emp_email,
+        to_addrs=[emp_email],
         cc=cc_list,
         reply_to=[],  # defaults to Amreen
         html=html,
@@ -1341,15 +1319,14 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
 
     finance_rec = _recipients_for_finance(req)
     cc_raw: List[str] = []
-    if finance_rec.to:
-        cc_raw.append(finance_rec.to)
+    cc_raw.extend(finance_rec.to or [])
     cc_raw.extend(finance_rec.cc or [])
     cc_raw.extend(_admin_emails())
     cc = _dedupe_lower(cc_raw)
 
     _send(
         subject=subject,
-        to_addr=emp_email,
+        to_addrs=[emp_email],
         cc=cc,
         reply_to=[],  # defaults to Amreen
         html=html,
@@ -1425,15 +1402,14 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
     txt = "\n".join(txt_lines)
 
     cc_list = _admin_emails()
-    mgr_email = _manager_email_actual(req)
-    if mgr_email:
-        cc_list.append(mgr_email)
+    mgr_to = _manager_email_candidates(req)
+    cc_list.extend(mgr_to)
     # Ensure Amreen is CC'd on the final paid email
     cc = _ensure_cc_amreen(cc_list)
 
     _send(
         subject=subject,
-        to_addr=emp_email,
+        to_addrs=[emp_email],
         cc=cc,
         reply_to=[],  # defaults to Amreen
         html=html,
@@ -1539,7 +1515,7 @@ def send_reimbursement_clarification(req: ReimbursementRequest, *, actor=None) -
 
     _send(
         subject=subject,
-        to_addr=emp_email,
+        to_addrs=[emp_email],
         cc=_admin_emails(),
         reply_to=[],  # defaults to Amreen
         html=html,

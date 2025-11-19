@@ -6,7 +6,8 @@ from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ValidationError as DjangoCoreValidationError
+from django.core.validators import validate_email as dj_validate_email
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -49,16 +50,30 @@ def receipt_upload_path(instance: models.Model, filename: str) -> str:
 
 
 def _parse_email_list(raw: str) -> list[str]:
+    """
+    Split a comma/semicolon-separated string into a deduped, lowercase list of valid emails.
+    Invalid addresses are skipped (and logged).
+    """
     if not raw:
         return []
-    parts = [p.strip() for p in raw.replace(";", ",").split(",")]
+    # Normalize separators and split
+    parts = [p.strip() for p in str(raw).replace(";", ",").split(",")]
     out: list[str] = []
     seen = set()
     for p in parts:
+        if not p:
+            continue
         low = p.lower()
-        if low and low not in seen:
-            seen.add(low)
-            out.append(low)
+        if low in seen:
+            continue
+        # Validate email format (skip and log if invalid)
+        try:
+            dj_validate_email(low)
+        except Exception:
+            logger.warning("Skipping invalid email address in settings: %r", p)
+            continue
+        seen.add(low)
+        out.append(low)
     return out
 
 
@@ -83,13 +98,13 @@ def validate_receipt_file(value) -> None:
 
     ext = os.path.splitext(name)[1].lower()
     if ext not in allowed_exts:
-        raise ValidationError(
+        raise DjangoCoreValidationError(
             _("Unsupported file type '%(ext)s'. Allowed types: %(types)s"),
             params={"ext": ext, "types": ", ".join(allowed_exts)},
         )
 
     if size > max_mb * 1024 * 1024:
-        raise ValidationError(
+        raise DjangoCoreValidationError(
             _("File is too large (max %(max_mb)s MB)."),
             params={"max_mb": max_mb},
         )
@@ -207,13 +222,27 @@ class ReimbursementSettings(models.Model):
         """
         Global Level-1 approver (e.g. vilas@...). None if not configured.
         """
-        return (self.approver_level1_email or "").strip() or None
+        val = (self.approver_level1_email or "").strip().lower()
+        try:
+            if val:
+                dj_validate_email(val)
+                return val
+        except Exception:
+            logger.warning("Invalid approver_level1_email configured: %r", self.approver_level1_email)
+        return None
 
     def approver_level2(self) -> Optional[str]:
         """
         Global Level-2 approver (e.g. Mumbai accounts main email).
         """
-        return (self.approver_level2_email or "").strip() or None
+        val = (self.approver_level2_email or "").strip().lower()
+        try:
+            if val:
+                dj_validate_email(val)
+                return val
+        except Exception:
+            logger.warning("Invalid approver_level2_email configured: %r", self.approver_level2_email)
+        return None
 
     def approver_cc_list(self) -> list[str]:
         """
@@ -372,7 +401,7 @@ class ExpenseItem(models.Model):
     def clean(self) -> None:
         super().clean()
         if self.amount is None or self.amount <= Decimal("0"):
-            raise ValidationError({"amount": _("Amount must be greater than 0.")})
+            raise DjangoCoreValidationError({"amount": _("Amount must be greater than 0.")})
 
     @property
     def is_locked(self) -> bool:
@@ -716,7 +745,7 @@ class ReimbursementLine(models.Model):
             if self.pk:
                 qs = qs.exclude(pk=self.pk)
             if qs.exists():
-                raise ValidationError(
+                raise DjangoCoreValidationError(
                     {
                         "expense_item": _(
                             "This expense is already used in another open reimbursement request."

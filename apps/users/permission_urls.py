@@ -6,8 +6,9 @@ PERMISSION_URLS = {
     # -----------------------
     "leave_apply": "leave:apply_leave",
     "leave_list": "leave:my_leaves",
-    "leave_pending_manager": "leave:pending_leaves",  # optional, if used
-    "leave_pending_hr": "leave:hr_leaves",            # optional, if used
+    # Sidebar uses leave:manager_pending
+    "leave_pending_manager": "leave:manager_pending",   # was leave:pending_leaves
+    "leave_pending_hr": "leave:hr_leaves",              # optional, if used
     # Admin CC management (UI convenience; views still enforce superuser)
     "leave_cc_admin": "leave:cc_config",
 
@@ -49,17 +50,21 @@ PERMISSION_URLS = {
     # Employee
     "reimbursement_apply": "reimbursement:my_reimbursements",
     "reimbursement_list": "reimbursement:my_reimbursements",
-    # Manager
-    "reimbursement_manager_pending": "reimbursement:manager_queue",
-    "reimbursement_manager_review": "reimbursement:manager_queue",
-    # Management
+
+    # Manager — your templates use reimbursement:manager_pending
+    "reimbursement_manager_pending": "reimbursement:manager_pending",  # was reimbursement:manager_queue
+    "reimbursement_manager_review": "reimbursement:manager_pending",   # keep same landing unless you have a detail view
+
+    # Management (only if you have these URLs defined)
     "reimbursement_management_pending": "reimbursement:management_queue",
     "reimbursement_management_review": "reimbursement:management_queue",
-    # Finance
-    "reimbursement_finance_pending": "reimbursement:finance_queue",
-    "reimbursement_finance_review": "reimbursement:finance_queue",
-    # Admin console (Bills Summary as primary landing)
-    "reimbursement_admin": "reimbursement:admin_bills_summary",
+
+    # Finance — your templates use reimbursement:finance_pending
+    "reimbursement_finance_pending": "reimbursement:finance_pending",  # was reimbursement:finance_queue
+    "reimbursement_finance_review": "reimbursement:finance_pending",
+
+    # Admin console — your sidebar links to reimbursement:admin_requests
+    "reimbursement_admin": "reimbursement:admin_requests",  # was reimbursement:admin_bills_summary
 
     # -----------------------
     # Reports
@@ -77,7 +82,7 @@ PERMISSION_URLS = {
     "authorized_numbers": "settings:authorized_list",
 
     # -----------------------
-    # Clients (optional area; map to your actual URL names if present)
+    # Clients (optional)
     # -----------------------
     "manage_clients_add": "clients:add",
     "manage_clients_list": "clients:list",
@@ -87,7 +92,7 @@ PERMISSION_URLS = {
     "manage_clients_upload_dndrnd": "clients:upload_dndrnd",
 
     # -----------------------
-    # Customer Group (optional; adjust if present)
+    # Customer Group (optional)
     # -----------------------
     "customer_group_add": "customer_group:add",
     "customer_group_list": "customer_group:list",
@@ -96,7 +101,7 @@ PERMISSION_URLS = {
     "customer_group_csv": "customer_group:csv",
 
     # -----------------------
-    # WhatsApp Template (optional; adjust if present)
+    # WhatsApp Template (optional)
     # -----------------------
     "wa_template_add": "wa_template:add",
     "wa_template_list": "wa_template:list",
@@ -104,7 +109,7 @@ PERMISSION_URLS = {
     "wa_template_delete": "wa_template:delete",
 
     # -----------------------
-    # Master Tasks (optional; adjust if present)
+    # Master Tasks (optional)
     # -----------------------
     "mt_add_checklist": "master_tasks:add_checklist",
     "mt_list_checklist": "master_tasks:list_checklist",
@@ -119,7 +124,7 @@ PERMISSION_URLS = {
     "mt_delegation_planned_date_list": "master_tasks:delegation_planned_date_list",
 
     # -----------------------
-    # Organization (optional; adjust if present)
+    # Organization (optional)
     # -----------------------
     "org_add_branch": "org:add_branch",
     "org_list_branch": "org:list_branch",

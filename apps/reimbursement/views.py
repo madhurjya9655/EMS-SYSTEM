@@ -6,7 +6,6 @@ from typing import Any, Dict, Iterable, Optional
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db import models
 from django.db.models import Q, Sum, Count, Exists, OuterRef
 from django.http import (
     FileResponse,
@@ -18,6 +17,7 @@ from django.http import (
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import (
     ListView,
     DetailView,
@@ -25,9 +25,6 @@ from django.views.generic import (
     FormView,
     UpdateView,
 )
-from django.views.decorators.csrf import csrf_exempt
-from django.core import signing
-from django.core.signing import BadSignature
 
 from apps.users.mixins import PermissionRequiredMixin
 from apps.users.permissions import has_permission
@@ -93,7 +90,6 @@ def _send_safe(func_name: str, *args, **kwargs) -> None:
     """
     try:
         from .services import notifications  # type: ignore
-
         fn = getattr(notifications, func_name, None)
         if fn:
             fn(*args, **kwargs)
@@ -130,7 +126,6 @@ def _redirect_back(request, fallback_name: str) -> HttpResponse:
 class ExpenseInboxView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
     Employee "Upload Expenses" page:
-
     - Show a form to upload new expenses (bills).
     - Existing expenses are listed on the right.
     """
@@ -237,7 +232,6 @@ class ExpenseItemDeleteView(LoginRequiredMixin, PermissionRequiredMixin, Templat
 class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormView):
     """
     Employee clicks "New Request" from My Requests page:
-
     - Select multiple ExpenseItems from inbox.
     - Submit as a single ReimbursementRequest.
     """
@@ -413,7 +407,6 @@ class MyReimbursementsView(LoginRequiredMixin, PermissionRequiredMixin, ListView
 class ReimbursementBulkDeleteView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
     Bulk deletion of reimbursement requests from 'My Requests'.
-
     - Only acts on the current user's requests.
     - Skips Paid requests.
     - Unlocks attached ExpenseItems back to SAVED.
@@ -482,7 +475,6 @@ class ReimbursementBulkDeleteView(LoginRequiredMixin, PermissionRequiredMixin, T
 class ReimbursementRequestUpdateView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
     """
     Edit an existing reimbursement request.
-
     - Employees should NOT be able to edit once request is submitted.
     - Only Admin users (reimbursement_admin / superuser) can edit.
     """
@@ -600,7 +592,6 @@ class ReimbursementRequestUpdateView(LoginRequiredMixin, PermissionRequiredMixin
 class ReimbursementRequestDeleteView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
     Delete a reimbursement request (for the owner).
-
     - Unlocks attached expenses back to the inbox (SAVED).
     - Paid requests cannot be deleted.
     """
@@ -862,10 +853,10 @@ class ManagementReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
         messages.success(self.request, "Management decision recorded.")
         return super().form_valid(form)
 
-    # Preserve filters on success
+    # Preserve filters on success — fixed the route name to be consistent everywhere
     def get_success_url(self):
         back = _safe_back_url(self.request.GET.get("return") or self.request.POST.get("return"))
-        return back or reverse("reimbursement:management_queue")
+        return back or reverse("reimbursement:management_pending")
 
 # ---------------------------------------------------------------------------
 # Finance queue & processing
@@ -1135,6 +1126,7 @@ class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, Temp
     template_name = "reimbursement/admin_approver_mapping.html"
 
     def get_users_queryset(self):
+        # Keep it predictable for selects/grids
         return User.objects.filter(is_active=True).order_by(
             "first_name",
             "last_name",
@@ -1147,7 +1139,7 @@ class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, Temp
         ctx["settings_form"] = ReimbursementSettingsForm(instance=settings_obj)
         ctx["bulk_form"] = ApproverMappingBulkForm()
 
-        users = self.get_users_queryset()
+        users = list(self.get_users_queryset())
         mappings = {
             m.employee_id: m
             for m in ReimbursementApproverMapping.objects.select_related(
@@ -1159,12 +1151,7 @@ class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, Temp
         ctx["users"] = users
         ctx["mappings"] = mappings
         ctx["all_users_for_select"] = users
-
-        ctx["rows"] = [
-            {"user": u, "mapping": mappings.get(u.id)}
-            for u in users
-        ]
-
+        ctx["rows"] = [{"user": u, "mapping": mappings.get(u.id)} for u in users]
         return ctx
 
     def post(self, request, *args, **kwargs):
@@ -1204,6 +1191,7 @@ class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, Temp
             mapping, _ = ReimbursementApproverMapping.objects.get_or_create(
                 employee=user
             )
+            before = (mapping.manager_id, mapping.finance_id)
             changed = False
             if apply_mgr:
                 mapping.manager = mgr_for_all
@@ -1211,33 +1199,44 @@ class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, Temp
             if apply_fin:
                 mapping.finance = fin_for_all
                 changed = True
+
             if changed:
                 if not mapping.manager and not mapping.finance:
                     mapping.delete()
+                    after = (None, None)
                 else:
                     mapping.save()
-                count += 1
+                    after = (mapping.manager_id, mapping.finance_id)
+                if after != before:
+                    count += 1
 
         messages.success(
             self.request,
-            f"Bulk mapping applied to {count} employees.",
+            f"Bulk mapping applied to {count} employee(s).",
         )
         return redirect("reimbursement:approver_mapping_admin")
 
     def _handle_save_mappings(self, request):
-        users = self.get_users_queryset()
+        users = list(self.get_users_queryset())
         count = 0
+
         for user in users:
-            mgr_id = request.POST.get(f"manager_{user.id}") or ""
-            fin_id = request.POST.get(f"finance_{user.id}") or ""
+            mgr_id_raw = request.POST.get(f"manager_{user.id}") or ""
+            fin_id_raw = request.POST.get(f"finance_{user.id}") or ""
+
+            # sanitize ids
+            mgr_id = int(mgr_id_raw) if mgr_id_raw.isdigit() else None
+            fin_id = int(fin_id_raw) if fin_id_raw.isdigit() else None
 
             manager = User.objects.filter(pk=mgr_id).first() if mgr_id else None
             finance = User.objects.filter(pk=fin_id).first() if fin_id else None
 
             try:
                 mapping = ReimbursementApproverMapping.objects.get(employee=user)
+                before = (mapping.manager_id, mapping.finance_id)
             except ReimbursementApproverMapping.DoesNotExist:
                 mapping = None
+                before = (None, None)
 
             if not manager and not finance:
                 if mapping:
@@ -1251,9 +1250,11 @@ class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, Temp
             mapping.manager = manager
             mapping.finance = finance
             mapping.save()
-            count += 1
+            after = (mapping.manager_id, mapping.finance_id)
+            if after != before:
+                count += 1
 
-        messages.success(self.request, f"Mappings saved for {count} employees.")
+        messages.success(self.request, f"Mappings saved for {count} employee(s).")
         return redirect("reimbursement:approver_mapping_admin")
 
 # ---------------------------------------------------------------------------
@@ -1272,8 +1273,6 @@ def download_receipt(
     if not user.is_authenticated:
         raise Http404
 
-    line: Optional[ReimbursementLine] = None
-    expense: Optional[ExpenseItem] = None
     file_field = None
 
     if line_id is not None:
@@ -1319,11 +1318,13 @@ def download_receipt(
 def reimbursement_email_action(request):
     """
     Endpoint hit from Approve / Reject buttons in email.
-
     - Does NOT require login (magic link).
     - Validates the signed token.
     - Applies manager / management decision.
     """
+    from django.core import signing
+    from django.core.signing import BadSignature
+
     token = request.GET.get("t") or request.POST.get("t")
     if not token:
         return HttpResponseBadRequest("Missing token.")
