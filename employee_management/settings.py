@@ -36,24 +36,22 @@ def env_int(name: str, default: int = 0) -> int:
 # -----------------------------------------------------------------------------
 # CORE
 # -----------------------------------------------------------------------------
-SECRET_KEY = os.getenv("SECRET_KEY", "CHANGE_ME_IN_PROD")
-# Default DEBUG to False for safety; turn it on locally via env.
-DEBUG = env_bool("DEBUG", False)
-
+SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-__dev-only-use-this__")
+DEBUG = env_bool("DEBUG", True)
 SITE_URL = os.getenv("SITE_URL", "https://ems-system-d26q.onrender.com")
 CRON_SECRET = os.getenv("CRON_SECRET", "")  # for HTTP cron hook
 ON_RENDER = bool(os.environ.get("RENDER"))
 
 ALLOWED_HOSTS = env_list(
     "ALLOWED_HOSTS",
-    "ems-system-d26q.onrender.com,.onrender.com,localhost,127.0.0.1,0.0.0.0",
+    "ems-system-d26q.onrender.com,localhost,127.0.0.1,0.0.0.0",
 )
 
-# Build CSRF trusted origins from hosts + add wildcard for Render
 CSRF_TRUSTED_ORIGINS = env_list(
     "CSRF_TRUSTED_ORIGINS",
-    "https://ems-system-d26q.onrender.com,https://*.onrender.com",
+    "https://ems-system-d26q.onrender.com",
 )
+
 if DEBUG:
     for local_origin in (
         "http://localhost:8000",
@@ -72,12 +70,9 @@ SESSION_COOKIE_HTTPONLY = True
 SESSION_EXPIRE_AT_BROWSER_CLOSE = False
 APPEND_SLASH = True
 
-# Always secure cookies on Render or when not DEBUG
 SESSION_COOKIE_SECURE = True if (ON_RENDER or not DEBUG) else False
 CSRF_COOKIE_SECURE = True if (ON_RENDER or not DEBUG) else False
 
-# Force HTTPS on Render or in production
-SECURE_SSL_REDIRECT = True if (ON_RENDER or not DEBUG) else False
 SECURE_CONTENT_TYPE_NOSNIFF = True
 
 # -----------------------------------------------------------------------------
@@ -193,11 +188,7 @@ else:
 # -----------------------------------------------------------------------------
 # DATABASE - SQLITE
 # -----------------------------------------------------------------------------
-# Use a persistent path on Render so DB survives restarts
-_default_sqlite_path = (
-    "/var/data/db.sqlite3" if ON_RENDER else str(BASE_DIR / "db.sqlite3")
-)
-DB_PATH = os.getenv("SQLITE_PATH") or _default_sqlite_path
+DB_PATH = os.getenv("SQLITE_PATH") or str(BASE_DIR / "db.sqlite3")
 Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 
 DATABASES = {
@@ -537,9 +528,14 @@ LEAVE_DECISION_TOKEN_MAX_AGE = env_int(
 # SECURITY (Prod)
 # -----------------------------------------------------------------------------
 if not DEBUG:
-    # HSTS only when truly in prod
+    SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", True)
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
     SECURE_HSTS_SECONDS = env_int("SECURE_HSTS_SECONDS", 31536000)
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", True)
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool(
+        "SECURE_HSTS_INCLUDE_SUBDOMAINS", True
+    )
     SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", True)
 
     SECURE_CONTENT_TYPE_NOSNIFF = True
@@ -581,9 +577,15 @@ TASK_LIST_PAGE_SIZE = env_int("TASK_LIST_PAGE_SIZE", 50)
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
 SESSION_COOKIE_AGE = 60 * 60 * 24 * 7
 
-FILE_UPLOAD_MAX_MEMORY_SIZE = env_int("FILE_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 * 1024)
-DATA_UPLOAD_MAX_MEMORY_SIZE = env_int("DATA_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 * 1024)
-DATA_UPLOAD_MAX_NUMBER_FIELDS = env_int("DATA_UPLOAD_MAX_NUMBER_FIELDS", 2000)
+FILE_UPLOAD_MAX_MEMORY_SIZE = env_int(
+    "FILE_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 * 1024
+)
+DATA_UPLOAD_MAX_MEMORY_SIZE = env_int(
+    "DATA_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 * 1024
+)
+DATA_UPLOAD_MAX_NUMBER_FIELDS = env_int(
+    "DATA_UPLOAD_MAX_NUMBER_FIELDS", 2000
+)
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 if REDIS_URL:
@@ -621,8 +623,12 @@ if ON_RENDER:
 
     WEB_CONCURRENCY = env_int("WEB_CONCURRENCY", 2)
     MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
-    FILE_UPLOAD_MAX_MEMORY_SIZE = min(FILE_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024)
-    DATA_UPLOAD_MAX_MEMORY_SIZE = min(DATA_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024)
+    FILE_UPLOAD_MAX_MEMORY_SIZE = min(
+        FILE_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024
+    )
+    DATA_UPLOAD_MAX_MEMORY_SIZE = min(
+        DATA_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024
+    )
     EMAIL_FAIL_SILENTLY = True
 
 # -----------------------------------------------------------------------------
@@ -632,7 +638,6 @@ if DEBUG:
     INTERNAL_IPS = ["127.0.0.1", "localhost"]
     if not os.getenv("EMAIL_HOST_USER"):
         EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-    # Allow HTTP locally
     SECURE_SSL_REDIRECT = False
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
@@ -695,21 +700,29 @@ HELP_TICKET_STATUSES = [
 # -----------------------------------------------------------------------------
 # LEAVE ROUTING FILE
 # -----------------------------------------------------------------------------
-LEAVE_ROUTING_FILE = str(BASE_DIR / "apps" / "users" / "data" / "leave_routing.json")
+LEAVE_ROUTING_FILE = str(
+    BASE_DIR / "apps" / "users" / "data" / "leave_routing.json"
+)
 
 # -----------------------------------------------------------------------------
 # PERMISSION SYSTEM SETTINGS
 # -----------------------------------------------------------------------------
 PERMISSION_DENIED_REDIRECT = "dashboard:home"
-PERMISSION_DEBUG_ENABLED = env_bool("PERMISSION_DEBUG_ENABLED", DEBUG and not ON_RENDER)
+PERMISSION_DEBUG_ENABLED = env_bool(
+    "PERMISSION_DEBUG_ENABLED", DEBUG and not ON_RENDER
+)
 
 # -----------------------------------------------------------------------------
 # CELERY CONFIGURATION
 # -----------------------------------------------------------------------------
 ENABLE_CELERY_EMAIL = env_bool("ENABLE_CELERY_EMAIL", False)
 
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/1")
+CELERY_BROKER_URL = os.getenv(
+    "CELERY_BROKER_URL", "redis://127.0.0.1:6379/0"
+)
+CELERY_RESULT_BACKEND = os.getenv(
+    "CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/1"
+)
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
