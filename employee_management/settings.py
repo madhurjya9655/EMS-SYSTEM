@@ -1,3 +1,4 @@
+# employee_management/settings.py
 import os
 import sqlite3
 from pathlib import Path
@@ -172,22 +173,42 @@ else:
     }]
 
 # -----------------------------------------------------------------------------
-# DATABASE - SQLITE
+# DATABASE (Render-safe)
 # -----------------------------------------------------------------------------
-DB_PATH = os.getenv("SQLITE_PATH") or str(BASE_DIR / "db.sqlite3")
-Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": DB_PATH,
-        "OPTIONS": {
-            "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
-            "timeout": 60,
-        },
+import dj_database_url  # requires: dj-database-url
+
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+if DATABASE_URL:
+    DATABASES = {
+        "default": dj_database_url.parse(
+            DATABASE_URL,
+            conn_max_age=env_int("CONN_MAX_AGE", 60),
+            ssl_require=env_bool("DB_SSL_REQUIRE", True),
+        )
     }
-}
+else:
+    # SQLite: use writable location on Render
+    if ON_RENDER:
+        DB_PATH = os.getenv("SQLITE_PATH") or "/var/data/db.sqlite3"
+    else:
+        DB_PATH = os.getenv("SQLITE_PATH") or str(BASE_DIR / "db.sqlite3")
+
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": DB_PATH,
+            "OPTIONS": {
+                "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+                "timeout": 60,
+            },
+        }
+    }
+
+CONN_MAX_AGE = env_int("CONN_MAX_AGE", 0)
 DATABASE_CONNECTION_POOLING = False
-CONN_MAX_AGE = 0
 
 # -----------------------------------------------------------------------------
 # SQLITE ROBUSTNESS
@@ -364,10 +385,8 @@ STATIC_URL = "/static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-# IMPORTANT: avoid 500s for missing manifest entries (like favicon)
 WHITENOISE_MANIFEST_STRICT = False
 
-# Ensure Django finds files before hashing
 STATICFILES_FINDERS = [
     "django.contrib.staticfiles.finders.FileSystemFinder",
     "django.contrib.staticfiles.finders.AppDirectoriesFinder",
@@ -404,7 +423,6 @@ EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "BOS Lakshya <no-reply@example.com>")
 
-# ---- Reimbursement sender — Amreen ------------------------------------------
 REIMBURSEMENT_SENDER_EMAIL = os.getenv("REIMBURSEMENT_SENDER_EMAIL", "amreen@blueoceansteels.com")
 REIMBURSEMENT_SENDER_NAME = os.getenv("REIMBURSEMENT_SENDER_NAME", "Amreen")
 REIMBURSEMENT_EMAIL_FROM = os.getenv("REIMBURSEMENT_EMAIL_FROM", f"{REIMBURSEMENT_SENDER_NAME} <{REIMBURSEMENT_SENDER_EMAIL}>")

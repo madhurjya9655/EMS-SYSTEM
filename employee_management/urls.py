@@ -10,10 +10,10 @@ from django.urls import include, path, re_path
 from django.views.decorators.http import require_GET
 from django.views.generic import RedirectView
 
-# If you have a custom login view in apps.users
+# Custom login view
 from apps.users.views import CustomLoginView
 
-# Optional admin titles
+# Admin titles
 admin.site.site_header = "EMS Admin"
 admin.site.index_title = "Administration"
 admin.site.site_title = "EMS Admin"
@@ -27,7 +27,7 @@ def healthcheck(_request):
     return HttpResponse("ok", content_type="text/plain")
 
 
-# Minimal robots.txt (override with a real view/file later if needed)
+# Minimal robots.txt
 @require_GET
 def robots_txt(_request):
     return HttpResponse("User-agent: *\nDisallow:\n", content_type="text/plain")
@@ -55,8 +55,11 @@ urlpatterns = [
     path("dashboard/",     include(("dashboard.urls",          "dashboard"),     namespace="dashboard")),
     path("settings/",      include(("apps.settings.urls",      "settings"),      namespace="settings")),
 
-    # Root → recruitment app
-    path("", include(("apps.recruitment.urls", "recruitment"), namespace="recruitment")),
+    # Recruitment is now under its own prefix (no longer the site root)
+    path("recruitment/",   include(("apps.recruitment.urls",   "recruitment"),   namespace="recruitment")),
+
+    # Root → safe redirect (dashboard will in turn require login)
+    path("", RedirectView.as_view(pattern_name="dashboard:home", permanent=False), name="site-root"),
 
     # Healthcheck aliases
     path("up",  healthcheck, name="healthcheck-no-slash"),
