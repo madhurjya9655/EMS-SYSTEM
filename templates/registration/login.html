@@ -5,61 +5,39 @@
 
 {% block content %}
 <style>
-  /* Keep the same theme color as the app */
   :root{ --primary:#3b82f6; }
-
   .auth-wrap{
-    min-height: calc(100vh - var(--header-height, 0px));
+    min-height: calc(100vh - var(--header-h, 0px));
     display:flex;align-items:center;justify-content:center;
     padding:2rem 1rem;background:#f6f8fb;
   }
-
   .auth-card{
     width:100%;max-width:980px;border:1px solid #e5e7eb;border-radius:16px;
     overflow:hidden;background:#fff;box-shadow:0 12px 40px rgba(2,6,23,.08);
   }
-
   .auth-left{
     background: linear-gradient(135deg, var(--primary) 0%, #60a5fa 100%);
     color:#fff;display:flex;flex-direction:column;justify-content:center;align-items:center;
     padding:2.25rem;gap:1rem;
   }
-  .auth-left .brand{
-    display:flex;flex-direction:column;align-items:center;text-align:center;gap:.5rem;
-  }
+  .auth-left .brand{display:flex;flex-direction:column;align-items:center;text-align:center;gap:.5rem}
   .auth-left .brand img{height:64px;width:auto;border-radius:10px;display:block}
   .auth-left .brand h2{margin:0;font-weight:800;letter-spacing:.2px;font-size:1.25rem}
   .auth-left .sub{opacity:.95;font-size:.95rem;line-height:1.5;max-width:28ch}
-
   .auth-right{padding:2.25rem 2rem}
   .auth-title{font-weight:800;margin:0 0 .25rem 0;font-size:1.5rem;color:#0f172a}
   .auth-muted{color:#64748b;margin-bottom:1.5rem}
-
   .form-label{font-weight:600;color:#0f172a}
   .form-control{
     border:1px solid #e5e7eb;border-radius:10px;padding:.75rem .9rem;
     font-size:1rem;transition:border-color .15s, box-shadow .15s;
   }
-  .form-control:focus{
-    border-color: var(--primary);
-    box-shadow:0 0 0 .2rem rgba(59,130,246,.15);
-  }
-
-  .input-group .btn{
-    border-color:#e5e7eb;border-left:none;border-radius:0 10px 10px 0
-  }
-
-  .btn-primary{
-    background: var(--primary);border-color: var(--primary);font-weight:700;border-radius:10px;
-    padding:.7rem 1rem
-  }
+  .form-control:focus{border-color: var(--primary);box-shadow:0 0 0 .2rem rgba(59,130,246,.15)}
+  .input-group .btn{border-color:#e5e7eb;border-left:none;border-radius:0 10px 10px 0}
+  .btn-primary{background: var(--primary);border-color: var(--primary);font-weight:700;border-radius:10px;padding:.7rem 1rem}
   .btn-primary:hover{filter:brightness(.95)}
   .auth-meta{display:flex;justify-content:space-between;align-items:center;gap:1rem}
-
-  @media (max-width: 991px){
-    .auth-left{display:none}
-    .auth-right{padding:2rem}
-  }
+  @media (max-width: 991px){ .auth-left{display:none} .auth-right{padding:2rem} }
 </style>
 
 <div class="auth-wrap">
@@ -68,7 +46,8 @@
       <!-- Brand side -->
       <div class="col-lg-5 auth-left">
         <div class="brand">
-          <img src="{% static 'images/bos logo.png' %}" alt="BOS Lakshya Logo">
+          <!-- IMPORTANT: file name uses underscore and exists in static/ -->
+          <img src="{% static 'images/bos_logo.png' %}" alt="BOS Lakshya Logo">
           <h2>BOS Lakshya</h2>
           <div class="sub">Secure access to your BOS Lakshya dashboard.</div>
         </div>
@@ -119,36 +98,14 @@
 
 <script>
   // Toggle show/hide password (accessible)
-  document.querySelectorAll('.show-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const input = btn.closest('.input-group').querySelector('.password-input');
-      const isHidden = input.type === 'password';
-      input.type = isHidden ? 'text' : 'password';
-      btn.textContent = isHidden ? 'Hide' : 'Show';
-      btn.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
-    });
-  });
-
-  // Remember Me (same behavior as before)
-  document.addEventListener('DOMContentLoaded', function () {
-    const uname = localStorage.getItem('rememberedUsername');
-    const pwd = localStorage.getItem('rememberedPassword');
-    if (uname) document.querySelector('input[name="username"]').value = uname;
-    if (pwd) document.querySelector('input[name="password"]').value = pwd;
-    if (uname && pwd) document.getElementById('remember').checked = true;
-  });
-
-  document.getElementById('loginForm').addEventListener('submit', function () {
-    const remember = document.getElementById('remember').checked;
-    const username = document.querySelector('input[name="username"]').value;
-    const password = document.querySelector('input[name="password"]').value;
-    if (remember) {
-      localStorage.setItem('rememberedUsername', username);
-      localStorage.setItem('rememberedPassword', password);
-    } else {
-      localStorage.removeItem('rememberedUsername');
-      localStorage.removeItem('rememberedPassword');
-    }
+  document.addEventListener('click', function(e){
+    const btn = e.target.closest('.show-btn');
+    if(!btn) return;
+    const input = btn.closest('.input-group').querySelector('.password-input');
+    const isHidden = input.type === 'password';
+    input.type = isHidden ? 'text' : 'password';
+    btn.textContent = isHidden ? 'Hide' : 'Show';
+    btn.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
   });
 </script>
 {% endblock %}
