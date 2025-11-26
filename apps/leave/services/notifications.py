@@ -4,17 +4,17 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Iterable
-from zoneinfo import ZoneInfo
 from urllib.parse import urljoin
+from zoneinfo import ZoneInfo
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core import signing
 from django.core.mail import EmailMultiAlternatives, get_connection
 from django.template.loader import get_template
 from django.urls import reverse
 from django.utils import timezone
 
-from django.contrib.auth import get_user_model
 from apps.leave.models import (
     LeaveRequest,
     LeaveDecisionAudit,
@@ -28,13 +28,17 @@ User = get_user_model()
 
 IST = ZoneInfo("Asia/Kolkata")
 TOKEN_SALT = getattr(settings, "LEAVE_DECISION_TOKEN_SALT", "leave-action-v1")
-TOKEN_MAX_AGE_SECONDS = getattr(settings, "LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)
+TOKEN_MAX_AGE_SECONDS = getattr(settings, "LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)  # reserved for verifiers
 
 
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
 def _site_base() -> str:
+    """
+    Return normalized base URL (trailing slash) for absolute links.
+    Prefers SITE_URL, then SITE_BASE_URL, else localhost.
+    """
     base = (
         getattr(settings, "SITE_URL", "")
         or getattr(settings, "SITE_BASE_URL", "")
@@ -43,11 +47,14 @@ def _site_base() -> str:
     return base.rstrip("/") + "/"
 
 
-def _abs_url(path: str) -> str:
+def _abs_url(path: str | None) -> str:
+    if not path:
+        return _site_base()
     return urljoin(_site_base(), path.lstrip("/"))
 
 
 def _format_ist(dt) -> str:
+    """Format a datetime in IST; fall back to str(dt) if anything fails."""
     try:
         return timezone.localtime(dt, IST).strftime("%d %b %Y, %I:%M %p")
     except Exception:
@@ -55,6 +62,7 @@ def _format_ist(dt) -> str:
 
 
 def _email_enabled() -> bool:
+    """Global feature flag gate; defaults to True."""
     try:
         return bool(getattr(settings, "FEATURES", {}).get("EMAIL_NOTIFICATIONS", True))
     except Exception:
@@ -62,9 +70,36 @@ def _email_enabled() -> bool:
 
 
 def _render_pair(html_tpl: str, txt_tpl: str, context: Dict) -> Tuple[str, str]:
-    html = get_template(html_tpl).render(context)
-    txt = get_template(txt_tpl).render(context)
-    return html, txt
+    """
+    Render HTML & text templates. If templates are missing, produce a simple
+    inline fallback so the send still succeeds (and logs carry context).
+    """
+    try:
+        html = get_template(html_tpl).render(context)
+        txt = get_template(txt_tpl).render(context)
+        return html, txt
+    except Exception:
+        # Minimal generic fallbacks by intent type
+        kind = "notification"
+        if "leave_type" in context and "approve_url" in context:
+            kind = "leave request"
+        elif "status" in context and "approver_name" in context:
+            kind = "leave decision"
+        elif "handovers" in context:
+            kind = "handover"
+        elif "task_type" in context and "task_name" in context:
+            kind = "task completed"
+
+        lines = [f"{kind.title()} from EMS"]
+        for k, v in context.items():
+            try:
+                lines.append(f"- {k}: {v}")
+            except Exception:
+                continue
+        txt = "\n".join(lines)
+        html = "<br/>".join(lines)
+        logger.warning("Template render failed for %s/%s; using inline fallback.", html_tpl, txt_tpl, exc_info=True)
+        return html, txt
 
 
 def _send(subject: str, to_addr: str, cc: List[str], reply_to: List[str], html: str, txt: str) -> bool:
@@ -113,10 +148,9 @@ def _send(subject: str, to_addr: str, cc: List[str], reply_to: List[str], html: 
         if sent:
             logger.info("Leave email sent OK: to=%s cc=%s subject=%r", to_addr, cc, subject)
             return True
-        else:
-            # Django returns the number of successfully delivered messages; 0 means failure
-            logger.error("Leave email send returned 0: to=%s cc=%s subject=%r", to_addr, cc, subject)
-            return False
+
+        logger.error("Leave email send returned 0: to=%s cc=%s subject=%r", to_addr, cc, subject)
+        return False
     except Exception as exc:
         # If fail_silently=True, Django would suppress; we still log here.
         logger.exception("Leave email send FAILED: to=%s cc=%s subject=%r error=%s", to_addr, cc, subject, exc)
@@ -138,6 +172,7 @@ def _already_sent_recent(leave: LeaveRequest, kind_hint: str | None = None, with
 
 
 def _dedupe_lower(emails: Iterable[str]) -> List[str]:
+    """Lowercase + dedupe + remove falsy entries, preserving order."""
     seen = set()
     out: List[str] = []
     for e in emails or []:
@@ -186,7 +221,7 @@ def _duration_days_ist(leave: LeaveRequest) -> float:
     if e < s:
         s, e = e, s
     days = (e - s).days + 1
-    if leave.is_half_day and days == 1:
+    if getattr(leave, "is_half_day", False) and days == 1:
         return 0.5
     return float(days)
 
@@ -348,20 +383,20 @@ def send_leave_request_email(
     # Collect handover summary for email
     handover_summary = []
     try:
-        handovers = LeaveHandover.objects.filter(leave_request=leave).select_related('new_assignee')
+        handovers = LeaveHandover.objects.filter(leave_request=leave).select_related("new_assignee")
         for handover in handovers:
             task_title = handover.get_task_title()
-            task_url = handover.get_task_url()
-            if task_url:
-                task_url = _abs_url(task_url)
-            handover_summary.append({
-                'task_type': handover.get_task_type_display(),
-                'task_id': handover.original_task_id,
-                'task_title': task_title,
-                'task_url': task_url,
-                'assignee_name': _employee_display_name(handover.new_assignee),
-                'message': handover.message,
-            })
+            task_url = _abs_url(handover.get_task_url())
+            handover_summary.append(
+                {
+                    "task_type": handover.get_task_type_display(),
+                    "task_id": handover.original_task_id,
+                    "task_title": task_title,
+                    "task_url": task_url,
+                    "assignee_name": _employee_display_name(handover.new_assignee),
+                    "message": handover.message,
+                }
+            )
     except Exception:
         pass
 
@@ -398,12 +433,14 @@ def send_leave_request_email(
     ok = _send(subject, to_addr, cc=list(cc or []), reply_to=reply_to, html=html, txt=txt)
     if not ok:
         logger.error("Leave request email NOT delivered for leave #%s (see earlier logs for details).", leave.id)
-    else:
-        try:
-            if LeaveDecisionAudit and DecisionAction:
-                LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT, extra={"kind": "request"})
-        except Exception:
-            logger.exception("Failed to log EMAIL_SENT (request) for leave #%s", leave.id)
+        return
+
+    # Best-effort audit
+    try:
+        if LeaveDecisionAudit and DecisionAction:
+            LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT, extra={"kind": "request"})
+    except Exception:
+        logger.exception("Failed to log EMAIL_SENT (request) for leave #%s", leave.id)
 
 
 def send_leave_decision_email(leave: LeaveRequest) -> None:
@@ -470,12 +507,13 @@ def send_leave_decision_email(leave: LeaveRequest) -> None:
     ok = _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
     if not ok:
         logger.error("Leave decision email NOT delivered for leave #%s (see earlier logs for details).", leave.id)
-    else:
-        try:
-            if LeaveDecisionAudit and DecisionAction:
-                LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT, extra={"kind": "decision"})
-        except Exception:
-            logger.exception("Failed to log EMAIL_SENT (decision) for leave #%s", leave.id)
+        return
+
+    try:
+        if LeaveDecisionAudit and DecisionAction:
+            LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT, extra={"kind": "decision"})
+    except Exception:
+        logger.exception("Failed to log EMAIL_SENT (decision) for leave #%s", leave.id)
 
 
 def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
@@ -499,17 +537,16 @@ def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
     handover_details = []
     for handover in handovers:
         task_title = handover.get_task_title()
-        task_url = handover.get_task_url()
-        if task_url:
-            task_url = _abs_url(task_url)
-
-        handover_details.append({
-            'task_name': task_title,
-            'task_type': handover.get_task_type_display(),
-            'task_id': handover.original_task_id,
-            'task_url': task_url,
-            'message': handover.message,
-        })
+        task_url = _abs_url(handover.get_task_url())
+        handover_details.append(
+            {
+                "task_name": task_title,
+                "task_type": handover.get_task_type_display(),
+                "task_id": handover.original_task_id,
+                "task_url": task_url,
+                "message": handover.message,
+            }
+        )
 
     subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
     subject = f"{subject_prefix}Task Handover: {employee_name} ({_format_ist(leave.start_at)} - {_format_ist(leave.end_at)})"
@@ -535,12 +572,17 @@ def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
     ok = _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
     if not ok:
         logger.error("Handover email NOT delivered for leave #%s (see earlier logs for details).", leave.id)
-    else:
-        try:
-            if LeaveDecisionAudit and DecisionAction:
-                LeaveDecisionAudit.log(leave, DecisionAction.HANDOVER_EMAIL_SENT, extra={"assignee_id": getattr(assignee, "id", None)})
-        except Exception:
-            logger.exception("Failed to log HANDOVER_EMAIL_SENT for leave #%s", leave.id)
+        return
+
+    try:
+        if LeaveDecisionAudit and DecisionAction:
+            LeaveDecisionAudit.log(
+                leave,
+                DecisionAction.HANDOVER_EMAIL_SENT,
+                extra={"assignee_id": getattr(assignee, "id", None)},
+            )
+    except Exception:
+        logger.exception("Failed to log HANDOVER_EMAIL_SENT for leave #%s", leave.id)
 
 
 def send_delegation_reminder_email(reminder) -> None:
@@ -561,9 +603,7 @@ def send_delegation_reminder_email(reminder) -> None:
     employee_name = leave.employee_name or _employee_display_name(leave.employee)
     assignee_name = _employee_display_name(assignee)
     task_title = handover.get_task_title()
-    task_url = handover.get_task_url()
-    if task_url:
-        task_url = _abs_url(task_url)
+    task_url = _abs_url(handover.get_task_url())
 
     subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
     subject = f"{subject_prefix}Reminder: {task_title} (delegated by {employee_name})"
@@ -590,18 +630,22 @@ def send_delegation_reminder_email(reminder) -> None:
     ok = _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
     if not ok:
         logger.error("Delegation reminder email NOT delivered (handover id=%s).", handover.id)
-    else:
-        try:
-            if LeaveDecisionAudit and DecisionAction:
-                LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT, extra={"kind": "handover_reminder", "handover_id": handover.id})
-        except Exception:
-            logger.exception("Failed to log EMAIL_SENT (handover_reminder) for leave #%s", leave.id)
+        return
+
+    try:
+        if LeaveDecisionAudit and DecisionAction:
+            LeaveDecisionAudit.log(
+                leave,
+                DecisionAction.EMAIL_SENT,
+                extra={"kind": "handover_reminder", "handover_id": handover.id},
+            )
+    except Exception:
+        logger.exception("Failed to log EMAIL_SENT (handover_reminder) for leave #%s", leave.id)
 
 
 # ---------------------------------------------------------------------------
 # Task completion notifications
 # ---------------------------------------------------------------------------
-
 def _task_type_and_url(task) -> Tuple[str, Optional[str]]:
     """
     Infer (task_type_name, absolute_url_to_task_detail) from task instance.
@@ -639,11 +683,12 @@ def _find_related_leave(task) -> Optional[LeaveRequest]:
             tname = "help_ticket"
         else:
             return None
-        ho = (LeaveHandover.objects
-              .filter(task_type=tname, original_task_id=task.id)
-              .select_related("leave_request")
-              .order_by("-id")
-              .first())
+        ho = (
+            LeaveHandover.objects.filter(task_type=tname, original_task_id=task.id)
+            .select_related("leave_request")
+            .order_by("-id")
+            .first()
+        )
         return ho.leave_request if ho else None
     except Exception:
         return None
@@ -666,7 +711,7 @@ def send_task_completion_email(original_assignee: User, delegate: User, task, co
         return
 
     task_type, task_url = _task_type_and_url(task)
-    task_name = getattr(task, "task_name", None) or getattr(task, "title", f"{task_type} #{getattr(task, 'id', '')}")
+    task_name = getattr(task, "task_name", None) or getattr(task, "title", f"{task_type} #{getattr(task, "id", "")}")
 
     completed_at = context.get("completed_at") or timezone.now()
     planned_date = context.get("planned_date")
@@ -675,7 +720,10 @@ def send_task_completion_email(original_assignee: User, delegate: User, task, co
     leave = _find_related_leave(task)
 
     subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
-    subject = f"{subject_prefix}{task_type} Completed by {getattr(delegate, 'get_full_name', lambda: '')() or delegate.username}: {task_name}"
+    subject = (
+        f"{subject_prefix}{task_type} Completed by "
+        f"{getattr(delegate, 'get_full_name', lambda: '')() or delegate.username}: {task_name}"
+    )
 
     ctx = {
         "site_url": _site_base().rstrip("/"),
@@ -711,7 +759,16 @@ def send_task_completion_email(original_assignee: User, delegate: User, task, co
             LeaveDecisionAudit.log(
                 leave,
                 DecisionAction.EMAIL_SENT,
-                extra={"kind": "task_completed", "task_type": task_type, "task_id": getattr(task, "id", None)}
+                extra={"kind": "task_completed", "task_type": task_type, "task_id": getattr(task, "id", None)},
             )
     except Exception:
         logger.exception("Failed to log EMAIL_SENT (task_completed) for leave #%s", getattr(leave, "id", None))
+
+
+__all__ = [
+    "send_leave_request_email",
+    "send_leave_decision_email",
+    "send_handover_email",
+    "send_delegation_reminder_email",
+    "send_task_completion_email",
+]

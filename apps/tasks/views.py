@@ -1,15 +1,16 @@
+# apps/tasks/views.py
 import csv
+import logging
 import pytz
 import re
 import time
-import logging
 import unicodedata
 from datetime import datetime, timedelta, date, time as dt_time
 from functools import wraps
 from threading import Lock, Thread
 
 import pandas as pd
-from dateutil.relativedelta import relativedelta
+from dateutil.relativedelta import relativedelta  # (kept if used by other helpers)
 
 from django.apps import apps
 from django.conf import settings
@@ -102,6 +103,10 @@ def clean_unicode_string(text):
 
 
 def robust_db_operation(max_retries=3, base_delay=0.05):
+    """
+    Decorator to retry DB ops that can briefly fail with 'database is locked' (SQLite etc).
+    Small refactor makes the retry branch explicit to satisfy strict linters.
+    """
     def deco(fn):
         @wraps(fn)
         def inner(*args, **kwargs):
@@ -112,14 +117,19 @@ def robust_db_operation(max_retries=3, base_delay=0.05):
                 except OperationalError as e:
                     txt = str(e).lower()
                     last = e
-                    if "locked" in txt:
-                        if attempt < max_retries - 1:
-                            delay = base_delay * (2 ** attempt)
-                            logger.warning("DB locked; retrying %s/%s in %.3fs", attempt + 1, max_retries, delay)
-                            time.sleep(delay)
-                            continue
-                    raise
-            raise last
+                    if "locked" in txt and attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning("DB locked; retrying %s/%s in %.3fs", attempt + 1, max_retries, delay)
+                        time.sleep(delay)
+                        continue
+                    else:
+                        # Not a lock, or out of retries -> re-raise
+                        raise
+            # If we exhausted retries and still failed, raise the last seen error
+            if last is not None:
+                raise last
+            # Fallback (shouldn't be reached)
+            return None
         return inner
     return deco
 
@@ -242,11 +252,11 @@ def _get_handover_rows_for_user(user, today_date):
     handovers = (
         LeaveHandover.objects
         .filter(
-                new_assignee=user,
-                is_active=True,
-                effective_start_date__lte=today_date,
-                effective_end_date__gte=today_date,
-                leave_request__status="APPROVED",
+            new_assignee=user,
+            is_active=True,
+            effective_start_date__lte=today_date,
+            effective_end_date__gte=today_date,
+            leave_request__status="APPROVED",
         )
         .select_related("leave_request", "original_assignee", "new_assignee")
         .order_by("id")
@@ -300,7 +310,8 @@ def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     if task_date > today:
         return False
     anchor_10am = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
-    return (now_ist >= anchor_10am)
+    return now_ist >= anchor_10am
+
 
 # Use same 10AM gate for Delegation (today/past), Help Tickets are immediate
 def _should_show_today_or_past(task_dt: datetime, now_ist: datetime) -> bool:
@@ -362,7 +373,8 @@ _SYN_MODE = {
 _RECURRENCE_RE = re.compile(r"(?i)\b(?:every|evry)?\s*(\d+)?\s*(day|daily|week|weekly|month|monthly|year|yearly)\b")
 
 
-def _clean_str(val): return clean_unicode_string("" if val is None else str(val).strip())
+def _clean_str(val):
+    return clean_unicode_string("" if val is None else str(val).strip())
 
 
 def parse_mode_frequency_from_row(row):
@@ -402,7 +414,8 @@ def parse_mode_frequency_from_row(row):
     return "", None
 
 
-def parse_bool(val) -> bool: return _clean_str(val).lower() in {"1", "true", "yes", "y", "on"}
+def parse_bool(val) -> bool:
+    return _clean_str(val).lower() in {"1", "true", "yes", "y", "on"}
 
 
 def parse_int(val, default=0) -> int:
@@ -544,7 +557,9 @@ def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, star
             planned_ist_date = planned_dt.astimezone(IST).date()
             safe_date = next_working_day_skip_leaves(assign_to, planned_ist_date)
             if safe_date != planned_ist_date:
-                planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(timezone.get_current_timezone())
+                planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(
+                    timezone.get_current_timezone()
+                )
 
             message = _clean_str(row.get("Message"))
             priority = (_clean_str(row.get("Priority")) or "Low").title()
@@ -668,7 +683,9 @@ def process_delegation_batch_excel_ultra_optimized(batch_df, assign_by_user, sta
             planned_ist_date = planned_dt.astimezone(IST).date()
             safe_date = next_working_day_skip_leaves(assign_to, planned_ist_date)
             if safe_date != planned_ist_date:
-                planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(timezone.get_current_timezone())
+                planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(
+                    timezone.get_current_timezone()
+                )
 
             priority = (_clean_str(row.get("Priority")) or "Low").title()
             if priority not in ["Low", "Medium", "High"]:
@@ -762,7 +779,7 @@ def process_delegation_bulk_upload_excel_friendly(file, assign_by_user):
         end_idx = min(start_idx + bs, total)
         batch_df = df.iloc[start_idx:end_idx]
         batch_created, batch_errors = process_delegation_batch_excel_ultra_optimized(
-           batch_df, assign_by_user, start_idx
+            batch_df, assign_by_user, start_idx
         )
         created.extend(batch_created)
         errors.extend(batch_errors)
@@ -1133,10 +1150,25 @@ def add_delegation(request):
 
 @has_permission("list_delegation")
 def list_delegation(request):
+    """
+    Delegation list with persistent filters.
+
+    Filters supported (GET):
+      - keyword
+      - status: 'all' | 'Pending' | 'Completed' | 'In Progress' (no-op unless such rows exist)
+      - assign_by: user id
+      - assign_to: user id
+      - start_date (YYYY-MM-DD)
+      - end_date   (YYYY-MM-DD)
+      - date       (YYYY-MM-DD) exact day match
+      - today_only (1)
+      - priority   (Low/Medium/High)
+    """
     if request.method == "POST":
         action = request.POST.get("action", "")
         if action == "bulk_delete":
             ids = request.POST.getlist("sel")
+            return_url = request.POST.get("return_url") or reverse("tasks:list_delegation")
             if ids:
                 try:
                     deleted, _ = Delegation.objects.filter(pk__in=ids).delete()
@@ -1148,45 +1180,75 @@ def list_delegation(request):
                     messages.error(request, f"Error during bulk delete: {e}")
             else:
                 messages.warning(request, "No delegation tasks were selected for deletion.")
+            # PERSIST FILTERS: redirect back to the same filtered URL
+            return redirect(return_url)
         else:
             messages.warning(request, "Invalid action specified.")
-        return redirect("tasks:list_delegation")
+            return redirect("tasks:list_delegation")
 
-    qs = Delegation.objects.filter(status="Pending").select_related("assign_by", "assign_to").order_by("-planned_date", "-id")
+    # Start from ALL, then apply filters. Default behavior keeps Pending unless status filter says otherwise.
+    base_qs = Delegation.objects.select_related("assign_by", "assign_to")
+    status_param = (request.GET.get("status") or "").strip()
 
-    kw = request.GET.get("keyword", "").strip()
+    if not status_param or status_param == "Pending":
+        qs = base_qs.filter(status="Pending")
+    elif status_param == "all":
+        qs = base_qs
+    else:
+        # Accept 'Completed' or any other value (e.g., 'In Progress' if added later)
+        qs = base_qs.filter(status=status_param)
+
+    # Keyword across task_name & message
+    kw = (request.GET.get("keyword") or "").strip()
     if kw:
-        qs = qs.filter(Q(task_name__icontains=kw))
+        qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
 
-    if request.GET.get("assign_to", "").strip():
-        qs = qs.filter(assign_to_id=request.GET.get("assign_to").strip())
+    # Assigned By / To
+    assign_by_id = (request.GET.get("assign_by") or "").strip()
+    assign_to_id = (request.GET.get("assign_to") or "").strip()
+    if assign_by_id:
+        qs = qs.filter(assign_by_id=assign_by_id)
+    if assign_to_id:
+        qs = qs.filter(assign_to_id=assign_to_id)
 
-    if request.GET.get("priority", "").strip():
-        qs = qs.filter(priority=request.GET.get("priority").strip())
+    # Optional human-name filter for assignee (employee name)
+    employee_name = (request.GET.get("employee") or "").strip()
+    if employee_name:
+        qs = qs.filter(
+            Q(assign_to__username__icontains=employee_name) |
+            Q(assign_to__first_name__icontains=employee_name) |
+            Q(assign_to__last_name__icontains=employee_name)
+        )
 
-    if request.GET.get("start_date", "").strip():
-        qs = qs.filter(planned_date__date__gte=request.GET.get("start_date").strip())
+    # Priority
+    priority_val = (request.GET.get("priority") or "").strip()
+    if priority_val:
+        qs = qs.filter(priority=priority_val)
 
-    if request.GET.get("end_date", "").strip():
-        qs = qs.filter(planned_date__date__lte=request.GET.get("end_date").strip())
-
-    status_param = request.GET.get("status", "").strip()
-    if status_param == "all":
-        qs = Delegation.objects.all().select_related("assign_by", "assign_to")
-    elif status_param and status_param != "Pending":
-        qs = Delegation.objects.filter(status=status_param).select_related("assign_by", "assign_to")
+    # Single-day filter
+    on_date = (request.GET.get("date") or "").strip()
+    if on_date:
+        qs = qs.filter(planned_date__date=on_date)
+    else:
+        # Range filters (backwards compatible with your existing "start_date"/"end_date")
+        if (request.GET.get("start_date") or "").strip():
+            qs = qs.filter(planned_date__date__gte=request.GET.get("start_date").strip())
+        if (request.GET.get("end_date") or "").strip():
+            qs = qs.filter(planned_date__date__lte=request.GET.get("end_date").strip())
 
     if request.GET.get("today_only"):
         today = timezone.localdate()
         qs = qs.filter(planned_date__date=today)
 
-    # Summary for list_delegation.html header cards
+    # Summary cards
     agg = qs.aggregate(
         assign_time=Sum("time_per_task_minutes"),
         actual_time=Sum("actual_duration_minutes"),
     )
     assign_time = agg.get("assign_time") or 0
     actual_time = agg.get("actual_time") or 0
+
+    qs = qs.order_by("-planned_date", "-id")
 
     ctx = {
         "items": qs,
@@ -1225,7 +1287,8 @@ def edit_delegation(request, pk):
             obj2.frequency = None
             obj2.save()
             messages.success(request, f"Delegation task '{obj2.task_name}' updated successfully! Assignee will be notified at 10:00 AM on the due day.")
-            return redirect("tasks:list_delegation")
+            # preserve filters from ?next=
+            return redirect(request.GET.get("next", reverse("tasks:list_delegation")))
     else:
         form = DelegationForm(instance=obj)
     return render(request, "tasks/add_delegation.html", {"form": form})
@@ -1237,11 +1300,10 @@ def delete_delegation(request, pk):
     if request.method == "POST":
         obj.delete()
         messages.success(request, f"Deleted delegation task '{obj.task_name}'.")
-        return redirect("tasks:list_delegation")
+        return redirect(request.GET.get("next", reverse("tasks:list_delegation")))
     return render(request, "tasks/confirm_delete.html", {"object": obj, "type": "Delegation"})
 
 
-# >>> complete view for delegations
 @login_required
 def complete_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
@@ -1292,7 +1354,6 @@ def complete_delegation(request, pk):
     return redirect(request.GET.get("next", "dashboard:home"))
 
 
-# >>> reassign view for delegations (no immediate assignee email)
 @has_permission("list_delegation")
 def reassign_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
@@ -1307,7 +1368,7 @@ def reassign_delegation(request, pk):
                 request,
                 f"Delegation task reassigned to {obj.assign_to.get_full_name() or obj.assign_to.username} (assignee will be notified at 10:00 AM on the due day)."
             )
-            return redirect("tasks:list_delegation")
+            return redirect(request.GET.get("next", reverse("tasks:list_delegation")))
 
     return render(
         request,

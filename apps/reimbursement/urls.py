@@ -82,10 +82,11 @@ urlpatterns = [
         name="manager_review",
     ),
 
+    # NOTE: Use name 'management_pending' to match reverses used in views.py
     path(
         "management/",
         views.ManagementQueueView.as_view(),
-        name="management_queue",
+        name="management_pending",
     ),
     path(
         "management/<int:pk>/review/",

@@ -14,7 +14,7 @@ urlpatterns = [
     path("delete/<int:pk>/", views.delete_leave, name="delete_leave"),
     # Bulk delete — keep both names for backward compatibility
     path("bulk-delete/", views.bulk_delete_leaves, name="bulk_delete_leaves"),
-    path("bulk-delete/", views.bulk_delete_leaves, name="bulk_delete"),  # alias to fix NoReverseMatch
+    path("bulk_delete/", views.bulk_delete_leaves, name="bulk_delete"),  # alias with underscore
 
     # Manager queue & actions
     path("manager/pending/", views.manager_pending, name="manager_pending"),

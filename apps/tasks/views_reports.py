@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from datetime import datetime, date
-from typing import Optional
+from typing import Optional, Tuple
 
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseBadRequest
 from django.utils.html import escape
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.views.decorators.http import require_GET
@@ -22,6 +22,17 @@ def _is_admin(user) -> bool:
     if user.is_superuser or user.is_staff:
         return True
     return user.groups.filter(name__in=["Admin", "Manager", "EA", "CEO"]).exists()
+
+def _parse_int(s: Optional[str]) -> Tuple[Optional[int], Optional[str]]:
+    """
+    Returns (value, error). Only basic validation; keeps logic unchanged elsewhere.
+    """
+    if s is None or s == "":
+        return None, None
+    try:
+        return int(s), None
+    except (TypeError, ValueError):
+        return None, "assign_to_id must be an integer"
 
 def _parse_date(s: Optional[str]) -> Optional[date]:
     if not s:
@@ -47,12 +58,25 @@ def recurring_report(request):
       - status: completed | missed | pending | all   (default: all)
       - format: csv | html                           (default: html)
     """
+    # Validate status early
+    raw_status = (request.GET.get("status") or "all").lower().strip()
+    valid_status = {"completed", "missed", "pending", "all"}
+    if raw_status not in valid_status:
+        return HttpResponseBadRequest(
+            f"Invalid status '{escape(raw_status)}'. Allowed: completed | missed | pending | all"
+        )
+
+    # Validate assign_to_id if provided
+    assign_to_id, err = _parse_int(request.GET.get("assign_to_id"))
+    if err:
+        return HttpResponseBadRequest(escape(err))
+
     q = RecurringReportQuery(
         date_from=_parse_date(request.GET.get("date_from") or request.GET.get("from")),
         date_to=_parse_date(request.GET.get("date_to") or request.GET.get("to")),
-        assign_to_id=(int(request.GET["assign_to_id"]) if request.GET.get("assign_to_id") else None),
+        assign_to_id=assign_to_id,
         group_name=(request.GET.get("group_name") or request.GET.get("group")),
-        status=(request.GET.get("status") or "all").lower(),
+        status=raw_status,
     )
 
     # CSV download
@@ -97,4 +121,4 @@ def recurring_report(request):
             "</tr>"
         )
     html_parts.append("</tbody></table></body></html>")
-    return HttpResponse("".join(html_parts))
+    return HttpResponse("".join(html_parts), content_type="text/html; charset=utf-8")

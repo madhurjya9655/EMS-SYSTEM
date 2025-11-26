@@ -1,4 +1,3 @@
-E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\tasks\list_delegation.html:
 {% extends "base.html" %}
 {% load static %}
 {% block title %}Delegations{% endblock %}
@@ -12,27 +11,92 @@ E:\CLIENT PROJECT\employee management system bos\employee_management_system\temp
 <div class="card mb-3">
   <div class="card-body">
     <form method="get" class="row g-3 align-items-end" role="search" aria-label="Delegation Filters">
-      <div class="col-md-4">
+      <div class="col-md-3">
         <label for="fltKeyword" class="form-label">Keyword</label>
         <input id="fltKeyword" type="text" class="form-control" name="keyword" value="{{ request.GET.keyword }}">
       </div>
 
-      <div class="col-md-4">
+      <div class="col-md-2">
+        <label for="fltStatus" class="form-label">Status</label>
+        <select id="fltStatus" class="form-select" name="status">
+          <option value="Pending" {% if request.GET.status|default:'Pending' == 'Pending' %}selected{% endif %}>Pending</option>
+          <option value="Completed" {% if request.GET.status == 'Completed' %}selected{% endif %}>Completed</option>
+          <option value="In Progress" {% if request.GET.status == 'In Progress' %}selected{% endif %}>In-progress</option>
+          <option value="all" {% if request.GET.status == 'all' %}selected{% endif %}>All</option>
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label for="fltAssignBy" class="form-label">Assigned By</label>
+        <select id="fltAssignBy" class="form-select" name="assign_by">
+          <option value="" {% if not request.GET.assign_by %}selected{% endif %}>All</option>
+          {% for u in users %}
+            <option value="{{ u.id }}" {% if request.GET.assign_by|default:'' == u.id|stringformat:"s" %}selected{% endif %}>
+              {{ u.get_full_name|default:u.username }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label for="fltAssignTo" class="form-label">Assigned To</label>
+        <select id="fltAssignTo" class="form-select" name="assign_to">
+          <option value="" {% if not request.GET.assign_to %}selected{% endif %}>All</option>
+          {% for u in users %}
+            <option value="{{ u.id }}" {% if request.GET.assign_to|default:'' == u.id|stringformat:"s" %}selected{% endif %}>
+              {{ u.get_full_name|default:u.username }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-3">
+        <label for="fltEmployee" class="form-label">Employee Name (Assignee)</label>
+        <input id="fltEmployee" type="text" class="form-control" name="employee" placeholder="e.g. Aman"
+               value="{{ request.GET.employee }}">
+      </div>
+
+      <div class="col-md-2">
+        <label for="fltDate" class="form-label">Date</label>
+        <input id="fltDate" type="date" class="form-control" name="date" value="{{ request.GET.date }}">
+      </div>
+
+      <div class="col-md-2">
+        <label for="fltStart" class="form-label">From</label>
+        <input id="fltStart" type="date" class="form-control" name="start_date" value="{{ request.GET.start_date }}">
+      </div>
+
+      <div class="col-md-2">
+        <label for="fltEnd" class="form-label">To</label>
+        <input id="fltEnd" type="date" class="form-control" name="end_date" value="{{ request.GET.end_date }}">
+      </div>
+
+      <div class="col-md-2">
+        <label for="fltPriority" class="form-label">Priority</label>
+        <select id="fltPriority" class="form-select" name="priority">
+          <option value="" {% if not request.GET.priority %}selected{% endif %}>All</option>
+          {% for p,_ in priority_choices %}
+            <option value="{{ p }}" {% if request.GET.priority == p %}selected{% endif %}>{{ p }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-2">
         <div class="form-check mt-4 pt-1">
           <input class="form-check-input" type="checkbox" name="today_only" value="1" id="todayOnly"
                  {% if request.GET.today_only %}checked{% endif %}>
           <label class="form-check-label" for="todayOnly">
-            Today only (show tasks planned for today)
+            Today only
           </label>
         </div>
       </div>
 
-      <div class="col-md-4 text-md-end">
+      <div class="col-md-12 text-md-end">
         <button class="btn btn-primary">
           <i class="fas fa-filter me-1" aria-hidden="true"></i> Apply
         </button>
         <a class="btn btn-outline-secondary ms-2" href="{% url 'tasks:list_delegation' %}">
-          <i class="fas fa-undo me-1" aria-hidden="true"></i> Reset
+          <i class="fas fa-undo me-1" aria-hidden="true"></i> Clear Filters
         </a>
       </div>
     </form>
@@ -67,6 +131,7 @@ E:\CLIENT PROJECT\employee management system bos\employee_management_system\temp
     <form method="post" action="{% url 'tasks:list_delegation' %}" data-bulk>
       {% csrf_token %}
       <input type="hidden" name="action" value="bulk_delete">
+      <!-- Persist filters after bulk action -->
       <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
 
       <table class="table table-hover mb-0 align-middle">

@@ -1,3 +1,4 @@
+# apps/reimbursement/services/notifications.py
 from __future__ import annotations
 
 import logging
@@ -9,10 +10,11 @@ from urllib.parse import urlencode, urljoin
 
 from django.conf import settings
 from django.core import signing
-        # NOTE: using EmailMultiAlternatives for HTML + attachments
+# NOTE: using EmailMultiAlternatives for HTML + attachments
 from django.core.mail import EmailMultiAlternatives, get_connection
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.html import escape
 from django.contrib.auth import get_user_model
 
 from apps.reimbursement.models import (
@@ -25,6 +27,31 @@ from apps.reimbursement.models import (
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
+# ---------------------------------------------------------------------------
+# Hard-coded recipients per workflow requirement
+# ---------------------------------------------------------------------------
+
+# Finance verification stage — ONLY these two
+_FINANCE_TEAM = [
+    "akshay@blueoceansteels.com",
+    "sharyu@blueoceansteels.com",
+]
+
+# Final (after approval) — TO + CC
+_FINAL_TO = [
+    "jyothi@gasteels.com",
+    "chetan.shah@gasteels.com",
+]
+_FINAL_CC = [
+    "amreen@blueoceansteels.com",
+    "vilas@blueoceansteels.com",
+    "akshay@blueoceansteels.com",
+    "sharyu@blueoceansteels.com",
+]
+
+# Attachment cap (bytes) for outbound emails (default: 20 MB)
+_MAX_ATTACH_TOTAL_BYTES = int(getattr(settings, "REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES", 20 * 1024 * 1024))
 
 # ---------------------------------------------------------------------------
 # Utilities
@@ -62,7 +89,8 @@ def _dedupe_lower(emails: Iterable[str]) -> List[str]:
 
 def _employee_display_name(user) -> str:
     try:
-        return (getattr(user, "get_full_name", lambda: "")() or user.username or "").strip()
+        # Prefer full name; fallback to username; strip spaces
+        return (getattr(user, "get_full_name", lambda: "")() or getattr(user, "username", "") or "").strip()
     except Exception:
         return (getattr(user, "username", "") or "").strip()
 
@@ -70,11 +98,29 @@ def _format_amount(amount: Decimal | None) -> str:
     try:
         if amount is None:
             return "0.00"
-        return f"{amount:.2f}"
+        # Add thousand separators for INR style readability
+        return f"{amount:,.2f}"
     except Exception:
         return str(amount or "0.00")
 
+def _format_dt(dt) -> str:
+    """
+    Format a datetime in a friendly local string with tz name.
+    """
+    try:
+        if not dt:
+            return ""
+        z = timezone.get_current_timezone()
+        loc = timezone.localtime(dt, z)
+        tzname = loc.tzname() or "IST"
+        return loc.strftime(f"%d %b %Y, %H:%M {tzname}")
+    except Exception:
+        return str(dt)
+
 def _collect_receipt_files(req: ReimbursementRequest) -> List:
+    """
+    Collect unique files for the request lines, without size cap enforcement.
+    """
     files = []
     try:
         lines = req.lines.select_related("expense_item")
@@ -91,6 +137,36 @@ def _collect_receipt_files(req: ReimbursementRequest) -> List:
     except Exception:
         logger.exception("Failed to collect receipt files for reimbursement #%s", req.id)
     return files
+
+def _collect_receipt_files_limited(req: ReimbursementRequest) -> List:
+    """
+    Collect receipt files but stop when the cumulative size approaches the cap.
+    """
+    selected = []
+    total = 0
+    for f in _collect_receipt_files(req):
+        try:
+            size = getattr(f, "size", None)
+            if size is None and hasattr(f, "path"):
+                # As a fallback, attempt os.path.getsize without importing os globally
+                import os
+                size = os.path.getsize(f.path)
+            size = int(size or 0)
+        except Exception:
+            size = 0
+
+        # If single file is absurdly big, skip it but continue others
+        if _MAX_ATTACH_TOTAL_BYTES and size > _MAX_ATTACH_TOTAL_BYTES:
+            logger.warning("Skipping oversized attachment %r (size=%s)", getattr(f, "name", f), size)
+            continue
+
+        if _MAX_ATTACH_TOTAL_BYTES and (total + size) > _MAX_ATTACH_TOTAL_BYTES:
+            logger.info("Attachment cap reached for req #%s (cap=%s bytes)", req.id, _MAX_ATTACH_TOTAL_BYTES)
+            break
+
+        selected.append(f)
+        total += size
+    return selected
 
 def _amreen_from_email() -> str:
     """
@@ -142,6 +218,7 @@ def _send(
     txt: str,
     attachments: Optional[Iterable] = None,
     bcc: Optional[Iterable[str]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> bool:
     """
     Send an email and log success/failure with full context.
@@ -191,6 +268,7 @@ def _send(
                 bcc=bcc_list or None,
                 reply_to=reply_to_list or None,
                 connection=conn,
+                headers=extra_headers or None,
             )
             msg.attach_alternative(html, "text/html")
 
@@ -223,6 +301,54 @@ def _send(
             to_list, cc_list, bcc_list, subject, exc
         )
         return False
+
+def _send_and_log(
+    req: ReimbursementRequest,
+    *,
+    kind: str,
+    subject: str,
+    to_addrs: Union[str, Iterable[str]],
+    cc: Optional[Iterable[str]] = None,
+    reply_to: Optional[Iterable[str]] = None,
+    html: str,
+    txt: str,
+    attachments: Optional[Iterable] = None,
+    bcc: Optional[Iterable[str]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> None:
+    """
+    Wrapper that sends an email and logs an EMAIL_SENT event with extra.kind for de-dupe.
+    """
+    ok = _send(
+        subject=subject,
+        to_addrs=to_addrs,
+        cc=cc,
+        reply_to=reply_to,
+        html=html,
+        txt=txt,
+        attachments=attachments,
+        bcc=bcc,
+        extra_headers=extra_headers,
+    )
+    try:
+        ReimbursementLog.log(
+            req,
+            ReimbursementLog.Action.EMAIL_SENT,
+            actor=None,
+            message="Email sent" if ok else "Email attempt",
+            from_status=req.status,
+            to_status=req.status,
+            extra={
+                "kind": kind,
+                "subject": subject,
+                "to": _as_list(to_addrs),
+                "cc": _as_list(cc),
+                "bcc": _as_list(bcc),
+                "ok": bool(ok),
+            },
+        )
+    except Exception:
+        logger.exception("Failed to write EMAIL_SENT log for req #%s kind=%s", req.id, kind)
 
 def _already_sent_recent(
     req: ReimbursementRequest,
@@ -297,6 +423,7 @@ def _manager_email_candidates(req: ReimbursementRequest) -> List[str]:
     except Exception:
         logger.exception("Failed resolving manager email candidates for reimbursement #%s", req.id)
 
+    # If nothing resolved, you can optionally add a global fallback group here
     return _dedupe_lower(candidates)
 
 def _recipients_for_manager(req: ReimbursementRequest) -> _Recipients:
@@ -325,6 +452,9 @@ def _recipients_for_management(req: ReimbursementRequest) -> _Recipients:
     )
 
 def _recipients_for_finance(req: ReimbursementRequest) -> _Recipients:
+    """
+    Legacy/settings-based finance resolution (still used for some CC cases).
+    """
     admin_cc = _admin_emails()
     finance_list: List[str] = []
     try:
@@ -338,6 +468,15 @@ def _recipients_for_finance(req: ReimbursementRequest) -> _Recipients:
     return _Recipients(
         to=_dedupe_lower(finance_list),
         cc=_dedupe_lower(admin_cc),
+    )
+
+def _recipients_for_finance_enforced() -> _Recipients:
+    """
+    Enforced rule: finance verify email must go ONLY to Akshay & Sharyu.
+    """
+    return _Recipients(
+        to=_dedupe_lower(_FINANCE_TEAM),
+        cc=[],
     )
 
 def _employee_email(req: ReimbursementRequest) -> Optional[str]:
@@ -376,10 +515,10 @@ def _lines_for_email(req: ReimbursementRequest) -> List[Dict[str, str]]:
                 bill_url = ""
             rows.append(
                 {
-                    "category": category,
-                    "date": date_str,
-                    "description": description,
-                    "amount": amount,
+                    "category": escape(category),
+                    "date": escape(date_str),
+                    "description": escape(description),
+                    "amount": escape(amount),
                     "bill_url": bill_url,
                 }
             )
@@ -466,6 +605,7 @@ def _build_action_token(req: ReimbursementRequest, role: str, decision: str) -> 
         "req_id": req.id,
         "role": role,
         "decision": decision,
+        "ts": timezone.now().timestamp(),
     }
     return signing.dumps(payload, salt=_ACTION_SALT)
 
@@ -523,6 +663,9 @@ def _management_action_buttons(req: ReimbursementRequest) -> str:
 # ---------------------------------------------------------------------------
 
 def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_note: str = "") -> None:
+    """
+    STEP 1 — Send ONLY to Finance team (Akshay & Sharyu). No CC.
+    """
     if not _email_enabled():
         logger.info("Emails disabled; skipping finance-verify email for #%s.", req.id)
         return
@@ -532,12 +675,12 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
         logger.info("Suppressing duplicate '%s' email for req #%s.", kind, req.id)
         return
 
-    fin_rec = _recipients_for_finance(req)
+    fin_rec = _recipients_for_finance_enforced()
     if not fin_rec.to:
         logger.warning("Finance verify email suppressed: no finance address for req #%s.", req.id)
         return
 
-    emp_name = _employee_display_name(req.created_by)
+    emp_name = escape(_employee_display_name(req.created_by))
     amt_str = _format_amount(req.total_amount)
     subject = f"Verify Reimbursement — {emp_name} — ₹{amt_str}"
 
@@ -545,6 +688,7 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
     submitted_at = req.submitted_at or req.created_at
     lines_html = _build_lines_table_html(req)
     lines_txt = _build_lines_table_text(req)
+    emp_note_html = escape(employee_note).replace("\n", "<br>") if employee_note else ""
 
     html = f"""
 <html>
@@ -558,7 +702,7 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
       <table style="font-size:14px;margin:8px 0 16px 0;">
         <tr><td style="padding-right:8px;"><strong>Request ID -</strong></td><td>#{req.id}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Employee Name -</strong></td><td>{emp_name}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Date of Submission -</strong></td><td>{submitted_at}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Date of Submission -</strong></td><td>{_format_dt(submitted_at)}</td></tr>
       </table>
     """
 
@@ -566,7 +710,7 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
         html += f"""
       <p style="font-size:14px;margin:0 0 12px 0;">
         <strong>Employee Note -</strong><br>
-        {employee_note.replace("\n","<br>")}
+        {emp_note_html}
       </p>
     """
 
@@ -589,10 +733,10 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
 
     txt = "\n".join(
         [
-            f"Verify Reimbursement — {emp_name} — ₹{amt_str}",
+            f"Verify Reimbursement — {_employee_display_name(req.created_by)} — ₹{amt_str}",
             "",
             f"Request ID - #{req.id}",
-            f"Employee Name - {emp_name}",
+            f"Employee Name - {_employee_display_name(req.created_by)}",
             f"Date of Submission - {submitted_at}",
             "",
             ("Employee Note:\n" + employee_note + "\n") if employee_note else "",
@@ -606,19 +750,27 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
 
     # Replies go to employee if available; else to Amreen
     reply_to = [_employee_email(req)] if _employee_email(req) else _amreen_reply_to()
-    attachments = _collect_receipt_files(req)
+    attachments = _collect_receipt_files_limited(req)
 
-    _send(
+    _send_and_log(
+        req,
+        kind=kind,
         subject=subject,
         to_addrs=fin_rec.to,
-        cc=fin_rec.cc,
+        cc=[],  # ENFORCED: no CC
         reply_to=reply_to,
         html=html,
         txt=txt,
         attachments=attachments,
+        extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "finance_verify"},
     )
 
 def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
+    """
+    STEP 2 — Finance verified → email Approver(s).
+    CC MUST include ONLY the verifier (Akshay or Sharyu), not both.
+    Include verification timestamp, verified-by, and approver names.
+    """
     if not _email_enabled():
         logger.info("Emails disabled; skipping finance-verified email for #%s.", req.id)
         return
@@ -633,17 +785,24 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
         logger.warning("Finance verified email suppressed: no manager/L1 email for req #%s.", req.id)
         return
 
-    emp_name = _employee_display_name(req.created_by)
+    emp_name = escape(_employee_display_name(req.created_by))
     amt_str = _format_amount(req.total_amount)
-    subject = f"Reimbursement Request For – {emp_name} – ₹{amt_str}"
+    subject = f"Reimbursement #{req.id} Verified – Pending Manager Approval"
 
     detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
     submitted_at = req.submitted_at or req.created_at
+    verified_at = req.verified_at or timezone.now()
+    verifier_name = _employee_display_name(req.verified_by) if req.verified_by else "Finance"
+    approver_list_str = ", ".join(mgr_rec.to)
+
     lines_html = _build_lines_table_html(req)
     lines_txt = _build_lines_table_text(req)
     buttons_html = _manager_action_buttons(req)
-    cc_str = ", ".join(mgr_rec.cc) if mgr_rec.cc else ""
-    to_str = ", ".join(mgr_rec.to)
+
+    # Build CC: ONLY the verifier if we can resolve their email
+    verifier_email = ((req.verified_by.email or "").strip().lower()
+                      if (req.verified_by and getattr(req.verified_by, "email", None)) else "")
+    cc_list = _dedupe_lower([verifier_email] if verifier_email else [])
 
     html = f"""
 <html>
@@ -659,7 +818,10 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
       <table style="font-size:14px;margin:8px 0 16px 0;">
         <tr><td style="padding-right:8px;"><strong>Request ID -</strong></td><td>#{req.id}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Employee Name -</strong></td><td>{emp_name}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Date of Submission -</strong></td><td>{submitted_at}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Date of Submission -</strong></td><td>{_format_dt(submitted_at)}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Verified By -</strong></td><td>{escape(verifier_name)}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Verification Timestamp -</strong></td><td>{_format_dt(verified_at)}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Approver(s) -</strong></td><td>{escape(approver_list_str)}</td></tr>
       </table>
 
       <h3 style="font-size:15px;margin:16px 0 6px 0;">Expense Details</h3>
@@ -674,8 +836,8 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
       {buttons_html}
 
       <p style="font-size:12px;color:#6b7280;margin-top:16px;">
-        This email was sent to: {to_str}
-        {(" | CC: " + cc_str) if cc_str else ""}
+        This email was sent to: {escape(approver_list_str)}
+        {(" | CC: " + ", ".join(cc_list)) if cc_list else ""}
       </p>
 
       <p style="font-size:13px;margin-top:16px;color:#4b5563;">
@@ -688,13 +850,16 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
 
     txt = "\n".join(
         [
-            f"Reimbursement Request For – {emp_name} – ₹{amt_str}",
+            f"Reimbursement Request For – {_employee_display_name(req.created_by)} – ₹{amt_str}",
             "",
             "Finance has verified this request and forwarded it for approval.",
             "",
             f"Request ID - #{req.id}",
-            f"Employee Name - {emp_name}",
+            f"Employee Name - {_employee_display_name(req.created_by)}",
             f"Date of Submission - {submitted_at}",
+            f"Verified By - {verifier_name}",
+            f"Verification Timestamp - {verified_at}",
+            f"Approver(s) - {approver_list_str}",
             "",
             "Expense Details:",
             lines_txt,
@@ -705,21 +870,22 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
             "Quick actions (secure, no login):",
             f"Approve: {_build_action_url(req, 'manager', 'approved')}",
             f"Reject : {_build_action_url(req, 'manager', 'rejected')}",
-            "",
-            "Uploaded bills are attached.",
         ]
     )
 
-    attachments = _collect_receipt_files(req)
+    attachments = _collect_receipt_files_limited(req)
 
-    _send(
+    _send_and_log(
+        req,
+        kind=kind,
         subject=subject,
         to_addrs=mgr_rec.to,
-        cc=mgr_rec.cc,
-        reply_to=[],  # defaults to Amreen via _send
+        cc=cc_list,          # ENFORCED: only the verifier
+        reply_to=[],         # defaults to Amreen via _send
         html=html,
         txt=txt,
         attachments=attachments,
+        extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "finance_verified"},
     )
 
 def send_reimbursement_finance_rejected(req: ReimbursementRequest) -> None:
@@ -737,12 +903,12 @@ def send_reimbursement_finance_rejected(req: ReimbursementRequest) -> None:
         logger.info("Finance rejected email suppressed: employee missing email (req #%s).", req.id)
         return
 
-    emp_name = _employee_display_name(req.created_by)
+    emp_name = escape(_employee_display_name(req.created_by))
     amt_str = _format_amount(req.total_amount)
     subject = f"Reimbursement Rejected by Finance — {emp_name} — ₹{amt_str}"
 
     detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
-    note_html = (req.finance_note or "").replace("\n", "<br>") if req.finance_note else "-"
+    note_html = escape((req.finance_note or "")).replace("\n", "<br>") if req.finance_note else "-"
 
     html = f"""
 <html>
@@ -787,13 +953,16 @@ def send_reimbursement_finance_rejected(req: ReimbursementRequest) -> None:
         ]
     )
 
-    _send(
+    _send_and_log(
+        req,
+        kind=kind,
         subject=subject,
         to_addrs=[emp_email],
         cc=_admin_emails(),
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
+        extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "finance_rejected"},
     )
 
 # ---------------------------------------------------------------------------
@@ -809,7 +978,7 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
         logger.info("Suppressing duplicate 'submitted' email for reimbursement #%s.", req.id)
         return
 
-    emp_name = _employee_display_name(req.created_by)
+    emp_name = escape(_employee_display_name(req.created_by))
     amt_str = _format_amount(req.total_amount)
     subject = f"Reimbursement Request For – {emp_name} – ₹{amt_str}"
 
@@ -828,6 +997,7 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
     to_str = ", ".join(mgr_recip.to)
     lines_html = _build_lines_table_html(req)
     lines_txt = _build_lines_table_text(req)
+    note_html = escape(employee_note).replace("\n", "<br>") if employee_note else ""
 
     html = f"""
 <html>
@@ -843,12 +1013,11 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
       <table style="font-size:14px;margin:8px 0 16px 0;">
         <tr><td style="padding-right:8px;"><strong>Request ID -</strong></td><td>#{req.id}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Employee Name -</strong></td><td>{emp_name}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Date of Submission -</strong></td><td>{submitted_at}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Date of Submission -</strong></td><td>{_format_dt(submitted_at)}</td></tr>
       </table>
     """
 
     if employee_note:
-        note_html = employee_note.replace("\n", "<br>")
         html += f"""
       <p style="font-size:14px;margin:0 0 12px 0;">
         <strong>Employee Note -</strong><br>
@@ -872,8 +1041,8 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
       {buttons_html}
 
       <p style="font-size:12px;color:#6b7280;margin-top:16px;">
-        This email was sent to: {to_str}
-        {(" | CC: " + cc_str) if cc_str else ""}
+        This email was sent to: {escape(to_str)}
+        {(" | CC: " + escape(cc_str)) if cc_str else ""}
       </p>
 
       <p style="font-size:13px;margin-top:16px;color:#4b5563;">
@@ -885,12 +1054,12 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
     """
 
     txt_lines = [
-        f"Reimbursement Request For – {emp_name} – ₹{amt_str}",
+        f"Reimbursement Request For – {_employee_display_name(req.created_by)} – ₹{amt_str}",
         "",
-        f"New Reimbursement Request from {emp_name}",
+        f"New Reimbursement Request from {_employee_display_name(req.created_by)}",
         "",
         f"Request ID - #{req.id}",
-        f"Employee Name - {emp_name}",
+        f"Employee Name - {_employee_display_name(req.created_by)}",
         f"Date of Submission - {submitted_at}",
         "",
     ]
@@ -921,9 +1090,11 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
     txt = "\n".join(txt_lines)
 
     reply_to = [_employee_email(req)] if _employee_email(req) else _amreen_reply_to()
-    attachments = _collect_receipt_files(req)
+    attachments = _collect_receipt_files_limited(req)
 
-    _send(
+    _send_and_log(
+        req,
+        kind="submitted",
         subject=subject,
         to_addrs=mgr_recip.to,
         cc=mgr_recip.cc,
@@ -931,6 +1102,7 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
         html=html,
         txt=txt,
         attachments=attachments,
+        extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "submitted"},
     )
 
 # ---------------------------------------------------------------------------
@@ -951,7 +1123,7 @@ def send_reimbursement_admin_summary(req: ReimbursementRequest) -> None:
         logger.info("Suppressing duplicate admin_summary email for reimbursement #%s.", req.id)
         return
 
-    emp_name = _employee_display_name(req.created_by)
+    emp_name = escape(_employee_display_name(req.created_by))
     amt_str = _format_amount(req.total_amount)
     subject = f"Reimbursement Submitted (Admin Summary) — {emp_name} — ₹{amt_str}"
 
@@ -971,8 +1143,8 @@ def send_reimbursement_admin_summary(req: ReimbursementRequest) -> None:
         <tr><td style="padding-right:8px;"><strong>Employee:</strong></td><td>{emp_name}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Request ID:</strong></td><td>#{req.id}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Total Amount:</strong></td><td>₹{amt_str}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Status:</strong></td><td>{req.get_status_display()}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Submitted On:</strong></td><td>{submitted_at}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Status:</strong></td><td>{escape(req.get_status_display())}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Submitted On:</strong></td><td>{_format_dt(submitted_at)}</td></tr>
       </table>
 
       <p style="font-size:14px;margin:12px 0;">
@@ -981,7 +1153,7 @@ def send_reimbursement_admin_summary(req: ReimbursementRequest) -> None:
       </p>
 
       <p style="font-size:12px;color:#6b7280;margin-top:16px;">
-        This summary was sent to: {", ".join(admin_list)}
+        This summary was sent to: {", ".join([escape(x) for x in admin_list])}
       </p>
 
       <p style="font-size:13px;margin-top:16px;color:#4b5563;">
@@ -996,7 +1168,7 @@ def send_reimbursement_admin_summary(req: ReimbursementRequest) -> None:
         [
             "Reimbursement Submitted (Admin Summary)",
             "",
-            f"Employee   : {emp_name}",
+            f"Employee   : {_employee_display_name(req.created_by)}",
             f"Request ID : #{req.id}",
             f"Total Amt  : ₹{amt_str}",
             f"Status     : {req.get_status_display()}",
@@ -1009,55 +1181,51 @@ def send_reimbursement_admin_summary(req: ReimbursementRequest) -> None:
         ]
     )
 
-    _send(
+    _send_and_log(
+        req,
+        kind="admin_summary",
         subject=subject,
         to_addrs=admin_list,
         cc=[],
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
+        extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "admin_summary"},
     )
 
-def _send_level2_notification(req: ReimbursementRequest) -> None:
+def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
+    """
+    STEP 3 — Final email after approval.
+    TO:  Jyothi & Chetan
+    CC:  Amreen, Vilas, Akshay, Sharyu  (Amreen also enforced via reply-to helper)
+    Body must include: Bill Amount, Employee Name, Verified By, Approved By, Approval Timestamp.
+    """
     if not _email_enabled():
-        logger.info("Reimbursement emails disabled; skipping level2 notification for #%s.", req.id)
+        logger.info("Emails disabled; skipping final-notification email for #%s.", req.id)
         return
 
-    kind = "level2_notify"
+    kind = "final_notification"
     if _already_sent_recent(req, kind_hint=kind):
-        logger.info("Suppressing duplicate Level-2 notification for reimbursement #%s.", req.id)
+        logger.info("Suppressing duplicate final notification for reimbursement #%s.", req.id)
         return
 
-    settings_obj = _default_settings()
-    to_addr = settings_obj.approver_level2()
-    if not to_addr:
-        logger.info(
-            "Level-2 notification suppressed: no global Level-2 email configured for req #%s.",
-            req.id,
-        )
+    to_list = _dedupe_lower(_FINAL_TO)
+    if not to_list:
+        logger.warning("Final notification suppressed: no TO list configured for req #%s.", req.id)
         return
+    cc_list = _ensure_cc_amreen(_FINAL_CC)
 
-    cc_list = settings_obj.approver_cc_list()
-    emp_email = _employee_email(req)
-    if emp_email:
-        cc_list.append(emp_email)
-    cc_list = _dedupe_lower(cc_list)
-    bcc_list = settings_obj.approver_bcc_list()
-
-    # Ensure Amreen is CC'd on this final approval handoff
-    cc_list = _ensure_cc_amreen(cc_list)
-
-    emp_name = _employee_display_name(req.created_by)
+    emp_name = escape(_employee_display_name(req.created_by))
     amt_str = _format_amount(req.total_amount)
-    manager_name = _employee_display_name(req.manager) if req.manager else "Manager"
-    subject = f"Approved Reimbursement Request For – {emp_name} – ₹{amt_str}"
+    approved_by = _employee_display_name(req.manager) if req.manager else "Approver"
+    approved_at = req.manager_decided_at or timezone.now()
+    verified_by = _employee_display_name(req.verified_by) if req.verified_by else "Finance"
+
+    subject = f"Approved Reimbursement — {emp_name} — ₹{amt_str}"
 
     detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
-    submitted_at = req.submitted_at or req.created_at
-    approved_at = req.manager_decided_at or timezone.now()
     lines_html = _build_lines_table_html(req)
     lines_txt = _build_lines_table_text(req)
-    manager_comment_html = (req.manager_comment or "").replace("\n", "<br>") if req.manager_comment else "-"
 
     html = f"""
 <html>
@@ -1065,20 +1233,15 @@ def _send_level2_notification(req: ReimbursementRequest) -> None:
     <div style="max-width:700px;margin:0 auto;background:#ffffff;border-radius:10px;
                 padding:20px;border:1px solid #e5e7eb;">
       <h2 style="margin-top:0;margin-bottom:12px;color:#111827;">
-        Approved Reimbursement Request For – {emp_name} – ₹{amt_str}
+        Approved Reimbursement — {emp_name} — ₹{amt_str}
       </h2>
 
-      <p style="margin:0 0 8px 0;">
-        Reimbursement Approved By {manager_name}<br>
-        For {emp_name}
-      </p>
-
       <table style="font-size:14px;margin:8px 0 16px 0;">
+        <tr><td style="padding-right:8px;"><strong>Request ID -</strong></td><td>#{req.id}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Employee Name -</strong></td><td>{emp_name}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Date of Submission -</strong></td><td>{submitted_at}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Manager Comment -</strong></td><td>{manager_comment_html}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Approver Name -</strong></td><td>{manager_name}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Date &amp; Time Approved -</strong></td><td>{approved_at}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Verified By -</strong></td><td>{escape(verified_by)}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Approved By -</strong></td><td>{escape(approved_by)}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Approval Timestamp -</strong></td><td>{_format_dt(approved_at)}</td></tr>
       </table>
 
       <h3 style="font-size:15px;margin:16px 0 6px 0;">Expense Details</h3>
@@ -1090,7 +1253,7 @@ def _send_level2_notification(req: ReimbursementRequest) -> None:
       </p>
 
       <p style="font-size:13px;margin-top:16px;color:#4b5563;">
-        Please process the above expenses for settlement.
+        This is an automated confirmation after approval.
       </p>
     </div>
   </body>
@@ -1099,38 +1262,35 @@ def _send_level2_notification(req: ReimbursementRequest) -> None:
 
     txt = "\n".join(
         [
-            f"Approved Reimbursement Request For – {emp_name} – ₹{amt_str}",
+            f"Approved Reimbursement — {_employee_display_name(req.created_by)} — ₹{amt_str}",
             "",
-            f"Reimbursement Approved By {manager_name}",
-            f"For {emp_name}",
-            "",
-            f"Employee Name - {emp_name}",
-            f"Date of Submission - {submitted_at}",
-            f"Manager Comment - {(req.manager_comment or '').strip() or '-'}",
-            f"Approver Name - {manager_name}",
-            f"Date & Time Approved - {approved_at}",
+            f"Request ID        : #{req.id}",
+            f"Employee Name     : {_employee_display_name(req.created_by)}",
+            f"Verified By       : {verified_by}",
+            f"Approved By       : {approved_by}",
+            f"Approval Timestamp: {approved_at}",
             "",
             "Expense Details:",
             lines_txt,
             "",
             "View details:",
             detail_url,
-            "",
-            "Please process the above expenses for settlement.",
         ]
     )
 
-    attachments = _collect_receipt_files(req)
+    attachments = _collect_receipt_files_limited(req)
 
-    _send(
+    _send_and_log(
+        req,
+        kind=kind,
         subject=subject,
-        to_addrs=[to_addr],
-        cc=cc_list,
+        to_addrs=to_list,
+        cc=cc_list,  # must include Akshay & Sharyu regardless of who verified; also Amreen & Vilas
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
-        bcc=_dedupe_lower(bcc_list),
         attachments=attachments,
+        extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "final_notification"},
     )
 
 def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: str) -> None:
@@ -1148,7 +1308,7 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
         logger.info("Manager action email suppressed: employee has no email (req #%s).", req.id)
         return
 
-    emp_name = _employee_display_name(req.created_by)
+    emp_name = escape(_employee_display_name(req.created_by))
     amt_str = _format_amount(req.total_amount)
     status_label = req.get_status_display()
 
@@ -1163,7 +1323,7 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
         decision_label = "Clarification Required"
 
     detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
-    manager_comment_html = (req.manager_comment or "").replace("\n", "<br>") if req.manager_comment else ""
+    manager_comment_html = escape(req.manager_comment or "").replace("\n", "<br>") if req.manager_comment else ""
 
     html = f"""
 <html>
@@ -1175,9 +1335,9 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
       </h2>
 
       <table style="font-size:14px;margin:8px 0 16px 0;">
-        <tr><td style="padding-right:8px;"><strong>Decision:</strong></td><td>{decision_label}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Decision:</strong></td><td>{escape(decision_label)}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Total Amount:</strong></td><td>₹{amt_str}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Current Status:</strong></td><td>{status_label}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Current Status:</strong></td><td>{escape(status_label)}</td></tr>
       </table>
     """
 
@@ -1212,23 +1372,27 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
         "",
     ]
     if req.manager_comment:
-        txt_lines.extend(["Manager Comment:", req.manager_comment, ""])
+        txt_lines.extend(["Manager Comment:", (req.manager_comment or ""), ""])
     txt_lines.extend(["View details:", detail_url])
     txt = "\n".join(txt_lines)
 
     cc_list: List[str] = [] if decision == "rejected" else _admin_emails()
 
-    _send(
+    _send_and_log(
+        req,
+        kind=kind,
         subject=subject,
         to_addrs=[emp_email],
         cc=cc_list,
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
+        extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "manager_action"},
     )
 
+    # On approval, trigger final notification (step 3)
     if decision == "approved":
-        _send_level2_notification(req)
+        send_reimbursement_final_notification(req)
 
 def send_reimbursement_management_action(req: ReimbursementRequest, *, decision: str) -> None:
     if not _email_enabled():
@@ -1249,7 +1413,7 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
         logger.info("Management action email suppressed: employee has no email (req #%s).", req.id)
         return
 
-    emp_name = _employee_display_name(req.created_by)
+    emp_name = escape(_employee_display_name(req.created_by))
     amt_str = _format_amount(req.total_amount)
     status_label = req.get_status_display()
 
@@ -1264,7 +1428,7 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
         decision_label = "Clarification Required"
 
     detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
-    management_comment_html = (req.management_comment or "").replace("\n", "<br>") if req.management_comment else ""
+    management_comment_html = escape(req.management_comment or "").replace("\n", "<br>") if req.management_comment else ""
 
     html = f"""
 <html>
@@ -1276,9 +1440,9 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
       </h2>
 
       <table style="font-size:14px;margin:8px 0 16px 0;">
-        <tr><td style="padding-right:8px;"><strong>Decision:</strong></td><td>{decision_label}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Decision:</strong></td><td>{escape(decision_label)}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Total Amount:</strong></td><td>₹{amt_str}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Current Status:</strong></td><td>{status_label}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Current Status:</strong></td><td>{escape(status_label)}</td></tr>
       </table>
     """
 
@@ -1313,7 +1477,7 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
         "",
     ]
     if req.management_comment:
-        txt_lines.extend(["Management Comment:", req.management_comment, ""])
+        txt_lines.extend(["Management Comment:", (req.management_comment or ""), ""])
     txt_lines.extend(["View details:", detail_url])
     txt = "\n".join(txt_lines)
 
@@ -1324,13 +1488,16 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
     cc_raw.extend(_admin_emails())
     cc = _dedupe_lower(cc_raw)
 
-    _send(
+    _send_and_log(
+        req,
+        kind=kind,
         subject=subject,
         to_addrs=[emp_email],
         cc=cc,
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
+        extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "management_action"},
     )
 
 def send_reimbursement_paid(req: ReimbursementRequest) -> None:
@@ -1347,7 +1514,7 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
         logger.info("Paid email suppressed: employee has no email (req #%s).", req.id)
         return
 
-    emp_name = _employee_display_name(req.created_by)
+    emp_name = escape(_employee_display_name(req.created_by))
     amt_str = _format_amount(req.total_amount)
     subject = f"Reimbursement Paid — {emp_name} — ₹{amt_str}"
 
@@ -1365,13 +1532,13 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
 
       <table style="font-size:14px;margin:8px 0 16px 0;">
         <tr><td style="padding-right:8px;"><strong>Total Amount:</strong></td><td>₹{amt_str}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Status:</strong></td><td>{req.get_status_display()}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Paid On:</strong></td><td>{paid_at}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Status:</strong></td><td>{escape(req.get_status_display())}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Paid On:</strong></td><td>{_format_dt(paid_at)}</td></tr>
     """
     if req.finance_payment_reference:
         html += f"""
         <tr><td style="padding-right:8px;"><strong>Payment Ref:</strong></td>
-            <td>{req.finance_payment_reference}</td></tr>
+            <td>{escape(req.finance_payment_reference)}</td></tr>
     """
     html += f"""
       </table>
@@ -1407,13 +1574,16 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
     # Ensure Amreen is CC'd on the final paid email
     cc = _ensure_cc_amreen(cc_list)
 
-    _send(
+    _send_and_log(
+        req,
+        kind="paid",
         subject=subject,
         to_addrs=[emp_email],
         cc=cc,
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
+        extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "paid"},
     )
 
 def send_reimbursement_clarification(req: ReimbursementRequest, *, actor=None) -> None:
@@ -1430,7 +1600,7 @@ def send_reimbursement_clarification(req: ReimbursementRequest, *, actor=None) -
         logger.info("Clarification email suppressed: employee has no email (req #%s).", req.id)
         return
 
-    emp_name = _employee_display_name(req.created_by)
+    emp_name = escape(_employee_display_name(req.created_by))
     amt_str = _format_amount(req.total_amount)
     subject = f"Clarification Needed — Reimbursement #{req.id} — ₹{amt_str}"
 
@@ -1453,8 +1623,7 @@ def send_reimbursement_clarification(req: ReimbursementRequest, *, actor=None) -
         or (req.management_comment or "").strip()
         or (req.manager_comment or "").strip()
     )
-
-    clarification_msg_html = clarification_msg.replace("\n", "<br>") if clarification_msg else ""
+    clarification_msg_html = escape(clarification_msg).replace("\n", "<br>") if clarification_msg else ""
 
     html = f"""
 <html>
@@ -1466,9 +1635,9 @@ def send_reimbursement_clarification(req: ReimbursementRequest, *, actor=None) -
       </h2>
 
       <table style="font-size:14px;margin:8px 0 16px 0;">
-        <tr><td style="padding-right:8px;"><strong>Requested By:</strong></td><td>{who}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Requested By:</strong></td><td>{escape(who)}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Total Amount:</strong></td><td>₹{amt_str}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Current Status:</strong></td><td>{req.get_status_display()}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Current Status:</strong></td><td>{escape(req.get_status_display())}</td></tr>
       </table>
     """
 
@@ -1513,11 +1682,14 @@ def send_reimbursement_clarification(req: ReimbursementRequest, *, actor=None) -
     txt_lines.extend(["Review / update:", detail_url])
     txt = "\n".join(txt_lines)
 
-    _send(
+    _send_and_log(
+        req,
+        kind="clarification",
         subject=subject,
         to_addrs=[emp_email],
         cc=_admin_emails(),
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
+        extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "clarification"},
     )

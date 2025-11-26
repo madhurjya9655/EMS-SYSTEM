@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Legacy — Manager Queue{% endblock %}
+
+{% block content %}
+<h2 class="mb-3">Legacy — Manager Queue</h2>
+
+<div class="card">
+  <div class="card-body table-responsive">
+    <table class="table table-sm align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>ID</th>
+          <th>Employee</th>
+          <th>Amount</th>
+          <th>Category</th>
+          <th>Status</th>
+          <th>Submitted</th>
+          <th style="width:120px;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in requests %}
+        <tr>
+          <td>#{{ r.id }}</td>
+          <td>{{ r.employee.get_full_name|default:r.employee.username }}</td>
+          <td>₹{{ r.amount|floatformat:2 }}</td>
+          <td>{{ r.get_category_display }}</td>
+          <td>{{ r.get_status_display }}</td>
+          <td>{{ r.submitted_at|date:"Y-m-d H:i" }}</td>
+          <td>
+            <a href="{% url 'reimbursement:legacy_manager_review' r.id %}" class="btn btn-sm btn-outline-primary">Review</a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="7" class="text-center text-muted py-3">No legacy requests pending manager.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

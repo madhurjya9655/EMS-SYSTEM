@@ -108,7 +108,8 @@
     {% csrf_token %}
     <input type="hidden" name="return" value="{{ back_url }}">
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      <button type="submit" name="decision" value="verified"
+      <!-- FIXED: value must be 'verify' -->
+      <button type="submit" name="decision" value="verify"
               style="padding:10px 14px;background:#16a34a;border:0;border-radius:6px;color:#fff;cursor:pointer;">
         Verify (Send to Manager)
       </button>

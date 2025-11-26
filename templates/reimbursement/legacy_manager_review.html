@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Legacy — Manager Review #{{ object.id }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Legacy — Manager Review #{{ object.id }}</h2>
+  <a href="{% url 'reimbursement:legacy_manager_pending' %}" class="btn btn-outline-secondary btn-sm">Back</a>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <table class="table table-sm">
+      <tr><th style="width:30%;">Employee</th><td>{{ object.employee.get_full_name|default:object.employee.username }}</td></tr>
+      <tr><th>Amount</th><td>₹{{ object.amount|floatformat:2 }}</td></tr>
+      <tr><th>Category</th><td>{{ object.get_category_display }}</td></tr>
+      <tr><th>Submitted</th><td>{{ object.submitted_at|date:"Y-m-d H:i" }}</td></tr>
+      <tr>
+        <th>Bill</th>
+        <td>
+          {% if object.bill %}
+            <a href="{{ object.bill.url }}" target="_blank" class="btn btn-sm btn-outline-secondary">View</a>
+          {% else %}
+            <span class="text-muted small">No file</span>
+          {% endif %}
+        </td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">Decision</div>
+  <div class="card-body">
+    <form method="post">
+      {% csrf_token %}
+      {% for field in form %}
+        <div class="mb-3">
+          {{ field.label_tag }}
+          {{ field }}
+          {% if field.errors %}<div class="text-danger small">{{ field.errors }}</div>{% endif %}
+        </div>
+      {% endfor %}
+      <button class="btn btn-primary">Save</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

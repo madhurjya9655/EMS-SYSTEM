@@ -64,8 +64,14 @@ urlpatterns = [
     # -----------------
     # HTTP cron hooks
     # -----------------
+    # Flexible: supports token in path, header, or query/body
     path(
         "internal/cron/weekly-congrats/<str:token>/",
+        weekly_congrats_hook,
+        name="cron_weekly_congrats_with_token",
+    ),
+    path(  # also allow calling without token in path
+        "internal/cron/weekly-congrats/",
         weekly_congrats_hook,
         name="cron_weekly_congrats",
     ),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Iterable, List, Optional
 
 from django.conf import settings
@@ -17,12 +18,12 @@ logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
 
 
-def _now_date_ist() -> timezone.datetime.date:
+def _now_date_ist() -> date:
     """Current date in IST (no time)."""
     return timezone.localtime(timezone.now(), IST).date()
 
 
-def _handover_is_effective(h: LeaveHandover, *, today_ist=None) -> bool:
+def _handover_is_effective(h: LeaveHandover, *, today_ist: Optional[date] = None) -> bool:
     """Check if a handover row is active for *today* and leave is still valid."""
     if not h.is_active:
         return False
@@ -47,11 +48,15 @@ def _set_task_assignee(task_obj, new_user) -> bool:
         current = getattr(task_obj, "assign_to", None)
         if current == new_user:
             return False
+
         setattr(task_obj, "assign_to", new_user)
-        # Best effort set an audit-ish field if present
+
+        update_fields = ["assign_to"]
         if hasattr(task_obj, "updated_at"):
             setattr(task_obj, "updated_at", timezone.now())
-        task_obj.save(update_fields=["assign_to"] if "updated_at" not in task_obj.__dict__ else ["assign_to", "updated_at"])
+            update_fields.append("updated_at")
+
+        task_obj.save(update_fields=update_fields)
         return True
     except Exception:
         logger.exception("Failed to update task assignee for %s", task_obj)
@@ -148,7 +153,6 @@ def send_handover_email(leave: LeaveRequest, assignee, handovers: List[LeaveHand
         text_body = strip_tags(html_body)
         subject = f"[Handover] Tasks assigned to you for {ctx['employee_name']}’s leave"
 
-        # Respect EMAIL settings if configured; otherwise fallback to default connection.
         conn = get_connection(
             username=getattr(settings, "EMAIL_HOST_USER", None),
             password=getattr(settings, "EMAIL_HOST_PASSWORD", None),

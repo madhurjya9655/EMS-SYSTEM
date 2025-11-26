@@ -192,6 +192,13 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
         start_at = leave.start_at
         end_at = leave.end_at
 
+        # Use DATE range for planned_date to be safe across Date/DateTime fields
+        start_date = timezone.localtime(start_at, IST).date() if start_at else None
+        end_date = timezone.localtime(end_at, IST).date() if end_at else None
+
+        if not (start_date and end_date):
+            return counts
+
         from apps.tasks.models import Checklist, Delegation, HelpTicket, FMS
 
         exclude_ids = {"checklist": [], "delegation": [], "help_ticket": []}
@@ -207,7 +214,8 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
             except Exception:
                 pass
 
-        dt_window = Q(planned_date__gte=start_at) & Q(planned_date__lt=end_at)
+        # DATE-based window (inclusive)
+        dt_window = Q(planned_date__gte=start_date) & Q(planned_date__lte=end_date)
 
         q = Checklist.objects.filter(assign_to=leave.employee, status='Pending').filter(dt_window)
         if exclude_ids["checklist"]:
@@ -219,8 +227,8 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
             q = q.exclude(id__in=exclude_ids["delegation"])
         counts["delegation"] = int(q.update(is_skipped_due_to_leave=True))
 
-        q = HelpTicket.objects.filter(assign_to=leave.employee)\
-                              .exclude(status__in=['Closed', 'COMPLETED', 'Completed', 'Done'])\
+        q = HelpTicket.objects.filter(assign_to=leave.employee) \
+                              .exclude(status__in=['Closed', 'COMPLETED', 'Completed', 'Done']) \
                               .filter(dt_window)
         if exclude_ids["help_ticket"]:
             q = q.exclude(id__in=exclude_ids["help_ticket"])
@@ -382,8 +390,9 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                         handovers_created = []
                         if delegate_to and (cl_ids or dg_ids or ht_ids):
                             handovers = []
-                            ef_start = lr.start_date
-                            ef_end = lr.end_date
+                            # SAFELY derive Date fields for effective window
+                            ef_start = getattr(lr, "start_date", None) or timezone.localtime(lr.start_at, IST).date()
+                            ef_end = getattr(lr, "end_date", None) or timezone.localtime(lr.end_at, IST).date()
                             for tid in cl_ids:
                                 handovers.append(
                                     LeaveHandover(

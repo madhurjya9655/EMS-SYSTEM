@@ -14,28 +14,41 @@ class LeaveConfig(AppConfig):
     name = "apps.leave"
     verbose_name = "Leave & Approvals"
 
-    # Re-entrancy guard: prevents recursive/duplicate signal imports
+    # Re-entrancy guards so we wire things exactly once
     _signals_loaded: bool = False
+    _completion_hooks_loaded: bool = False
 
     def ready(self) -> None:
         """
         Connect signals once and log lightweight sanity info (non-fatal).
 
-        IMPORTANT:
-        - Guarded to avoid recursive imports that can occur when other apps
-          import leave modules during their own AppConfig.ready().
-        - Never import anything from apps.tasks (or other apps) here.
+        Notes:
+        - We only import our own modules here. We never import apps.tasks directly.
+        - Completion hooks in apps.leave.signals_tasks rely on the app registry
+          (apps.get_model) and don't import task models, so they're safe to call.
         """
-        # Ensure signal handlers are registered (once)
+        # 1) Core leave signals
         if not self.__class__._signals_loaded:
             try:
                 import_module("apps.leave.signals")
                 self.__class__._signals_loaded = True
                 logger.debug("apps.leave: signals loaded (once).")
-            except Exception:  # pragma: no cover
+            except Exception:
                 logger.exception("apps.leave: failed to import signals")
 
-        # Base URL (used in emails/links)
+        # 2) Handover completion hooks (notify + stop reminders when a handed-over
+        #    task is completed). Uses apps registry; does NOT import apps.tasks.
+        if not self.__class__._completion_hooks_loaded:
+            try:
+                mod = import_module("apps.leave.signals_tasks")
+                if hasattr(mod, "connect_all_task_completion_signals"):
+                    mod.connect_all_task_completion_signals()
+                    self.__class__._completion_hooks_loaded = True
+                    logger.debug("apps.leave: completion hooks connected.")
+            except Exception:
+                logger.debug("apps.leave: completion hooks not connected (ok during migrations).")
+
+        # 3) Base URL (used in emails/links)
         try:
             site_url = (getattr(settings, "SITE_URL", "") or getattr(settings, "SITE_BASE_URL", "")).strip()
         except Exception:
@@ -43,11 +56,11 @@ class LeaveConfig(AppConfig):
         if not site_url:
             logger.info("apps.leave: SITE_URL not set; approval links will default to http://localhost:8000")
 
-        # Routing file used by recipients_for_leave()
+        # 4) Routing file used by recipients_for_leave()
         routing_file = getattr(settings, "LEAVE_ROUTING_FILE", "apps/users/data/leave_routing.json")
         logger.debug("apps.leave: using routing map at %s", routing_file)
 
-        # Token config (used for one-click approve/reject)
+        # 5) Token config (used for one-click approve/reject)
         token_salt = getattr(settings, "LEAVE_DECISION_TOKEN_SALT", "leave-action-v1")
         token_age = getattr(settings, "LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)
         logger.debug(
@@ -56,7 +69,7 @@ class LeaveConfig(AppConfig):
             token_age,
         )
 
-        # Feature flags
+        # 6) Feature flags
         try:
             features = getattr(settings, "FEATURES", {})
             if not features or not features.get("EMAIL_NOTIFICATIONS", True):
@@ -65,10 +78,9 @@ class LeaveConfig(AppConfig):
             # Settings may be in flux during certain management commands
             pass
 
-        # Light-touch presence check for handover service (optional)
+        # 7) Light-touch presence check for handover service (optional)
         try:
-            # Do not import functions; only module-level availability check.
             import_module("apps.leave.services.task_handover")
             logger.debug("apps.leave: task_handover service loaded.")
-        except Exception:  # pragma: no cover
+        except Exception:
             logger.debug("apps.leave: task_handover service not available yet (ok during migrations).")

@@ -1,7 +1,8 @@
+# apps/tasks/email_utils.py
 from __future__ import annotations
 
 from typing import Iterable, List, Sequence, Optional, Dict, Any
-from datetime import datetime, time as _time
+from datetime import datetime, date as _date, time as _time
 import logging
 
 from django.conf import settings
@@ -161,11 +162,17 @@ def _fmt_dt_date(dt: Any) -> str:
     """
     IST string as 'YYYY-MM-DD' and add ' HH:MM' if time is meaningful
     (not 00:00 and not the default 10:00).
+
+    Robust to receiving either a datetime or a date.
     """
     if not dt:
         return ""
     try:
         tz = IST or timezone.get_current_timezone()
+        # If we were given a plain date (defensive), treat it as 00:00 local.
+        if isinstance(dt, _date) and not isinstance(dt, datetime):
+            dt = datetime(dt.year, dt.month, dt.day, 0, 0)
+        # Ensure awareness in project TZ, then display in IST (or configured TZ).
         aware = dt if timezone.is_aware(dt) else timezone.make_aware(dt, tz)
         ist = timezone.localtime(aware, tz)
         base = ist.strftime("%Y-%m-%d")
