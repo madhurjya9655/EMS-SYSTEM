@@ -328,7 +328,6 @@ class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormV
 
     def form_valid(self, form: ReimbursementCreateForm):
         user = self.request.user
-        settings_obj = ReimbursementSettings.get_solo()
         expense_items: Iterable[ExpenseItem] = form.cleaned_data["expense_items"]
         employee_note: str = form.cleaned_data.get("employee_note") or ""
 
@@ -373,10 +372,8 @@ class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormV
             to_status=req.status,
         )
 
-        # Notify FINANCE (verification stage) + admin summary
+        # Notify FINANCE (verification stage) – NO admin summary anymore per new workflow
         _send_safe("send_reimbursement_finance_verify", req, employee_note=employee_note)
-        if settings_obj.admin_email_list():
-            _send_safe("send_reimbursement_admin_summary", req)
 
         messages.success(
             self.request,
