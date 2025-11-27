@@ -4,18 +4,29 @@ services:
     env: python
 
     buildCommand: |
+      pip install --upgrade pip
       pip install -r requirements.txt
+      python manage.py collectstatic --noinput
 
     # CRITICAL: Use only 1 worker to prevent SQLite locks
-    startCommand: gunicorn employee_management.wsgi:application --workers=1 --timeout=120 --max-requests=1000 --max-requests-jitter=100
+    startCommand: >
+      gunicorn employee_management.wsgi:application
+      --workers=1
+      --timeout=120
+      --max-requests=1000
+      --max-requests-jitter=100
+      --bind 0.0.0.0:$PORT
 
-    # Run after each deploy. One shell line is safest on Render.
-    postdeploy: |
-      python manage.py migrate --noinput && python manage.py collectstatic --noinput
+    # Runs after each deploy finishes successfully
+    postDeployCommand: |
+      python manage.py migrate --noinput
 
     envVars:
       - key: DJANGO_SETTINGS_MODULE
         value: employee_management.settings
+
+      - key: PYTHON_VERSION
+        value: 3.12.6
 
       # IMPORTANT: keep this path aligned with your Disk mount path
       - key: SQLITE_PATH
@@ -28,7 +39,14 @@ services:
       - key: WEB_CONCURRENCY
         value: "1"
 
-      # Put these in Render > Environment as secrets (do NOT commit values)
+      # Recommended explicit hosts/CSRF (optional if you keep wildcards)
+      - key: ALLOWED_HOSTS
+        value: bos-ems.onrender.com,.onrender.com,localhost,127.0.0.1
+
+      - key: CSRF_TRUSTED_ORIGINS
+        value: https://bos-ems.onrender.com,https://*.onrender.com
+
+      # Put these in Render > Environment as secrets (values not in repo)
       - key: EMAIL_HOST_USER
         sync: false
       - key: EMAIL_HOST_PASSWORD
@@ -44,4 +62,4 @@ services:
     disk:
       name: ems-disk
       mountPath: /opt/render/project/src/db
-      sizeGB: 10   # keep this equal/greater than your current disk size
+      sizeGB: 10

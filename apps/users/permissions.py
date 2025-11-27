@@ -241,12 +241,25 @@ def _codes_from_mapping(user) -> Set[str]:
     return set()
 
 
+def _baseline_dynamic_grants(user) -> Set[str]:
+    """
+    Baseline employee-level grants for every authenticated user.
+    Ensures all employees can see and use:
+      - Expenses Inbox / Apply (reimbursement_apply)
+      - My Requests (reimbursement_list)
+    """
+    if not getattr(user, "is_authenticated", False):
+        return set()
+    return {"reimbursement_apply", "reimbursement_list"}
+
+
 def _user_permission_codes(user) -> Set[str]:
     """
     Get all permission codes for a user, including:
     - Profile.permissions
     - Group-based grants
     - ApproverMapping-based grants
+    - Baseline dynamic grants (employee-level)
     - Expanded synonym permissions
 
     Returns a set of lowercased permission codes.
@@ -272,6 +285,9 @@ def _user_permission_codes(user) -> Set[str]:
 
     # Dynamic RP grant via ApproverMapping
     codes |= _codes_from_mapping(user)
+
+    # NEW: Baseline employee-level reimbursement access for all authenticated users
+    codes |= _baseline_dynamic_grants(user)
 
     # Apply synonyms
     expanded = _expand_synonyms(codes)
@@ -426,7 +442,6 @@ def permissions_context(request):
         "can_add_checklist": "add_checklist" in user_perms or getattr(request.user, "is_superuser", False),
         "can_view_delegation": "list_delegation" in user_perms or getattr(request.user, "is_superuser", False),
         "can_add_delegation": "add_delegation" in user_perms or getattr(request.user, "is_superuser", False),
-        "can_manage_cc": "leave_cc_admin" in user_perms or getattr(request.user, "is_superuser", False),
     }
 
     return {
