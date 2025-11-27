@@ -439,7 +439,6 @@
           <i class="fas fa-bars" aria-hidden="true"></i>
         </button>
         <div class="logo-icon">
-          <!-- FIXED: use images/bos_logo.png -->
           <img src="{% static 'images/bos_logo.png' %}" alt="BOS Lakshya logo" loading="lazy" decoding="async">
         </div>
         <span class="logo-text">BOS Lakshya</span>
@@ -627,24 +626,37 @@
           <i class="fas fa-receipt" aria-hidden="true"></i> BOS Reimburse Log <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
         <div class="submenu" id="reimbursementSubmenu" role="group" aria-label="Reimbursement">
+
+          {# NEW: Expense Inbox (Upload Expenses) #}
+          {% if user|has_permission:"reimbursement_apply" %}
+          <a href="{% url 'reimbursement:expense_inbox' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'expense_inbox' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'expense_inbox' %}aria-current="page"{% endif %}>
+            <i class="fas fa-receipt" aria-hidden="true"></i> Upload Expenses
+          </a>
+          {% endif %}
+
           {% if user|has_any_permission:"reimbursement_apply,reimbursement_list" %}
           <a href="{% url 'reimbursement:my_reimbursements' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'my_reimbursements' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'my_reimbursements' %}aria-current="page"{% endif %}>
             <i class="fas fa-file-medical" aria-hidden="true"></i> My Requests
           </a>
           {% endif %}
+
           {% if user|has_permission:"reimbursement_manager_pending" %}
           <a href="{% url 'reimbursement:manager_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'manager_pending' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'manager_pending' %}aria-current="page"{% endif %}>
             <i class="fas fa-check-square" aria-hidden="true"></i> Manager Approvals
           </a>
           {% endif %}
+
           {% if user|has_permission:"reimbursement_finance_pending" %}
           <a href="{% url 'reimbursement:finance_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}aria-current="page"{% endif %}>
             <i class="fas fa-wallet" aria-hidden="true"></i> Finance Approvals
           </a>
           {% endif %}
+
           {% if user|has_permission:"reimbursement_admin" %}
           <a href="{% url 'reimbursement:admin_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'admin_requests' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'admin_requests' %}aria-current="page"{% endif %}>
