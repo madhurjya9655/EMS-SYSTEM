@@ -437,6 +437,15 @@ LEAVE_EMAIL_REPLY_TO_EMPLOYEE = env_bool("LEAVE_EMAIL_REPLY_TO_EMPLOYEE", True)
 LEAVE_DECISION_TOKEN_SALT = os.getenv("LEAVE_DECISION_TOKEN_SALT", "leave-action-v1")
 LEAVE_DECISION_TOKEN_MAX_AGE = env_int("LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)
 
+# --- NEW: CC assigner for Delegation emails (Pankaj rule) --------------------
+# Configure via env:
+#   DELEGATION_CC_ASSIGNER_EMAILS="pankaj@company.com,other@company.com"
+#   DELEGATION_CC_ASSIGNER_USERNAMES="pankaj,otheruser"
+ASSIGNER_CC_FOR_DELEGATION = {
+    "emails": env_list("DELEGATION_CC_ASSIGNER_EMAILS", ""),
+    "usernames": env_list("DELEGATION_CC_ASSIGNER_USERNAMES", ""),
+}
+
 # -----------------------------------------------------------------------------
 # SECURITY (Prod)
 # -----------------------------------------------------------------------------

@@ -75,7 +75,7 @@ def _dedupe_emails(emails: Iterable[str]) -> List[str]:
     return out
 
 
-def _without_emails(emails: Sequence[str], exclude: Sequence[str] | None) -> List[str]:
+def _without_emails(emails: Sequence[str], exclude: Optional[Sequence[str]]) -> List[str]:
     """Case-insensitive subtract of exclude from emails."""
     if not emails:
         return []
@@ -83,7 +83,7 @@ def _without_emails(emails: Sequence[str], exclude: Sequence[str] | None) -> Lis
     return [e for e in emails if e and e.strip().lower() not in excl]
 
 
-def get_admin_emails(exclude: Sequence[str] | None = None) -> List[str]:
+def get_admin_emails(exclude: Optional[Sequence[str]] = None) -> List[str]:
     """
     Superusers + members of Admin/Manager/EA/CEO groups.
     Returns a deduped list of emails, excluding any in `exclude`.
@@ -216,12 +216,15 @@ def _render_or_fallback(template_name: str, context: Dict[str, Any], fallback: s
 
 
 def _send_unified_assignment_email(
-    *, subject: str, to_email: str, context: Dict[str, Any]
+    *, subject: str, to_email: str, context: Dict[str, Any], cc: Optional[Sequence[str]] = None, bcc: Optional[Sequence[str]] = None
 ) -> None:
     """Render standardized TXT + HTML and send safely (assignee-only)."""
     to_email = (to_email or "").strip()
     if not to_email:
         return
+
+    cc_list = _dedupe_emails(cc or [])
+    bcc_list = _dedupe_emails(bcc or [])
 
     # Text fallback (simple/plain)
     text_fallback = (
@@ -280,10 +283,17 @@ def _send_unified_assignment_email(
             body=text_body,
             from_email=_from_email(),
             to=[to_email],
+            cc=cc_list or None,
+            bcc=bcc_list or None,
         )
         msg.attach_alternative(html_body, "text/html")
         msg.send(fail_silently=_fail_silently())
-        logger.info("Sent assignment email to %s (%s)", to_email, subject)
+        logger.info(
+            "Sent assignment email to %s (%s)%s",
+            to_email,
+            subject,
+            f" [cc={', '.join(cc_list)}]" if cc_list else "",
+        )
     except Exception as e:
         logger.error("Failed sending assignment email to %s: %s", to_email, e)
 
@@ -392,6 +402,27 @@ def _build_subject(subject_prefix: str, task_title: str) -> str:
 
 
 # -------------------------------------------------------------------
+# CC rule for Delegation (Pankaj)
+# -------------------------------------------------------------------
+def _should_cc_assigner_for_delegation(assign_by) -> List[str]:
+    """
+    Returns a list containing the assigner's email if settings say we should CC them
+    for delegation emails and if the assigner matches by email/username.
+    """
+    try:
+        cfg = getattr(settings, "ASSIGNER_CC_FOR_DELEGATION", {}) or {}
+        emails = {e.strip().lower() for e in (cfg.get("emails") or []) if e}
+        usernames = {u.strip().lower() for u in (cfg.get("usernames") or []) if u}
+        a_email = (getattr(assign_by, "email", "") or "").strip().lower()
+        a_username = (getattr(assign_by, "username", "") or "").strip().lower()
+        if (a_email and a_email in emails) or (a_username and a_username in usernames):
+            return _dedupe_emails([getattr(assign_by, "email", "") or ""])
+    except Exception as e:
+        logger.error("CC rule evaluation failed: %s", e)
+    return []
+
+
+# -------------------------------------------------------------------
 # Task-specific senders (Assignment / Admin confirmations)
 # -------------------------------------------------------------------
 def send_checklist_assignment_to_user(
@@ -483,10 +514,13 @@ def send_delegation_assignment_to_user(
         "task_id": delegation.id,
     }
 
+    cc_list = _should_cc_assigner_for_delegation(getattr(delegation, "assign_by", None))
+
     _send_unified_assignment_email(
         subject=subject,
         to_email=to_email,
         context=ctx,
+        cc=cc_list,
     )
 
 
@@ -535,7 +569,7 @@ def send_checklist_admin_confirmation(*, task, subject_prefix: str = "Checklist 
     IMPORTANT: Excludes the assigner from recipients to satisfy
     “Assigner should never receive emails”.
     """
-    exclude = []
+    exclude: List[str] = []
     try:
         if getattr(task, "assign_by", None) and getattr(task.assign_by, "email", None):
             exclude = [task.assign_by.email]
@@ -588,7 +622,7 @@ def send_delegation_admin_confirmation(
     *, delegation, subject_prefix: str = "Delegation Assignment"
 ) -> None:
     """Detailed admin confirmation for delegation (assigner excluded)."""
-    exclude = []
+    exclude: List[str] = []
     try:
         if getattr(delegation, "assign_by", None) and getattr(
             delegation.assign_by, "email", None
@@ -635,7 +669,7 @@ def send_help_ticket_admin_confirmation(
     *, ticket, subject_prefix: str = "Help Ticket Assignment"
 ) -> None:
     """Detailed admin confirmation for help ticket (assigner excluded)."""
-    exclude = []
+    exclude: List[str] = []
     try:
         if getattr(ticket, "assign_by", None) and getattr(ticket.assign_by, "email", None):
             exclude = [ticket.assign_by.email]
@@ -784,15 +818,20 @@ def send_task_reminder_email(*, task, task_type: str = "Checklist") -> None:
         "complete_url": SITE_URL,
     }
 
+    cc_list: List[str] = []
+    if (task_type or "").strip().lower() == "delegation":
+        cc_list = _should_cc_assigner_for_delegation(getattr(task, "assign_by", None))
+
     _send_unified_assignment_email(
         subject=f"Reminder: {urgency} - {task_name}",
         to_email=to_email,
         context=ctx,
+        cc=cc_list,
     )
 
 
 def send_admin_bulk_summary(
-    *, title: str, rows: Sequence[dict], exclude_assigner_email: str | None = None
+    *, title: str, rows: Sequence[dict], exclude_assigner_email: Optional[str] = None
 ) -> None:
     """
     Send clean admin bulk summary with basic stats.
@@ -861,7 +900,7 @@ def send_bulk_completion_summary(
 # -------------------------------------------------------------------
 # Welcome email for new users
 # -------------------------------------------------------------------
-def send_welcome_email(*, user: User, raw_password: str | None = None) -> None:
+def send_welcome_email(*, user: User, raw_password: Optional[str] = None) -> None:
     """
     Welcome mail with login details. Skips if user has no email.
     This does NOT CC/BCC anyone (assigner never receives).

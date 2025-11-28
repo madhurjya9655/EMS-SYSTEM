@@ -56,23 +56,31 @@ class UserForm(forms.ModelForm):
     """
     - On create: password required.
     - On edit: password optional; if left blank, keep existing password.
-    """
 
-    password = forms.CharField(widget=forms.PasswordInput, required=True)
+    IMPORTANT: We DO NOT include 'password' in Meta.fields so that
+    ModelForm does not assign it to instance.password during save().
+    We handle password only in the view via set_password().
+    """
+    password = forms.CharField(
+        widget=forms.PasswordInput,
+        required=False,  # required on create enforced in clean()
+        help_text="Leave blank to keep the current password.",
+    )
 
     class Meta:
         model = UserModel
-        fields = ["first_name", "last_name", "username", "email", "password"]
+        # NOTE: 'password' is intentionally omitted here
+        fields = ["first_name", "last_name", "username", "email"]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # Make password optional on edit (instance exists)
-        if self.instance and self.instance.pk:
-            self.fields["password"].required = False
-            self.fields["password"].help_text = "Leave empty to keep the current password."
+        # On create, show password as required; on edit, optional
+        if not (self.instance and self.instance.pk):
+            self.fields["password"].required = True
+            self.fields["password"].help_text = "Set an initial password."
 
-        # Basic Bootstrap classes
+        # Bootstrap classes
         for name, field in self.fields.items():
             if not isinstance(
                 field.widget,
@@ -101,13 +109,14 @@ class UserForm(forms.ModelForm):
 
     def clean_password(self):
         """
-        Allow blank password on edit.
+        Required on create, optional on edit. Return None when left blank on edit
+        so the view can easily check `if pwd: set_password(pwd)`.
         """
-        pwd = self.cleaned_data.get("password", "")
+        pwd = (self.cleaned_data.get("password") or "").strip()
         if self.instance and self.instance.pk:
-            # Optional on edit
-            return pwd or ""
-        # Required on create
+            # Editing: blank is allowed
+            return pwd or None
+        # Creating: must provide a password
         if not pwd:
             raise forms.ValidationError("Please set an initial password.")
         return pwd
@@ -138,11 +147,6 @@ class ProfileForm(forms.ModelForm):
         ]
 
     def __init__(self, *args, **kwargs):
-        """
-        Important fix:
-        Use self.instance (set by super().__init__) to pre-populate permissions
-        when editing a user, so checkboxes are correctly checked.
-        """
         super().__init__(*args, **kwargs)
 
         # Make selects/inputs pretty
@@ -151,7 +155,7 @@ class ProfileForm(forms.ModelForm):
         for name in ("phone", "branch"):
             self.fields[name].widget.attrs.setdefault("class", "form-control")
 
-        # Narrow team_leader choices to active users, ordered nicely
+        # Team leader choices to active users ordered
         if hasattr(self.fields["team_leader"], "queryset"):
             self.fields["team_leader"].queryset = (
                 self.fields["team_leader"]
@@ -159,11 +163,9 @@ class ProfileForm(forms.ModelForm):
                 .order_by("first_name", "last_name", "username")
             )
 
-        # ✅ FIX: use self.instance instead of kwargs.get('instance')
+        # Pre-populate permissions from instance
         instance = getattr(self, "instance", None)
         if instance and getattr(instance, "pk", None) and getattr(instance, "permissions", None):
-            # This will make pf.permissions.value contain the list of codes,
-            # which your template checks with:  code in pf.permissions.value
             self.initial["permissions"] = instance.permissions
 
     def clean_phone(self):
@@ -179,27 +181,18 @@ class ProfileForm(forms.ModelForm):
             raise forms.ValidationError("Enter a valid 10-digit phone number.")
         return phone
 
-    # ---- Admin role exact behavior on save (when form performs the save) ----
     def save(self, commit: bool = True) -> Profile:
-        """
-        When commit=True and role == 'Admin', ensure linked User is staff.
-        Also ensure permissions is stored as a list in Profile.permissions.
-        """
         instance: Profile = super().save(commit=False)
         instance.permissions = self.cleaned_data.get("permissions") or []
-
         if commit:
             instance.save()
             self._maybe_mark_user_staff(instance)
-
         return instance
 
     def _maybe_mark_user_staff(self, instance: Profile) -> None:
         try:
-            # EXACT: If role is Admin, make sure user.is_staff is True.
             if instance.role == "Admin" and instance.user and not instance.user.is_staff:
                 instance.user.is_staff = True
                 instance.user.save(update_fields=["is_staff"])
         except Exception:
-            # Never break form save due to a secondary sync issue.
             pass

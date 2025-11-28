@@ -12,60 +12,41 @@ from django.http import HttpRequest, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import NoReverseMatch, reverse, reverse_lazy
 from django.views.decorators.http import require_POST
-from django.utils.http import url_has_allowed_host_and_scheme  # NEW
+from django.utils.http import url_has_allowed_host_and_scheme
 
 from .forms import CustomAuthForm, ProfileForm, UserForm
 from .models import Profile
 from .permission_urls import PERMISSION_URLS
 from .permissions import PERMISSIONS_STRUCTURE, _user_permission_codes, permissions_context
-from .utils import soft_delete_user  # <-- use the safe soft-delete util
+from .utils import soft_delete_user
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
 def admin_only(user) -> bool:
-    """Simple predicate for admin-only views."""
     return bool(getattr(user, "is_superuser", False))
 
 
 class CustomLoginView(LoginView):
-    """
-    Login view with "Remember me" and smart post-login routing:
-
-    - If ?next= is present and safe → honor it.
-    - Else Superuser → dashboard
-    - Else → first URL from PERMISSION_URLS the user has access to
-    - Fallback → dashboard
-
-    "Remember me" controls the session expiry securely:
-      • checked  -> persistent session (uses settings.SESSION_COOKIE_AGE)
-      • unchecked-> session cookie (expires at browser close)
-    """
     template_name = "registration/login.html"
     authentication_form = CustomAuthForm
     redirect_authenticated_user = True
 
     def form_valid(self, form):
-        # --- Remember me (server-side) ---
         remember_checked = bool(self.request.POST.get("remember"))
-        # None → Django uses settings.SESSION_COOKIE_AGE (persistent)
-        # 0    → expire at browser close (session cookie)
         self.request.session.set_expiry(None if remember_checked else 0)
         return super().form_valid(form)
 
     def get_success_url(self) -> str:
-        # 1) Honor a safe ?next=
         nxt = self.request.POST.get("next") or self.request.GET.get("next")
         if nxt and url_has_allowed_host_and_scheme(nxt, allowed_hosts={self.request.get_host()}):
             return nxt
 
-        # 2) Superuser → dashboard
         user = self.request.user
         if getattr(user, "is_superuser", False):
             return reverse_lazy("dashboard:home")
 
-        # 3) Permissions-based landing route
         user_codes = _user_permission_codes(user)
         for code, url_name in PERMISSION_URLS.items():
             if code.lower() in user_codes:
@@ -74,14 +55,12 @@ class CustomLoginView(LoginView):
                 except NoReverseMatch:
                     continue
 
-        # 4) Fallback
         return reverse_lazy("dashboard:home")
 
 
 @login_required
 @user_passes_test(admin_only)
 def list_users(request: HttpRequest) -> HttpResponse:
-    """Admin: list users."""
     users = User.objects.order_by("first_name", "last_name", "username")
     return render(request, "users/list_user.html", {"users": users})
 
@@ -89,24 +68,20 @@ def list_users(request: HttpRequest) -> HttpResponse:
 @login_required
 @user_passes_test(admin_only)
 def add_user(request: HttpRequest) -> HttpResponse:
-    """
-    Admin: create a new user with an attached Profile + permissions list.
-    """
     if request.method == "POST":
         uf = UserForm(request.POST)
         pf = ProfileForm(request.POST)
 
         if uf.is_valid() and pf.is_valid():
-            # Create user
             user = uf.save(commit=False)
-            raw_pwd = uf.cleaned_data.get("password") or ""
+            raw_pwd = uf.cleaned_data.get("password")
+            # On create it's guaranteed by the form; still guard:
             if raw_pwd:
                 user.set_password(raw_pwd)
             user.is_staff = False
             user.is_active = True
             user.save()
 
-            # Create profile with permissions
             profile = pf.save(commit=False)
             profile.user = user
             profile.permissions = pf.cleaned_data.get("permissions") or []
@@ -130,22 +105,18 @@ def add_user(request: HttpRequest) -> HttpResponse:
 @login_required
 @user_passes_test(admin_only)
 def edit_user(request: HttpRequest, pk: int) -> HttpResponse:
-    """
-    Admin: edit a user. Password change is optional (only when provided).
-    Profile is created on save if it doesn't exist yet.
-    """
     user_obj = get_object_or_404(User, pk=pk)
     profile_obj: Optional[Profile] = Profile.objects.filter(user=user_obj).first()
 
     if request.method == "POST":
         uf = UserForm(request.POST, instance=user_obj)
-        pf = ProfileForm(request.POST, instance=profile_obj)  # instance may be None
+        pf = ProfileForm(request.POST, instance=profile_obj)
 
         if uf.is_valid() and pf.is_valid():
-            user = uf.save(commit=False)
+            user = uf.save(commit=False)  # password not touched by the form
             pwd = uf.cleaned_data.get("password")
             if pwd:
-                user.set_password(pwd)
+                user.set_password(pwd)     # only when a new password was provided
             user.save()
 
             profile = pf.save(commit=False)
@@ -158,8 +129,7 @@ def edit_user(request: HttpRequest, pk: int) -> HttpResponse:
 
         messages.error(request, "Please correct the errors below.")
     else:
-        # Show blank password field on edit
-        uf = UserForm(instance=user_obj, initial={"password": ""})
+        uf = UserForm(instance=user_obj)   # no password initial needed anymore
         pf = ProfileForm(instance=profile_obj)
 
     return render(
@@ -177,10 +147,6 @@ def edit_user(request: HttpRequest, pk: int) -> HttpResponse:
 @login_required
 @user_passes_test(admin_only)
 def delete_user(request: HttpRequest, pk: int) -> HttpResponse:
-    """
-    Admin: confirm + *soft delete* user (POST only for the actual delete).
-    Prevents self-deletion and protects superusers from non-superusers.
-    """
     try:
         user = User.objects.get(pk=pk)
     except User.DoesNotExist:
@@ -192,13 +158,11 @@ def delete_user(request: HttpRequest, pk: int) -> HttpResponse:
             messages.error(request, "You cannot delete your own account!")
             return redirect("users:list_users")
 
-        # Optional: block deletion of other superusers unless current user is also superuser
         if getattr(user, "is_superuser", False) and not getattr(request.user, "is_superuser", False):
             return HttpResponseForbidden("Only a superuser can delete another superuser.")
 
         try:
             username = user.username
-            # Use the safe soft-delete utility (anonymize + deactivate + purge sessions)
             soft_delete_user(user, performed_by=request.user)
             messages.success(request, f"User '{username}' deleted (soft) and anonymized.")
         except Exception as e:
@@ -207,7 +171,6 @@ def delete_user(request: HttpRequest, pk: int) -> HttpResponse:
 
         return redirect("users:list_users")
 
-    # GET → show confirm page
     return render(request, "users/confirm_delete.html", {"user": user})
 
 
@@ -215,9 +178,6 @@ def delete_user(request: HttpRequest, pk: int) -> HttpResponse:
 @user_passes_test(admin_only)
 @require_POST
 def toggle_active(request: HttpRequest, pk: int) -> HttpResponse:
-    """
-    Admin: toggle the 'is_active' flag for a user (POST only).
-    """
     u = get_object_or_404(User, pk=pk)
     if u == request.user:
         messages.error(request, "You cannot deactivate your own account.")
@@ -232,36 +192,21 @@ def toggle_active(request: HttpRequest, pk: int) -> HttpResponse:
 
 @login_required
 def debug_permissions(request: HttpRequest) -> HttpResponse:
-    """
-    Debug view to show permissions for the current user.
-    Add to urls.py as: path('debug-permissions/', debug_permissions, name='debug_permissions')
-    """
     user = request.user
     user_perms = _user_permission_codes(user)
 
-    # Map permissions to available URLs
     permission_urls = {}
     for code, url_name in PERMISSION_URLS.items():
         if code.lower() in user_perms or getattr(user, "is_superuser", False):
             try:
                 url = reverse(url_name)
-                permission_urls[code] = {
-                    'url_name': url_name,
-                    'url': url,
-                }
+                permission_urls[code] = {'url_name': url_name, 'url': url}
             except NoReverseMatch:
-                permission_urls[code] = {
-                    'url_name': url_name,
-                    'url': None,
-                    'error': 'URL not found'
-                }
+                permission_urls[code] = {'url_name': url_name, 'url': None, 'error': 'URL not found'}
 
-    # Get the reverse URL mapping for debugging
     url_to_perms = {}
     for code, url in PERMISSION_URLS.items():
-        if url not in url_to_perms:
-            url_to_perms[url] = []
-        url_to_perms[url].append(code)
+        url_to_perms.setdefault(url, []).append(code)
 
     return render(request, 'users/debug_permissions.html', {
         'user': user,

@@ -273,46 +273,18 @@ class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormV
 
         user = self.request.user
 
-        # All expenses for this user (for display)
-        all_items = (
-            ExpenseItem.objects.filter(created_by=user)
-            .order_by("-date", "-created_at")
-        )
-
-        # Map each expense -> its reimbursement line (if any)
-        lines = (
-            ReimbursementLine.objects.filter(expense_item__in=all_items)
-            .select_related("request", "expense_item")
-        )
-        line_map = {ln.expense_item_id: ln for ln in lines}
+        # ✅ Show ONLY bills "pending to send" (available, not attached anywhere)
+        all_items = self._available_expenses_qs()
 
         rows = []
         for item in all_items:
-            line = line_map.get(item.id)
-            if not line:
-                status_label = "Available"
-                status_class = "secondary"
-                selectable = True
-            else:
-                req = line.request
-                if req.status == ReimbursementRequest.Status.PAID:
-                    status_label = "Paid"
-                    status_class = "success"
-                elif req.status == ReimbursementRequest.Status.REJECTED:
-                    status_label = "Rejected"
-                    status_class = "danger"
-                else:
-                    status_label = "Pending"
-                    status_class = "warning"
-                selectable = False
-
             rows.append(
                 {
                     "item": item,
-                    "line": line,
-                    "status_label": status_label,
-                    "status_class": status_class,
-                    "selectable": selectable,
+                    "line": None,
+                    "status_label": "Available",
+                    "status_class": "secondary",
+                    "selectable": True,
                 }
             )
 
@@ -372,7 +344,7 @@ class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormV
             to_status=req.status,
         )
 
-        # Notify FINANCE (verification stage) – NO admin summary anymore per new workflow
+        # Notify FINANCE (verification stage)
         _send_safe("send_reimbursement_finance_verify", req, employee_note=employee_note)
 
         messages.success(

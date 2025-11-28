@@ -3,8 +3,9 @@ import csv
 import logging
 import pytz
 import re
-import time
+import time  # stdlib time module (we alias datetime.time as dt_time below)
 import unicodedata
+from typing import Optional
 from datetime import datetime, timedelta, date, time as dt_time
 from functools import wraps
 from threading import Lock, Thread
@@ -105,7 +106,6 @@ def clean_unicode_string(text):
 def robust_db_operation(max_retries=3, base_delay=0.05):
     """
     Decorator to retry DB ops that can briefly fail with 'database is locked' (SQLite etc).
-    Small refactor makes the retry branch explicit to satisfy strict linters.
     """
     def deco(fn):
         @wraps(fn)
@@ -125,10 +125,8 @@ def robust_db_operation(max_retries=3, base_delay=0.05):
                     else:
                         # Not a lock, or out of retries -> re-raise
                         raise
-            # If we exhausted retries and still failed, raise the last seen error
             if last is not None:
                 raise last
-            # Fallback (shouldn't be reached)
             return None
         return inner
     return deco
@@ -155,6 +153,7 @@ def _minutes_between(now_dt: datetime, planned_dt: datetime) -> int:
 
 
 def is_working_day(d: date) -> bool:
+    # Sunday (weekday=6) is off
     if d.weekday() == 6:
         return False
     return not Holiday.objects.filter(date=d).exists()
@@ -168,8 +167,10 @@ def next_working_day(d: date) -> date:
 
 # Next working day that also skips the assignee's leave window (for Checklist/Delegation only)
 def next_working_day_skip_leaves(assign_to: User, d: date) -> date:
+    # FIX: guard against projects where LeaveRequest doesn't expose helper method
+    is_blocked = getattr(LeaveRequest, "is_user_blocked_on", None)
     for _ in range(0, 120):
-        if is_working_day(d) and not LeaveRequest.is_user_blocked_on(assign_to, d):
+        if is_working_day(d) and (not is_blocked or not is_blocked(assign_to, d)):
             return d
         d += timedelta(days=1)
     return d
@@ -188,15 +189,16 @@ def span_bounds(d_from: date, d_to_inclusive: date):
     return start, end
 
 
-def _ist_date(dt: datetime) -> date | None:
+def _ist_date(dt: datetime) -> Optional[date]:
     if not dt:
         return None
     if timezone.is_aware(dt):
         return dt.astimezone(IST).date()
+    # FIX: don't localize an already-aware dt; handled above
     return IST.localize(dt).date()
 
 
-def _normalize_task_type(val) -> str | None:
+def _normalize_task_type(val) -> Optional[str]:
     if val is None:
         return None
     try:
@@ -554,7 +556,7 @@ def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, star
             planned_dt = preserve_first_occurrence_time(planned_dt)
 
             # Enforce holiday/leave blocking for bulk uploads (shift forward)
-            planned_ist_date = planned_dt.astimezone(IST).date()
+            planned_ist_date = (planned_dt if timezone.is_aware(planned_dt) else IST.localize(planned_dt)).astimezone(IST).date()
             safe_date = next_working_day_skip_leaves(assign_to, planned_ist_date)
             if safe_date != planned_ist_date:
                 planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(
@@ -680,7 +682,7 @@ def process_delegation_batch_excel_ultra_optimized(batch_df, assign_by_user, sta
             planned_dt = preserve_first_occurrence_time(planned_dt)
 
             # Shift to next safe day (holiday + leave)
-            planned_ist_date = planned_dt.astimezone(IST).date()
+            planned_ist_date = (planned_dt if timezone.is_aware(planned_dt) else IST.localize(planned_dt)).astimezone(IST).date()
             safe_date = next_working_day_skip_leaves(assign_to, planned_ist_date)
             if safe_date != planned_ist_date:
                 planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(
@@ -834,7 +836,7 @@ def kick_off_bulk_emails_async(created_tasks, task_type="Checklist"):
     _background(_send_bulk_emails_by_ids, task_ids, task_type=task_type, thread_name="bulk-emails")
 
 
-def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: str | None = None):
+def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: Optional[str] = None):
     def _safe_call():
         try:
             try:
@@ -970,7 +972,7 @@ def add_checklist(request):
             if ist_day and not is_working_day(ist_day):
                 messages.error(request, "This day is holiday")
                 return render(request, "tasks/add_checklist.html", {"form": form})
-            if assignee and ist_day and LeaveRequest.is_user_blocked_on(assignee, ist_day):
+            if assignee and ist_day and getattr(LeaveRequest, "is_user_blocked_on", lambda *a, **k: False)(assignee, ist_day):
                 messages.error(request, "Assignee is on leave during this period.")
                 return render(request, "tasks/add_checklist.html", {"form": form})
 
@@ -1007,7 +1009,7 @@ def edit_checklist(request, pk):
             if ist_day and not is_working_day(ist_day):
                 messages.error(request, "This day is holiday")
                 return render(request, "tasks/add_checklist.html", {"form": form})
-            if assignee and ist_day and LeaveRequest.is_user_blocked_on(assignee, ist_day):
+            if assignee and ist_day and getattr(LeaveRequest, "is_user_blocked_on", lambda *a, **k: False)(assignee, ist_day):
                 messages.error(request, "Assignee is on leave during this period.")
                 return render(request, "tasks/add_checklist.html", {"form": form})
 
@@ -1130,7 +1132,7 @@ def add_delegation(request):
             if ist_day and not is_working_day(ist_day):
                 messages.error(request, "This day is holiday")
                 return render(request, "tasks/add_delegation.html", {"form": form})
-            if assignee and ist_day and LeaveRequest.is_user_blocked_on(assignee, ist_day):
+            if assignee and ist_day and getattr(LeaveRequest, "is_user_blocked_on", lambda *a, **k: False)(assignee, ist_day):
                 messages.error(request, "Assignee is on leave during this period.")
                 return render(request, "tasks/add_delegation.html", {"form": form})
 
@@ -1152,17 +1154,6 @@ def add_delegation(request):
 def list_delegation(request):
     """
     Delegation list with persistent filters.
-
-    Filters supported (GET):
-      - keyword
-      - status: 'all' | 'Pending' | 'Completed' | 'In Progress' (no-op unless such rows exist)
-      - assign_by: user id
-      - assign_to: user id
-      - start_date (YYYY-MM-DD)
-      - end_date   (YYYY-MM-DD)
-      - date       (YYYY-MM-DD) exact day match
-      - today_only (1)
-      - priority   (Low/Medium/High)
     """
     if request.method == "POST":
         action = request.POST.get("action", "")
@@ -1180,7 +1171,6 @@ def list_delegation(request):
                     messages.error(request, f"Error during bulk delete: {e}")
             else:
                 messages.warning(request, "No delegation tasks were selected for deletion.")
-            # PERSIST FILTERS: redirect back to the same filtered URL
             return redirect(return_url)
         else:
             messages.warning(request, "Invalid action specified.")
@@ -1195,15 +1185,12 @@ def list_delegation(request):
     elif status_param == "all":
         qs = base_qs
     else:
-        # Accept 'Completed' or any other value (e.g., 'In Progress' if added later)
         qs = base_qs.filter(status=status_param)
 
-    # Keyword across task_name & message
     kw = (request.GET.get("keyword") or "").strip()
     if kw:
         qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
 
-    # Assigned By / To
     assign_by_id = (request.GET.get("assign_by") or "").strip()
     assign_to_id = (request.GET.get("assign_to") or "").strip()
     if assign_by_id:
@@ -1211,7 +1198,6 @@ def list_delegation(request):
     if assign_to_id:
         qs = qs.filter(assign_to_id=assign_to_id)
 
-    # Optional human-name filter for assignee (employee name)
     employee_name = (request.GET.get("employee") or "").strip()
     if employee_name:
         qs = qs.filter(
@@ -1220,17 +1206,14 @@ def list_delegation(request):
             Q(assign_to__last_name__icontains=employee_name)
         )
 
-    # Priority
     priority_val = (request.GET.get("priority") or "").strip()
     if priority_val:
         qs = qs.filter(priority=priority_val)
 
-    # Single-day filter
     on_date = (request.GET.get("date") or "").strip()
     if on_date:
         qs = qs.filter(planned_date__date=on_date)
     else:
-        # Range filters (backwards compatible with your existing "start_date"/"end_date")
         if (request.GET.get("start_date") or "").strip():
             qs = qs.filter(planned_date__date__gte=request.GET.get("start_date").strip())
         if (request.GET.get("end_date") or "").strip():
@@ -1240,7 +1223,6 @@ def list_delegation(request):
         today = timezone.localdate()
         qs = qs.filter(planned_date__date=today)
 
-    # Summary cards
     agg = qs.aggregate(
         assign_time=Sum("time_per_task_minutes"),
         actual_time=Sum("actual_duration_minutes"),
@@ -1272,12 +1254,11 @@ def edit_delegation(request, pk):
             planned_dt = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
             assignee = form.cleaned_data.get("assign_to")
 
-            # block rescheduling to holidays / leave
             ist_day = planned_dt.astimezone(IST).date() if planned_dt else None
             if ist_day and not is_working_day(ist_day):
                 messages.error(request, "This day is holiday")
                 return render(request, "tasks/add_delegation.html", {"form": form})
-            if assignee and ist_day and LeaveRequest.is_user_blocked_on(assignee, ist_day):
+            if assignee and ist_day and getattr(LeaveRequest, "is_user_blocked_on", lambda *a, **k: False)(assignee, ist_day):
                 messages.error(request, "Assignee is on leave during this period.")
                 return render(request, "tasks/add_delegation.html", {"form": form})
 
@@ -1287,7 +1268,6 @@ def edit_delegation(request, pk):
             obj2.frequency = None
             obj2.save()
             messages.success(request, f"Delegation task '{obj2.task_name}' updated successfully! Assignee will be notified at 10:00 AM on the due day.")
-            # preserve filters from ?next=
             return redirect(request.GET.get("next", reverse("tasks:list_delegation")))
     else:
         form = DelegationForm(instance=obj)
@@ -1497,7 +1477,8 @@ def list_help_ticket(request):
             "current_tab": "all",
             "can_create": can_create(request.user),
             "users": User.objects.filter(is_active=True).order_by("username"),
-            "status_choices": HelpTicket.STATUS_CHOICES,
+            # FIX: be tolerant if STATUS_CHOICES is absent on model in some envs
+            "status_choices": getattr(HelpTicket, "STATUS_CHOICES", (("Open", "Open"), ("Closed", "Closed"))),
         },
     )
 
@@ -1600,9 +1581,10 @@ def note_help_ticket(request, pk):
 
         messages.success(request, f"Note saved for HT-{ticket.id}.")
         return redirect(request.GET.get("next", reverse("tasks:assigned_to_me")))
+    # FIX: render a dedicated note template instead of the list (avoids context assumptions)
     return render(
         request,
-        "tasks/list_help_ticket.html",
+        "tasks/note_help_ticket.html",
         {"ticket": ticket, "next": request.GET.get("next", reverse("tasks:assigned_to_me"))}
     )
 
@@ -1958,13 +1940,10 @@ def dashboard_home(request):
         delegation_qs = []
         help_ticket_qs = []
 
-    selected = request.GET.get('task_type')
-    if selected == 'delegation':
-        tasks = delegation_qs
-    elif selected == 'help_ticket':
-        tasks = help_ticket_qs
-    else:
-        tasks = checklist_qs
+    # FIX: avoid reassigning 'selected' variable twice; keep once
+    tasks = checklist_qs if request.GET.get('task_type') not in ('delegation', 'help_ticket') else (
+        delegation_qs if request.GET.get('task_type') == 'delegation' else help_ticket_qs
+    )
 
     if tasks:
         for i, task in enumerate(tasks[:3], start=1):
@@ -1979,7 +1958,7 @@ def dashboard_home(request):
         'week_score':    week_score,
         'pending_tasks': pending_tasks,
         'tasks':         tasks,
-        'selected':      selected,
+        'selected':      request.GET.get('task_type'),
         'prev_time':     "00:00",
         'curr_time':     "00:00",
         'today_only':    today_only,
