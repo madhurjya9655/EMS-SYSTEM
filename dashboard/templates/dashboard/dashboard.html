@@ -6,77 +6,26 @@
 {% block content %}
 <div class="container-fluid py-3">
 
-  <!-- Week Score + Pending Tasks -->
-  <div class="row g-3">
-    <div class="col-xl-6">
-      <div class="card">
-        <div class="card-header fw-bold">Week Score</div>
-        <div class="card-body p-0">
-          <table class="table mb-0">
-            <thead>
-              <tr>
-                <th style="width:40%"></th>
-                <th class="text-center">Previous</th>
-                <th class="text-center">Current</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Checklist</td>
-                <td class="text-center">{{ week_score.checklist.previous|default:"0" }}</td>
-                <td class="text-center">{{ week_score.checklist.current|default:"0" }}</td>
-              </tr>
-              <tr>
-                <td>Delegation</td>
-                <td class="text-center">{{ week_score.delegation.previous|default:"0" }}</td>
-                <td class="text-center">{{ week_score.delegation.current|default:"0" }}</td>
-              </tr>
-              <tr>
-                <td>Help Ticket</td>
-                <td class="text-center">{{ week_score.help_ticket.previous|default:"0" }}</td>
-                <td class="text-center">{{ week_score.help_ticket.current|default:"0" }}</td>
-              </tr>
-              <tr>
-                <td>Time Spent</td>
-                <td class="text-center">{{ prev_time|default:"00:00" }}</td>
-                <td class="text-center">{{ curr_time|default:"00:00" }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+  <!-- Top controls (type switch + badges + today toggle) -->
+  <div class="d-flex align-items-center justify-content-between mb-3">
 
-    <div class="col-xl-6">
-      <div class="card">
-        <div class="card-header fw-bold">Pending Tasks</div>
-        <div class="card-body p-0">
-          <table class="table mb-0">
-            <tbody>
-              <tr><td>Checklist</td><td class="text-end">{{ pending_tasks.checklist|default:"0" }}</td></tr>
-              <tr><td>Delegation</td><td class="text-end">{{ pending_tasks.delegation|default:"0" }}</td></tr>
-              <tr><td>Help Ticket</td><td class="text-end">{{ pending_tasks.help_ticket|default:"0" }}</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Type Switcher + Today Only toggle -->
-  <div class="d-flex align-items-center justify-content-between mt-4 mb-2">
     <div class="btn-group" role="group" aria-label="Task type">
       <a href="?task_type=checklist{% if today_only %}&today_only=1{% endif %}"
          class="btn btn-primary {% if not selected or selected == 'checklist' %}active{% endif %}">
-        Checklist Tasks
+        Checklist
+        <span class="badge bg-dark ms-2">{{ pending_tasks.checklist|default:"0" }}</span>
       </a>
+
       <a href="?task_type=delegation{% if today_only %}&today_only=1{% endif %}"
          class="btn btn-primary {% if selected == 'delegation' %}active{% endif %}">
-        Delegation Tasks
+        Delegation
+        <span class="badge bg-dark ms-2">{{ pending_tasks.delegation|default:"0" }}</span>
       </a>
+
       <a href="?task_type=help_ticket{% if today_only %}&today_only=1{% endif %}"
          class="btn btn-primary {% if selected == 'help_ticket' %}active{% endif %}">
-        Help Ticket Tasks
+        Help Ticket
+        <span class="badge bg-dark ms-2">{{ pending_tasks.help_ticket|default:"0" }}</span>
       </a>
     </div>
 
@@ -366,7 +315,6 @@
         {% endif %}
       </div>
 
-      {# ======= UPDATED FOOTER WITH "VIEW FULL TASK" ======= #}
       <div class="modal-footer">
         {% if not selected or selected == 'checklist' %}
           {% if task.status == 'Pending' %}
@@ -400,7 +348,6 @@
 
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
       </div>
-      {# ======= /UPDATED FOOTER ======= #}
 
     </div>
   </div>

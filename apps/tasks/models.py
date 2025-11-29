@@ -20,7 +20,9 @@ def is_holiday_or_sunday(date_val):
             date_val = date_val.date()
         except Exception:
             pass
-    return (hasattr(date_val, "weekday") and date_val.weekday() == 6) or Holiday.objects.filter(date=date_val).exists()
+    return (
+        hasattr(date_val, "weekday") and date_val.weekday() == 6
+    ) or Holiday.objects.filter(date=date_val).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +36,7 @@ def _active_handover_for(task_obj, task_type_name: str):
     cycles by importing lazily.
     """
     try:
-        from django.db.models import Q
+        from django.db.models import Q  # noqa: F401  (kept for potential filters)
         from apps.leave.models import LeaveHandover, LeaveStatus  # local import to avoid circulars
         today = timezone.now().date()
         return (

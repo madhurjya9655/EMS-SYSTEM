@@ -149,37 +149,46 @@ _template_options = {
 }
 
 if DEBUG:
-    TEMPLATES = [{
-        "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [BASE_DIR / "templates"],
-        "APP_DIRS": True,
-        "OPTIONS": _template_options,
-    }]
+    TEMPLATES = [
+        {
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "DIRS": [BASE_DIR / "templates"],
+            "APP_DIRS": True,
+            "OPTIONS": _template_options,
+        }
+    ]
 else:
-    TEMPLATES = [{
-        "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [BASE_DIR / "templates"],
-        "APP_DIRS": False,
-        "OPTIONS": {
-            **_template_options,
-            "loaders": [(
-                "django.template.loaders.cached.Loader",
-                [
-                    "django.template.loaders.filesystem.Loader",
-                    "django.template.loaders.app_directories.Loader",
+    TEMPLATES = [
+        {
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "DIRS": [BASE_DIR / "templates"],
+            "APP_DIRS": False,
+            "OPTIONS": {
+                **_template_options,
+                "loaders": [
+                    (
+                        "django.template.loaders.cached.Loader",
+                        [
+                            "django.template.loaders.filesystem.Loader",
+                            "django.template.loaders.app_directories.Loader",
+                        ],
+                    )
                 ],
-            )],
-        },
-    }]
+            },
+        }
+    ]
 
 # -----------------------------------------------------------------------------
 # DATABASE (Render-safe)
 # -----------------------------------------------------------------------------
-import dj_database_url  # requires: dj-database-url
+try:
+    import dj_database_url  # type: ignore
+except Exception:  # pragma: no cover
+    dj_database_url = None
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
-if DATABASE_URL:
+if DATABASE_URL and dj_database_url:
     DATABASES = {
         "default": dj_database_url.parse(
             DATABASE_URL,
@@ -300,7 +309,7 @@ def _configure_sqlite_connection(sender, connection, **kwargs):
 connection_created.connect(_configure_sqlite_connection)
 
 try:
-    from django.db.backends.sqlite3.operations import DatabaseOperations
+    from django.db.backends.sqlite3.operations import DatabaseOperations  # type: ignore
     _orig_convert = DatabaseOperations.convert_datetimefield_value
     def safe_convert_datetimefield_value(self, value, expression, connection):
         if value is None:
@@ -386,6 +395,9 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 WHITENOISE_MANIFEST_STRICT = False
+WHITENOISE_MAX_AGE = 60 * 60 * 24 * 365  # 1 yr
+WHITENOISE_AUTOREFRESH = DEBUG
+WHITENOISE_USE_FINDERS = DEBUG  # dev convenience
 
 STATICFILES_FINDERS = [
     "django.contrib.staticfiles.finders.FileSystemFinder",
@@ -396,8 +408,6 @@ STORAGES = {
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
 }
-
-WHITENOISE_MAX_AGE = 60 * 60 * 24 * 365
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.getenv("MEDIA_ROOT") or ("/var/data/media" if ON_RENDER else str(BASE_DIR / "media"))
@@ -437,10 +447,7 @@ LEAVE_EMAIL_REPLY_TO_EMPLOYEE = env_bool("LEAVE_EMAIL_REPLY_TO_EMPLOYEE", True)
 LEAVE_DECISION_TOKEN_SALT = os.getenv("LEAVE_DECISION_TOKEN_SALT", "leave-action-v1")
 LEAVE_DECISION_TOKEN_MAX_AGE = env_int("LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)
 
-# --- NEW: CC assigner for Delegation emails (Pankaj rule) --------------------
-# Configure via env:
-#   DELEGATION_CC_ASSIGNER_EMAILS="pankaj@company.com,other@company.com"
-#   DELEGATION_CC_ASSIGNER_USERNAMES="pankaj,otheruser"
+# Delegation CC rule inputs (configurable)
 ASSIGNER_CC_FOR_DELEGATION = {
     "emails": env_list("DELEGATION_CC_ASSIGNER_EMAILS", ""),
     "usernames": env_list("DELEGATION_CC_ASSIGNER_USERNAMES", ""),
@@ -506,6 +513,7 @@ if REDIS_URL:
             "TIMEOUT": env_int("CACHE_TIMEOUT", 300),
         }
     }
+    SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 else:
     CACHES = {
         "default": {
@@ -522,7 +530,8 @@ JSON_DUMPS_PARAMS = {"ensure_ascii": False}
 # RENDER.COM SPECIFIC
 # -----------------------------------------------------------------------------
 if ON_RENDER:
-    SESSION_ENGINE = "django.contrib.sessions.backends.db"
+    if not REDIS_URL:
+        SESSION_ENGINE = "django.contrib.sessions.backends.db"
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     WEB_CONCURRENCY = env_int("WEB_CONCURRENCY", 2)
@@ -579,8 +588,8 @@ FEATURES = {
 # -----------------------------------------------------------------------------
 TASK_PRIORITIES = [("Low", "Low"), ("Medium", "Medium"), ("High", "High")]
 TASK_STATUSES = [("Pending", "Pending"), ("Completed", "Completed")]
-RECURRING_MODES = [("Daily","Daily"),("Weekly","Weekly"),("Monthly","Monthly"),("Yearly","Yearly")]
-HELP_TICKET_STATUSES = [("Open","Open"),("In Progress","In Progress"),("Closed","Closed")]
+RECURRING_MODES = [("Daily", "Daily"), ("Weekly", "Weekly"), ("Monthly", "Monthly"), ("Yearly", "Yearly")]
+HELP_TICKET_STATUSES = [("Open", "Open"), ("In Progress", "In Progress"), ("Closed", "Closed")]
 
 # -----------------------------------------------------------------------------
 # LEAVE ROUTING FILE

@@ -62,7 +62,6 @@
           <div class="input-group mt-2" id="planned-date-input-group" style="display:none;">
             <input type="text" class="form-control" id="planned_date_display" placeholder="Select date & time" autocomplete="off">
             <button class="input-group-text calendar-blue-btn" id="planned_date_btn" type="button" aria-label="Open calendar">
-              <!-- Inline SVG icon with blue theme -->
               <svg class="calendar-blue-icon" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
                 <rect x="3" y="3" width="18" height="5" rx="2" ry="2" fill="#2f6fed"/>
                 <rect x="3" y="6.5" width="18" height="14.5" rx="3" ry="3" fill="#eef0ff" stroke="#cfd3ff"/>
@@ -150,12 +149,11 @@
           </div>
           <div class="card-body">
             <small class="text-muted d-block mb-2">
-              Use this to CC Amreen, reporting officer, or colleagues who should be informed.
+              Select colleagues to CC on delegation emails.
             </small>
 
             {% if form.cc_users %}
-              <div class="mb-3">
-                {{ form.cc_users.label_tag }}
+              <div class="mb-1">
                 {{ form.cc_users }}
                 {% if form.cc_users.help_text %}
                   <small class="form-text text-muted">{{ form.cc_users.help_text }}</small>
@@ -165,23 +163,10 @@
                 {% endif %}
               </div>
             {% endif %}
-
-            {% if form.cc_emails %}
-              <div class="mb-3">
-                {{ form.cc_emails.label_tag }}
-                {{ form.cc_emails }}
-                {% if form.cc_emails.errors %}
-                  <div class="text-danger small">{{ form.cc_emails.errors }}</div>
-                {% endif %}
-                {% if form.cc_emails.help_text %}
-                  <small class="form-text text-muted">{{ form.cc_emails.help_text }}</small>
-                {% endif %}
-              </div>
-            {% endif %}
           </div>
         </div>
 
-        {% with 'task_name assign_to planned_date priority message audio_recording time_per_task_minutes attachment_mandatory cc_users cc_emails mode frequency set_reminder' as excluded %}
+        {% with 'task_name assign_to planned_date priority message audio_recording time_per_task_minutes attachment_mandatory cc_users mode frequency set_reminder' as excluded %}
           {% for field in form %}
             {% if field.name not in excluded %}
               <div class="mb-3">
@@ -211,22 +196,16 @@
   </form>
 </div>
 
-<!-- Flatpickr assets -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/material_blue.css">
 <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 
 <style>
-  .calendar-blue-btn{
-    border-left: 0;
-    background: #f4f7ff;
-    cursor: pointer;
-  }
-  .calendar-blue-btn:hover{ background: #e9f0ff; }
-  #planned-date-input-group .form-control{ border-right: 0; }
+  .calendar-blue-btn{ border-left:0; background:#f4f7ff; cursor:pointer; }
+  .calendar-blue-btn:hover{ background:#e9f0ff; }
+  #planned-date-input-group .form-control{ border-right:0; }
   #planned-date-input-group .input-group-text{
-    border-top-left-radius: 0;
-    border-bottom-left-radius: 0;
+    border-top-left-radius:0; border-bottom-left-radius:0;
   }
 </style>
 

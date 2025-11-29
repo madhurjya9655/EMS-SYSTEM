@@ -29,8 +29,12 @@ from django.utils import timezone
 from apps.users.permissions import has_permission
 from apps.settings.models import Holiday
 
-# LeaveRequest used for checklist/delegation (NOT for Help Tickets)
-from apps.leave.models import LeaveHandover, LeaveStatus, LeaveRequest
+# LeaveRequest/Leave* may cause circular imports at import-time in some setups.
+# Make this import tolerant and fall back to None; callsites already guard via getattr/apps.get_model.
+try:
+    from apps.leave.models import LeaveHandover, LeaveStatus, LeaveRequest  # noqa: F401
+except Exception:  # pragma: no cover
+    LeaveHandover = LeaveStatus = LeaveRequest = None  # type: ignore
 
 from .forms import (
     BulkUploadForm,
@@ -1187,9 +1191,7 @@ def list_delegation(request):
     else:
         qs = base_qs.filter(status=status_param)
 
-    kw = (request.GET.get("keyword") or "").strip()
-    if kw:
-        qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
+    # Removed: keyword search (keyword param is ignored deliberately)
 
     assign_by_id = (request.GET.get("assign_by") or "").strip()
     assign_to_id = (request.GET.get("assign_to") or "").strip()
@@ -1198,26 +1200,18 @@ def list_delegation(request):
     if assign_to_id:
         qs = qs.filter(assign_to_id=assign_to_id)
 
-    employee_name = (request.GET.get("employee") or "").strip()
-    if employee_name:
-        qs = qs.filter(
-            Q(assign_to__username__icontains=employee_name) |
-            Q(assign_to__first_name__icontains=employee_name) |
-            Q(assign_to__last_name__icontains=employee_name)
-        )
+    # Removed: employee name fuzzy search (employee param is ignored deliberately)
 
     priority_val = (request.GET.get("priority") or "").strip()
     if priority_val:
         qs = qs.filter(priority=priority_val)
 
-    on_date = (request.GET.get("date") or "").strip()
-    if on_date:
-        qs = qs.filter(planned_date__date=on_date)
-    else:
-        if (request.GET.get("start_date") or "").strip():
-            qs = qs.filter(planned_date__date__gte=request.GET.get("start_date").strip())
-        if (request.GET.get("end_date") or "").strip():
-            qs = qs.filter(planned_date__date__lte=request.GET.get("end_date").strip())
+    # Removed: single 'date' filter (date param is ignored deliberately)
+    # Keep From/To date range filters:
+    if (request.GET.get("start_date") or "").strip():
+        qs = qs.filter(planned_date__date__gte=request.GET.get("start_date").strip())
+    if (request.GET.get("end_date") or "").strip():
+        qs = qs.filter(planned_date__date__lte=request.GET.get("end_date").strip())
 
     if request.GET.get("today_only"):
         today = timezone.localdate()

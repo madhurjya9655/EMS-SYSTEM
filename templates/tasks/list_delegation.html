@@ -11,11 +11,7 @@
 <div class="card mb-3">
   <div class="card-body">
     <form method="get" class="row g-3 align-items-end" role="search" aria-label="Delegation Filters">
-      <div class="col-md-3">
-        <label for="fltKeyword" class="form-label">Keyword</label>
-        <input id="fltKeyword" type="text" class="form-control" name="keyword" value="{{ request.GET.keyword }}">
-      </div>
-
+      <!-- Status -->
       <div class="col-md-2">
         <label for="fltStatus" class="form-label">Status</label>
         <select id="fltStatus" class="form-select" name="status">
@@ -26,6 +22,7 @@
         </select>
       </div>
 
+      <!-- Assigned By -->
       <div class="col-md-2">
         <label for="fltAssignBy" class="form-label">Assigned By</label>
         <select id="fltAssignBy" class="form-select" name="assign_by">
@@ -38,6 +35,7 @@
         </select>
       </div>
 
+      <!-- Assigned To -->
       <div class="col-md-2">
         <label for="fltAssignTo" class="form-label">Assigned To</label>
         <select id="fltAssignTo" class="form-select" name="assign_to">
@@ -50,17 +48,7 @@
         </select>
       </div>
 
-      <div class="col-md-3">
-        <label for="fltEmployee" class="form-label">Employee Name (Assignee)</label>
-        <input id="fltEmployee" type="text" class="form-control" name="employee" placeholder="e.g. Aman"
-               value="{{ request.GET.employee }}">
-      </div>
-
-      <div class="col-md-2">
-        <label for="fltDate" class="form-label">Date</label>
-        <input id="fltDate" type="date" class="form-control" name="date" value="{{ request.GET.date }}">
-      </div>
-
+      <!-- From / To date -->
       <div class="col-md-2">
         <label for="fltStart" class="form-label">From</label>
         <input id="fltStart" type="date" class="form-control" name="start_date" value="{{ request.GET.start_date }}">
@@ -71,6 +59,7 @@
         <input id="fltEnd" type="date" class="form-control" name="end_date" value="{{ request.GET.end_date }}">
       </div>
 
+      <!-- Priority (if present) -->
       <div class="col-md-2">
         <label for="fltPriority" class="form-label">Priority</label>
         <select id="fltPriority" class="form-select" name="priority">
@@ -81,6 +70,7 @@
         </select>
       </div>
 
+      <!-- Today only (if present) -->
       <div class="col-md-2">
         <div class="form-check mt-4 pt-1">
           <input class="form-check-input" type="checkbox" name="today_only" value="1" id="todayOnly"
@@ -91,6 +81,7 @@
         </div>
       </div>
 
+      <!-- Apply / Clear -->
       <div class="col-md-12 text-md-end">
         <button class="btn btn-primary">
           <i class="fas fa-filter me-1" aria-hidden="true"></i> Apply

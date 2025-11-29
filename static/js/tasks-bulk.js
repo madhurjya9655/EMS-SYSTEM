@@ -1,5 +1,7 @@
-// E:\CLIENT PROJECT\employee management system bos\employee_management_system\static\js\tasks-bulk.js
-// Unobtrusive bulk selection + counters + confirmations (Bootstrap 5, vanilla JS)
+// -----------------------------------------------------------
+// BOS Lakshya – Bulk tools & small UX utilities
+// Vanilla JS, Bootstrap 5 friendly, accessible & resilient
+// -----------------------------------------------------------
 
 (function () {
   "use strict";
@@ -7,9 +9,22 @@
   const qs  = (sel, root = document) => root.querySelector(sel);
   const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-  // ---------------------------------------------------------------------------
-  // 1) Global [data-confirm] guard (works for links/buttons, incl. external form targets)
-  // ---------------------------------------------------------------------------
+  // ---------- 0) Small helpers ----------
+  const throttle = (fn, ms = 200) => {
+    let t = 0;
+    return (...args) => {
+      const now = Date.now();
+      if (now - t >= ms) { t = now; fn(...args); }
+    };
+  };
+
+  const setSelectedVisual = (cb) => {
+    const row = cb.closest("tr");
+    if (!row) return;
+    row.classList.toggle("is-selected", cb.checked);
+  };
+
+  // ---------- 1) Global [data-confirm] guard ----------
   document.addEventListener("click", function (e) {
     const el = e.target.closest("[data-confirm]");
     if (!el) return;
@@ -17,7 +32,7 @@
     const msg = el.getAttribute("data-confirm");
     if (!msg) return;
 
-    // If this is the primary bulk submit inside a [data-bulk] form, let the form's submit handler confirm.
+    // If this is the primary bulk submit inside a [data-bulk] form, let that form confirm.
     const isBulkSubmit = el.matches("[data-bulk-submit]") && el.form && el.form.matches("[data-bulk]");
     if (isBulkSubmit) return;
 
@@ -27,9 +42,7 @@
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // 2) FILTER panel chevron (+ / -) toggle (only if the page provides it)
-  // ---------------------------------------------------------------------------
+  // ---------- 2) FILTER panel chevron toggle (optional) ----------
   document.addEventListener("DOMContentLoaded", function () {
     const panel = qs("#filterPanel");
     const icon  = qs("[data-filter-toggle-icon]");
@@ -38,22 +51,21 @@
     const toMinus = () => { icon.classList.remove("fa-plus");  icon.classList.add("fa-minus"); };
     const toPlus  = () => { icon.classList.remove("fa-minus"); icon.classList.add("fa-plus");  };
 
-    // Initial
     if (panel.classList.contains("show")) toMinus(); else toPlus();
-
     panel.addEventListener("shown.bs.collapse", toMinus);
     panel.addEventListener("hidden.bs.collapse", toPlus);
   });
 
-  // ---------------------------------------------------------------------------
-  // 3) Bulk-form initializer (supports multiple forms per page)
-  // ---------------------------------------------------------------------------
+  // ---------- 3) Bulk-form initializer ----------
   function initBulkForm(form) {
-    const selectAll        = qs("[data-select-all]", form);
-    const submitBtn        = qs("[data-bulk-submit]", form);
-    let   selectedCountEl  = qs("[data-selected-count]", form) || qs("[data-selected-count]");
+    if (form._bulkInit) return;        // idempotent
+    form._bulkInit = true;
 
-    // Only consider visible & enabled row checkboxes within this form.
+    const selectAll       = qs("[data-select-all]", form);
+    const submitBtn       = qs("[data-bulk-submit]", form);
+    const selectedCountEl = qs("[data-selected-count]", form) || qs("[data-selected-count]");
+
+    // Only visible & enabled row checkboxes within this form.
     const getRowChecks = () =>
       qsa("[data-row-check]", form).filter(cb => {
         const row = cb.closest("tr");
@@ -65,16 +77,21 @@
       const selected = checks.filter(cb => cb.checked).length;
       const total    = checks.length;
 
+      // Button state + counter
       if (submitBtn) submitBtn.disabled = selected === 0;
       if (selectedCountEl) selectedCountEl.textContent = String(selected);
 
+      // Select-all state
       if (selectAll) {
         selectAll.indeterminate = selected > 0 && selected < total;
         selectAll.checked       = total > 0 && selected === total;
       }
+
+      // Selected row highlight
+      checks.forEach(setSelectedVisual);
     }
 
-    // Select-all toggles all row checks in THIS form
+    // Toggle all
     if (selectAll) {
       selectAll.addEventListener("change", () => {
         getRowChecks().forEach(cb => { cb.checked = selectAll.checked; });
@@ -82,9 +99,10 @@
       });
     }
 
-    // Per-row change updates state
+    // Per-row change updates state + highlight
     form.addEventListener("change", (e) => {
       if (e.target && e.target.matches("[data-row-check]")) {
+        setSelectedVisual(e.target);
         updateState();
       }
     });
@@ -103,7 +121,10 @@
           if (start !== -1 && end !== -1) {
             const [lo, hi] = start < end ? [start, end] : [end, start];
             const value = cb.checked;
-            for (let i = lo; i <= hi; i++) checks[i].checked = value;
+            for (let i = lo; i <= hi; i++) {
+              checks[i].checked = value;
+              setSelectedVisual(checks[i]);
+            }
           }
         }
         last = cb;
@@ -111,7 +132,28 @@
       });
     })();
 
-    // Confirm on submit + prevent double submit
+    // Keyboard helpers: A = toggle all (when focused inside table), Esc = clear all
+    form.addEventListener("keydown", (e) => {
+      const tag = (e.target.tagName || "").toLowerCase();
+      const inInput = ["input","textarea","select"].includes(tag);
+      if (inInput) return;
+
+      if (e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        const all = getRowChecks();
+        const anyUnchecked = all.some(cb => !cb.checked);
+        all.forEach(cb => cb.checked = anyUnchecked);
+        updateState();
+      } else if (e.key === "Escape") {
+        const all = getRowChecks();
+        if (all.some(cb => cb.checked)) {
+          all.forEach(cb => cb.checked = false);
+          updateState();
+        }
+      }
+    });
+
+    // Confirm on submit + avoid double submit
     form.addEventListener("submit", (e) => {
       const anySelected = getRowChecks().some(cb => cb.checked);
       if (!anySelected) {
@@ -125,16 +167,22 @@
         return;
       }
 
-      // Avoid double submits
       if (submitBtn) submitBtn.disabled = true;
     });
 
     // Initial paint
     updateState();
+
+    // If rows are added/removed dynamically, keep state correct
+    const mo = new MutationObserver(throttle(updateState, 120));
+    mo.observe(form, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "disabled"] });
   }
 
-  // Boot
-  document.addEventListener("DOMContentLoaded", function () {
-    qsa("form[data-bulk]").forEach(initBulkForm);
-  });
+  // ---------- 4) Boot (support multiple bulk forms per page) ----------
+  function boot() { qsa("form[data-bulk]").forEach(initBulkForm); }
+  document.addEventListener("DOMContentLoaded", boot);
+
+  // In case content is swapped via HTMX/Turbo/partial reloads:
+  document.addEventListener("htmx:afterSwap", boot);
+  document.addEventListener("turbo:render", boot);
 })();
