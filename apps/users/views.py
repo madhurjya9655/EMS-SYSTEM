@@ -11,7 +11,7 @@ from django.contrib.auth.views import LoginView
 from django.http import HttpRequest, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import NoReverseMatch, reverse, reverse_lazy
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_http_methods  # <-- changed
 from django.utils.http import url_has_allowed_host_and_scheme
 
 from .forms import CustomAuthForm, ProfileForm, UserForm
@@ -176,7 +176,7 @@ def delete_user(request: HttpRequest, pk: int) -> HttpResponse:
 
 @login_required
 @user_passes_test(admin_only)
-@require_POST
+@require_http_methods(["GET", "POST"])  # <-- accept GET (UI link) and POST (form)
 def toggle_active(request: HttpRequest, pk: int) -> HttpResponse:
     u = get_object_or_404(User, pk=pk)
     if u == request.user:
@@ -184,9 +184,16 @@ def toggle_active(request: HttpRequest, pk: int) -> HttpResponse:
         return redirect("users:list_users")
     if getattr(u, "is_superuser", False) and not getattr(request.user, "is_superuser", False):
         return HttpResponseForbidden("Only a superuser can change another superuser's status.")
+
+    # Flip and persist
     u.is_active = not u.is_active
     u.save(update_fields=["is_active"])
+
     messages.success(request, f"User {'activated' if u.is_active else 'deactivated'} successfully.")
+
+    nxt = request.GET.get("next") or request.POST.get("next")
+    if nxt and url_has_allowed_host_and_scheme(nxt, allowed_hosts={request.get_host()}):
+        return redirect(nxt)
     return redirect("users:list_users")
 
 
