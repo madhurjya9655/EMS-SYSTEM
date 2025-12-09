@@ -29,9 +29,9 @@ SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
 # Email policy knobs
 SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
-# Send emails strictly around 10:00 IST (default window 09:55–10:05)
+# Keep the 10:00 gating but make it robust: send any time AFTER 10:00 IST on the planned day
 SEND_RECUR_EMAILS_ONLY_AT_10AM = True
-EMAIL_WINDOW_MINUTES = 5
+EMAIL_WINDOW_MINUTES = 5  # retained for compatibility (no longer used as a hard window)
 
 
 def _safe_console_text(s: object) -> str:
@@ -48,6 +48,17 @@ def _to_ist(dt: datetime) -> datetime:
     if timezone.is_naive(dt):
         dt = timezone.make_aware(dt, timezone.get_current_timezone())
     return dt.astimezone(IST)
+
+
+# --- UPDATED: robust 10 AM rule (no tiny window) --------------------
+def _after_10am_today(now_ist: datetime | None = None) -> bool:
+    """
+    True if now (IST) is on 'today IST' and time is >= 10:00 IST.
+    Preserves the 'don’t send before 10' rule without a fragile 5-minute window.
+    """
+    now_ist = (now_ist or timezone.now()).astimezone(IST)
+    anchor = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
+    return now_ist >= anchor
 
 
 # >>> NEW: helpers for blocking logic
@@ -74,30 +85,19 @@ def _push_to_next_allowed_date(user_id: int, d: date) -> date:
     return d
 
 
-def _within_10am_ist_window(leeway_minutes: int = EMAIL_WINDOW_MINUTES) -> bool:
-    """
-    True if now (IST) is within [10:00 - leeway, 10:00 + leeway].
-    Default window: 09:55–10:05 IST.
-    """
-    now_ist = timezone.now().astimezone(IST)
-    anchor = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
-    return (anchor - timedelta(minutes=leeway_minutes)) <= now_ist <= (anchor + timedelta(minutes=leeway_minutes))
-
-
 def _send_checklist_recur_email(obj: Checklist) -> None:
     """
     Send an assignee-only email reminder for a planned checklist (no admin CC).
-    Only runs at ~10:00 IST if SEND_RECUR_EMAILS_ONLY_AT_10AM is True.
+    Only runs after 10:00 IST if SEND_RECUR_EMAILS_ONLY_AT_10AM is True.
     """
     if not SEND_EMAILS_FOR_AUTO_RECUR:
         return
-    if SEND_RECUR_EMAILS_ONLY_AT_10AM and not _within_10am_ist_window():
-        logger.info(_safe_console_text(f"Skip recur email for CL-{obj.id}: outside 10:00 IST window"))
+    if SEND_RECUR_EMAILS_ONLY_AT_10AM and not _after_10am_today():
+        logger.info(_safe_console_text(f"Skip recur email for CL-{obj.id}: before 10:00 IST"))
         return
 
     try:
         planned_ist = obj.planned_date.astimezone(IST) if obj.planned_date else None
-        pretty_date = planned_ist.strftime("%d %b %Y") if planned_ist else "N/A"
         pretty_time = planned_ist.strftime("%H:%M") if planned_ist else "N/A"
 
         complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
@@ -108,18 +108,18 @@ def _send_checklist_recur_email(obj: Checklist) -> None:
             complete_url=complete_url,
             subject_prefix=subject,
         )
-        logger.info(_safe_console_text(f"Sent 10:00 reminder for CL-{obj.id} to user_id={obj.assign_to_id}"))
+        logger.info(_safe_console_text(f"Sent checklist reminder for CL-{obj.id} to user_id={obj.assign_to_id}"))
     except Exception as e:
         logger.error(_safe_console_text(f"Failed to send recurring reminder for CL-{obj.id}: {e}"))
 
 
-# >>> NEW: 10:00 AM Delegation reminders (one-time tasks)
+# >>> UPDATED: 10:00 AM Delegation reminders (one-time tasks) — robust check
 def _send_delegation_10am_emails(today_ist: date, user_id: int | None, dry_run: bool) -> int:
     """
-    Sends 'Today’s Delegation – <task> (due 7 PM)' at ~10:00 IST
+    Sends 'Today’s Delegation – <task> (due 7 PM)' AFTER 10:00 IST
     for all Pending delegations whose planned_date is TODAY (IST).
     """
-    if not _within_10am_ist_window():
+    if not _after_10am_today():
         return 0
 
     start_today_ist = IST.localize(datetime.combine(today_ist, dt_time.min))
@@ -151,7 +151,7 @@ def _send_delegation_10am_emails(today_ist: date, user_id: int | None, dry_run: 
         except Exception as e:
             logger.error("Failed to send delegation 10AM email for DL-%s: %s", getattr(obj, "id", "?"), e)
     if sent:
-        logger.info(_safe_console_text(f"Sent {sent} Delegation 10:00 reminders for {today_ist}"))
+        logger.info(_safe_console_text(f"Sent {sent} Delegation reminders for {today_ist}"))
     return sent
 
 
@@ -161,11 +161,11 @@ class Command(BaseCommand):
         "Rules:\n"
         "• Next occurrence is always on a working day at 19:00 IST (Sun/holiday → shift).\n"
         "• Generation is independent of completion (missed tasks remain; next still appears).\n"
-        "• Emails are sent at ~10:00 IST on the planned day (subject shows date/time).\n"
+        "• Emails are sent AFTER 10:00 IST on the planned day (subject shows time).\n"
         "• Dashboard 10:00 gating handled in views/templates (Checklists & Delegations); Help Tickets are immediate.\n"
         "• Idempotent dupe-guard (±1 minute) on planned_date.\n"
-        "• NEW: Skip/shift occurrences that fall inside assignee leave windows (PENDING/APPROVED).\n"
-        "• NEW: Send 10:00 AM Delegation reminders for today’s delegations.\n"
+        "• Skip/shift occurrences that fall inside assignee leave windows (PENDING/APPROVED).\n"
+        "• Send Delegation 'today' reminders after 10:00 IST.\n"
     )
 
     def add_arguments(self, parser):
@@ -175,7 +175,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--email-today-only",
             action="store_true",
-            help="Only send 10:00 reminders for tasks whose planned date is today IST (default behavior).",
+            help="Only send reminders for tasks whose planned date is today IST (default behavior).",
         )
 
     def handle(self, *args, **opts):
@@ -243,7 +243,7 @@ class Command(BaseCommand):
                 if not next_dt:
                     break
 
-                # >>> NEW: push away from leave windows as well
+                # push away from leave windows as well
                 next_ist = _to_ist(next_dt)
                 safe_date = _push_to_next_allowed_date(s["assign_to_id"], next_ist.date())
                 if safe_date != next_ist.date():
@@ -320,8 +320,8 @@ class Command(BaseCommand):
                 if next_date >= today_ist:
                     break
 
-        # -------- 2) SEND 10:00 REMINDERS FOR TODAY'S TASKS --------
-        if send_emails and SEND_EMAILS_FOR_AUTO_RECUR and (not SEND_RECUR_EMAILS_ONLY_AT_10AM or _within_10am_ist_window()):
+        # -------- 2) SEND REMINDERS FOR TODAY'S TASKS (AFTER 10:00 IST) --------
+        if send_emails and SEND_EMAILS_FOR_AUTO_RECUR and (not SEND_RECUR_EMAILS_ONLY_AT_10AM or _after_10am_today()):
             # Checklists (recurring)
             start_today_ist = IST.localize(datetime.combine(today_ist, dt_time.min))
             end_today_ist = IST.localize(datetime.combine(today_ist, dt_time.max))
@@ -351,7 +351,7 @@ class Command(BaseCommand):
                         email_total += 1
                         per_user_emailed[obj.assign_to_id] = per_user_emailed.get(obj.assign_to_id, 0) + 1
 
-            # >>> NEW: Delegations (one-time) — 10 AM reminders
+            # Delegations (one-time) — reminders after 10:00 IST
             email_total += _send_delegation_10am_emails(today_ist, user_id, dry_run)
 
         # -------- 3) Summaries --------
@@ -366,7 +366,7 @@ class Command(BaseCommand):
                 logger.info(_safe_console_text(f"[RECUR MAIL] user_id={uid} → sent {count} checklist reminder(s)"))
         else:
             if send_emails:
-                logger.info(_safe_console_text(f"[RECUR MAIL] No checklist reminders sent (outside window or none due)."))
+                logger.info(_safe_console_text(f"[RECUR MAIL] No checklist reminders sent (before 10:00 IST or none due)."))
 
         parts = [f"Created {created_total} checklist occurrence(s)"]
         if send_emails:

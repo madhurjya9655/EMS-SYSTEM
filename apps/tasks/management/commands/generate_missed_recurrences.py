@@ -1,4 +1,3 @@
-# apps/tasks/management/commands/generate_missed_recurrences.py
 from __future__ import annotations
 
 import logging
@@ -31,8 +30,8 @@ SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
 # Email policy knobs
 SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
+# Keep the 10:00 gating but make it robust: send any time AFTER 10:00 IST on the planned day
 SEND_RECUR_EMAILS_ONLY_AT_10AM = getattr(settings, "SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
-EMAIL_WINDOW_MINUTES = 5
 
 
 def _safe_console_text(s: object) -> str:
@@ -45,14 +44,15 @@ def _safe_console_text(s: object) -> str:
             return ""
 
 
-def _within_10am_ist_window(leeway_minutes: int = EMAIL_WINDOW_MINUTES) -> bool:
+# --- UPDATED: robust 10 AM rule (no tiny window) --------------------
+def _after_10am_today(now_ist: datetime | None = None) -> bool:
     """
-    True if now (IST) is within [10:00 - leeway, 10:00 + leeway].
-    Default window: 09:55–10:05 IST.
+    True if now (IST) is on 'today IST' and time is >= 10:00 IST.
+    Preserves the 'don’t send before 10' rule without a fragile 5-minute window.
     """
-    now_ist = timezone.now().astimezone(IST)
+    now_ist = (now_ist or timezone.now()).astimezone(IST)
     anchor = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
-    return (anchor - timedelta(minutes=leeway_minutes)) <= now_ist <= (anchor + timedelta(minutes=leeway_minutes))
+    return now_ist >= anchor
 
 
 # >>> NEW: helpers
@@ -91,6 +91,7 @@ class Command(BaseCommand):
         "Ensure exactly one FUTURE 'Pending' checklist per recurring series exists.\n"
         "Next recurrences are scheduled at 19:00 IST on working days (Sun/holidays skipped), "
         "per the final product rule. Dashboard handles 10:00 IST visibility gating.\n"
+        "Also sends the assignee-only reminder AFTER 10:00 IST on the planned day.\n"
         "NEW: Skip/shift occurrences that fall inside assignee leave windows (Pending/Approved).\n"
     )
 
@@ -236,7 +237,7 @@ class Command(BaseCommand):
                 if send_emails and SEND_EMAILS_FOR_AUTO_RECUR:
                     assignee_email = _assignee_email_or_none(new_obj)
                     if assignee_email:
-                        if (not SEND_RECUR_EMAILS_ONLY_AT_10AM) or _within_10am_ist_window():
+                        if (not SEND_RECUR_EMAILS_ONLY_AT_10AM) or _after_10am_today():
                             try:
                                 complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
                                 send_checklist_assignment_to_user(

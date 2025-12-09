@@ -665,6 +665,21 @@ def send_delegation_admin_confirmation(
     )
 
 
+# ---- NEW: global exclusions for Help Ticket admin mails ---------------
+def _help_ticket_admin_exclude_list() -> List[str]:
+    """
+    Settings-driven exclusion for help-ticket admin confirmations.
+    Example in settings.py:
+        HELP_TICKET_ADMIN_EXCLUDE_EMAILS = ["pankaj@example.com", "me@company.com"]
+    """
+    try:
+        raw = getattr(settings, "HELP_TICKET_ADMIN_EXCLUDE_EMAILS", []) or []
+        return _dedupe_emails([e for e in raw if e])
+    except Exception as e:
+        logger.error("Failed to read HELP_TICKET_ADMIN_EXCLUDE_EMAILS: %s", e)
+        return []
+
+
 def send_help_ticket_admin_confirmation(
     *, ticket, subject_prefix: str = "Help Ticket Assignment"
 ) -> None:
@@ -675,6 +690,9 @@ def send_help_ticket_admin_confirmation(
             exclude = [ticket.assign_by.email]
     except Exception:
         pass
+
+    # >>> NEW: also exclude any configured emails (e.g., “don’t CC me”)
+    exclude += _help_ticket_admin_exclude_list()
 
     admins = get_admin_emails(exclude=exclude)
     if not admins:
