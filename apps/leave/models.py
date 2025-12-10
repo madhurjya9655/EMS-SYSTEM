@@ -105,7 +105,12 @@ class ApproverMapping(models.Model):
         verbose_name_plural = "Approver Mappings"
 
     def __str__(self) -> str:
-        cc_count = self.default_cc_users.count()
+        # Be defensive if the M2M through-table is missing
+        cc_count = 0
+        try:
+            cc_count = self.default_cc_users.count()
+        except Exception:
+            cc_count = 0
         return f"{self.employee} → RP:{self.reporting_person} CC:{self.cc_person or '-'} (+{cc_count} more)"
 
     # Backward-compatible resolver
@@ -113,35 +118,60 @@ class ApproverMapping(models.Model):
     def resolve_for(user: User) -> Tuple[Optional[User], Optional[User]]:
         """
         Returns (reporting_person, single_cc_person_for_legacy_use)
+
+        Robust against missing M2M table: falls back to cc_person only.
         """
         try:
             m = ApproverMapping.objects.select_related("reporting_person", "cc_person").get(employee=user)
-            if m.cc_person:
-                return m.reporting_person, m.cc_person
-            # If legacy is empty, fallback to first of default_cc_users (if any)
-            first_cc = m.default_cc_users.first()
-            return m.reporting_person, first_cc
         except ApproverMapping.DoesNotExist:
             return None, None
+        except Exception:
+            logger.exception("ApproverMapping.resolve_for: failed to load mapping")
+            return None, None
+
+        if getattr(m, "cc_person", None):
+            return m.reporting_person, m.cc_person
+
+        first_cc = None
+        try:
+            first_cc = m.default_cc_users.first()
+        except Exception:
+            first_cc = None
+
+        return m.reporting_person, first_cc
 
     # New resolver with multiple CCs
     @staticmethod
     def resolve_multi_for(user: User) -> Tuple[Optional[User], List[User]]:
         """
         Returns (reporting_person, list_of_cc_users)
+
+        Robust against missing M2M table: returns [] on failure.
         """
         try:
             m = (ApproverMapping.objects
                  .select_related("reporting_person", "cc_person")
                  .prefetch_related("default_cc_users")
                  .get(employee=user))
-            ccs: List[User] = list(m.default_cc_users.all())
-            # include legacy single if present and not already in list
-            if m.cc_person and m.cc_person not in ccs:
-                ccs.append(m.cc_person)
-            return m.reporting_person, ccs
         except ApproverMapping.DoesNotExist:
             return None, []
+        except Exception:
+            logger.exception("ApproverMapping.resolve_multi_for: failed to load mapping")
+            return None, []
+
+        ccs: List[User] = []
+        try:
+            ccs = list(m.default_cc_users.all())
+        except Exception:
+            ccs = []
+
+        try:
+            if m.cc_person and all(u.id != m.cc_person_id for u in ccs if hasattr(u, "id")):
+                ccs.append(m.cc_person)
+        except Exception:
+            pass
+
+        return m.reporting_person, ccs
 
 
 class CCConfiguration(models.Model):
@@ -1004,16 +1034,24 @@ def deactivate_expired_handovers() -> int:
 # ---------------------------------------------------------------------------
 
 def _collect_admin_cc_emails(employee: User) -> List[str]:
-    rp, cc_users = LeaveRequest.resolve_routing_multi_for(employee)
-    emails = []
-    for u in cc_users:
-        if u and u.email:
-            emails.append(u.email)
+    """
+    Be resilient if multi-cc persistence is unavailable.
+    """
+    emails: List[str] = []
+    try:
+        rp, cc_users = LeaveRequest.resolve_routing_multi_for(employee)
+        for u in cc_users:
+            if u and getattr(u, "email", None):
+                emails.append(u.email)
+    except Exception:
+        logger.exception("collect_admin_cc_emails: failed to resolve multi-cc")
+        emails = []
+
     # de-duplicate while preserving order
     seen = set()
     ordered = []
     for e in emails:
-        e_low = e.strip().lower()
+        e_low = (e or "").strip().lower()
         if e_low and e_low not in seen:
             seen.add(e_low)
             ordered.append(e)
