@@ -3,6 +3,7 @@ import os
 import sqlite3
 from pathlib import Path
 from typing import List
+
 from dotenv import load_dotenv
 from django.db.backends.signals import connection_created
 
@@ -20,15 +21,18 @@ def env_list(name: str, default_csv: str = "") -> List[str]:
     raw = os.getenv(name, default_csv) or ""
     return [part.strip() for part in raw.split(",") if part.strip()]
 
+
 def env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name, str(default))
     return str(raw).lower() in ("1", "true", "yes", "on")
+
 
 def env_int(name: str, default: int = 0) -> int:
     try:
         return int(os.getenv(name, str(default)))
     except (ValueError, TypeError):
         return default
+
 
 # -----------------------------------------------------------------------------
 # CORE
@@ -102,7 +106,13 @@ LOCAL_APPS = [
     "dashboard.apps.DashboardConfig",
     "apps.settings.apps.SettingsConfig",
 ]
+
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
+
+# Ensure django-celery-beat is installed (you already had this at the bottom,
+# but keeping it here is safer and avoids "append later" surprises)
+if "django_celery_beat" not in INSTALLED_APPS:
+    INSTALLED_APPS.append("django_celery_beat")
 
 # -----------------------------------------------------------------------------
 # MIDDLEWARE
@@ -249,19 +259,30 @@ def _robust_sqlite_decoder(val):
     except Exception:
         return None
 
+
 try:
     for dt_type in [
-        "timestamp", "datetime", "timestamptz", "timestamp with time zone",
-        "date", "time", "TIMESTAMP", "DATETIME", "DATE", "TIME",
+        "timestamp",
+        "datetime",
+        "timestamptz",
+        "timestamp with time zone",
+        "date",
+        "time",
+        "TIMESTAMP",
+        "DATETIME",
+        "DATE",
+        "TIME",
     ]:
         sqlite3.register_converter(dt_type, _robust_sqlite_decoder)
 except Exception:
     pass
 
+
 def _configure_sqlite_connection(sender, connection, **kwargs):
     if connection.vendor != "sqlite":
         return
     try:
+
         def universal_text_factory(data):
             if data is None:
                 return None
@@ -288,6 +309,7 @@ def _configure_sqlite_connection(sender, connection, **kwargs):
                 return str(data)
             except Exception:
                 return ""
+
         connection.connection.text_factory = universal_text_factory
     except Exception:
         pass
@@ -306,11 +328,14 @@ def _configure_sqlite_connection(sender, connection, **kwargs):
     except Exception:
         pass
 
+
 connection_created.connect(_configure_sqlite_connection)
 
 try:
     from django.db.backends.sqlite3.operations import DatabaseOperations  # type: ignore
+
     _orig_convert = DatabaseOperations.convert_datetimefield_value
+
     def safe_convert_datetimefield_value(self, value, expression, connection):
         if value is None:
             return None
@@ -332,6 +357,7 @@ try:
                     return None
                 return None
             raise
+
     DatabaseOperations.convert_datetimefield_value = safe_convert_datetimefield_value
 except Exception:
     pass
@@ -348,28 +374,82 @@ LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
-        "verbose": {"format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}", "style": "{"},
+        "verbose": {
+            "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
+            "style": "{",
+        },
         "simple": {"format": "{levelname} {asctime} {message}", "style": "{"},
-        "detailed": {"format": "[{asctime}] {levelname} {name} {module}.{funcName}:{lineno} - {message}", "style": "{"},
+        "detailed": {
+            "format": "[{asctime}] {levelname} {name} {module}.{funcName}:{lineno} - {message}",
+            "style": "{",
+        },
     },
     "handlers": {
-        "console": {"level": "DEBUG" if DEBUG else "WARNING", "class": "logging.StreamHandler", "formatter": "simple"},
-        "file": {"level": "INFO", "class": "logging.FileHandler", "filename": str(LOGS_DIR / "django.log"), "formatter": "verbose", "encoding": "utf-8"},
-        "permissions_file": {"level": "DEBUG" if DEBUG else "INFO", "class": "logging.FileHandler", "filename": str(LOGS_DIR / "permissions.log"), "formatter": "detailed", "encoding": "utf-8"},
-        "tasks_file": {"level": "DEBUG" if DEBUG else "INFO", "class": "logging.FileHandler", "filename": str(LOGS_DIR / "tasks.log"), "formatter": "detailed", "encoding": "utf-8"},
-        "bulk_upload_file": {"level": "INFO", "class": "logging.FileHandler", "filename": str(LOGS_DIR / "bulk_upload.log"), "formatter": "detailed", "encoding": "utf-8"},
+        "console": {
+            "level": "DEBUG" if DEBUG else "WARNING",
+            "class": "logging.StreamHandler",
+            "formatter": "simple",
+        },
+        "file": {
+            "level": "INFO",
+            "class": "logging.FileHandler",
+            "filename": str(LOGS_DIR / "django.log"),
+            "formatter": "verbose",
+            "encoding": "utf-8",
+        },
+        "permissions_file": {
+            "level": "DEBUG" if DEBUG else "INFO",
+            "class": "logging.FileHandler",
+            "filename": str(LOGS_DIR / "permissions.log"),
+            "formatter": "detailed",
+            "encoding": "utf-8",
+        },
+        "tasks_file": {
+            "level": "DEBUG" if DEBUG else "INFO",
+            "class": "logging.FileHandler",
+            "filename": str(LOGS_DIR / "tasks.log"),
+            "formatter": "detailed",
+            "encoding": "utf-8",
+        },
+        "bulk_upload_file": {
+            "level": "INFO",
+            "class": "logging.FileHandler",
+            "filename": str(LOGS_DIR / "bulk_upload.log"),
+            "formatter": "detailed",
+            "encoding": "utf-8",
+        },
     },
     "root": {"handlers": ["console"], "level": "WARNING"},
     "loggers": {
         "django": {"handlers": ["file"], "level": "INFO", "propagate": False},
         "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
-        "apps.users.permissions": {"handlers": ["permissions_file"] + (["console"] if DEBUG else []), "level": "DEBUG" if DEBUG else "INFO", "propagate": False},
-        "apps.users.middleware": {"handlers": ["permissions_file"] + (["console"] if DEBUG else []), "level": "DEBUG" if DEBUG else "INFO", "propagate": False},
-        "apps.tasks": {"handlers": ["tasks_file", "console"], "level": "DEBUG" if DEBUG else "INFO", "propagate": False},
-        "apps.tasks.views": {"handlers": ["bulk_upload_file", "console"], "level": "INFO", "propagate": False},
+        "apps.users.permissions": {
+            "handlers": ["permissions_file"] + (["console"] if DEBUG else []),
+            "level": "DEBUG" if DEBUG else "INFO",
+            "propagate": False,
+        },
+        "apps.users.middleware": {
+            "handlers": ["permissions_file"] + (["console"] if DEBUG else []),
+            "level": "DEBUG" if DEBUG else "INFO",
+            "propagate": False,
+        },
+        "apps.tasks": {
+            "handlers": ["tasks_file", "console"],
+            "level": "DEBUG" if DEBUG else "INFO",
+            "propagate": False,
+        },
+        "apps.tasks.views": {
+            "handlers": ["bulk_upload_file", "console"],
+            "level": "INFO",
+            "propagate": False,
+        },
         "apps.tasks.signals": {"handlers": ["tasks_file"], "level": "INFO", "propagate": False},
         "apps.leave": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},
-        "apps.leave.services.notifications": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},
+        "apps.leave.services.notifications": {
+            "handlers": ["file", "console"],
+            "level": "INFO",
+            "propagate": False,
+        },
     },
 }
 
@@ -435,12 +515,18 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "BOS Lak
 
 REIMBURSEMENT_SENDER_EMAIL = os.getenv("REIMBURSEMENT_SENDER_EMAIL", "amreen@blueoceansteels.com")
 REIMBURSEMENT_SENDER_NAME = os.getenv("REIMBURSEMENT_SENDER_NAME", "Amreen")
-REIMBURSEMENT_EMAIL_FROM = os.getenv("REIMBURSEMENT_EMAIL_FROM", f"{REIMBURSEMENT_SENDER_NAME} <{REIMBURSEMENT_SENDER_EMAIL}>")
+REIMBURSEMENT_EMAIL_FROM = os.getenv(
+    "REIMBURSEMENT_EMAIL_FROM", f"{REIMBURSEMENT_SENDER_NAME} <{REIMBURSEMENT_SENDER_EMAIL}>"
+)
 
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 30)
 EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
 SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", True)
 SEND_RECUR_EMAILS_ONLY_AT_10AM = env_bool("SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
+
+# ✅ NEW (kept OFF to match your workflow): delegation immediate mail toggle
+SEND_DELEGATION_IMMEDIATE_EMAIL = env_bool("SEND_DELEGATION_IMMEDIATE_EMAIL", False)
+
 EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "[BOS Lakshya] ")
 LEAVE_EMAIL_FROM = os.getenv("LEAVE_EMAIL_FROM", DEFAULT_FROM_EMAIL)
 LEAVE_EMAIL_REPLY_TO_EMPLOYEE = env_bool("LEAVE_EMAIL_REPLY_TO_EMPLOYEE", True)
@@ -605,19 +691,91 @@ PERMISSION_DEBUG_ENABLED = env_bool("PERMISSION_DEBUG_ENABLED", DEBUG and not ON
 # -----------------------------------------------------------------------------
 # CELERY CONFIGURATION
 # -----------------------------------------------------------------------------
+from celery.schedules import crontab  # noqa: E402
+
 ENABLE_CELERY_EMAIL = env_bool("ENABLE_CELERY_EMAIL", False)
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/1")
+
+def _redis_db(url: str, db: int) -> str:
+    """
+    Convert redis URL to a specific DB safely.
+    Examples:
+      redis://host:6379/0 -> redis://host:6379/1
+      rediss://host:6379   -> rediss://host:6379/1
+    """
+    u = (url or "").strip()
+    if not u:
+        return u
+    # If there's already a "/<number>" at end, replace it
+    parts = u.rsplit("/", 1)
+    if len(parts) == 2 and parts[1].isdigit():
+        return f"{parts[0]}/{db}"
+    # Otherwise append
+    if u.endswith("/"):
+        return f"{u}{db}"
+    return f"{u}/{db}"
+
+# Prefer explicit CELERY_* envs, else reuse REDIS_URL if present, else local default
+CELERY_BROKER_URL = (
+    os.getenv("CELERY_BROKER_URL", "").strip()
+    or (_redis_db(REDIS_URL, 0) if REDIS_URL else "redis://127.0.0.1:6379/0")
+)
+CELERY_RESULT_BACKEND = (
+    os.getenv("CELERY_RESULT_BACKEND", "").strip()
+    or (_redis_db(REDIS_URL, 1) if REDIS_URL else "redis://127.0.0.1:6379/1")
+)
+
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
+
+# IMPORTANT: schedule in IST
 CELERY_TIMEZONE = TIME_ZONE
+
+# Keep UTC enabled (fine) as long as CELERY_TIMEZONE is set to Asia/Kolkata
 CELERY_ENABLE_UTC = True
+
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60
 CELERY_TASK_SOFT_TIME_LIMIT = 60
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
 
-if "django_celery_beat" not in INSTALLED_APPS:
-    INSTALLED_APPS.append("django_celery_beat")
+# If you want Beat schedules stored in DB, Celery Beat should use this scheduler
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# -------------------------------
+# Beat schedule (IST)
+# -------------------------------
+CELERY_BEAT_SCHEDULE = {
+    # Due-day mail fan-out: run at 10:00, 10:05, 10:10 IST (safe + deduped)
+    "tasks_due_today_10am_fanout": {
+        "task": "apps.tasks.tasks.send_due_today_assignments",
+        "schedule": crontab(hour=10, minute="0-10/5"),
+    },
+
+    # Delegation reminders: check every 5 minutes
+    "delegation_reminders_every_5_minutes": {
+        "task": "apps.tasks.tasks.dispatch_delegation_reminders",
+        "schedule": crontab(minute="*/5"),
+    },
+
+    # Recurrence generator safety net: hourly at :15
+    "generate_recurring_checklists_hourly": {
+        "task": "apps.tasks.tasks.generate_recurring_checklists",
+        "schedule": crontab(minute=15, hour="*/1"),
+        "args": (),  # keep default dry_run=False
+    },
+
+    # Optional health audit daily at 02:30 IST
+    "audit_recurring_health_daily": {
+        "task": "apps.tasks.tasks.audit_recurring_health",
+        "schedule": crontab(hour=2, minute=30),
+    },
+
+    # ✅ End-of-day consolidated pending task summary at 19:00 IST (Mon–Sat)
+    # Holiday skipping is enforced inside the task using Holiday.is_holiday().
+    "daily_pending_task_summary_7pm_mon_sat": {
+        "task": "apps.tasks.tasks.send_daily_pending_task_summary",
+        "schedule": crontab(hour=19, minute=0, day_of_week="1-6"),
+    },
+}

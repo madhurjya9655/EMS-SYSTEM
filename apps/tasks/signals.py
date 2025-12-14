@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
 SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
+# If Celery fanout is enabled, DO NOT send/schedule emails from signals (avoid duplicates)
+ENABLE_CELERY_EMAIL = getattr(settings, "ENABLE_CELERY_EMAIL", False)
+
 # ---------------------------------------------------------------------
 # Import recurrence helpers – prefer recurrence_utils (final rules).
 # ---------------------------------------------------------------------
@@ -195,6 +198,8 @@ def _schedule_10am_email_for_checklist(obj: Checklist) -> None:
     Schedule/send the assignee-only email for ANY created checklist (first or recurring)
     at ~10:00 IST on its planned date.
     """
+    if ENABLE_CELERY_EMAIL:
+        return
     if not SEND_EMAILS_FOR_AUTO_RECUR:
         return
 
@@ -266,6 +271,8 @@ def _schedule_10am_email_for_delegation(obj: Delegation) -> None:
     Schedule/send the assignee-only email for ANY created delegation
     at ~10:00 IST on its planned date (delegations are one-time).
     """
+    if ENABLE_CELERY_EMAIL:
+        return
     if not SEND_EMAILS_FOR_AUTO_RECUR:
         return
 
@@ -337,6 +344,8 @@ def _send_delegation_assignment_immediate(obj: Delegation) -> None:
     One-time "New Delegation Assigned" email, sent immediately after creation.
     Daily / 10:00 AM reminders are handled separately.
     """
+    if ENABLE_CELERY_EMAIL:
+        return
     if not SEND_EMAILS_FOR_AUTO_RECUR:
         return
 
@@ -490,6 +499,7 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                 nxt_ist = prev_ist + relativedelta(years=step)
             d = nxt_ist.date()
             next_dt = IST.localize(datetime.combine(d, dt_time(19, 0))).astimezone(tz)
+
         # NOW: shift to next working day (Sunday/holiday) and pin 19:00
         next_dt = _shift_to_next_working_day_7pm(next_dt)
     except Exception as e:
@@ -536,10 +546,12 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                     nxt_ist = prev_ist + relativedelta(years=step)
                 d = nxt_ist.date()
                 tmp = IST.localize(datetime.combine(d, dt_time(19, 0))).astimezone(tz)
+
             next_dt = _shift_to_next_working_day_7pm(tmp)
         except Exception:
             break
         safety += 1
+
     if not next_dt:
         logger.warning(
             _utils._safe_console_text(
@@ -613,6 +625,8 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
 def schedule_checklist_email_on_create(sender, instance: Checklist, created: bool, **kwargs):
     if not created:
         return
+    if ENABLE_CELERY_EMAIL:
+        return
     try:
         _on_commit(lambda: _schedule_10am_email_for_checklist(instance))
     except Exception:
@@ -625,6 +639,8 @@ def schedule_checklist_email_on_create(sender, instance: Checklist, created: boo
 @receiver(post_save, sender=Delegation)
 def schedule_delegation_email_on_create(sender, instance: Delegation, created: bool, **kwargs):
     if not created:
+        return
+    if ENABLE_CELERY_EMAIL:
         return
     # 1) Immediate "New Delegation Assigned" email
     try:

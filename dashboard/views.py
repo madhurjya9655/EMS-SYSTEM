@@ -11,6 +11,8 @@ from dateutil.relativedelta import relativedelta
 from django.contrib.auth.decorators import login_required
 from django.utils import timezone
 from django.shortcuts import render
+from django.core.cache import cache
+from django.conf import settings
 
 # IMPORTANT: Only import TASKS-side models at module import time.
 # Do NOT import anything from apps.leave.* at the top of the file.
@@ -30,6 +32,10 @@ IST = ZoneInfo('Asia/Kolkata')
 # - Dashboard/email gating: 10:00 IST same day
 EVENING_HOUR = 19
 EVENING_MINUTE = 0
+
+# Cache TTLs (safe-only caching)
+_DASH_TTL = int(getattr(settings, "DASHBOARD_CACHE_TIMEOUT", 300) or 300)
+_DASH_FAST_TTL = min(_DASH_TTL, 60)  # volatile counts: keep short
 
 
 # ----------------------------- logging helper -----------------------------
@@ -61,17 +67,17 @@ def next_working_day(dt_: date) -> date:
     return dt_
 
 
-def day_bounds(d: date):
-    tz = timezone.get_current_timezone()
-    start = timezone.make_aware(datetime.combine(d, dt_time.min), tz)
-    end = start + timedelta(days=1)
-    return start, end
-
-
-def span_bounds(d_from: date, d_to_inclusive: date):
-    start, _ = day_bounds(d_from)
-    _, end = day_bounds(d_to_inclusive)
-    return start, end
+def _ist_span_to_project_bounds(d_from: date, d_to_inclusive: date):
+    """
+    Build [start, end) datetimes in PROJECT timezone, aligned to IST date boundaries.
+    Uses end-exclusive bounds (better for index usage).
+    """
+    project_tz = timezone.get_current_timezone()
+    start_ist = timezone.make_aware(datetime.combine(d_from, dt_time.min), IST)
+    end_ist = timezone.make_aware(datetime.combine(d_to_inclusive + timedelta(days=1), dt_time.min), IST)
+    start_proj = timezone.localtime(start_ist, project_tz)
+    end_proj = timezone.localtime(end_ist, project_tz)
+    return start_proj, end_proj
 
 
 def _coerce_date_safe(dtor):
@@ -143,8 +149,7 @@ def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> datet
     # Pin to 19:00 IST per final rule
     cur_ist = cur_ist.replace(hour=EVENING_HOUR, minute=EVENING_MINUTE, second=0, microsecond=0)
 
-    # IMPORTANT: No working-day shift here; exact stepped date.
-    return timezone.make_naive(cur_ist, IST).replace(tzinfo=None).astimezone(project_tz) if hasattr(cur_ist, "astimezone") else cur_ist.astimezone(project_tz)
+    return timezone.localtime(cur_ist, project_tz)
 
 
 # ---------- Checklist visibility gating ----------
@@ -172,7 +177,6 @@ def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     if task_date > today:
         return False
 
-    # Gate today's checklist items until 10:00 IST
     ten_am = dt_time(10, 0, 0)
     return now_ist.timetz().replace(tzinfo=None) >= ten_am
 
@@ -184,7 +188,6 @@ def _normalize_task_type(val) -> str | None:
     """
     if val is None:
         return None
-    # ints (enum)
     try:
         ival = int(val)
         mapping_int = {1: "checklist", 2: "delegation", 3: "help_ticket"}
@@ -192,7 +195,6 @@ def _normalize_task_type(val) -> str | None:
             return mapping_int[ival]
     except Exception:
         pass
-    # strings
     s = str(val).strip().lower()
     if s in ("checklist", "delegation", "help_ticket", "help ticket"):
         return "help_ticket" if s.startswith("help") else s
@@ -207,7 +209,6 @@ def _get_handover_tasks_for_user(user, today_date: date):
     for tasks handed over TO the given user and active *today* (IST date).
     """
     try:
-        # LAZY import to avoid circular imports at module import time
         from apps.leave.models import LeaveHandover, LeaveStatus  # type: ignore
 
         active = (
@@ -219,7 +220,7 @@ def _get_handover_tasks_for_user(user, today_date: date):
                 effective_end_date__gte=today_date,
                 leave_request__status=LeaveStatus.APPROVED,
             )
-            .select_related('leave_request')
+            .only("task_type", "original_task_id")
         )
 
         out = {'checklist': [], 'delegation': [], 'help_ticket': []}
@@ -244,7 +245,6 @@ def _get_outgoing_handover_ids_for_user(user, today_date: date):
     Returns: {'checklist': [ids], 'delegation': [ids], 'help_ticket': [ids]}
     """
     try:
-        # LAZY import to avoid circular imports at module import time
         from apps.leave.models import LeaveHandover, LeaveStatus  # type: ignore
 
         active = (
@@ -289,6 +289,8 @@ def calculate_checklist_assigned_time(qs, date_from, date_to):
     date_from = _coerce_date_safe(date_from)
     date_to = _coerce_date_safe(date_to)
 
+    qs = qs.only("planned_date", "mode", "frequency", "time_per_task_minutes")
+
     for task in qs:
         try:
             mode = getattr(task, 'mode', '') or ''
@@ -297,7 +299,6 @@ def calculate_checklist_assigned_time(qs, date_from, date_to):
                 freq = int(raw_freq)
             except Exception:
                 freq = 1
-            # Clamp per spec
             freq = max(1, min(freq, 10))
 
             minutes = task.time_per_task_minutes or 0
@@ -349,35 +350,40 @@ def calculate_checklist_assigned_time(qs, date_from, date_to):
 
 
 def calculate_delegation_assigned_time_safe(assign_to_user, date_from, date_to):
-    total = 0
-
     try:
         date_from = _coerce_date_safe(date_from)
         date_to = _coerce_date_safe(date_to)
+        start_dt, end_dt = _ist_span_to_project_bounds(date_from, date_to)
 
-        start_dt, end_dt = span_bounds(date_from, date_to)
+        agg = (
+            Delegation.objects.filter(
+                assign_to=assign_to_user,
+                planned_date__gte=start_dt,
+                planned_date__lt=end_dt,
+                status='Pending'
+            )
+            .aggregate(total=timezone.models.Sum("time_per_task_minutes") if hasattr(timezone, "models") else None)
+        )
+    except Exception:
+        agg = None
 
+    if isinstance(agg, dict) and "total" in agg:
+        return int(agg["total"] or 0)
+
+    # Fallback (keeps behavior safe if aggregate path fails in odd environments)
+    total = 0
+    try:
+        start_dt, end_dt = _ist_span_to_project_bounds(_coerce_date_safe(date_from), _coerce_date_safe(date_to))
         delegations = Delegation.objects.filter(
             assign_to=assign_to_user,
             planned_date__gte=start_dt,
             planned_date__lt=end_dt,
             status='Pending'
-        )
-
+        ).only("planned_date", "time_per_task_minutes")
         for d in delegations:
-            try:
-                planned = d.planned_date
-                if planned and timezone.is_naive(planned):
-                    planned = timezone.make_aware(planned, timezone.get_current_timezone())
-                planned_date = _coerce_date_safe(planned)
-                if date_from <= planned_date <= date_to:
-                    total += d.time_per_task_minutes or 0
-            except Exception as e:
-                logger.error(_safe_console_text(f"Error calculating delegation time for delegation {getattr(d, 'id', '?')}: {e}"))
-                continue
-    except Exception as e:
-        logger.error(_safe_console_text(f"Error in delegation time calculation: {e}"))
-
+            total += d.time_per_task_minutes or 0
+    except Exception:
+        pass
     return total
 
 
@@ -414,61 +420,73 @@ def dashboard_home(request):
     start_prev = start_current - timedelta(days=7)                    # Monday last week
     end_prev = start_current - timedelta(days=1)                      # Sunday last week
 
-    # ---------- Weekly scores (DATE-ONLY filters; safe for DateField/DateTimeField) ----------
-    try:
-        # Checklist & Delegation: use __date transforms (works on DateTimeField)
-        curr_chk = Checklist.objects.filter(
-            assign_to=request.user, status='Completed',
-            planned_date__date__gte=start_current, planned_date__date__lte=today_ist,
-        ).count()
-        prev_chk = Checklist.objects.filter(
-            assign_to=request.user, status='Completed',
-            planned_date__date__gte=start_prev, planned_date__date__lte=end_prev,
-        ).count()
+    # ----- Cache: weekly score + pending counts (safe short TTL) -----
+    cache_key_week = f"dash:week_score:u{request.user.id}:{today_ist.isoformat()}"
+    cache_key_pending = f"dash:pending:u{request.user.id}:{today_ist.isoformat()}"
 
-        curr_del = Delegation.objects.filter(
-            assign_to=request.user, status='Completed',
-            planned_date__date__gte=start_current, planned_date__date__lte=today_ist,
-        ).count()
-        prev_del = Delegation.objects.filter(
-            assign_to=request.user, status='Completed',
-            planned_date__date__gte=start_prev, planned_date__date__lte=end_prev,
-        ).count()
+    week_score = cache.get(cache_key_week)
+    pending_tasks = cache.get(cache_key_pending)
 
-        # HelpTicket.planned_date may be a DateField → filter by dates directly (no __date).
-        curr_help = HelpTicket.objects.filter(
-            assign_to=request.user, status='Closed',
-            planned_date__gte=start_current, planned_date__lte=today_ist,
-        ).count()
-        prev_help = HelpTicket.objects.filter(
-            assign_to=request.user, status='Closed',
-            planned_date__gte=start_prev, planned_date__lte=end_prev,
-        ).count()
-    except Exception as e:
-        logger.error(_safe_console_text(f"Error calculating weekly scores: {e}"))
-        curr_chk = prev_chk = curr_del = prev_del = curr_help = prev_help = 0
+    if week_score is None or pending_tasks is None:
+        try:
+            curr_start_dt, curr_end_dt = _ist_span_to_project_bounds(start_current, today_ist)
+            prev_start_dt, prev_end_dt = _ist_span_to_project_bounds(start_prev, end_prev)
 
-    week_score = {
-        'checklist':   {'previous': prev_chk,   'current': curr_chk},
-        'delegation':  {'previous': prev_del,   'current': curr_del},
-        'help_ticket': {'previous': prev_help,  'current': curr_help},
-    }
+            curr_chk = Checklist.objects.filter(
+                assign_to=request.user, status='Completed',
+                planned_date__gte=curr_start_dt, planned_date__lt=curr_end_dt,
+            ).count()
+            prev_chk = Checklist.objects.filter(
+                assign_to=request.user, status='Completed',
+                planned_date__gte=prev_start_dt, planned_date__lt=prev_end_dt,
+            ).count()
 
-    # Pending counts
-    try:
-        pending_tasks = {
-            'checklist':   Checklist.objects.filter(assign_to=request.user, status='Pending').count(),
-            'delegation':  Delegation.objects.filter(assign_to=request.user, status='Pending').count(),
-            'help_ticket': HelpTicket.objects.filter(assign_to=request.user).exclude(status='Closed').count(),
-        }
-    except Exception as e:
-        logger.error(_safe_console_text(f"Error calculating pending counts: {e}"))
-        pending_tasks = {'checklist': 0, 'delegation': 0, 'help_ticket': 0}
+            curr_del = Delegation.objects.filter(
+                assign_to=request.user, status='Completed',
+                planned_date__gte=curr_start_dt, planned_date__lt=curr_end_dt,
+            ).count()
+            prev_del = Delegation.objects.filter(
+                assign_to=request.user, status='Completed',
+                planned_date__gte=prev_start_dt, planned_date__lt=prev_end_dt,
+            ).count()
+
+            curr_help = HelpTicket.objects.filter(
+                assign_to=request.user, status='Closed',
+                planned_date__gte=curr_start_dt, planned_date__lt=curr_end_dt,
+            ).count()
+            prev_help = HelpTicket.objects.filter(
+                assign_to=request.user, status='Closed',
+                planned_date__gte=prev_start_dt, planned_date__lt=prev_end_dt,
+            ).count()
+
+            week_score = {
+                'checklist':   {'previous': prev_chk,   'current': curr_chk},
+                'delegation':  {'previous': prev_del,   'current': curr_del},
+                'help_ticket': {'previous': prev_help,  'current': curr_help},
+            }
+
+            pending_tasks = {
+                'checklist':   Checklist.objects.filter(assign_to=request.user, status='Pending').count(),
+                'delegation':  Delegation.objects.filter(assign_to=request.user, status='Pending').count(),
+                'help_ticket': HelpTicket.objects.filter(assign_to=request.user).exclude(status='Closed').count(),
+            }
+
+            cache.set(cache_key_week, week_score, _DASH_FAST_TTL)
+            cache.set(cache_key_pending, pending_tasks, _DASH_FAST_TTL)
+
+        except Exception as e:
+            logger.error(_safe_console_text(f"Error calculating weekly/pending scores: {e}"))
+            week_score = {
+                'checklist': {'previous': 0, 'current': 0},
+                'delegation': {'previous': 0, 'current': 0},
+                'help_ticket': {'previous': 0, 'current': 0},
+            }
+            pending_tasks = {'checklist': 0, 'delegation': 0, 'help_ticket': 0}
 
     selected = request.GET.get('task_type')
     today_only = (request.GET.get('today') == '1' or request.GET.get('today_only') == '1')
 
-    # Build IST-aligned bounds once
+    # Build IST-aligned bounds once (project tz)
     start_today_proj = timezone.localtime(
         timezone.make_aware(datetime.combine(today_ist, dt_time.min), IST),
         project_tz
@@ -480,24 +498,45 @@ def dashboard_home(request):
 
     # Handover tasks for this user (IST "today")
     handover_incoming = _get_handover_tasks_for_user(request.user, today_ist)
-    # IDs of tasks this user handed over (so we exclude from their base lists)
     handover_outgoing = _get_outgoing_handover_ids_for_user(request.user, today_ist)
+
+    # Gate anchor
+    ten_am = dt_time(10, 0, 0)
+    after_10 = now_ist.timetz().replace(tzinfo=None) >= ten_am
 
     try:
         # -------------------- Checklists --------------------
-        base_checklists = list(
-            Checklist.objects
-            .filter(
-                assign_to=request.user,
-                status='Pending',
-                planned_date__lte=end_today_proj
+        # IMPORTANT: base list respects 10AM gate using DB filter to avoid loading hidden rows
+        if today_only:
+            if after_10:
+                base_checklists = list(
+                    Checklist.objects
+                    .filter(
+                        assign_to=request.user,
+                        status='Pending',
+                        planned_date__gte=start_today_proj,
+                        planned_date__lte=end_today_proj,
+                    )
+                    .exclude(id__in=handover_outgoing['checklist'])
+                    .select_related('assign_by', 'assign_to')
+                    .order_by('planned_date')
+                )
+            else:
+                base_checklists = []
+        else:
+            if after_10:
+                planned_filter = {'planned_date__lte': end_today_proj}
+            else:
+                planned_filter = {'planned_date__lt': start_today_proj}  # hide today's items before 10AM
+            base_checklists = list(
+                Checklist.objects
+                .filter(assign_to=request.user, status='Pending', **planned_filter)
+                .exclude(id__in=handover_outgoing['checklist'])
+                .select_related('assign_by', 'assign_to')
+                .order_by('planned_date')
             )
-            .exclude(id__in=handover_outgoing['checklist'])  # HIDE tasks handed over away
-            .select_related('assign_by', 'assign_to')
-            .order_by('planned_date')
-        )
 
-        # Include handed-over checklists received by this user
+        # Include handed-over checklists (always visible per existing behavior)
         if handover_incoming['checklist']:
             ho_qs = list(
                 Checklist.objects
@@ -531,8 +570,9 @@ def dashboard_home(request):
                     planned_date__gte=start_today_proj,
                     planned_date__lte=now_project_tz,
                 )
-                .exclude(id__in=handover_outgoing['delegation'])  # HIDE handed-over
-                .select_related('assign_by', 'assign_to').order_by('planned_date')
+                .exclude(id__in=handover_outgoing['delegation'])
+                .select_related('assign_by', 'assign_to')
+                .order_by('planned_date')
             )
         else:
             base_delegations = list(
@@ -540,8 +580,9 @@ def dashboard_home(request):
                     assign_to=request.user, status='Pending',
                     planned_date__lte=end_today_proj
                 )
-                .exclude(id__in=handover_outgoing['delegation'])  # HIDE handed-over
-                .select_related('assign_by', 'assign_to').order_by('planned_date')
+                .exclude(id__in=handover_outgoing['delegation'])
+                .select_related('assign_by', 'assign_to')
+                .order_by('planned_date')
             )
 
         if handover_incoming['delegation']:
@@ -549,7 +590,9 @@ def dashboard_home(request):
                 Delegation.objects.filter(
                     id__in=handover_incoming['delegation'], status='Pending',
                     planned_date__lte=end_today_proj
-                ).select_related('assign_by', 'assign_to').order_by('planned_date')
+                )
+                .select_related('assign_by', 'assign_to')
+                .order_by('planned_date')
             )
             for t in ho_del:
                 t.is_handover = True
@@ -558,7 +601,6 @@ def dashboard_home(request):
             delegation_qs = base_delegations
 
         # ------------------- Help Tickets -------------------
-        # Help tickets appear immediately (no 10:00 gating).
         if today_only:
             base_help = list(
                 HelpTicket.objects.filter(
@@ -567,8 +609,9 @@ def dashboard_home(request):
                     planned_date__lte=now_project_tz,
                 )
                 .exclude(status='Closed')
-                .exclude(id__in=handover_outgoing['help_ticket'])  # HIDE handed-over
-                .select_related('assign_by', 'assign_to').order_by('planned_date')
+                .exclude(id__in=handover_outgoing['help_ticket'])
+                .select_related('assign_by', 'assign_to')
+                .order_by('planned_date')
             )
         else:
             base_help = list(
@@ -576,8 +619,9 @@ def dashboard_home(request):
                     assign_to=request.user, planned_date__lte=end_today_proj
                 )
                 .exclude(status='Closed')
-                .exclude(id__in=handover_outgoing['help_ticket'])  # HIDE handed-over
-                .select_related('assign_by', 'assign_to').order_by('planned_date')
+                .exclude(id__in=handover_outgoing['help_ticket'])
+                .select_related('assign_by', 'assign_to')
+                .order_by('planned_date')
             )
 
         if handover_incoming['help_ticket']:
@@ -585,7 +629,10 @@ def dashboard_home(request):
                 HelpTicket.objects.filter(
                     id__in=handover_incoming['help_ticket'],
                     planned_date__lte=end_today_proj
-                ).exclude(status='Closed').select_related('assign_by', 'assign_to').order_by('planned_date')
+                )
+                .exclude(status='Closed')
+                .select_related('assign_by', 'assign_to')
+                .order_by('planned_date')
             )
             for t in ho_help:
                 t.is_handover = True
@@ -605,7 +652,6 @@ def dashboard_home(request):
         delegation_qs = []
         help_ticket_qs = []
 
-    # choose tab
     if selected == 'delegation':
         tasks = delegation_qs
     elif selected == 'help_ticket':
@@ -613,7 +659,6 @@ def dashboard_home(request):
     else:
         tasks = checklist_qs
 
-    # time aggregates
     try:
         prev_min = calculate_checklist_assigned_time(
             Checklist.objects.filter(assign_to=request.user, status='Pending'),
@@ -629,11 +674,9 @@ def dashboard_home(request):
         logger.error(_safe_console_text(f"Error calculating time aggregations: {e}"))
         prev_min = curr_min = prev_min_del = curr_min_del = 0
 
-    # ---------------- Handed-over section with real objects ----------------
     handed_over_full = {'checklist': [], 'delegation': [], 'help_ticket': []}
     completed_by_delegate = {'checklist': [], 'delegation': [], 'help_ticket': []}
     try:
-        # LAZY import to avoid circular imports at module import time
         from apps.leave.models import LeaveHandover, LeaveStatus
 
         active_handover = (
@@ -649,7 +692,6 @@ def dashboard_home(request):
             .order_by("id")
         )
 
-        # Helper to pack one row
         def _row(task, ho, url_prefix: str):
             return {
                 'task': task,
@@ -660,7 +702,6 @@ def dashboard_home(request):
                 'task_url': f"/{url_prefix}/{getattr(task, 'id', '')}/" if getattr(task, 'id', None) else None,
             }
 
-        # Index real tasks by id for each type to avoid N+1 fetch
         cl_ids = [h.original_task_id for h in active_handover if _normalize_task_type(h.task_type) == "checklist"]
         dl_ids = [h.original_task_id for h in active_handover if _normalize_task_type(h.task_type) == "delegation"]
         ht_ids = [h.original_task_id for h in active_handover if _normalize_task_type(h.task_type) == "help_ticket"]
@@ -684,8 +725,6 @@ def dashboard_home(request):
                 if t:
                     handed_over_full['help_ticket'].append(_row(t, ho, "tickets"))
 
-        # ------- Completed by delegate (original owner's dashboard block) -------
-        # Look back a small window for recency (e.g., last 14 days)
         lookback_days = 14
         since_dt = timezone.now() - timedelta(days=lookback_days)
         try:
@@ -695,22 +734,19 @@ def dashboard_home(request):
                 .select_related("new_assignee")
                 .order_by("-updated_at", "-id")
             )
-            # Gather task ids per type
+
             cb_cl_ids = [h.original_task_id for h in recent_handover if _normalize_task_type(h.task_type) == "checklist"]
             cb_dl_ids = [h.original_task_id for h in recent_handover if _normalize_task_type(h.task_type) == "delegation"]
             cb_ht_ids = [h.original_task_id for h in recent_handover if _normalize_task_type(h.task_type) == "help_ticket"]
 
-            # Fetch completed ones only (Closed for tickets)
             cb_cls = Checklist.objects.filter(id__in=cb_cl_ids, status="Completed")
             cb_dls = Delegation.objects.filter(id__in=cb_dl_ids, status="Completed")
             cb_hts = HelpTicket.objects.filter(id__in=cb_ht_ids, status="Closed")
 
-            # Optional: only recently touched/resolved
             cb_cls = [t for t in cb_cls if getattr(t, "updated_at", since_dt) >= since_dt]
             cb_dls = [t for t in cb_dls if getattr(t, "updated_at", since_dt) >= since_dt]
             cb_hts = [t for t in cb_hts if getattr(t, "updated_at", getattr(t, "resolved_at", since_dt)) >= since_dt]
 
-            # Compose rows
             ho_map = {}
             for h in recent_handover:
                 ho_map[h.original_task_id] = h
@@ -732,7 +768,6 @@ def dashboard_home(request):
     except Exception as e:
         logger.error(_safe_console_text(f"Error building handed_over section: {e}"))
 
-    # sample log
     if tasks:
         for i, task in enumerate(tasks[:3], start=1):
             tdt = timezone.localtime(task.planned_date, IST) if task.planned_date else None

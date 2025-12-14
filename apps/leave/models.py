@@ -10,6 +10,7 @@ from typing import Iterable, Optional, List, Tuple
 import pytz
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
@@ -18,12 +19,15 @@ from django.utils.text import slugify
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
+# Typing-only alias (avoids Pylance: "Variable not allowed in type expression")
+UserType = AbstractUser
+
 # Single source of truth for all time-gated rules (IST)
 IST = pytz.timezone("Asia/Kolkata")
 
 # Working window (used for Half Day guards)
 WORK_START_IST = time(9, 30)
-WORK_END_IST   = time(18, 0)
+WORK_END_IST = time(18, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +119,7 @@ class ApproverMapping(models.Model):
 
     # Backward-compatible resolver
     @staticmethod
-    def resolve_for(user: User) -> Tuple[Optional[User], Optional[User]]:
+    def resolve_for(user: UserType) -> Tuple[Optional[UserType], Optional[UserType]]:
         """
         Returns (reporting_person, single_cc_person_for_legacy_use)
 
@@ -142,7 +146,7 @@ class ApproverMapping(models.Model):
 
     # New resolver with multiple CCs
     @staticmethod
-    def resolve_multi_for(user: User) -> Tuple[Optional[User], List[User]]:
+    def resolve_multi_for(user: UserType) -> Tuple[Optional[UserType], List[UserType]]:
         """
         Returns (reporting_person, list_of_cc_users)
 
@@ -159,7 +163,7 @@ class ApproverMapping(models.Model):
             logger.exception("ApproverMapping.resolve_multi_for: failed to load mapping")
             return None, []
 
-        ccs: List[User] = []
+        ccs: List[UserType] = []
         try:
             ccs = list(m.default_cc_users.all())
         except Exception:
@@ -396,17 +400,17 @@ class LeaveRequest(models.Model):
         return d in set(self.ist_dates())
 
     @staticmethod
-    def resolve_routing_for(user: User) -> Tuple[Optional[User], Optional[User]]:
+    def resolve_routing_for(user: UserType) -> Tuple[Optional[UserType], Optional[UserType]]:
         # Backward-compatible wrapper
         return ApproverMapping.resolve_for(user)
 
     @staticmethod
-    def resolve_routing_multi_for(user: User) -> Tuple[Optional[User], List[User]]:
+    def resolve_routing_multi_for(user: UserType) -> Tuple[Optional[UserType], List[UserType]]:
         # New multi-cc resolver
         return ApproverMapping.resolve_multi_for(user)
 
     def _snapshot_employee_details(self) -> None:
-        user: User = self.employee
+        user: UserType = self.employee
         self.employee_email = (user.email or "").strip()
         full_name = (getattr(user, "get_full_name", lambda: "")() or "").strip()
         self.employee_name = (
@@ -561,11 +565,11 @@ class LeaveRequest(models.Model):
             for handover in handovers:
                 handover.effective_start_date = self.start_date
                 handover.effective_end_date = self.end_date
-                handover.save(update_fields=['effective_start_date', 'effective_end_date'])
+                handover.save(update_fields=["effective_start_date", "effective_end_date"])
         except Exception:
             logger.exception("Failed to update handover dates")
 
-    def approve(self, by_user: Optional[User], comment: str = "") -> None:
+    def approve(self, by_user: Optional[UserType], comment: str = "") -> None:
         if self.status != LeaveStatus.PENDING:
             raise ValidationError("Only pending requests can be approved.")
         with transaction.atomic():
@@ -577,7 +581,7 @@ class LeaveRequest(models.Model):
             LeaveDecisionAudit.log(self, DecisionAction.APPROVED, decided_by=by_user)
         _safe_send_decision_email(self)
 
-    def reject(self, by_user: Optional[User], comment: str = "") -> None:
+    def reject(self, by_user: Optional[UserType], comment: str = "") -> None:
         if self.status != LeaveStatus.PENDING:
             raise ValidationError("Only pending requests can be rejected.")
         with transaction.atomic():
@@ -593,11 +597,11 @@ class LeaveRequest(models.Model):
         _safe_send_decision_email(self)
 
     @staticmethod
-    def is_user_blocked_on(user: User, d: date) -> bool:
+    def is_user_blocked_on(user: UserType, d: date) -> bool:
         return LeaveRequest.objects.active_for_blocking().filter(employee=user).covering_ist_date(d).exists()
 
     @staticmethod
-    def get_user_active_leaves(user: User) -> "LeaveRequestQuerySet":
+    def get_user_active_leaves(user: UserType) -> "LeaveRequestQuerySet":
         """Get all currently active leaves for a user"""
         return LeaveRequest.objects.filter(employee=user).active_today()
 
@@ -623,11 +627,11 @@ class LeaveHandoverQuerySet(models.QuerySet):
             effective_end_date__gte=today
         )
 
-    def for_assignee(self, user: User) -> "LeaveHandoverQuerySet":
+    def for_assignee(self, user: UserType) -> "LeaveHandoverQuerySet":
         """Get handovers assigned to a specific user"""
         return self.filter(new_assignee=user)
 
-    def currently_assigned_to(self, user: User) -> "LeaveHandoverQuerySet":
+    def currently_assigned_to(self, user: UserType) -> "LeaveHandoverQuerySet":
         """Get tasks currently assigned to user due to handovers"""
         return self.active_now().for_assignee(user)
 
@@ -726,7 +730,7 @@ class LeaveHandover(models.Model):
         """Get task title/name for display"""
         task_obj = self.get_task_object()
         if task_obj:
-            return getattr(task_obj, 'task_name', None) or getattr(task_obj, 'title', str(task_obj))
+            return getattr(task_obj, "task_name", None) or getattr(task_obj, "title", str(task_obj))
         return f"{self.task_type.title()} #{self.original_task_id}"
 
     def get_task_url(self):
@@ -734,11 +738,11 @@ class LeaveHandover(models.Model):
         from django.urls import reverse
         try:
             if self.task_type == HandoverTaskType.CHECKLIST:
-                return reverse('tasks:edit_checklist', args=[self.original_task_id])
+                return reverse("tasks:edit_checklist", args=[self.original_task_id])
             elif self.task_type == HandoverTaskType.DELEGATION:
-                return reverse('tasks:edit_delegation', args=[self.original_task_id])
+                return reverse("tasks:edit_delegation", args=[self.original_task_id])
             elif self.task_type == HandoverTaskType.HELP_TICKET:
-                return reverse('tasks:edit_help_ticket', args=[self.original_task_id])
+                return reverse("tasks:edit_help_ticket", args=[self.original_task_id])
         except Exception:
             pass
         return None
@@ -779,7 +783,7 @@ class HandoverTaskMixin:
     """Mixin to add handover functionality to task models"""
 
     @classmethod
-    def get_tasks_for_user(cls, user: User):
+    def get_tasks_for_user(cls, user: UserType):
         """Get all tasks for a user including handed over tasks"""
         # Original tasks assigned to user
         original_tasks = cls.objects.filter(assign_to=user)
@@ -796,7 +800,7 @@ class HandoverTaskMixin:
         if handed_over_task_ids:
             handed_over_tasks = cls.objects.filter(id__in=handed_over_task_ids)
             # Combine using union
-            return original_tasks.union(handed_over_tasks).order_by('-id')
+            return original_tasks.union(handed_over_tasks).order_by("-id")
 
         return original_tasks
 
@@ -830,31 +834,31 @@ class HandoverTaskMixin:
             effective_start_date__lte=today,
             effective_end_date__gte=today,
             leave_request__status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED]
-        ).select_related('leave_request', 'original_assignee', 'new_assignee').first()
+        ).select_related("leave_request", "original_assignee", "new_assignee").first()
 
         if handover:
             return {
-                'is_handed_over': True,
-                'original_assignee': handover.original_assignee,
-                'current_assignee': handover.new_assignee,
-                'handover_message': handover.message,
-                'leave_request': handover.leave_request,
-                'handover_end_date': handover.effective_end_date,
-                'handover': handover
+                "is_handed_over": True,
+                "original_assignee": handover.original_assignee,
+                "current_assignee": handover.new_assignee,
+                "handover_message": handover.message,
+                "leave_request": handover.leave_request,
+                "handover_end_date": handover.effective_end_date,
+                "handover": handover,
             }
 
-        return {'is_handed_over': False}
+        return {"is_handed_over": False}
 
     @classmethod
     def _get_task_type_name(cls):
         """Get the task type name for handovers"""
-        if 'checklist' in cls.__name__.lower():
-            return 'checklist'
-        elif 'delegation' in cls.__name__.lower():
-            return 'delegation'
-        elif 'help' in cls.__name__.lower() or 'ticket' in cls.__name__.lower():
-            return 'help_ticket'
-        return 'unknown'
+        if "checklist" in cls.__name__.lower():
+            return "checklist"
+        elif "delegation" in cls.__name__.lower():
+            return "delegation"
+        elif "help" in cls.__name__.lower() or "ticket" in cls.__name__.lower():
+            return "help_ticket"
+        return "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -905,8 +909,8 @@ class DelegationReminder(models.Model):
 
         # Check if the original task is completed
         task_obj = self.leave_handover.get_task_object()
-        if task_obj and hasattr(task_obj, 'status'):
-            if task_obj.status in ['Completed', 'Closed', 'Done']:
+        if task_obj and hasattr(task_obj, "status"):
+            if task_obj.status in ["Completed", "Closed", "Done"]:
                 return False
 
         return True
@@ -916,12 +920,12 @@ class DelegationReminder(models.Model):
         self.last_sent_at = timezone.now()
         self.total_sent += 1
         self.next_run_at = timezone.now() + timedelta(days=self.interval_days)
-        self.save(update_fields=['last_sent_at', 'total_sent', 'next_run_at', 'updated_at'])
+        self.save(update_fields=["last_sent_at", "total_sent", "next_run_at", "updated_at"])
 
     def deactivate(self):
         """Stop sending reminders"""
         self.is_active = False
-        self.save(update_fields=['is_active', 'updated_at'])
+        self.save(update_fields=["is_active", "updated_at"])
 
 
 # ---------------------------------------------------------------------------
@@ -972,7 +976,7 @@ class LeaveDecisionAudit(models.Model):
         return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
 
     @classmethod
-    def log(cls, leave: LeaveRequest, action: str, decided_by: Optional[User] = None, **extra) -> "LeaveDecisionAudit":
+    def log(cls, leave: LeaveRequest, action: str, decided_by: Optional[UserType] = None, **extra) -> "LeaveDecisionAudit":
         return cls.objects.create(leave=leave, action=action, decided_by=decided_by, extra=extra or {})
 
 
@@ -980,28 +984,28 @@ class LeaveDecisionAudit(models.Model):
 # Utility Functions for Dashboard Integration
 # ---------------------------------------------------------------------------
 
-def get_handed_over_tasks_for_user(user: User) -> dict:
+def get_handed_over_tasks_for_user(user: UserType) -> dict:
     """Get all tasks handed over to a user, grouped by type"""
     handovers = LeaveHandover.objects.currently_assigned_to(user).select_related(
-        'leave_request', 'original_assignee'
+        "leave_request", "original_assignee"
     )
 
     result = {
-        'checklist': [],
-        'delegation': [],
-        'help_ticket': []
+        "checklist": [],
+        "delegation": [],
+        "help_ticket": [],
     }
 
     for handover in handovers:
         task_obj = handover.get_task_object()
         if task_obj:
             task_data = {
-                'task': task_obj,
-                'handover': handover,
-                'original_assignee': handover.original_assignee,
-                'leave_request': handover.leave_request,
-                'handover_message': handover.message,
-                'task_url': handover.get_task_url()
+                "task": task_obj,
+                "handover": handover,
+                "original_assignee": handover.original_assignee,
+                "leave_request": handover.leave_request,
+                "handover_message": handover.message,
+                "task_url": handover.get_task_url(),
             }
             result[handover.task_type].append(task_data)
 
@@ -1033,7 +1037,7 @@ def deactivate_expired_handovers() -> int:
 # Signals (emails + audits)
 # ---------------------------------------------------------------------------
 
-def _collect_admin_cc_emails(employee: User) -> List[str]:
+def _collect_admin_cc_emails(employee: UserType) -> List[str]:
     """
     Be resilient if multi-cc persistence is unavailable.
     """
@@ -1079,7 +1083,7 @@ def _safe_send_handover_emails(leave: LeaveRequest) -> None:
     """Send separate handover emails to each assignee"""
     try:
         from apps.leave.services.notifications import send_handover_email
-        handovers = LeaveHandover.objects.filter(leave_request=leave).select_related('new_assignee')
+        handovers = LeaveHandover.objects.filter(leave_request=leave).select_related("new_assignee")
 
         # Group handovers by assignee to send one email per person
         assignee_handovers = {}
@@ -1093,7 +1097,7 @@ def _safe_send_handover_emails(leave: LeaveRequest) -> None:
         for assignee_id, user_handovers in assignee_handovers.items():
             assignee = user_handovers[0].new_assignee
             send_handover_email(leave, assignee, user_handovers)
-            LeaveDecisionAudit.log(leave, DecisionAction.HANDOVER_EMAIL_SENT, extra={'assignee_id': assignee_id})
+            LeaveDecisionAudit.log(leave, DecisionAction.HANDOVER_EMAIL_SENT, extra={"assignee_id": assignee_id})
 
             # Create delegation reminders if configured
             for handover in user_handovers:
@@ -1105,7 +1109,7 @@ def _safe_send_handover_emails(leave: LeaveRequest) -> None:
                     leave_handover=handover,
                     interval_days=reminder_interval,
                     next_run_at=next_run,
-                    is_active=True
+                    is_active=True,
                 )
 
     except Exception:
