@@ -33,37 +33,17 @@ def _cron_authorized(request, token: str = "") -> bool:
 def weekly_congrats_hook(request, token: str = ""):
     """
     Lightweight, token-gated cron hook for weekly congratulations emails.
-
-    Accepts:
-      - Token in path: /internal/cron/weekly-congrats/<token>/
-      - Or header:     X-CRON-TOKEN: <token>
-      - Or query/body: ?token=<token>  /  token=<token>
-
-    Allows GET (for providers that only support GET) and POST.
-    Returns JSON with a simple summary; never echoes back any token.
     """
     if not _cron_authorized(request, token):
         return HttpResponseForbidden("Forbidden")
 
     if not getattr(settings, "FEATURE_EMAIL_NOTIFICATIONS", True):
         return JsonResponse(
-            {
-                "ok": True,
-                "skipped": True,
-                "reason": "feature_flag_off",
-                "method": request.method,
-            }
+            {"ok": True, "skipped": True, "reason": "feature_flag_off", "method": request.method}
         )
 
     summary = send_weekly_congratulations_mails() or {}
-    return JsonResponse(
-        {
-            "ok": True,
-            "triggered": True,
-            "method": request.method,
-            **summary,
-        }
-    )
+    return JsonResponse({"ok": True, "triggered": True, "method": request.method, **summary})
 
 
 @csrf_exempt
@@ -72,37 +52,28 @@ def due_today_assignments_hook(request, token: str = ""):
     """
     Token-gated cron hook for the 10:00 AM due-today fan-out.
 
-    IMPORTANT (why this exists):
-    Render Cron runs in an isolated container and may not see the persistent
-    SQLite disk used by the web service. If cron runs ORM directly, it can hit
-    an empty SQLite DB and fail with: "no such table: tasks_checklist".
-
-    This hook runs INSIDE the web service process (correct DB), and triggers the
-    exact same code path: apps.tasks.tasks.send_due_today_assignments.run()
-    No recurrence/business logic changes.
+    This MUST run inside the WEB service process (shared persistent SQLite),
+    because Render Cron containers do not reliably see the disk.
     """
     if not _cron_authorized(request, token):
         return HttpResponseForbidden("Forbidden")
 
     if not getattr(settings, "FEATURE_EMAIL_NOTIFICATIONS", True):
         return JsonResponse(
-            {
-                "ok": True,
-                "skipped": True,
-                "reason": "feature_flag_off",
-                "method": request.method,
-            }
+            {"ok": True, "skipped": True, "reason": "feature_flag_off", "method": request.method}
         )
 
-    # Lazy import so loading URLs doesn't import celery/task modules at startup
-    from apps.tasks.tasks import send_due_today_assignments
+    try:
+        # Lazy import so URL loading doesn't import celery/task modules at startup
+        from apps.tasks.tasks import send_due_today_assignments
 
-    result = send_due_today_assignments.run()
-    return JsonResponse(
-        {
-            "ok": True,
-            "triggered": True,
-            "method": request.method,
-            "result": result,
-        }
-    )
+        result = send_due_today_assignments.run()
+        return JsonResponse(
+            {"ok": True, "triggered": True, "method": request.method, "result": result}
+        )
+    except Exception as e:
+        # Return JSON so cron can see the real reason instead of a blank HTML 500
+        return JsonResponse(
+            {"ok": False, "error_type": type(e).__name__, "error": str(e)},
+            status=500,
+        )
