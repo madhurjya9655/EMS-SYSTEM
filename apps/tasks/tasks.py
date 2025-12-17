@@ -9,6 +9,7 @@ from celery import shared_task
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
+from django.db.utils import OperationalError, ProgrammingError
 from django.urls import reverse
 from django.utils import timezone
 
@@ -338,16 +339,37 @@ def _fetch_delegations_due_today(start_dt, end_dt):
 
 
 def _fetch_checklists_due_today(start_dt, end_dt):
-    qs = Checklist.objects.filter(status="Pending", planned_date__gte=start_dt, planned_date__lte=end_dt)
-    if qs.exists():
-        return list(qs)
+    """
+    Fetch checklist tasks due today.
 
+    IMPORTANT SAFETY:
+    In some deployments the cron may run against a DB that is not migrated yet
+    (or a different SQLite file). In that case, the underlying table
+    `tasks_checklist` may not exist and Django raises OperationalError.
+
+    We must NOT crash the 10:00 AM cron. Instead, skip checklist emailing
+    gracefully and allow other task types (e.g. Delegation) to continue.
+    This does NOT change recurrence/business rules; it is a runtime guard only.
+    """
     try:
+        qs = Checklist.objects.filter(status="Pending", planned_date__gte=start_dt, planned_date__lte=end_dt)
+        if qs.exists():
+            return list(qs)
+
         today_ist = _now_ist().date()
         qs2 = Checklist.objects.filter(status="Pending", planned_date__date=today_ist)
         return list(qs2)
+
+    except (OperationalError, ProgrammingError) as e:
+        logger.warning(_safe_console_text(f"[DUE@10] Checklist skipped (DB not ready): {e}"))
+        return []
+
     except Exception:
-        return list(qs)
+        # Preserve previous behavior as best-effort, but never crash cron
+        try:
+            return list(qs)  # type: ignore[name-defined]
+        except Exception:
+            return []
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30)

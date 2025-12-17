@@ -1,7 +1,7 @@
 from django.urls import path
 from . import views
 from .views_reports import recurring_report
-from .views_cron import weekly_congrats_hook
+from .views_cron import weekly_congrats_hook, due_today_assignments_hook
 
 app_name = "tasks"
 
@@ -64,15 +64,27 @@ urlpatterns = [
     # -----------------
     # HTTP cron hooks
     # -----------------
-    # Flexible: supports token in path, header, or query/body
+    # Weekly congrats
     path(
         "internal/cron/weekly-congrats/<str:token>/",
         weekly_congrats_hook,
         name="cron_weekly_congrats_with_token",
     ),
-    path(  # also allow calling without token in path
+    path(
         "internal/cron/weekly-congrats/",
         weekly_congrats_hook,
         name="cron_weekly_congrats",
+    ),
+
+    # Due-today 10AM fan-out (checklists + delegations + recurring due emails)
+    path(
+        "internal/cron/due-today/<str:token>/",
+        due_today_assignments_hook,
+        name="cron_due_today_with_token",
+    ),
+    path(
+        "internal/cron/due-today/",
+        due_today_assignments_hook,
+        name="cron_due_today",
     ),
 ]
