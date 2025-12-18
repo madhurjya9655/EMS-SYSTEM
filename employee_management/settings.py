@@ -109,8 +109,7 @@ LOCAL_APPS = [
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
-# Ensure django-celery-beat is installed (you already had this at the bottom,
-# but keeping it here is safer and avoids "append later" surprises)
+# Ensure django-celery-beat is installed
 if "django_celery_beat" not in INSTALLED_APPS:
     INSTALLED_APPS.append("django_celery_beat")
 
@@ -207,7 +206,6 @@ if DATABASE_URL and dj_database_url:
         )
     }
 else:
-    # SQLite: use writable location on Render
     if ON_RENDER:
         DB_PATH = os.getenv("SQLITE_PATH") or "/var/data/db.sqlite3"
     else:
@@ -422,7 +420,6 @@ LOGGING = {
     "root": {"handlers": ["console"], "level": "WARNING"},
     "loggers": {
         "django": {"handlers": ["file"], "level": "INFO", "propagate": False},
-        # Print full tracebacks for request errors to console (visible in Render)
         "django.request": {"handlers": ["console", "file"], "level": "ERROR", "propagate": False},
         "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
         "apps.users.permissions": {
@@ -477,9 +474,9 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 WHITENOISE_MANIFEST_STRICT = False
-WHITENOISE_MAX_AGE = 60 * 60 * 24 * 365  # 1 yr
+WHITENOISE_MAX_AGE = 60 * 60 * 24 * 365
 WHITENOISE_AUTOREFRESH = DEBUG
-WHITENOISE_USE_FINDERS = DEBUG  # dev convenience
+WHITENOISE_USE_FINDERS = DEBUG
 
 STATICFILES_FINDERS = [
     "django.contrib.staticfiles.finders.FileSystemFinder",
@@ -526,7 +523,6 @@ EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
 SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", True)
 SEND_RECUR_EMAILS_ONLY_AT_10AM = env_bool("SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
 
-# ✅ NEW (kept OFF to match your workflow): delegation immediate mail toggle
 SEND_DELEGATION_IMMEDIATE_EMAIL = env_bool("SEND_DELEGATION_IMMEDIATE_EMAIL", False)
 
 EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "[BOS Lakshya] ")
@@ -535,13 +531,11 @@ LEAVE_EMAIL_REPLY_TO_EMPLOYEE = env_bool("LEAVE_EMAIL_REPLY_TO_EMPLOYEE", True)
 LEAVE_DECISION_TOKEN_SALT = os.getenv("LEAVE_DECISION_TOKEN_SALT", "leave-action-v1")
 LEAVE_DECISION_TOKEN_MAX_AGE = env_int("LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)
 
-# Delegation CC rule inputs (configurable)
 ASSIGNER_CC_FOR_DELEGATION = {
     "emails": env_list("DELEGATION_CC_ASSIGNER_EMAILS", ""),
     "usernames": env_list("DELEGATION_CC_ASSIGNER_USERNAMES", ""),
 }
 
-# Fallback to console email backend on Render if no SMTP creds are set
 if ON_RENDER and not os.getenv("EMAIL_HOST_USER"):
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
@@ -702,25 +696,16 @@ from celery.schedules import crontab  # noqa: E402
 ENABLE_CELERY_EMAIL = env_bool("ENABLE_CELERY_EMAIL", False)
 
 def _redis_db(url: str, db: int) -> str:
-    """
-    Convert redis URL to a specific DB safely.
-    Examples:
-      redis://host:6379/0 -> redis://host:6379/1
-      rediss://host:6379   -> rediss://host:6379/1
-    """
     u = (url or "").strip()
     if not u:
         return u
-    # If there's already a "/<number>" at end, replace it
     parts = u.rsplit("/", 1)
     if len(parts) == 2 and parts[1].isdigit():
         return f"{parts[0]}/{db}"
-    # Otherwise append
     if u.endswith("/"):
         return f"{u}{db}"
     return f"{u}/{db}"
 
-# Prefer explicit CELERY_* envs, else reuse REDIS_URL if present, else local default
 CELERY_BROKER_URL = (
     os.getenv("CELERY_BROKER_URL", "").strip()
     or (_redis_db(REDIS_URL, 0) if REDIS_URL else "redis://127.0.0.1:6379/0")
@@ -734,10 +719,7 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 
-# IMPORTANT: schedule in IST
 CELERY_TIMEZONE = TIME_ZONE
-
-# Keep UTC enabled (fine) as long as CELERY_TIMEZONE is set to Asia/Kolkata
 CELERY_ENABLE_UTC = True
 
 CELERY_TASK_TRACK_STARTED = True
@@ -746,20 +728,19 @@ CELERY_TASK_SOFT_TIME_LIMIT = 60
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
 
-# If you want Beat schedules stored in DB, Celery Beat should use this scheduler
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
 # -------------------------------
 # Beat schedule (IST)
 # -------------------------------
 CELERY_BEAT_SCHEDULE = {
-    # Due-day mail fan-out: run at 10:00, 10:05, 10:10 IST (safe + deduped)
+    # 10:00 due-day assignment fan-out
     "tasks_due_today_10am_fanout": {
         "task": "apps.tasks.tasks.send_due_today_assignments",
         "schedule": crontab(hour=10, minute="0-10/5"),
     },
 
-    # Delegation reminders: check every 5 minutes
+    # Delegation reminders every 5 minutes
     "delegation_reminders_every_5_minutes": {
         "task": "apps.tasks.tasks.dispatch_delegation_reminders",
         "schedule": crontab(minute="*/5"),
@@ -769,19 +750,24 @@ CELERY_BEAT_SCHEDULE = {
     "generate_recurring_checklists_hourly": {
         "task": "apps.tasks.tasks.generate_recurring_checklists",
         "schedule": crontab(minute=15, hour="*/1"),
-        "args": (),  # keep default dry_run=False
+        "args": (),
     },
 
-    # Optional health audit daily at 02:30 IST
+    # Optional health audit daily at 02:30
     "audit_recurring_health_daily": {
         "task": "apps.tasks.tasks.audit_recurring_health",
         "schedule": crontab(hour=2, minute=30),
     },
 
-    # ✅ End-of-day consolidated pending task summary at 19:00 IST (Mon–Sat)
-    # Holiday skipping is enforced inside the task using Holiday.is_holiday().
-    "daily_pending_task_summary_7pm_mon_sat": {
-        "task": "apps.tasks.tasks.send_daily_pending_task_summary",
+    # ✅ 7:00 PM per-employee pending digest (Mon–Sat)
+    "daily_employee_pending_digest_7pm_mon_sat": {
+        "task": "apps.tasks.pending_digest.send_daily_employee_pending_digest",
+        "schedule": crontab(hour=19, minute=0, day_of_week="1-6"),
+    },
+
+    # ✅ 7:00 PM admin consolidated pending digest (Mon–Sat)
+    "daily_admin_all_pending_digest_7pm_mon_sat": {
+        "task": "apps.tasks.pending_digest.send_admin_all_pending_digest",
         "schedule": crontab(hour=19, minute=0, day_of_week="1-6"),
     },
 }
