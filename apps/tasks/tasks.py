@@ -1,3 +1,4 @@
+# apps/tasks/tasks.py
 from __future__ import annotations
 
 import logging
@@ -10,6 +11,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 from django.db import connection  # for table introspection
+from django.db.models import Q
 from django.db.utils import OperationalError, ProgrammingError
 from django.urls import reverse
 from django.utils import timezone
@@ -63,6 +65,13 @@ def _ist_day_bounds(for_dt_ist: datetime) -> Tuple[datetime, datetime]:
         start_ist.astimezone(timezone.get_current_timezone()),
         end_ist.astimezone(timezone.get_current_timezone()),
     )
+
+
+def _end_of_today_ist_in_project_tz() -> datetime:
+    """End-of-today (23:59:59.999999) in IST, converted to project timezone."""
+    now_ist = _now_ist()
+    end_ist = IST.localize(datetime.combine(now_ist.date(), dt_time(23, 59, 59, 999999)))
+    return end_ist.astimezone(timezone.get_current_timezone())
 
 
 def _is_after_10am_ist() -> bool:
@@ -582,12 +591,18 @@ def _is_sunday_or_holiday(d: dt_date) -> bool:
 
 
 def _build_pending_rows() -> List[Dict[str, Any]]:
+    """
+    Build rows for the admin consolidated summary.
+    IMPORTANT: include only tasks due till the end of today (IST), or without a due date.
+    """
     rows: List[Dict[str, Any]] = []
+    end_today = _end_of_today_ist_in_project_tz()
 
-    # Checklist (Pending only)
+    # Checklist (Pending only; due <= today OR no due date)
     try:
         qs = (
             Checklist.objects.filter(status="Pending")
+            .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
             .select_related("assign_to", "assign_by")
             .order_by("planned_date", "id")
         )
@@ -609,10 +624,11 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(_safe_console_text(f"[PENDING SUMMARY] Checklist fetch failed: {e}"))
 
-    # Delegation (Pending only)
+    # Delegation (Pending only; due <= today OR no due date)
     try:
         qs = (
             Delegation.objects.filter(status="Pending")
+            .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
             .select_related("assign_to", "assign_by")
             .order_by("planned_date", "id")
         )
@@ -634,10 +650,11 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(_safe_console_text(f"[PENDING SUMMARY] Delegation fetch failed: {e}"))
 
-    # FMS (Pending only)
+    # FMS (Pending only; due <= today OR no due date)
     try:
         qs = (
             FMS.objects.filter(status="Pending")
+            .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
             .select_related("assign_to", "assign_by")
             .order_by("planned_date", "id")
         )
@@ -661,10 +678,11 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(_safe_console_text(f"[PENDING SUMMARY] FMS fetch failed: {e}"))
 
-    # Help Ticket (not closed)
+    # Help Ticket (not closed; due <= today OR no due date)
     try:
         qs = (
             HelpTicket.objects.exclude(status="Closed")
+            .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
             .select_related("assign_to", "assign_by")
             .order_by("planned_date", "id")
         )
