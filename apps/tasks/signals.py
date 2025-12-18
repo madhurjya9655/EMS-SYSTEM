@@ -66,7 +66,7 @@ if _normalize_mode is None or _RECURRING_MODES is None:
             prev_dt: datetime,
             mode: str,
             frequency: int,
-            *,
+            * ,
             end_date=None,
         ):
             # legacy get_next_planned_date already pins to 19:00 IST in that module
@@ -76,7 +76,7 @@ if _normalize_mode is None or _RECURRING_MODES is None:
             prev_dt: datetime,
             mode: str,
             frequency: int,
-            *,
+            * ,
             end_date=None,
         ):
             m = _normalize_mode(mode)
@@ -145,24 +145,6 @@ def _within_10am_ist_window(leeway_minutes: int = 5) -> bool:
     )
 
 
-def _spawn_delayed(send_at_utc: datetime, fn, *, name: str = "recur-email"):
-    """Sleep until `send_at_utc` (UTC) and then call `fn` in a daemon thread."""
-
-    def _runner():
-        try:
-            while True:
-                now = timezone.now().astimezone(pytz.UTC)
-                secs = (send_at_utc - now).total_seconds()
-                if secs <= 0:
-                    break
-                _time.sleep(min(60.0, max(0.5, secs)))
-            fn()
-        except Exception as e:
-            logger.error(_utils._safe_console_text(f"Delayed checklist email failed: {e}"))
-
-    Thread(target=_runner, name=name, daemon=True).start()
-
-
 # ---------------------------------------------------------------------
 # Working-day helpers (skip Sunday & holidays) for recurrence
 # ---------------------------------------------------------------------
@@ -191,12 +173,13 @@ def _shift_to_next_working_day_7pm(ist_dt: datetime) -> datetime:
 
 
 # ---------------------------------------------------------------------
-# 10:00 IST email schedulers (subjects adjusted to "Today’s …")
+# 10:00 IST email schedulers (adjusted: rely on CRON; no sleeper threads)
 # ---------------------------------------------------------------------
 def _schedule_10am_email_for_checklist(obj: Checklist) -> None:
     """
-    Schedule/send the assignee-only email for ANY created checklist (first or recurring)
-    at ~10:00 IST on its planned date.
+    For any created checklist:
+      - If it's the planned day and current IST time is AFTER 10:00, send immediately (so cron won't miss it).
+      - Otherwise, do nothing here. Daily 10:00 IST cron will dispatch.
     """
     if ENABLE_CELERY_EMAIL:
         return
@@ -233,43 +216,44 @@ def _schedule_10am_email_for_checklist(obj: Checklist) -> None:
             subject_prefix=subject_prefix,
         )
 
+    # If not restricting to 10 AM, send immediately
     if not SEND_RECUR_EMAILS_ONLY_AT_10AM:
         _on_commit(_send_now)
         return
 
-    # Determine anchor 10:00 IST on the PLANNED date
     try:
         planned = obj.planned_date
         if not planned:
+            # No planned date: send now
             _on_commit(_send_now)
             return
 
-        planned_ist = timezone.localtime(planned, IST)
-        anchor_ist = IST.localize(datetime.combine(planned_ist.date(), dt_time(10, 0)))
         now_ist = timezone.now().astimezone(IST)
+        planned_ist = timezone.localtime(planned, IST)
+        if planned_ist.date() != now_ist.date():
+            # Future/past day: let cron handle it (no sleeper threads)
+            return
 
-        if (anchor_ist - timedelta(minutes=5)) <= now_ist <= (anchor_ist + timedelta(minutes=5)):
+        # It's today's task. If we're past 10:00 IST now, send immediately.
+        anchor_ist = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
+        if now_ist >= anchor_ist:
             _on_commit(_send_now)
-        elif now_ist < anchor_ist:
-            anchor_utc = anchor_ist.astimezone(pytz.UTC)
-            _on_commit(
-                lambda: _spawn_delayed(anchor_utc, _send_now, name=f"cl-10am-email-{obj.id}")
-            )
-        else:
-            _on_commit(_send_now)
+        # Else before 10:00 IST: do nothing; cron will send.
     except Exception as e:
         logger.error(
             _utils._safe_console_text(
                 f"Checklist email scheduling failed for {obj.id}: {e}"
             )
         )
-        _on_commit(_send_now)
+        # As a fallback: do nothing here; cron remains the source of truth.
 
 
 def _schedule_10am_email_for_delegation(obj: Delegation) -> None:
     """
-    Schedule/send the assignee-only email for ANY created delegation
-    at ~10:00 IST on its planned date (delegations are one-time).
+    For delegations:
+      - We already send an immediate "New Delegation Assigned" on create.
+      - Schedule a day-of 10:00 IST reminder ONLY if creation is before 10:00 IST of the planned day.
+        (Avoid duplicate if creation happens after 10:00 IST.)
     """
     if ENABLE_CELERY_EMAIL:
         return
@@ -313,32 +297,32 @@ def _schedule_10am_email_for_delegation(obj: Delegation) -> None:
     try:
         planned = obj.planned_date
         if not planned:
-            _on_commit(_send_now)
             return
 
-        planned_ist = timezone.localtime(planned, IST)
-        anchor_ist = IST.localize(datetime.combine(planned_ist.date(), dt_time(10, 0)))
         now_ist = timezone.now().astimezone(IST)
+        planned_ist = timezone.localtime(planned, IST)
+        if planned_ist.date() != now_ist.date():
+            # Not today's reminder; cron will handle on the day
+            return
 
-        if (anchor_ist - timedelta(minutes=5)) <= now_ist <= (anchor_ist + timedelta(minutes=5)):
-            _on_commit(_send_now)
-        elif now_ist < anchor_ist:
-            anchor_utc = anchor_ist.astimezone(pytz.UTC)
-            _on_commit(
-                lambda: _spawn_delayed(anchor_utc, _send_now, name=f"dl-10am-email-{obj.id}")
-            )
+        anchor_ist = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
+        if now_ist < anchor_ist:
+            # Before 10:00 → allow the cron at 10:00 to send (no threads here)
+            return
         else:
-            _on_commit(_send_now)
+            # After 10:00 → BUT we already sent the immediate “New Delegation Assigned”.
+            # To avoid a same-moment duplicate, skip sending the 10am-style reminder now.
+            return
     except Exception as e:
         logger.error(
             _utils._safe_console_text(
                 f"Delegation email scheduling failed for {obj.id}: {e}"
             )
         )
-        _on_commit(_send_now)
+        # Do nothing; cron covers the reminder on time.
 
 
-# NEW: immediate assignment email for delegations (so user gets mail as soon as task is added)
+# Immediate assignment email for delegations (so user gets mail as soon as task is added)
 def _send_delegation_assignment_immediate(obj: Delegation) -> None:
     """
     One-time "New Delegation Assigned" email, sent immediately after creation.
@@ -609,7 +593,7 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                     f"'{new_obj.task_name}' at {new_obj.planned_date}"
                 )
             )
-        # Do NOT send email directly here — the generic created handler will schedule @ 10:00 IST.
+        # Do NOT send email directly here — handled elsewhere.
     except Exception as e:
         logger.error(
             _utils._safe_console_text(
@@ -619,7 +603,7 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
 
 
 # ---------------------------------------------------------------------
-# GENERIC: On ANY checklist creation, schedule the 10:00 IST email
+# GENERIC: On ANY checklist creation, conditionally send/allow cron
 # ---------------------------------------------------------------------
 @receiver(post_save, sender=Checklist)
 def schedule_checklist_email_on_create(sender, instance: Checklist, created: bool, **kwargs):
@@ -634,7 +618,7 @@ def schedule_checklist_email_on_create(sender, instance: Checklist, created: boo
 
 
 # ---------------------------------------------------------------------
-# DELEGATION: On creation, immediate assignment email + 10:00 IST email
+# DELEGATION: On creation, immediate assignment + (maybe) 10:00 reminder
 # ---------------------------------------------------------------------
 @receiver(post_save, sender=Delegation)
 def schedule_delegation_email_on_create(sender, instance: Delegation, created: bool, **kwargs):
@@ -647,7 +631,7 @@ def schedule_delegation_email_on_create(sender, instance: Delegation, created: b
         _on_commit(lambda: _send_delegation_assignment_immediate(instance))
     except Exception:
         _send_delegation_assignment_immediate(instance)
-    # 2) Existing behaviour – schedule day-of 10:00 AM reminder
+    # 2) Day-of 10:00 IST reminder only if created before the 10:00 gate
     try:
         _on_commit(lambda: _schedule_10am_email_for_delegation(instance))
     except Exception:

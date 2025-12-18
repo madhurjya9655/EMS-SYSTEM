@@ -867,7 +867,7 @@ def list_checklist(request):
                 task_name=obj.task_name,
                 mode=obj.mode,
                 frequency=obj.frequency,
-                group_name=obj.group_name,
+                group_name=getattr(obj, "group_name", None),
             )
             deleted, _ = Checklist.objects.filter(status="Pending", **filters).delete()
             messages.success(request, f"Deleted {deleted} pending occurrence(s) from the series '{obj.task_name}'.")
@@ -1146,8 +1146,8 @@ def add_delegation(request):
             obj.frequency = None
             obj.save()
 
-            # DO NOT email assignee immediately; 10 AM scheduler handles it.
-            messages.success(request, f"Delegation task '{obj.task_name}' created. Assignee will be notified at 10:00 AM on the due day.")
+            # DO NOT email assignee immediately; signals handle immediate + 10:00 reminder logic.
+            messages.success(request, f"Delegation task '{obj.task_name}' created. Assignee will be notified appropriately.")
             return redirect("tasks:list_delegation")
     else:
         form = DelegationForm(initial={"assign_by": request.user})
@@ -1328,29 +1328,6 @@ def complete_delegation(request, pk):
     return redirect(request.GET.get("next", "dashboard:home"))
 
 
-@has_permission("list_delegation")
-def reassign_delegation(request, pk):
-    obj = get_object_or_404(Delegation, pk=pk)
-    if request.method == "POST":
-        uid = request.POST.get("assign_to")
-        if uid:
-            old_assignee = obj.assign_to
-            obj.assign_to = User.objects.get(pk=uid)
-            obj.save()
-
-            messages.success(
-                request,
-                f"Delegation task reassigned to {obj.assign_to.get_full_name() or obj.assign_to.username} (assignee will be notified at 10:00 AM on the due day)."
-            )
-            return redirect(request.GET.get("next", reverse("tasks:list_delegation")))
-
-    return render(
-        request,
-        "tasks/reassign_delegation.html",
-        {"object": obj, "all_users": User.objects.filter(is_active=True).order_by("username")}
-    )
-
-
 @login_required
 def add_help_ticket(request):
     if request.method == "POST":
@@ -1370,11 +1347,11 @@ def add_help_ticket(request):
 
             complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
             try:
-                # Immediate email on allowed days
-                send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Assigned")
+                # IMPORTANT: DO NOT send the assignee mail here (signal handles create).
+                # Still send admin confirmation.
                 send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Assignment")
             except Exception as e:
-                logger.error("Help-ticket assignment emails failed: %s", e)
+                logger.error("Help-ticket assignment/admin emails failed: %s", e)
 
             messages.success(request, f"Help ticket '{ticket.title}' created and assigned successfully!")
             return redirect("tasks:list_help_ticket")
@@ -1406,6 +1383,7 @@ def edit_help_ticket(request, pk):
                     send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Reassigned")
                     send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Reassigned")
                 else:
+                    # On edit (same assignee), notify assignee + admin
                     send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Updated")
                     send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Updated")
             except Exception as e:

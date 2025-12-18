@@ -361,140 +361,157 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
 
     if request.method == "POST":
         form = LeaveRequestForm(request.POST, request.FILES, user=request.user)
-        if form.is_valid():
-            # ---- Robust insert: retry entire transaction if SQLite is busy ----
-            max_attempts = 5
-            base_sleep = 0.25  # seconds
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    with transaction.atomic():
-                        lr = form.save(commit=True)
+        try:
+            if form.is_valid():
+                # ---- Robust insert: retry entire transaction if SQLite is busy ----
+                max_attempts = 5
+                base_sleep = 0.25  # seconds
+                handovers_created: List[LeaveHandover] = []
+                for attempt in range(1, max_attempts + 1):
+                    try:
+                        with transaction.atomic():
+                            lr = form.save(commit=True)
 
-                        cd = form.cleaned_data
-                        delegate_to = cd.get("delegate_to")
-                        ho_msg = (cd.get("handover_message") or "").strip()
+                            cd = form.cleaned_data
+                            delegate_to = cd.get("delegate_to")
+                            ho_msg = (cd.get("handover_message") or "").strip()
 
-                        def _to_int_list(vals):
-                            out: List[int] = []
-                            for v in (vals or []):
+                            def _to_int_list(vals):
+                                out: List[int] = []
+                                for v in (vals or []):
+                                    try:
+                                        out.append(int(v))
+                                    except (TypeError, ValueError):
+                                        continue
+                                return out
+
+                            cl_ids = _to_int_list(cd.get("handover_checklist"))
+                            dg_ids = _to_int_list(cd.get("handover_delegation"))
+                            ht_ids = _to_int_list(cd.get("handover_help_ticket"))
+
+                            if delegate_to and (cl_ids or dg_ids or ht_ids):
+                                handovers = []
+                                # SAFELY derive Date fields for effective window
+                                ef_start = getattr(lr, "start_date", None) or timezone.localtime(lr.start_at, IST).date()
+                                ef_end = getattr(lr, "end_date", None) or timezone.localtime(lr.end_at, IST).date()
+                                for tid in cl_ids:
+                                    handovers.append(
+                                        LeaveHandover(
+                                            leave_request=lr,
+                                            original_assignee=request.user,
+                                            new_assignee=delegate_to,
+                                            task_type=HandoverTaskType.CHECKLIST,
+                                            original_task_id=tid,
+                                            message=ho_msg,
+                                            effective_start_date=ef_start,
+                                            effective_end_date=ef_end,
+                                            is_active=True,
+                                        )
+                                    )
+                                for tid in dg_ids:
+                                    handovers.append(
+                                        LeaveHandover(
+                                            leave_request=lr,
+                                            original_assignee=request.user,
+                                            new_assignee=delegate_to,
+                                            task_type=HandoverTaskType.DELEGATION,
+                                            original_task_id=tid,
+                                            message=ho_msg,
+                                            effective_start_date=ef_start,
+                                            effective_end_date=ef_end,
+                                            is_active=True,
+                                        )
+                                    )
+                                for tid in ht_ids:
+                                    handovers.append(
+                                        LeaveHandover(
+                                            leave_request=lr,
+                                            original_assignee=request.user,
+                                            new_assignee=delegate_to,
+                                            task_type=HandoverTaskType.HELP_TICKET,
+                                            original_task_id=tid,
+                                            message=ho_msg,
+                                            effective_start_date=ef_start,
+                                            effective_end_date=ef_end,
+                                            is_active=True,
+                                        )
+                                    )
+                                if handovers:
+                                    handovers_created = LeaveHandover.objects.bulk_create(handovers, ignore_conflicts=True)
+
+                            # ---------------- NEW: Auto-skip tasks immediately ----------------
+                            skip_counts = _auto_skip_tasks_for_leave(lr, exclude_handover=True)
+                            logger.info("Skip counts for leave %s: %s", lr.id, skip_counts)
+                            # -------------------------------------------------------------------
+
+                            # ---------------- Apply handover + Email dispatch (sync or Celery) ----------------
+                            def _apply_and_send():
                                 try:
-                                    out.append(int(v))
-                                except (TypeError, ValueError):
-                                    continue
-                            return out
+                                    try:
+                                        from apps.leave.services.task_handover import apply_handover_for_leave
+                                        moved = apply_handover_for_leave(lr)
+                                        if moved:
+                                            logger.info("Leave %s handover applied; moved=%s", lr.id, moved)
+                                    except Exception as e:
+                                        logger.exception("Failed applying handover for leave %s: %s", lr.id, e)
 
-                        cl_ids = _to_int_list(cd.get("handover_checklist"))
-                        dg_ids = _to_int_list(cd.get("handover_delegation"))
-                        ht_ids = _to_int_list(cd.get("handover_help_ticket"))
+                                    use_async = bool(getattr(settings, "ENABLE_CELERY_EMAIL", False)) and bool(send_leave_emails_async)
+                                    if use_async:
+                                        try:
+                                            send_leave_emails_async.delay(lr.id)
+                                        except Exception as e:
+                                            logger.error("Celery enqueue failed (leave emails) for %s: %s", lr.id, e)
+                                    elif send_leave_request_email:
+                                        _send_leave_emails_sync(lr)
 
-                        handovers_created = []
-                        if delegate_to and (cl_ids or dg_ids or ht_ids):
-                            handovers = []
-                            # SAFELY derive Date fields for effective window
-                            ef_start = getattr(lr, "start_date", None) or timezone.localtime(lr.start_at, IST).date()
-                            ef_end = getattr(lr, "end_date", None) or timezone.localtime(lr.end_at, IST).date()
-                            for tid in cl_ids:
-                                handovers.append(
-                                    LeaveHandover(
-                                        leave_request=lr,
-                                        original_assignee=request.user,
-                                        new_assignee=delegate_to,
-                                        task_type=HandoverTaskType.CHECKLIST,
-                                        original_task_id=tid,
-                                        message=ho_msg,
-                                        effective_start_date=ef_start,
-                                        effective_end_date=ef_end,
-                                        is_active=True,
-                                    )
-                                )
-                            for tid in dg_ids:
-                                handovers.append(
-                                    LeaveHandover(
-                                        leave_request=lr,
-                                        original_assignee=request.user,
-                                        new_assignee=delegate_to,
-                                        task_type=HandoverTaskType.DELEGATION,
-                                        original_task_id=tid,
-                                        message=ho_msg,
-                                        effective_start_date=ef_start,
-                                        effective_end_date=ef_end,
-                                        is_active=True,
-                                    )
-                                )
-                            for tid in ht_ids:
-                                handovers.append(
-                                    LeaveHandover(
-                                        leave_request=lr,
-                                        original_assignee=request.user,
-                                        new_assignee=delegate_to,
-                                        task_type=HandoverTaskType.HELP_TICKET,
-                                        original_task_id=tid,
-                                        message=ho_msg,
-                                        effective_start_date=ef_start,
-                                        effective_end_date=ef_end,
-                                        is_active=True,
-                                    )
-                                )
-                            if handovers:
-                                handovers_created = LeaveHandover.objects.bulk_create(handovers, ignore_conflicts=True)
-
-                        # ---------------- NEW: Auto-skip tasks immediately ----------------
-                        skip_counts = _auto_skip_tasks_for_leave(lr, exclude_handover=True)
-                        logger.info("Skip counts for leave %s: %s", lr.id, skip_counts)
-                        # -------------------------------------------------------------------
-
-                        # ---------------- Apply handover + Email dispatch (sync or Celery) ----------------
-                        def _apply_and_send():
-                            try:
-                                try:
-                                    from apps.leave.services.task_handover import apply_handover_for_leave
-                                    moved = apply_handover_for_leave(lr)
-                                    if moved:
-                                        logger.info("Leave %s handover applied; moved=%s", lr.id, moved)
+                                    if handovers_created:
+                                        use_async_ho = bool(getattr(settings, "ENABLE_CELERY_EMAIL", False)) and bool(send_handover_emails_async)
+                                        if use_async_ho:
+                                            handover_ids = [h.id for h in handovers_created if h.id]
+                                            if handover_ids:
+                                                try:
+                                                    send_handover_emails_async.delay(lr.id, handover_ids)
+                                                except Exception as e:
+                                                    logger.error("Celery enqueue failed (handover emails) for %s: %s", lr.id, e)
+                                        elif send_handover_email:
+                                            _send_handover_emails_sync(lr, handovers_created)
                                 except Exception as e:
-                                    logger.exception("Failed applying handover for leave %s: %s", lr.id, e)
+                                    logger.error("Failed in post-commit apply+emails for leave %s: %s", lr.id, e)
 
-                                use_async = bool(getattr(settings, "ENABLE_CELERY_EMAIL", False)) and bool(send_leave_emails_async)
-                                if use_async:
-                                    send_leave_emails_async.delay(lr.id)
-                                elif send_leave_request_email:
-                                    _send_leave_emails_sync(lr)
+                            transaction.on_commit(_apply_and_send)
+                            # ----------------------------------------------------------------
 
-                                if handovers_created:
-                                    use_async_ho = bool(getattr(settings, "ENABLE_CELERY_EMAIL", False)) and bool(send_handover_emails_async)
-                                    if use_async_ho:
-                                        handover_ids = [h.id for h in handovers_created if h.id]
-                                        if handover_ids:
-                                            send_handover_emails_async.delay(lr.id, handover_ids)
-                                    elif send_handover_email:
-                                        _send_handover_emails_sync(lr, handovers_created)
-                            except Exception as e:
-                                logger.error(f"Failed in post-commit apply+emails for leave {lr.id}: {e}")
+                        if handovers_created:
+                            messages.success(request, f"Leave application submitted with {len(handovers_created)} task handovers. Email notifications are being sent.")
+                        else:
+                            messages.success(request, "Leave application submitted successfully. Email notifications are being sent.")
+                        return redirect("leave:dashboard")
 
-                        transaction.on_commit(_apply_and_send)
-                        # ----------------------------------------------------------------
-
-                    if handovers_created:
-                        messages.success(request, f"Leave application submitted with {len(handovers_created)} task handovers. Email notifications are being sent.")
-                    else:
-                        messages.success(request, "Leave application submitted successfully. Email notifications are being sent.")
-                    return redirect("leave:dashboard")
-
-                except OperationalError as e:
-                    if "database is locked" in str(e).lower() and attempt < max_attempts:
-                        sleep_s = base_sleep * (2 ** (attempt - 1))
-                        logger.warning(f"SQLite busy on apply_leave (attempt {attempt}/{max_attempts}); retrying in {sleep_s:.2f}s.")
-                        time.sleep(sleep_s)
-                        continue
-                    logger.exception("apply_leave failed due to OperationalError on attempt %s", attempt)
-                    messages.error(request, "Database is busy. Please try again.")
-                    break
-                except Exception as e:
-                    logger.exception("apply_leave failed to create leave and/or handover")
-                    messages.error(request, f"Could not submit the leave: {str(e)}. Please try again.")
-                    break
-        else:
-            messages.error(request, "Please fix the errors below.")
+                    except OperationalError as e:
+                        if "database is locked" in str(e).lower() and attempt < max_attempts:
+                            sleep_s = base_sleep * (2 ** (attempt - 1))
+                            logger.warning("SQLite busy on apply_leave (attempt %s/%s); retrying in %.2fs.", attempt, max_attempts, sleep_s)
+                            time.sleep(sleep_s)
+                            continue
+                        logger.exception("apply_leave failed due to OperationalError on attempt %s", attempt)
+                        messages.error(request, "Database is busy. Please try again.")
+                        break
+                    except Exception as e:
+                        # Log full traceback and fall back to form redisplay (never 500)
+                        logger.exception("apply_leave failed to create leave and/or handover: %s", e)
+                        messages.error(request, "Could not submit the leave due to an unexpected error. Please review the form and try again.")
+                        break
+            else:
+                # Log validation errors for visibility in Render logs
+                try:
+                    logger.error("LeaveRequestForm invalid: %s", form.errors.as_json())
+                except Exception:
+                    logger.error("LeaveRequestForm invalid (errors could not be serialized).")
+                messages.error(request, "Please fix the errors below.")
+        except Exception:
+            # Catch anything else around validation itself
+            logger.exception("apply_leave crashed during validation stage")
+            messages.error(request, "Something went wrong while validating your request. Please try again.")
     else:
         form = LeaveRequestForm(user=request.user)
 
@@ -510,10 +527,18 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
 
 def _send_leave_emails_sync(leave: LeaveRequest):
     try:
-        cc_emails = [user.email for user in leave.cc_users.all() if user.email]
+        if not send_leave_request_email:
+            logger.info("send_leave_request_email not available; skipping email dispatch for leave %s", leave.id)
+            return
+
+        cc_emails = []
+        try:
+            cc_emails = [user.email for user in leave.cc_users.all() if getattr(user, "email", None)]
+        except Exception:
+            cc_emails = []
 
         manager_email = None
-        if leave.reporting_person and leave.reporting_person.email:
+        if getattr(leave, "reporting_person", None) and getattr(leave.reporting_person, "email", None):
             manager_email = leave.reporting_person.email
 
         admin_cc_list: List[str] = []
@@ -523,7 +548,7 @@ def _send_leave_emails_sync(leave: LeaveRequest):
         except Exception:
             pass
 
-        if leave.cc_person and getattr(leave.cc_person, "email", None):
+        if getattr(leave, "cc_person", None) and getattr(leave.cc_person, "email", None):
             admin_cc_list.append(leave.cc_person.email)
 
         all_cc = []
@@ -539,15 +564,22 @@ def _send_leave_emails_sync(leave: LeaveRequest):
         send_leave_request_email(leave, manager_email=manager_email, cc_list=all_cc)
 
         if LeaveDecisionAudit and DecisionAction:
-            LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT)
+            try:
+                LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT)
+            except Exception:
+                logger.exception("Audit log failed for EMAIL_SENT on leave %s", leave.id)
 
-        logger.info(f"Sent leave request email for leave {leave.id}")
+        logger.info("Sent leave request email for leave %s", leave.id)
 
     except Exception as e:
-        logger.error(f"Failed to send leave emails sync for leave {leave.id}: {e}")
+        logger.error("Failed to send leave emails sync for leave %s: %s", leave.id if getattr(leave, 'id', None) else "?", e)
 
 def _send_handover_emails_sync(leave: LeaveRequest, handovers: List[LeaveHandover]):
     try:
+        if not send_handover_email:
+            logger.info("send_handover_email not available; skipping handover email dispatch for leave %s", leave.id)
+            return
+
         assignee_handovers = {}
         for handover in handovers:
             assignee_id = handover.new_assignee.id
@@ -560,12 +592,15 @@ def _send_handover_emails_sync(leave: LeaveRequest, handovers: List[LeaveHandove
                 assignee = user_handovers[0].new_assignee
                 send_handover_email(leave, assignee, user_handovers)
                 if LeaveDecisionAudit and DecisionAction:
-                    LeaveDecisionAudit.log(leave, DecisionAction.HANDOVER_EMAIL_SENT, extra={'assignee_id': assignee_id})
+                    try:
+                        LeaveDecisionAudit.log(leave, DecisionAction.HANDOVER_EMAIL_SENT, extra={'assignee_id': assignee_id})
+                    except Exception:
+                        logger.exception("Audit log failed for HANDOVER_EMAIL_SENT on leave %s", leave.id)
             except Exception as e:
-                logger.error(f"Failed to send handover email to assignee {assignee_id}: {e}")
+                logger.error("Failed to send handover email to assignee %s: %s", assignee_id, e)
 
     except Exception as e:
-        logger.error(f"Failed to send handover emails sync for leave {leave.id}: {e}")
+        logger.error("Failed to send handover emails sync for leave %s: %s", leave.id if getattr(leave, 'id', None) else "?", e)
 
 @has_permission("leave_list")
 @login_required

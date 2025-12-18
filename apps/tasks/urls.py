@@ -1,3 +1,4 @@
+# apps/tasks/urls.py
 from django.urls import path
 from . import views
 from .views_reports import recurring_report
@@ -24,7 +25,11 @@ urlpatterns = [
     path("delegation/add/",               views.add_delegation,        name="add_delegation"),
     path("delegation/edit/<int:pk>/",     views.edit_delegation,       name="edit_delegation"),
     path("delegation/delete/<int:pk>/",   views.delete_delegation,     name="delete_delegation"),
-    path("delegation/reassign/<int:pk>/", views.reassign_delegation,   name="reassign_delegation"),
+
+    # NOTE: original view `reassign_delegation` doesn't exist; route to `edit_delegation`
+    # but keep the URL name so existing reverse() calls/templates keep working.
+    path("delegation/reassign/<int:pk>/", views.edit_delegation,       name="reassign_delegation"),
+
     path("delegation/complete/<int:pk>/", views.complete_delegation,   name="complete_delegation"),
     path("delegation/<int:pk>/",          views.delegation_details,    name="delegation_detail"),
 

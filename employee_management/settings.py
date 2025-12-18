@@ -386,7 +386,7 @@ LOGGING = {
     },
     "handlers": {
         "console": {
-            "level": "DEBUG" if DEBUG else "WARNING",
+            "level": "DEBUG" if DEBUG else "INFO",
             "class": "logging.StreamHandler",
             "formatter": "simple",
         },
@@ -422,6 +422,8 @@ LOGGING = {
     "root": {"handlers": ["console"], "level": "WARNING"},
     "loggers": {
         "django": {"handlers": ["file"], "level": "INFO", "propagate": False},
+        # Print full tracebacks for request errors to console (visible in Render)
+        "django.request": {"handlers": ["console", "file"], "level": "ERROR", "propagate": False},
         "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
         "apps.users.permissions": {
             "handlers": ["permissions_file"] + (["console"] if DEBUG else []),
@@ -538,6 +540,10 @@ ASSIGNER_CC_FOR_DELEGATION = {
     "emails": env_list("DELEGATION_CC_ASSIGNER_EMAILS", ""),
     "usernames": env_list("DELEGATION_CC_ASSIGNER_USERNAMES", ""),
 }
+
+# Fallback to console email backend on Render if no SMTP creds are set
+if ON_RENDER and not os.getenv("EMAIL_HOST_USER"):
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
 # -----------------------------------------------------------------------------
 # SECURITY (Prod)
