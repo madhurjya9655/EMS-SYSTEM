@@ -30,6 +30,9 @@ from .utils import (
     _fmt_dt_date,
 )
 
+# NEW: per-employee daily digest service
+from .services.pending_digest import send_daily_pending_digests_for_all_users
+
 logger = logging.getLogger(__name__)
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -531,7 +534,22 @@ def dispatch_delegation_reminders(self) -> dict:
 
 
 # -------------------------------
-# Daily Pending Task Summary (Admin Report)
+# Daily Pending Task Digest (Per-Employee)  ← BEAT TARGET (19:00 IST, Mon–Sat)
+# -------------------------------
+@shared_task(name="apps.tasks.tasks.send_daily_pending_task_summary")
+def send_daily_pending_task_summary() -> Dict[str, int]:
+    """
+    Sends one consolidated email to *every* active user with an email (even if 0 tasks).
+    Includes: Checklist (Pending) + Delegation (Pending) + Help Ticket (not Closed).
+    """
+    return send_daily_pending_digests_for_all_users()
+
+# Optional: allow .run() style direct invocation (mirrors other hooks)
+send_daily_pending_task_summary.run = send_daily_pending_task_summary  # type: ignore[attr-defined]
+
+
+# -------------------------------
+# Daily Pending Task Summary (Admin Report) — retained, renamed
 # -------------------------------
 def _email_notifications_enabled() -> bool:
     try:
@@ -688,8 +706,11 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
     return rows
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=60)
-def send_daily_pending_task_summary(self, force: bool = False) -> dict:
+@shared_task(bind=True, max_retries=2, default_retry_delay=60, name="apps.tasks.tasks.send_admin_daily_pending_task_summary")
+def send_admin_daily_pending_task_summary(self, force: bool = False) -> dict:
+    """
+    Retained admin roll-up email (not scheduled). Use only if needed.
+    """
     if not _email_notifications_enabled():
         logger.info(_safe_console_text("[PENDING SUMMARY] Skipped: email notifications disabled"))
         return {"ok": True, "skipped": True, "reason": "email_notifications_disabled"}

@@ -777,7 +777,7 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
 
     kind = "finance_verified"
     if _already_sent_recent(req, kind):
-        logger.info("Suppressing duplicate '%s' email for req #%s.", kind, req.id)
+        logger.info("Suppressing duplicate '%s' email for req #%s.", req.id)
         return
 
     mgr_rec = _recipients_for_manager(req)
@@ -1376,14 +1376,21 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
     txt_lines.extend(["View details:", detail_url])
     txt = "\n".join(txt_lines)
 
-    cc_list: List[str] = [] if decision == "rejected" else _admin_emails()
+    # --- CC rules ---
+    # - Rejected: no CC (unchanged)
+    # - Approved: CC admins + Akshay so he knows the bill is approved
+    # - Clarification: CC admins (unchanged)
+    cc_raw: List[str] = [] if decision == "rejected" else _admin_emails()
+    if decision == "approved":
+        cc_raw.append("akshay@blueoceansteels.com")
+    cc = _dedupe_lower(cc_raw)
 
     _send_and_log(
         req,
         kind=kind,
         subject=subject,
         to_addrs=[emp_email],
-        cc=cc_list,
+        cc=cc,
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
