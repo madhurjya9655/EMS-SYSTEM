@@ -13,6 +13,9 @@ from django.views.generic import RedirectView
 # Custom login view
 from apps.users.views import CustomLoginView
 
+# ✅ Cron endpoints
+from apps.tasks import cron_views
+
 # Admin titles
 admin.site.site_header = "EMS Admin"
 admin.site.index_title = "Administration"
@@ -70,6 +73,11 @@ urlpatterns = [
     # Robots + favicon helpers
     path("robots.txt", robots_txt),
     re_path(r"^favicon\.ico$", RedirectView.as_view(url=f"{settings.STATIC_URL}favicon.ico", permanent=False)),
+
+    # ✅ Internal cron endpoints (protected by CRON_SECRET)
+    path("internal/cron/due-today/", cron_views.due_today, name="cron-due-today"),
+    path("internal/cron/pending-7pm/", cron_views.pending_summary_7pm, name="cron-pending-7pm"),
+    path("internal/cron/employee-digest/", cron_views.employee_digest, name="cron-employee-digest"),
 ]
 
 # Serve media in DEBUG (and optionally when SERVE_MEDIA=1)
