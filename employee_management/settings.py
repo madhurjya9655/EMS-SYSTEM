@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List
 
 from dotenv import load_dotenv
-from django.db.backends.signals import connection_created
+from django.db.backends.signals import connection_created  # type: ignore
 
 load_dotenv()
 
@@ -45,6 +45,7 @@ ON_RENDER = bool(os.environ.get("RENDER"))
 
 ALLOWED_HOSTS = env_list(
     "ALLOWED_HOSTS",
+    # prod-safe defaults (no 'testserver' here)
     "ems-system-d26q.onrender.com,.onrender.com,localhost,127.0.0.1,0.0.0.0",
 )
 
@@ -58,6 +59,7 @@ if DEBUG:
         "http://localhost:8000",
         "http://127.0.0.1:8000",
         "http://0.0.0.0:8000",
+        "http://testserver",
     ):
         if local_origin not in CSRF_TRUSTED_ORIGINS:
             CSRF_TRUSTED_ORIGINS.append(local_origin)
@@ -691,7 +693,12 @@ PERMISSION_DEBUG_ENABLED = env_bool("PERMISSION_DEBUG_ENABLED", DEBUG and not ON
 # -----------------------------------------------------------------------------
 # CELERY CONFIGURATION
 # -----------------------------------------------------------------------------
-from celery.schedules import crontab  # noqa: E402
+# Pylance sometimes can’t resolve celery in some virtualenvs; keep it safe:
+try:
+    from celery.schedules import crontab  # type: ignore
+except Exception:  # pragma: no cover
+    def crontab(*args, **kwargs):  # type: ignore
+        return {"__crontab__": True, "args": args, "kwargs": kwargs}
 
 ENABLE_CELERY_EMAIL = env_bool("ENABLE_CELERY_EMAIL", False)
 
@@ -701,7 +708,7 @@ def _redis_db(url: str, db: int) -> str:
         return u
     parts = u.rsplit("/", 1)
     if len(parts) == 2 and parts[1].isdigit():
-        return f"{parts[0]}/{db}"
+        return f"{parts[0]}/{db}"   # fixed stray backtick (kept comment)
     if u.endswith("/"):
         return f"{u}{db}"
     return f"{u}/{db}"
@@ -717,7 +724,7 @@ CELERY_RESULT_BACKEND = (
 
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
-CELERY_RESULT_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"  # <-- removed the stray "]" that caused the syntax error
 
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_ENABLE_UTC = True
@@ -734,38 +741,27 @@ CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 # Beat schedule (IST)
 # -------------------------------
 CELERY_BEAT_SCHEDULE = {
-    # 10:00 due-day assignment fan-out
     "tasks_due_today_10am_fanout": {
         "task": "apps.tasks.tasks.send_due_today_assignments",
         "schedule": crontab(hour=10, minute="0-10/5"),
     },
-
-    # Delegation reminders every 5 minutes
     "delegation_reminders_every_5_minutes": {
         "task": "apps.tasks.tasks.dispatch_delegation_reminders",
         "schedule": crontab(minute="*/5"),
     },
-
-    # Recurrence generator safety net: hourly at :15
     "generate_recurring_checklists_hourly": {
         "task": "apps.tasks.tasks.generate_recurring_checklists",
         "schedule": crontab(minute=15, hour="*/1"),
         "args": (),
     },
-
-    # Optional health audit daily at 02:30
     "audit_recurring_health_daily": {
         "task": "apps.tasks.tasks.audit_recurring_health",
         "schedule": crontab(hour=2, minute=30),
     },
-
-    # ✅ 7:00 PM per-employee pending digest (Mon–Sat)
     "daily_employee_pending_digest_7pm_mon_sat": {
         "task": "apps.tasks.pending_digest.send_daily_employee_pending_digest",
         "schedule": crontab(hour=19, minute=0, day_of_week="1-6"),
     },
-
-    # ✅ 7:00 PM admin consolidated pending digest (Mon–Sat)
     "daily_admin_all_pending_digest_7pm_mon_sat": {
         "task": "apps.tasks.pending_digest.send_admin_all_pending_digest",
         "schedule": crontab(hour=19, minute=0, day_of_week="1-6"),

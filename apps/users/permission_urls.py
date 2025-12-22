@@ -52,19 +52,22 @@ PERMISSION_URLS = {
     "reimbursement_list": "reimbursement:my_reimbursements",
 
     # Manager — your templates use reimbursement:manager_pending
-    "reimbursement_manager_pending": "reimbursement:manager_pending",  # was reimbursement:manager_queue
-    "reimbursement_manager_review": "reimbursement:manager_pending",   # keep same landing unless you have a detail view
+    "reimbursement_manager_pending": "reimbursement:manager_pending",
+    "reimbursement_manager_review": "reimbursement:manager_pending",
 
     # Management (only if you have these URLs defined)
-    "reimbursement_management_pending": "reimbursement:management_queue",
-    "reimbursement_management_review": "reimbursement:management_queue",
+    "reimbursement_management_pending": "reimbursement:management_pending",
+    "reimbursement_management_review": "reimbursement:management_pending",
 
     # Finance — your templates use reimbursement:finance_pending
-    "reimbursement_finance_pending": "reimbursement:finance_pending",  # was reimbursement:finance_queue
+    "reimbursement_finance_pending": "reimbursement:finance_pending",
     "reimbursement_finance_review": "reimbursement:finance_pending",
 
     # Admin console — your sidebar links to reimbursement:admin_requests
-    "reimbursement_admin": "reimbursement:admin_requests",  # was reimbursement:admin_bills_summary
+    "reimbursement_admin": "reimbursement:admin_requests",
+
+    # NEW: Reimbursement Analytics
+    "reimbursement_analytics": "reimbursement:analytics_dashboard",
 
     # -----------------------
     # Reports

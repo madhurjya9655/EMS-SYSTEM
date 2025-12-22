@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from functools import wraps
-from typing import Any, Iterable, Set
+from typing import Any, Set
 
 from django import template
 from django.apps import apps as django_apps
@@ -71,6 +71,8 @@ PERMISSIONS_STRUCTURE = {
         ("reimbursement_finance_review", "Finance Review (Single Request)"),
         # Admin console (Bills / Requests / Employee / Status / Mapping)
         ("reimbursement_admin", "Admin – Reimbursement Console"),
+        # NEW: Analytics dashboard (keeps analytics inside main app theme)
+        ("reimbursement_analytics", "Analytics Dashboard"),
     ],
     "Reports": [
         ("doer_tasks", "Doer Tasks"),
@@ -214,9 +216,15 @@ def _codes_from_groups(user) -> Set[str]:
 
     grants: Set[str] = set()
 
-    # If a user is in "Manager", grant the leave-approval queue permission.
+    # If a user is in "Manager", grant the leave-approval queue permission,
+    # and allow seeing reimbursement analytics.
     if "manager" in names:
         grants.add("leave_pending_manager")
+        grants.add("reimbursement_analytics")
+
+    # Finance should also be able to see analytics.
+    if "finance" in names:
+        grants.add("reimbursement_analytics")
 
     # Add other group → code mappings here as your org evolves.
 
@@ -280,13 +288,13 @@ def _user_permission_codes(user) -> Set[str]:
             sorted(codes),
         )
 
-    # Grants via Django groups (e.g., "Manager")
+    # Grants via Django groups (e.g., "Manager", "Finance")
     codes |= _codes_from_groups(user)
 
     # Dynamic RP grant via ApproverMapping
     codes |= _codes_from_mapping(user)
 
-    # NEW: Baseline employee-level reimbursement access for all authenticated users
+    # Baseline employee-level reimbursement access for all authenticated users
     codes |= _baseline_dynamic_grants(user)
 
     # Apply synonyms

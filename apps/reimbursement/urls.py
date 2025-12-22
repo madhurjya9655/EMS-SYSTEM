@@ -4,6 +4,7 @@ from __future__ import annotations
 from django.urls import path
 
 from . import views
+from . import views_analytics  # <-- add analytics views import
 
 app_name = "reimbursement"
 
@@ -138,6 +139,40 @@ urlpatterns = [
         "admin/approver-mapping/",
         views.ApproverMappingAdminView.as_view(),
         name="approver_mapping_admin",
+    ),
+
+    # ------------------------------------------------------------------
+    # Analytics (dashboard + JSON APIs)
+    # ------------------------------------------------------------------
+    path(
+        "analytics/",
+        views_analytics.AnalyticsDashboardView.as_view(),
+        name="analytics_dashboard",
+    ),
+    path(
+        "analytics/api/summary/",
+        views_analytics.AnalyticsSummaryAPI.as_view(),
+        name="analytics_api_summary",
+    ),
+    path(
+        "analytics/api/timeseries/",
+        views_analytics.AnalyticsTimeSeriesAPI.as_view(),
+        name="analytics_api_timeseries",
+    ),
+    path(
+        "analytics/api/categories/",
+        views_analytics.AnalyticsCategoryAPI.as_view(),
+        name="analytics_api_categories",
+    ),
+    path(
+        "analytics/api/employees/",
+        views_analytics.AnalyticsEmployeeAPI.as_view(),
+        name="analytics_api_employees",
+    ),
+    path(
+        "analytics/api/highrisk/",
+        views_analytics.AnalyticsHighRiskAPI.as_view(),
+        name="analytics_api_highrisk",
     ),
 
     # ------------------------------------------------------------------

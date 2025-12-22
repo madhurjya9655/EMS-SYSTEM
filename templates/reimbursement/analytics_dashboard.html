@@ -1,0 +1,482 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Reimbursement Analytics · BOS Lakshya{% endblock %}
+
+{% block head_extra %}
+<style>
+  /* ---------- Layout ---------- */
+  .analytics-wrap{display:grid;grid-template-columns:1fr 3fr;gap:1rem}
+  @media (max-width: 1400px){ .analytics-wrap{grid-template-columns:1fr 2.25fr} }
+  @media (max-width: 1200px){ .analytics-wrap{grid-template-columns:1fr 2fr} }
+  @media (max-width: 992px){ .analytics-wrap{grid-template-columns:1fr} }
+
+  /* ---------- KPI Grid ---------- */
+  .kpi-grid{
+    display:grid;
+    grid-template-columns:repeat(6,1fr);
+    gap:.75rem
+  }
+  @media (max-width:1200px){ .kpi-grid{grid-template-columns:repeat(3,1fr)} }
+  @media (max-width:576px){ .kpi-grid{grid-template-columns:repeat(2,1fr)} }
+
+  .kpi-tile{
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    padding:.9rem;
+    display:flex;
+    flex-direction:column;
+    min-height:84px;
+  }
+  .kpi-label{font-size:.78rem;color:var(--muted);line-height:1.2}
+  .kpi-value{
+    font-weight:700;
+    font-size:1.1rem;
+    margin-top:.25rem;
+    min-height:1.25em;
+    display:flex;
+    align-items:center
+  }
+
+  /* ---------- Pills / Helpers ---------- */
+  .pill{
+    display:inline-block;
+    padding:.25rem .6rem;
+    border-radius:999px;
+    border:1px solid var(--border);
+    font-size:.8rem;
+    background:var(--surface)
+  }
+
+  /* ---------- Filters ---------- */
+  .filters{min-width:0}
+  .filters .form-label{font-size:.85rem;color:var(--muted)}
+  .filters .form-control,.filters .form-select{height:40px; min-width:0} /* prevent overflow */
+  .filters .form-select[multiple]{height:auto;min-height:172px;padding:.4rem .6rem}
+  .filters .btn{height:40px}
+
+  /* Responsive date range row (prevents overflow) */
+  .filters .range{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:.5rem;
+  }
+  @media (max-width: 1200px){
+    .filters .range{grid-template-columns:1fr}
+  }
+
+  /* ---------- Chart canvases ---------- */
+  canvas{
+    background:var(--surface-alt);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+  }
+
+  /* Make card bodies a bit tighter for even heights across a row */
+  .card .card-body{padding:1rem}
+
+  /* ---------- Skeleton placeholders ---------- */
+  .skeleton{
+    position:relative;
+    color:transparent !important;
+  }
+  .skeleton::after{
+    content:"";
+    position:absolute;inset:0;
+    background:linear-gradient(90deg, rgba(148,163,184,.15) 25%, rgba(148,163,184,.25) 37%, rgba(148,163,184,.15) 63%);
+    background-size:400% 100%;
+    animation:shimmer 1.2s ease-in-out infinite;
+    border-radius:6px;
+  }
+  @keyframes shimmer{
+    0%{background-position:100% 0}
+    100%{background-position:-100% 0}
+  }
+
+  /* ---------- Tables ---------- */
+  .table thead th{white-space:nowrap}
+  .table td,.table th{vertical-align:middle}
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+    <div>
+      <h1 class="page-title mb-0">Reimbursement Analytics</h1>
+      <small class="text-muted">Approved / Paid datasets • IST</small>
+    </div>
+    <div class="text-muted small">
+      <span class="pill">Theme: App Shell</span>
+      <span class="pill">Charts: Chart.js</span>
+    </div>
+  </div>
+</div>
+
+<div class="analytics-wrap">
+  <!-- Filters -->
+  <div class="card filters">
+    <div class="card-body">
+      <form id="filtersForm">
+        <div class="mb-3">
+          <label class="form-label" for="status">Status</label>
+          <select id="status" class="form-select">
+            <option value="approved_and_paid">Approved + Paid (default)</option>
+            <option value="approved_only">Approved only</option>
+            <option value="paid_only">Paid only</option>
+          </select>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label" for="preset">Preset</label>
+          <select id="preset" class="form-select">
+            <option value="">Custom / None</option>
+            <option value="weekly">This Week</option>
+            <option value="monthly" selected>Current Month</option>
+            <option value="quarterly">Current Quarter</option>
+            <option value="yearly">Current Year</option>
+          </select>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label" for="granularity">Granularity</label>
+          <select id="granularity" class="form-select">
+            <option value="weekly">Weekly</option>
+            <option value="monthly" selected>Monthly</option>
+            <option value="quarterly">Quarterly</option>
+            <option value="yearly">Yearly</option>
+          </select>
+        </div>
+
+        <div class="mb-2">
+          <label class="form-label">Date Range</label>
+          <div class="range">
+            <input type="date" id="from" class="form-control" placeholder="From">
+            <input type="date" id="to" class="form-control" placeholder="To">
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label" for="employees">Employees (IDs, comma-separated)</label>
+          <input type="text" id="employees" class="form-control" placeholder="e.g. 12,45,78">
+        </div>
+
+        <div class="mb-3">
+          <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <label class="form-label mb-0" for="categories">Categories</label>
+            <button type="button" id="categoriesClear" class="btn btn-outline-secondary btn-sm">Clear</button>
+          </div>
+          <select id="categories" class="form-select" multiple size="6" aria-describedby="categoriesHelp">
+            {% for key,label in categoryLabels.items %}
+            <option value="{{ key }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+          <div id="categoriesHelp" class="form-text">Hold Ctrl/Cmd to select multiple</div>
+        </div>
+
+        <div class="d-flex gap-2 mt-3">
+          <button type="submit" class="btn btn-primary flex-grow-1">Apply</button>
+          <button type="button" id="clearBtn" class="btn btn-outline-secondary">Reset</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div>
+    <!-- KPIs -->
+    <div class="kpi-grid mb-3" aria-live="polite" aria-busy="true">
+      <div class="kpi-tile">
+        <div class="kpi-label">Total Spend</div>
+        <div class="kpi-value skeleton" id="kpiTotal">—</div>
+      </div>
+      <div class="kpi-tile">
+        <div class="kpi-label">Current Month</div>
+        <div class="kpi-value skeleton" id="kpiMonth">—</div>
+      </div>
+      <div class="kpi-tile">
+        <div class="kpi-label">Current Quarter</div>
+        <div class="kpi-value skeleton" id="kpiQuarter">—</div>
+      </div>
+      <div class="kpi-tile">
+        <div class="kpi-label">Current Year</div>
+        <div class="kpi-value skeleton" id="kpiYear">—</div>
+      </div>
+      <div class="kpi-tile">
+        <div class="kpi-label">Avg / Employee</div>
+        <div class="kpi-value skeleton" id="kpiAvg">—</div>
+      </div>
+      <div class="kpi-tile">
+        <div class="kpi-label">Highest Spender</div>
+        <div class="kpi-value skeleton" id="kpiTop">—</div>
+      </div>
+    </div>
+
+    <!-- Charts + Lists -->
+    <div class="row g-3">
+      <div class="col-12 col-xl-6">
+        <div class="card h-100">
+          <div class="card-header"><strong>Time-based Spend</strong></div>
+          <div class="card-body">
+            <canvas id="tsChart" height="210"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="col-12 col-xl-6">
+        <div class="card h-100">
+          <div class="card-header"><strong>Category Breakdown (Bar)</strong></div>
+          <div class="card-body">
+            <canvas id="catBar" height="210"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-xl-6">
+        <div class="card h-100">
+          <div class="card-header"><strong>Category Share (Donut)</strong></div>
+          <div class="card-body">
+            <canvas id="catPie" height="230"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-xl-6">
+        <div class="card h-100">
+          <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <strong>High-Risk / High-Spend (Avg + X%)</strong>
+            <span class="pill skeleton" id="hrMeta">—</span>
+          </div>
+          <div class="card-body">
+            <div id="hrList" class="d-flex flex-wrap gap-2"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12">
+        <div class="card">
+          <div class="card-header"><strong>Employee Spend Analysis</strong></div>
+          <div class="card-body">
+            <div id="top5Pills" class="d-flex flex-wrap gap-2 mb-2"></div>
+            <div class="table-responsive" style="max-height:420px">
+              <table class="table align-middle">
+                <thead class="table-light">
+                  <tr>
+                    <th>Employee</th>
+                    <th>Total Amount</th>
+                    <th># Requests</th>
+                    <th>Top Category</th>
+                  </tr>
+                </thead>
+                <tbody id="empBody">
+                  <tr>
+                    <td colspan="4" class="text-muted">Loading…</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /row -->
+  </div><!-- /main -->
+</div><!-- /wrap -->
+
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+  const fmtMoney = v => '₹' + (Number(v||0)).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const qs = (id) => document.getElementById(id);
+
+  // URL params
+  function readParams() {
+    const p = new URLSearchParams(location.search);
+    return {
+      status: p.get('status') || 'approved_and_paid',
+      preset: p.get('preset') || 'monthly',
+      granularity: p.get('granularity') || 'monthly',
+      from: p.get('from') || '',
+      to: p.get('to') || '',
+      employees: p.get('employees') || '',
+      categories: (p.get('categories') || ''),
+      threshold: p.get('threshold') || '50'
+    };
+  }
+  function writeParams(params) {
+    const p = new URLSearchParams();
+    Object.entries(params).forEach(([k,v]) => { if (v) p.set(k, v); });
+    const url = location.pathname + '?' + p.toString();
+    history.replaceState(null, '', url);
+  }
+
+  // Form <> params
+  function setFormFromParams(params) {
+    qs('status').value = params.status;
+    qs('preset').value = params.preset;
+    qs('granularity').value = params.granularity;
+    qs('from').value = params.from;
+    qs('to').value = params.to;
+    qs('employees').value = params.employees;
+    // categories (multi)
+    const set = new Set((params.categories||'').split(',').filter(Boolean));
+    [...qs('categories').options].forEach(o => o.selected = set.has(o.value));
+  }
+  function getFormParams() {
+    const selectedCats = [...qs('categories').selectedOptions].map(o => o.value).join(',');
+    return {
+      status: qs('status').value,
+      preset: qs('preset').value,
+      granularity: qs('granularity').value,
+      from: qs('from').value,
+      to: qs('to').value,
+      employees: (qs('employees').value || '').replace(/\s+/g,''),
+      categories: selectedCats
+    };
+  }
+
+  // Charts
+  let tsChart, catBar, catPie;
+  function ensureCharts() {
+    if (!tsChart) {
+      tsChart = new Chart(qs('tsChart').getContext('2d'), {
+        type: 'line',
+        data: { labels: [], datasets: [{ label: 'Total', data: [] }] },
+        options: { responsive: true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true } } }
+      });
+    }
+    if (!catBar) {
+      catBar = new Chart(qs('catBar').getContext('2d'), {
+        type: 'bar',
+        data: { labels: [], datasets: [{ label: 'Amount', data: [] }] },
+        options: { responsive: true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true } } }
+      });
+    }
+    if (!catPie) {
+      catPie = new Chart(qs('catPie').getContext('2d'), {
+        type: 'doughnut',
+        data: { labels: [], datasets: [{ data: [] }] },
+        options: { responsive: true, maintainAspectRatio:false }
+      });
+    }
+  }
+
+  // Fetch helper
+  async function fetchJSON(url, params) {
+    const p = new URLSearchParams(params);
+    const res = await fetch(url + '?' + p.toString(), { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('Request failed');
+    return await res.json();
+  }
+
+  // Skeleton toggling
+  function clearSkeleton(...ids){
+    ids.forEach(id => {
+      const el = qs(id);
+      if (!el) return;
+      el.classList.remove('skeleton');
+      el.setAttribute('aria-busy', 'false');
+    });
+    const kpiWrap = document.querySelector('.kpi-grid');
+    if (kpiWrap) kpiWrap.setAttribute('aria-busy', 'false');
+  }
+
+  async function loadAll() {
+    const p = readParams();
+    setFormFromParams(p);
+    ensureCharts();
+
+    const common = {
+      status: p.status,
+      preset: p.preset,
+      granularity: p.granularity,
+      from: p.from,
+      to: p.to,
+      employees: p.employees,
+      categories: p.categories
+    };
+
+    // KPIs
+    const k = await fetchJSON("{% url 'reimbursement:analytics_api_summary' %}", common);
+    qs('kpiTotal').textContent   = fmtMoney(k.total_spend);
+    qs('kpiMonth').textContent   = fmtMoney(k.current_month_spend);
+    qs('kpiQuarter').textContent = fmtMoney(k.current_quarter_spend);
+    qs('kpiYear').textContent    = fmtMoney(k.current_year_spend);
+    qs('kpiAvg').textContent     = fmtMoney(k.average_spend_per_employee);
+    qs('kpiTop').textContent     = k.highest_spender ? `${k.highest_spender.employee_name} — ${fmtMoney(k.highest_spender.total)}` : '—';
+    clearSkeleton('kpiTotal','kpiMonth','kpiQuarter','kpiYear','kpiAvg','kpiTop');
+
+    // Time series
+    const ts = await fetchJSON("{% url 'reimbursement:analytics_api_timeseries' %}", common);
+    tsChart.data.labels = ts.map(r => new Date(r.period).toLocaleDateString('en-IN'));
+    tsChart.data.datasets[0].data = ts.map(r => r.total);
+    tsChart.update();
+
+    // Categories
+    const cats = await fetchJSON("{% url 'reimbursement:analytics_api_categories' %}", common);
+    catBar.data.labels = cats.map(r => r.label);
+    catBar.data.datasets[0].data = cats.map(r => r.total);
+    catBar.update();
+
+    catPie.data.labels = cats.map(r => r.label);
+    catPie.data.datasets[0].data = cats.map(r => r.percent);
+    catPie.update();
+
+    // Employees
+    const emp = await fetchJSON("{% url 'reimbursement:analytics_api_employees' %}", common);
+    const pills = (emp.top5 || []).map(r => `<span class="pill">${r.employee_name}: ${fmtMoney(r.total)}</span>`).join('');
+    qs('top5Pills').innerHTML = pills || '<span class="text-muted">No data</span>';
+
+    qs('empBody').innerHTML = (emp.rows || []).map(r => `
+      <tr>
+        <td>${r.employee_name}</td>
+        <td>${fmtMoney(r.total)}</td>
+        <td>${r.request_count}</td>
+        <td>${r.top_category || '-'}</td>
+      </tr>
+    `).join('') || `<tr><td colspan="4" class="text-muted">No data</td></tr>`;
+
+    // High risk
+    const hr = await fetchJSON("{% url 'reimbursement:analytics_api_highrisk' %}", { ...common, threshold: p.threshold || 50 });
+    qs('hrMeta').textContent = `Avg ${fmtMoney(hr.average||0)} • +${hr.threshold}% ⇒ ${fmtMoney(hr.cutoff||0)}`;
+    qs('hrList').innerHTML = (hr.flags || []).map(f => `<span class="pill">${f.employee_name}: ${fmtMoney(f.total)}</span>`).join('') || '<span class="text-muted">No flags</span>';
+    clearSkeleton('hrMeta');
+  }
+
+  // Form interactions
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('filtersForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const params = { ...readParams(), ...getFormParams() };
+      writeParams(params);
+      loadAll().catch(err => {
+        console.error(err);
+        alert('Failed to load analytics.');
+      });
+    });
+
+    document.getElementById('clearBtn').addEventListener('click', () => {
+      const cleared = { status:'approved_and_paid', preset:'monthly', granularity:'monthly' };
+      writeParams(cleared);
+      location.reload();
+    });
+
+    document.getElementById('categoriesClear').addEventListener('click', () => {
+      [...qs('categories').options].forEach(o => o.selected = false);
+    });
+
+    // Boot
+    const current = readParams();
+    if (!current.preset && !current.from && !current.to) current.preset = 'monthly';
+    if (!current.status) current.status = 'approved_and_paid';
+    writeParams(current);
+    loadAll().catch(err => {
+      console.error(err);
+      alert('Failed to load analytics.');
+    });
+  });
+</script>
+{% endblock %}
