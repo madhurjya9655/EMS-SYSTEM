@@ -584,15 +584,88 @@ class ReimbursementRequest(models.Model):
             self.save(update_fields=["total_amount", "updated_at"])
         return total
 
+    # ---- Transition validation ---------------------------------------------
+
+    def _is_manager_approved(self) -> bool:
+        return (self.manager_decision or "").lower() == "approved" and bool(self.manager_decided_at)
+
+    def _is_management_approved(self) -> bool:
+        return (self.management_decision or "").lower() == "approved" and bool(self.management_decided_at)
+
+    def _validate_transition(self, old: str, new: str) -> None:
+        """
+        Enforce core business rules so statuses can't skip steps.
+        Raises DjangoCoreValidationError on invalid transitions.
+        """
+        if not old or old == new:
+            return
+
+        require_mgmt = ReimbursementSettings.get_solo().require_management_approval
+
+        # PENDING_MANAGER requires finance verification set
+        if new == self.Status.PENDING_MANAGER and not self.verified_by_id:
+            raise DjangoCoreValidationError(_("Cannot move to Manager review before Finance verifies."))
+
+        # PENDING_MANAGEMENT requires manager approved
+        if new == self.Status.PENDING_MANAGEMENT and not self._is_manager_approved():
+            raise DjangoCoreValidationError(_("Cannot move to Management before Manager approval."))
+
+        # PENDING_FINANCE requires final approvals depending on org policy
+        if new == self.Status.PENDING_FINANCE:
+            if require_mgmt:
+                if not self._is_management_approved():
+                    raise DjangoCoreValidationError(_("Cannot move to Finance review before Management approval."))
+            else:
+                if not self._is_manager_approved():
+                    raise DjangoCoreValidationError(_("Cannot move to Finance review before Manager approval."))
+
+        # APPROVED only from PENDING_FINANCE
+        if new == self.Status.APPROVED and old != self.Status.PENDING_FINANCE:
+            raise DjangoCoreValidationError(_("Only Finance can set Approved after Finance review."))
+
+        # PAID only from APPROVED and needs payment reference
+        if new == self.Status.PAID:
+            if old != self.Status.APPROVED:
+                raise DjangoCoreValidationError(_("Cannot mark Paid before Approved."))
+            if not (self.finance_payment_reference or "").strip():
+                raise DjangoCoreValidationError(_("Payment reference is required to mark Paid."))
+
     def save(self, *args, **kwargs):
         """
         Custom save:
 
         - Ensure submitted_at is set when status first moves out of DRAFT.
+        - Enforce status transition rules.
+        - Auto-log STATUS_CHANGED in audit log.
         """
+        # Load current DB state for comparison
+        old_status = None
+        if self.pk:
+            try:
+                old_status = type(self).objects.only("status").get(pk=self.pk).status
+            except type(self).DoesNotExist:
+                old_status = None
+
+        # Auto-set submitted_at once it leaves Draft
         if self.submitted_at is None and self.status != self.Status.DRAFT:
             self.submitted_at = timezone.now()
+
+        # Validate transition (if changed)
+        if old_status and self.status != old_status:
+            self._validate_transition(old_status, self.status)
+
         super().save(*args, **kwargs)
+
+        # Audit log for status change
+        if old_status and self.status != old_status:
+            ReimbursementLog.log(
+                self,
+                ReimbursementLog.Action.STATUS_CHANGED,
+                actor=None,
+                message="System status transition",
+                from_status=old_status,
+                to_status=self.status,
+            )
 
     # ---- Finance helpers ----------------------------------------------------
 
@@ -641,7 +714,13 @@ class ReimbursementRequest(models.Model):
     ) -> None:
         """
         Helper for Finance to mark the request as Paid and log it.
+        Enforces that current status is APPROVED and a reference is provided.
         """
+        if self.status != self.Status.APPROVED:
+            raise DjangoCoreValidationError(_("Cannot mark Paid before Approved."))
+        if not (reference or "").strip():
+            raise DjangoCoreValidationError(_("Payment reference is required to mark Paid."))
+
         from_status = self.status
         self.status = self.Status.PAID
         self.finance_payment_reference = reference
