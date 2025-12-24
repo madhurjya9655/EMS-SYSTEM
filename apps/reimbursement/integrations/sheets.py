@@ -172,6 +172,13 @@ def _get_sheet_map() -> Dict[str, int]:
         out[props.get("title")] = props.get("sheetId")
     return out
 
+def _get_sheet_obj(sheet_id: int) -> dict | None:
+    resp = _svc().spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+    for s in resp.get("sheets", []):
+        if s.get("properties", {}).get("sheetId") == sheet_id:
+            return s
+    return None
+
 def _batch_update(requests: list) -> None:
     if not requests:
         return
@@ -248,25 +255,34 @@ def _friendly_format_main(sheet_id: int) -> None:
             }
         })
 
-    # Alternating row banding (must include firstBandColor & secondBandColor)
-    requests.append({
-        "addBanding": {
-            "bandedRange": {
-                "range": {"sheetId": sheet_id, "startRowIndex": 0, "startColumnIndex": 0, "endColumnIndex": end_col},
-                "rowProperties": {
-                    "headerColor": {"red": 0.95, "green": 0.95, "blue": 0.95},
-                    "firstBandColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
-                    "secondBandColor": {"red": 0.98, "green": 0.98, "blue": 0.98},
-                },
-            }
-        }
-    })
+    # Alternating row banding — add only if not already present
+    has_banding = False
+    try:
+        sheet_obj = _get_sheet_obj(sheet_id)
+        banded = (sheet_obj or {}).get("bandedRanges", [])
+        has_banding = bool(banded)
+    except Exception:
+        has_banding = False
 
-    # Execute formatting; ignore banding duplication errors
+    if not has_banding:
+        requests.append({
+            "addBanding": {
+                "bandedRange": {
+                    "range": {"sheetId": sheet_id, "startRowIndex": 0, "startColumnIndex": 0, "endColumnIndex": end_col},
+                    "rowProperties": {
+                        "headerColor": {"red": 0.95, "green": 0.95, "blue": 0.95},
+                        "firstBandColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
+                        "secondBandColor": {"red": 0.98, "green": 0.98, "blue": 0.98},
+                    },
+                }
+            }
+        })
+
+    # Execute formatting quietly (no stack traces in logs)
     try:
         _batch_update(requests)
-    except Exception:
-        logger.exception("Ignored non-fatal formatting error while applying friendly layout")
+    except Exception as e:
+        logger.info("Non-fatal formatting skip: %s", e)
 
 def ensure_spreadsheet_structure() -> None:
     """
