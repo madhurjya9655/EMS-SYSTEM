@@ -48,13 +48,13 @@ _WARNED_MISSING_CREDS = False
 HEADER = [
     "ReimbID",              # A
     "EmployeeID",           # B
-    "Employee",             # C  (friendly)
+    "Employee",             # C
     "Department",           # D
-    "Categories",           # E  (friendly)
-    "Items",                # F  (friendly)
-    "Amount",               # G  (friendly, INR)
+    "Categories",           # E
+    "Items",                # F
+    "Amount",               # G
     "Currency",             # H
-    "Submitted",            # I  (friendly)
+    "Submitted",            # I
     "Status",               # J
     "StatusUpdated",        # K
     "Manager",              # L
@@ -63,7 +63,7 @@ HEADER = [
     "ManagementDecided",    # O
     "FinanceVerifier",      # P
     "FinanceVerified",      # Q
-    "PaymentRef",           # R  (friendly)
+    "PaymentRef",           # R
     "PaidAt",               # S
     "RejectionReason",      # T
     "FinanceNote",          # U
@@ -201,36 +201,12 @@ def _friendly_format_main(sheet_id: int) -> None:
         }
     })
 
-    # Column widths (friendlier)
+    # Column widths (friendly)
     widths = {
-        1: 90,   # ReimbID
-        2: 90,   # EmployeeID
-        3: 200,  # Employee
-        4: 150,  # Department
-        5: 160,  # Categories
-        6: 90,   # Items
-        7: 120,  # Amount
-        8: 70,   # Currency
-        9: 170,  # Submitted
-        10: 150, # Status
-        11: 170, # StatusUpdated
-        12: 150, # Manager
-        13: 170, # ManagerDecided
-        14: 150, # Management
-        15: 170, # ManagementDecided
-        16: 150, # FinanceVerifier
-        17: 170, # FinanceVerified
-        18: 160, # PaymentRef
-        19: 170, # PaidAt
-        20: 220, # RejectionReason
-        21: 260, # FinanceNote
-        22: 260, # ReceiptLinks
-        23: 160, # EMSLink
-        24: 170, # CreatedAt
-        25: 170, # UpdatedAt
-        26: 170, # SyncedAt
-        27: 110, # SyncVersion
-        28: 180, # Extra
+        1: 90,  2: 90,  3: 200, 4: 150, 5: 160, 6: 90,  7: 120, 8: 70,  9: 170,
+        10: 150, 11: 170, 12: 150, 13: 170, 14: 150, 15: 170, 16: 150, 17: 170,
+        18: 160, 19: 170, 20: 220, 21: 260, 22: 260, 23: 160, 24: 170, 25: 170,
+        26: 170, 27: 110, 28: 180,
     }
     for idx, px in widths.items():
         requests.append({
@@ -252,7 +228,7 @@ def _friendly_format_main(sheet_id: int) -> None:
             }
         })
 
-    # Amount number format (INR style but generic to avoid locale issues)
+    # Amount number format
     requests.append({
         "repeatCell": {
             "range": {"sheetId": sheet_id, "startRowIndex": 1, "startColumnIndex": 6, "endColumnIndex": 7},
@@ -272,17 +248,25 @@ def _friendly_format_main(sheet_id: int) -> None:
             }
         })
 
-    # Alternating row banding
+    # Alternating row banding (must include firstBandColor & secondBandColor)
     requests.append({
         "addBanding": {
             "bandedRange": {
                 "range": {"sheetId": sheet_id, "startRowIndex": 0, "startColumnIndex": 0, "endColumnIndex": end_col},
-                "rowProperties": {"headerColor": {"red": 0.95, "green": 0.95, "blue": 0.95}},
+                "rowProperties": {
+                    "headerColor": {"red": 0.95, "green": 0.95, "blue": 0.95},
+                    "firstBandColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
+                    "secondBandColor": {"red": 0.98, "green": 0.98, "blue": 0.98},
+                },
             }
         }
     })
 
-    _batch_update(requests)
+    # Execute formatting; ignore banding duplication errors
+    try:
+        _batch_update(requests)
+    except Exception:
+        logger.exception("Ignored non-fatal formatting error while applying friendly layout")
 
 def ensure_spreadsheet_structure() -> None:
     """
