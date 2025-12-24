@@ -27,55 +27,53 @@ logger = logging.getLogger(__name__)
 # HARD-CODED SHEET IDENTIFIERS
 # ---------------------------------------------------------------------------
 
-# Client’s shared Google Sheet
 SPREADSHEET_ID = "1LOVDkTVMGdEPOP9CQx-WVDv7ZY1TpqiQD82FFCc3t4A"
 
-# Tab names (stable; do not rename without data migration)
 TAB_MAIN = "Reimbursements"
 TAB_CHANGELOG = "ChangeLog"
 TAB_SCHEMA = "Schema"
-TAB_META = "_Meta"  # reserved for future use
+TAB_META = "_Meta"  # reserved
 
 # Schema/header version — bump if you change HEADER
-SYNC_VERSION = 1
+SYNC_VERSION = 2
 
 # One-time warning flags per process
 _WARNED_MISSING_GOOGLE = False
 _WARNED_MISSING_CREDS = False
 
 # ---------------------------------------------------------------------------
-# MAIN TAB HEADER (future-proof, stable order)
+# MAIN TAB HEADER (friendly labels, stable order)
 # ---------------------------------------------------------------------------
 
 HEADER = [
     "ReimbID",              # A
     "EmployeeID",           # B
-    "EmployeeName",         # C
+    "Employee",             # C  (friendly)
     "Department",           # D
-    "CategoryList",         # E
-    "LineCount",            # F
-    "TotalAmount",          # G
+    "Categories",           # E  (friendly)
+    "Items",                # F  (friendly)
+    "Amount",               # G  (friendly, INR)
     "Currency",             # H
-    "SubmittedAt",          # I
+    "Submitted",            # I  (friendly)
     "Status",               # J
-    "StatusUpdatedAt",      # K
-    "ManagerUsername",      # L
-    "ManagerDecisionAt",    # M
-    "ManagementUsername",   # N
-    "ManagementDecisionAt", # O
+    "StatusUpdated",        # K
+    "Manager",              # L
+    "ManagerDecided",       # M
+    "Management",           # N
+    "ManagementDecided",    # O
     "FinanceVerifier",      # P
-    "FinanceVerifiedAt",    # Q
-    "FinanceRef",           # R
+    "FinanceVerified",      # Q
+    "PaymentRef",           # R  (friendly)
     "PaidAt",               # S
-    "RejectedReason",       # T
+    "RejectionReason",      # T
     "FinanceNote",          # U
-    "ReceiptURLs",          # V
-    "InternalRecordURL",    # W
+    "ReceiptLinks",         # V
+    "EMSLink",              # W
     "CreatedAt",            # X
     "UpdatedAt",            # Y
     "SyncedAt",             # Z
     "SyncVersion",          # AA
-    "ExtraJSON",            # AB
+    "Extra",                # AB
 ]
 
 CHANGELOG_HEADER = [
@@ -181,10 +179,115 @@ def _batch_update(requests: list) -> None:
         spreadsheetId=SPREADSHEET_ID, body={"requests": requests}
     ).execute()
 
+def _friendly_format_main(sheet_id: int) -> None:
+    """Make main tab client-friendly: widths, filter, wrap, formats."""
+    end_col = len(HEADER)
+    requests = []
+
+    # Freeze header
+    requests.append({
+        "updateSheetProperties": {
+            "properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 1}},
+            "fields": "gridProperties.frozenRowCount",
+        }
+    })
+
+    # Enable filter on header row
+    requests.append({
+        "setBasicFilter": {
+            "filter": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1_000_000, "startColumnIndex": 0, "endColumnIndex": end_col}
+            }
+        }
+    })
+
+    # Column widths (friendlier)
+    widths = {
+        1: 90,   # ReimbID
+        2: 90,   # EmployeeID
+        3: 200,  # Employee
+        4: 150,  # Department
+        5: 160,  # Categories
+        6: 90,   # Items
+        7: 120,  # Amount
+        8: 70,   # Currency
+        9: 170,  # Submitted
+        10: 150, # Status
+        11: 170, # StatusUpdated
+        12: 150, # Manager
+        13: 170, # ManagerDecided
+        14: 150, # Management
+        15: 170, # ManagementDecided
+        16: 150, # FinanceVerifier
+        17: 170, # FinanceVerified
+        18: 160, # PaymentRef
+        19: 170, # PaidAt
+        20: 220, # RejectionReason
+        21: 260, # FinanceNote
+        22: 260, # ReceiptLinks
+        23: 160, # EMSLink
+        24: 170, # CreatedAt
+        25: 170, # UpdatedAt
+        26: 170, # SyncedAt
+        27: 110, # SyncVersion
+        28: 180, # Extra
+    }
+    for idx, px in widths.items():
+        requests.append({
+            "updateDimensionProperties": {
+                "range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": idx - 1, "endIndex": idx},
+                "properties": {"pixelSize": px},
+                "fields": "pixelSize",
+            }
+        })
+
+    # Wrap Notes / URLs columns
+    wrap_cols = [20, 21, 22]  # RejectionReason, FinanceNote, ReceiptLinks
+    for col in wrap_cols:
+        requests.append({
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 1, "startColumnIndex": col - 1, "endColumnIndex": col},
+                "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
+                "fields": "userEnteredFormat.wrapStrategy",
+            }
+        })
+
+    # Amount number format (INR style but generic to avoid locale issues)
+    requests.append({
+        "repeatCell": {
+            "range": {"sheetId": sheet_id, "startRowIndex": 1, "startColumnIndex": 6, "endColumnIndex": 7},
+            "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": "#,##0.00"}}},
+            "fields": "userEnteredFormat.numberFormat",
+        }
+    })
+
+    # Date/time columns format
+    dt_cols = [9, 11, 13, 15, 17, 19, 24, 25, 26]  # indices 1-based
+    for col in dt_cols:
+        requests.append({
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 1, "startColumnIndex": col - 1, "endColumnIndex": col},
+                "cell": {"userEnteredFormat": {"numberFormat": {"type": "DATE_TIME", "pattern": "yyyy-mm-dd hh:mm:ss"}}},
+                "fields": "userEnteredFormat.numberFormat",
+            }
+        })
+
+    # Alternating row banding
+    requests.append({
+        "addBanding": {
+            "bandedRange": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 0, "startColumnIndex": 0, "endColumnIndex": end_col},
+                "rowProperties": {"headerColor": {"red": 0.95, "green": 0.95, "blue": 0.95}},
+            }
+        }
+    })
+
+    _batch_update(requests)
+
 def ensure_spreadsheet_structure() -> None:
     """
-    Ensure required tabs exist with header rows, frozen row, and widths.
-    Safe & idempotent. No-ops if Google unavailable.
+    Ensure required tabs exist with header rows, friendly formatting,
+    and hide internal tabs. Safe & idempotent. No-ops if Google unavailable.
     """
     if not _google_available():
         return
@@ -198,7 +301,7 @@ def ensure_spreadsheet_structure() -> None:
                 "addSheet": {
                     "properties": {
                         "title": title,
-                        "gridProperties": {"rowCount": 1000, "columnCount": 40},
+                        "gridProperties": {"rowCount": 2000, "columnCount": 40},
                     }
                 }
             })
@@ -207,42 +310,23 @@ def ensure_spreadsheet_structure() -> None:
         _batch_update(requests)
         existing = _get_sheet_map()
 
-    # Freeze header rows & set widths
+    # Hide internal tabs (non-tech)
     requests = []
-    for title in [TAB_MAIN, TAB_CHANGELOG, TAB_SCHEMA]:
+    for title in [TAB_CHANGELOG, TAB_SCHEMA]:
         sid = existing.get(title)
-        if sid is None:
-            continue
-        requests.append({
-            "updateSheetProperties": {
-                "properties": {"sheetId": sid, "gridProperties": {"frozenRowCount": 1}},
-                "fields": "gridProperties.frozenRowCount",
-            }
-        })
-        if title == TAB_MAIN:
-            widths = {
-                1: 100, 2: 110, 3: 180, 4: 160, 5: 160, 6: 100, 7: 120, 8: 80, 9: 180,
-                10: 140, 11: 180, 12: 160, 13: 180, 14: 170, 15: 180, 16: 160, 17: 180,
-                18: 160, 19: 180, 20: 220, 21: 220, 22: 280, 23: 160, 24: 180, 25: 180,
-                26: 180, 27: 110, 28: 260,
-            }
-            for idx, px in widths.items():
-                requests.append({
-                    "updateDimensionProperties": {
-                        "range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": idx - 1, "endIndex": idx},
-                        "properties": {"pixelSize": px},
-                        "fields": "pixelSize",
-                    }
-                })
-        else:
+        if sid is not None:
             requests.append({
-                "updateDimensionProperties": {
-                    "range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 10},
-                    "properties": {"pixelSize": 160},
-                    "fields": "pixelSize",
+                "updateSheetProperties": {
+                    "properties": {"sheetId": sid, "hidden": True},
+                    "fields": "hidden",
                 }
             })
     _batch_update(requests)
+
+    # MAIN formatting + widths + filter + banding
+    main_id = existing.get(TAB_MAIN)
+    if main_id is not None:
+        _friendly_format_main(main_id)
 
     # Write header rows if missing/mismatched
     values = _svc().spreadsheets().values()
@@ -280,7 +364,7 @@ def ensure_spreadsheet_structure() -> None:
             body={"values": [SCHEMA_HEADER]},
         ).execute()
 
-    # Schema heartbeat (nice to have)
+    # Schema heartbeat
     hb = [SYNC_VERSION, json.dumps(HEADER, ensure_ascii=False), True, _iso(datetime.now(timezone.utc)), "bootstrap/update"]
     try:
         values.append(
@@ -291,7 +375,6 @@ def ensure_spreadsheet_structure() -> None:
             body={"values": [hb]},
         ).execute()
     except Exception:
-        # ignore if sheet protected / concurrent
         pass
 
 # ---------------------------------------------------------------------------
@@ -339,36 +422,36 @@ def build_row(req) -> list:
     row = {
         "ReimbID": req.id,
         "EmployeeID": getattr(employee, "id", ""),
-        "EmployeeName": (
+        "Employee": (
             f"{getattr(employee,'first_name','')} {getattr(employee,'last_name','')}".strip()
             or getattr(employee, "username", "")
             or f"User #{getattr(employee, 'id', '')}"
         ),
         "Department": dept,
-        "CategoryList": cats,
-        "LineCount": line_count,
-        "TotalAmount": float(req.total_amount or 0),
+        "Categories": cats,
+        "Items": line_count,
+        "Amount": float(req.total_amount or 0),
         "Currency": "INR",
-        "SubmittedAt": _iso(req.submitted_at),
+        "Submitted": _iso(req.submitted_at),
         "Status": req.status,
-        "StatusUpdatedAt": _iso(req.updated_at),
-        "ManagerUsername": manager_un,
-        "ManagerDecisionAt": _iso(req.manager_decided_at),
-        "ManagementUsername": management_un,
-        "ManagementDecisionAt": _iso(req.management_decided_at),
+        "StatusUpdated": _iso(req.updated_at),
+        "Manager": manager_un,
+        "ManagerDecided": _iso(req.manager_decided_at),
+        "Management": management_un,
+        "ManagementDecided": _iso(req.management_decided_at),
         "FinanceVerifier": finance_un,
-        "FinanceVerifiedAt": _iso(req.verified_at),
-        "FinanceRef": req.finance_payment_reference or "",
+        "FinanceVerified": _iso(req.verified_at),
+        "PaymentRef": req.finance_payment_reference or "",
         "PaidAt": _iso(req.paid_at),
-        "RejectedReason": req.management_comment if req.status == req.Status.REJECTED else "",
+        "RejectionReason": req.management_comment if req.status == req.Status.REJECTED else "",
         "FinanceNote": req.finance_note or "",
-        "ReceiptURLs": receipts_csv,
-        "InternalRecordURL": f'=HYPERLINK("{_detail_url(req.id)}","Open in EMS")',
+        "ReceiptLinks": receipts_csv,
+        "EMSLink": f'=HYPERLINK("{_detail_url(req.id)}","Open in EMS")',
         "CreatedAt": _iso(req.created_at),
         "UpdatedAt": _iso(req.updated_at),
         "SyncedAt": _iso(datetime.now(timezone.utc)),
         "SyncVersion": SYNC_VERSION,
-        "ExtraJSON": json.dumps(extra, ensure_ascii=False),
+        "Extra": json.dumps(extra, ensure_ascii=False),
     }
     return [row[h] for h in HEADER]
 
@@ -386,7 +469,7 @@ def _index_by_id() -> Dict[str, int]:
             idx[str(v[0])] = i
     return idx
 
-def upsert_row(row: list, reimb_id: int) -> Tuple[str, int]:
+def upsert_row(row: list, reimb_id: int):
     values = _svc().spreadsheets().values()
     idx = _index_by_id()
     end_col = _header_end_col()
@@ -450,12 +533,11 @@ def append_changelog(
 def sync_request(req) -> None:
     """
     Idempotent upsert for a single ReimbursementRequest.
-    Ensures tabs/headers first. No-ops if google libs/creds missing.
+    Ensures tabs/headers/formatting first. No-ops if google libs/creds missing.
     """
     if not _google_available() or req is None:
         return
 
-    # Ensure spreadsheet structure
     ensure_spreadsheet_structure()
 
     row = build_row(req)
