@@ -34,15 +34,14 @@ TAB_CHANGELOG = "ChangeLog"
 TAB_SCHEMA = "Schema"
 TAB_META = "_Meta"  # reserved
 
-# Schema/header version — bump if you change HEADER
-SYNC_VERSION = 2
+# Bump when HEADER or link behavior changes
+SYNC_VERSION = 4
 
-# One-time warning flags per process
 _WARNED_MISSING_GOOGLE = False
 _WARNED_MISSING_CREDS = False
 
 # ---------------------------------------------------------------------------
-# MAIN TAB HEADER (friendly labels, stable order)
+# MAIN TAB HEADER (client-friendly)
 # ---------------------------------------------------------------------------
 
 HEADER = [
@@ -76,9 +75,7 @@ HEADER = [
     "Extra",                # AB
 ]
 
-CHANGELOG_HEADER = [
-    "TimestampUTC", "Event", "ReimbID", "OldStatus", "NewStatus", "RowNum", "Actor", "Result"
-]
+CHANGELOG_HEADER = ["TimestampUTC", "Event", "ReimbID", "OldStatus", "NewStatus", "RowNum", "Actor", "Result"]
 SCHEMA_HEADER = ["Version", "HeaderJSON", "Active", "RecordedAtUTC", "Note"]
 
 # ---------------------------------------------------------------------------
@@ -93,7 +90,7 @@ def _excel_col(n: int) -> str:
     return "".join(reversed(out))
 
 def _header_end_col() -> str:
-    return _excel_col(len(HEADER))  # "AB" today
+    return _excel_col(len(HEADER))  # "AB"
 
 def _iso(dt):
     if not dt:
@@ -106,14 +103,19 @@ def _site_url() -> str:
     return (getattr(settings, "SITE_URL", "").rstrip("/")) or "http://127.0.0.1:8000"
 
 def _detail_url(req_id: int) -> str:
+    """
+    Always resolve to Admin change page (guaranteed).
+    If named route is missing, fall back to raw admin path.
+    """
+    base = _site_url()
     try:
-        path = reverse("reimbursement:request_detail", kwargs={"pk": req_id})
+        path = reverse("admin:reimbursement_reimbursementrequest_change", args=[req_id])
+        return f"{base}{path}"
     except NoReverseMatch:
-        path = f"/reimbursement/request/{req_id}/"
-    return f"{_site_url()}{path}"
+        return f"{base}/admin/reimbursement/reimbursementrequest/{req_id}/change/"
 
 # ---------------------------------------------------------------------------
-# Lazy Google loader (no import at module import time)
+# Lazy Google loader
 # ---------------------------------------------------------------------------
 
 def _google_available() -> bool:
@@ -138,7 +140,7 @@ def _google_available() -> bool:
         if not _WARNED_MISSING_CREDS:
             logger.warning(
                 "Google Sheets sync disabled: credentials missing. "
-                "Set GOOGLE_SERVICE_ACCOUNT_JSON (recommended) or GOOGLE_SERVICE_ACCOUNT_FILE."
+                "Set GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SERVICE_ACCOUNT_FILE."
             )
             _WARNED_MISSING_CREDS = True
         return False
@@ -187,7 +189,6 @@ def _batch_update(requests: list) -> None:
     ).execute()
 
 def _friendly_format_main(sheet_id: int) -> None:
-    """Make main tab client-friendly: widths, filter, wrap, formats."""
     end_col = len(HEADER)
     requests = []
 
@@ -199,7 +200,7 @@ def _friendly_format_main(sheet_id: int) -> None:
         }
     })
 
-    # Enable filter on header row
+    # Enable filter
     requests.append({
         "setBasicFilter": {
             "filter": {
@@ -208,7 +209,7 @@ def _friendly_format_main(sheet_id: int) -> None:
         }
     })
 
-    # Column widths (friendly)
+    # Column widths
     widths = {
         1: 90,  2: 90,  3: 200, 4: 150, 5: 160, 6: 90,  7: 120, 8: 70,  9: 170,
         10: 150, 11: 170, 12: 150, 13: 170, 14: 150, 15: 170, 16: 150, 17: 170,
@@ -224,9 +225,8 @@ def _friendly_format_main(sheet_id: int) -> None:
             }
         })
 
-    # Wrap Notes / URLs columns
-    wrap_cols = [20, 21, 22]  # RejectionReason, FinanceNote, ReceiptLinks
-    for col in wrap_cols:
+    # Wrap long text columns
+    for col in [20, 21, 22]:
         requests.append({
             "repeatCell": {
                 "range": {"sheetId": sheet_id, "startRowIndex": 1, "startColumnIndex": col - 1, "endColumnIndex": col},
@@ -235,7 +235,7 @@ def _friendly_format_main(sheet_id: int) -> None:
             }
         })
 
-    # Amount number format
+    # Amount format
     requests.append({
         "repeatCell": {
             "range": {"sheetId": sheet_id, "startRowIndex": 1, "startColumnIndex": 6, "endColumnIndex": 7},
@@ -244,9 +244,8 @@ def _friendly_format_main(sheet_id: int) -> None:
         }
     })
 
-    # Date/time columns format
-    dt_cols = [9, 11, 13, 15, 17, 19, 24, 25, 26]  # indices 1-based
-    for col in dt_cols:
+    # Date/time formats
+    for col in [9, 11, 13, 15, 17, 19, 24, 25, 26]:
         requests.append({
             "repeatCell": {
                 "range": {"sheetId": sheet_id, "startRowIndex": 1, "startColumnIndex": col - 1, "endColumnIndex": col},
@@ -255,12 +254,11 @@ def _friendly_format_main(sheet_id: int) -> None:
             }
         })
 
-    # Alternating row banding — add only if not already present
+    # Add banding only if absent
     has_banding = False
     try:
         sheet_obj = _get_sheet_obj(sheet_id)
-        banded = (sheet_obj or {}).get("bandedRanges", [])
-        has_banding = bool(banded)
+        has_banding = bool((sheet_obj or {}).get("bandedRanges", []))
     except Exception:
         has_banding = False
 
@@ -278,17 +276,12 @@ def _friendly_format_main(sheet_id: int) -> None:
             }
         })
 
-    # Execute formatting quietly (no stack traces in logs)
     try:
         _batch_update(requests)
     except Exception as e:
         logger.info("Non-fatal formatting skip: %s", e)
 
 def ensure_spreadsheet_structure() -> None:
-    """
-    Ensure required tabs exist with header rows, friendly formatting,
-    and hide internal tabs. Safe & idempotent. No-ops if Google unavailable.
-    """
     if not _google_available():
         return
 
@@ -310,7 +303,7 @@ def ensure_spreadsheet_structure() -> None:
         _batch_update(requests)
         existing = _get_sheet_map()
 
-    # Hide internal tabs (non-tech)
+    # Hide internal tabs
     requests = []
     for title in [TAB_CHANGELOG, TAB_SCHEMA]:
         sid = existing.get(title)
@@ -323,18 +316,15 @@ def ensure_spreadsheet_structure() -> None:
             })
     _batch_update(requests)
 
-    # MAIN formatting + widths + filter + banding
     main_id = existing.get(TAB_MAIN)
     if main_id is not None:
         _friendly_format_main(main_id)
 
-    # Write header rows if missing/mismatched
     values = _svc().spreadsheets().values()
 
-    # MAIN
+    # MAIN header
     cur = values.get(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!1:1").execute().get("values", [[]])
-    row0 = cur[0] if cur else []
-    if row0 != HEADER:
+    if (cur[0] if cur else []) != HEADER:
         values.update(
             spreadsheetId=SPREADSHEET_ID,
             range=f"{TAB_MAIN}!1:1",
@@ -342,10 +332,9 @@ def ensure_spreadsheet_structure() -> None:
             body={"values": [HEADER]},
         ).execute()
 
-    # CHANGELOG
+    # CHANGELOG header
     cur = values.get(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_CHANGELOG}!1:1").execute().get("values", [[]])
-    row0 = cur[0] if cur else []
-    if row0 != CHANGELOG_HEADER:
+    if (cur[0] if cur else []) != CHANGELOG_HEADER:
         values.update(
             spreadsheetId=SPREADSHEET_ID,
             range=f"{TAB_CHANGELOG}!1:1",
@@ -353,10 +342,9 @@ def ensure_spreadsheet_structure() -> None:
             body={"values": [CHANGELOG_HEADER]},
         ).execute()
 
-    # SCHEMA
+    # SCHEMA header
     cur = values.get(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_SCHEMA}!1:1").execute().get("values", [[]])
-    row0 = cur[0] if cur else []
-    if row0 != SCHEMA_HEADER:
+    if (cur[0] if cur else []) != SCHEMA_HEADER:
         values.update(
             spreadsheetId=SPREADSHEET_ID,
             range=f"{TAB_SCHEMA}!1:1",
@@ -499,16 +487,7 @@ def upsert_row(row: list, reimb_id: int):
         pass
     return "insert", rn
 
-def append_changelog(
-    event: str,
-    req_id: int,
-    old: str,
-    new: str,
-    rownum: int,
-    actor: str = "",
-    result: str = "ok",
-    err: str = "",
-) -> None:
+def append_changelog(event: str, req_id: int, old: str, new: str, rownum: int, actor: str = "", result: str = "ok", err: str = "") -> None:
     _svc().spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
         range=f"{TAB_CHANGELOG}!A:H",
@@ -531,10 +510,6 @@ def append_changelog(
 # ---------------------------------------------------------------------------
 
 def sync_request(req) -> None:
-    """
-    Idempotent upsert for a single ReimbursementRequest.
-    Ensures tabs/headers/formatting first. No-ops if google libs/creds missing.
-    """
     if not _google_available() or req is None:
         return
 
