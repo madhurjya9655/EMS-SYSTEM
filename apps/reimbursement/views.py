@@ -28,6 +28,8 @@ from django.views.generic import (
     UpdateView,
 )
 
+from django.core.exceptions import ValidationError as DjangoCoreValidationError
+
 from apps.users.mixins import PermissionRequiredMixin
 from apps.users.permissions import has_permission
 
@@ -935,6 +937,25 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
             .select_related("created_by", "manager", "management")
         )
 
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        req: ReimbursementRequest = self.object
+        # Context flag templates can use to hide/disable the checkbox/button if desired
+        can, _ = req.can_mark_paid(req.finance_payment_reference or "")
+        ctx["can_mark_paid"] = can
+        return ctx
+
+    def get_form(self, form_class=None):
+        form = super().get_form(form_class)
+        # Extra safety: disable the checkbox at render time when not eligible
+        try:
+            can, _ = self.object.can_mark_paid(self.object.finance_payment_reference or "")
+            if not can and "mark_paid" in form.fields:
+                form.fields["mark_paid"].disabled = True
+        except Exception:
+            pass
+        return form
+
     def form_valid(self, form: FinanceProcessForm):
         req: ReimbursementRequest = self.object
         prev_status = req.status
@@ -948,13 +969,50 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         req.save(update_fields=["finance_note", "finance_payment_reference", "updated_at"])
 
         if mark_paid:
-            # Single, authoritative logging occurs inside model.mark_paid (with actor)
-            req.mark_paid(reference=ref, actor=self.request.user, note=note)
-            # DO NOT log paid again here — avoid duplicates
+            # Hard gate using model SoT (prevents illegal POSTs)
+            ok, msg = req.can_mark_paid(ref)
+            if not ok:
+                # Attach form errors and do NOT proceed
+                if "reference" in msg.lower():
+                    form.add_error("finance_payment_reference", msg)
+                else:
+                    form.add_error("mark_paid", msg)
+                    form.add_error(None, msg)
+                return self.form_invalid(form)
+
+            # Convert any model-level validation to user-friendly errors (no 500)
+            try:
+                # Single, authoritative logging occurs inside model.mark_paid (with actor)
+                req.mark_paid(reference=ref, actor=self.request.user, note=note)
+            except DjangoCoreValidationError as e:
+                msg = e.message if hasattr(e, "message") else str(e)
+                if not msg:
+                    msg = "Unable to mark as Claim Settled due to a validation error."
+                form.add_error(None, msg)
+                return self.form_invalid(form)
+
             _send_safe("send_reimbursement_paid", req)
             messages.success(self.request, "Request marked as Claim Settled.")
         else:
-            messages.success(self.request, "Finance details updated.")
+            # NEW: allow Finance to move PENDING_FINANCE -> APPROVED (Ready to Pay)
+            if req.status == ReimbursementRequest.Status.PENDING_FINANCE:
+                try:
+                    req.status = ReimbursementRequest.Status.APPROVED
+                    req.save(update_fields=["status", "updated_at"])
+                    ReimbursementLog.log(
+                        req,
+                        ReimbursementLog.Action.STATUS_CHANGED,
+                        actor=self.request.user,
+                        message="Finance approved (Ready to Pay).",
+                        from_status=prev_status,
+                        to_status=req.status,
+                    )
+                    messages.success(self.request, "Finance review saved. Status set to Ready to Pay.")
+                except DjangoCoreValidationError as e:
+                    form.add_error(None, getattr(e, "message", str(e)) or "Unable to approve this reimbursement.")
+                    return self.form_invalid(form)
+            else:
+                messages.success(self.request, "Finance details updated.")
 
         return super().form_valid(form)
 

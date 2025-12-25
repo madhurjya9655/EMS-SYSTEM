@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from decimal import Decimal
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoCoreValidationError
@@ -64,8 +64,17 @@ def _parse_email_list(raw: str) -> list[str]:
     return out
 
 def validate_receipt_file(value) -> None:
+    """
+    Server-side validator for uploaded receipts/bills.
+
+    IMPORTANT: Keep this in sync with forms._allowed_exts()
+    """
     max_mb = getattr(settings, "REIMBURSEMENT_MAX_RECEIPT_MB", 8)
-    default_exts = [".jpg", ".jpeg", ".png", ".pdf"]
+
+    # Default list now matches the forms (images, PDF, Excel)
+    default_exts = [".jpg", ".jpeg", ".png", ".pdf", ".xls", ".xlsx"]
+
+    # Allow override via settings if provided
     allowed_exts = getattr(settings, "REIMBURSEMENT_ALLOWED_EXTENSIONS", default_exts)
     allowed_exts = [str(e).lower() for e in (allowed_exts or default_exts)]
 
@@ -322,6 +331,19 @@ class ReimbursementRequest(models.Model):
             self.save(update_fields=["total_amount", "updated_at"])
         return total
 
+    # ---- Centralized transition eligibility (read-only checks) --------------
+
+    def can_mark_paid(self, reference: str = "") -> Tuple[bool, str]:
+        """
+        Read-only guard used by forms/views to decide whether "Mark Paid" is allowed.
+        This mirrors the checks enforced by mark_paid().
+        """
+        if self.status != self.Status.APPROVED:
+            return False, _("Cannot mark Paid before Approved.")
+        if not (reference or "").strip():
+            return False, _("Payment reference is required to mark Paid.")
+        return True, ""
+
     # ---- Transition validation ---------------------------------------------
 
     def _is_manager_approved(self) -> bool:
@@ -345,7 +367,7 @@ class ReimbursementRequest(models.Model):
         if new == self.Status.PENDING_FINANCE:
             if require_mgmt:
                 if not self._is_management_approved():
-                    raise DjangoCoreValidationError(_("Cannot move to Finance review before Management approval."))  # noqa: E501
+                    raise DjangoCoreValidationError(_("Cannot move to Finance review before Management approval."))
             else:
                 if not self._is_manager_approved():
                     raise DjangoCoreValidationError(_("Cannot move to Finance review before Manager approval."))

@@ -361,15 +361,33 @@ class FinanceProcessForm(forms.ModelForm):
             ),
         }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Gate the checkbox in the UI — Finance should not be offered "Mark Paid" unless eligible
+        try:
+            if self.instance and getattr(self.instance, "status", None) != ReimbursementRequest.Status.APPROVED:
+                self.fields["mark_paid"].disabled = True
+                self.fields["mark_paid"].help_text = "Available only after final approval."
+        except Exception:
+            # Never break rendering
+            pass
+
     def clean(self):
         cleaned = super().clean()
         mark_paid = cleaned.get("mark_paid")
         ref = (cleaned.get("finance_payment_reference") or "").strip()
-        if mark_paid and not ref:
-            self.add_error(
-                "finance_payment_reference",
-                "Payment reference is required when marking as Claim Settled.",
-            )
+
+        # Use the model's single source of truth
+        if mark_paid:
+            ok, msg = self.instance.can_mark_paid(ref)
+            if not ok:
+                # Attach the message to the most relevant field for better UX
+                if "reference" in msg.lower():
+                    self.add_error("finance_payment_reference", msg)
+                else:
+                    # Non-field and checkbox error to make it obvious
+                    self.add_error("mark_paid", msg)
+                    self.add_error(None, msg)
         return cleaned
 
 

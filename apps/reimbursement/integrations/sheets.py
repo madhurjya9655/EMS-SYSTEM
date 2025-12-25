@@ -1,12 +1,14 @@
 # apps/reimbursement/integrations/sheets.py
 from __future__ import annotations
 
+import io
 import json
 import logging
+import mimetypes
 import os
 import time
 from datetime import datetime, timezone
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List, Optional
 
 from django.conf import settings
 from django.urls import NoReverseMatch, reverse
@@ -23,14 +25,19 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-SPREADSHEET_ID = "1LOVDkTVMGdEPOP9CQx-WVDv7ZY1TpqiQD82FFCc3t4A"
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+# Replace with a setting if you prefer:
+SPREADSHEET_ID = getattr(settings, "REIMBURSEMENT_SHEET_ID", "1LOVDkTVMGdEPOP9CQx-WVDv7ZY1TpqiQD82FFCc3t4A")
 
 TAB_MAIN = "Reimbursements"
 TAB_CHANGELOG = "ChangeLog"
 TAB_SCHEMA = "Schema"
 TAB_META = "_Meta"
 
-SYNC_VERSION = 5  # bumped
+SYNC_VERSION = 6  # bumped when schema/behavior changes
 
 _WARNED_MISSING_GOOGLE = False
 _WARNED_MISSING_CREDS = False
@@ -44,6 +51,10 @@ HEADER = [
 
 CHANGELOG_HEADER = ["TimestampUTC","Event","ReimbID","OldStatus","NewStatus","RowNum","Actor","Result"]
 SCHEMA_HEADER    = ["Version","HeaderJSON","Active","RecordedAtUTC","Note"]
+
+# ---------------------------------------------------------------------------
+# Google client helpers
+# ---------------------------------------------------------------------------
 
 def _excel_col(n: int) -> str:
     out=[]
@@ -87,26 +98,42 @@ def _detail_url(req_id: int) -> str:
     return base + "/"
 
 def _google_available() -> bool:
+    """
+    Check libraries and credentials for Sheets/Drive. Log once if missing.
+    """
     global _WARNED_MISSING_GOOGLE, _WARNED_MISSING_CREDS
     try:
         import googleapiclient.discovery  # noqa
         import google.oauth2.service_account  # noqa
+        import googleapiclient.http  # noqa
     except Exception:
         if not _WARNED_MISSING_GOOGLE:
-            logger.warning("Google Sheets sync disabled: install deps -> pip install google-api-python-client google-auth google-auth-httplib2")
+            logger.warning(
+                "Google sync disabled: install deps -> pip install google-api-python-client google-auth google-auth-httplib2"
+            )
             _WARNED_MISSING_GOOGLE = True
         return False
 
-    if not (os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON") or os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE") or getattr(settings, "GOOGLE_SERVICE_ACCOUNT_FILE", None)):
+    if not (
+        os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+        or os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE")
+        or getattr(settings, "GOOGLE_SERVICE_ACCOUNT_FILE", None)
+    ):
         if not _WARNED_MISSING_CREDS:
-            logger.warning("Google Sheets sync disabled: credentials missing. Set GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SERVICE_ACCOUNT_FILE.")
+            logger.warning(
+                "Google sync disabled: credentials missing. Set GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SERVICE_ACCOUNT_FILE."
+            )
             _WARNED_MISSING_CREDS = True
         return False
     return True
 
 def _credentials():
     from google.oauth2 import service_account
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/drive",
+    ]
     raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
     if raw:
         return service_account.Credentials.from_service_account_info(json.loads(raw), scopes=scopes)
@@ -115,12 +142,20 @@ def _credentials():
         return service_account.Credentials.from_service_account_file(file_path, scopes=scopes)
     raise RuntimeError("Google credentials not found")
 
-def _svc():
+def _svc_sheets():
     from googleapiclient.discovery import build
-    return build("sheets","v4",credentials=_credentials(),cache_discovery=False)
+    return build("sheets", "v4", credentials=_credentials(), cache_discovery=False)
+
+def _svc_drive():
+    from googleapiclient.discovery import build
+    return build("drive", "v3", credentials=_credentials(), cache_discovery=False)
+
+# ---------------------------------------------------------------------------
+# Spreadsheet structure + formatting
+# ---------------------------------------------------------------------------
 
 def _get_sheet_map() -> Dict[str,int]:
-    resp = _svc().spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+    resp = _svc_sheets().spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
     out: Dict[str,int] = {}
     for s in resp.get("sheets", []):
         props = s.get("properties", {})
@@ -128,7 +163,7 @@ def _get_sheet_map() -> Dict[str,int]:
     return out
 
 def _get_sheet_obj(sheet_id: int) -> dict | None:
-    resp = _svc().spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+    resp = _svc_sheets().spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
     for s in resp.get("sheets", []):
         if s.get("properties", {}).get("sheetId") == sheet_id:
             return s
@@ -136,7 +171,7 @@ def _get_sheet_obj(sheet_id: int) -> dict | None:
 
 def _batch_update(requests: list) -> None:
     if not requests: return
-    _svc().spreadsheets().batchUpdate(spreadsheetId=SPREADSHEET_ID, body={"requests": requests}).execute()
+    _svc_sheets().spreadsheets().batchUpdate(spreadsheetId=SPREADSHEET_ID, body={"requests": requests}).execute()
 
 def _friendly_format_main(sheet_id: int) -> None:
     end_col = len(HEADER)
@@ -166,6 +201,7 @@ def _friendly_format_main(sheet_id: int) -> None:
 
 def ensure_spreadsheet_structure() -> None:
     if not _google_available(): return
+    values = _svc_sheets().spreadsheets().values()
     existing = _get_sheet_map()
     requests=[]
     for title in [TAB_MAIN,TAB_CHANGELOG,TAB_SCHEMA]:
@@ -183,7 +219,6 @@ def ensure_spreadsheet_structure() -> None:
     main_id = existing.get(TAB_MAIN)
     if main_id is not None:
         _friendly_format_main(main_id)
-    values = _svc().spreadsheets().values()
     cur = values.get(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!1:1").execute().get("values",[[]])
     if (cur[0] if cur else []) != HEADER:
         values.update(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!1:1", valueInputOption="RAW", body={"values":[HEADER]}).execute()
@@ -199,16 +234,127 @@ def ensure_spreadsheet_structure() -> None:
     except Exception:
         pass
 
-def _collect_receipt_urls(req) -> str:
+# ---------------------------------------------------------------------------
+# Drive helpers (upload receipts, return shareable links)
+# ---------------------------------------------------------------------------
+
+def _drive_folder_id() -> Optional[str]:
+    return os.environ.get("REIMBURSEMENT_DRIVE_FOLDER_ID") or getattr(settings, "REIMBURSEMENT_DRIVE_FOLDER_ID", None)
+
+def _drive_share_anyone() -> bool:
+    return (os.environ.get("REIMBURSEMENT_DRIVE_LINK_SHARING") or getattr(settings, "REIMBURSEMENT_DRIVE_LINK_SHARING", "anyone")).lower() == "anyone"
+
+def _drive_domain() -> Optional[str]:
+    return os.environ.get("REIMBURSEMENT_DRIVE_DOMAIN") or getattr(settings, "REIMBURSEMENT_DRIVE_DOMAIN", None)
+
+def _drive_find_file_by_name(name: str, parent: str) -> Optional[str]:
+    try:
+        svc = _svc_drive()
+        # Avoid backslash escaping inside the f-string expression (fix Pylance lexer issue)
+        safe_name = name.replace("'", "\\'")
+        q = f"name = '{safe_name}' and '{parent}' in parents and trashed = false"
+        resp = svc.files().list(q=q, spaces="drive", fields="files(id,name)", pageSize=1).execute()
+        items = resp.get("files", [])
+        return items[0]["id"] if items else None
+    except Exception:
+        return None
+
+def _drive_ensure_permission(file_id: str) -> None:
+    try:
+        svc = _svc_drive()
+        if _drive_share_anyone():
+            body = {"type": "anyone", "role": "reader"}
+        else:
+            domain = _drive_domain()
+            if not domain:
+                # Fallback to anyone if domain not configured
+                body = {"type": "anyone", "role": "reader"}
+            else:
+                body = {"type": "domain", "role": "reader", "domain": domain, "allowFileDiscovery": False}
+        svc.permissions().create(fileId=file_id, body=body, fields="id").execute()
+    except Exception as e:
+        # Non-fatal; the file will still exist
+        logger.info("Drive permission set failed for %s: %s", file_id, e)
+
+def _drive_upload_bytes(name: str, data: bytes, parent: str, mime: Optional[str]) -> Optional[str]:
+    from googleapiclient.http import MediaIoBaseUpload
+    try:
+        svc = _svc_drive()
+        media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime or "application/octet-stream", resumable=False)
+        body = {"name": name, "parents": [parent]}
+        file = svc.files().create(body=body, media_body=media, fields="id").execute()
+        fid = file.get("id")
+        if fid:
+            _drive_ensure_permission(fid)
+        return fid
+    except Exception as e:
+        logger.info("Drive upload failed for %s: %s", name, e)
+        return None
+
+def _receipt_drive_filename(req_id: int, line_id: int, original_name: str) -> str:
+    base = os.path.basename(original_name or "") or "receipt"
+    return f"reimb_{req_id}_line_{line_id}_{base}"
+
+def _drive_link(file_id: str) -> str:
+    # Standard Drive view link
+    return f"https://drive.google.com/file/d/{file_id}/view?usp=drivesdk"
+
+def _collect_receipt_links_from_drive(req) -> List[str]:
+    """
+    Upload all receipt files for the request to Drive and return shareable links.
+    Deduplicates by deterministic filename (per request/line).
+    """
+    folder = _drive_folder_id()
+    if not folder:
+        return []
+
+    links: List[str] = []
+    for line in req.lines.select_related("expense_item"):
+        f = getattr(line, "receipt_file", None) or getattr(line.expense_item, "receipt_file", None)
+        if not f:
+            continue
+        try:
+            name = _receipt_drive_filename(req.id, line.id, getattr(f, "name", "receipt"))
+            # Try to reuse existing file
+            existing_id = _drive_find_file_by_name(name, folder)
+            if existing_id:
+                links.append(_drive_link(existing_id))
+                continue
+
+            # Read bytes (works with storage backends that support .open)
+            with f.open("rb") as fh:
+                data = fh.read()
+
+            mime = mimetypes.guess_type(getattr(f, "name", ""))[0]
+            file_id = _drive_upload_bytes(name, data, folder, mime)
+            if file_id:
+                links.append(_drive_link(file_id))
+        except Exception as e:
+            logger.info("Skipping Drive upload for line %s: %s", getattr(line, "id", None), e)
+            continue
+
+    # de-dup while preserving order
+    out, seen = [], set()
+    for u in links:
+        if u not in seen:
+            seen.add(u); out.append(u)
+    return out
+
+# ---------------------------------------------------------------------------
+# Row building
+# ---------------------------------------------------------------------------
+
+def _collect_receipt_urls_storage(req) -> List[str]:
     urls=[]
     for line in req.lines.select_related("expense_item"):
         f = getattr(line, "receipt_file", None) or getattr(line.expense_item, "receipt_file", None)
-        if f and getattr(f, "url", None): urls.append(f.url)
+        if f and getattr(f, "url", None):
+            urls.append(f.url)
     out,seen=[],set()
     for u in urls:
         if u not in seen:
             seen.add(u); out.append(u)
-    return ",".join(out)
+    return out
 
 def _categories_and_count(req) -> Tuple[str,int]:
     cats=[line.expense_item.category for line in req.lines.select_related("expense_item")]
@@ -219,14 +365,34 @@ def _categories_and_count(req) -> Tuple[str,int]:
     return ",".join(deduped), req.lines.count()
 
 def build_row(req) -> list:
+    """
+    Build a single row of data for the request.
+    Prefers Drive links if a Drive folder is configured and upload succeeds;
+    otherwise falls back to storage URLs.
+    """
     employee = req.created_by
     dept = getattr(employee, "department", "") or (getattr(employee, "profile", None) and getattr(employee.profile, "department","")) or ""
     cats, line_count = _categories_and_count(req)
-    receipts_csv = _collect_receipt_urls(req)
+
+    # Prefer Drive links
+    drive_links = []
+    try:
+        if _google_available() and _drive_folder_id():
+            drive_links = _collect_receipt_links_from_drive(req)
+    except Exception:
+        drive_links = []
+
+    if drive_links:
+        receipts_csv = ",".join(drive_links)
+    else:
+        storage_links = _collect_receipt_urls_storage(req)
+        receipts_csv = ",".join(storage_links)
+
     manager_un = getattr(req.manager, "username", "") if req.manager_id else ""
     management_un = getattr(req.management, "username", "") if req.management_id else ""
     finance_un = getattr(req.verified_by, "username", "") if req.verified_by_id else ""
     extra = {}
+
     row = {
         "ReimbID": req.id,
         "EmployeeID": getattr(employee,"id",""),
@@ -259,15 +425,19 @@ def build_row(req) -> list:
     }
     return [row[h] for h in HEADER]
 
+# ---------------------------------------------------------------------------
+# Upsert and changelog
+# ---------------------------------------------------------------------------
+
 def _index_by_id() -> Dict[str,int]:
-    resp=_svc().spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!A2:A").execute()
+    resp=_svc_sheets().spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!A2:A").execute()
     idx: Dict[str,int] = {}
     for i,v in enumerate(resp.get("values", []), start=2):
         if v: idx[str(v[0])] = i
     return idx
 
 def upsert_row(row: list, reimb_id: int):
-    values=_svc().spreadsheets().values()
+    values=_svc_sheets().spreadsheets().values()
     idx=_index_by_id()
     end_col=_header_end_col()
     if str(reimb_id) in idx:
@@ -281,7 +451,7 @@ def upsert_row(row: list, reimb_id: int):
     return "insert", rn
 
 def append_changelog(event: str, req_id: int, old: str, new: str, rownum: int, actor: str = "", result: str = "ok", err: str = "") -> None:
-    _svc().spreadsheets().values().append(
+    _svc_sheets().spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
         range=f"{TAB_CHANGELOG}!A:H",
         valueInputOption="RAW",
@@ -289,10 +459,19 @@ def append_changelog(event: str, req_id: int, old: str, new: str, rownum: int, a
         body={"values":[[_iso(datetime.now(timezone.utc)), event, req_id, old or "", new or "", rownum, actor or "", f"{result}: {err}" if err else result]]}
     ).execute()
 
+# ---------------------------------------------------------------------------
+# Public entry: sync a single request
+# ---------------------------------------------------------------------------
+
 def sync_request(req) -> None:
-    if not _google_available() or req is None: return
+    """
+    Export-only. No status mutations or audit writes. Safe fallbacks.
+    """
+    if not _google_available() or req is None:
+        return
     ensure_spreadsheet_structure()
     row = build_row(req)
+
     backoffs = [0.2,0.5,1,2,4]
     prev_status = getattr(req, "status", "") or ""
     for attempt, wait in enumerate(backoffs, start=1):
