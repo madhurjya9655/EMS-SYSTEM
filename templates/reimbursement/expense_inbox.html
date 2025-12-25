@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load widget_tweaks %}
 {% block title %}Upload Expenses{% endblock %}
 
 {% block content %}
@@ -35,23 +36,23 @@
                     </div>
                   {% endfor %}
                 </div>
-                {% if field.help_text %}
-                  <div class="form-text">{{ field.help_text }}</div>
-                {% endif %}
-                {% if field.errors %}
-                  <div class="text-danger small">{{ field.errors }}</div>
-                {% endif %}
+                {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                {% if field.errors %}<div class="text-danger small">{{ field.errors }}</div>{% endif %}
               </div>
             {% else %}
               <div class="mb-3">
                 {{ field.label_tag }}
-                {{ field }}
-                {% if field.help_text %}
-                  <div class="form-text">{{ field.help_text }}</div>
+
+                {# For the file input, allow Excel too #}
+                {% if field.name == "receipt_file" %}
+                  {{ field|attr:"accept:.pdf,.jpg,.jpeg,.png,.xls,.xlsx" }}
+                  <div class="form-text">Allowed: PDF / JPG / JPEG / PNG / XLS / XLSX</div>
+                {% else %}
+                  {{ field }}
                 {% endif %}
-                {% if field.errors %}
-                  <div class="text-danger small">{{ field.errors }}</div>
-                {% endif %}
+
+                {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+                {% if field.errors %}<div class="text-danger small">{{ field.errors }}</div>{% endif %}
               </div>
             {% endif %}
           {% endfor %}

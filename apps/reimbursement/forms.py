@@ -1,10 +1,13 @@
 # apps/reimbursement/forms.py
 from __future__ import annotations
 
-from typing import Optional
+import os
+from typing import Optional, Iterable, List
 
 from django import forms
+from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 
 from .models import (
     ExpenseItem,
@@ -26,6 +29,49 @@ User = get_user_model()
 
 class DateInput(forms.DateInput):
     input_type = "date"
+
+
+def _allowed_exts() -> List[str]:
+    """
+    Allowed file extensions for receipts / bills. Comes from settings so
+    Admins can adjust without code changes.
+    """
+    exts = getattr(settings, "REIMBURSEMENT_ALLOWED_EXTENSIONS", None)
+    if not exts:
+        exts = [".jpg", ".jpeg", ".png", ".pdf", ".xls", ".xlsx"]
+    if isinstance(exts, (list, tuple)):
+        return [str(e).lower().strip() for e in exts if str(e).strip()]
+    return [s.strip().lower() for s in str(exts).split(",") if s.strip()]
+
+
+def _max_file_mb() -> int:
+    return int(getattr(settings, "REIMBURSEMENT_MAX_RECEIPT_MB", 8))
+
+
+def _validate_uploaded_file(f, *, field_label: str = "file") -> None:
+    """
+    Lightweight server-side validator for uploaded receipt/bill files:
+    - Extension must be one of the allowed list
+    - Size must be <= REIMBURSEMENT_MAX_RECEIPT_MB
+    """
+    if not f:
+        return
+    name = getattr(f, "name", "")
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in _allowed_exts():
+        raise ValidationError(
+            f"Unsupported {field_label} type '{ext}'. "
+            f"Allowed: {', '.join(_allowed_exts())}"
+        )
+    try:
+        size = int(getattr(f, "size", 0))
+    except Exception:
+        size = 0
+    if _max_file_mb() and size > _max_file_mb() * 1024 * 1024:
+        raise ValidationError(
+            f"{field_label.capitalize()} is too large. "
+            f"Max size is {_max_file_mb()} MB."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -75,9 +121,11 @@ class ExpenseItemForm(forms.ModelForm):
                 attrs={"class": "form-check-input"},
                 choices=GST_TYPE_CHOICES,
             ),
+            # Advertise Excel & common image/PDF types in the browser picker
             "receipt_file": forms.FileInput(
                 attrs={
                     "class": "form-control",
+                    "accept": ".pdf,.jpg,.jpeg,.png,.xls,.xlsx",
                 }
             ),
         }
@@ -93,6 +141,11 @@ class ExpenseItemForm(forms.ModelForm):
         self.fields["category"].label = "Type of Expense"
         self.fields["gst_type"].label = "Bill Type"
         self.fields["gst_type"].initial = "non_gst"
+
+    def clean_receipt_file(self):
+        f = self.files.get("receipt_file") or self.cleaned_data.get("receipt_file")
+        _validate_uploaded_file(f, field_label="receipt")
+        return f
 
 
 class ExpenseStatusFilterForm(forms.Form):
@@ -569,8 +622,18 @@ class ReimbursementForm(forms.ModelForm):
                 attrs={"class": "form-select"},
                 choices=REIMBURSEMENT_CATEGORY_CHOICES,
             ),
-            "bill": forms.FileInput(attrs={"class": "form-control"}),
+            "bill": forms.FileInput(
+                attrs={
+                    "class": "form-control",
+                    "accept": ".pdf,.jpg,.jpeg,.png,.xls,.xlsx",
+                }
+            ),
         }
+
+    def clean_bill(self):
+        f = self.files.get("bill") or self.cleaned_data.get("bill")
+        _validate_uploaded_file(f, field_label="bill")
+        return f
 
 
 class ManagerReviewForm(forms.ModelForm):

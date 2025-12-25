@@ -767,3 +767,12 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(hour=19, minute=0, day_of_week="1-6"),
     },
 }
+
+# === Reimbursement receipt settings (Excel allowed) ===
+# These are read by the reimbursement file validator.
+REIMBURSEMENT_ALLOWED_EXTENSIONS = env_list(
+    "REIMBURSEMENT_ALLOWED_EXTENSIONS",
+    ".jpg,.jpeg,.png,.pdf,.xls,.xlsx"
+)
+# Optional: cap per-file or total size (in MB) via your existing validators if used
+REIMBURSEMENT_MAX_RECEIPT_MB = env_int("REIMBURSEMENT_MAX_RECEIPT_MB", 8)
