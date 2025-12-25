@@ -345,7 +345,7 @@ class ReimbursementRequest(models.Model):
         if new == self.Status.PENDING_FINANCE:
             if require_mgmt:
                 if not self._is_management_approved():
-                    raise DjangoCoreValidationError(_("Cannot move to Finance review before Management approval."))
+                    raise DjangoCoreValidationError(_("Cannot move to Finance review before Management approval."))  # noqa: E501
             else:
                 if not self._is_manager_approved():
                     raise DjangoCoreValidationError(_("Cannot move to Finance review before Manager approval."))
@@ -391,21 +391,17 @@ class ReimbursementRequest(models.Model):
             # run invariants on status change
             self.full_clean()
 
+        # NOTE: Removed automatic "System status transition" audit logging here.
+        # All audit entries must be created by explicit, role-checked actions (views/services).
         super().save(*args, **kwargs)
-
-        if old_status and self.status != old_status:
-            ReimbursementLog.log(
-                self,
-                ReimbursementLog.Action.STATUS_CHANGED,
-                actor=None,
-                message="System status transition",
-                from_status=old_status,
-                to_status=self.status,
-            )
 
     # ---- Finance helpers ----------------------------------------------------
 
     def mark_verified(self, *, actor: Optional[models.Model] = None, note: str = "") -> None:
+        """
+        Single-source-of-truth to verify by finance.
+        Emits ONE audit log with the correct actor.
+        """
         from_status = self.status
         self.status = self.Status.PENDING_MANAGER
         self.verified_by = actor if isinstance(actor, models.Model) else None
@@ -423,6 +419,10 @@ class ReimbursementRequest(models.Model):
         )
 
     def mark_paid(self, reference: str, *, actor: Optional[models.Model] = None, note: str = "") -> None:
+        """
+        Single-source-of-truth to mark as paid.
+        Emits ONE audit log with the correct actor.
+        """
         if self.status != self.Status.APPROVED:
             raise DjangoCoreValidationError(_("Cannot mark Paid before Approved."))
         if not (reference or "").strip():

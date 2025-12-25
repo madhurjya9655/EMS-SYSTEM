@@ -16,6 +16,7 @@ from django.http import (
     HttpResponseBadRequest,
 )
 from django.shortcuts import get_object_or_404, redirect
+    # noqa: E402
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -723,9 +724,10 @@ class ManagerReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
             ]
         )
 
+        # Single authoritative audit (no system auto-log anymore)
         ReimbursementLog.log(
             req,
-            ReimbursementLog.Action.STATUS_CHANGED,
+            ReimbursementLog.Action.STATUS_CHANGED if decision != "approved" else ReimbursementLog.Action.MANAGER_APPROVED,
             actor=self.request.user,
             message=f"Manager decision: {decision}",
             from_status=prev_status,
@@ -809,6 +811,7 @@ class ManagementReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
             ]
         )
 
+        # Single authoritative audit (no system auto-log anymore)
         ReimbursementLog.log(
             req,
             ReimbursementLog.Action.STATUS_CHANGED,
@@ -858,6 +861,7 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
 class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
     Finance verification (pre-manager step): approve (verify) or reject.
+    Ensures a SINGLE verified log — uses model.mark_verified() as the SoT.
     """
 
     permission_code = "reimbursement_finance_review"
@@ -872,22 +876,15 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
 
         decision = (request.POST.get("decision") or "").strip().lower()
         note = (request.POST.get("note") or "").strip()
-        prev_status = req.status
 
         if decision in ("verify", "verified"):
+            # Single, authoritative logging occurs inside model.mark_verified (with actor)
             req.mark_verified(actor=request.user, note=note)
-            ReimbursementLog.log(
-                req,
-                ReimbursementLog.Action.VERIFIED,
-                actor=request.user,
-                message="Finance verified at pre-approval stage.",
-                from_status=prev_status,
-                to_status=req.status,
-            )
-            # Notify manager that a verified request is ready
+            # DO NOT log a second "VERIFIED" here — avoid duplicates
             _send_safe("send_reimbursement_finance_verified", req)
             messages.success(request, "Request verified and sent to Manager.")
         elif decision == "rejected":
+            prev_status = req.status
             req.finance_note = (req.finance_note + ("\n" if req.finance_note and note else "") + note).strip()
             req.status = ReimbursementRequest.Status.REJECTED
             req.save(update_fields=["finance_note", "status", "updated_at"])
@@ -918,6 +915,7 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
 class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
     """
     Finance review form, including mark-paid (Claim Settled).
+    Uses model.mark_paid() to ensure single, accurate audit entry with actor.
     """
 
     permission_code = "reimbursement_finance_review"
@@ -944,44 +942,18 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         ref: str = form.cleaned_data.get("finance_payment_reference") or ""
         note: str = form.cleaned_data.get("finance_note") or ""
 
+        # Always persist note/reference inputs first (non-status)
         req.finance_note = note
         req.finance_payment_reference = ref
+        req.save(update_fields=["finance_note", "finance_payment_reference", "updated_at"])
 
         if mark_paid:
-            req.status = ReimbursementRequest.Status.PAID
-            req.paid_at = timezone.now()
-            req.save(
-                update_fields=[
-                    "status",
-                    "finance_note",
-                    "finance_payment_reference",
-                    "paid_at",
-                    "updated_at",
-                ]
-            )
-
-            ReimbursementLog.log(
-                req,
-                ReimbursementLog.Action.PAID,
-                actor=self.request.user,
-                message="Finance marked request as paid (Claim Settled).",
-                from_status=prev_status,
-                to_status=req.status,
-            )
+            # Single, authoritative logging occurs inside model.mark_paid (with actor)
+            req.mark_paid(reference=ref, actor=self.request.user, note=note)
+            # DO NOT log paid again here — avoid duplicates
             _send_safe("send_reimbursement_paid", req)
             messages.success(self.request, "Request marked as Claim Settled.")
         else:
-            req.save(
-                update_fields=["finance_note", "finance_payment_reference", "updated_at"]
-            )
-            ReimbursementLog.log(
-                req,
-                ReimbursementLog.Action.COMMENTED,
-                actor=self.request.user,
-                message="Finance note updated.",
-                from_status=prev_status,
-                to_status=req.status,
-            )
             messages.success(self.request, "Finance details updated.")
 
         return super().form_valid(form)
@@ -1082,150 +1054,6 @@ class AdminStatusSummaryView(LoginRequiredMixin, PermissionRequiredMixin, Templa
         ctx["rows"] = rows
         ctx["status_labels"] = dict(ReimbursementRequest.Status.choices)
         return ctx
-
-# ---------------------------------------------------------------------------
-# Admin: Settings + Approver Mapping
-# ---------------------------------------------------------------------------
-
-class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    Admin-only page for reimbursement settings & approver mapping.
-    """
-
-    permission_code = "reimbursement_admin"
-    template_name = "reimbursement/admin_approver_mapping.html"
-
-    def get_users_queryset(self):
-        # Keep it predictable for selects/grids
-        return User.objects.filter(is_active=True).order_by(
-            "first_name",
-            "last_name",
-            "username",
-        )
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        settings_obj = ReimbursementSettings.get_solo()
-        ctx["settings_form"] = ReimbursementSettingsForm(instance=settings_obj)
-        ctx["bulk_form"] = ApproverMappingBulkForm()
-
-        users = list(self.get_users_queryset())
-        mappings = {
-            m.employee_id: m
-            for m in ReimbursementApproverMapping.objects.select_related(
-                "manager",
-                "finance",
-            )
-        }
-
-        ctx["users"] = users
-        ctx["mappings"] = mappings
-        ctx["all_users_for_select"] = users
-        ctx["rows"] = [{"user": u, "mapping": mappings.get(u.id)} for u in users]
-        return ctx
-
-    def post(self, request, *args, **kwargs):
-        if "save_settings" in request.POST:
-            return self._handle_save_settings(request)
-        if "apply_bulk" in request.POST:
-            return self._handle_apply_bulk(request)
-        if "save_mappings" in request.POST:
-            return self._handle_save_mappings(request)
-        messages.error(request, "Unknown action.")
-        return redirect("reimbursement:approver_mapping_admin")
-
-    def _handle_save_settings(self, request):
-        settings_obj = ReimbursementSettingsForm.Meta.model.get_solo()
-        form = ReimbursementSettingsForm(request.POST, instance=settings_obj)
-        if form.is_valid():
-            form.save()
-            messages.success(request, "Reimbursement settings updated.")
-        else:
-            messages.error(request, "Please correct errors in settings form.")
-        return redirect("reimbursement:approver_mapping_admin")
-
-    def _handle_apply_bulk(self, request):
-        form = ApproverMappingBulkForm(request.POST)
-        if not form.is_valid():
-            messages.error(request, "Please correct errors in bulk form.")
-            return redirect("reimbursement:approver_mapping_admin")
-
-        apply_mgr = form.cleaned_data.get("apply_manager_to_all")
-        apply_fin = form.cleaned_data.get("apply_finance_to_all")
-        mgr_for_all = form.cleaned_data.get("manager_for_all")
-        fin_for_all = form.cleaned_data.get("finance_for_all")
-
-        users = self.get_users_queryset()
-        count = 0
-        for user in users:
-            mapping, _ = ReimbursementApproverMapping.objects.get_or_create(
-                employee=user
-            )
-            before = (mapping.manager_id, mapping.finance_id)
-            changed = False
-            if apply_mgr:
-                mapping.manager = mgr_for_all
-                changed = True
-            if apply_fin:
-                mapping.finance = fin_for_all
-                changed = True
-
-            if changed:
-                if not mapping.manager and not mapping.finance:
-                    mapping.delete()
-                    after = (None, None)
-                else:
-                    mapping.save()
-                    after = (mapping.manager_id, mapping.finance_id)
-                if after != before:
-                    count += 1
-
-        messages.success(
-            self.request,
-            f"Bulk mapping applied to {count} employee(s).",
-        )
-        return redirect("reimbursement:approver_mapping_admin")
-
-    def _handle_save_mappings(self, request):
-        users = list(self.get_users_queryset())
-        count = 0
-
-        for user in users:
-            mgr_id_raw = request.POST.get(f"manager_{user.id}") or ""
-            fin_id_raw = request.POST.get(f"finance_{user.id}") or ""
-
-            # sanitize ids
-            mgr_id = int(mgr_id_raw) if mgr_id_raw.isdigit() else None
-            fin_id = int(fin_id_raw) if fin_id_raw.isdigit() else None
-
-            manager = User.objects.filter(pk=mgr_id).first() if mgr_id else None
-            finance = User.objects.filter(pk=fin_id).first() if fin_id else None
-
-            try:
-                mapping = ReimbursementApproverMapping.objects.get(employee=user)
-                before = (mapping.manager_id, mapping.finance_id)
-            except ReimbursementApproverMapping.DoesNotExist:
-                mapping = None
-                before = (None, None)
-
-            if not manager and not finance:
-                if mapping:
-                    mapping.delete()
-                    count += 1
-                continue
-
-            if not mapping:
-                mapping = ReimbursementApproverMapping(employee=user)
-
-            mapping.manager = manager
-            mapping.finance = finance
-            mapping.save()
-            after = (mapping.manager_id, mapping.finance_id)
-            if after != before:
-                count += 1
-
-        messages.success(self.request, f"Mappings saved for {count} employee(s).")
-        return redirect("reimbursement:approver_mapping_admin")
 
 # ---------------------------------------------------------------------------
 # Secure receipt download
@@ -1349,7 +1177,7 @@ def reimbursement_email_action(request):
 
         ReimbursementLog.log(
             req,
-            ReimbursementLog.Action.STATUS_CHANGED,
+            ReimbursementLog.Action.STATUS_CHANGED if decision != "approved" else ReimbursementLog.Action.MANAGER_APPROVED,
             actor=req.manager,
             message=f"Manager decision via email: {decision}",
             from_status=prev_status,
