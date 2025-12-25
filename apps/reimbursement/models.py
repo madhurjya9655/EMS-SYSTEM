@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional, Tuple
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoCoreValidationError
 from django.core.validators import validate_email as dj_validate_email
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -465,6 +465,180 @@ class ReimbursementRequest(models.Model):
             to_status=self.status,
         )
 
+    # ---- Admin override helpers (explicit, audited, no auto-transitions) ----
+
+    def reverse_to_finance_verification(self, *, actor: Optional[models.Model], reason: str) -> None:
+        """
+        Manual, explicit reversal back to FINANCE VERIFICATION.
+        - Does NOT delete/recreate anything.
+        - Clears prior approvals & finance verification markers to avoid any auto-skip.
+        - Preserves full audit trail with from->to, who, when, and reason.
+        - Relies on model-level validations; no backdoor to PAID or approvals.
+        """
+        if not reason or not reason.strip():
+            raise DjangoCoreValidationError(_("Reversal reason is required."))
+
+        if self.status == self.Status.PENDING_FINANCE_VERIFY:
+            raise DjangoCoreValidationError(_("The request is already pending Finance Verification."))
+
+        if self.status == self.Status.REJECTED:
+            # Business rule: for Rejected, use a resend (explicit intent) instead of reversal.
+            raise DjangoCoreValidationError(_("Cannot reverse a Rejected request. Use resend to Finance if appropriate."))
+
+        from_status = self.status
+
+        with transaction.atomic():
+            # Move explicitly back to verification
+            self.status = self.Status.PENDING_FINANCE_VERIFY
+
+            # Clear verification/approvals to prevent 'auto' advancement later
+            self.verified_by = None
+            self.verified_at = None
+
+            self.manager_decision = ""
+            self.manager_comment = self.manager_comment or ""
+            self.manager_decided_at = None
+
+            self.management_decision = ""
+            self.management_comment = self.management_comment or ""
+            self.management_decided_at = None
+
+            # DO NOT clear payment reference/paid_at (historic data).
+            note_line = f"[REVERSAL] Sent back to Finance Verification. Reason: {reason.strip()}"
+            self.finance_note = (self.finance_note + ("\n" if self.finance_note else "") + note_line).strip()
+
+            self.save(update_fields=[
+                "status",
+                "verified_by",
+                "verified_at",
+                "manager_decision",
+                "manager_comment",
+                "manager_decided_at",
+                "management_decision",
+                "management_comment",
+                "management_decided_at",
+                "finance_note",
+                "updated_at",
+            ])
+
+            ReimbursementLog.log(
+                self,
+                ReimbursementLog.Action.REVERSED,
+                actor=actor,
+                message=note_line,
+                from_status=from_status,
+                to_status=self.status,
+                extra={"type": "reverse_to_finance_verification"},
+            )
+
+    def resend_to_finance(self, *, actor: Optional[models.Model], reason: str = "") -> None:
+        """
+        Admin-triggered resend back to finance verification (idempotent with clear audit).
+        """
+        from_status = self.status
+        if self.status == self.Status.PENDING_FINANCE_VERIFY:
+            ReimbursementLog.log(
+                self,
+                ReimbursementLog.Action.STATUS_CHANGED,
+                actor=actor,
+                message="Admin re-sent to Finance Verification (already there). " + (reason or ""),
+                from_status=from_status,
+                to_status=self.status,
+                extra={"type": "resend_to_finance"},
+            )
+            return
+        self.reverse_to_finance_verification(actor=actor, reason=reason or "Admin resend to Finance Verification")
+
+    def resend_to_manager(self, *, actor: Optional[models.Model], reason: str = "") -> None:
+        """
+        Admin-triggered move to Manager queue.
+        Still respects validations: requires verified_by to exist (no bypass).
+        """
+        if not self.verified_by_id:
+            raise DjangoCoreValidationError(_("Cannot resend to Manager before Finance verifies."))
+        from_status = self.status
+        self.status = self.Status.PENDING_MANAGER
+        note = f"Admin re-sent to Manager. {('Reason: ' + reason) if reason else ''}".strip()
+        self.save(update_fields=["status", "updated_at"])
+        ReimbursementLog.log(
+            self,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
+            message=note,
+            from_status=from_status,
+            to_status=self.status,
+            extra={"type": "resend_to_manager"},
+        )
+
+    def admin_force_move(self, target_status: str, *, actor: Optional[models.Model], reason: str = "") -> None:
+        """
+        Explicit manual move (forward/backward) **without** bypassing model-level rules.
+        - Still calls the normal transition validator via save().
+        - Disallows direct set to PAID (no bypass).
+        """
+        valid = {c[0] for c in self.Status.choices}
+        if target_status not in valid:
+            raise DjangoCoreValidationError(_("Invalid target status."))
+        if target_status == self.Status.PAID:
+            raise DjangoCoreValidationError(_("Admin cannot directly set Paid."))
+
+        from_status = self.status
+        if from_status == target_status:
+            ReimbursementLog.log(
+                self,
+                ReimbursementLog.Action.STATUS_CHANGED,
+                actor=actor,
+                message=f"Admin attempted force move but status unchanged ({target_status}). {reason}".strip(),
+                from_status=from_status,
+                to_status=self.status,
+                extra={"type": "admin_force_move_noop"},
+            )
+            return
+
+        self.status = target_status
+        # save() triggers _validate_transition + invariants
+        self.save(update_fields=["status", "updated_at"])
+        ReimbursementLog.log(
+            self,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
+            message=f"Admin force-moved. {('Reason: ' + reason) if reason else ''}".strip(),
+            from_status=from_status,
+            to_status=self.status,
+            extra={"type": "admin_force_move"},
+        )
+
+    def delete_with_audit(self, *, actor: Optional[models.Model], reason: str) -> None:
+        """
+        Admin-safe delete:
+        - Strictly forbidden for PAID.
+        - Unlocks attached expense items.
+        - Emits a single audit log.
+        """
+        if self.status == self.Status.PAID:
+            raise DjangoCoreValidationError(_("Paid reimbursements cannot be deleted."))
+        if not reason or not reason.strip():
+            raise DjangoCoreValidationError(_("A reason is required to delete a reimbursement."))
+
+        with transaction.atomic():
+            # Unlock attached expense items
+            for line in list(self.lines.select_related("expense_item")):
+                exp = line.expense_item
+                line.delete()
+                exp.status = ExpenseItem.Status.SAVED
+                exp.save(update_fields=["status", "updated_at"])
+
+            ReimbursementLog.log(
+                self,
+                ReimbursementLog.Action.STATUS_CHANGED,
+                actor=actor,
+                message=f"Admin deleted reimbursement. Reason: {reason.strip()}",
+                from_status=self.status,
+                to_status="deleted",
+                extra={"type": "admin_delete_with_audit"},
+            )
+            super().delete()
+
 class ReimbursementLine(models.Model):
     class Status(models.TextChoices):
         INCLUDED = "included", _("Included")
@@ -535,12 +709,14 @@ class ReimbursementLog(models.Model):
         CLARIFICATION_REQUESTED = "clarification_requested", _("Clarification Requested")
         PAID = "paid", _("Marked Paid")
         EMAIL_SENT = "email_sent", _("Email Sent")
+        # NEW explicit, auditable reversal action
+        REVERSED = "reversed", _("Reversed to Finance Verification")
 
     request = models.ForeignKey(ReimbursementRequest, on_delete=models.CASCADE, related_name="logs")
     actor = models.ForeignKey(UserModel, on_delete=models.SET_NULL, null=True, blank=True, related_name="reimbursement_logs")
     action = models.CharField(max_length=32, choices=Action.choices, db_index=True)
     from_status = models.CharField(max_length=32, blank=True, default="")
-    to_status = models.CharField(maxlength=32, blank=True, default="") if False else models.CharField(max_length=32, blank=True, default="")  # lint helper
+    to_status = models.CharField(max_length=32, blank=True, default="")
     message = models.TextField(blank=True, default="")
     extra = models.JSONField(blank=True, default=dict)
     created_at = models.DateTimeField(auto_now_add=True)

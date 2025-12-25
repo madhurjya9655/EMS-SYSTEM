@@ -726,7 +726,6 @@ class ManagerReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
             ]
         )
 
-        # Single authoritative audit (no system auto-log anymore)
         ReimbursementLog.log(
             req,
             ReimbursementLog.Action.STATUS_CHANGED if decision != "approved" else ReimbursementLog.Action.MANAGER_APPROVED,
@@ -741,7 +740,6 @@ class ManagerReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         messages.success(self.request, "Manager decision recorded.")
         return super().form_valid(form)
 
-    # Preserve filters on success
     def get_success_url(self):
         back = _safe_back_url(self.request.GET.get("return") or self.request.POST.get("return"))
         return back or reverse("reimbursement:manager_pending")
@@ -813,7 +811,6 @@ class ManagementReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
             ]
         )
 
-        # Single authoritative audit (no system auto-log anymore)
         ReimbursementLog.log(
             req,
             ReimbursementLog.Action.STATUS_CHANGED,
@@ -828,7 +825,6 @@ class ManagementReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
         messages.success(self.request, "Management decision recorded.")
         return super().form_valid(form)
 
-    # Preserve filters on success — fixed the route name to be consistent everywhere
     def get_success_url(self):
         back = _safe_back_url(self.request.GET.get("return") or self.request.POST.get("return"))
         return back or reverse("reimbursement:management_pending")
@@ -880,9 +876,7 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
         note = (request.POST.get("note") or "").strip()
 
         if decision in ("verify", "verified"):
-            # Single, authoritative logging occurs inside model.mark_verified (with actor)
             req.mark_verified(actor=request.user, note=note)
-            # DO NOT log a second "VERIFIED" here — avoid duplicates
             _send_safe("send_reimbursement_finance_verified", req)
             messages.success(request, "Request verified and sent to Manager.")
         elif decision == "rejected":
@@ -940,14 +934,12 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         req: ReimbursementRequest = self.object
-        # Context flag templates can use to hide/disable the checkbox/button if desired
         can, _ = req.can_mark_paid(req.finance_payment_reference or "")
         ctx["can_mark_paid"] = can
         return ctx
 
     def get_form(self, form_class=None):
         form = super().get_form(form_class)
-        # Extra safety: disable the checkbox at render time when not eligible
         try:
             can, _ = self.object.can_mark_paid(self.object.finance_payment_reference or "")
             if not can and "mark_paid" in form.fields:
@@ -963,16 +955,14 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         ref: str = form.cleaned_data.get("finance_payment_reference") or ""
         note: str = form.cleaned_data.get("finance_note") or ""
 
-        # Always persist note/reference inputs first (non-status)
+        # Always persist non-status fields first
         req.finance_note = note
         req.finance_payment_reference = ref
         req.save(update_fields=["finance_note", "finance_payment_reference", "updated_at"])
 
         if mark_paid:
-            # Hard gate using model SoT (prevents illegal POSTs)
             ok, msg = req.can_mark_paid(ref)
             if not ok:
-                # Attach form errors and do NOT proceed
                 if "reference" in msg.lower():
                     form.add_error("finance_payment_reference", msg)
                 else:
@@ -980,9 +970,7 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
                     form.add_error(None, msg)
                 return self.form_invalid(form)
 
-            # Convert any model-level validation to user-friendly errors (no 500)
             try:
-                # Single, authoritative logging occurs inside model.mark_paid (with actor)
                 req.mark_paid(reference=ref, actor=self.request.user, note=note)
             except DjangoCoreValidationError as e:
                 msg = e.message if hasattr(e, "message") else str(e)
@@ -994,7 +982,6 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
             _send_safe("send_reimbursement_paid", req)
             messages.success(self.request, "Request marked as Claim Settled.")
         else:
-            # NEW: allow Finance to move PENDING_FINANCE -> APPROVED (Ready to Pay)
             if req.status == ReimbursementRequest.Status.PENDING_FINANCE:
                 try:
                     req.status = ReimbursementRequest.Status.APPROVED
@@ -1016,13 +1003,12 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
 
         return super().form_valid(form)
 
-    # Preserve filters on success
     def get_success_url(self):
         back = _safe_back_url(self.request.GET.get("return") or self.request.POST.get("return"))
         return back or reverse("reimbursement:finance_pending")
 
 # ---------------------------------------------------------------------------
-# Admin dashboards
+# Admin dashboards (unchanged listings/summaries)
 # ---------------------------------------------------------------------------
 
 class AdminBillsSummaryView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
@@ -1292,6 +1278,111 @@ def reimbursement_email_action(request):
 </html>
 """
     return HttpResponse(html)
+
+# ---------------------------------------------------------------------------
+# NEW: Admin Override endpoints (POST-only helpers; wire in urls if needed)
+# ---------------------------------------------------------------------------
+
+class AdminReverseToFinanceVerificationView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    POST-only action for Admins:
+    - Explicit, manual reversal of a request back to FINANCE VERIFICATION
+    - Audit-safe; no auto-transitions
+    """
+    permission_code = "reimbursement_admin"
+    template_name = "reimbursement/admin_reverse_confirm.html"
+
+    def post(self, request, *args, **kwargs):
+        req = get_object_or_404(ReimbursementRequest, pk=kwargs.get("pk"))
+        if not _user_is_admin(request.user):
+            return HttpResponseForbidden("Not allowed.")
+        reason = (request.POST.get("reason") or "").strip()
+        try:
+            req.reverse_to_finance_verification(actor=request.user, reason=reason or "Admin reversal")
+            _send_safe("send_reimbursement_finance_verify", req, employee_note=f"Admin reversal by {request.user}")
+            messages.success(request, "Reversal recorded. Sent back to Finance Verification.")
+        except DjangoCoreValidationError as e:
+            messages.error(request, getattr(e, "message", str(e)) or "Unable to reverse this reimbursement.")
+        return _redirect_back(request, "reimbursement:admin_requests")
+
+class AdminResendToFinanceView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    POST-only: Resend to Finance Verification (idempotent; always logs).
+    """
+    permission_code = "reimbursement_admin"
+    template_name = "reimbursement/admin_resend_finance.html"
+
+    def post(self, request, *args, **kwargs):
+        req = get_object_or_404(ReimbursementRequest, pk=kwargs.get("pk"))
+        if not _user_is_admin(request.user):
+            return HttpResponseForbidden("Not allowed.")
+        reason = (request.POST.get("reason") or "").strip()
+        try:
+            req.resend_to_finance(actor=request.user, reason=reason)
+            _send_safe("send_reimbursement_finance_verify", req, employee_note=f"Admin resend by {request.user}")
+            messages.success(request, "Request re-sent to Finance Verification.")
+        except DjangoCoreValidationError as e:
+            messages.error(request, getattr(e, "message", str(e)))
+        return _redirect_back(request, "reimbursement:admin_requests")
+
+class AdminResendToManagerView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    POST-only: Resend to Manager (requires verified_by to be present).
+    """
+    permission_code = "reimbursement_admin"
+    template_name = "reimbursement/admin_resend_manager.html"
+
+    def post(self, request, *args, **kwargs):
+        req = get_object_or_404(ReimbursementRequest, pk=kwargs.get("pk"))
+        if not _user_is_admin(request.user):
+            return HttpResponseForbidden("Not allowed.")
+        reason = (request.POST.get("reason") or "").strip()
+        try:
+            req.resend_to_manager(actor=request.user, reason=reason)
+            messages.success(request, "Request re-sent to Manager for approval.")
+        except DjangoCoreValidationError as e:
+            messages.error(request, getattr(e, "message", str(e)))
+        return _redirect_back(request, "reimbursement:admin_requests")
+
+class AdminForceMoveView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    POST-only: Admin can manually move backward/forward **without** bypassing model validations.
+    Disallows direct move to PAID.
+    """
+    permission_code = "reimbursement_admin"
+    template_name = "reimbursement/admin_force_move.html"
+
+    def post(self, request, *args, **kwargs):
+        req = get_object_or_404(ReimbursementRequest, pk=kwargs.get("pk"))
+        if not _user_is_admin(request.user):
+            return HttpResponseForbidden("Not allowed.")
+        target = (request.POST.get("target_status") or "").strip()
+        reason = (request.POST.get("reason") or "").strip()
+        try:
+            req.admin_force_move(target, actor=request.user, reason=reason)
+            messages.success(request, f"Request moved to {target}.")
+        except DjangoCoreValidationError as e:
+            messages.error(request, getattr(e, "message", str(e)) or "Unable to move the request.")
+        return _redirect_back(request, "reimbursement:admin_requests")
+
+class AdminDeleteWithAuditView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    POST-only: Admin delete with strict checks and full audit.
+    """
+    permission_code = "reimbursement_admin"
+    template_name = "reimbursement/admin_delete_confirm.html"
+
+    def post(self, request, *args, **kwargs):
+        req = get_object_or_404(ReimbursementRequest, pk=kwargs.get("pk"))
+        if not _user_is_admin(request.user):
+            return HttpResponseForbidden("Not allowed.")
+        reason = (request.POST.get("reason") or "").strip()
+        try:
+            req.delete_with_audit(actor=request.user, reason=reason or "Admin delete")
+            messages.success(request, "Reimbursement deleted with audit trail.")
+        except DjangoCoreValidationError as e:
+            messages.error(request, getattr(e, "message", str(e)) or "Unable to delete this reimbursement.")
+        return _redirect_back(request, "reimbursement:admin_requests")
 
 # ---------------------------------------------------------------------------
 # LEGACY VIEWS (single-bill Reimbursement model)
