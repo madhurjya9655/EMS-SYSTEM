@@ -560,9 +560,25 @@ if not DEBUG:
 # -----------------------------------------------------------------------------
 CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
 CRISPY_TEMPLATE_PACK = "bootstrap5"
+
+# === Google service account (used by reimbursement Sheets/Drive client) ===
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-GOOGLE_SHEET_SCOPES = os.getenv("GOOGLE_SHEET_SCOPES")
+GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")  # support JSON-in-env too
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")  # optional legacy name
+GOOGLE_SHEET_SCOPES = os.getenv("GOOGLE_SHEET_SCOPES")  # optional/unused
+
+# -----------------------------------------------------------------------------
+# REIMBURSEMENT / GOOGLE INTEGRATIONS
+# -----------------------------------------------------------------------------
+# These match what the integration code reads with getattr(settings, "...", default)
+REIMBURSEMENT_SHEET_ID = os.getenv("REIMBURSEMENT_SHEET_ID", "1LOVDkTVMGdEPOP9CQx-WVDv7ZY1TpqiQD82FFCc3t4A")
+REIMBURSEMENT_DRIVE_FOLDER_ID = os.getenv("REIMBURSEMENT_DRIVE_FOLDER_ID")  # parent folder to upload receipts
+# Link-sharing behavior for uploaded receipts: "anyone" (default) or "domain"
+REIMBURSEMENT_DRIVE_LINK_SHARING = os.getenv("REIMBURSEMENT_DRIVE_LINK_SHARING", "anyone")
+REIMBURSEMENT_DRIVE_DOMAIN = os.getenv("REIMBURSEMENT_DRIVE_DOMAIN")  # required if using domain sharing
+# Optional: build detail links to your EMS request detail if admin reverse isn’t available
+# Example value: "reimbursement/{id}/"
+REIMBURSEMENT_DETAIL_URL_TEMPLATE = os.getenv("REIMBURSEMENT_DETAIL_URL_TEMPLATE")
 
 # -----------------------------------------------------------------------------
 # TASK SYSTEM
