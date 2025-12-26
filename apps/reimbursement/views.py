@@ -1,4 +1,3 @@
-# apps/reimbursement/views.py
 from __future__ import annotations
 
 import logging
@@ -16,7 +15,6 @@ from django.http import (
     HttpResponseBadRequest,
 )
 from django.shortcuts import get_object_or_404, redirect
-    # noqa: E402
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -1008,7 +1006,7 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         return back or reverse("reimbursement:finance_pending")
 
 # ---------------------------------------------------------------------------
-# Admin dashboards (unchanged listings/summaries)
+# Admin dashboards & config (added ApproverMappingAdminView)
 # ---------------------------------------------------------------------------
 
 class AdminBillsSummaryView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
@@ -1098,6 +1096,33 @@ class AdminStatusSummaryView(LoginRequiredMixin, PermissionRequiredMixin, Templa
         ctx["rows"] = rows
         ctx["status_labels"] = dict(ReimbursementRequest.Status.choices)
         return ctx
+
+class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, FormView):
+    """
+    Admin-only page to manage per-employee approver mapping.
+    Uses ApproverMappingBulkForm; validations/business rules remain centralized.
+    """
+    permission_code = "reimbursement_admin"
+    form_class = ApproverMappingBulkForm
+    template_name = "reimbursement/approver_mapping_admin.html"
+
+    def get_form_kwargs(self) -> Dict[str, Any]:
+        kwargs = super().get_form_kwargs()
+        kwargs["user"] = self.request.user
+        return kwargs
+
+    def form_valid(self, form: ApproverMappingBulkForm):
+        processed = form.save()
+        messages.success(self.request, f"Approver mapping updated. Rows processed: {processed}.")
+        return super().form_valid(form)
+
+    def form_invalid(self, form):
+        messages.error(self.request, "Could not update approver mapping. Please fix the errors below.")
+        return super().form_invalid(form)
+
+    def get_success_url(self):
+        back = _safe_back_url(self.request.GET.get("return") or self.request.POST.get("return"))
+        return back or self.request.path
 
 # ---------------------------------------------------------------------------
 # Secure receipt download
@@ -1285,9 +1310,7 @@ def reimbursement_email_action(request):
 
 class AdminReverseToFinanceVerificationView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
-    POST-only action for Admins:
-    - Explicit, manual reversal of a request back to FINANCE VERIFICATION
-    - Audit-safe; no auto-transitions
+    POST-only action for Admins: Reverse back to FINANCE VERIFICATION.
     """
     permission_code = "reimbursement_admin"
     template_name = "reimbursement/admin_reverse_confirm.html"

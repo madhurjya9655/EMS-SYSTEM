@@ -1,4 +1,3 @@
-# apps/reimbursement/urls.py
 from __future__ import annotations
 
 from django.urls import path
@@ -8,9 +7,8 @@ from . import views_analytics
 
 app_name = "reimbursement"
 
-# --- Lazy loader to avoid import-time issues for the admin view ---
+# Lazy loader to avoid import-time issues for the admin view
 def approver_mapping_admin_view(*args, **kwargs):
-    # Import only when the route is hit, preventing circular/partial imports
     from .views import ApproverMappingAdminView
     return ApproverMappingAdminView.as_view()(*args, **kwargs)
 

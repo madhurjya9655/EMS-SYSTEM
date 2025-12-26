@@ -363,11 +363,15 @@ class FinanceProcessForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Gate the checkbox in the UI — Finance should not be offered "Mark Paid" unless eligible
+        # ✅ Gate the checkbox using the model's single source-of-truth guard,
+        #    not a raw status == APPROVED check.
         try:
-            if self.instance and getattr(self.instance, "status", None) != ReimbursementRequest.Status.APPROVED:
+            ref = (self.instance.finance_payment_reference or "") if self.instance else ""
+            can, msg = self.instance.can_mark_paid(ref) if self.instance else (False, "")
+            if not can and "reference" not in (msg or "").lower():
                 self.fields["mark_paid"].disabled = True
-                self.fields["mark_paid"].help_text = "Available only after final approval."
+                # Keep a concise hint without exposing backend messages here.
+                self.fields["mark_paid"].help_text = "Available after approvals, during Finance review."
         except Exception:
             # Never break rendering
             pass

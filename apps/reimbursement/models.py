@@ -338,8 +338,9 @@ class ReimbursementRequest(models.Model):
         Read-only guard used by forms/views to decide whether "Mark Paid" is allowed.
         This mirrors the checks enforced by mark_paid().
         """
-        if self.status != self.Status.APPROVED:
-            return False, _("Cannot mark Paid before Approved.")
+        # ✅ Allow settlement from Pending Finance Review OR Approved (Ready to Pay).
+        if self.status not in {self.Status.PENDING_FINANCE, self.Status.APPROVED}:
+            return False, _("Cannot mark Paid before Finance review stage after approvals.")
         if not (reference or "").strip():
             return False, _("Payment reference is required to mark Paid.")
         return True, ""
@@ -367,7 +368,7 @@ class ReimbursementRequest(models.Model):
         if new == self.Status.PENDING_FINANCE:
             if require_mgmt:
                 if not self._is_management_approved():
-                    raise DjangoCoreValidationError(_("Cannot move to Finance review before Management approval."))
+                    raise DjangoCoreValidationError(_("Cannot move to Finance review before Management approval." ))
             else:
                 if not self._is_manager_approved():
                     raise DjangoCoreValidationError(_("Cannot move to Finance review before Manager approval."))
@@ -376,8 +377,9 @@ class ReimbursementRequest(models.Model):
             raise DjangoCoreValidationError(_("Only Finance can set Approved after Finance review."))
 
         if new == self.Status.PAID:
-            if old != self.Status.APPROVED:
-                raise DjangoCoreValidationError(_("Cannot mark Paid before Approved."))
+            # ✅ Allow transition to PAID from either APPROVED or PENDING_FINANCE.
+            if old not in {self.Status.APPROVED, self.Status.PENDING_FINANCE}:
+                raise DjangoCoreValidationError(_("Cannot mark Paid before Finance review stage after approvals."))
             if not (self.finance_payment_reference or "").strip():
                 raise DjangoCoreValidationError(_("Payment reference is required to mark Paid."))
 
@@ -445,8 +447,9 @@ class ReimbursementRequest(models.Model):
         Single-source-of-truth to mark as paid.
         Emits ONE audit log with the correct actor.
         """
-        if self.status != self.Status.APPROVED:
-            raise DjangoCoreValidationError(_("Cannot mark Paid before Approved."))
+        # ✅ Allow settlement from Pending Finance Review OR Approved.
+        if self.status not in {self.Status.PENDING_FINANCE, self.Status.APPROVED}:
+            raise DjangoCoreValidationError(_("Cannot mark Paid before Finance review stage after approvals."))
         if not (reference or "").strip():
             raise DjangoCoreValidationError(_("Payment reference is required to mark Paid."))
         from_status = self.status
