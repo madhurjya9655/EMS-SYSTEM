@@ -25,6 +25,7 @@
         <form method="post">
           {% csrf_token %}
           <input type="hidden" name="return" value="{{ back_url }}">
+
           <div class="mb-3">
             {{ form.finance_note.label_tag }}
             {{ form.finance_note }}
@@ -32,6 +33,7 @@
               <div class="text-danger small">{{ form.finance_note.errors }}</div>
             {% endif %}
           </div>
+
           <div class="mb-3">
             {{ form.finance_payment_reference.label_tag }}
             {{ form.finance_payment_reference }}
@@ -39,14 +41,26 @@
               <div class="text-danger small">{{ form.finance_payment_reference.errors }}</div>
             {% endif %}
           </div>
+
           <div class="form-check mb-3">
             {{ form.mark_paid }}
             {{ form.mark_paid.label_tag }}
             {% if form.mark_paid.errors %}
               <div class="text-danger small">{{ form.mark_paid.errors }}</div>
             {% endif %}
-            <div class="form-text">Tick this and provide a payment reference to mark as Paid.</div>
+
+            {# Contextual helper text depending on whether mark_paid is allowed #}
+            {% if form.mark_paid.field.disabled or not can_mark_paid %}
+              <div class="form-text">
+                Available after approvals during Finance review, and requires a payment reference.
+              </div>
+            {% else %}
+              <div class="form-text">
+                Tick this and provide a payment reference to mark as Paid.
+              </div>
+            {% endif %}
           </div>
+
           <button type="submit" class="btn btn-primary w-100">Save Finance Details</button>
         </form>
       </div>

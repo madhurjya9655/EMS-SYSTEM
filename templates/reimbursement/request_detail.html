@@ -4,12 +4,36 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h2>Reimbursement Request #{{ request_obj.id }}</h2>
-  <div>
+  <div class="d-flex gap-2">
     <a href="{% url 'reimbursement:my_reimbursements' %}" class="btn btn-outline-secondary btn-sm">
       Back to My Requests
     </a>
+
+    {# --- Resubmit action (visible only to owner when status == REJECTED) --- #}
+    {% if request.user == request_obj.created_by and request_obj.status == 'rejected' %}
+      <form method="post" action="{% url 'reimbursement:request_resubmit' request_obj.id %}" class="d-inline">
+        {% csrf_token %}
+        <input type="hidden" name="return" value="{% url 'reimbursement:my_reimbursements' %}">
+        <button type="submit" class="btn btn-primary btn-sm">
+          Resubmit
+        </button>
+      </form>
+    {% endif %}
   </div>
 </div>
+
+{# Rejection banner #}
+{% if request_obj.status == 'rejected' %}
+  <div class="alert alert-warning d-flex align-items-start" role="alert">
+    <div class="me-2">⚠️</div>
+    <div>
+      <strong>This request was rejected.</strong>
+      {% if request_obj.manager_comment or request_obj.management_comment or request_obj.finance_note %}
+        <div class="small text-muted">Review the comments below, make changes if needed, and click <em>Resubmit</em>.</div>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
 
 <div class="row">
   <div class="col-md-6">

@@ -1,22 +1,90 @@
-{% extends 'base.html' %}
-{% block title %}Manager Approvals{% endblock %}
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Pending Leaves — Manager{% endblock %}
+
 {% block content %}
-<h2>Pending Leaves for Manager</h2>
-<table class="table">
-  <thead><tr><th>Employee</th><th>Dates</th><th>Action</th></tr></thead>
-  <tbody>
-    {% for lr in leaves %}
-    <tr>
-      <td>{{ lr.requester }}</td>
-      <td>{{ lr.start_date }} – {{ lr.end_date }}</td>
-      <td>
-        <a href="{% url 'leave:apply_leave' %}?id={{ lr.id }}" class="btn btn-sm btn-success">Approve</a>
-        <a href="{% url 'leave:apply_leave' %}?id={{ lr.id }}&reject=1" class="btn btn-sm btn-danger">Reject</a>
-      </td>
-    </tr>
-    {% empty %}
-    <tr><td colspan="3">No pending requests.</td></tr>
+<div class="container-fluid">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h3 class="mb-0">Pending Leaves Assigned to You</h3>
+    <div class="text-muted small">
+      IST now: {{ now|default:None|date:"d/m/Y H:i" }}{% if not now %}{% now "d/m/Y H:i" %}{% endif %}
+    </div>
+  </div>
+
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert {% if message.tags %}alert-{{ message.tags }}{% else %}alert-info{% endif %} py-2">{{ message }}</div>
     {% endfor %}
-  </tbody>
-</table>
+  {% endif %}
+
+  {% if leaves %}
+    <div class="table-responsive">
+      <table class="table table-sm align-middle table-hover">
+        <thead class="table-light">
+          <tr>
+            <th class="text-nowrap">#</th>
+            <th>Employee</th>
+            <th>Type</th>
+            <th class="text-nowrap">Start (IST)</th>
+            <th class="text-nowrap">End (IST)</th>
+            <th class="text-nowrap">Half-day</th>
+            <th>Reason</th>
+            <th class="text-nowrap" style="min-width: 220px;">Comment (optional)</th>
+            <th class="text-nowrap">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for lr in leaves %}
+          {# One form per row. Buttons use `formaction` to hit approve/reject endpoints. #}
+          <tr>
+            <td class="text-muted">#{{ lr.id }}</td>
+            <td>
+              <div class="fw-semibold">{{ lr.employee.get_full_name|default:lr.employee.username }}</div>
+              <div class="small text-muted">{{ lr.employee.email }}</div>
+            </td>
+            <td class="text-nowrap">{{ lr.leave_type.name }}</td>
+            <td class="text-nowrap">{{ lr.start_at|date:"Y-m-d H:i" }}</td>
+            <td class="text-nowrap">{{ lr.end_at|date:"Y-m-d H:i" }}</td>
+            <td class="text-nowrap">
+              {% if lr.is_half_day %}<span class="badge bg-info text-dark">Yes</span>{% else %}<span class="badge bg-secondary">No</span>{% endif %}
+            </td>
+            <td style="max-width: 320px;">
+              <div class="small">{{ lr.reason|default:"—" }}</div>
+            </td>
+            <td>
+              <form method="post" id="row-form-{{ lr.id }}">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{% url 'leave:manager_pending' %}">
+                <input type="text" name="decision_comment" class="form-control form-control-sm" placeholder="Add a note for the employee (optional)">
+              </form>
+            </td>
+            <td class="text-nowrap">
+              <a class="btn btn-sm btn-outline-primary mb-1"
+                 href="{% url 'leave:approval_page' lr.id %}?next={% url 'leave:manager_pending' %}">
+                Open
+              </a>
+              <button type="submit"
+                      class="btn btn-sm btn-success mb-1"
+                      form="row-form-{{ lr.id }}"
+                      formaction="{% url 'leave:manager_decide_approve' lr.id %}?next={% url 'leave:manager_pending' %}"
+                      formmethod="post">
+                Approve
+              </button>
+              <button type="submit"
+                      class="btn btn-sm btn-danger mb-1"
+                      form="row-form-{{ lr.id }}"
+                      formaction="{% url 'leave:manager_decide_reject' lr.id %}?next={% url 'leave:manager_pending' %}"
+                      formmethod="post">
+                Reject
+              </button>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="alert alert-secondary">No pending leave requests for your approval.</div>
+  {% endif %}
+</div>
 {% endblock %}

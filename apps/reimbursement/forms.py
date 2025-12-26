@@ -584,6 +584,47 @@ class ApproverMappingBulkForm(forms.Form):
         label="Finance (for all)",
     )
 
+    # --- NEW: accept `user` so the view can pass it without error
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+        # If you ever need org scoping, you can filter querysets here using self.user.
+
+    # --- NEW: implement save() because the view calls form.save()
+    def save(self) -> int:
+        """
+        Apply selected defaults to all employees.
+        Returns number of mapping rows processed (created/updated).
+        """
+        if not hasattr(self, "cleaned_data"):
+            raise ValueError("Call is_valid() before save().")
+
+        apply_mgr = self.cleaned_data.get("apply_manager_to_all")
+        apply_fin = self.cleaned_data.get("apply_finance_to_all")
+        mgr = self.cleaned_data.get("manager_for_all")
+        fin = self.cleaned_data.get("finance_for_all")
+
+        if not apply_mgr and not apply_fin:
+            return 0  # nothing to do
+
+        processed = 0
+        # In many orgs you may want to exclude superusers or inactive users; adjust as needed.
+        employees = User.objects.all()
+
+        for emp in employees:
+            mapping, _ = ReimbursementApproverMapping.objects.get_or_create(employee=emp)
+            changed = False
+            if apply_mgr and mgr and mapping.manager_id != getattr(mgr, "id", None):
+                mapping.manager = mgr
+                changed = True
+            if apply_fin and fin and mapping.finance_id != getattr(fin, "id", None):
+                mapping.finance = fin
+                changed = True
+            if changed:
+                mapping.save(update_fields=["manager", "finance"])
+                processed += 1
+        return processed
+
 
 # Extra helpers used by the new mapping view (grid-style)
 

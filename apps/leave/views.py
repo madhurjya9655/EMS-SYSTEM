@@ -615,7 +615,12 @@ def manager_pending(request: HttpRequest) -> HttpResponse:
         .select_related("employee", "leave_type")
         .order_by("start_at")
     )
-    return render(request, "leave/manager_pending.html", {"leaves": leaves})
+    # No time-based lock for manager decisions. The UI must reflect that.
+    ctx = {
+        "leaves": leaves,
+        "next_url": reverse("leave:manager_pending"),
+    }
+    return render(request, "leave/manager_pending.html", ctx)
 
 def _build_approval_context(leave: LeaveRequest) -> Dict[str, object]:
     emp = leave.employee

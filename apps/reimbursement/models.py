@@ -468,6 +468,68 @@ class ReimbursementRequest(models.Model):
             to_status=self.status,
         )
 
+    # ---- Employee resubmit helper ------------------------------------------
+
+    def employee_resubmit(self, *, actor: Optional[models.Model], note: str = "") -> None:
+        """
+        Employee resubmits a previously REJECTED reimbursement.
+        - Moves back to PENDING_FINANCE_VERIFY.
+        - Clears verification/approvals so flow restarts correctly.
+        - Keeps attached expense lines intact.
+        - Records audit with who and why.
+        """
+        if self.status != self.Status.REJECTED:
+            raise DjangoCoreValidationError(_("Only rejected requests can be resubmitted."))
+
+        from_status = self.status
+
+        with transaction.atomic():
+            # Reset flow back to Finance Verification
+            self.status = self.Status.PENDING_FINANCE_VERIFY
+            self.submitted_at = timezone.now()
+
+            # Clear any verification / approvals
+            self.verified_by = None
+            self.verified_at = None
+
+            self.manager_decision = ""
+            self.manager_comment = self.manager_comment or ""
+            self.manager_decided_at = None
+
+            self.management_decision = ""
+            self.management_comment = self.management_comment or ""
+            self.management_decided_at = None
+
+            # Optional note appended to finance_note for traceability
+            if note:
+                tag = f"[RESUBMIT] {note.strip()}"
+                self.finance_note = (self.finance_note + ("\n" if self.finance_note else "") + tag).strip()
+
+            self.save(update_fields=[
+                "status",
+                "submitted_at",
+                "verified_by",
+                "verified_at",
+                "manager_decision",
+                "manager_comment",
+                "manager_decided_at",
+                "management_decision",
+                "management_comment",
+                "management_decided_at",
+                "finance_note",
+                "updated_at",
+            ])
+
+            ReimbursementLog.log(
+                self,
+                ReimbursementLog.Action.STATUS_CHANGED,
+                actor=actor,
+                message="Employee corrected and resubmitted the reimbursement.",
+                from_status=from_status,
+                to_status=self.status,
+                extra={"type": "employee_resubmit"},
+            )
+
     # ---- Admin override helpers (explicit, audited, no auto-transitions) ----
 
     def reverse_to_finance_verification(self, *, actor: Optional[models.Model], reason: str) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import logging
 from typing import Any, Dict, Iterable, Optional
 
@@ -355,7 +356,7 @@ class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormV
         return super().form_valid(form)
 
 # ---------------------------------------------------------------------------
-# Employee: My Requests + detail + edit/delete + BULK DELETE
+# Employee: My Requests + detail + edit/delete + BULK DELETE + RESUBMIT
 # ---------------------------------------------------------------------------
 
 class MyReimbursementsView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
@@ -446,8 +447,8 @@ class ReimbursementBulkDeleteView(LoginRequiredMixin, PermissionRequiredMixin, T
 class ReimbursementRequestUpdateView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
     """
     Edit an existing reimbursement request.
-    - Employees should NOT be able to edit once request is submitted.
-    - Only Admin users (reimbursement_admin / superuser) can edit.
+    - Employees may edit their own request ONLY when it's REJECTED (to correct a bill).
+    - Admin users (reimbursement_admin / superuser) can edit anytime.
     """
 
     permission_code = "reimbursement_list"
@@ -457,13 +458,19 @@ class ReimbursementRequestUpdateView(LoginRequiredMixin, PermissionRequiredMixin
     success_url = reverse_lazy("reimbursement:my_reimbursements")
 
     def dispatch(self, request, *args, **kwargs):
-        if not _user_is_admin(request.user):
-            messages.error(
-                request,
-                "You cannot edit a reimbursement after it has been submitted. Please contact Admin.",
-            )
-            return redirect("reimbursement:my_reimbursements")
-        return super().dispatch(request, *args, **kwargs)
+        self.object = self.get_object()
+        if _user_is_admin(request.user):
+            return super().dispatch(request, *args, **kwargs)
+
+        # Owner can edit only if REJECTED
+        if self.object.created_by_id == request.user.id and self.object.status == ReimbursementRequest.Status.REJECTED:
+            return super().dispatch(request, *args, **kwargs)
+
+        messages.error(
+            request,
+            "You can only edit a request after it is rejected, or contact Admin.",
+        )
+        return redirect("reimbursement:my_reimbursements")
 
     def get_queryset(self):
         qs = ReimbursementRequest.objects.select_related("manager", "management")
@@ -552,13 +559,37 @@ class ReimbursementRequestUpdateView(LoginRequiredMixin, PermissionRequiredMixin
             req,
             ReimbursementLog.Action.COMMENTED,
             actor=user,
-            message="Reimbursement request edited by Admin.",
+            message="Reimbursement request edited.",
             from_status=req.status,
             to_status=req.status,
         )
 
         messages.success(self.request, "Reimbursement request updated.")
         return super().form_valid(form)
+
+class ReimbursementResubmitView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    Owner resubmits a REJECTED reimbursement after correcting items.
+    """
+
+    permission_code = "reimbursement_list"
+    template_name = "reimbursement/request_resubmit_confirm.html"
+
+    def post(self, request, *args, **kwargs):
+        req = get_object_or_404(
+            ReimbursementRequest,
+            pk=kwargs.get("pk"),
+            created_by=request.user,
+            status=ReimbursementRequest.Status.REJECTED,
+        )
+        note = (request.POST.get("note") or "").strip()
+        try:
+            req.employee_resubmit(actor=request.user, note=note)
+            _send_safe("send_reimbursement_finance_verify", req, employee_note=f"Resubmitted by {request.user}")
+            messages.success(request, "Request resubmitted to Finance Verification.")
+        except DjangoCoreValidationError as e:
+            messages.error(request, getattr(e, "message", str(e)) or "Unable to resubmit.")
+        return _redirect_back(request, "reimbursement:my_reimbursements")
 
 class ReimbursementRequestDeleteView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
@@ -635,6 +666,13 @@ class ReimbursementDetailView(LoginRequiredMixin, PermissionRequiredMixin, Detai
         req: ReimbursementRequest = self.object
         ctx["lines"] = req.lines.select_related("expense_item")
         ctx["logs"] = req.logs.select_related("actor")
+        # Owner can resubmit when rejected
+        ctx["can_resubmit"] = (
+            req.status == ReimbursementRequest.Status.REJECTED
+            and self.request.user.is_authenticated
+            and req.created_by_id == self.request.user.id
+        )
+        ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
         return ctx
 
 # ---------------------------------------------------------------------------
@@ -934,6 +972,7 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         req: ReimbursementRequest = self.object
         can, _ = req.can_mark_paid(req.finance_payment_reference or "")
         ctx["can_mark_paid"] = can
+        ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
         return ctx
 
     def get_form(self, form_class=None):
@@ -1006,7 +1045,7 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         return back or reverse("reimbursement:finance_pending")
 
 # ---------------------------------------------------------------------------
-# Admin dashboards & config (added ApproverMappingAdminView)
+# Admin dashboards, config & CSV export (ApproverMappingAdminView fixed)
 # ---------------------------------------------------------------------------
 
 class AdminBillsSummaryView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
@@ -1097,32 +1136,179 @@ class AdminStatusSummaryView(LoginRequiredMixin, PermissionRequiredMixin, Templa
         ctx["status_labels"] = dict(ReimbursementRequest.Status.choices)
         return ctx
 
-class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, FormView):
+class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
     Admin-only page to manage per-employee approver mapping.
-    Uses ApproverMappingBulkForm; validations/business rules remain centralized.
+    - Fixes the previous error by NOT injecting unknown kwargs into forms.
+    - Renders three logical sections that match the provided template:
+      (1) Settings, (2) Bulk apply, (3) Per-employee mapping grid.
     """
     permission_code = "reimbursement_admin"
-    form_class = ApproverMappingBulkForm
-    template_name = "reimbursement/approver_mapping_admin.html"
+    template_name = "reimbursement/admin_approver_mapping.html"
 
-    def get_form_kwargs(self) -> Dict[str, Any]:
-        kwargs = super().get_form_kwargs()
-        kwargs["user"] = self.request.user
-        return kwargs
+    # ----- helpers -----
 
-    def form_valid(self, form: ApproverMappingBulkForm):
-        processed = form.save()
-        messages.success(self.request, f"Approver mapping updated. Rows processed: {processed}.")
-        return super().form_valid(form)
+    def _all_users_for_select(self):
+        return User.objects.all().order_by("first_name", "last_name", "username")
 
-    def form_invalid(self, form):
-        messages.error(self.request, "Could not update approver mapping. Please fix the errors below.")
-        return super().form_invalid(form)
+    def _rows(self):
+        rows = []
+        mappings = {
+            m.employee_id: m
+            for m in ReimbursementApproverMapping.objects.select_related("employee", "manager", "finance")
+        }
+        for u in self._all_users_for_select():
+            rows.append({"user": u, "mapping": mappings.get(u.id)})
+        return rows
 
-    def get_success_url(self):
-        back = _safe_back_url(self.request.GET.get("return") or self.request.POST.get("return"))
-        return back or self.request.path
+    # ----- GET -----
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        settings_obj = ReimbursementSettings.get_solo()
+        ctx["settings_form"] = ReimbursementSettingsForm(instance=settings_obj)
+        ctx["bulk_form"] = ApproverMappingBulkForm()
+        ctx["rows"] = self._rows()
+        ctx["all_users_for_select"] = self._all_users_for_select()
+        return ctx
+
+    # ----- POST -----
+
+    def post(self, request, *args, **kwargs):
+        # Which form?
+        if "save_settings" in request.POST:
+            return self._handle_save_settings(request)
+        if "apply_bulk" in request.POST:
+            return self._handle_apply_bulk(request)
+        if "save_mappings" in request.POST:
+            return self._handle_save_mappings(request)
+
+        messages.error(request, "Unknown action.")
+        return redirect(request.path)
+
+    def _handle_save_settings(self, request):
+        obj = ReimbursementSettings.get_solo()
+        form = ReimbursementSettingsForm(request.POST, instance=obj)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Settings saved.")
+        else:
+            messages.error(request, "Please fix the errors in settings.")
+        return redirect(request.path)
+
+    def _handle_apply_bulk(self, request):
+        form = ApproverMappingBulkForm(request.POST)
+        if not form.is_valid():
+            messages.error(request, "Please fix the errors in bulk form.")
+            return redirect(request.path)
+
+        apply_manager = form.cleaned_data.get("apply_manager_to_all")
+        apply_finance = form.cleaned_data.get("apply_finance_to_all")
+        manager_for_all = form.cleaned_data.get("manager_for_all")
+        finance_for_all = form.cleaned_data.get("finance_for_all")
+
+        users = self._all_users_for_select()
+        processed = 0
+        for u in users:
+            mapping, _ = ReimbursementApproverMapping.objects.get_or_create(employee=u)
+            changed = False
+            if apply_manager:
+                mapping.manager = manager_for_all
+                changed = True
+            if apply_finance:
+                mapping.finance = finance_for_all
+                changed = True
+            if changed:
+                mapping.save()
+                processed += 1
+
+        messages.success(request, f"Bulk mapping applied. Rows updated: {processed}.")
+        return redirect(request.path)
+
+    def _handle_save_mappings(self, request):
+        users = self._all_users_for_select()
+        id_to_user = {u.id: u for u in users}
+        processed = 0
+
+        for u in users:
+            manager_id = request.POST.get(f"manager_{u.id}") or ""
+            finance_id = request.POST.get(f"finance_{u.id}") or ""
+
+            manager = id_to_user.get(int(manager_id)) if manager_id.isdigit() else None
+            finance = id_to_user.get(int(finance_id)) if finance_id.isdigit() else None
+
+            mapping, _ = ReimbursementApproverMapping.objects.get_or_create(employee=u)
+            if mapping.manager_id != (manager.id if manager else None) or mapping.finance_id != (finance.id if finance else None):
+                mapping.manager = manager
+                mapping.finance = finance
+                mapping.save()
+                processed += 1
+
+        messages.success(request, f"Per-employee mappings saved. Rows processed: {processed}.")
+        return redirect(request.path)
+
+class ReimbursementExportCSVView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    Admin-only CSV export ("backend sheet") of reimbursements with attachment links.
+    Each line row is exported (1 row per line).
+    """
+    permission_code = "reimbursement_admin"
+    template_name = "reimbursement/admin_export_dummy.html"  # not used
+
+    def get(self, request, *args, **kwargs):
+        qs = (
+            ReimbursementLine.objects.select_related(
+                "request",
+                "expense_item",
+                "request__created_by",
+            )
+            .order_by("request_id", "id")
+        )
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = 'attachment; filename="reimbursements_export.csv"'
+        writer = csv.writer(response)
+        writer.writerow([
+            "request_id",
+            "employee_name",
+            "employee_email",
+            "status",
+            "submitted_at",
+            "total_amount",
+            "line_id",
+            "expense_date",
+            "category",
+            "gst_type",
+            "vendor",
+            "description",
+            "amount",
+            "receipt_url",
+        ])
+
+        for line in qs:
+            req = line.request
+            expense = line.expense_item
+            receipt_url = request.build_absolute_uri(
+                reverse("reimbursement:receipt_line", args=[line.id])
+            )
+            writer.writerow([
+                req.id,
+                (req.created_by.get_full_name() or req.created_by.username),
+                req.created_by.email,
+                req.status,
+                req.submitted_at.isoformat() if req.submitted_at else "",
+                f"{req.total_amount:.2f}",
+                line.id,
+                expense.date.isoformat() if expense and expense.date else "",
+                expense.get_category_display() if expense else "",
+                expense.get_gst_type_display() if expense and expense.gst_type else "",
+                getattr(expense, "vendor", "") or "",
+                (line.description or ""),
+                f"{line.amount:.2f}",
+                receipt_url,
+            ])
+
+        return response
 
 # ---------------------------------------------------------------------------
 # Secure receipt download

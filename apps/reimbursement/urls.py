@@ -29,6 +29,7 @@ urlpatterns = [
     path("bulk-delete/", views.ReimbursementBulkDeleteView.as_view(), name="bulk_delete"),
     path("request/<int:pk>/edit/", views.ReimbursementRequestUpdateView.as_view(), name="request_edit"),
     path("request/<int:pk>/delete/", views.ReimbursementRequestDeleteView.as_view(), name="request_delete"),
+    path("request/<int:pk>/resubmit/", views.ReimbursementResubmitView.as_view(), name="request_resubmit"),
     path("<int:pk>/", views.ReimbursementDetailView.as_view(), name="reimbursement_detail"),
 
     # ------------------------------
@@ -47,13 +48,14 @@ urlpatterns = [
     path("finance/<int:pk>/review/", views.FinanceReviewView.as_view(), name="finance_review"),
 
     # ------------------------------
-    # Admin dashboards & config
+    # Admin dashboards, config & export
     # ------------------------------
     path("admin/bills/", views.AdminBillsSummaryView.as_view(), name="admin_bills_summary"),
     path("admin/requests/", views.AdminRequestsListView.as_view(), name="admin_requests"),
     path("admin/employee-summary/", views.AdminEmployeeSummaryView.as_view(), name="admin_employee_summary"),
     path("admin/status-summary/", views.AdminStatusSummaryView.as_view(), name="admin_status_summary"),
     path("admin/approver-mapping/", approver_mapping_admin_view, name="approver_mapping_admin"),
+    path("admin/export.csv", views.ReimbursementExportCSVView.as_view(), name="admin_export_csv"),
 
     # ------------------------------
     # Analytics
