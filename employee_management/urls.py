@@ -40,8 +40,8 @@ def robots_txt(_request):
 # URL patterns
 # ---------------------------------------------------------------------
 urlpatterns = [
-    # Admin
-    path("admin/", admin.site.urls),
+    # Admin (hardened path from settings.ADMIN_URL)
+    path(settings.ADMIN_URL, admin.site.urls),
 
     # Auth
     path("accounts/login/", CustomLoginView.as_view(), name="login"),
@@ -58,10 +58,10 @@ urlpatterns = [
     path("dashboard/",     include(("dashboard.urls",          "dashboard"),     namespace="dashboard")),
     path("settings/",      include(("apps.settings.urls",      "settings"),      namespace="settings")),
 
-    # Recruitment is now under its own prefix (no longer the site root)
+    # Recruitment under its own prefix
     path("recruitment/",   include(("apps.recruitment.urls",   "recruitment"),   namespace="recruitment")),
 
-    # Root → safe redirect (dashboard will in turn require login)
+    # Root → redirect to dashboard
     path("", RedirectView.as_view(pattern_name="dashboard:home", permanent=False), name="site-root"),
 
     # Healthcheck aliases
@@ -90,7 +90,7 @@ if "debug_toolbar" in settings.INSTALLED_APPS:
 
 
 # ---------------------------------------------------------------------
-# Minimal, safe error handlers (plain text; replace with templates later)
+# Minimal, safe error handlers (plain text; swap to templates later)
 # ---------------------------------------------------------------------
 def _plain(status: int, msg: str):
     return HttpResponse(msg, content_type="text/plain", status=status)

@@ -38,20 +38,22 @@ def env_int(name: str, default: int = 0) -> int:
 # CORE
 # -----------------------------------------------------------------------------
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-__dev-only-use-this__")
-DEBUG = env_bool("DEBUG", False)  # default OFF for prod
+DEBUG = env_bool("DEBUG", False)
 SITE_URL = os.getenv("SITE_URL", "https://ems-system-d26q.onrender.com")
 CRON_SECRET = os.getenv("CRON_SECRET", "")
 ON_RENDER = bool(os.environ.get("RENDER"))
 
+# Hardened admin path (used in urls.py)
+ADMIN_URL = os.getenv("ADMIN_URL", "super-secret-admin/")
+
 ALLOWED_HOSTS = env_list(
     "ALLOWED_HOSTS",
-    # prod-safe defaults (no 'testserver' here)
     "ems-system-d26q.onrender.com,.onrender.com,localhost,127.0.0.1,0.0.0.0",
 )
 
 CSRF_TRUSTED_ORIGINS = env_list(
     "CSRF_TRUSTED_ORIGINS",
-    "https://ems-system-d26q.onrender.com,https://*.onrender.com",
+    "https://ems-system-d26q.onrender.com",
 )
 
 if DEBUG:
@@ -76,6 +78,13 @@ APPEND_SLASH = True
 SESSION_COOKIE_SECURE = True if (ON_RENDER or not DEBUG) else False
 CSRF_COOKIE_SECURE = True if (ON_RENDER or not DEBUG) else False
 SECURE_CONTENT_TYPE_NOSNIFF = True
+
+PASSWORD_HASHERS = [
+    "django.contrib.auth.hashers.Argon2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher",
+    "django.contrib.auth.hashers.BCryptSHA256PasswordHasher",
+]
 
 # -----------------------------------------------------------------------------
 # APPS
@@ -111,7 +120,6 @@ LOCAL_APPS = [
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
-# Ensure django-celery-beat is installed
 if "django_celery_beat" not in INSTALLED_APPS:
     INSTALLED_APPS.append("django_celery_beat")
 
@@ -156,7 +164,7 @@ _template_options = {
         "group_tags": "apps.common.templatetags.group_tags",
         "model_extras": "apps.common.templatetags.model_extras",
     },
-    "string_if_invalid": "" if DEBUG else "",
+    "string_if_invalid": "",
 }
 
 if DEBUG:
@@ -183,18 +191,18 @@ else:
                             "django.template.loaders.filesystem.Loader",
                             "django.template.loaders.app_directories.Loader",
                         ],
-                    )
+                    ),
                 ],
             },
         }
     ]
 
 # -----------------------------------------------------------------------------
-# DATABASE (Render-safe)
+# DATABASE
 # -----------------------------------------------------------------------------
 try:
     import dj_database_url  # type: ignore
-except Exception:  # pragma: no cover
+except Exception:
     dj_database_url = None
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
@@ -205,25 +213,25 @@ if DATABASE_URL and dj_database_url:
             DATABASE_URL,
             conn_max_age=env_int("CONN_MAX_AGE", 60),
             ssl_require=env_bool("DB_SSL_REQUIRE", True),
-        )
+        ),
     }
 else:
     if ON_RENDER:
-        DB_PATH = os.getenv("SQLITE_PATH") or "/var/data/db.sqlite3"
+        db_path = os.getenv("SQLITE_PATH") or "/var/data/db.sqlite3"
     else:
-        DB_PATH = os.getenv("SQLITE_PATH") or str(BASE_DIR / "db.sqlite3")
+        db_path = os.getenv("SQLITE_PATH") or str(BASE_DIR / "db.sqlite3")
 
-    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
-            "NAME": DB_PATH,
+            "NAME": db_path,
             "OPTIONS": {
                 "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
                 "timeout": 60,
             },
-        }
+        },
     }
 
 CONN_MAX_AGE = env_int("CONN_MAX_AGE", 0)
@@ -378,7 +386,10 @@ LOGGING = {
             "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
             "style": "{",
         },
-        "simple": {"format": "{levelname} {asctime} {message}", "style": "{"},
+        "simple": {
+            "format": "{levelname} {asctime} {message}",
+            "style": "{",
+        },
         "detailed": {
             "format": "[{asctime}] {levelname} {name} {module}.{funcName}:{lineno} - {message}",
             "style": "{",
@@ -418,11 +429,19 @@ LOGGING = {
             "formatter": "detailed",
             "encoding": "utf-8",
         },
+        "mail_admins": {
+            "level": "ERROR",
+            "class": "django.utils.log.AdminEmailHandler",
+        },
     },
     "root": {"handlers": ["console"], "level": "WARNING"},
     "loggers": {
         "django": {"handlers": ["file"], "level": "INFO", "propagate": False},
-        "django.request": {"handlers": ["console", "file"], "level": "ERROR", "propagate": False},
+        "django.request": {
+            "handlers": ["console", "file", "mail_admins"],
+            "level": "ERROR",
+            "propagate": False,
+        },
         "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
         "apps.users.permissions": {
             "handlers": ["permissions_file"] + (["console"] if DEBUG else []),
@@ -453,6 +472,9 @@ LOGGING = {
         },
     },
 }
+
+ADMINS = [("Ops", os.getenv("ADMIN_EMAIL", "ops@example.com"))]
+SERVER_EMAIL = os.getenv("SERVER_EMAIL", os.getenv("DEFAULT_FROM_EMAIL", "no-reply@example.com"))
 
 # -----------------------------------------------------------------------------
 # I18N / TZ
@@ -517,7 +539,8 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "BOS Lak
 REIMBURSEMENT_SENDER_EMAIL = os.getenv("REIMBURSEMENT_SENDER_EMAIL", "amreen@blueoceansteels.com")
 REIMBURSEMENT_SENDER_NAME = os.getenv("REIMBURSEMENT_SENDER_NAME", "Amreen")
 REIMBURSEMENT_EMAIL_FROM = os.getenv(
-    "REIMBURSEMENT_EMAIL_FROM", f"{REIMBURSEMENT_SENDER_NAME} <{REIMBURSEMENT_SENDER_EMAIL}>"
+    "REIMBURSEMENT_EMAIL_FROM",
+    f"{REIMBURSEMENT_SENDER_NAME} <{REIMBURSEMENT_SENDER_EMAIL}>",
 )
 
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 30)
@@ -561,23 +584,13 @@ if not DEBUG:
 CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
 CRISPY_TEMPLATE_PACK = "bootstrap5"
 
-# === Google service account (used by reimbursement Sheets/Drive client) ===
-GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
-GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")  # support JSON-in-env too
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")  # optional legacy name
-GOOGLE_SHEET_SCOPES = os.getenv("GOOGLE_SHEET_SCOPES")  # optional/unused
-
 # -----------------------------------------------------------------------------
 # REIMBURSEMENT / GOOGLE INTEGRATIONS
 # -----------------------------------------------------------------------------
-# These match what the integration code reads with getattr(settings, "...", default)
 REIMBURSEMENT_SHEET_ID = os.getenv("REIMBURSEMENT_SHEET_ID", "1LOVDkTVMGdEPOP9CQx-WVDv7ZY1TpqiQD82FFCc3t4A")
-REIMBURSEMENT_DRIVE_FOLDER_ID = os.getenv("REIMBURSEMENT_DRIVE_FOLDER_ID")  # parent folder to upload receipts
-# Link-sharing behavior for uploaded receipts: "anyone" (default) or "domain"
+REIMBURSEMENT_DRIVE_FOLDER_ID = os.getenv("REIMBURSEMENT_DRIVE_FOLDER_ID")
 REIMBURSEMENT_DRIVE_LINK_SHARING = os.getenv("REIMBURSEMENT_DRIVE_LINK_SHARING", "anyone")
-REIMBURSEMENT_DRIVE_DOMAIN = os.getenv("REIMBURSEMENT_DRIVE_DOMAIN")  # required if using domain sharing
-# Optional: build detail links to your EMS request detail if admin reverse isn’t available
-# Example value: "reimbursement/{id}/"
+REIMBURSEMENT_DRIVE_DOMAIN = os.getenv("REIMBURSEMENT_DRIVE_DOMAIN")
 REIMBURSEMENT_DETAIL_URL_TEMPLATE = os.getenv("REIMBURSEMENT_DETAIL_URL_TEMPLATE")
 
 # -----------------------------------------------------------------------------
@@ -615,7 +628,7 @@ if REDIS_URL:
                 "PARSER_CLASS": "redis.connection.HiredisParser",
             },
             "TIMEOUT": env_int("CACHE_TIMEOUT", 300),
-        }
+        },
     }
     SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 else:
@@ -625,7 +638,7 @@ else:
             "LOCATION": "ems-fast-cache",
             "TIMEOUT": 300,
             "OPTIONS": {"MAX_ENTRIES": 2000, "CULL_FREQUENCY": 3},
-        }
+        },
     }
 
 JSON_DUMPS_PARAMS = {"ensure_ascii": False}
@@ -656,7 +669,7 @@ if DEBUG:
     CSRF_COOKIE_SECURE = False
 
 # -----------------------------------------------------------------------------
-# CUSTOM SETTINGS VALIDATION
+# VALIDATION / REQUIRED DIRS
 # -----------------------------------------------------------------------------
 def validate_email_settings():
     if (not DEBUG and EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend"):
@@ -707,9 +720,8 @@ PERMISSION_DENIED_REDIRECT = "dashboard:home"
 PERMISSION_DEBUG_ENABLED = env_bool("PERMISSION_DEBUG_ENABLED", DEBUG and not ON_RENDER)
 
 # -----------------------------------------------------------------------------
-# CELERY CONFIGURATION
+# CELERY
 # -----------------------------------------------------------------------------
-# Pylance sometimes can’t resolve celery in some virtualenvs; keep it safe:
 try:
     from celery.schedules import crontab  # type: ignore
 except Exception:  # pragma: no cover
@@ -724,38 +736,34 @@ def _redis_db(url: str, db: int) -> str:
         return u
     parts = u.rsplit("/", 1)
     if len(parts) == 2 and parts[1].isdigit():
-        return f"{parts[0]}/{db}"   # fixed stray backtick (kept comment)
+        return f"{parts[0]}/{db}"
     if u.endswith("/"):
         return f"{u}{db}"
     return f"{u}/{db}"
 
+REDIS_URL_FOR_CELERY = os.getenv("REDIS_URL", "").strip()
+
 CELERY_BROKER_URL = (
     os.getenv("CELERY_BROKER_URL", "").strip()
-    or (_redis_db(REDIS_URL, 0) if REDIS_URL else "redis://127.0.0.1:6379/0")
+    or (_redis_db(REDIS_URL_FOR_CELERY, 0) if REDIS_URL_FOR_CELERY else "redis://127.0.0.1:6379/0")
 )
 CELERY_RESULT_BACKEND = (
     os.getenv("CELERY_RESULT_BACKEND", "").strip()
-    or (_redis_db(REDIS_URL, 1) if REDIS_URL else "redis://127.0.0.1:6379/1")
+    or (_redis_db(REDIS_URL_FOR_CELERY, 1) if REDIS_URL_FOR_CELERY else "redis://127.0.0.1:6379/1")
 )
 
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
-CELERY_RESULT_SERIALIZER = "json"  # <-- removed the stray "]" that caused the syntax error
-
+CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_ENABLE_UTC = True
-
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60
 CELERY_TASK_SOFT_TIME_LIMIT = 60
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
-
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
-# -------------------------------
-# Beat schedule (IST)
-# -------------------------------
 CELERY_BEAT_SCHEDULE = {
     "tasks_due_today_10am_fanout": {
         "task": "apps.tasks.tasks.send_due_today_assignments",
@@ -784,11 +792,8 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
-# === Reimbursement receipt settings (Excel allowed) ===
-# These are read by the reimbursement file validator.
 REIMBURSEMENT_ALLOWED_EXTENSIONS = env_list(
     "REIMBURSEMENT_ALLOWED_EXTENSIONS",
-    ".jpg,.jpeg,.png,.pdf,.xls,.xlsx"
+    ".jpg,.jpeg,.png,.pdf,.xls,.xlsx",
 )
-# Optional: cap per-file or total size (in MB) via your existing validators if used
 REIMBURSEMENT_MAX_RECEIPT_MB = env_int("REIMBURSEMENT_MAX_RECEIPT_MB", 8)

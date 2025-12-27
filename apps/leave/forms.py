@@ -7,11 +7,12 @@ from typing import Optional, List, Tuple
 from django import forms
 from django.contrib.auth import get_user_model
 from django.utils import timezone
-from zoneinfo import ZoneInfo
+import pytz  # ✅ align tz impl with models.py to avoid mixing zoneinfo/pytz
 
 from .models import LeaveRequest, LeaveStatus, LeaveType
 
-IST = ZoneInfo("Asia/Kolkata")
+# ✅ Use the same tz object type as models.py (pytz.timezone) to keep behavior consistent.
+IST = pytz.timezone("Asia/Kolkata")
 User = get_user_model()
 
 ALLOWED_ATTACHMENT_EXTS = {
@@ -36,6 +37,7 @@ def _aware_ist(dt: datetime) -> datetime:
     """Ensure timezone-aware datetime in IST."""
     if timezone.is_naive(dt):
         return timezone.make_aware(dt, timezone=IST)
+    # If it's already aware, normalize/show in IST to be consistent.
     return timezone.localtime(dt, IST)
 
 
@@ -296,7 +298,8 @@ class LeaveRequestForm(forms.ModelForm):
         end_d:   Optional[date] = cleaned.get("end_at")
 
         if not leave_type or not start_d:
-            return cleaned  # field-level errors will be shown
+            # Field-level errors will show; don't fabricate datetimes.
+            return cleaned
 
         # HALF DAY: one date + free range inside 09:30–18:00, max 6h
         if dur == "HALF":
@@ -354,10 +357,32 @@ class LeaveRequestForm(forms.ModelForm):
 
     # -------------------------------------------------------------------- save
     def save(self, commit: bool = True) -> LeaveRequest:
+        """
+        ✅ Core fix for logs:
+        Always write tz-aware datetimes to the model instance before saving.
+        This avoids any path where a naive datetime or a date leaks into the DateTimeField,
+        which triggered:
+          RuntimeWarning: DateTimeField LeaveRequest.start_at received a naive datetime
+        """
         obj: LeaveRequest = super().save(commit=False)
 
         if hasattr(self, "employee") and self.employee and not getattr(obj, "employee_id", None):
             obj.employee = self.employee
+
+        # Ensure tz-aware datetimes are set on the instance (override any earlier assignment)
+        start_cd = self.cleaned_data.get("start_at")
+        end_cd = self.cleaned_data.get("end_at")
+
+        if isinstance(start_cd, datetime):
+            obj.start_at = _aware_ist(start_cd)
+        elif isinstance(start_cd, date):
+            # Defensive: if a date slipped through, expand to full-day anchors.
+            obj.start_at = _aware_ist(datetime.combine(start_cd, FULL_DAY_DEFAULT_FROM))
+
+        if isinstance(end_cd, datetime):
+            obj.end_at = _aware_ist(end_cd)
+        elif isinstance(end_cd, date):
+            obj.end_at = _aware_ist(datetime.combine(end_cd, FULL_DAY_DEFAULT_TO))
 
         obj.is_half_day = bool(self.cleaned_data.get("is_half_day"))
 
