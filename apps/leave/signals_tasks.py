@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from django.apps import apps
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils import timezone
 
+# Import actual model + TextChoices directly (LeaveStatus is NOT a model)
+from apps.leave.models import LeaveHandover, LeaveStatus
+
 log = logging.getLogger(__name__)
 
 DONE_VALUES = {"completed", "closed", "done"}  # case-insensitive
+
 
 def _status_is_done(instance) -> bool:
     val = getattr(instance, "status", None)
@@ -18,13 +21,9 @@ def _status_is_done(instance) -> bool:
         return False
     return val.strip().lower() in DONE_VALUES
 
+
 def _handover_for(instance):
     """Return active LeaveHandover row for this task instance, or None."""
-    LeaveHandover = apps.get_model("leave", "LeaveHandover")
-    LeaveStatus = apps.get_model("leave", "LeaveStatus")
-    if not LeaveHandover or not LeaveStatus:
-        return None
-
     # infer type from model class name
     model_name = instance.__class__.__name__.lower()
     if "checklist" in model_name:
@@ -56,6 +55,7 @@ def _handover_for(instance):
         log.exception("Failed finding handover for %r", instance)
         return None
 
+
 def _deactivate_reminders(handover):
     try:
         DelegationReminder = apps.get_model("leave", "DelegationReminder")
@@ -64,12 +64,14 @@ def _deactivate_reminders(handover):
     except Exception:
         log.exception("Could not deactivate reminders for handover id=%s", getattr(handover, "id", None))
 
+
 def _notify_completion(handover):
     try:
         from apps.leave.services.notifications import send_handover_completion_email
         send_handover_completion_email(handover)
     except Exception:
         log.exception("Failed sending completion email for handover id=%s", getattr(handover, "id", None))
+
 
 def _connect_sender(sender_label: str):
     Model = apps.get_model("tasks", sender_label)
@@ -90,6 +92,7 @@ def _connect_sender(sender_label: str):
             _notify_completion(ho)
         except Exception:
             log.exception("Completion hook failed for %s", sender_label)
+
 
 # connect for the three task models (if they exist)
 def connect_all_task_completion_signals():

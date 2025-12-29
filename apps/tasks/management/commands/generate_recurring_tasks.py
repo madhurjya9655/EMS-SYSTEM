@@ -30,7 +30,7 @@ SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 # Email policy knobs
 SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
 # Keep the 10:00 gating but make it robust: send any time AFTER 10:00 IST on the planned day
-SEND_RECUR_EMAILS_ONLY_AT_10AM = True
+SEND_RECUR_EMAILS_ONLY_AT_10AM = getattr(settings, "SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
 EMAIL_WINDOW_MINUTES = 5  # retained for compatibility (no longer used as a hard window)
 
 
@@ -182,6 +182,7 @@ class Command(BaseCommand):
         user_id = opts.get("user_id")
         dry_run = bool(opts.get("dry_run", False))
         send_emails = not bool(opts.get("no_email", False))
+        # Note: argparse sets this flag to False by default; code below still limits to 'today'
         email_today_only = bool(opts.get("email_today_only", True))
 
         now = timezone.now()

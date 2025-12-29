@@ -185,8 +185,6 @@ def exclude_tasks_on_active_leave(qs, user):
                     return qs.exclude(planned_date__date=today)
                 else:
                     return qs.exclude(planned_date=today)
-            # If planned_date doesn't exist, safest is to keep qs unchanged (not .none())
-            # to avoid hiding unrelated items from mixed querysets.
             return qs
 
         # If the boolean exists, also hide flagged rows regardless of date

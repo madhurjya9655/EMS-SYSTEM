@@ -20,6 +20,10 @@ from . import utils as _utils  # email helpers & console-safe logging
 # NEW: for working-day (holiday/Sunday) shifts on recurrence
 from apps.settings.models import Holiday
 
+# ✅ Leave-blocking helpers
+from apps.tasks.services.blocking import guard_assign
+from apps.tasks.utils.blocking import is_user_blocked_at
+
 logger = logging.getLogger(__name__)
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -180,6 +184,7 @@ def _schedule_10am_email_for_checklist(obj: Checklist) -> None:
     For any created checklist:
       - If it's the planned day and current IST time is AFTER 10:00, send immediately (so cron won't miss it).
       - Otherwise, do nothing here. Daily 10:00 IST cron will dispatch.
+      - 🔒 Leave guard: if user is blocked for today's 10:00 IST, DO NOT send.
     """
     if ENABLE_CELERY_EMAIL:
         return
@@ -208,6 +213,16 @@ def _schedule_10am_email_for_checklist(obj: Checklist) -> None:
         return
 
     def _send_now():
+        # Final guard at send moment (10:00 anchor logic)
+        try:
+            now_ist = timezone.now().astimezone(IST)
+            anchor_ist = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
+            if not guard_assign(obj.assign_to, anchor_ist):
+                logger.info(_utils._safe_console_text(f"Checklist CL-{obj.id} suppressed (assignee on leave @ 10:00 IST)."))
+                return
+        except Exception:
+            pass
+
         complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
         subject_prefix = f"Today’s Checklist – {obj.task_name}"
         _utils.send_checklist_assignment_to_user(
@@ -224,7 +239,7 @@ def _schedule_10am_email_for_checklist(obj: Checklist) -> None:
     try:
         planned = obj.planned_date
         if not planned:
-            # No planned date: send now
+            # No planned date: send now (still guarded)
             _on_commit(_send_now)
             return
 
@@ -234,7 +249,7 @@ def _schedule_10am_email_for_checklist(obj: Checklist) -> None:
             # Future/past day: let cron handle it (no sleeper threads)
             return
 
-        # It's today's task. If we're past 10:00 IST now, send immediately.
+        # It's today's task. If we're past 10:00 IST now, send immediately (with guard).
         anchor_ist = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
         if now_ist >= anchor_ist:
             _on_commit(_send_now)
@@ -284,6 +299,15 @@ def _schedule_10am_email_for_delegation(obj: Delegation) -> None:
     def _send_now():
         complete_url = f"{SITE_URL}{reverse('tasks:complete_delegation', args=[obj.id])}"
         subject_prefix = f"Today’s Delegation – {obj.task_name} (due 7 PM)"
+        # Day-level guard at 10:00 IST of the day
+        try:
+            now_ist = timezone.now().astimezone(IST)
+            anchor_ist = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
+            if not guard_assign(obj.assign_to, anchor_ist):
+                logger.info(_utils._safe_console_text(f"Delegation DL-{obj.id} 10AM reminder suppressed (assignee on leave)."))
+                return
+        except Exception:
+            pass
         _utils.send_delegation_assignment_to_user(
             delegation=obj,
             complete_url=complete_url,
@@ -327,6 +351,9 @@ def _send_delegation_assignment_immediate(obj: Delegation) -> None:
     """
     One-time "New Delegation Assigned" email, sent immediately after creation.
     Daily / 10:00 AM reminders are handled separately.
+
+    🔒 LEAVE GUARD: if the assignee is on leave *right now*, suppress the immediate mail.
+    (The task may still exist; visibility & reminders are governed elsewhere.)
     """
     if ENABLE_CELERY_EMAIL:
         return
@@ -352,6 +379,14 @@ def _send_delegation_assignment_immediate(obj: Delegation) -> None:
             )
         )
         return
+
+    # Time-level guard (current instant in IST)
+    try:
+        if is_user_blocked_at(obj.assign_to, timezone.now().astimezone(IST)):
+            logger.info(_utils._safe_console_text(f"Immediate delegation email suppressed for DL-{obj.id}: assignee on leave now."))
+            return
+    except Exception:
+        pass
 
     def _send_now():
         try:
@@ -626,7 +661,7 @@ def schedule_delegation_email_on_create(sender, instance: Delegation, created: b
         return
     if ENABLE_CELERY_EMAIL:
         return
-    # 1) Immediate "New Delegation Assigned" email
+    # 1) Immediate "New Delegation Assigned" email (with leave guard)
     try:
         _on_commit(lambda: _send_delegation_assignment_immediate(instance))
     except Exception:
@@ -639,12 +674,27 @@ def schedule_delegation_email_on_create(sender, instance: Delegation, created: b
 
 
 # ---------------------------------------------------------------------
-# HELPTICKET: Immediate email on assignment (created)
+# HELPTICKET: Immediate email on assignment (created) — with leave guard
 # ---------------------------------------------------------------------
 @receiver(post_save, sender=HelpTicket)
 def send_help_ticket_email_on_create(sender, instance: HelpTicket, created: bool, **kwargs):
     if not created:
         return
+
+    # If assignee is on leave NOW, or the planned timestamp lies within a leave window,
+    # suppress the assignment email.
+    try:
+        assignee = getattr(instance, "assign_to", None)
+        if assignee and is_user_blocked_at(assignee, timezone.now().astimezone(IST)):
+            logger.info(_utils._safe_console_text(f"HelpTicket HT-{getattr(instance, 'id', '?')} email suppressed: assignee on leave now."))
+            return
+        if assignee and getattr(instance, "planned_date", None):
+            planned_ist = timezone.localtime(instance.planned_date, IST)
+            if is_user_blocked_at(assignee, planned_ist):
+                logger.info(_utils._safe_console_text(f"HelpTicket HT-{getattr(instance, 'id', '?')} email suppressed: planned time within leave."))
+                return
+    except Exception:
+        pass
 
     def _send_now():
         try:

@@ -4,7 +4,9 @@ from __future__ import annotations
 from datetime import timedelta, datetime, time as dt_time, date
 import logging
 import sys
-from zoneinfo import ZoneInfo
+
+# 🔧 Use pytz everywhere to match the rest of the project (models/forms use pytz)
+import pytz
 
 from dateutil.relativedelta import relativedelta
 
@@ -13,6 +15,7 @@ from django.utils import timezone
 from django.shortcuts import render
 from django.core.cache import cache
 from django.conf import settings
+from django.db.models import Sum  # 🔧 correct aggregate import
 
 # IMPORTANT: Only import TASKS-side models at module import time.
 # Do NOT import anything from apps.leave.* at the top of the file.
@@ -24,8 +27,8 @@ logger = logging.getLogger(__name__)
 # Canonical recurring modes
 RECURRING_MODES = ['Daily', 'Weekly', 'Monthly', 'Yearly']
 
-# Timezones / anchors (use ZoneInfo — no pytz)
-IST = ZoneInfo('Asia/Kolkata')
+# Timezone (pytz) — align with models.py to avoid SQLite UDF tz mixups
+IST = pytz.timezone('Asia/Kolkata')
 
 # FINAL SPEC:
 # - Planned time for recurrences: 19:00 IST (7 PM)
@@ -350,6 +353,11 @@ def calculate_checklist_assigned_time(qs, date_from, date_to):
 
 
 def calculate_delegation_assigned_time_safe(assign_to_user, date_from, date_to):
+    """
+    Safe aggregate for delegation assigned minutes.
+    Fix: use django.db.models.Sum (not django.utils.timezone.models), which could raise
+    backend errors. Also keep fallback path.
+    """
     try:
         date_from = _coerce_date_safe(date_from)
         date_to = _coerce_date_safe(date_to)
@@ -362,7 +370,7 @@ def calculate_delegation_assigned_time_safe(assign_to_user, date_from, date_to):
                 planned_date__lt=end_dt,
                 status='Pending'
             )
-            .aggregate(total=timezone.models.Sum("time_per_task_minutes") if hasattr(timezone, "models") else None)
+            .aggregate(total=Sum("time_per_task_minutes"))
         )
     except Exception:
         agg = None
@@ -475,7 +483,8 @@ def dashboard_home(request):
             cache.set(cache_key_pending, pending_tasks, _DASH_FAST_TTL)
 
         except Exception as e:
-            logger.error(_safe_console_text(f"Error calculating weekly/pending scores: {e}"))
+            # Keep log text stable with earlier deployments
+            logger.error(_safe_console_text(f"Error calculating weekly scores: {e}"))
             week_score = {
                 'checklist': {'previous': 0, 'current': 0},
                 'delegation': {'previous': 0, 'current': 0},

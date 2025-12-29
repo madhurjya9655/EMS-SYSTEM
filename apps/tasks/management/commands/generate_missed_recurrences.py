@@ -106,6 +106,8 @@ class Command(BaseCommand):
         send_emails = not bool(opts.get("no_email", False))
 
         now = timezone.now()
+        now_ist = now.astimezone(IST)
+        today_ist = now_ist.date()
 
         filters = {"mode__in": RECURRING_MODES, "frequency__gte": 1}
         if user_id:
@@ -237,19 +239,22 @@ class Command(BaseCommand):
                 if send_emails and SEND_EMAILS_FOR_AUTO_RECUR:
                     assignee_email = _assignee_email_or_none(new_obj)
                     if assignee_email:
-                        if (not SEND_RECUR_EMAILS_ONLY_AT_10AM) or _after_10am_today():
-                            try:
-                                complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
-                                send_checklist_assignment_to_user(
-                                    task=new_obj,
-                                    complete_url=complete_url,
-                                    subject_prefix="Recurring Checklist Generated",
-                                )
-                                logger.info(_safe_console_text(
-                                    f"Sent recur email for CL-{new_obj.id} to user_id={new_obj.assign_to_id}"
-                                ))
-                            except Exception as e:
-                                logger.exception("Email failure for recurring checklist %s: %s", new_obj.id, e)
+                        # >>> FIX: only email AFTER 10:00 IST *and* when planned date is *today* IST
+                        planned_ist = new_obj.planned_date.astimezone(IST) if new_obj.planned_date else None
+                        if planned_ist and planned_ist.date() == today_ist:
+                            if (not SEND_RECUR_EMAILS_ONLY_AT_10AM) or _after_10am_today(now_ist):
+                                try:
+                                    complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
+                                    send_checklist_assignment_to_user(
+                                        task=new_obj,
+                                        complete_url=complete_url,
+                                        subject_prefix="Recurring Checklist Generated",
+                                    )
+                                    logger.info(_safe_console_text(
+                                        f"Sent recur email for CL-{new_obj.id} to user_id={new_obj.assign_to_id}"
+                                    ))
+                                except Exception as e:
+                                    logger.exception("Email failure for recurring checklist %s: %s", new_obj.id, e)
 
             except Exception as e:
                 logger.exception("Failed to create recurrence for %s: %s", instance.task_name, e)

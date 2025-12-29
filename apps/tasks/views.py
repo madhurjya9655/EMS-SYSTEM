@@ -55,6 +55,12 @@ from .utils import (
 )
 from .recurrence_utils import preserve_first_occurrence_time
 
+# ✅ Central leave-blocking (date- & time-aware)
+from apps.tasks.utils.blocking import (
+    is_user_blocked,         # date-level, 10:00 IST anchor (for CL/DL visibility)
+    is_user_blocked_at,      # time-level, exact instant in IST (for Help Tickets / "right now")
+)
+
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
@@ -971,7 +977,7 @@ def add_checklist(request):
             planned_date = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
             assignee = form.cleaned_data.get("assign_to")
 
-            # hard-block holidays and leave
+            # hard-block holidays and leave (date-level @ 10:00 IST)
             ist_day = planned_date.astimezone(IST).date() if planned_date else None
             if ist_day and not is_working_day(ist_day):
                 messages.error(request, "This day is holiday")
@@ -1335,10 +1341,22 @@ def add_help_ticket(request):
         if form.is_valid():
             planned_date = form.cleaned_data.get("planned_date")
             planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
+            assignee = form.cleaned_data.get("assign_to")
 
-            # Block creation on holidays / Sundays ONLY (per final rule). No leave blocking.
+            # Block creation on holidays / Sundays ONLY (as before) …
             if planned_date_local and not is_working_day(planned_date_local):
                 messages.error(request, "This is a holiday; you cannot add on this day.")
+                return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "add", "can_create": can_create(request.user)})
+
+            # …and CRITICALLY block if the assignee is ON LEAVE at the time of assignment
+            now_ist = timezone.now().astimezone(IST)
+            if assignee and is_user_blocked_at(assignee, now_ist):
+                messages.error(request, "Assignee is currently on leave. Please reassign or create after the leave window.")
+                return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "add", "can_create": can_create(request.user)})
+
+            # Also block if the planned timestamp itself lies within the leave window
+            if assignee and planned_date and is_user_blocked_at(assignee, planned_date.astimezone(IST)):
+                messages.error(request, "Planned time falls within assignee’s leave window. Choose another time or reassign.")
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "add", "can_create": can_create(request.user)})
 
             ticket = form.save(commit=False)
@@ -1369,10 +1387,21 @@ def edit_help_ticket(request, pk):
         if form.is_valid():
             planned_date = form.cleaned_data.get("planned_date")
             planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
+            new_assignee = form.cleaned_data.get("assign_to")
 
             # Block moving onto holidays/Sundays ONLY
             if planned_date_local and not is_working_day(planned_date_local):
                 messages.error(request, "This is a holiday; you cannot add on this day.")
+                return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "edit", "can_create": can_create(request.user)})
+
+            # Leave blocking: if changing assignee/time, prevent assigning into an active leave window
+            now_ist = timezone.now().astimezone(IST)
+            if new_assignee and is_user_blocked_at(new_assignee, now_ist):
+                messages.error(request, "Assignee is currently on leave. Please reassign or update after the leave window.")
+                return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "edit", "can_create": can_create(request.user)})
+
+            if new_assignee and planned_date and is_user_blocked_at(new_assignee, planned_date.astimezone(IST)):
+                messages.error(request, "Planned time falls within assignee’s leave window. Choose another time or reassign.")
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "edit", "can_create": can_create(request.user)})
 
             ticket = form.save()
@@ -1463,6 +1492,12 @@ def assigned_to_me(request):
         .select_related("assign_by", "assign_to")
         .order_by("-planned_date")
     )
+
+    # Leave-blocking for Help Tickets on personal "assigned to me" view:
+    # If user is on leave RIGHT NOW, hide all items.
+    if is_user_blocked_at(request.user, timezone.now().astimezone(IST)):
+        items = HelpTicket.objects.none()
+
     return render(request, "tasks/list_help_ticket_assigned_to.html", {"items": items, "current_tab": "assigned_to"})
 
 
@@ -1835,6 +1870,12 @@ def dashboard_home(request):
                 if getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist)
             ]
 
+        # Leave-filter for Checklist: hide any date that is blocked (10:00 IST anchor)
+        try:
+            checklist_qs = [c for c in checklist_qs if not is_user_blocked(request.user, _ist_date(c.planned_date))]
+        except Exception:
+            pass
+
         # DELEGATIONS
         if today_only:
             base_delegations = list(
@@ -1867,6 +1908,12 @@ def dashboard_home(request):
             delegation_qs = [d for d in delegation_qs if getattr(d, 'is_handover', False) or _should_show_today_or_past(d.planned_date, now_ist)]
         else:
             delegation_qs = [d for d in delegation_qs if _ist_date(d.planned_date) == today_ist and (getattr(d, 'is_handover', False) or _should_show_today_or_past(d.planned_date, now_ist))]
+
+        # Leave-filter for Delegation: hide any date that is blocked (10:00 IST anchor)
+        try:
+            delegation_qs = [d for d in delegation_qs if not is_user_blocked(request.user, _ist_date(d.planned_date))]
+        except Exception:
+            pass
 
         # HELP TICKETS — immediate (no 10AM gate)
         if today_only:
@@ -1901,6 +1948,13 @@ def dashboard_home(request):
         else:
             help_ticket_qs = [h for h in help_ticket_qs if _ist_date(h.planned_date) == today_ist]
 
+        # Leave-filter for Help Tickets: if user is on leave RIGHT NOW, hide all
+        try:
+            if is_user_blocked_at(request.user, now_ist):
+                help_ticket_qs = []
+        except Exception:
+            pass
+
         logger.info(_safe_console_text(
             f"Dashboard filtering for {request.user.username}: today_only={today_only} | "
             f"checklists={len(checklist_qs)} delegations={len(delegation_qs)} help_tickets={len(help_ticket_qs)} | "
@@ -1911,6 +1965,14 @@ def dashboard_home(request):
         checklist_qs = []
         delegation_qs = []
         help_ticket_qs = []
+
+    # If the day itself is blocked for the user, wipe CL/DL for today entirely (final guard)
+    try:
+        if is_user_blocked(request.user, today_ist):
+            checklist_qs = []
+            delegation_qs = []
+    except Exception:
+        pass
 
     # FIX: avoid reassigning 'selected' variable twice; keep once
     tasks = checklist_qs if request.GET.get('task_type') not in ('delegation', 'help_ticket') else (

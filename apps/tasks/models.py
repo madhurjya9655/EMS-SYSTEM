@@ -73,6 +73,34 @@ def _send_task_completion(original_assignee: User, delegate: User, task_obj, con
         pass
 
 
+# ---- Leave window helper (instant-based) ------------------------------------
+
+def _is_on_leave_instant(user: User, dt) -> bool:
+    """
+    True if `dt` lies inside ANY leave window (Pending or Approved) for this user.
+    Uses IST timezone via leave.services.tasks_integration; falls back to simple range.
+    """
+    if not user or not getattr(user, "id", None) or not dt:
+        return False
+    try:
+        from apps.leave.services.tasks_integration import is_user_on_leave_at_instant
+        return bool(is_user_on_leave_at_instant(user, dt))
+    except Exception:
+        # Fallback: minimal in-model check (naive localtime inclusively)
+        try:
+            from apps.leave.models import LeaveRequest
+            qs = LeaveRequest.objects.filter(employee=user).only("start_at", "end_at", "status")
+            ndt = timezone.localtime(dt) if timezone.is_aware(dt) else timezone.make_aware(dt, timezone.get_current_timezone())
+            for lr in qs:
+                s = timezone.localtime(lr.start_at)
+                e = timezone.localtime(lr.end_at)
+                if s <= ndt <= e and str(lr.status) in {"PENDING", "APPROVED"}:
+                    return True
+        except Exception:
+            return False
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Checklist
 # ---------------------------------------------------------------------------
@@ -192,7 +220,16 @@ class Checklist(models.Model):
         return timesince(self.planned_date, end)
 
     def clean(self):
+        """
+        Hard block: from the moment a leave is APPLIED (Pending or Approved),
+        do not allow checklist assignments whose planned timestamp falls within
+        the assignee's leave window (full-day or half-day).
+        """
         super().clean()
+        if self.assign_to_id and self.planned_date:
+            if _is_on_leave_instant(self.assign_to, self.planned_date):
+                from django.core.exceptions import ValidationError
+                raise ValidationError("Assignee is on leave during the planned window.")
 
     def save(self, *args, **kwargs):
         # detect status transition
@@ -333,6 +370,11 @@ class Delegation(models.Model):
         self.mode = None
         self.frequency = None
         super().clean()
+        # Hard-block leave windows for the assignee at the planned instant
+        if self.assign_to_id and self.planned_date:
+            if _is_on_leave_instant(self.assign_to, self.planned_date):
+                from django.core.exceptions import ValidationError
+                raise ValidationError("Assignee is on leave during the planned window.")
 
     def save(self, *args, **kwargs):
         # Enforce non-recurring
@@ -482,6 +524,10 @@ class HelpTicket(models.Model):
         from django.core.exceptions import ValidationError
         if is_holiday_or_sunday(self.planned_date):
             raise ValidationError("This is a holiday date or Sunday, you cannot add a task on this day.")
+        # Hard-block if planned instant lies within a leave window for assignee
+        if self.assign_to_id and self.planned_date:
+            if _is_on_leave_instant(self.assign_to, self.planned_date):
+                raise ValidationError("Assignee is on leave during the planned window.")
         super().clean()
 
     def save(self, *args, **kwargs):

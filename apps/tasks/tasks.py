@@ -38,6 +38,10 @@ from .pending_digest import (
     send_admin_all_pending_digest,        # single consolidated digest to admin
 )
 
+# ✅ LEAVE-BLOCKING GUARD: single source of truth used before any day-of fan-out
+# If guard_assign(...) returns False, we MUST NOT "assign"/notify for that user at that time.
+from apps.tasks.services.blocking import guard_assign
+
 logger = logging.getLogger(__name__)
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -72,6 +76,18 @@ def _end_of_today_ist_in_project_tz() -> datetime:
     now_ist = _now_ist()
     end_ist = IST.localize(datetime.combine(now_ist.date(), dt_time(23, 59, 59, 999999)))
     return end_ist.astimezone(timezone.get_current_timezone())
+
+
+def _assignment_anchor_for_today_10am_ist() -> datetime:
+    """
+    The canonical 'assignment decision' instant for today: 10:00 IST.
+    We pass THIS to guard_assign(...) so that:
+      • Full-day leaves block the day
+      • Half-day AM/PM leaves respect the 10:00 anchor (AM blocks, PM does not)
+      • PENDING leaves apply only if requested before 09:30 IST of the day
+    """
+    today_ist = _now_ist().date()
+    return IST.localize(datetime.combine(today_ist, dt_time(10, 0)))
 
 
 def _is_after_10am_ist() -> bool:
@@ -404,12 +420,20 @@ def _fetch_checklists_due_today(start_dt, end_dt):
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30)
 def send_due_today_assignments(self) -> dict:
+    """
+    10:00 IST fan-out of "due-today" notifications.
+
+    🚫 LEAVE AWARE: before emailing each assignee, we call guard_assign(user, 10:00 IST today).
+    If it returns False, we **skip** notifying that user for the day because they are on
+    APPROVED leave or a qualifying PENDING leave (applied before 09:30 IST).
+    """
     if not _is_after_10am_ist():
         logger.info(_safe_console_text("[DUE@10] Skipped: before 10:00 IST"))
         return {"sent": 0, "checklists": 0, "delegations": 0, "skipped_before_10": True}
 
     now_ist = _now_ist()
     start_dt, end_dt = _ist_day_bounds(now_ist)
+    anchor_dt = _assignment_anchor_for_today_10am_ist()
 
     checklists = _fetch_checklists_due_today(start_dt, end_dt)
     delegations = _fetch_delegations_due_today(start_dt, end_dt)
@@ -419,6 +443,19 @@ def send_due_today_assignments(self) -> dict:
     de_sent = 0
 
     for obj in checklists:
+        # ⛔ Do not send if user is blocked for 10:00 IST today
+        try:
+            if not guard_assign(obj.assign_to, anchor_dt):
+                logger.info(
+                    _safe_console_text(
+                        f"[DUE@10] Checklist {obj.id} suppressed (assignee on leave @ 10:00 IST)"
+                    )
+                )
+                continue
+        except Exception:
+            # defensive: if anything goes wrong in guard, do not block
+            pass
+
         if _already_sent_today("Checklist", obj.id):
             continue
         _send_checklist_email(obj)
@@ -427,6 +464,18 @@ def send_due_today_assignments(self) -> dict:
         cl_sent += 1
 
     for obj in delegations:
+        # ⛔ Do not send if user is blocked for 10:00 IST today
+        try:
+            if not guard_assign(obj.assign_to, anchor_dt):
+                logger.info(
+                    _safe_console_text(
+                        f"[DUE@10] Delegation {obj.id} suppressed (assignee on leave @ 10:00 IST)"
+                    )
+                )
+                continue
+        except Exception:
+            pass
+
         if _already_sent_today("Delegation", obj.id):
             continue
         _send_delegation_email(obj)
@@ -454,10 +503,19 @@ def _send_delegation_reminder_email(obj: Delegation) -> None:
     """
     Reminder email rules:
       - Never email assigner if self-assigned.
+      - Respect leave blocking at the 10:00 IST anchor of TODAY.
     """
     if _is_self_assigned(obj):
         logger.info(_safe_console_text(f"[DL REM] Delegation {obj.id} skipped: assigner == assignee"))
         return
+
+    # ⛔ Skip reminders if the assignee is on leave today per 10:00 IST anchor
+    try:
+        if not guard_assign(obj.assign_to, _assignment_anchor_for_today_10am_ist()):
+            logger.info(_safe_console_text(f"[DL REM] Delegation {obj.id} suppressed (assignee on leave today)"))
+            return
+    except Exception:
+        pass
 
     try:
         complete_url = f"{SITE_URL}{reverse('tasks:complete_delegation', args=[obj.id])}"

@@ -14,9 +14,13 @@ What this module provides
     - Non-daily tasks in the window → reschedule to next working day @ 10:00 IST
     - Safe no-op if Checklist model isn't present
 
+• is_user_on_leave_at_instant(user, when_dt):
+    - True if ANY (PENDING or APPROVED) leave window covers this IST instant.
+    - This enforces “block from moment of application”.
+
 • is_user_on_leave_for_date(user, date):
-    - True if an APPROVED leave includes that IST date (or a PENDING leave
-      applied correctly before 09:30 IST for that same day)
+    - Date-level signal (coarse); true if any approved/pending leave intersects that date.
+      (Used by dashboards/visibility; recurrence rules remain unchanged.)
 
 • next_working_day(dt):
     - Return an aware datetime at midnight for the next working day after dt
@@ -245,56 +249,50 @@ def next_working_day(dt: datetime) -> datetime:
     return _aware(datetime.combine(d, time(0, 0)))
 
 
-# ---- Leave checks used by schedulers/assignment pipelines -------------------
+# ---- Leave checks ------------------------------------------------------------
 
 from apps.leave.models import LeaveRequest, LeaveStatus  # noqa: E402
 
 
-def _pending_applied_before_930_for_day(leave: LeaveRequest, target_day: date) -> bool:
+def is_user_on_leave_at_instant(user, when_dt: datetime) -> bool:
     """
-    Pending leaves block only if:
-      • they cover target_day (inclusive, IST), AND
-      • they were applied on/before that date BEFORE 09:30 IST.
+    Return True if `when_dt` (IST) lies inside ANY leave window for the user
+    with status PENDING or APPROVED.
+
+    This implements the “block from the moment of application” rule.
     """
-    if leave.status != LeaveStatus.PENDING:
+    try:
+        if not getattr(user, "id", None) or not when_dt:
+            return False
+        w = _aware(when_dt).astimezone(IST or timezone.get_current_timezone())
+        qs = LeaveRequest.objects.filter(employee=user).only("start_at", "end_at", "status")
+        for lr in qs:
+            try:
+                s = _aware(lr.start_at).astimezone(IST or timezone.get_current_timezone())
+                e = _aware(lr.end_at).astimezone(IST or timezone.get_current_timezone())
+                if s <= w <= e and lr.status in (LeaveStatus.PENDING, LeaveStatus.APPROVED):
+                    return True
+            except Exception:
+                continue
         return False
-
-    if target_day not in _datespan_inclusive_ist(leave.start_at, leave.end_at):
+    except Exception:
         return False
-
-    applied = _to_ist(getattr(leave, "applied_at", None))
-    if not applied:
-        return False
-
-    if applied.date() > target_day:
-        return False
-
-    anchor_930 = applied.replace(
-        year=target_day.year, month=target_day.month, day=target_day.day,
-        hour=9, minute=30, second=0, microsecond=0
-    )
-    return applied <= anchor_930
 
 
 def is_user_on_leave_for_date(user, target_day: date) -> bool:
     """
-    Returns True if the user is considered 'on leave' for target_day (IST):
-      • APPROVED leave covers target_day, OR
-      • PENDING leave covers target_day AND was applied before 09:30 IST that day.
+    Coarse day-level check (IST). True if any leave (Pending/Approved) overlaps this date.
+    Used by visibility filters. For precise gating, use is_user_on_leave_at_instant().
     """
-    if not getattr(user, "id", None):
+    try:
+        if not getattr(user, "id", None) or not target_day:
+            return False
+        # Check the full span of the IST date
+        day_start = _aware(datetime.combine(target_day, time.min))
+        day_end = _aware(datetime.combine(target_day, time.max))
+        return is_user_on_leave_at_instant(user, day_start) or is_user_on_leave_at_instant(user, day_end)
+    except Exception:
         return False
-
-    qs = LeaveRequest.objects.filter(employee=user)
-    for lr in qs:
-        span = _datespan_inclusive_ist(lr.start_at, lr.end_at)
-        if target_day not in span:
-            continue
-        if lr.status == LeaveStatus.APPROVED:
-            return True
-        if _pending_applied_before_930_for_day(lr, target_day):
-            return True
-    return False
 
 
 def should_skip_assignment(user, planned_dt) -> bool:
@@ -303,10 +301,9 @@ def should_skip_assignment(user, planned_dt) -> bool:
     Returns True iff the user should NOT receive assignment at planned_dt.
     """
     try:
-        d = _ist_date(planned_dt)
-        if not d:
+        if not planned_dt:
             return False
-        return is_user_on_leave_for_date(user, d)
+        return is_user_on_leave_at_instant(user, planned_dt)
     except Exception:
         return False
 
@@ -421,5 +418,6 @@ __all__ = [
     "apply_leave_to_tasks",
     "next_working_day",
     "is_user_on_leave_for_date",
+    "is_user_on_leave_at_instant",
     "should_skip_assignment",
 ]

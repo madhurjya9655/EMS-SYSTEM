@@ -506,7 +506,7 @@ def send_leave_decision_email(leave: LeaveRequest) -> None:
 
     ok = _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
     if not ok:
-        logger.error("Leave decision email NOT delivered for leave #%s (see earlier logs for details).", leave.id)
+        logger.error("Leave decision email NOT delivered for leave #%s", leave.id)
         return
 
     try:
@@ -571,7 +571,7 @@ def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
 
     ok = _send(subject, to_addr, cc=[], reply_to=reply_to, html=html, txt=txt)
     if not ok:
-        logger.error("Handover email NOT delivered for leave #%s (see earlier logs for details).", leave.id)
+        logger.error("Handover email NOT delivered for leave #%s", leave.id)
         return
 
     try:
@@ -711,7 +711,7 @@ def send_task_completion_email(original_assignee: User, delegate: User, task, co
         return
 
     task_type, task_url = _task_type_and_url(task)
-    task_name = getattr(task, "task_name", None) or getattr(task, "title", f"{task_type} #{getattr(task, "id", "")}")
+    task_name = getattr(task, "task_name", None) or getattr(task, "title", f"{task_type} #{getattr(task, 'id', '')}")
 
     completed_at = context.get("completed_at") or timezone.now()
     planned_date = context.get("planned_date")
@@ -765,10 +765,38 @@ def send_task_completion_email(original_assignee: User, delegate: User, task, co
         logger.exception("Failed to log EMAIL_SENT (task_completed) for leave #%s", getattr(leave, "id", None))
 
 
+# NEW: wrapper used by signals_tasks.py (so post-save completion hooks work)
+def send_handover_completion_email(handover: LeaveHandover) -> None:
+    """
+    Thin adapter so `signals_tasks.py` can notify the original assignee when a
+    handed-over task is marked as completed.
+
+    Uses the existing `send_task_completion_email(...)` under the hood.
+    """
+    try:
+        if not _email_enabled():
+            return
+        task = handover.get_task_object()
+        if not task:
+            logger.info("Completion email skipped: task not found for handover id=%s", getattr(handover, "id", None))
+            return
+
+        original = handover.original_assignee
+        delegate = handover.new_assignee
+        context = {
+            "completed_at": timezone.now(),
+            "planned_date": getattr(task, "planned_date", None),
+        }
+        send_task_completion_email(original, delegate, task, context)
+    except Exception:
+        logger.exception("Failed in send_handover_completion_email for handover id=%s", getattr(handover, "id", None))
+
+
 __all__ = [
     "send_leave_request_email",
     "send_leave_decision_email",
     "send_handover_email",
     "send_delegation_reminder_email",
     "send_task_completion_email",
+    "send_handover_completion_email",  # ← added export
 ]
