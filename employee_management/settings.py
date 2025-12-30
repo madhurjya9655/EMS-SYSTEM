@@ -543,7 +543,8 @@ REIMBURSEMENT_EMAIL_FROM = os.getenv(
     f"{REIMBURSEMENT_SENDER_NAME} <{REIMBURSEMENT_SENDER_EMAIL}>",
 )
 
-EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 30)
+# ⬇️ Make SMTP non-blocking for cron by keeping a small timeout
+EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
 EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
 SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", True)
 SEND_RECUR_EMAILS_ONLY_AT_10AM = env_bool("SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
@@ -691,6 +692,9 @@ validate_required_dirs()
 # -----------------------------------------------------------------------------
 # FEATURE FLAGS
 # -----------------------------------------------------------------------------
+# Top-level boolean used by cron views (kept separate from the FEATURES dict)
+FEATURE_EMAIL_NOTIFICATIONS = env_bool("FEATURE_EMAIL_NOTIFICATIONS", True)
+
 FEATURES = {
     "BULK_UPLOAD_ENABLED": env_bool("FEATURE_BULK_UPLOAD", True),
     "EMAIL_NOTIFICATIONS": env_bool("FEATURE_EMAIL_NOTIFICATIONS", True),
