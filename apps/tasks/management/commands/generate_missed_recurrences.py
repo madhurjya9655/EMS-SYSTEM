@@ -9,17 +9,16 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
+from django.db.models import Q
 
 from apps.tasks.models import Checklist
 from apps.tasks.recurrence import (
     get_next_planned_date,   # final rule: 19:00 IST on working days
     RECURRING_MODES,
 )
-from apps.tasks.utils import (
-    send_checklist_assignment_to_user,
-)
+from apps.tasks.utils import send_checklist_assignment_to_user
 
-# >>> NEW: imports for blocking checks
+# Leave/holiday checks
 from apps.settings.models import Holiday
 from apps.leave.models import LeaveRequest
 
@@ -28,9 +27,7 @@ logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
 SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
-# Email policy knobs
 SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
-# Keep the 10:00 gating but make it robust: send any time AFTER 10:00 IST on the planned day
 SEND_RECUR_EMAILS_ONLY_AT_10AM = getattr(settings, "SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
 
 
@@ -44,18 +41,12 @@ def _safe_console_text(s: object) -> str:
             return ""
 
 
-# --- UPDATED: robust 10 AM rule (no tiny window) --------------------
 def _after_10am_today(now_ist: datetime | None = None) -> bool:
-    """
-    True if now (IST) is on 'today IST' and time is >= 10:00 IST.
-    Preserves the 'don’t send before 10' rule without a fragile 5-minute window.
-    """
     now_ist = (now_ist or timezone.now()).astimezone(IST)
     anchor = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
     return now_ist >= anchor
 
 
-# >>> NEW: helpers
 def _is_holiday(d: date) -> bool:
     return d.weekday() == 6 or Holiday.objects.filter(date=d).exists()
 
@@ -78,21 +69,21 @@ def _push_to_next_allowed_date(user_id: int, d: date) -> date:
     return d
 
 
-def _assignee_email_or_none(obj: Checklist) -> str | None:
-    try:
-        email = (obj.assign_to.email or "").strip()
-        return email or None
-    except Exception:
-        return None
+def _series_q(assign_to_id: int, task_name: str, mode: str, frequency: int | None, group_name: str | None):
+    """Treat NULL frequency as 1 for legacy tolerance."""
+    freq = max(int(frequency or 1), 1)
+    q = Q(assign_to_id=assign_to_id, task_name=task_name, mode=mode)
+    if group_name:
+        q &= Q(group_name=group_name)
+    q &= Q(frequency__in=[freq, None])
+    return q, freq
 
 
 class Command(BaseCommand):
     help = (
-        "Ensure exactly one FUTURE 'Pending' checklist per recurring series exists.\n"
-        "Next recurrences are scheduled at 19:00 IST on working days (Sun/holidays skipped), "
-        "per the final product rule. Dashboard handles 10:00 IST visibility gating.\n"
-        "Also sends the assignee-only reminder AFTER 10:00 IST on the planned day.\n"
-        "NEW: Skip/shift occurrences that fall inside assignee leave windows (Pending/Approved).\n"
+        "Backfill missed recurrences WITHOUT violating the rule: next spawns ONLY after completion.\n"
+        "For each series, if there is NO Pending item and there IS a Completed item, create the next at 19:00 IST\n"
+        "(Sun/holiday shifted; also shifted off assignee leave). Emails go only after 10:00 AM IST on the planned day."
     )
 
     def add_arguments(self, parser):
@@ -109,12 +100,11 @@ class Command(BaseCommand):
         now_ist = now.astimezone(IST)
         today_ist = now_ist.date()
 
-        filters = {"mode__in": RECURRING_MODES, "frequency__gte": 1}
+        filters = {"mode__in": RECURRING_MODES}
         if user_id:
             filters["assign_to_id"] = user_id
 
-        # One row per (assignee, task_name, mode, frequency, group_name)
-        groups = (
+        seeds = (
             Checklist.objects.filter(**filters)
             .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
             .distinct()
@@ -126,139 +116,116 @@ class Command(BaseCommand):
         if dry_run:
             self.stdout.write(self.style.WARNING("DRY RUN — no tasks will be created."))
 
-        for g in groups:
+        for s in seeds:
             processed += 1
-            # Find the latest occurrence as the stepping base
-            instance = (
-                Checklist.objects.filter(
-                    assign_to_id=g["assign_to_id"],
-                    task_name=g["task_name"],
-                    mode=g["mode"],
-                    frequency=g["frequency"],
-                    group_name=g["group_name"],
-                )
+            q_series, freq_norm = _series_q(
+                assign_to_id=s["assign_to_id"],
+                task_name=s["task_name"],
+                mode=s["mode"],
+                frequency=s["frequency"],
+                group_name=s["group_name"],
+            )
+
+            # Golden rules:
+            # 1) If ANY Pending exists → do not create future
+            if Checklist.objects.filter(status="Pending").filter(q_series).exists():
+                continue
+
+            # 2) Step only from the latest COMPLETED
+            base = (
+                Checklist.objects.filter(status="Completed")
+                .filter(q_series)
                 .order_by("-planned_date", "-id")
                 .first()
             )
-            if not instance or not instance.planned_date:
+            if not base or not base.planned_date:
                 continue
 
-            # If there is already a future pending item in this series, skip.
-            if Checklist.objects.filter(
-                assign_to_id=instance.assign_to_id,
-                task_name=instance.task_name,
-                mode=instance.mode,
-                frequency=instance.frequency,
-                group_name=instance.group_name,
-                planned_date__gt=now,
-                status="Pending",
-            ).exists():
-                continue
-
-            # Compute next planned occurrence (ALWAYS 19:00 IST on a working day)
-            next_planned = get_next_planned_date(instance.planned_date, instance.mode, instance.frequency)
+            next_planned = get_next_planned_date(base.planned_date, s["mode"], freq_norm)
             if not next_planned:
                 continue
 
-            # Catch up until next_planned is in the future (robust)
-            safety = 0
-            while next_planned and next_planned <= now and safety < 730:  # ≈ 2 years safety
-                next_planned = get_next_planned_date(next_planned, instance.mode, instance.frequency)
-                safety += 1
-            if not next_planned:
-                continue
+            # shift away from holiday/leave
+            next_date_ist = next_planned.astimezone(IST).date()
+            safe_date = _push_to_next_allowed_date(s["assign_to_id"], next_date_ist)
+            if safe_date != next_date_ist:
+                next_planned = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(
+                    timezone.get_current_timezone()
+                )
 
-            # >>> NEW: push away from leave/holiday if needed
-            next_ist = next_planned.astimezone(IST)
-            safe_date = _push_to_next_allowed_date(instance.assign_to_id, next_ist.date())
-            if safe_date != next_ist.date():
-                next_planned = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(timezone.get_current_timezone())
-
-            # Dupe guard (±1 minute window)
-            dupe = Checklist.objects.filter(
-                assign_to_id=instance.assign_to_id,
-                task_name=instance.task_name,
-                mode=instance.mode,
-                frequency=instance.frequency,
-                group_name=instance.group_name,
-                planned_date__gte=next_planned - timedelta(minutes=1),
-                planned_date__lt=next_planned + timedelta(minutes=1),
-                status="Pending",
-            ).exists()
+            # Dupe guard within ±1 minute inside tolerant series
+            dupe = (
+                Checklist.objects.filter(status="Pending")
+                .filter(q_series)
+                .filter(
+                    planned_date__gte=next_planned - timedelta(minutes=1),
+                    planned_date__lt=next_planned + timedelta(minutes=1),
+                )
+                .exists()
+            )
             if dupe:
                 continue
 
             if dry_run:
                 created += 1
                 self.stdout.write(
-                    f"[DRY RUN] Would create: {instance.task_name} → {next_planned.astimezone(IST):%Y-%m-%d %H:%M IST}"
+                    f"[DRY RUN] Would create: {s['task_name']} → {next_planned.astimezone(IST):%Y-%m-%d %H:%M IST}"
                 )
                 continue
 
             try:
                 with transaction.atomic():
-                    kwargs = dict(
-                        assign_by=instance.assign_by,
-                        task_name=instance.task_name,
-                        assign_to=instance.assign_to,
-                        planned_date=next_planned,  # 19:00 IST (final rule) and shifted off leave/holiday
-                        priority=instance.priority,
-                        attachment_mandatory=instance.attachment_mandatory,
-                        mode=instance.mode,
-                        frequency=instance.frequency,
-                        status="Pending",
+                    obj = Checklist.objects.create(
+                        assign_by=base.assign_by,
+                        task_name=base.task_name,
+                        message=base.message,
+                        assign_to=base.assign_to,
+                        planned_date=next_planned,
+                        priority=base.priority,
+                        attachment_mandatory=base.attachment_mandatory,
+                        mode=base.mode,
+                        frequency=freq_norm,  # normalize going forward
+                        time_per_task_minutes=base.time_per_task_minutes,
+                        remind_before_days=base.remind_before_days,
+                        assign_pc=base.assign_pc,
+                        notify_to=base.notify_to,
+                        auditor=getattr(base, "auditor", None),
+                        set_reminder=base.set_reminder,
+                        reminder_mode=base.reminder_mode,
+                        reminder_frequency=base.reminder_frequency,
+                        reminder_starting_time=base.reminder_starting_time,
+                        checklist_auto_close=base.checklist_auto_close,
+                        checklist_auto_close_days=base.checklist_auto_close_days,
+                        group_name=getattr(base, "group_name", None),
                         actual_duration_minutes=0,
+                        status="Pending",
                     )
-                    # Optional fields mirrored when present
-                    for opt in (
-                        "message",
-                        "time_per_task_minutes",
-                        "remind_before_days",
-                        "assign_pc",
-                        "notify_to",
-                        "auditor",
-                        "set_reminder",
-                        "reminder_mode",
-                        "reminder_frequency",
-                        "reminder_starting_time",
-                        "checklist_auto_close",
-                        "checklist_auto_close_days",
-                        "group_name",
-                    ):
-                        if hasattr(instance, opt):
-                            kwargs[opt] = getattr(instance, opt)
-                    new_obj = Checklist.objects.create(**kwargs)
 
                 created += 1
                 self.stdout.write(self.style.SUCCESS(
-                    f"✅ Created: CL-{new_obj.id} '{new_obj.task_name}' "
-                    f"@ {new_obj.planned_date.astimezone(IST):%Y-%m-%d %H:%M IST}"
+                    f"✅ Created: CL-{obj.id} '{obj.task_name}' @ {obj.planned_date.astimezone(IST):%Y-%m-%d %H:%M IST}"
                 ))
 
-                # Email policy (assignee-only), matching other auto-recur flows
+                # Email policy — assignee only, only after 10:00 IST if planned today
                 if send_emails and SEND_EMAILS_FOR_AUTO_RECUR:
-                    assignee_email = _assignee_email_or_none(new_obj)
-                    if assignee_email:
-                        # >>> FIX: only email AFTER 10:00 IST *and* when planned date is *today* IST
-                        planned_ist = new_obj.planned_date.astimezone(IST) if new_obj.planned_date else None
-                        if planned_ist and planned_ist.date() == today_ist:
-                            if (not SEND_RECUR_EMAILS_ONLY_AT_10AM) or _after_10am_today(now_ist):
-                                try:
-                                    complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[new_obj.id])}"
-                                    send_checklist_assignment_to_user(
-                                        task=new_obj,
-                                        complete_url=complete_url,
-                                        subject_prefix="Recurring Checklist Generated",
-                                    )
-                                    logger.info(_safe_console_text(
-                                        f"Sent recur email for CL-{new_obj.id} to user_id={new_obj.assign_to_id}"
-                                    ))
-                                except Exception as e:
-                                    logger.exception("Email failure for recurring checklist %s: %s", new_obj.id, e)
+                    planned_ist = obj.planned_date.astimezone(IST)
+                    if planned_ist.date() == today_ist and (not SEND_RECUR_EMAILS_ONLY_AT_10AM or _after_10am_today()):
+                        try:
+                            complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
+                            send_checklist_assignment_to_user(
+                                task=obj,
+                                complete_url=complete_url,
+                                subject_prefix=f"Today’s Checklist – {obj.task_name}",
+                            )
+                            logger.info(_safe_console_text(
+                                f"Sent recur email for CL-{obj.id} to user_id={obj.assign_to_id}"
+                            ))
+                        except Exception as e:
+                            logger.exception("Email failure for recurring checklist %s: %s", obj.id, e)
 
             except Exception as e:
-                logger.exception("Failed to create recurrence for %s: %s", instance.task_name, e)
-                self.stdout.write(self.style.ERROR(f"❌ Failed: {instance.task_name} - {e}"))
+                logger.exception("Failed to create recurrence for %s: %s", s, e)
+                self.stdout.write(self.style.ERROR(f"❌ Failed: {s['task_name']} - {e}"))
 
         # Summary
         if dry_run:

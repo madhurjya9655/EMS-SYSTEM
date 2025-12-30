@@ -3,16 +3,18 @@ from django.conf import settings
 from django.http import JsonResponse, HttpResponseForbidden
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from django.utils import timezone
 
 from apps.tasks.services.weekly_performance import (
     send_weekly_congratulations_mails,
     upsert_weekly_scores_for_last_week,  # pure ORM scorer
 )
 
-# ⬇️ Celery tasks we want to run inline for cron hooks
+# Celery tasks & orchestrators
 from apps.tasks.tasks import (
     generate_recurring_checklists,    # ensure “today” rows exist
     send_due_today_assignments,       # 10:00 IST fan-out (leave aware)
+    pre10am_unblock_and_generate,     # NEW: 09:55 IST safeguard
 )
 
 import threading
@@ -131,6 +133,42 @@ def due_today_assignments_hook(request, token: str = ""):
         )
     except Exception as e:
         # Always JSON on error
+        return JsonResponse(
+            {"ok": False, "error_type": type(e).__name__, "error": str(e)},
+            status=500,
+        )
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def pre10am_unblock_and_generate_hook(request, token: str = ""):
+    """
+    09:55 IST safeguard:
+      1) Complete overdue daily 'Pending' rows (yesterday or earlier)
+      2) Generate 'today' items so dashboard & 10AM mails are correct
+    Optional: ?user_id=123 to target a single user.
+    """
+    try:
+        if not _cron_authorized(request, token):
+            return HttpResponseForbidden("Forbidden")
+
+        uid = request.GET.get("user_id")
+        try:
+            uid = int(uid) if uid else None
+        except Exception:
+            uid = None
+
+        result = pre10am_unblock_and_generate(user_id=uid)
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "method": request.method,
+                "at": timezone.now().isoformat(),
+                **result,
+            }
+        )
+    except Exception as e:
         return JsonResponse(
             {"ok": False, "error_type": type(e).__name__, "error": str(e)},
             status=500,

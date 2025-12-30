@@ -137,18 +137,18 @@ def _series_q_for_frequency(assign_to_id: int, task_name: str, mode: str, freq_n
     This is the ONLY behavioral change, and it does NOT alter recurrence math/timings;
     it just makes the queries tolerant to legacy rows with frequency=NULL.
     """
-    freq_set = [freq_norm, None]  # <<< FIX: tolerate both 1 and NULL
+    freq_set = [freq_norm, None]  # <<< tolerate both 1 and NULL
     q = Q(assign_to_id=assign_to_id, task_name=task_name, mode=mode)
     if group_name:
         q &= Q(group_name=group_name)
-    q &= Q(frequency__in=freq_set)  # <<< FIX: match 1 or NULL
+    q &= Q(frequency__in=freq_set)
     return q
 
 
 def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False) -> int:
     now = timezone.now()
 
-    # <<< FIX: build tolerant Q that considers freq=1 and freq=NULL the same series
+    # normalize freq (treat NULL as 1)
     freq_norm = max(int(series.get("frequency") or 1), 1)
     q_series = _series_q_for_frequency(
         assign_to_id=series["assign_to_id"],
@@ -158,7 +158,7 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
         group_name=series.get("group_name"),
     )
 
-    # If ANY Pending exists in this series → do not create a new future one (golden rule unchanged)
+    # If ANY Pending exists in this series → do not create a new future one
     if Checklist.objects.filter(status="Pending").filter(q_series).exists():
         return 0
 
@@ -215,7 +215,7 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
             priority=completed.priority,
             attachment_mandatory=completed.attachment_mandatory,
             mode=completed.mode,
-            frequency=freq_norm,  # <<< FIX: normalize to non-null going forward
+            frequency=freq_norm,  # normalize going forward
             time_per_task_minutes=completed.time_per_task_minutes,
             remind_before_days=completed.remind_before_days,
             assign_pc=completed.assign_pc,
@@ -276,7 +276,7 @@ def generate_recurring_checklists(self, user_id: int | None = None, dry_run: boo
         # Normalize freq in-memory; DB lookups will tolerate NULL via frequency__in
         freq_norm = max(int(s.get("frequency") or 1), 1)
         s["mode"] = m
-        s["frequency"] = freq_norm  # <<< FIX: keep normalized for _ensure_...
+        s["frequency"] = freq_norm
 
         created = _ensure_future_occurrence_for_series(s, dry_run=dry_run)
         created_total += created
@@ -857,3 +857,48 @@ def send_daily_pending_task_summary(self, force: bool = False) -> dict:
     logger.info(_safe_console_text(f"[PENDING SUMMARY] Sent for {day_iso} to {len(recipients)} recipient(s); total_pending={len(rows)}"))
 
     return {"ok": True, "skipped": False, "day": day_iso, "recipients": len(recipients), "total_pending": len(rows)}
+
+
+# =========================
+# AUTO-UNBLOCK + PRE-10AM GEN (NEW)
+# =========================
+def auto_unblock_overdue_dailies(*, user_id: int | None = None, dry_run: bool = False) -> dict:
+    """
+    System safeguard:
+      - Finds DAILY checklists with planned_date < today AND status='Pending'
+      - Marks them COMPLETED (admin/system action) to unblock the next recurrence
+
+    Preserves rule: "next occurrence spawns only on completion".
+    """
+    today = timezone.localdate()
+
+    qs = Checklist.objects.filter(
+        mode="Daily",
+        planned_date__date__lt=today,
+        status="Pending",
+    )
+    if user_id:
+        qs = qs.filter(assign_to_id=user_id)
+
+    count = qs.count()
+    if dry_run:
+        logger.info(_safe_console_text(f"[UNBLOCK:DRY] Would complete {count} overdue daily rows (user_id={user_id})"))
+        return {"affected": count, "user_id": user_id, "dry_run": True}
+
+    with transaction.atomic():
+        updated = qs.update(status="Completed")
+    logger.info(_safe_console_text(f"[UNBLOCK] Completed {updated} overdue daily rows (user_id={user_id})"))
+    return {"affected": updated, "user_id": user_id, "dry_run": False}
+
+
+def pre10am_unblock_and_generate(*, user_id: int | None = None) -> dict:
+    """
+    Runs just before 10:00 AM IST:
+      1) auto_unblock_overdue_dailies (real)
+      2) generate_recurring_checklists (real)
+    """
+    res_unblock = auto_unblock_overdue_dailies(user_id=user_id, dry_run=False)
+    res_gen = generate_recurring_checklists.run(dry_run=False, user_id=user_id)
+    out = {"ok": True, "unblock": res_unblock, "generate": res_gen}
+    logger.info(_safe_console_text(f"[PRE10] {out}"))
+    return out

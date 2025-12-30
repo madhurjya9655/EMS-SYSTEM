@@ -2,7 +2,7 @@
 from django.urls import path
 from . import views
 from .views_reports import recurring_report
-from .views_cron import weekly_congrats_hook, due_today_assignments_hook
+from .views_cron import weekly_congrats_hook, due_today_assignments_hook, pre10am_unblock_and_generate_hook
 
 app_name = "tasks"
 
@@ -63,10 +63,15 @@ urlpatterns = [
     path("reports/recurring/",              recurring_report,            name="recurring_report"),
 
     # -----------------
-    # HTTP cron hooks (under /tasks/… for manual tests; prod cron uses the root path)
+    # HTTP cron hooks (internal)
     # -----------------
     path("internal/cron/weekly-congrats/<str:token>/", weekly_congrats_hook,      name="cron_weekly_congrats_with_token"),
     path("internal/cron/weekly-congrats/",             weekly_congrats_hook,      name="cron_weekly_congrats"),
+
     path("internal/cron/due-today/<str:token>/",       due_today_assignments_hook, name="cron_due_today_with_token"),
     path("internal/cron/due-today/",                   due_today_assignments_hook, name="cron_due_today"),
+
+    # NEW: 09:55 IST unblock + generate
+    path("internal/cron/pre10am-unblock/<str:token>/", pre10am_unblock_and_generate_hook, name="cron_pre10_with_token"),
+    path("internal/cron/pre10am-unblock/",             pre10am_unblock_and_generate_hook, name="cron_pre10"),
 ]
