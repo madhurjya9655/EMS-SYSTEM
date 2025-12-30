@@ -7,13 +7,15 @@
     <style>
       body { font-family: Arial, Helvetica, sans-serif; color:#111; line-height:1.5; }
       .btn { display:inline-block; margin-top:14px; padding:10px 14px; border:1px solid #2563eb; border-radius:6px; text-decoration:none; }
+      table { border-collapse:collapse; max-width:640px; }
+      td { padding:6px; vertical-align:top; }
     </style>
   </head>
   <body>
     <h2 style="margin:0 0 12px 0;">{{ subject_prefix|default:"New Checklist Assigned" }}</h2>
     <p style="margin:0 0 16px 0;">You have a new checklist task.</p>
 
-    <table cellpadding="6" cellspacing="0" border="0" style="border-collapse:collapse; max-width:640px;">
+    <table cellpadding="0" cellspacing="0" border="0">
       <tr>
         <td style="font-weight:bold; white-space:nowrap;">Task</td>
         <td>{{ task.task_name|default:"Task" }}</td>
@@ -48,14 +50,17 @@
       {% endif %}
     </table>
 
-    {% if extra_instructions or task.extra_instructions or task.message %}
-      <div style="margin-top:16px;">
-        <div style="font-weight:bold; margin-bottom:6px;">Extra Instructions</div>
-        <div style="border:1px solid #e2e6ea; border-radius:6px; padding:12px 14px; background:#fff; white-space:pre-wrap;">
-          {{ extra_instructions|default:task.extra_instructions|default:task.message|linebreaksbr }}
+    {# Defensive: only use extra_instructions if provided in context; otherwise fallback to task.message #}
+    {% with ei=extra_instructions|default_if_none:"" %}
+      {% if ei or task.message %}
+        <div style="margin-top:16px;">
+          <div style="font-weight:bold; margin-bottom:6px;">Extra Instructions</div>
+          <div style="border:1px solid #e2e6ea; border-radius:6px; padding:12px 14px; background:#fff; white-space:pre-wrap;">
+            {{ ei|default:task.message|linebreaksbr }}
+          </div>
         </div>
-      </div>
-    {% endif %}
+      {% endif %}
+    {% endwith %}
 
     {% if task.is_recurring %}
       <p style="margin-top:16px; color:#0a58ca;">

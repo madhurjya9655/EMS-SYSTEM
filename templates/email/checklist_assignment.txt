@@ -6,11 +6,18 @@ Assigned To: {{ task.assign_to.get_full_name|default:task.assign_to.username|def
 Planned Date: {% if task.planned_date %}{{ task.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}
 Priority: {{ task.get_priority_display|default:task.priority|default:"Low" }}{% if task.time_per_task_minutes %}
 Estimated Time: {{ task.time_per_task_minutes }} min{% endif %}{% if task.group_name %}
-Group: {{ task.group_name }}{% endif %}{% if extra_instructions or task.extra_instructions or task.message %}
+Group: {{ task.group_name }}{% endif %}
 
+{% with ei=extra_instructions|default_if_none:"" %}
+{% if ei or task.message %}
 Extra Instructions:
-{{ extra_instructions|default:task.extra_instructions|default:task.message }}{% endif %}{% if task.is_recurring %}
+{{ ei|default:task.message }}
+{% endif %}
+{% endwith %}
 
-Recurring: {{ task.mode }}{% if task.frequency %} (Every {{ task.frequency }} {{ task.mode|lower }}{{ task.frequency|pluralize }}){% endif %}{% endif %}{% if complete_url %}
-
-Complete: {{ complete_url }}{% endif %}
+{% if task.is_recurring %}
+Recurring: {{ task.mode }}{% if task.frequency %} (Every {{ task.frequency }} {{ task.mode|lower }}{{ task.frequency|pluralize }}){% endif %}
+{% endif %}
+{% if complete_url %}
+Complete: {{ complete_url }}
+{% endif %}
