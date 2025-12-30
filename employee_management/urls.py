@@ -14,7 +14,10 @@ from django.views.generic import RedirectView
 from apps.users.views import CustomLoginView
 
 # ✅ Cron endpoints
-from apps.tasks import cron_views
+# Keep old module for 7PM/admin digests…
+from apps.tasks import cron_views as legacy_cron_views
+# …but switch 10:00 AM fan-out to the hardened hook
+from apps.tasks import views_cron as new_cron_views
 
 # Admin titles
 admin.site.site_header = "EMS Admin"
@@ -75,9 +78,12 @@ urlpatterns = [
     re_path(r"^favicon\.ico$", RedirectView.as_view(url=f"{settings.STATIC_URL}favicon.ico", permanent=False)),
 
     # ✅ Internal cron endpoints (protected by CRON_SECRET)
-    path("internal/cron/due-today/", cron_views.due_today, name="cron-due-today"),
-    path("internal/cron/pending-7pm/", cron_views.pending_summary_7pm, name="cron-pending-7pm"),
-    path("internal/cron/employee-digest/", cron_views.employee_digest, name="cron-employee-digest"),
+    # 10:00 AM fan-out — now calls the hardened view that pre-generates “today” and never 500s
+    path("internal/cron/due-today/", new_cron_views.due_today_assignments_hook, name="cron-due-today"),
+
+    # Keep your original cron views for the rest (unchanged behavior)
+    path("internal/cron/pending-7pm/", legacy_cron_views.pending_summary_7pm, name="cron-pending-7pm"),
+    path("internal/cron/employee-digest/", legacy_cron_views.employee_digest, name="cron-employee-digest"),
 ]
 
 # Serve media in DEBUG (and optionally when SERVE_MEDIA=1)

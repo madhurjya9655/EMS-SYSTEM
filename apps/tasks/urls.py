@@ -25,11 +25,8 @@ urlpatterns = [
     path("delegation/add/",               views.add_delegation,        name="add_delegation"),
     path("delegation/edit/<int:pk>/",     views.edit_delegation,       name="edit_delegation"),
     path("delegation/delete/<int:pk>/",   views.delete_delegation,     name="delete_delegation"),
-
-    # NOTE: original view `reassign_delegation` doesn't exist; route to `edit_delegation`
-    # but keep the URL name so existing reverse() calls/templates keep working.
+    # alias keeping URL name stable
     path("delegation/reassign/<int:pk>/", views.edit_delegation,       name="reassign_delegation"),
-
     path("delegation/complete/<int:pk>/", views.complete_delegation,   name="complete_delegation"),
     path("delegation/<int:pk>/",          views.delegation_details,    name="delegation_detail"),
 
@@ -58,7 +55,6 @@ urlpatterns = [
     path("help_ticket/close/<int:pk>/",     views.close_help_ticket,     name="close_help_ticket"),
     path("help_ticket/note/<int:pk>/",      views.note_help_ticket,      name="note_help_ticket"),
     path("help_ticket/details/<int:pk>/",   views.help_ticket_details,   name="help_ticket_details"),
-    # alias view (simply calls help_ticket_details)
     path("help_ticket/detail/<int:pk>/",    views.help_ticket_detail,    name="help_ticket_detail"),
 
     # -----------------
@@ -67,29 +63,10 @@ urlpatterns = [
     path("reports/recurring/",              recurring_report,            name="recurring_report"),
 
     # -----------------
-    # HTTP cron hooks
+    # HTTP cron hooks (under /tasks/… for manual tests; prod cron uses the root path)
     # -----------------
-    # Weekly congrats
-    path(
-        "internal/cron/weekly-congrats/<str:token>/",
-        weekly_congrats_hook,
-        name="cron_weekly_congrats_with_token",
-    ),
-    path(
-        "internal/cron/weekly-congrats/",
-        weekly_congrats_hook,
-        name="cron_weekly_congrats",
-    ),
-
-    # Due-today 10AM fan-out (checklists + delegations + recurring due emails)
-    path(
-        "internal/cron/due-today/<str:token>/",
-        due_today_assignments_hook,
-        name="cron_due_today_with_token",
-    ),
-    path(
-        "internal/cron/due-today/",
-        due_today_assignments_hook,
-        name="cron_due_today",
-    ),
+    path("internal/cron/weekly-congrats/<str:token>/", weekly_congrats_hook,      name="cron_weekly_congrats_with_token"),
+    path("internal/cron/weekly-congrats/",             weekly_congrats_hook,      name="cron_weekly_congrats"),
+    path("internal/cron/due-today/<str:token>/",       due_today_assignments_hook, name="cron_due_today_with_token"),
+    path("internal/cron/due-today/",                   due_today_assignments_hook, name="cron_due_today"),
 ]
