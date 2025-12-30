@@ -129,14 +129,43 @@ def _table_exists_for_model(model) -> bool:
 # -------------------------------
 # Recurrence generator (optional)
 # -------------------------------
+def _series_q_for_frequency(assign_to_id: int, task_name: str, mode: str, freq_norm: int, group_name: str | None):
+    """
+    Build a Q() that treats frequency=None as 1, so existing rows with NULL frequency
+    are not orphaned from the series after normalization.
+
+    This is the ONLY behavioral change, and it does NOT alter recurrence math/timings;
+    it just makes the queries tolerant to legacy rows with frequency=NULL.
+    """
+    freq_set = [freq_norm, None]  # <<< FIX: tolerate both 1 and NULL
+    q = Q(assign_to_id=assign_to_id, task_name=task_name, mode=mode)
+    if group_name:
+        q &= Q(group_name=group_name)
+    q &= Q(frequency__in=freq_set)  # <<< FIX: match 1 or NULL
+    return q
+
+
 def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False) -> int:
     now = timezone.now()
 
-    if Checklist.objects.filter(status="Pending", **series).exists():
+    # <<< FIX: build tolerant Q that considers freq=1 and freq=NULL the same series
+    freq_norm = max(int(series.get("frequency") or 1), 1)
+    q_series = _series_q_for_frequency(
+        assign_to_id=series["assign_to_id"],
+        task_name=series["task_name"],
+        mode=series["mode"],
+        freq_norm=freq_norm,
+        group_name=series.get("group_name"),
+    )
+
+    # If ANY Pending exists in this series → do not create a new future one (golden rule unchanged)
+    if Checklist.objects.filter(status="Pending").filter(q_series).exists():
         return 0
 
+    # Use latest COMPLETED in the tolerant series as the stepping base
     completed = (
-        Checklist.objects.filter(status="Completed", **series)
+        Checklist.objects.filter(status="Completed")
+        .filter(q_series)
         .order_by("-planned_date", "-id")
         .first()
     )
@@ -144,24 +173,26 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
         return 0
 
     next_dt = get_next_planned_date(
-        completed.planned_date, series["mode"], series["frequency"] or 1
+        completed.planned_date, series["mode"], freq_norm
     )
 
     safety = 0
     while next_dt and next_dt <= now and safety < 730:
-        next_dt = get_next_planned_date(
-            next_dt, series["mode"], series["frequency"] or 1
-        )
+        next_dt = get_next_planned_date(next_dt, series["mode"], freq_norm)
         safety += 1
     if not next_dt:
         return 0
 
-    dupe = Checklist.objects.filter(
-        planned_date__gte=next_dt - timedelta(minutes=1),
-        planned_date__lt=next_dt + timedelta(minutes=1),
-        status="Pending",
-        **series,
-    ).exists()
+    # Dupe guard within ±1 minute (still in tolerant series)
+    dupe = (
+        Checklist.objects.filter(status="Pending")
+        .filter(q_series)
+        .filter(
+            planned_date__gte=next_dt - timedelta(minutes=1),
+            planned_date__lt=next_dt + timedelta(minutes=1),
+        )
+        .exists()
+    )
     if dupe:
         return 0
 
@@ -184,7 +215,7 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
             priority=completed.priority,
             attachment_mandatory=completed.attachment_mandatory,
             mode=completed.mode,
-            frequency=completed.frequency,
+            frequency=freq_norm,  # <<< FIX: normalize to non-null going forward
             time_per_task_minutes=completed.time_per_task_minutes,
             remind_before_days=completed.remind_before_days,
             assign_pc=completed.assign_pc,
@@ -223,6 +254,7 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=10)
 def generate_recurring_checklists(self, user_id: int | None = None, dry_run: bool = False) -> dict:
+    # NOTE: keep seeds broad; we normalize inside the loop and query with tolerant series Q
     filters = {"mode__in": RECURRING_MODES}
     if user_id:
         filters["assign_to_id"] = user_id
@@ -240,8 +272,11 @@ def generate_recurring_checklists(self, user_id: int | None = None, dry_run: boo
         m = normalize_mode(s["mode"])
         if m not in RECURRING_MODES:
             continue
+
+        # Normalize freq in-memory; DB lookups will tolerate NULL via frequency__in
+        freq_norm = max(int(s.get("frequency") or 1), 1)
         s["mode"] = m
-        s["frequency"] = max(int(s.get("frequency") or 1), 1)
+        s["frequency"] = freq_norm  # <<< FIX: keep normalized for _ensure_...
 
         created = _ensure_future_occurrence_for_series(s, dry_run=dry_run)
         created_total += created
