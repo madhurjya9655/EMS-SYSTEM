@@ -7,26 +7,34 @@
 <style>
   :root{ --primary:#3b82f6; }
   .logout-wrap{
-    min-height: calc(100vh - var(--header-height, 0px));
+    min-height: calc(100vh - var(--header-h, 0px));
     display:flex;align-items:center;justify-content:center;background:#f6f8fb;padding:2rem 1rem;
   }
   .logout-card{
     width:100%;max-width:560px;background:#fff;border:1px solid #e5e7eb;border-radius:16px;
-    box-shadow:0 12px 40px rgba(2,6,23,.08);overflow:hidden;text-align:center;
+    box-shadow:0 12px 40px rgba(2,6,23,.08);overflow:hidden;text-align:center;position:relative;
   }
   .logout-head{
     background: linear-gradient(135deg, var(--primary) 0%, #60a5fa 100%);
-    color:#fff;padding:1.25rem 1rem
+    color:#fff;padding:1.25rem 1rem;position:relative;overflow:hidden;
   }
   .logout-body{padding:2rem 2rem 1.5rem}
-  .logout-logo{height:60px;margin-bottom:.75rem;border-radius:10px}
+  .logout-logo{height:60px;margin-bottom:.75rem;border-radius:10px;box-shadow:0 6px 16px rgba(0,0,0,.18)}
   .btn-primary{background:var(--primary);border-color:var(--primary);font-weight:700;border-radius:10px;padding:.65rem 1rem}
   .btn-primary:hover{filter:brightness(.95)}
+
+  /* subtle glow ring */
+  .ring{
+    position:absolute; inset:-60% -20% auto -20%; height:220px;
+    background: radial-gradient(closest-side, rgba(255,255,255,.25), transparent 70%);
+    filter: blur(10px);
+  }
 </style>
 
 <div class="logout-wrap">
   <div class="logout-card">
     <div class="logout-head">
+      <div class="ring"></div>
       <img src="{% static 'images/bos_logo.png' %}" alt="BOS Lakshya Logo" class="logout-logo">
       <h5 class="m-0 fw-bold">You are logged out</h5>
     </div>

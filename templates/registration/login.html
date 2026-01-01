@@ -6,6 +6,7 @@
 {% block content %}
 <style>
   :root{ --primary:#3b82f6; }
+
   .auth-wrap{
     min-height: calc(100vh - var(--header-h, 0px));
     display:flex;align-items:center;justify-content:center;
@@ -18,12 +19,43 @@
   .auth-left{
     background: linear-gradient(135deg, var(--primary) 0%, #60a5fa 100%);
     color:#fff;display:flex;flex-direction:column;justify-content:center;align-items:center;
-    padding:2.25rem;gap:1rem;
+    padding:2.25rem;gap:1.2rem;position:relative;overflow:hidden;
   }
   .auth-left .brand{display:flex;flex-direction:column;align-items:center;text-align:center;gap:.5rem}
   .auth-left .brand img{height:64px;width:auto;border-radius:10px;display:block}
   .auth-left .brand h2{margin:0;font-weight:800;letter-spacing:.2px;font-size:1.25rem}
   .auth-left .sub{opacity:.95;font-size:.95rem;line-height:1.5;max-width:28ch}
+
+  /* Confetti particles (subtle) */
+  .confetti{
+    position:absolute; inset:0; pointer-events:none; z-index:0; opacity:.18;
+    background-image:
+      radial-gradient(2px 2px at 20% 10%, #fff 40%, transparent 41%),
+      radial-gradient(2px 2px at 70% 30%, #fff 40%, transparent 41%),
+      radial-gradient(2px 2px at 40% 70%, #fff 40%, transparent 41%),
+      radial-gradient(2px 2px at 85% 60%, #fff 40%, transparent 41%),
+      radial-gradient(2px 2px at 15% 80%, #fff 40%, transparent 41%);
+    animation: confettiFloat 18s linear infinite;
+  }
+  @keyframes confettiFloat{
+    0%{ background-position: 0 0, 40px 20px, 80px 40px, 120px 80px, 160px 120px; }
+    100%{ background-position: 0 200px, 40px 220px, 80px 240px, 120px 280px, 160px 320px; }
+  }
+
+  /* New Year one-line fade carousel below the logo */
+  .ny-line-wrap{
+    position:relative; z-index:1; width:100%;
+    min-height:30px; display:flex; align-items:center; justify-content:center;
+    margin-top:.25rem;
+  }
+  .ny-line{
+    position:absolute; opacity:0; transition:opacity .6s ease; font-weight:700;
+  }
+  .ny-line.is-active{ opacity:1; }
+  .ny-dots{ display:flex; gap:.35rem; margin-top:.4rem; }
+  .ny-dots span{ width:18px; height:3px; background:rgba(255,255,255,.55); border-radius:6px; }
+  .ny-dots span.is-active{ background:#fff; }
+
   .auth-right{padding:2.25rem 2rem}
   .auth-title{font-weight:800;margin:0 0 .25rem 0;font-size:1.5rem;color:#0f172a}
   .auth-muted{color:#64748b;margin-bottom:1.5rem}
@@ -37,7 +69,11 @@
   .btn-primary{background: var(--primary);border-color: var(--primary);font-weight:700;border-radius:10px;padding:.7rem 1rem}
   .btn-primary:hover{filter:brightness(.95)}
   .auth-meta{display:flex;justify-content:space-between;align-items:center;gap:1rem}
-  @media (max-width: 991px){ .auth-left{display:none} .auth-right{padding:2rem} }
+
+  @media (max-width: 991px){
+    .auth-left{display:none}
+    .auth-right{padding:2rem}
+  }
 </style>
 
 <div class="auth-wrap">
@@ -45,11 +81,20 @@
     <div class="row g-0">
       <!-- Brand side -->
       <div class="col-lg-5 auth-left">
+        <div class="confetti" aria-hidden="true"></div>
         <div class="brand">
-          <!-- IMPORTANT: file name uses underscore and exists in static/ -->
           <img src="{% static 'images/bos_logo.png' %}" alt="BOS Lakshya Logo">
           <h2>BOS Lakshya</h2>
           <div class="sub">Secure access to your BOS Lakshya dashboard.</div>
+
+          <!-- One-line rotating New Year wishes (no overlap) -->
+          <div class="ny-line-wrap" id="nyLineWrap" aria-live="polite">
+            <div class="ny-line is-active">Happy New Year 2026 🎉</div>
+            <div class="ny-line">Wishing you growth & success!</div>
+            <div class="ny-line">Together to new milestones 🚀</div>
+            <div class="ny-line">Make it count — every day ✨</div>
+          </div>
+          <div class="ny-dots" id="nyLineDots" aria-hidden="true"></div>
         </div>
       </div>
 
@@ -107,5 +152,29 @@
     btn.textContent = isHidden ? 'Hide' : 'Show';
     btn.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
   });
+
+  // Lightweight one-line fade carousel (no overlap)
+  (function(){
+    const wrap = document.getElementById('nyLineWrap');
+    const dotsWrap = document.getElementById('nyLineDots');
+    if(!wrap || !dotsWrap) return;
+    const lines = Array.prototype.slice.call(wrap.querySelectorAll('.ny-line'));
+    lines.forEach((_l, idx)=>{
+      const dot = document.createElement('span');
+      if(idx===0) dot.classList.add('is-active');
+      dot.addEventListener('click', ()=>{ go(idx); restart(); });
+      dotsWrap.appendChild(dot);
+    });
+    let i=0, timer=null;
+    function render(){
+      lines.forEach((l,idx)=> l.classList.toggle('is-active', idx===i));
+      const dots = dotsWrap.querySelectorAll('span');
+      dots.forEach((d,idx)=> d.classList.toggle('is-active', idx===i));
+    }
+    function next(){ i=(i+1)%lines.length; render(); }
+    function go(n){ i=n%lines.length; render(); }
+    function restart(){ if(timer) clearInterval(timer); timer=setInterval(next, 3800); }
+    render(); restart();
+  })();
 </script>
 {% endblock %}
