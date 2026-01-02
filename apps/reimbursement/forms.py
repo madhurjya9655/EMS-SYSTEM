@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Optional, Iterable, List
+from typing import Iterable, List, Optional
 
 from django import forms
 from django.conf import settings
@@ -11,13 +11,13 @@ from django.core.exceptions import ValidationError
 
 from .models import (
     ExpenseItem,
-    ReimbursementRequest,
-    ReimbursementLine,
-    ReimbursementApproverMapping,
-    ReimbursementSettings,
     Reimbursement,
-    REIMBURSEMENT_CATEGORY_CHOICES,
+    ReimbursementApproverMapping,
+    ReimbursementLine,
+    ReimbursementRequest,
+    ReimbursementSettings,
     GST_TYPE_CHOICES,
+    REIMBURSEMENT_CATEGORY_CHOICES,
 )
 
 User = get_user_model()
@@ -441,6 +441,74 @@ class FinanceVerifyForm(forms.ModelForm):
 
 
 # ---------------------------------------------------------------------------
+# Finance: bill-level actions (approve/reject a single line)
+# NOTE: These are non-model forms to keep them decoupled from any future
+#       per-line state model changes. Views/services will enforce rules.
+# ---------------------------------------------------------------------------
+
+_FINANCE_LINE_DECISIONS = [
+    ("approve", "Approve this bill"),
+    ("reject", "Reject this bill"),
+]
+
+
+class FinanceLineDecisionForm(forms.Form):
+    """
+    Finance action for a single bill (ReimbursementLine).
+    - decision=approve|reject
+    - finance_rejection_reason required if reject
+    """
+    line_id = forms.IntegerField(widget=forms.HiddenInput)
+    decision = forms.ChoiceField(choices=_FINANCE_LINE_DECISIONS, widget=forms.Select(attrs={"class": "form-select"}))
+    finance_rejection_reason = forms.CharField(
+        required=False,
+        widget=forms.Textarea(
+            attrs={
+                "class": "form-control",
+                "rows": 3,
+                "placeholder": "Reason required when rejecting a bill.",
+            }
+        ),
+        label="Rejection reason (mandatory if rejecting)",
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("decision") == "reject":
+            reason = (cleaned.get("finance_rejection_reason") or "").strip()
+            if not reason:
+                self.add_error("finance_rejection_reason", "Please provide a rejection reason.")
+        return cleaned
+
+
+class EmployeeRejectedBillEditForm(forms.ModelForm):
+    """
+    Employee edits/replaces ONLY a rejected bill (line):
+    - Can update amount/description/receipt_file
+    - Actual eligibility (line is currently rejected and belongs to employee)
+      is enforced in the view/service layer.
+    """
+    class Meta:
+        model = ReimbursementLine
+        fields = ["amount", "description", "receipt_file"]
+        widgets = {
+            "amount": forms.NumberInput(attrs={"class": "form-control", "min": "0.01", "step": "0.01"}),
+            "description": forms.Textarea(attrs={"class": "form-control", "rows": 3, "placeholder": "Optional"}),
+            "receipt_file": forms.FileInput(
+                attrs={
+                    "class": "form-control",
+                    "accept": ".pdf,.jpg,.jpeg,.png,.xls,.xlsx",
+                }
+            ),
+        }
+
+    def clean_receipt_file(self):
+        f = self.files.get("receipt_file") or self.cleaned_data.get("receipt_file")
+        _validate_uploaded_file(f, field_label="receipt")
+        return f
+
+
+# ---------------------------------------------------------------------------
 # Admin: Settings & Approver mappings
 # ---------------------------------------------------------------------------
 
@@ -584,13 +652,11 @@ class ApproverMappingBulkForm(forms.Form):
         label="Finance (for all)",
     )
 
-    # --- NEW: accept `user` so the view can pass it without error
+    # --- accept `user` so the view can pass it without error
     def __init__(self, *args, user=None, **kwargs):
         self.user = user
         super().__init__(*args, **kwargs)
-        # If you ever need org scoping, you can filter querysets here using self.user.
 
-    # --- NEW: implement save() because the view calls form.save()
     def save(self) -> int:
         """
         Apply selected defaults to all employees.
@@ -608,7 +674,6 @@ class ApproverMappingBulkForm(forms.Form):
             return 0  # nothing to do
 
         processed = 0
-        # In many orgs you may want to exclude superusers or inactive users; adjust as needed.
         employees = User.objects.all()
 
         for emp in employees:

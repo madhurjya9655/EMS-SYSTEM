@@ -707,9 +707,21 @@
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'admin_requests' %}aria-current="page"{% endif %}>
             <i class="fas fa-list-alt" aria-hidden="true"></i> Admin – All Requests
           </a>
+          <a href="{% url 'reimbursement:admin_bills_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_bills_summary' %}active{% endif %}">
+            <i class="fas fa-table" aria-hidden="true"></i> Admin – Bills Summary
+          </a>
+          <a href="{% url 'reimbursement:admin_status_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_status_summary' %}active{% endif %}">
+            <i class="fas fa-signal" aria-hidden="true"></i> Admin – Status Summary
+          </a>
+          <a href="{% url 'reimbursement:admin_employee_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_employee_summary' %}active{% endif %}">
+            <i class="fas fa-user-tie" aria-hidden="true"></i> Admin – Employee Summary
+          </a>
           <a href="{% url 'reimbursement:approver_mapping_admin' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'approver_mapping_admin' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'approver_mapping_admin' %}aria-current="page"{% endif %}>
             <i class="fas fa-user-shield" aria-hidden="true"></i> Approver Mapping
+          </a>
+          <a href="{% url 'reimbursement:admin_export_csv' %}" class="nav-item">
+            <i class="fas fa-file-csv" aria-hidden="true"></i> Export CSV
           </a>
           {% endif %}
 

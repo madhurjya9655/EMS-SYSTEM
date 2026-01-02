@@ -242,6 +242,8 @@ class ExpenseItem(models.Model):
 
     @property
     def is_locked(self) -> bool:
+        # An expense item is editable by employee if it is NOT attached or has been rejected by finance for its line.
+        # We keep simple rules here; the service will flip status back to SAVED on reject to unlock editing.
         return self.status in {self.Status.ATTACHED, self.Status.SUBMITTED}
 
 # ---------------------------------------------------------------------------
@@ -255,6 +257,8 @@ class ReimbursementRequest(models.Model):
         PENDING_MANAGER = "pending_manager", _("Pending Manager Approval")
         PENDING_MANAGEMENT = "pending_management", _("Pending Management Approval")
         PENDING_FINANCE = "pending_finance", _("Pending Finance Review")
+        PARTIAL_HOLD = "partial_hold", _("Partial Hold (Finance)")
+        PARTIALLY_REJECTED = "partially_rejected", _("Partially Rejected (Back to Employee)")
         CLARIFICATION_REQUIRED = "clarification_required", _("Clarification Required")
         REJECTED = "rejected", _("Rejected")
         APPROVED = "approved", _("Approved (Ready to Pay)")
@@ -331,6 +335,53 @@ class ReimbursementRequest(models.Model):
             self.save(update_fields=["total_amount", "updated_at"])
         return total
 
+    # ---- Derived status from child bills -----------------------------------
+
+    def derive_status_from_bills(self) -> str:
+        """
+        Pure function: derive parent status from child bill_statuses.
+        Rules:
+          - If ANY bill FINANCE_REJECTED => PARTIALLY_REJECTED (back to employee)
+          - Else if ALL bills FINANCE_APPROVED => PENDING_MANAGER
+          - Else (mixed: submitted/resubmitted/approved mix) => PARTIAL_HOLD
+        """
+        qs = self.lines.all().values_list("bill_status", flat=True)
+        statuses = set(qs)
+        if not statuses:
+            return self.Status.DRAFT
+
+        if ReimbursementLine.BillStatus.FINANCE_REJECTED in statuses:
+            return self.Status.PARTIALLY_REJECTED
+
+        # only when every included line reached finance-approved
+        included_qs = self.lines.filter(status=ReimbursementLine.Status.INCLUDED)
+        if included_qs.exists() and not included_qs.exclude(bill_status=ReimbursementLine.BillStatus.FINANCE_APPROVED).exists():
+            return self.Status.PENDING_MANAGER
+
+        return self.Status.PARTIAL_HOLD
+
+    def apply_derived_status_from_bills(self, *, actor: Optional[models.Model] = None, reason: str = "") -> None:
+        """
+        Set parent status strictly according to child bill statuses.
+        Emits an audit log only if the status actually changes.
+        """
+        new_status = self.derive_status_from_bills()
+        if new_status == self.status:
+            return
+        old = self.status
+        self.status = new_status
+        # Submitted_at remains first submit time; do not mutate.
+        self.save(update_fields=["status", "updated_at"])
+        ReimbursementLog.log(
+            self,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
+            message=reason or "Derived status recalculated from bill-level changes.",
+            from_status=old,
+            to_status=new_status,
+            extra={"type": "derived_status_from_bills"},
+        )
+
     # ---- Centralized transition eligibility (read-only checks) --------------
 
     def can_mark_paid(self, reference: str = "") -> Tuple[bool, str]:
@@ -338,7 +389,7 @@ class ReimbursementRequest(models.Model):
         Read-only guard used by forms/views to decide whether "Mark Paid" is allowed.
         This mirrors the checks enforced by mark_paid().
         """
-        # ✅ Allow settlement from Pending Finance Review OR Approved (Ready to Pay).
+        # ✅ Allow settlement from Pending Finance Review OR Approved (legacy).
         if self.status not in {self.Status.PENDING_FINANCE, self.Status.APPROVED}:
             return False, _("Cannot mark Paid before Finance review stage after approvals.")
         if not (reference or "").strip():
@@ -530,7 +581,7 @@ class ReimbursementRequest(models.Model):
                 extra={"type": "employee_resubmit"},
             )
 
-    # ---- Admin override helpers (explicit, audited, no auto-transitions) ----
+    # ---- Admin override helpers (explicit, auditable, no auto-transitions) ----
 
     def reverse_to_finance_verification(self, *, actor: Optional[models.Model], reason: str) -> None:
         """
@@ -709,18 +760,41 @@ class ReimbursementLine(models.Model):
         INCLUDED = "included", _("Included")
         REMOVED = "removed", _("Removed")
 
+    class BillStatus(models.TextChoices):
+        DRAFT = "draft", _("Draft")
+        SUBMITTED = "submitted", _("Submitted")
+        FINANCE_APPROVED = "finance_approved", _("Finance Approved")
+        FINANCE_REJECTED = "finance_rejected", _("Finance Rejected")
+        EMPLOYEE_RESUBMITTED = "employee_resubmitted", _("Employee Resubmitted")
+        MANAGER_APPROVED = "manager_approved", _("Manager Approved")
+        PAID = "paid", _("Paid")
+
     request = models.ForeignKey(ReimbursementRequest, on_delete=models.CASCADE, related_name="lines")
     expense_item = models.ForeignKey(ExpenseItem, on_delete=models.PROTECT, related_name="request_lines")
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.TextField(blank=True, default="")
     receipt_file = models.FileField(upload_to=receipt_upload_path, validators=[validate_receipt_file], blank=True, null=True)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.INCLUDED, db_index=True)
+
+    # --- NEW bill-level workflow fields ---
+    bill_status = models.CharField(
+        max_length=32,
+        choices=BillStatus.choices,
+        default=BillStatus.SUBMITTED,
+        db_index=True,
+    )
+    finance_rejection_reason = models.TextField(blank=True, default="")
+    rejected_by = models.ForeignKey(UserModel, on_delete=models.SET_NULL, null=True, blank=True, related_name="finance_rejected_bills")
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    last_modified_by = models.ForeignKey(UserModel, on_delete=models.SET_NULL, null=True, blank=True, related_name="modified_reimbursement_lines")
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["id"]
         indexes = [
             models.Index(fields=["request", "status"]),
+            models.Index(fields=["request", "bill_status"]),
             models.Index(fields=["expense_item"]),
         ]
 
@@ -737,6 +811,8 @@ class ReimbursementLine(models.Model):
                     ReimbursementRequest.Status.PENDING_MANAGER,
                     ReimbursementRequest.Status.PENDING_MANAGEMENT,
                     ReimbursementRequest.Status.PENDING_FINANCE,
+                    ReimbursementRequest.Status.PARTIAL_HOLD,
+                    ReimbursementRequest.Status.PARTIALLY_REJECTED,
                     ReimbursementRequest.Status.CLARIFICATION_REQUIRED,
                     ReimbursementRequest.Status.APPROVED,
                 },
@@ -758,6 +834,85 @@ class ReimbursementLine(models.Model):
             if not self.receipt_file:
                 self.receipt_file = self.expense_item.receipt_file
         super().save(*args, **kwargs)
+
+    # ----- Bill-level state transitions (strict) -----------------------------
+
+    def approve_by_finance(self, *, actor: Optional[models.Model]) -> None:
+        """
+        Approve ONLY this bill, leaving siblings untouched.
+        """
+        if self.bill_status == self.BillStatus.FINANCE_APPROVED:
+            return
+        prev = self.bill_status
+        self.bill_status = self.BillStatus.FINANCE_APPROVED
+        self.finance_rejection_reason = ""
+        self.rejected_by = None
+        self.rejected_at = None
+        self.last_modified_by = actor if isinstance(actor, models.Model) else None
+        self.save(update_fields=[
+            "bill_status", "finance_rejection_reason", "rejected_by", "rejected_at", "last_modified_by", "updated_at" if hasattr(self, "updated_at") else "bill_status"
+        ])
+        ReimbursementLog.log(
+            self.request,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
+            message=f"Finance approved bill line #{self.pk}.",
+            from_status=prev,
+            to_status=self.bill_status,
+            extra={"line_id": self.pk, "type": "bill_finance_approved"},
+        )
+
+    def reject_by_finance(self, *, actor: Optional[models.Model], reason: str) -> None:
+        """
+        Reject ONLY this bill; unlocks the underlying expense for employee edits.
+        """
+        if not reason or not reason.strip():
+            raise DjangoCoreValidationError(_("Rejection reason is required."))
+        prev = self.bill_status
+        self.bill_status = self.BillStatus.FINANCE_REJECTED
+        self.finance_rejection_reason = reason.strip()
+        self.rejected_by = actor if isinstance(actor, models.Model) else None
+        self.rejected_at = timezone.now()
+        self.last_modified_by = actor if isinstance(actor, models.Model) else None
+        self.save(update_fields=[
+            "bill_status", "finance_rejection_reason", "rejected_by", "rejected_at", "last_modified_by"
+        ])
+
+        # Unlock the expense for employee to edit/replace
+        exp = self.expense_item
+        exp.status = ExpenseItem.Status.SAVED
+        exp.save(update_fields=["status", "updated_at"])
+
+        ReimbursementLog.log(
+            self.request,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
+            message=f"Finance rejected bill line #{self.pk}.",
+            from_status=prev,
+            to_status=self.bill_status,
+            extra={"line_id": self.pk, "reason": self.finance_rejection_reason, "type": "bill_finance_rejected"},
+        )
+
+    def employee_resubmit_bill(self, *, actor: Optional[models.Model]) -> None:
+        """
+        Employee corrected the rejected bill and re-submitted it for finance.
+        """
+        if self.bill_status != self.BillStatus.FINANCE_REJECTED:
+            raise DjangoCoreValidationError(_("Only finance-rejected bills can be resubmitted by employee."))
+        prev = self.bill_status
+        self.bill_status = self.BillStatus.EMPLOYEE_RESUBMITTED
+        self.last_modified_by = actor if isinstance(actor, models.Model) else None
+        self.save(update_fields=["bill_status", "last_modified_by"])
+        # Keep rejection reason for audit; do not clear.
+        ReimbursementLog.log(
+            self.request,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
+            message=f"Employee resubmitted bill line #{self.pk} after correction.",
+            from_status=prev,
+            to_status=self.bill_status,
+            extra={"line_id": self.pk, "type": "bill_employee_resubmitted"},
+        )
 
 # ---------------------------------------------------------------------------
 # Audit logging

@@ -1124,7 +1124,9 @@ class AdminStatusSummaryView(LoginRequiredMixin, PermissionRequiredMixin, Templa
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        rows = (
+
+        # Raw aggregation
+        raw_rows = (
             ReimbursementRequest.objects.values("status")
             .annotate(
                 total_amount=Sum("total_amount"),
@@ -1132,8 +1134,21 @@ class AdminStatusSummaryView(LoginRequiredMixin, PermissionRequiredMixin, Templa
             )
             .order_by("status")
         )
+
+        # Map machine status -> human label once here
+        status_labels = dict(ReimbursementRequest.Status.choices)
+        rows = []
+        for r in raw_rows:
+            rows.append({
+                "status": r["status"],
+                "status_label": status_labels.get(r["status"], r["status"]),
+                "total_amount": r["total_amount"],
+                "request_count": r["request_count"],
+            })
+
         ctx["rows"] = rows
-        ctx["status_labels"] = dict(ReimbursementRequest.Status.choices)
+        # Keep for other templates if needed
+        ctx["status_labels"] = status_labels
         return ctx
 
 class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):

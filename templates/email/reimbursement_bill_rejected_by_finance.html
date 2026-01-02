@@ -1,0 +1,45 @@
+{% extends "email/base_email.html" %}
+{% block content %}
+<p>Hi {{ employee_name }},</p>
+
+<p>
+  Finance reviewed your reimbursement <strong>#{{ request_id }}</strong> and
+  <strong>rejected one bill</strong>.
+</p>
+
+<table cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;border-collapse:collapse;">
+  <tr>
+    <td style="padding:4px 0;width:180px;"><strong>Bill Line ID:</strong></td>
+    <td style="padding:4px 0;">#{{ bill_id }}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0;"><strong>Amount:</strong></td>
+    <td style="padding:4px 0;">₹ {{ bill_amount }}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0;"><strong>Description:</strong></td>
+    <td style="padding:4px 0;">{{ bill_description }}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0;"><strong>Reason:</strong></td>
+    <td style="padding:4px 0;white-space:pre-line;">{{ rejection_reason }}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0;"><strong>Request Status:</strong></td>
+    <td style="padding:4px 0;">{{ status_label }}</td>
+  </tr>
+</table>
+
+<p>
+  <strong>Action required:</strong> Please edit or replace the rejected bill and upload the correct receipt.
+</p>
+
+{% if detail_url %}
+<p>
+  View your request:<br>
+  <a href="{{ detail_url }}">{{ detail_url }}</a>
+</p>
+{% endif %}
+
+<p>Regards,<br>BOS Lakshya</p>
+{% endblock %}

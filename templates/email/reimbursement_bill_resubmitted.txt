@@ -1,0 +1,13 @@
+Reimbursement #{{ request_id }} - Employee resubmitted a corrected bill
+
+Employee: {{ employee_name }} ({{ employee_email }})
+Bill Line ID: #{{ bill_id }}
+Amount: ₹ {{ bill_amount }}
+Description: {{ bill_description }}
+Resubmitted By: {{ resubmitted_by }}
+Request Status: {{ status_label }}
+
+{% if detail_url %}Review: {{ detail_url }}{% endif %}
+
+Regards,
+System

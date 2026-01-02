@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional, Any
@@ -61,12 +61,12 @@ def hhmm(total_minutes: Optional[int]) -> str:
 @register.filter(name="istfmt")
 def istdatetime_format(dt: Optional[datetime], fmt: str = "%d %b, %Y %H:%M") -> str:
     try:
-        return _to_ist(dt).strftime(fmt) if dt else "—"
+        return _to_ist(dt).strftime(fmt) if dt else "â€”"
     except Exception:
         try:
             return _to_ist(dt).isoformat()
         except Exception:
-            return "—"
+            return "â€”"
 
 
 @register.simple_tag
@@ -78,5 +78,6 @@ def now_ist(fmt: str = "%d %b, %Y %H:%M") -> str:
 
 
 @register.filter(name="coalesce")
-def coalesce(value: Any, default: str = "—"):
+def coalesce(value: Any, default: str = "â€”"):
     return value if value not in (None, "", [], {}) else default
+

@@ -8,7 +8,7 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 from .integrations.sheets import sync_request
-from .models import ReimbursementRequest
+from .models import ReimbursementRequest, ReimbursementLine
 
 logger = logging.getLogger(__name__)
 
@@ -31,5 +31,26 @@ def _sync_req_on_save(sender, instance: ReimbursementRequest, created, **kwargs)
             sync_request(req)  # strictly export; no DB writes back
         except Exception:
             logger.exception("Sheets sync scheduling failed for ReimbursementRequest %s", instance.pk)
+
+    transaction.on_commit(_do)
+
+
+@receiver(post_save, sender=ReimbursementLine)
+def _recalc_parent_on_line_change(sender, instance: ReimbursementLine, created, **kwargs):
+    """
+    Whenever a bill line changes (including bill_status transitions),
+    recompute the parent's derived status from bills.
+    This is read-only safe and audited in the parent helper.
+    """
+    def _do():
+        try:
+            req = ReimbursementRequest.objects.get(pk=instance.request_id)
+            req.apply_derived_status_from_bills(
+                actor=getattr(instance, "last_modified_by", None),
+                reason=f"Bill line #{instance.pk} updated; re-deriving parent status.",
+            )
+        except Exception:
+            logger.exception("Unable to derive parent status for request %s after line %s save.",
+                             instance.request_id, instance.pk)
 
     transaction.on_commit(_do)

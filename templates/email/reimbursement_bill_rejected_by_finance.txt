@@ -1,0 +1,19 @@
+Reimbursement #{{ request_id }} - One bill rejected by Finance
+
+Hello {{ employee_name }},
+
+Finance rejected one bill from your reimbursement.
+
+Bill Line ID: #{{ bill_id }}
+Amount: ₹ {{ bill_amount }}
+Description: {{ bill_description }}
+Reason: {{ rejection_reason }}
+
+Request Status: {{ status_label }}
+
+Action required: Edit or replace the rejected bill and upload the correct receipt.
+
+{% if detail_url %}View: {{ detail_url }}{% endif %}
+
+Regards,
+BOS Lakshya

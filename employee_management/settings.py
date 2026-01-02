@@ -1,4 +1,4 @@
-# employee_management/settings.py
+﻿# employee_management/settings.py
 import os
 import sqlite3
 from pathlib import Path
@@ -12,7 +12,7 @@ load_dotenv()
 # -----------------------------------------------------------------------------
 # PATHS
 # -----------------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parent.parent  # …/employee_management_system
+BASE_DIR = Path(__file__).resolve().parent.parent  # â€¦/employee_management_system
 
 # -----------------------------------------------------------------------------
 # ENV HELPERS
@@ -160,7 +160,10 @@ _template_options = {
     ],
     "libraries": {
         "common_filters": "apps.common.templatetags.common_filters",
+        # keep apps.common alias as 'user_filters'
         "user_filters": "apps.users.templatetags.user_filters",
+        # rename the users app alias to avoid duplicate key:
+        "users_filters": "apps.users.templatetags.user_filters",
         "group_tags": "apps.common.templatetags.group_tags",
         "model_extras": "apps.common.templatetags.model_extras",
     },
@@ -543,7 +546,7 @@ REIMBURSEMENT_EMAIL_FROM = os.getenv(
     f"{REIMBURSEMENT_SENDER_NAME} <{REIMBURSEMENT_SENDER_EMAIL}>",
 )
 
-# ⬇️ Make SMTP non-blocking for cron by keeping a small timeout
+# â¬‡ï¸ Make SMTP non-blocking for cron by keeping a small timeout
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
 EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
 SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", True)
@@ -626,7 +629,8 @@ if REDIS_URL:
             "OPTIONS": {
                 "CLIENT_CLASS": "django_redis.client.DefaultClient",
                 "COMPRESSOR": "django_redis.compressors.zlib.ZlibCompressor",
-                "PARSER_CLASS": "redis.connection.HiredisParser",
+                # Use pure-Python parser so Windows doesn't need to build 'hiredis'
+                "PARSER_CLASS": "redis.connection.PythonParser",
             },
             "TIMEOUT": env_int("CACHE_TIMEOUT", 300),
         },
@@ -801,3 +805,4 @@ REIMBURSEMENT_ALLOWED_EXTENSIONS = env_list(
     ".jpg,.jpeg,.png,.pdf,.xls,.xlsx",
 )
 REIMBURSEMENT_MAX_RECEIPT_MB = env_int("REIMBURSEMENT_MAX_RECEIPT_MB", 8)
+
