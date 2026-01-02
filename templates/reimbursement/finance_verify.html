@@ -1,3 +1,4 @@
+<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\reimbursement\finance_verify.html -->
 {% extends "base.html" %}
 {% load i18n %}
 
@@ -79,7 +80,7 @@
             <td style="padding:8px;border-bottom:1px solid #f3f4f6;">
               {% url "reimbursement:receipt_line" line.id as receipt_url %}
               {% if receipt_url %}
-                <a href="{{ receipt_url }}">View</a>
+                <a href="{{ receipt_url }}" target="_blank" rel="noopener">View</a>
               {% else %}
                 -
               {% endif %}
@@ -108,7 +109,7 @@
     {% csrf_token %}
     <input type="hidden" name="return" value="{{ back_url }}">
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      <!-- FIXED: value must be 'verify' -->
+      <!-- Matches forms.FinanceVerifyForm choices ('verify' / 'rejected') -->
       <button type="submit" name="decision" value="verify"
               style="padding:10px 14px;background:#16a34a;border:0;border-radius:6px;color:#fff;cursor:pointer;">
         Verify (Send to Manager)

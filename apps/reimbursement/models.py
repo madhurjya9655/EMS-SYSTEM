@@ -1,4 +1,4 @@
-# apps/reimbursement/models.py
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\reimbursement\models.py
 from __future__ import annotations
 
 import logging
@@ -340,24 +340,27 @@ class ReimbursementRequest(models.Model):
     def derive_status_from_bills(self) -> str:
         """
         Pure function: derive parent status from child bill_statuses.
-        Rules:
-          - If ANY bill FINANCE_REJECTED => PARTIALLY_REJECTED (back to employee)
-          - Else if ALL bills FINANCE_APPROVED => PENDING_MANAGER
-          - Else (mixed: submitted/resubmitted/approved mix) => PARTIAL_HOLD
+        Rules (aligned with example workflow):
+          - If ANY bill is FINANCE_REJECTED or EMPLOYEE_RESUBMITTED => PARTIAL_HOLD (Finance)
+          - Else if ALL included bills are FINANCE_APPROVED => PENDING_MANAGER
+          - Else => PARTIAL_HOLD (Finance)
         """
         qs = self.lines.all().values_list("bill_status", flat=True)
         statuses = set(qs)
         if not statuses:
             return self.Status.DRAFT
 
-        if ReimbursementLine.BillStatus.FINANCE_REJECTED in statuses:
-            return self.Status.PARTIALLY_REJECTED
+        # Any rejection or resubmission keeps it in Partial Hold (Finance)
+        if (ReimbursementLine.BillStatus.FINANCE_REJECTED in statuses
+            or ReimbursementLine.BillStatus.EMPLOYEE_RESUBMITTED in statuses):
+            return self.Status.PARTIAL_HOLD
 
         # only when every included line reached finance-approved
         included_qs = self.lines.filter(status=ReimbursementLine.Status.INCLUDED)
         if included_qs.exists() and not included_qs.exclude(bill_status=ReimbursementLine.BillStatus.FINANCE_APPROVED).exists():
             return self.Status.PENDING_MANAGER
 
+        # Mixed submitted/approved etc. => Partial Hold
         return self.Status.PARTIAL_HOLD
 
     def apply_derived_status_from_bills(self, *, actor: Optional[models.Model] = None, reason: str = "") -> None:
@@ -411,7 +414,9 @@ class ReimbursementRequest(models.Model):
         require_mgmt = ReimbursementSettings.get_solo().require_management_approval
 
         if new == self.Status.PENDING_MANAGER and not self.verified_by_id:
-            raise DjangoCoreValidationError(_("Cannot move to Manager review before Finance verifies."))
+            # Note: request may reach PENDING_MANAGER through bill-level approvals (no verified_by).
+            # We do NOT enforce verified_by here for derived transitions; FinanceVerifyView sets verified_by.
+            pass
 
         if new == self.Status.PENDING_MANAGEMENT and not self._is_manager_approved():
             raise DjangoCoreValidationError(_("Cannot move to Management before Manager approval."))
@@ -466,15 +471,14 @@ class ReimbursementRequest(models.Model):
             # run invariants on status change
             self.full_clean()
 
-        # NOTE: Removed automatic "System status transition" audit logging here.
-        # All audit entries must be created by explicit, role-checked actions (views/services).
+        # NOTE: No implicit audit here; all audit entries via explicit helpers/services.
         super().save(*args, **kwargs)
 
     # ---- Finance helpers ----------------------------------------------------
 
     def mark_verified(self, *, actor: Optional[models.Model] = None, note: str = "") -> None:
         """
-        Single-source-of-truth to verify by finance.
+        Request-level verify by finance (used when finance treats whole request).
         Emits ONE audit log with the correct actor.
         """
         from_status = self.status
@@ -498,7 +502,6 @@ class ReimbursementRequest(models.Model):
         Single-source-of-truth to mark as paid.
         Emits ONE audit log with the correct actor.
         """
-        # ✅ Allow settlement from Pending Finance Review OR Approved.
         if self.status not in {self.Status.PENDING_FINANCE, self.Status.APPROVED}:
             raise DjangoCoreValidationError(_("Cannot mark Paid before Finance review stage after approvals."))
         if not (reference or "").strip():
@@ -524,10 +527,6 @@ class ReimbursementRequest(models.Model):
     def employee_resubmit(self, *, actor: Optional[models.Model], note: str = "") -> None:
         """
         Employee resubmits a previously REJECTED reimbursement.
-        - Moves back to PENDING_FINANCE_VERIFY.
-        - Clears verification/approvals so flow restarts correctly.
-        - Keeps attached expense lines intact.
-        - Records audit with who and why.
         """
         if self.status != self.Status.REJECTED:
             raise DjangoCoreValidationError(_("Only rejected requests can be resubmitted."))
@@ -535,11 +534,9 @@ class ReimbursementRequest(models.Model):
         from_status = self.status
 
         with transaction.atomic():
-            # Reset flow back to Finance Verification
             self.status = self.Status.PENDING_FINANCE_VERIFY
             self.submitted_at = timezone.now()
 
-            # Clear any verification / approvals
             self.verified_by = None
             self.verified_at = None
 
@@ -551,7 +548,6 @@ class ReimbursementRequest(models.Model):
             self.management_comment = self.management_comment or ""
             self.management_decided_at = None
 
-            # Optional note appended to finance_note for traceability
             if note:
                 tag = f"[RESUBMIT] {note.strip()}"
                 self.finance_note = (self.finance_note + ("\n" if self.finance_note else "") + tag).strip()
@@ -584,13 +580,6 @@ class ReimbursementRequest(models.Model):
     # ---- Admin override helpers (explicit, auditable, no auto-transitions) ----
 
     def reverse_to_finance_verification(self, *, actor: Optional[models.Model], reason: str) -> None:
-        """
-        Manual, explicit reversal back to FINANCE VERIFICATION.
-        - Does NOT delete/recreate anything.
-        - Clears prior approvals & finance verification markers to avoid any auto-skip.
-        - Preserves full audit trail with from->to, who, when, and reason.
-        - Relies on model-level validations; no backdoor to PAID or approvals.
-        """
         if not reason or not reason.strip():
             raise DjangoCoreValidationError(_("Reversal reason is required."))
 
@@ -598,16 +587,13 @@ class ReimbursementRequest(models.Model):
             raise DjangoCoreValidationError(_("The request is already pending Finance Verification."))
 
         if self.status == self.Status.REJECTED:
-            # Business rule: for Rejected, use a resend (explicit intent) instead of reversal.
             raise DjangoCoreValidationError(_("Cannot reverse a Rejected request. Use resend to Finance if appropriate."))
 
         from_status = self.status
 
         with transaction.atomic():
-            # Move explicitly back to verification
             self.status = self.Status.PENDING_FINANCE_VERIFY
 
-            # Clear verification/approvals to prevent 'auto' advancement later
             self.verified_by = None
             self.verified_at = None
 
@@ -619,7 +605,6 @@ class ReimbursementRequest(models.Model):
             self.management_comment = self.management_comment or ""
             self.management_decided_at = None
 
-            # DO NOT clear payment reference/paid_at (historic data).
             note_line = f"[REVERSAL] Sent back to Finance Verification. Reason: {reason.strip()}"
             self.finance_note = (self.finance_note + ("\n" if self.finance_note else "") + note_line).strip()
 
@@ -648,9 +633,6 @@ class ReimbursementRequest(models.Model):
             )
 
     def resend_to_finance(self, *, actor: Optional[models.Model], reason: str = "") -> None:
-        """
-        Admin-triggered resend back to finance verification (idempotent with clear audit).
-        """
         from_status = self.status
         if self.status == self.Status.PENDING_FINANCE_VERIFY:
             ReimbursementLog.log(
@@ -666,10 +648,6 @@ class ReimbursementRequest(models.Model):
         self.reverse_to_finance_verification(actor=actor, reason=reason or "Admin resend to Finance Verification")
 
     def resend_to_manager(self, *, actor: Optional[models.Model], reason: str = "") -> None:
-        """
-        Admin-triggered move to Manager queue.
-        Still respects validations: requires verified_by to exist (no bypass).
-        """
         if not self.verified_by_id:
             raise DjangoCoreValidationError(_("Cannot resend to Manager before Finance verifies."))
         from_status = self.status
@@ -687,11 +665,6 @@ class ReimbursementRequest(models.Model):
         )
 
     def admin_force_move(self, target_status: str, *, actor: Optional[models.Model], reason: str = "") -> None:
-        """
-        Explicit manual move (forward/backward) **without** bypassing model-level rules.
-        - Still calls the normal transition validator via save().
-        - Disallows direct set to PAID (no bypass).
-        """
         valid = {c[0] for c in self.Status.choices}
         if target_status not in valid:
             raise DjangoCoreValidationError(_("Invalid target status."))
@@ -712,7 +685,6 @@ class ReimbursementRequest(models.Model):
             return
 
         self.status = target_status
-        # save() triggers _validate_transition + invariants
         self.save(update_fields=["status", "updated_at"])
         ReimbursementLog.log(
             self,
@@ -725,19 +697,12 @@ class ReimbursementRequest(models.Model):
         )
 
     def delete_with_audit(self, *, actor: Optional[models.Model], reason: str) -> None:
-        """
-        Admin-safe delete:
-        - Strictly forbidden for PAID.
-        - Unlocks attached expense items.
-        - Emits a single audit log.
-        """
         if self.status == self.Status.PAID:
             raise DjangoCoreValidationError(_("Paid reimbursements cannot be deleted."))
         if not reason or not reason.strip():
             raise DjangoCoreValidationError(_("A reason is required to delete a reimbursement."))
 
         with transaction.atomic():
-            # Unlock attached expense items
             for line in list(self.lines.select_related("expense_item")):
                 exp = line.expense_item
                 line.delete()
@@ -865,6 +830,7 @@ class ReimbursementLine(models.Model):
     def reject_by_finance(self, *, actor: Optional[models.Model], reason: str) -> None:
         """
         Reject ONLY this bill; unlocks the underlying expense for employee edits.
+        Also emails the employee about this specific rejected bill.
         """
         if not reason or not reason.strip():
             raise DjangoCoreValidationError(_("Rejection reason is required."))
@@ -883,6 +849,13 @@ class ReimbursementLine(models.Model):
         exp.status = ExpenseItem.Status.SAVED
         exp.save(update_fields=["status", "updated_at"])
 
+        # Notify employee about the rejected bill (bill-specific email)
+        try:
+            from .emails import send_bill_rejected_by_finance
+            send_bill_rejected_by_finance(self.request, self)
+        except Exception:
+            logger.exception("Failed to send bill-rejected email for req=%s line=%s", self.request_id, self.pk)
+
         ReimbursementLog.log(
             self.request,
             ReimbursementLog.Action.STATUS_CHANGED,
@@ -896,6 +869,7 @@ class ReimbursementLine(models.Model):
     def employee_resubmit_bill(self, *, actor: Optional[models.Model]) -> None:
         """
         Employee corrected the rejected bill and re-submitted it for finance.
+        Also emails finance about the resubmission.
         """
         if self.bill_status != self.BillStatus.FINANCE_REJECTED:
             raise DjangoCoreValidationError(_("Only finance-rejected bills can be resubmitted by employee."))
@@ -903,7 +877,14 @@ class ReimbursementLine(models.Model):
         self.bill_status = self.BillStatus.EMPLOYEE_RESUBMITTED
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
         self.save(update_fields=["bill_status", "last_modified_by"])
-        # Keep rejection reason for audit; do not clear.
+
+        # Notify finance about this bill resubmission
+        try:
+            from .emails import send_bill_resubmitted
+            send_bill_resubmitted(self.request, self, actor=actor)
+        except Exception:
+            logger.exception("Failed to send bill-resubmitted email for req=%s line=%s", self.request_id, self.pk)
+
         ReimbursementLog.log(
             self.request,
             ReimbursementLog.Action.STATUS_CHANGED,

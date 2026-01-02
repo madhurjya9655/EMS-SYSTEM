@@ -1,4 +1,4 @@
-# apps/reimbursement/signals.py
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\reimbursement\signals.py
 from __future__ import annotations
 
 import logging
@@ -40,15 +40,31 @@ def _recalc_parent_on_line_change(sender, instance: ReimbursementLine, created, 
     """
     Whenever a bill line changes (including bill_status transitions),
     recompute the parent's derived status from bills.
-    This is read-only safe and audited in the parent helper.
+    If that recalculation makes the parent reach PENDING_MANAGER
+    (i.e., all bills finance-approved), automatically send the
+    manager approval email with Approve/Reject buttons.
     """
     def _do():
         try:
             req = ReimbursementRequest.objects.get(pk=instance.request_id)
+
+            # Re-derive parent status from bill-level changes
+            prev_status = req.status
             req.apply_derived_status_from_bills(
                 actor=getattr(instance, "last_modified_by", None),
                 reason=f"Bill line #{instance.pk} updated; re-deriving parent status.",
             )
+
+            # If we just transitioned to Pending Manager, trigger manager email.
+            if prev_status != req.status and req.status == ReimbursementRequest.Status.PENDING_MANAGER:
+                try:
+                    from .services import notifications
+                    # Send the same "verify → approver" mail used by request-level verify,
+                    # which includes Approve / Reject buttons (no login).
+                    notifications.send_reimbursement_finance_verified(req)
+                except Exception:
+                    logger.exception("Failed to send manager approval email for request %s after all bills approved.", req.pk)
+
         except Exception:
             logger.exception("Unable to derive parent status for request %s after line %s save.",
                              instance.request_id, instance.pk)

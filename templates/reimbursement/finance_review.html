@@ -1,3 +1,4 @@
+<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\reimbursement\finance_review.html -->
 {% extends "base.html" %}
 {% block title %}Finance Review – Reimbursement #{{ object.id }}{% endblock %}
 
@@ -49,7 +50,6 @@
               <div class="text-danger small">{{ form.mark_paid.errors }}</div>
             {% endif %}
 
-            {# Contextual helper text depending on whether mark_paid is allowed #}
             {% if form.mark_paid.field.disabled or not can_mark_paid %}
               <div class="form-text">
                 Available after approvals during Finance review, and requires a payment reference.

@@ -1,3 +1,4 @@
+<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\reimbursement\expense_inbox.html -->
 {% extends "base.html" %}
 {% load widget_tweaks %}
 {% block title %}Upload Expenses{% endblock %}
@@ -43,7 +44,6 @@
               <div class="mb-3">
                 {{ field.label_tag }}
 
-                {# For the file input, allow Excel too #}
                 {% if field.name == "receipt_file" %}
                   {{ field|attr:"accept:.pdf,.jpg,.jpeg,.png,.xls,.xlsx" }}
                   <div class="form-text">Allowed: PDF / JPG / JPEG / PNG / XLS / XLSX</div>

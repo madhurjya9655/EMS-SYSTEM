@@ -1,244 +1,230 @@
 {% extends "base.html" %}
+{% load humanize %}
+
 {% block title %}Reimbursement #{{ request_obj.id }}{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h2>Reimbursement Request #{{ request_obj.id }}</h2>
+  <h2>Reimbursement – Request #{{ request_obj.id }}</h2>
   <div class="d-flex gap-2">
     <a href="{% url 'reimbursement:my_reimbursements' %}" class="btn btn-outline-secondary btn-sm">
       Back to My Requests
     </a>
-
-    {# --- Resubmit action (visible only to owner when status == REJECTED) --- #}
-    {% if request.user == request_obj.created_by and request_obj.status == 'rejected' %}
-      <form method="post" action="{% url 'reimbursement:request_resubmit' request_obj.id %}" class="d-inline">
-        {% csrf_token %}
-        <input type="hidden" name="return" value="{% url 'reimbursement:my_reimbursements' %}">
-        <button type="submit" class="btn btn-primary btn-sm">
-          Resubmit
-        </button>
-      </form>
+    {% if can_resubmit %}
+      <a href="{% url 'reimbursement:request_resubmit_confirm' request_obj.id %}" class="btn btn-warning btn-sm">
+        Resubmit Whole Request
+      </a>
     {% endif %}
   </div>
 </div>
-
-{# Rejection banner #}
-{% if request_obj.status == 'rejected' %}
-  <div class="alert alert-warning d-flex align-items-start" role="alert">
-    <div class="me-2">⚠️</div>
-    <div>
-      <strong>This request was rejected.</strong>
-      {% if request_obj.manager_comment or request_obj.management_comment or request_obj.finance_note %}
-        <div class="small text-muted">Review the comments below, make changes if needed, and click <em>Resubmit</em>.</div>
-      {% endif %}
-    </div>
-  </div>
-{% endif %}
 
 <div class="row">
   <div class="col-md-6">
     <div class="card mb-3">
       <div class="card-header">Request Summary</div>
       <div class="card-body">
-        <dl class="row mb-0">
-          <dt class="col-sm-4">Employee</dt>
-          <dd class="col-sm-8">
-            {{ request_obj.created_by.get_full_name|default:request_obj.created_by.username }}
-            <div class="small text-muted">{{ request_obj.created_by.email }}</div>
-          </dd>
-
-          <dt class="col-sm-4">Submitted On</dt>
-          <dd class="col-sm-8">
-            {{ request_obj.submitted_at|default:request_obj.created_at|date:"Y-m-d H:i" }}
-          </dd>
-
-          <dt class="col-sm-4">Status</dt>
-          <dd class="col-sm-8">
-            <span class="badge bg-light text-dark">
-              {{ request_obj.get_status_display }}
-            </span>
-          </dd>
-
-          <dt class="col-sm-4">Manager</dt>
-          <dd class="col-sm-8">
-            {% if request_obj.manager %}
-              {{ request_obj.manager.get_full_name|default:request_obj.manager.username }}
-            {% else %}
-              <span class="text-muted">Not set</span>
-            {% endif %}
-          </dd>
-
-          <dt class="col-sm-4">Management</dt>
-          <dd class="col-sm-8">
-            {% if request_obj.management %}
-              {{ request_obj.management.get_full_name|default:request_obj.management.username }}
-            {% else %}
-              <span class="text-muted">Not set</span>
-            {% endif %}
-          </dd>
-
-          <dt class="col-sm-4">Total Amount</dt>
-          <dd class="col-sm-8">
-            ₹{{ request_obj.total_amount|floatformat:2 }}
-          </dd>
-
-          <dt class="col-sm-4">Paid On</dt>
-          <dd class="col-sm-8">
-            {% if request_obj.paid_at %}
-              {{ request_obj.paid_at|date:"Y-m-d" }}
+        <table class="table table-sm mb-0">
+          <tr>
+            <th style="width:40%;">Employee</th>
+            <td>
+              {{ request_obj.created_by.get_full_name|default:request_obj.created_by.username }}
+              <div class="small text-muted">{{ request_obj.created_by.email }}</div>
+            </td>
+          </tr>
+          <tr>
+            <th>Submitted</th>
+            <td>{{ request_obj.submitted_at|default:request_obj.created_at|date:"Y-m-d H:i" }}</td>
+          </tr>
+          <tr>
+            <th>Status</th>
+            <td>
+              <span class="badge bg-light text-dark">{{ request_obj.get_status_display }}</span>
+            </td>
+          </tr>
+          <tr>
+            <th>Total Amount</th>
+            <td>₹{{ request_obj.total_amount|floatformat:2 }}</td>
+          </tr>
+          {% if request_obj.paid_at %}
+          <tr>
+            <th>Paid On</th>
+            <td>
+              {{ request_obj.paid_at|date:"Y-m-d H:i" }}
               {% if request_obj.finance_payment_reference %}
-                <div class="text-muted small">
-                  Ref: {{ request_obj.finance_payment_reference }}
-                </div>
+                <div class="small text-muted">Ref: {{ request_obj.finance_payment_reference }}</div>
               {% endif %}
-            {% else %}
-              <span class="text-muted">Not paid</span>
-            {% endif %}
-          </dd>
-
-          {% if request_obj.verified_at %}
-          <dt class="col-sm-4">Verified On</dt>
-          <dd class="col-sm-8">
-            {{ request_obj.verified_at|date:"Y-m-d H:i" }}
-            {% if request_obj.verified_by %}
-              <div class="text-muted small">
-                By: {{ request_obj.verified_by.get_full_name|default:request_obj.verified_by.username }}
-              </div>
-            {% endif %}
-          </dd>
+            </td>
+          </tr>
           {% endif %}
-        </dl>
+        </table>
       </div>
     </div>
+
+    {% if request_obj.finance_note %}
+    <div class="alert alert-info">
+      <strong>Finance note:</strong>
+      <div class="small mb-0" style="white-space:pre-line;">{{ request_obj.finance_note }}</div>
+    </div>
+    {% endif %}
   </div>
 
   <div class="col-md-6">
     <div class="card mb-3">
-      <div class="card-header">Approval Trail</div>
+      <div class="card-header">Approvers</div>
       <div class="card-body">
-        <h6 class="mb-1">Manager</h6>
-        <p class="mb-2 small">
-          Decision: {{ request_obj.manager_decision|default:"-" }}<br>
-          At:
-          {% if request_obj.manager_decided_at %}
-            {{ request_obj.manager_decided_at|date:"Y-m-d H:i" }}
-          {% else %}
-            -
+        <table class="table table-sm mb-0">
+          <tr>
+            <th style="width:40%;">Manager</th>
+            <td>
+              {% if request_obj.manager %}
+                {{ request_obj.manager.get_full_name|default:request_obj.manager.username }}
+              {% else %}
+                <span class="text-muted">-</span>
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th>Management</th>
+            <td>
+              {% if request_obj.management %}
+                {{ request_obj.management.get_full_name|default:request_obj.management.username }}
+              {% else %}
+                <span class="text-muted">-</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% if request_obj.verified_at %}
+          <tr>
+            <th>Verified by Finance</th>
+            <td>
+              {{ request_obj.verified_at|date:"Y-m-d H:i" }}
+              {% if request_obj.verified_by %}
+                <div class="small text-muted">By: {{ request_obj.verified_by.get_full_name|default:request_obj.verified_by.username }}</div>
+              {% endif %}
+            </td>
+          </tr>
           {% endif %}
-        </p>
-        {% if request_obj.manager_comment %}
-          <div class="border rounded p-2 mb-3">
-            <strong>Comment:</strong><br>
-            <span class="small">{{ request_obj.manager_comment|linebreaksbr }}</span>
-          </div>
-        {% endif %}
-
-        <h6 class="mb-1">Management</h6>
-        <p class="mb-2 small">
-          Decision: {{ request_obj.management_decision|default:"-" }}<br>
-          At:
-          {% if request_obj.management_decided_at %}
-            {{ request_obj.management_decided_at|date:"Y-m-d H:i" }}
-          {% else %}
-            -
-          {% endif %}
-        </p>
-        {% if request_obj.management_comment %}
-          <div class="border rounded p-2 mb-3">
-            <strong>Comment:</strong><br>
-            <span class="small">{{ request_obj.management_comment|linebreaksbr }}</span>
-          </div>
-        {% endif %}
-
-        <h6 class="mb-1">Finance</h6>
-        {% if request_obj.finance_note %}
-          <div class="border rounded p-2 mb-2">
-            <strong>Finance Note:</strong><br>
-            <span class="small">{{ request_obj.finance_note|linebreaksbr }}</span>
-          </div>
-        {% else %}
-          <p class="text-muted small mb-0">No finance notes yet.</p>
-        {% endif %}
+        </table>
       </div>
     </div>
   </div>
 </div>
 
-<div class="card mb-3">
-  <div class="card-header">Included Expenses</div>
-  <div class="card-body">
+{# =========================
+   Expense Lines with per-bill status + employee actions on rejected lines
+   ========================= #}
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Expense Lines</span>
+    <div>
+      <a href="{% url 'reimbursement:expense_inbox' %}" class="btn btn-sm btn-outline-primary">
+        Add a New Bill
+      </a>
+    </div>
+  </div>
+
+  <div class="card-body p-0">
     <div class="table-responsive">
-      <table class="table table-sm table-hover align-middle">
+      <table class="table table-sm table-hover align-middle mb-0">
         <thead class="table-light">
           <tr>
-            <th>#</th>
-            <th>Date</th>
-            <th>Category</th>
-            <th>Bill Type</th>
-            <th>Vendor</th>
+            <th style="width:50px;">#</th>
+            <th style="width:110px;">Date</th>
+            <th style="width:140px;">Category</th>
+            <th style="width:130px;">Bill Type</th>
             <th>Description</th>
-            <th>Amount</th>
-            <th>Receipt</th>
+            <th class="text-end" style="width:120px;">Amount</th>
+            <th style="width:90px;">Receipt</th>
+            <th style="width:210px;">Bill Status</th>
+            <th style="width:220px;">Actions</th>
           </tr>
         </thead>
         <tbody>
-          {% for line in lines %}
-          <tr>
-            <td>{{ forloop.counter }}</td>
-            <td>{{ line.expense_item.date|date:"Y-m-d" }}</td>
-            <td>{{ line.expense_item.get_category_display }}</td>
-            <td>
-              {% if line.expense_item.gst_type %}
-                {{ line.expense_item.get_gst_type_display }}
-              {% else %}
-                <span class="text-muted">-</span>
-              {% endif %}
-            </td>
-            <td>{{ line.expense_item.vendor|default:"-" }}</td>
-            <td class="small">{{ line.description|default:"-" }}</td>
-            <td>₹{{ line.amount|floatformat:2 }}</td>
-            <td>
-              {% if line.receipt_file or line.expense_item.receipt_file %}
-                <a href="{% url 'reimbursement:receipt_line' line.id %}" target="_blank"
-                   class="btn btn-sm btn-outline-secondary">View</a>
-              {% else %}
-                <span class="text-muted small">No file</span>
-              {% endif %}
-            </td>
-          </tr>
+          {% for line in request_obj.lines.all %}
+            {% if line.status == "included" %}
+            <tr>
+              <td>{{ forloop.counter }}</td>
+              <td>{{ line.expense_item.date|date:"Y-m-d" }}</td>
+              <td>{{ line.expense_item.get_category_display|default:line.expense_item.category }}</td>
+              <td>
+                {% if line.expense_item.gst_type %}
+                  {{ line.expense_item.get_gst_type_display }}
+                {% else %}
+                  <span class="text-muted">-</span>
+                {% endif %}
+              </td>
+              <td class="small">{{ line.description|default:line.expense_item.description|default:"-" }}</td>
+              <td class="text-end">₹{{ line.amount|floatformat:2 }}</td>
+              <td>
+                {% if line.receipt_file or line.expense_item.receipt_file %}
+                  <a href="{% url 'reimbursement:receipt_line' line.id %}" target="_blank" class="btn btn-sm btn-outline-secondary">View</a>
+                {% else %}
+                  <span class="text-muted small">No file</span>
+                {% endif %}
+              </td>
+              <td>
+                {# Bill-level status badge #}
+                {% if line.bill_status == 'finance_rejected' %}
+                  <span class="badge bg-danger">Rejected by Finance</span>
+                  {% if line.finance_rejection_reason %}
+                    <div class="small text-muted mt-1" style="white-space:pre-line;">
+                      Reason: {{ line.finance_rejection_reason }}
+                    </div>
+                  {% endif %}
+                {% elif line.bill_status == 'finance_approved' %}
+                  <span class="badge bg-success">Finance Approved</span>
+                {% elif line.bill_status == 'pending_finance' %}
+                  <span class="badge bg-warning text-dark">Pending Finance</span>
+                {% else %}
+                  <span class="badge bg-secondary">{{ line.bill_status|default:"-"|title }}</span>
+                {% endif %}
+              </td>
+              <td>
+                {# EMPLOYEE ACTIONS on rejected bills ONLY #}
+                {% if line.bill_status == 'finance_rejected' %}
+                  <div class="d-flex flex-column gap-1">
+                    <a class="btn btn-sm btn-outline-primary"
+                       href="{% url 'reimbursement:expense_edit' line.expense_item.id %}">
+                      Edit this Bill
+                    </a>
+                    <a class="btn btn-sm btn-outline-dark"
+                       href="{% url 'reimbursement:expense_inbox' %}">
+                      Add New Bill (Replacement)
+                    </a>
+                    <div class="small text-muted">
+                      After updating or adding a replacement, resubmit the request.
+                    </div>
+                  </div>
+                {% else %}
+                  <span class="text-muted small">—</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endif %}
           {% empty %}
-          <tr>
-            <td colspan="8" class="text-center text-muted py-3">
-              No expense lines attached to this request.
-            </td>
-          </tr>
+            <tr>
+              <td colspan="9" class="text-center text-muted py-3">No expense lines.</td>
+            </tr>
           {% endfor %}
         </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="5" class="text-end"><strong>Total</strong></td>
+            <td class="text-end"><strong>₹{{ request_obj.total_amount|floatformat:2 }}</strong></td>
+            <td colspan="3"></td>
+          </tr>
+        </tfoot>
       </table>
     </div>
   </div>
 </div>
 
-<div class="card mb-3">
-  <div class="card-header">Activity Log</div>
-  <div class="card-body">
-    {% if logs %}
-      <ul class="list-unstyled mb-0">
-        {% for log in logs %}
-          <li class="mb-2">
-            <div class="small text-muted">
-              {{ log.created_at|date:"Y-m-d H:i" }} —
-              {{ log.get_action_display }}{% if log.actor %} by {{ log.actor.get_full_name|default:log.actor.username }}{% endif %}
-            </div>
-            {% if log.message %}
-              <div class="small">{{ log.message }}</div>
-            {% endif %}
-          </li>
-        {% endfor %}
-      </ul>
-    {% else %}
-      <p class="text-muted mb-0 small">No log entries yet.</p>
-    {% endif %}
+{# Helper: show an alert if the request is in a partial-hold state #}
+{% if show_partial_hold_hint %}
+  <div class="alert alert-warning mt-3">
+    One or more bills were rejected by Finance. Please edit the rejected bill(s) above
+    or add a new replacement bill. Then resubmit the request.
   </div>
-</div>
+{% endif %}
+
 {% endblock %}

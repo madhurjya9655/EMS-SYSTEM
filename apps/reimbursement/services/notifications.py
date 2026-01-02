@@ -1,4 +1,4 @@
-# apps/reimbursement/services/notifications.py
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\reimbursement\services\notifications.py
 from __future__ import annotations
 
 import logging
@@ -777,7 +777,7 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
 
     kind = "finance_verified"
     if _already_sent_recent(req, kind):
-        logger.info("Suppressing duplicate '%s' email for req #%s.", req.id)
+        logger.info("Suppressing duplicate '%s' email for req #%s.", kind, req.id)
         return
 
     mgr_rec = _recipients_for_manager(req)
@@ -1699,4 +1699,181 @@ def send_reimbursement_clarification(req: ReimbursementRequest, *, actor=None) -
         html=html,
         txt=txt,
         extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "clarification"},
+    )
+
+# ---------------------------------------------------------------------------
+# NEW: Bill-level notifications wired for finance-first flow
+# ---------------------------------------------------------------------------
+
+def _bill_view_url(line: ReimbursementLine) -> str:
+    try:
+        return _abs_url(reverse("reimbursement:receipt_line", args=[line.id]))
+    except Exception:
+        return ""
+
+def send_bill_rejected_by_finance(req: ReimbursementRequest, line: ReimbursementLine) -> None:
+    """
+    Finance rejects a single bill — email ONLY the employee with bill details and reason.
+    Keeps the overall request in Partial Hold until all bills are FINANCE_APPROVED.
+    """
+    if not _email_enabled():
+        logger.info("Emails disabled; skipping bill-rejected email for req #%s line #%s.", req.id, line.id)
+        return
+
+    kind = f"bill_rejected_by_finance_{line.id}"
+    if _already_sent_recent(req, kind_hint=kind):
+        logger.info("Suppressing duplicate '%s' email for req #%s line #%s.", kind, req.id, line.id)
+        return
+
+    emp_email = _employee_email(req)
+    if not emp_email:
+        logger.info("Bill rejected email suppressed: employee has no email (req #%s).", req.id)
+        return
+
+    emp_name = escape(_employee_display_name(req.created_by))
+    amt_str = _format_amount(line.amount or Decimal("0.00"))
+    reason_html = escape(line.finance_rejection_reason or "-").replace("\n", "<br>")
+    bill_url = _bill_view_url(line)
+    req_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
+
+    subject = f"Reimbursement #{req.id}: One bill was rejected by Finance"
+
+    html = f"""
+<html>
+  <body style="font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif;background:#f3f4f6;padding:16px;">
+    <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:10px;
+                padding:20px;border:1px solid #e5e7eb;">
+      <h2 style="margin:0 0 12px 0;color:#111827;">Bill Rejected by Finance</h2>
+
+      <table style="font-size:14px;margin:8px 0 16px 0;">
+        <tr><td style="padding-right:8px;"><strong>Request ID:</strong></td><td>#{req.id}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Employee:</strong></td><td>{emp_name}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Bill ID:</strong></td><td>#{line.id}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Bill Amount:</strong></td><td>₹{amt_str}</td></tr>
+      </table>
+
+      <p style="font-size:14px;margin:0 0 12px 0;">
+        <strong>Reason:</strong><br>{reason_html}
+      </p>
+
+      <p style="font-size:14px;margin:12px 0;">
+        {('Bill file: <a href="'+bill_url+'" style="color:#2563eb;text-decoration:none;">View</a><br>' if bill_url else '')}
+        Full request: <a href="{req_url}" style="color:#2563eb;text-decoration:none;">{req_url}</a>
+      </p>
+
+      <p style="font-size:13px;margin-top:16px;color:#4b5563;">
+        Edit this rejected bill or add a replacement, then resubmit for Finance review.
+      </p>
+    </div>
+  </body>
+</html>
+    """
+
+    txt = "\n".join(
+        [
+            f"Bill rejected by Finance (request #{req.id})",
+            "",
+            f"Employee : {_employee_display_name(req.created_by)}",
+            f"Bill ID  : #{line.id}",
+            f"Amount   : ₹{amt_str}",
+            f"Reason   : {(line.finance_rejection_reason or '-').strip()}",
+            "",
+            f"Bill file : {bill_url or '-'}",
+            f"Request   : {req_url}",
+        ]
+    )
+
+    _send_and_log(
+        req,
+        kind=kind,
+        subject=subject,
+        to_addrs=[emp_email],
+        cc=_admin_emails(),
+        reply_to=[],  # defaults to Amreen
+        html=html,
+        txt=txt,
+        extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "bill_rejected"},
+    )
+
+def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *, actor=None) -> None:
+    """
+    Employee edits/replaces a previously rejected bill — email the Finance team (Akshay & Sharyu).
+    """
+    if not _email_enabled():
+        logger.info("Emails disabled; skipping bill-resubmitted email for req #%s line #%s.", req.id, line.id)
+        return
+
+    kind = f"bill_resubmitted_{line.id}"
+    if _already_sent_recent(req, kind_hint=kind):
+        logger.info("Suppressing duplicate '%s' email for req #%s line #%s.", kind, req.id, line.id)
+        return
+
+    fin_rec = _recipients_for_finance_enforced()
+    if not fin_rec.to:
+        logger.warning("Bill resubmitted email suppressed: no finance recipients for req #%s.", req.id)
+        return
+
+    emp_name = escape(_employee_display_name(req.created_by))
+    emp_email = (getattr(req.created_by, "email", "") or "").strip() or "-"
+    amt_str = _format_amount(line.amount or Decimal("0.00"))
+    resubmitter = _employee_display_name(actor) if actor else emp_name
+    bill_url = _bill_view_url(line)
+    req_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
+
+    subject = f"Reimbursement #{req.id}: Employee resubmitted a corrected bill"
+
+    html = f"""
+<html>
+  <body style="font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif;background:#f3f4f6;padding:16px;">
+    <div style="max-width:700px;margin:0 auto;background:#ffffff;border-radius:10px;
+                padding:20px;border:1px solid #e5e7eb;">
+      <h2 style="margin:0 0 12px 0;color:#111827;">Corrected Bill Resubmitted</h2>
+
+      <table style="font-size:14px;margin:8px 0 16px 0;">
+        <tr><td style="padding-right:8px;"><strong>Request ID:</strong></td><td>#{req.id}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Employee:</strong></td><td>{emp_name}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Employee Email:</strong></td><td>{escape(emp_email)}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Resubmitted By:</strong></td><td>{escape(resubmitter)}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Bill ID:</strong></td><td>#{line.id}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Bill Amount:</strong></td><td>₹{amt_str}</td></tr>
+      </table>
+
+      <p style="font-size:14px;margin:12px 0;">
+        {('Bill file: <a href="'+bill_url+'" style="color:#2563eb;text-decoration:none;">View</a><br>' if bill_url else '')}
+        Full request: <a href="{req_url}" style="color:#2563eb;text-decoration:none;">{req_url}</a>
+      </p>
+
+      <p style="font-size:13px;margin-top:16px;color:#4b5563;">
+        Please re-verify only the corrected bill and proceed with the request.
+      </p>
+    </div>
+  </body>
+</html>
+    """
+
+    txt = "\n".join(
+        [
+            f"Corrected bill resubmitted (request #{req.id})",
+            "",
+            f"Employee        : {_employee_display_name(req.created_by)}",
+            f"Employee Email  : {emp_email}",
+            f"Resubmitted By  : {resubmitter}",
+            f"Bill ID         : #{line.id}",
+            f"Bill Amount     : ₹{amt_str}",
+            "",
+            f"Bill file : {bill_url or '-'}",
+            f"Request   : {req_url}",
+        ]
+    )
+
+    _send_and_log(
+        req,
+        kind=kind,
+        subject=subject,
+        to_addrs=fin_rec.to,
+        cc=[],  # enforced
+        reply_to=[emp_email] if emp_email and emp_email != "-" else _amreen_reply_to(),
+        html=html,
+        txt=txt,
+        extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "bill_resubmitted"},
     )
