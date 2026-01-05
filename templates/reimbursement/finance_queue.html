@@ -1,4 +1,3 @@
-<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\reimbursement\finance_queue.html -->
 {% extends "base.html" %}
 {% block title %}Finance Reimbursement Queue{% endblock %}
 
@@ -9,7 +8,7 @@
 
 <div class="card">
   <div class="card-header">
-    Requests pending finance review / payment
+    Requests pending finance verification / review / payment
   </div>
   <div class="card-body">
     <div class="table-responsive">
@@ -23,7 +22,7 @@
             <th>Total Amount</th>
             <th>Manager</th>
             <th>Management</th>
-            <th style="width:200px;">Actions</th>
+            <th style="width:240px;">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -53,15 +52,23 @@
               {% endif %}
             </td>
             <td class="d-flex gap-2">
+              {# Verification step #}
               {% if req.status == "pending_finance_verify" %}
                 <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}"
                    class="btn btn-sm btn-outline-warning">
                   Verify
                 </a>
-              {% else %}
+              {# Finance review & payment #}
+              {% elif req.status == "pending_finance" or req.status == "approved" %}
                 <a href="{% url 'reimbursement:finance_review' req.id %}?return={{ request.get_full_path|urlencode }}"
                    class="btn btn-sm btn-outline-primary">
                   Review / Pay
+                </a>
+              {# Intermediate finance-hold states: just open the detail page #}
+              {% else %}
+                <a href="{% url 'reimbursement:reimbursement_detail' req.id %}?return={{ request.get_full_path|urlencode }}"
+                   class="btn btn-sm btn-outline-secondary">
+                  View
                 </a>
               {% endif %}
             </td>

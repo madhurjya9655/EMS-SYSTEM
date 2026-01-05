@@ -880,12 +880,16 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
     context_object_name = "requests"
 
     def get_queryset(self):
+        # ✅ Include Partial/Hold & related intermediate states so they appear in Finance queue
         return (
             ReimbursementRequest.objects.filter(
                 status__in=[
                     ReimbursementRequest.Status.PENDING_FINANCE_VERIFY,
                     ReimbursementRequest.Status.PENDING_FINANCE,
                     ReimbursementRequest.Status.APPROVED,
+                    ReimbursementRequest.Status.PARTIAL_HOLD,
+                    ReimbursementRequest.Status.PARTIALLY_REJECTED,
+                    ReimbursementRequest.Status.CLARIFICATION_REQUIRED,
                 ]
             )
             .select_related("created_by", "manager", "management")
