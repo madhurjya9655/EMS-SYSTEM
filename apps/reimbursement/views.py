@@ -884,9 +884,9 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
             ReimbursementRequest.objects.filter(
                 status__in=[
                     ReimbursementRequest.Status.PENDING_FINANCE_VERIFY,
+                    ReimbursementRequest.Status.PARTIAL_HOLD,
                     ReimbursementRequest.Status.PENDING_FINANCE,
                     ReimbursementRequest.Status.APPROVED,
-                    ReimbursementRequest.Status.PARTIAL_HOLD,  # include partial holds
                 ]
             )
             .select_related("created_by", "manager", "management")
@@ -895,122 +895,92 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
 
 class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
-    Finance verification (pre-manager step) — bill-by-bill selection.
-    - Approve/Reject selected bills.
-    - If any bill is rejected -> request becomes PARTIAL_HOLD and employee is notified.
-    - Once ALL bills are finance-approved -> request is 'verified' and auto-moves to Manager.
+    Finance verification (pre-manager) with per-bill Approve / Reject selection.
+    When all INCLUDED bills are Finance-Approved, the request auto-moves to Manager.
     """
 
     permission_code = "reimbursement_finance_review"
     template_name = "reimbursement/finance_verify.html"
 
-    def _req_queryset(self):
-        return ReimbursementRequest.objects.select_related("created_by", "manager").prefetch_related("lines", "lines__expense_item")
-
-    def get(self, request, *args, **kwargs):
-        # Only allow verify screen while request is in verify or partial-hold
-        req = get_object_or_404(
-            self._req_queryset(),
-            pk=kwargs.get("pk"),
-            status__in=[
-                ReimbursementRequest.Status.PENDING_FINANCE_VERIFY,
-                ReimbursementRequest.Status.PARTIAL_HOLD,
-            ],
+    def _get_request(self, pk):
+        return get_object_or_404(
+            ReimbursementRequest.objects.select_related("created_by", "manager"),
+            pk=pk,
         )
-        ctx = {
-            "request_obj": req,
-            "lines": req.lines.select_related("expense_item"),
-            "back_url": _safe_back_url(request.GET.get("return")),
-        }
-        return self.render_to_response(ctx)
-
-    def post(self, request, *args, **kwargs):
-        req: ReimbursementRequest = get_object_or_404(
-            self._req_queryset(),
-            pk=kwargs.get("pk"),
-            status__in=[
-                ReimbursementRequest.Status.PENDING_FINANCE_VERIFY,
-                ReimbursementRequest.Status.PARTIAL_HOLD,
-            ],
-        )
-
-        # incoming format: line_action[<line_id>] = "approve" / "reject" / ""
-        actions = {
-            int(k.split("[", 1)[1].rstrip("]")): v
-            for k, v in request.POST.items()
-            if k.startswith("line_action[")
-        }
-        note = (request.POST.get("note") or "").strip()
-
-        if not actions:
-            messages.error(request, "Select at least one bill to approve or reject.")
-            return _redirect_back(request, "reimbursement:finance_pending")
-
-        any_rejected = False
-        any_changed = False
-
-        for line in req.lines.select_related("expense_item"):
-            act = actions.get(line.id, "")
-            if act == "approve":
-                if line.status != ReimbursementLine.Status.FINANCE_APPROVED:
-                    line.status = ReimbursementLine.Status.FINANCE_APPROVED
-                    line.save(update_fields=["status", "updated_at"])
-                    any_changed = True
-            elif act == "reject":
-                if line.status != ReimbursementLine.Status.FINANCE_REJECTED:
-                    line.status = ReimbursementLine.Status.FINANCE_REJECTED
-                    line.save(update_fields=["status", "updated_at"])
-                    any_changed = True
-                any_rejected = True
-            # blank = no-op for that line
-
-        # Append finance note (single running field)
-        if note:
-            req.finance_note = (req.finance_note + ("\n" if req.finance_note else "") + note).strip()
-            req.save(update_fields=["finance_note", "updated_at"])
-
-        if any_rejected:
-            prev = req.status
-            req.status = ReimbursementRequest.Status.PARTIAL_HOLD
-            req.save(update_fields=["status", "updated_at"])
-            ReimbursementLog.log(
-                req,
-                ReimbursementLog.Action.STATUS_CHANGED,
-                actor=request.user,
-                message="Finance partially approved; request moved to Partial Hold.",
-                from_status=prev,
-                to_status=req.status,
-            )
-            _send_safe("send_reimbursement_finance_rejected", req)
-            messages.success(request, "Selected bills rejected. Request moved to Partial Hold (Finance).")
-            return _redirect_back(request, "reimbursement:finance_pending")
-
-        # If nothing was rejected, check if ALL lines are finance-approved
-        total_lines = req.lines.count()
-        approved_lines = req.lines.filter(status=ReimbursementLine.Status.FINANCE_APPROVED).count()
-
-        if total_lines > 0 and approved_lines == total_lines:
-            # Single source of truth: mark verified (moves to Manager)
-            try:
-                req.mark_verified(actor=request.user, note=note)
-            except DjangoCoreValidationError as e:
-                messages.error(request, getattr(e, "message", str(e)) or "Unable to verify this request.")
-                return _redirect_back(request, "reimbursement:finance_pending")
-
-            _send_safe("send_reimbursement_finance_verified", req)
-            messages.success(request, "All bills verified. Sent to Manager for approval.")
-            return _redirect_back(request, "reimbursement:finance_pending")
-
-        # Some lines neither approved nor rejected (no-op), keep status as-is
-        if any_changed:
-            messages.success(request, "Bill decisions saved.")
-        else:
-            messages.info(request, "No changes were made.")
-        return _redirect_back(request, "reimbursement:finance_pending")
 
     def get_context_data(self, **kwargs):
-        # not used; GET above builds context explicitly
-        return super().get_context_data(**kwargs)
+        ctx = super().get_context_data(**kwargs)
+        req = self._get_request(self.kwargs.get("pk"))
+        ctx["request_obj"] = req
+        ctx["lines"] = req.lines.select_related("expense_item").filter(
+            status=ReimbursementLine.Status.INCLUDED
+        )
+        ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        req = self._get_request(kwargs.get("pk"))
+        back = _safe_back_url(request.POST.get("return"))
+        action = (request.POST.get("action") or "").strip().lower()
+        selected_ids = request.POST.getlist("line_ids")
+        reason = (request.POST.get("reason") or "").strip()
+
+        if action not in {"approve", "reject", "finalize"}:
+            messages.error(request, "Invalid action.")
+            return redirect(request.path)
+
+        # Approve / Reject selected lines
+        if action in {"approve", "reject"}:
+            if not selected_ids:
+                messages.warning(request, "Select at least one bill line.")
+                return redirect(request.path + (f"?return={back}" if back else ""))
+
+            qs = req.lines.filter(
+                pk__in=selected_ids,
+                status=ReimbursementLine.Status.INCLUDED,
+            ).select_related("expense_item")
+
+            processed = 0
+            for line in qs:
+                try:
+                    if action == "approve":
+                        line.approve_by_finance(actor=request.user)
+                    else:
+                        if not reason:
+                            messages.error(request, "Rejection reason is required.")
+                            return redirect(request.path + (f"?return={back}" if back else ""))
+                        line.reject_by_finance(actor=request.user, reason=reason)
+                    processed += 1
+                except DjangoCoreValidationError as e:
+                    messages.error(request, getattr(e, "message", str(e)) or f"Could not process line #{line.id}")
+                    return redirect(request.path + (f"?return={back}" if back else ""))
+
+            # After per-line updates, derive parent status
+            req.apply_derived_status_from_bills(actor=request.user, reason="Finance updated selected bills.")
+            if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
+                req.verified_by = request.user
+                req.verified_at = timezone.now()
+                req.save(update_fields=["verified_by", "verified_at", "updated_at"])
+                _send_safe("send_reimbursement_finance_verified", req)
+                messages.success(request, f"{processed} line(s) processed. All bills are approved; sent to Manager.")
+                return _redirect_back(request, "reimbursement:finance_pending")
+
+            messages.success(request, f"{processed} line(s) processed.")
+            return redirect(request.path + (f"?return={back}" if back else ""))
+
+        # Finalize: recompute and send to Manager if possible
+        if action == "finalize":
+            req.apply_derived_status_from_bills(actor=request.user, reason="Finance finalized verification.")
+            if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
+                req.verified_by = request.user
+                req.verified_at = timezone.now()
+                req.save(update_fields=["verified_by", "verified_at", "updated_at"])
+                _send_safe("send_reimbursement_finance_verified", req)
+                messages.success(request, "All bills approved. Sent to Manager.")
+                return _redirect_back(request, "reimbursement:finance_pending")
+
+            messages.info(request, "Some bills are not Finance-Approved yet. Remaining in Partial Hold (Finance).")
+            return redirect(request.path + (f"?return={back}" if back else ""))
 
 class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
     """

@@ -22,7 +22,7 @@
             <th>Total Amount</th>
             <th>Manager</th>
             <th>Management</th>
-            <th style="width:220px;">Actions</th>
+            <th style="width:260px;">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -32,7 +32,9 @@
             <td>{{ req.created_by.get_full_name|default:req.created_by.username }}</td>
             <td>{{ req.submitted_at|default:req.created_at|date:"Y-m-d H:i" }}</td>
             <td>
-              <span class="badge bg-light text-dark">{{ req.get_status_display }}</span>
+              <span class="badge bg-light text-dark">
+                {{ req.get_status_display }}
+              </span>
             </td>
             <td>₹{{ req.total_amount|floatformat:2 }}</td>
             <td>
@@ -49,22 +51,30 @@
                 <span class="text-muted small">-</span>
               {% endif %}
             </td>
-
             <td class="d-flex gap-2">
+              {# For both PENDING_FINANCE_VERIFY and PARTIAL_HOLD we open the verify page #}
               {% if req.status == "pending_finance_verify" or req.status == "partial_hold" %}
-                <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}"
-                   class="btn btn-sm btn-outline-warning">
+                <a
+                  href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}"
+                  class="btn btn-sm btn-outline-secondary">
+                  View Bills
+                </a>
+                <a
+                  href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}"
+                  class="btn btn-sm btn-outline-warning">
                   Verify
                 </a>
               {% elif req.status == "pending_finance" or req.status == "approved" %}
-                <a href="{% url 'reimbursement:finance_review' req.id %}?return={{ request.get_full_path|urlencode }}"
-                   class="btn btn-sm btn-outline-primary">
+                <a
+                  href="{% url 'reimbursement:finance_review' req.id %}?return={{ request.get_full_path|urlencode }}"
+                  class="btn btn-sm btn-outline-primary">
                   Review / Pay
                 </a>
               {% else %}
-                <a href="{% url 'reimbursement:reimbursement_detail' req.id %}?return={{ request.get_full_path|urlencode }}"
-                   class="btn btn-sm btn-outline-secondary">
-                  View
+                <a
+                  href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}"
+                  class="btn btn-sm btn-outline-secondary">
+                  View Bills
                 </a>
               {% endif %}
             </td>

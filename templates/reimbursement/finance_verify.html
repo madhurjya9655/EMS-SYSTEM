@@ -4,11 +4,11 @@
 {% block title %}Finance Verification – Reimbursement #{{ request_obj.id }}{% endblock %}
 
 {% block content %}
-<div class="container" style="max-width:960px;margin:20px auto;">
+<div class="container" style="max-width:1000px;margin:20px auto;">
   <div class="d-flex justify-content-between align-items-center">
     <div>
-      <h1 style="margin:0 0 6px 0;">Finance Verification</h1>
-      <p style="margin:0 0 16px 0;color:#6b7280;">Reimbursement #{{ request_obj.id }}</p>
+      <h1 style="margin:0 0 8px 0;">Finance Verification</h1>
+      <p class="text-muted" style="margin:0;">Reimbursement #{{ request_obj.id }}</p>
     </div>
     <div>
       {% if back_url %}
@@ -19,70 +19,62 @@
     </div>
   </div>
 
-  <div style="border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:16px;">
-    <table style="width:100%;border-collapse:collapse;">
-      <tr>
-        <td style="padding:6px 4px;width:200px;"><strong>Employee</strong></td>
-        <td style="padding:6px 4px;">{{ request_obj.created_by.get_full_name|default:request_obj.created_by.username }}</td>
-      </tr>
-      <tr>
-        <td style="padding:6px 4px;"><strong>Status</strong></td>
-        <td style="padding:6px 4px;">{{ request_obj.get_status_display }}</td>
-      </tr>
-      <tr>
-        <td style="padding:6px 4px;"><strong>Submitted At</strong></td>
-        <td style="padding:6px 4px;">{{ request_obj.submitted_at|default:request_obj.created_at|date:"Y-m-d H:i" }}</td>
-      </tr>
-      <tr>
-        <td style="padding:6px 4px;"><strong>Total Amount</strong></td>
-        <td style="padding:6px 4px;">₹ {{ request_obj.total_amount|floatformat:2 }}</td>
-      </tr>
+  <!-- Request summary -->
+  <div class="card mt-3 mb-3">
+    <div class="card-body">
+      <div class="row">
+        <div class="col-md-6">
+          <div><strong>Employee:</strong> {{ request_obj.created_by.get_full_name|default:request_obj.created_by.username }}</div>
+          <div><strong>Submitted:</strong> {{ request_obj.submitted_at|default:request_obj.created_at|date:"Y-m-d H:i" }}</div>
+        </div>
+        <div class="col-md-6">
+          <div><strong>Status:</strong> {{ request_obj.get_status_display }}</div>
+          <div><strong>Total:</strong> ₹{{ request_obj.total_amount|floatformat:2 }}</div>
+        </div>
+      </div>
       {% if request_obj.finance_note %}
-      <tr>
-        <td style="padding:6px 4px;vertical-align:top;"><strong>Finance Note</strong></td>
-        <td style="padding:6px 4px;white-space:pre-line;">{{ request_obj.finance_note }}</td>
-      </tr>
+      <div class="mt-2">
+        <strong>Finance Note:</strong>
+        <div style="white-space:pre-line">{{ request_obj.finance_note }}</div>
+      </div>
       {% endif %}
-    </table>
+    </div>
   </div>
 
-  <h3 style="margin:16px 0 8px 0;">Expense Lines</h3>
-
+  <!-- Bulk verify/reject form -->
   <form method="post">
     {% csrf_token %}
-    <input type="hidden" name="return" value="{{ back_url }}">
+    {% if back_url %}<input type="hidden" name="return" value="{{ back_url }}">{% endif %}
 
-    <div style="overflow:auto;border:1px solid #e5e7eb;border-radius:8px;">
-      <table style="width:100%;border-collapse:collapse;font-size:14px;">
-        <thead>
-          <tr style="background:#f9fafb;">
-            <th style="text-align:left;padding:8px;border-bottom:1px solid #e5e7eb;">#</th>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid #e5e7eb;">Type</th>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid #e5e7eb;">Date</th>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid #e5e7eb;">Description</th>
-            <th style="text-align:right;padding:8px;border-bottom:1px solid #e5e7eb;">Amount</th>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid #e5e7eb;">Bill</th>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid #e5e7eb;">Current</th>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid #e5e7eb;width:260px;">Action</th>
+    <div class="table-responsive">
+      <table class="table table-sm table-hover align-middle">
+        <thead class="table-light">
+          <tr>
+            <th style="width:34px;">
+              <input type="checkbox" id="chk_all" onclick="toggleAll(this)">
+            </th>
+            <th>#</th>
+            <th>Type</th>
+            <th>Date</th>
+            <th>Description</th>
+            <th class="text-end">Amount</th>
+            <th>Bill</th>
+            <th>Bill Status</th>
           </tr>
         </thead>
         <tbody>
           {% for line in lines %}
           <tr>
-            <td style="padding:8px;border-bottom:1px solid #f3f4f6;">{{ forloop.counter }}</td>
-            <td style="padding:8px;border-bottom:1px solid #f3f4f6;">
-              {{ line.expense_item.get_category_display|default:line.expense_item.category }}
+            <td>
+              <input type="checkbox" name="line_ids" value="{{ line.id }}" class="line-check">
             </td>
-            <td style="padding:8px;border-bottom:1px solid #f3f4f6;">
-              {{ line.expense_item.date|date:"d M Y" }}
-            </td>
-            <td style="padding:8px;border-bottom:1px solid #f3f4f6;white-space:pre-line;">
-              {{ line.description|default:line.expense_item.description|default:"-" }}
-            </td>
-            <td style="padding:8px;border-bottom:1px solid #f3f4f6;text-align:right;">
-              ₹ {{ line.amount|default:line.expense_item.amount|floatformat:2 }}
-            </td>
-            <td style="padding:8px;border-bottom:1px solid #f3f4f6;">
+            <td>{{ forloop.counter }}</td>
+            <td>{{ line.expense_item.get_category_display|default:line.expense_item.category }}</td>
+            <td>{{ line.expense_item.date|date:"d M Y" }}</td>
+            <td style="white-space:pre-line;">{{ line.description|default:line.expense_item.description|default:"-" }}</td>
+            <td class="text-end">₹{{ line.amount|floatformat:2 }}</td>
+            <td>
+              {# Direct secure file view #}
               {% url "reimbursement:receipt_line" line.id as receipt_url %}
               {% if receipt_url %}
                 <a href="{{ receipt_url }}" target="_blank" rel="noopener">View</a>
@@ -90,73 +82,63 @@
                 -
               {% endif %}
             </td>
-            <td style="padding:8px;border-bottom:1px solid #f3f4f6;">
-              {% if line.status == "finance_approved" %}
-                <span style="display:inline-block;padding:2px 8px;border-radius:12px;background:#ecfdf5;color:#16a34a;">Finance Approved</span>
-              {% elif line.status == "finance_rejected" %}
-                <span style="display:inline-block;padding:2px 8px;border-radius:12px;background:#fef2f2;color:#dc2626;">Finance Rejected</span>
-              {% elif line.status == "included" %}
-                <span style="display:inline-block;padding:2px 8px;border-radius:12px;background:#f3f4f6;color:#374151;">Pending</span>
+            <td>
+              {% if line.bill_status == "finance_approved" %}
+                <span class="badge bg-success">Finance Approved</span>
+              {% elif line.bill_status == "finance_rejected" %}
+                <span class="badge bg-danger">Finance Rejected</span>
+              {% elif line.bill_status == "employee_resubmitted" %}
+                <span class="badge bg-warning text-dark">Employee Resubmitted</span>
               {% else %}
-                <span style="display:inline-block;padding:2px 8px;border-radius:12px;background:#f3f4f6;color:#374151;">{{ line.get_status_display }}</span>
+                <span class="badge bg-secondary">Pending</span>
               {% endif %}
-            </td>
-            <td style="padding:8px;border-bottom:1px solid #f3f4f6;">
-              <!-- Per-bill decision radios. Leave = no change -->
-              <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                <label style="display:inline-flex;align-items:center;gap:6px;border:1px solid #16a34a;color:#16a34a;border-radius:6px;padding:4px 8px;cursor:pointer;">
-                  <input type="radio" class="form-check-input" name="line_action[{{ line.id }}]" value="approve">
-                  Approve
-                </label>
-                <label style="display:inline-flex;align-items:center;gap:6px;border:1px solid #dc2626;color:#dc2626;border-radius:6px;padding:4px 8px;cursor:pointer;">
-                  <input type="radio" class="form-check-input" name="line_action[{{ line.id }}]" value="reject">
-                  Reject
-                </label>
-                <label style="display:inline-flex;align-items:center;gap:6px;border:1px solid #6b7280;color:#6b7280;border-radius:6px;padding:4px 8px;cursor:pointer;">
-                  <input type="radio" class="form-check-input" name="line_action[{{ line.id }}]" value="" checked>
-                  Leave
-                </label>
-              </div>
             </td>
           </tr>
           {% empty %}
           <tr>
-            <td colspan="8" style="padding:12px;text-align:center;color:#6b7280;">
-              No expense lines were found.
+            <td colspan="8" class="text-center text-muted py-3">
+              No expense lines.
             </td>
           </tr>
           {% endfor %}
         </tbody>
         <tfoot>
           <tr>
-            <td colspan="4" style="padding:10px;text-align:right;"><strong>Total</strong></td>
-            <td style="padding:10px;text-align:right;"><strong>₹ {{ request_obj.total_amount|floatformat:2 }}</strong></td>
-            <td colspan="3"></td>
-          </tr>
-          <tr>
-            <td colspan="8" style="padding:12px;">
-              <label for="note" style="display:block;font-weight:600;margin-bottom:6px;">Finance Note (optional)</label>
-              <textarea id="note" name="note" rows="3"
-                        style="width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:6px;"
-                        placeholder="Add an internal note or clarification reason..."></textarea>
-              <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">
-                <button type="submit"
-                        style="padding:10px 14px;background:#16a34a;border:0;border-radius:6px;color:#fff;cursor:pointer;">
-                  Save Decisions
-                </button>
-                {% if back_url %}
-                  <a href="{{ back_url }}" class="btn btn-outline-secondary">Cancel</a>
-                {% endif %}
-              </div>
-              <p style="margin-top:8px;color:#6b7280;font-size:13px;">
-                Tip: If you reject any bill, the request will move to <strong>Partial Hold (Finance)</strong>.
-                When all bills are Finance-Approved, the system will automatically send the request to the Manager.
-              </p>
-            </td>
+            <td></td>
+            <td colspan="4" class="text-end"><strong>Total</strong></td>
+            <td class="text-end"><strong>₹{{ request_obj.total_amount|floatformat:2 }}</strong></td>
+            <td colspan="2"></td>
           </tr>
         </tfoot>
       </table>
     </div>
+
+    <!-- Actions -->
+    <div class="mt-3 d-flex flex-column gap-3">
+      <div class="d-flex flex-wrap gap-2">
+        <button name="action" value="approve" class="btn btn-success">
+          Approve Selected
+        </button>
+        <button name="action" value="reject" class="btn btn-danger">
+          Reject Selected
+        </button>
+        <button name="action" value="finalize" class="btn btn-primary">
+          Finalize &amp; Send to Manager (when all approved)
+        </button>
+      </div>
+
+      <div>
+        <label for="reason" class="form-label fw-semibold">Rejection reason (used only when rejecting)</label>
+        <textarea id="reason" name="reason" rows="3" class="form-control" placeholder="Add a clear reason employees can act on..."></textarea>
+      </div>
+    </div>
   </form>
 </div>
+
+<script>
+  function toggleAll(master){
+    const boxes = document.querySelectorAll('.line-check');
+    boxes.forEach(b => b.checked = master.checked);
+  }
+</script>
 {% endblock %}
