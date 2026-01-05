@@ -22,7 +22,7 @@
             <th>Total Amount</th>
             <th>Manager</th>
             <th>Management</th>
-            <th style="width:240px;">Actions</th>
+            <th style="width:220px;">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -32,9 +32,7 @@
             <td>{{ req.created_by.get_full_name|default:req.created_by.username }}</td>
             <td>{{ req.submitted_at|default:req.created_at|date:"Y-m-d H:i" }}</td>
             <td>
-              <span class="badge bg-light text-dark">
-                {{ req.get_status_display }}
-              </span>
+              <span class="badge bg-light text-dark">{{ req.get_status_display }}</span>
             </td>
             <td>₹{{ req.total_amount|floatformat:2 }}</td>
             <td>
@@ -51,20 +49,18 @@
                 <span class="text-muted small">-</span>
               {% endif %}
             </td>
+
             <td class="d-flex gap-2">
-              {# Verification step #}
-              {% if req.status == "pending_finance_verify" %}
+              {% if req.status == "pending_finance_verify" or req.status == "partial_hold" %}
                 <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}"
                    class="btn btn-sm btn-outline-warning">
                   Verify
                 </a>
-              {# Finance review & payment #}
               {% elif req.status == "pending_finance" or req.status == "approved" %}
                 <a href="{% url 'reimbursement:finance_review' req.id %}?return={{ request.get_full_path|urlencode }}"
                    class="btn btn-sm btn-outline-primary">
                   Review / Pay
                 </a>
-              {# Intermediate finance-hold states: just open the detail page #}
               {% else %}
                 <a href="{% url 'reimbursement:reimbursement_detail' req.id %}?return={{ request.get_full_path|urlencode }}"
                    class="btn btn-sm btn-outline-secondary">

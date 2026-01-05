@@ -1,4 +1,3 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\reimbursement\models.py
 from __future__ import annotations
 
 import logging
@@ -754,6 +753,7 @@ class ReimbursementLine(models.Model):
     last_modified_by = models.ForeignKey(UserModel, on_delete=models.SET_NULL, null=True, blank=True, related_name="modified_reimbursement_lines")
 
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)  # <-- added so update_fields including 'updated_at' are valid
 
     class Meta:
         ordering = ["id"]
@@ -815,7 +815,7 @@ class ReimbursementLine(models.Model):
         self.rejected_at = None
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
         self.save(update_fields=[
-            "bill_status", "finance_rejection_reason", "rejected_by", "rejected_at", "last_modified_by", "updated_at" if hasattr(self, "updated_at") else "bill_status"
+            "bill_status", "finance_rejection_reason", "rejected_by", "rejected_at", "last_modified_by", "updated_at"
         ])
         ReimbursementLog.log(
             self.request,
@@ -841,7 +841,7 @@ class ReimbursementLine(models.Model):
         self.rejected_at = timezone.now()
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
         self.save(update_fields=[
-            "bill_status", "finance_rejection_reason", "rejected_by", "rejected_at", "last_modified_by"
+            "bill_status", "finance_rejection_reason", "rejected_by", "rejected_at", "last_modified_by", "updated_at"
         ])
 
         # Unlock the expense for employee to edit/replace
@@ -876,7 +876,7 @@ class ReimbursementLine(models.Model):
         prev = self.bill_status
         self.bill_status = self.BillStatus.EMPLOYEE_RESUBMITTED
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
-        self.save(update_fields=["bill_status", "last_modified_by"])
+        self.save(update_fields=["bill_status", "last_modified_by", "updated_at"])
 
         # Notify finance about this bill resubmission
         try:
