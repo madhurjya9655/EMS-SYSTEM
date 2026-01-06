@@ -2,7 +2,8 @@
 from django.urls import path
 from . import views
 from .views_reports import recurring_report
-from .views_cron import weekly_congrats_hook, due_today_assignments_hook, pre10am_unblock_and_generate_hook
+from .views_cron import weekly_congrats_hook, pre10am_unblock_and_generate_hook
+from . import cron_views  # <-- use hardened cron endpoints here
 
 app_name = "tasks"
 
@@ -65,13 +66,21 @@ urlpatterns = [
     # -----------------
     # HTTP cron hooks (internal)
     # -----------------
+    # Weekly congrats stays on the existing module:
     path("internal/cron/weekly-congrats/<str:token>/", weekly_congrats_hook,      name="cron_weekly_congrats_with_token"),
     path("internal/cron/weekly-congrats/",             weekly_congrats_hook,      name="cron_weekly_congrats"),
 
-    path("internal/cron/due-today/<str:token>/",       due_today_assignments_hook, name="cron_due_today_with_token"),
-    path("internal/cron/due-today/",                   due_today_assignments_hook, name="cron_due_today"),
+    # ✅ Route "due-today" to hardened view that accepts ?key / headers and always JSON-200 on errors
+    path("internal/cron/due-today/<str:token>/",       cron_views.due_today,       name="cron_due_today_with_token"),
+    path("internal/cron/due-today/",                   cron_views.due_today,       name="cron_due_today"),
 
-    # NEW: 09:55 IST unblock + generate
+    # ✅ Add explicit endpoints for the consolidated 7PM summaries (admin + per-employee)
+    path("internal/cron/pending-7pm/",                 cron_views.pending_summary_7pm,  name="cron_pending_7pm"),
+
+    # ✅ Manual employee digest trigger (username/to via querystring)
+    path("internal/cron/employee-digest/",             cron_views.employee_digest,      name="cron_employee_digest"),
+
+    # NEW: 09:55 IST unblock + generate (kept on existing module as-is)
     path("internal/cron/pre10am-unblock/<str:token>/", pre10am_unblock_and_generate_hook, name="cron_pre10_with_token"),
     path("internal/cron/pre10am-unblock/",             pre10am_unblock_and_generate_hook, name="cron_pre10"),
 ]

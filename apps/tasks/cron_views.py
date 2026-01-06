@@ -19,6 +19,8 @@ def _authorized(request) -> bool:
       • ?key=<CRON_SECRET>
       • X-Cron-Key: <CRON_SECRET>
       • (lenient) ?token=<CRON_SECRET> or X-CRON-TOKEN: <CRON_SECRET>  (kept for parity with other hook)
+
+    If settings.CRON_SECRET is blank/missing, allow all (useful for dev).
     """
     key = (
         request.GET.get("key")
@@ -38,17 +40,16 @@ def due_today(request):
     HARDENED:
       • Never raises to caller.
       • Always returns JSON (status 200), even on internal error.
-      • Preserves auth semantics you already use (?key=... / X-Cron-Key).
+      • Preserves auth semantics (?key=... / X-Cron-Key / token variants).
     """
     if not _authorized(request):
         return HttpResponseForbidden("Forbidden")
 
     try:
         # Call the synchronous task runner (not the Celery async delay).
-        # This function itself guards "before 10 AM" and uses robust IST handling.
+        # This function itself guards "before 10 AM" (IST) and handles TZ.
         result = send_due_today_assignments.run()
 
-        # Normal success JSON
         return JsonResponse(
             {
                 "ok": True,
@@ -58,8 +59,7 @@ def due_today(request):
             status=200,
         )
     except Exception as e:
-        # IMPORTANT: return JSON status 200 so your Render cron doesn’t log HTTP 500.
-        # Error details are still visible in app logs and in this JSON.
+        # IMPORTANT: render cron shouldn't see 500s -> always JSON 200 with error payload
         return JsonResponse(
             {
                 "ok": False,
@@ -78,7 +78,7 @@ def pending_summary_7pm(request):
       - One email per employee with ONLY their own pending (single mail per user).
     GET /internal/cron/pending-7pm/?key=...
 
-    (Left functionally identical; wrapped in try/except + JSON 200 on error for parity.)
+    Safe: try/except + JSON 200 on error for parity.
     """
     if not _authorized(request):
         return HttpResponseForbidden("Forbidden")
@@ -100,7 +100,7 @@ def employee_digest(request):
     Manual trigger for a single user:
     GET /internal/cron/employee-digest/?key=...&username=<uname>&to=<override-email>
 
-    (Hardened to never raise; JSON 200 on error.)
+    Safe: never raises; JSON 200 on error.
     """
     if not _authorized(request):
         return HttpResponseForbidden("Forbidden")
@@ -119,3 +119,23 @@ def employee_digest(request):
             {"ok": False, "error_type": type(e).__name__, "error": str(e)},
             status=200,
         )
+
+
+# ----------------------------
+# Backward-compatibility shims
+# ----------------------------
+# Some existing URLs/places may still import hooks from views_cron.* or expect
+# names like "due_today_assignments_hook". These aliases let them call into the
+# hardened endpoints here without changing call-sites.
+
+def due_today_assignments_hook(request):
+    """Alias to hardened due_today() for legacy routes."""
+    return due_today(request)
+
+def pending_summary_hook(request):
+    """Alias to hardened pending_summary_7pm() for any legacy hook name."""
+    return pending_summary_7pm(request)
+
+def employee_digest_hook(request):
+    """Alias to hardened employee_digest() for any legacy hook name."""
+    return employee_digest(request)
