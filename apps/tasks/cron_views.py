@@ -4,7 +4,6 @@ from django.conf import settings
 
 from .tasks import (
     send_due_today_assignments,
-    send_daily_pending_task_summary,
 )
 from .pending_digest import (
     send_daily_employee_pending_digest,
@@ -14,13 +13,12 @@ from .pending_digest import (
 
 def _authorized(request) -> bool:
     """
-    Very simple protection for cron endpoints.
     Accept either:
       • ?key=<CRON_SECRET>
       • X-Cron-Key: <CRON_SECRET>
-      • (lenient) ?token=<CRON_SECRET> or X-CRON-TOKEN: <CRON_SECRET>  (kept for parity with other hook)
+      • (lenient) ?token=<CRON_SECRET> or X-CRON-TOKEN: <CRON_SECRET> (back-compat)
 
-    If settings.CRON_SECRET is blank/missing, allow all (useful for dev).
+    If no CRON_SECRET is defined in settings, allow (useful for local/dev).
     """
     key = (
         request.GET.get("key")
@@ -34,39 +32,26 @@ def _authorized(request) -> bool:
 
 def due_today(request):
     """
-    10:00 IST fan-out (safe at any time; task returns skip-before-10 flag).
-    GET /internal/cron/due-today/?key=...
+    10:00 IST fan-out (safe at any time; task guards pre-10:00 IST itself).
+    GET /internal/cron/due-today/?key=...   OR send header X-Cron-Key: <secret>
 
     HARDENED:
       • Never raises to caller.
       • Always returns JSON (status 200), even on internal error.
-      • Preserves auth semantics (?key=... / X-Cron-Key / token variants).
+      • Preserves simple key/header auth semantics.
     """
     if not _authorized(request):
         return HttpResponseForbidden("Forbidden")
 
     try:
-        # Call the synchronous task runner (not the Celery async delay).
-        # This function itself guards "before 10 AM" (IST) and handles TZ.
+        # Synchronous run (not .delay); the task decides whether to skip.
         result = send_due_today_assignments.run()
-
-        return JsonResponse(
-            {
-                "ok": True,
-                "triggered": True,
-                "result": result,
-            },
-            status=200,
-        )
+        return JsonResponse({"ok": True, "triggered": True, "result": result}, status=200)
     except Exception as e:
-        # IMPORTANT: render cron shouldn't see 500s -> always JSON 200 with error payload
+        # Keep HTTP 200 so Render Cron doesn't mark it as failed;
+        # details still appear in logs and JSON.
         return JsonResponse(
-            {
-                "ok": False,
-                "triggered": False,
-                "error_type": type(e).__name__,
-                "error": str(e),
-            },
+            {"ok": False, "triggered": False, "error_type": type(e).__name__, "error": str(e)},
             status=200,
         )
 
@@ -74,11 +59,9 @@ def due_today(request):
 def pending_summary_7pm(request):
     """
     19:00 IST consolidated summaries:
-      - One email to admin (pankaj@blueoceansteels.com) with ALL pending.
-      - One email per employee with ONLY their own pending (single mail per user).
+      - Admin mail with ALL pending.
+      - One mail per employee with ONLY their pending.
     GET /internal/cron/pending-7pm/?key=...
-
-    Safe: try/except + JSON 200 on error for parity.
     """
     if not _authorized(request):
         return HttpResponseForbidden("Forbidden")
@@ -99,8 +82,6 @@ def employee_digest(request):
     """
     Manual trigger for a single user:
     GET /internal/cron/employee-digest/?key=...&username=<uname>&to=<override-email>
-
-    Safe: never raises; JSON 200 on error.
     """
     if not _authorized(request):
         return HttpResponseForbidden("Forbidden")
@@ -119,23 +100,3 @@ def employee_digest(request):
             {"ok": False, "error_type": type(e).__name__, "error": str(e)},
             status=200,
         )
-
-
-# ----------------------------
-# Backward-compatibility shims
-# ----------------------------
-# Some existing URLs/places may still import hooks from views_cron.* or expect
-# names like "due_today_assignments_hook". These aliases let them call into the
-# hardened endpoints here without changing call-sites.
-
-def due_today_assignments_hook(request):
-    """Alias to hardened due_today() for legacy routes."""
-    return due_today(request)
-
-def pending_summary_hook(request):
-    """Alias to hardened pending_summary_7pm() for any legacy hook name."""
-    return pending_summary_7pm(request)
-
-def employee_digest_hook(request):
-    """Alias to hardened employee_digest() for any legacy hook name."""
-    return employee_digest(request)
