@@ -30,12 +30,17 @@ from typing import Optional
 from django.apps import apps
 from django.utils import timezone
 
+# Robust IST tzinfo with graceful fallback
 try:
-    from zoneinfo import ZoneInfo
+    from zoneinfo import ZoneInfo  # Python 3.9+
+    IST = ZoneInfo("Asia/Kolkata")
 except Exception:  # pragma: no cover
-    ZoneInfo = None  # type: ignore
+    try:
+        import pytz
+        IST = pytz.timezone("Asia/Kolkata")  # type: ignore[assignment]
+    except Exception:  # pragma: no cover
+        IST = timezone.get_current_timezone()
 
-IST = ZoneInfo("Asia/Kolkata") if ZoneInfo else timezone.get_current_timezone()
 logger = logging.getLogger("apps.tasks.blocking")
 
 # Assignment anchor for date-level checks (preserves existing 10:00 AM behavior)

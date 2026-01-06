@@ -1,4 +1,3 @@
-# apps/tasks/views.py
 import csv
 import logging
 import pytz
@@ -1000,7 +999,7 @@ def add_checklist(request):
             messages.success(request, f"Checklist task '{obj.task_name}' created and will notify the assignee at 10:00 AM on the due day.")
             return redirect("tasks:list_checklist")
     else:
-        form = ChecklistForm(initial={"assign_by": request.user})
+        form = ChecklistForm(initial({"assign_by": request.user}))
     return render(request, "tasks/add_checklist.html", {"form": form})
 
 
@@ -1156,7 +1155,7 @@ def add_delegation(request):
             messages.success(request, f"Delegation task '{obj.task_name}' created. Assignee will be notified appropriately.")
             return redirect("tasks:list_delegation")
     else:
-        form = DelegationForm(initial={"assign_by": request.user})
+        form = DelegationForm(initial({"assign_by": request.user}))
     return render(request, "tasks/add_delegation.html", {"form": form})
 
 
@@ -1197,8 +1196,6 @@ def list_delegation(request):
     else:
         qs = base_qs.filter(status=status_param)
 
-    # Removed: keyword search (keyword param is ignored deliberately)
-
     assign_by_id = (request.GET.get("assign_by") or "").strip()
     assign_to_id = (request.GET.get("assign_to") or "").strip()
     if assign_by_id:
@@ -1206,14 +1203,10 @@ def list_delegation(request):
     if assign_to_id:
         qs = qs.filter(assign_to_id=assign_to_id)
 
-    # Removed: employee name fuzzy search (employee param is ignored deliberately)
-
     priority_val = (request.GET.get("priority") or "").strip()
     if priority_val:
         qs = qs.filter(priority=priority_val)
 
-    # Removed: single 'date' filter (date param is ignored deliberately)
-    # Keep From/To date range filters:
     if (request.GET.get("start_date") or "").strip():
         qs = qs.filter(planned_date__date__gte=request.GET.get("start_date").strip())
     if (request.GET.get("end_date") or "").strip():
@@ -1752,6 +1745,8 @@ def close_help_ticket(request, pk: int):
     return redirect(request.GET.get("next", reverse("tasks:assigned_to_me")))
 
 
+# --------------- DASHBOARD (visibility rules + leave gating) ----------------
+
 @login_required
 def dashboard_home(request):
     now_ist = timezone.now().astimezone(IST)
@@ -1759,49 +1754,19 @@ def dashboard_home(request):
 
     logger.info(_safe_console_text(f"Dashboard accessed by {request.user.username} at {now_ist.strftime('%Y-%m-%d %H:%M:%S IST')}"))
 
+    # Weekly scorecards (Mon..Sun)
     start_current = today_ist - timedelta(days=today_ist.weekday())
     start_prev = start_current - timedelta(days=7)
     end_prev = start_current - timedelta(days=1)
 
+    # Scorecards
     try:
-        curr_chk = Checklist.objects.filter(
-            assign_to=request.user,
-            planned_date__date__gte=start_current,
-            planned_date__date__lte=today_ist,
-            status='Completed',
-        ).count()
-        prev_chk = Checklist.objects.filter(
-            assign_to=request.user,
-            planned_date__date__gte=start_prev,
-            planned_date__date__lte=end_prev,
-            status='Completed',
-        ).count()
-
-        curr_del = Delegation.objects.filter(
-            assign_to=request.user,
-            planned_date__date__gte=start_current,
-            planned_date__date__lte=today_ist,
-            status='Completed',
-        ).count()
-        prev_del = Delegation.objects.filter(
-            assign_to=request.user,
-            planned_date__date__gte=start_prev,
-            planned_date__date__lte=end_prev,
-            status='Completed',
-        ).count()
-
-        curr_help = HelpTicket.objects.filter(
-            assign_to=request.user,
-            planned_date__date__gte=start_current,
-            planned_date__date__lte=today_ist,
-            status='Closed',
-        ).count()
-        prev_help = HelpTicket.objects.filter(
-            assign_to=request.user,
-            planned_date__date__gte=start_prev,
-            planned_date__date__lte=end_prev,
-            status='Closed',
-        ).count()
+        curr_chk = Checklist.objects.filter(assign_to=request.user, planned_date__date__gte=start_current, planned_date__date__lte=today_ist, status='Completed').count()
+        prev_chk = Checklist.objects.filter(assign_to=request.user, planned_date__date__gte=start_prev, planned_date__date__lte=end_prev, status='Completed').count()
+        curr_del = Delegation.objects.filter(assign_to=request.user, planned_date__date__gte=start_current, planned_date__date__lte=today_ist, status='Completed').count()
+        prev_del = Delegation.objects.filter(assign_to=request.user, planned_date__date__gte=start_prev, planned_date__date__lte=end_prev, status='Completed').count()
+        curr_help = HelpTicket.objects.filter(assign_to=request.user, planned_date__date__gte=start_current, planned_date__date__lte=today_ist, status='Closed').count()
+        prev_help = HelpTicket.objects.filter(assign_to=request.user, planned_date__date__gte=start_prev, planned_date__date__lte=end_prev, status='Closed').count()
     except Exception as e:
         logger.error(_safe_console_text(f"Error calculating weekly scores: {e}"))
         curr_chk = prev_chk = curr_del = prev_del = curr_help = prev_help = 0
@@ -1812,6 +1777,7 @@ def dashboard_home(request):
         'help_ticket': {'previous': prev_help,  'current': curr_help},
     }
 
+    # Pending counts
     try:
         pending_tasks = {
             'checklist':   Checklist.objects.filter(assign_to=request.user, status='Pending').count(),
@@ -1828,7 +1794,7 @@ def dashboard_home(request):
     handed_over = _get_handover_rows_for_user(request.user, today_ist)
 
     try:
-        # CHECKLISTS
+        # -------------------- Checklists --------------------
         if today_only:
             base_checklists = list(
                 Checklist.objects
@@ -1876,7 +1842,7 @@ def dashboard_home(request):
         except Exception:
             pass
 
-        # DELEGATIONS
+        # ------------------- Delegations -------------------
         if today_only:
             base_delegations = list(
                 Delegation.objects.filter(
@@ -1915,7 +1881,7 @@ def dashboard_home(request):
         except Exception:
             pass
 
-        # HELP TICKETS — immediate (no 10AM gate)
+        # ------------------- Help Tickets -------------------
         if today_only:
             base_help = list(
                 HelpTicket.objects.filter(
@@ -1966,15 +1932,16 @@ def dashboard_home(request):
         delegation_qs = []
         help_ticket_qs = []
 
-    # If the day itself is blocked for the user, wipe CL/DL for today entirely (final guard)
+    # ✅ FINAL LEAVE GUARD (FIXED):
+    # If the user is on leave today, hide ONLY today's CL/DL (respecting half-day by 10:00 gate elsewhere).
+    # DO NOT hide overdue items (they must remain visible).
     try:
         if is_user_blocked(request.user, today_ist):
-            checklist_qs = []
-            delegation_qs = []
+            checklist_qs = [c for c in checklist_qs if _ist_date(c.planned_date) and _ist_date(c.planned_date) < today_ist]
+            delegation_qs = [d for d in delegation_qs if _ist_date(d.planned_date) and _ist_date(d.planned_date) < today_ist]
     except Exception:
         pass
 
-    # FIX: avoid reassigning 'selected' variable twice; keep once
     tasks = checklist_qs if request.GET.get('task_type') not in ('delegation', 'help_ticket') else (
         delegation_qs if request.GET.get('task_type') == 'delegation' else help_ticket_qs
     )

@@ -902,3 +902,9 @@ def pre10am_unblock_and_generate(*, user_id: int | None = None) -> dict:
     out = {"ok": True, "unblock": res_unblock, "generate": res_gen}
     logger.info(_safe_console_text(f"[PRE10] {out}"))
     return out
+
+
+# ✅ Celery wrapper so Beat can schedule at 09:55 IST
+@shared_task(bind=True, max_retries=1, default_retry_delay=30)
+def run_pre10am_unblock_and_generate(self, user_id: int | None = None) -> dict:
+    return pre10am_unblock_and_generate(user_id=user_id)

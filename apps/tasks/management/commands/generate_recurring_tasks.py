@@ -18,6 +18,7 @@ from apps.tasks.recurrence import (
     get_next_planned_date,     # ALWAYS 19:00 IST on next working day (Sun/holiday → shift)
 )
 from apps.tasks.utils import send_checklist_assignment_to_user, send_delegation_assignment_to_user
+from apps.tasks.services.blocking import guard_assign  # ✅ leave-aware email guard
 
 from apps.settings.models import Holiday
 from apps.leave.models import LeaveRequest
@@ -87,15 +88,34 @@ def _series_q(assign_to_id: int, task_name: str, mode: str, frequency: int | Non
 
 
 def _send_checklist_recur_email(obj: Checklist) -> None:
+    """
+    Send 'today' checklist email subject to:
+      • Email feature flags
+      • 10:00 IST gate (when configured)
+      • Self-assign suppression
+      • Leave guard at 10:00 IST (guard_assign)
+    """
     if not SEND_EMAILS_FOR_AUTO_RECUR:
         return
     if SEND_RECUR_EMAILS_ONLY_AT_10AM and not _after_10am_today():
         logger.info(_safe_console_text(f"Skip recur email for CL-{obj.id}: before 10:00 IST"))
         return
 
+    # ⛔ never email self-assign
+    if getattr(obj, "assign_by_id", None) and obj.assign_by_id == obj.assign_to_id:
+        logger.info(_safe_console_text(f"Skip recur email for CL-{obj.id}: self-assigned"))
+        return
+
     try:
         planned_ist = obj.planned_date.astimezone(IST) if obj.planned_date else None
         pretty_time = planned_ist.strftime("%H:%M") if planned_ist else "19:00"
+
+        # 🔒 leave guard at 10:00 IST of the day
+        if planned_ist:
+            anchor_ist = planned_ist.replace(hour=10, minute=0, second=0, microsecond=0)
+            if not guard_assign(obj.assign_to, anchor_ist):
+                logger.info(_safe_console_text(f"Skip recur email for CL-{obj.id}: assignee blocked (leave @ 10:00 IST)"))
+                return
 
         complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
         subject = f"Today’s Checklist – {obj.task_name} (due {pretty_time})"
@@ -111,7 +131,7 @@ def _send_checklist_recur_email(obj: Checklist) -> None:
 
 
 def _send_delegation_10am_emails(today_ist: date, user_id: int | None, dry_run: bool) -> int:
-    """Delegations are one-time; send day-of reminder after 10:00 IST."""
+    """Delegations are one-time; send day-of reminder after 10:00 IST with leave/self-assign guards."""
     if not _after_10am_today():
         return 0
 
@@ -124,13 +144,25 @@ def _send_delegation_10am_emails(today_ist: date, user_id: int | None, dry_run: 
         status="Pending",
         planned_date__gte=start_proj,
         planned_date__lte=end_proj,
-    ).select_related("assign_to")
+    ).select_related("assign_to", "assign_by")
 
     if user_id:
         qs = qs.filter(assign_to_id=user_id)
 
     sent = 0
     for obj in qs:
+        # ⛔ never email self-assign
+        if getattr(obj, "assign_by_id", None) and obj.assign_by_id == obj.assign_to_id:
+            logger.info(_safe_console_text(f"Skip delegation 10AM email for DL-{obj.id}: self-assigned"))
+            continue
+
+        # 🔒 leave guard at 10:00 IST
+        p_ist = obj.planned_date.astimezone(IST)
+        anchor_ist = p_ist.replace(hour=10, minute=0, second=0, microsecond=0)
+        if not guard_assign(obj.assign_to, anchor_ist):
+            logger.info(_safe_console_text(f"Skip delegation 10AM email for DL-{obj.id}: assignee blocked (leave @ 10:00 IST)"))
+            continue
+
         try:
             subject = f"Today’s Delegation – {obj.task_name} (due 7 PM)"
             complete_url = f"{SITE_URL}{reverse('tasks:complete_delegation', args=[obj.id])}"
@@ -295,17 +327,17 @@ class Command(BaseCommand):
                 planned_date__gte=start_proj,
                 planned_date__lte=end_proj,
                 mode__in=RECURRING_MODES,
-            )
+            ).select_related("assign_to", "assign_by")
             if user_id:
                 email_qs = email_qs.filter(assign_to_id=user_id)
 
-            for obj in email_qs.select_related("assign_to"):
+            for obj in email_qs:
                 if not dry_run:
                     _send_checklist_recur_email(obj)
                 email_total += 1
                 per_user_emailed[obj.assign_to_id] = per_user_emailed.get(obj.assign_to_id, 0) + 1
 
-            # Delegations day-of
+            # Delegations day-of (leave/self-assign aware)
             email_total += _send_delegation_10am_emails(today_ist, user_id, dry_run)
 
         # Summaries

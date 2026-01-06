@@ -13,6 +13,7 @@ from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from django.urls import reverse
 from django.utils import timezone
+from django.db.models import Q  # ✅ NEW: used for tolerant series queries
 
 from .models import Checklist, Delegation, HelpTicket
 from . import utils as _utils  # email helpers & console-safe logging
@@ -456,6 +457,19 @@ def force_delegation_planned_time(sender, instance: Delegation, **kwargs):
 # CREATE NEXT RECURRING CHECKLIST
 # (stepped date → then shift to next working day @ 19:00 IST)
 # ---------------------------------------------------------------------
+
+def _series_q_for_frequency(assign_to_id: int, task_name: str, mode: str, freq_norm: int, group_name: str | None) -> Q:
+    """
+    ✅ Tolerant series matcher: treat NULL frequency as 1 (legacy rows).
+    Mirrors apps/tasks/tasks.py::_series_q_for_frequency to avoid duplicate spawns.
+    """
+    q = Q(assign_to_id=assign_to_id, task_name=task_name, mode=mode)
+    if group_name:
+        q &= Q(group_name=group_name)
+    q &= Q(frequency__in=[freq_norm, None])
+    return q
+
+
 @receiver(post_save, sender=Checklist)
 def create_next_recurring_checklist(sender, instance: Checklist, created: bool, **kwargs):
     """
@@ -479,15 +493,18 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
 
     now = timezone.now()
 
-    # If a future pending of this same series already exists, don't create another.
-    series_filter = dict(
-        assign_to=instance.assign_to,
+    # ✅ Tolerant series Q (frequency: accept [exact, NULL])
+    freq_norm = max(int(getattr(instance, "frequency", 1) or 1), 1)
+    q_series = _series_q_for_frequency(
+        assign_to_id=instance.assign_to_id,
         task_name=instance.task_name,
         mode=instance.mode,
-        frequency=instance.frequency,
+        freq_norm=freq_norm,
         group_name=getattr(instance, "group_name", None),
     )
-    if Checklist.objects.filter(status="Pending", planned_date__gt=now, **series_filter).exists():
+
+    # If a future Pending in this tolerant series already exists, don't create another.
+    if Checklist.objects.filter(status="Pending").filter(q_series).filter(planned_date__gt=now).exists():
         return
 
     # Compute next planned date at fixed 19:00 IST (no shift yet)
@@ -579,12 +596,10 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
         )
         return
 
-    # Duplicate guard (±1 minute window)
-    dupe_exists = Checklist.objects.filter(
-        status="Pending",
+    # ✅ Duplicate guard (±1 minute window) using tolerant series Q
+    dupe_exists = Checklist.objects.filter(status="Pending").filter(q_series).filter(
         planned_date__gte=next_dt - timedelta(minutes=1),
         planned_date__lt=next_dt + timedelta(minutes=1),
-        **series_filter,
     ).exists()
     if dupe_exists:
         logger.info(

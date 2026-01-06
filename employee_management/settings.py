@@ -12,7 +12,7 @@ load_dotenv()
 # -----------------------------------------------------------------------------
 # PATHS
 # -----------------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parent.parent  # â€¦/employee_management_system
+BASE_DIR = Path(__file__).resolve().parent.parent  # …/employee_management_system
 
 # -----------------------------------------------------------------------------
 # ENV HELPERS
@@ -546,7 +546,7 @@ REIMBURSEMENT_EMAIL_FROM = os.getenv(
     f"{REIMBURSEMENT_SENDER_NAME} <{REIMBURSEMENT_SENDER_EMAIL}>",
 )
 
-# â¬‡ï¸ Make SMTP non-blocking for cron by keeping a small timeout
+# ⏱️ Make SMTP non-blocking for cron by keeping a small timeout
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
 EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
 SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", True)
@@ -773,23 +773,38 @@ CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
 CELERY_BEAT_SCHEDULE = {
+    # ✅ NEW: pre-10:00 IST auto-unblock + generate
+    "pre10am_unblock_and_generate_0955": {
+        "task": "apps.tasks.tasks.run_pre10am_unblock_and_generate",
+        "schedule": crontab(hour=9, minute=55),
+    },
+
+    # 10:00 IST due-today fan-out (retry at 10:05/10:10 for safety)
     "tasks_due_today_10am_fanout": {
         "task": "apps.tasks.tasks.send_due_today_assignments",
         "schedule": crontab(hour=10, minute="0-10/5"),
     },
+
+    # Delegation reminders (every 5 minutes)
     "delegation_reminders_every_5_minutes": {
         "task": "apps.tasks.tasks.dispatch_delegation_reminders",
         "schedule": crontab(minute="*/5"),
     },
+
+    # Generate recurring seeds hourly (tolerant)
     "generate_recurring_checklists_hourly": {
         "task": "apps.tasks.tasks.generate_recurring_checklists",
         "schedule": crontab(minute=15, hour="*/1"),
         "args": (),
     },
+
+    # Recurring audit
     "audit_recurring_health_daily": {
         "task": "apps.tasks.tasks.audit_recurring_health",
         "schedule": crontab(hour=2, minute=30),
     },
+
+    # 19:00 IST – employee digest + admin consolidated digest (Mon–Sat)
     "daily_employee_pending_digest_7pm_mon_sat": {
         "task": "apps.tasks.pending_digest.send_daily_employee_pending_digest",
         "schedule": crontab(hour=19, minute=0, day_of_week="1-6"),
@@ -805,4 +820,3 @@ REIMBURSEMENT_ALLOWED_EXTENSIONS = env_list(
     ".jpg,.jpeg,.png,.pdf,.xls,.xlsx",
 )
 REIMBURSEMENT_MAX_RECEIPT_MB = env_int("REIMBURSEMENT_MAX_RECEIPT_MB", 8)
-

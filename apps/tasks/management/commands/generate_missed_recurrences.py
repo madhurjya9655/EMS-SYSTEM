@@ -17,6 +17,7 @@ from apps.tasks.recurrence import (
     RECURRING_MODES,
 )
 from apps.tasks.utils import send_checklist_assignment_to_user
+from apps.tasks.services.blocking import guard_assign  # ✅ leave-aware email guard
 
 # Leave/holiday checks
 from apps.settings.models import Holiday
@@ -210,18 +211,26 @@ class Command(BaseCommand):
                 if send_emails and SEND_EMAILS_FOR_AUTO_RECUR:
                     planned_ist = obj.planned_date.astimezone(IST)
                     if planned_ist.date() == today_ist and (not SEND_RECUR_EMAILS_ONLY_AT_10AM or _after_10am_today()):
-                        try:
-                            complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
-                            send_checklist_assignment_to_user(
-                                task=obj,
-                                complete_url=complete_url,
-                                subject_prefix=f"Today’s Checklist – {obj.task_name}",
-                            )
-                            logger.info(_safe_console_text(
-                                f"Sent recur email for CL-{obj.id} to user_id={obj.assign_to_id}"
-                            ))
-                        except Exception as e:
-                            logger.exception("Email failure for recurring checklist %s: %s", obj.id, e)
+                        # ⛔ self-assign guard + leave guard at 10:00 IST
+                        if getattr(obj, "assign_by_id", None) and obj.assign_by_id == obj.assign_to_id:
+                            logger.info(_safe_console_text(f"Skip email for CL-{obj.id}: self-assigned"))
+                        else:
+                            anchor_ist = planned_ist.replace(hour=10, minute=0, second=0, microsecond=0)
+                            if not guard_assign(obj.assign_to, anchor_ist):
+                                logger.info(_safe_console_text(f"Skip email for CL-{obj.id}: assignee blocked (leave @ 10:00 IST)"))
+                            else:
+                                try:
+                                    complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
+                                    send_checklist_assignment_to_user(
+                                        task=obj,
+                                        complete_url=complete_url,
+                                        subject_prefix=f"Today’s Checklist – {obj.task_name}",
+                                    )
+                                    logger.info(_safe_console_text(
+                                        f"Sent recur email for CL-{obj.id} to user_id={obj.assign_to_id}"
+                                    ))
+                                except Exception as e:
+                                    logger.exception("Email failure for recurring checklist %s: %s", obj.id, e)
 
             except Exception as e:
                 logger.exception("Failed to create recurrence for %s: %s", s, e)
