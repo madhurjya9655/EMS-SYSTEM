@@ -1,3 +1,4 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
 import csv
 import logging
 import pytz
@@ -999,7 +1000,8 @@ def add_checklist(request):
             messages.success(request, f"Checklist task '{obj.task_name}' created and will notify the assignee at 10:00 AM on the due day.")
             return redirect("tasks:list_checklist")
     else:
-        form = ChecklistForm(initial({"assign_by": request.user}))
+        # ✅ FIX: use keyword argument, not callable
+        form = ChecklistForm(initial={"assign_by": request.user})
     return render(request, "tasks/add_checklist.html", {"form": form})
 
 
@@ -1155,7 +1157,8 @@ def add_delegation(request):
             messages.success(request, f"Delegation task '{obj.task_name}' created. Assignee will be notified appropriately.")
             return redirect("tasks:list_delegation")
     else:
-        form = DelegationForm(initial({"assign_by": request.user}))
+        # ✅ FIX: use keyword argument, not callable
+        form = DelegationForm(initial={"assign_by": request.user})
     return render(request, "tasks/add_delegation.html", {"form": form})
 
 

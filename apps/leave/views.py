@@ -1,3 +1,4 @@
+# apps/leave/views.py
 from __future__ import annotations
 
 import logging
@@ -78,6 +79,18 @@ ALLOWED_LEAVE_TYPE_NAMES = {
 WORK_START_IST = dtime(9, 30)
 WORK_END_IST = dtime(18, 0)
 
+# ---- Profile photo field detection ------------------------------------------
+PROFILE_PHOTO_FIELD_CANDIDATES = (
+    "photo",
+    "profile_photo",
+    "profile_image",
+    "avatar",
+    "image",
+    "picture",
+)
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
 def now_ist():
     """Return current time localized to IST."""
     return timezone.localtime(timezone.now(), IST)
@@ -100,6 +113,32 @@ def _model_has_field(model, name: str) -> bool:
     except Exception:
         return False
 
+def _detect_profile_photo_field(Profile) -> Optional[str]:
+    """Return the first configured photo-like field name on users.Profile, or None."""
+    for fname in PROFILE_PHOTO_FIELD_CANDIDATES:
+        if _model_has_field(Profile, fname):
+            return fname
+    return None
+
+def _get_profile_photo_url_safe(user) -> Optional[str]:
+    """
+    Read the profile photo URL without assuming the exact field name.
+    """
+    try:
+        Profile = django_apps.get_model("users", "Profile")
+        if not Profile:
+            return None
+        prof = Profile.objects.filter(user=user).first()
+        if not prof:
+            return None
+        fname = _detect_profile_photo_field(Profile)
+        if not fname:
+            return None
+        fileobj = getattr(prof, fname, None)
+        return getattr(fileobj, "url", None)
+    except Exception:
+        return None
+
 def _employee_header(user) -> Dict[str, Optional[str]]:
     """
     Build employee header safely without assuming Profile fields exist.
@@ -110,7 +149,7 @@ def _employee_header(user) -> Dict[str, Optional[str]]:
         "email": (user.email or "").strip(),
         "designation": "",
         "department": "",
-        "photo_url": None,
+        "photo_url": _get_profile_photo_url_safe(user),
     }
 
     try:
@@ -132,14 +171,7 @@ def _employee_header(user) -> Dict[str, Optional[str]]:
         if _model_has_field(Profile, "department"):
             header["department"] = (getattr(prof, "department", "") or "").strip()
 
-        # Look for a picture field across common names
-        pic_fields = ["photo", "avatar", "image", "profile_photo", "profile_image", "picture"]
-        for fname in pic_fields:
-            if _model_has_field(Profile, fname):
-                img = getattr(prof, fname, None)
-                if img and getattr(img, "url", None):
-                    header["photo_url"] = img.url
-                    break
+        # photo_url handled above via helper to support multiple field names
         return header
     except Exception:
         logger.exception("Failed to load Profile for user id=%s", getattr(user, "id", None))
@@ -967,26 +999,23 @@ class TokenDecisionView(View):
 @require_POST
 def upload_photo(request: HttpRequest) -> HttpResponse:
     """
-    Accept an uploaded image and store it on the user's Profile.
-    Supports multiple common field names to avoid schema mismatch:
-    photo, avatar, image, profile_photo, profile_image, picture
+    Saves uploaded image to the first available image field on users.Profile:
+    one of: photo, profile_photo, profile_image, avatar, image, picture.
+    Validates content type and size (<= 10 MB).
     """
     file = request.FILES.get("photo")
     if not file:
         messages.error(request, "Please choose an image file to upload.")
         return redirect("leave:dashboard")
 
-    # Light validation (size/mime)
-    try:
-        if getattr(file, "size", 0) and file.size > 10 * 1024 * 1024:
-            messages.error(request, "File too large. Max size is 10 MB.")
-            return redirect("leave:dashboard")
-        ctype = (getattr(file, "content_type", "") or "").lower()
-        if ctype and not ctype.startswith("image/"):
-            messages.error(request, "Please upload an image (JPG/PNG/WebP).")
-            return redirect("leave:dashboard")
-    except Exception:
-        pass
+    # Basic validations (type & size)
+    ctype = (getattr(file, "content_type", "") or "").lower()
+    if not ctype.startswith("image/"):
+        messages.error(request, "Only image files are allowed.")
+        return redirect("leave:dashboard")
+    if getattr(file, "size", 0) > MAX_UPLOAD_BYTES:
+        messages.error(request, "Image too large. Maximum allowed is 10 MB.")
+        return redirect("leave:dashboard")
 
     try:
         Profile = django_apps.get_model("users", "Profile")
@@ -994,40 +1023,33 @@ def upload_photo(request: HttpRequest) -> HttpResponse:
             messages.error(request, "Profile model is not available.")
             return redirect("leave:dashboard")
 
-        prof, _ = Profile.objects.get_or_create(user=request.user)
-
-        # Try a set of common field names (ImageField/FileField)
-        candidate_fields = [
-            "photo",
-            "avatar",
-            "image",
-            "profile_photo",
-            "profile_image",
-            "picture",
-        ]
-
-        target_field_name = None
-        for fname in candidate_fields:
-            if _model_has_field(Profile, fname):
-                target_field_name = fname
-                break
-
-        if not target_field_name:
-            looked = ", ".join(candidate_fields)
+        # Detect field name dynamically
+        field_name = _detect_profile_photo_field(Profile)
+        if not field_name:
             messages.error(
                 request,
-                f"Profile photo field is not configured on your Profile model. "
-                f"Tried: {looked}. Please add one of these fields."
+                "Profile photo field is not configured on users.Profile. "
+                "Add an ImageField named one of: "
+                + ", ".join(PROFILE_PHOTO_FIELD_CANDIDATES)
             )
             return redirect("leave:dashboard")
 
-        setattr(prof, target_field_name, file)
-        prof.save(update_fields=[target_field_name])
+        prof, _ = Profile.objects.get_or_create(user=request.user)
+
+        setattr(prof, field_name, file)
+        try:
+            prof.save(update_fields=[field_name])
+        except Exception:
+            # fallback in case update_fields mismatches
+            prof.save()
 
         messages.success(request, "Profile photo updated.")
     except Exception as e:
         logger.exception("Photo upload failed: %s", e)
-        messages.error(request, "Could not save photo. Please try again or use a smaller image.")
+        messages.error(
+            request,
+            "Could not save photo. Ensure MEDIA_ROOT is writable and Pillow is installed."
+        )
 
     return redirect("leave:dashboard")
 
@@ -1052,7 +1074,7 @@ def manager_widget(request: HttpRequest) -> HttpResponse:
             f"<td>"
             f"<a class='btn btn-sm btn-outline-primary' href='{reverse('leave:approval_page', args=[lr.id])}'>Open</a> "
             f"<form method='post' action='{reverse('leave:manager_decide_approve', args=[lr.id])}?next={_safe_next_url(request, 'leave:manager_pending')}' style='display:inline'>{_csrf_input(request)}"
-            f"<button class='btn btn-sm btn-success'>Approve</button></form> "
+            f"<button class='btn btn-sm btn	success'>Approve</button></form> "
             f"<form method='post' action='{reverse('leave:manager_decide_reject', args=[lr.id])}?next={_safe_next_url(request, 'leave:manager_pending')}' style='display:inline'>{_csrf_input(request)}"
             f"<button class='btn btn-sm btn-danger'>Reject</button></form>"
             f"</td></tr>"
