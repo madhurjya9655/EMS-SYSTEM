@@ -21,18 +21,15 @@ def env_list(name: str, default_csv: str = "") -> List[str]:
     raw = os.getenv(name, default_csv) or ""
     return [part.strip() for part in raw.split(",") if part.strip()]
 
-
 def env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name, str(default))
     return str(raw).lower() in ("1", "true", "yes", "on")
-
 
 def env_int(name: str, default: int = 0) -> int:
     try:
         return int(os.getenv(name, str(default)))
     except (ValueError, TypeError):
         return default
-
 
 # -----------------------------------------------------------------------------
 # CORE
@@ -42,6 +39,10 @@ DEBUG = env_bool("DEBUG", False)
 SITE_URL = os.getenv("SITE_URL", "https://ems-system-d26q.onrender.com")
 CRON_SECRET = os.getenv("CRON_SECRET", "")
 ON_RENDER = bool(os.environ.get("RENDER"))
+
+# ➕ Serve MEDIA in production behind Django if explicitly enabled.
+#    Default ON for Render so profile photos work without S3/CDN.
+SERVE_MEDIA = env_bool("SERVE_MEDIA", True if ON_RENDER else False)
 
 # Hardened admin path (used in urls.py)
 ADMIN_URL = os.getenv("ADMIN_URL", "super-secret-admin/")
@@ -270,7 +271,6 @@ def _robust_sqlite_decoder(val):
     except Exception:
         return None
 
-
 try:
     for dt_type in [
         "timestamp",
@@ -288,12 +288,10 @@ try:
 except Exception:
     pass
 
-
 def _configure_sqlite_connection(sender, connection, **kwargs):
     if connection.vendor != "sqlite":
         return
     try:
-
         def universal_text_factory(data):
             if data is None:
                 return None
@@ -320,7 +318,6 @@ def _configure_sqlite_connection(sender, connection, **kwargs):
                 return str(data)
             except Exception:
                 return ""
-
         connection.connection.text_factory = universal_text_factory
     except Exception:
         pass
@@ -339,12 +336,10 @@ def _configure_sqlite_connection(sender, connection, **kwargs):
     except Exception:
         pass
 
-
 connection_created.connect(_configure_sqlite_connection)
 
 try:
     from django.db.backends.sqlite3.operations import DatabaseOperations  # type: ignore
-
     _orig_convert = DatabaseOperations.convert_datetimefield_value
 
     def safe_convert_datetimefield_value(self, value, expression, connection):
@@ -546,12 +541,10 @@ REIMBURSEMENT_EMAIL_FROM = os.getenv(
     f"{REIMBURSEMENT_SENDER_NAME} <{REIMBURSEMENT_SENDER_EMAIL}>",
 )
 
-# ⏱️ Make SMTP non-blocking for cron by keeping a small timeout
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
 EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
 SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", True)
 SEND_RECUR_EMAILS_ONLY_AT_10AM = env_bool("SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
-
 SEND_DELEGATION_IMMEDIATE_EMAIL = env_bool("SEND_DELEGATION_IMMEDIATE_EMAIL", False)
 
 EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "[BOS Lakshya] ")
@@ -629,7 +622,7 @@ if REDIS_URL:
             "OPTIONS": {
                 "CLIENT_CLASS": "django_redis.client.DefaultClient",
                 "COMPRESSOR": "django_redis.compressors.zlib.ZlibCompressor",
-                # Use pure-Python parser so Windows doesn't need to build 'hiredis'
+                # ✅ Force pure-Python parser so Windows dev boxes don't need 'hiredis'
                 "PARSER_CLASS": "redis.connection.PythonParser",
             },
             "TIMEOUT": env_int("CACHE_TIMEOUT", 300),
@@ -696,7 +689,6 @@ validate_required_dirs()
 # -----------------------------------------------------------------------------
 # FEATURE FLAGS
 # -----------------------------------------------------------------------------
-# Top-level boolean used by cron views (kept separate from the FEATURES dict)
 FEATURE_EMAIL_NOTIFICATIONS = env_bool("FEATURE_EMAIL_NOTIFICATIONS", True)
 
 FEATURES = {
@@ -773,38 +765,27 @@ CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
 CELERY_BEAT_SCHEDULE = {
-    # ✅ NEW: pre-10:00 IST auto-unblock + generate
     "pre10am_unblock_and_generate_0955": {
         "task": "apps.tasks.tasks.run_pre10am_unblock_and_generate",
         "schedule": crontab(hour=9, minute=55),
     },
-
-    # 10:00 IST due-today fan-out (retry at 10:05/10:10 for safety)
     "tasks_due_today_10am_fanout": {
         "task": "apps.tasks.tasks.send_due_today_assignments",
         "schedule": crontab(hour=10, minute="0-10/5"),
     },
-
-    # Delegation reminders (every 5 minutes)
     "delegation_reminders_every_5_minutes": {
         "task": "apps.tasks.tasks.dispatch_delegation_reminders",
         "schedule": crontab(minute="*/5"),
     },
-
-    # Generate recurring seeds hourly (tolerant)
     "generate_recurring_checklists_hourly": {
         "task": "apps.tasks.tasks.generate_recurring_checklists",
         "schedule": crontab(minute=15, hour="*/1"),
         "args": (),
     },
-
-    # Recurring audit
     "audit_recurring_health_daily": {
         "task": "apps.tasks.tasks.audit_recurring_health",
         "schedule": crontab(hour=2, minute=30),
     },
-
-    # 19:00 IST – employee digest + admin consolidated digest (Mon–Sat)
     "daily_employee_pending_digest_7pm_mon_sat": {
         "task": "apps.tasks.pending_digest.send_daily_employee_pending_digest",
         "schedule": crontab(hour=19, minute=0, day_of_week="1-6"),
