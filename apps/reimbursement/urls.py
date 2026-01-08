@@ -1,4 +1,3 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\reimbursement\urls.py
 from __future__ import annotations
 
 from django.urls import path
@@ -47,6 +46,7 @@ urlpatterns = [
     path("finance/", views.FinanceQueueView.as_view(), name="finance_pending"),
     path("finance/<int:pk>/verify/", views.FinanceVerifyView.as_view(), name="finance_verify"),
     path("finance/<int:pk>/review/", views.FinanceReviewView.as_view(), name="finance_review"),
+    # NOTE: no separate line-delete URL — deletion is handled inside FinanceVerifyView.
 
     # ------------------------------
     # Admin dashboards, config & export

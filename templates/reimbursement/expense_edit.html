@@ -4,35 +4,60 @@
 
 {% block content %}
 <div class="row justify-content-center">
-  <div class="col-md-7">
+  <div class="col-xl-7 col-lg-8 col-md-9">
     <div class="d-flex justify-content-between align-items-center mb-3">
       <h2 class="m-0">Edit Expense</h2>
       <a href="{% url 'reimbursement:expense_inbox' %}" class="btn btn-outline-secondary btn-sm">Back to Inbox</a>
     </div>
 
-    <div class="card">
+    <div class="card shadow-sm">
       <div class="card-body">
-        <form method="post" enctype="multipart/form-data">
+        <form method="post" enctype="multipart/form-data" novalidate>
           {% csrf_token %}
 
-          {% for field in form %}
-            <div class="mb-3">
-              {{ field.label_tag }}
+          <div class="mb-3">
+            <label class="form-label">Date</label>
+            {{ form.date|add_class:"form-control" }}
+            {% if form.date.errors %}<div class="text-danger small">{{ form.date.errors }}</div>{% endif %}
+          </div>
 
-              {# Ensure the receipt input advertises Excel too #}
-              {% if field.name == "receipt_file" %}
-                {{ field|attr:"accept:.pdf,.jpg,.jpeg,.png,.xls,.xlsx" }}
-                <div class="form-text">
-                  Allowed: PDF / JPG / JPEG / PNG / XLS / XLSX
+          <div class="mb-3">
+            <label class="form-label">Type of Expense</label>
+            {{ form.category|add_class:"form-select" }}
+            {% if form.category.errors %}<div class="text-danger small">{{ form.category.errors }}</div>{% endif %}
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Amount</label>
+            {{ form.amount|add_class:"form-control" }}
+            {% if form.amount.errors %}<div class="text-danger small">{{ form.amount.errors }}</div>{% endif %}
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Description</label>
+            {{ form.description|add_class:"form-control" }}
+            {% if form.description.errors %}<div class="text-danger small">{{ form.description.errors }}</div>{% endif %}
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label d-block">Bill Type</label>
+            <div class="d-flex flex-column gap-1">
+              {% for subwidget in form.gst_type %}
+                <div class="form-check">
+                  {{ subwidget.tag }}
+                  <label class="form-check-label" for="{{ subwidget.id_for_label }}">{{ subwidget.choice_label }}</label>
                 </div>
-              {% else %}
-                {{ field }}
-              {% endif %}
-
-              {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
-              {% if field.errors %}<div class="text-danger small">{{ field.errors }}</div>{% endif %}
+              {% endfor %}
             </div>
-          {% endfor %}
+            {% if form.gst_type.errors %}<div class="text-danger small">{{ form.gst_type.errors }}</div>{% endif %}
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Receipt file</label>
+            {{ form.receipt_file|attr:"accept:.pdf,.jpg,.jpeg,.png,.xls,.xlsx"|add_class:"form-control" }}
+            <div class="form-text">Allowed: PDF / JPG / JPEG / PNG / XLS / XLSX</div>
+            {% if form.receipt_file.errors %}<div class="text-danger small">{{ form.receipt_file.errors }}</div>{% endif %}
+          </div>
 
           <div class="d-flex justify-content-between">
             <button type="submit" class="btn btn-primary">Save</button>

@@ -895,8 +895,15 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
 
 class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
-    Finance verification (pre-manager) with per-bill Approve / Reject selection.
-    When all INCLUDED bills are Finance-Approved, the request auto-moves to Manager.
+    Finance verification (pre-manager) with per-bill Approve / Reject / Delete selection.
+
+    UPDATED FLOW:
+    - Finance can Approve / Reject / Delete bills (single or bulk).
+    - If there is at least ONE Finance-Approved bill on the request,
+      Finance can Finalize (or it will auto-finalize after actions) to
+      move the request to Manager even if other bills remain Rejected.
+    - Rejected bills are visible to the employee to edit/re-upload and
+      later resubmit; they DO NOT block the approved bills from proceeding.
     """
 
     permission_code = "reimbursement_finance_review"
@@ -918,6 +925,40 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
         ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
         return ctx
 
+    def _maybe_promote_to_manager(self, req: ReimbursementRequest, actor) -> bool:
+        """
+        If there is at least one Finance-Approved bill, move to Pending Manager.
+        Returns True if a promotion happened.
+        """
+        approved_qs = req.lines.filter(
+            status=ReimbursementLine.Status.INCLUDED,
+            bill_status="finance_approved",
+        )
+        has_any_approved = approved_qs.exists()
+
+        if not has_any_approved:
+            return False
+
+        prev = req.status
+        req.status = ReimbursementRequest.Status.PENDING_MANAGER
+        if not req.verified_by_id:
+            req.verified_by = actor
+            req.verified_at = timezone.now()
+        req.recalc_total(save=True)
+        req.save(update_fields=["status", "verified_by", "verified_at", "updated_at"])
+
+        ReimbursementLog.log(
+            req,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
+            message="Finance finalized: approved bills sent to Manager; rejected bills returned to employee.",
+            from_status=prev,
+            to_status=req.status,
+        )
+
+        _send_safe("send_reimbursement_finance_verified", req)
+        return True
+
     def post(self, request, *args, **kwargs):
         req = self._get_request(kwargs.get("pk"))
         back = _safe_back_url(request.POST.get("return"))
@@ -925,12 +966,12 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
         selected_ids = request.POST.getlist("line_ids")
         reason = (request.POST.get("reason") or "").strip()
 
-        if action not in {"approve", "reject", "finalize"}:
+        if action not in {"approve", "reject", "finalize", "delete"}:
             messages.error(request, "Invalid action.")
             return redirect(request.path)
 
-        # Approve / Reject selected lines
-        if action in {"approve", "reject"}:
+        # Approve / Reject / Delete selected lines
+        if action in {"approve", "reject", "delete"}:
             if not selected_ids:
                 messages.warning(request, "Select at least one bill line.")
                 return redirect(request.path + (f"?return={back}" if back else ""))
@@ -941,6 +982,28 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
             ).select_related("expense_item")
 
             processed = 0
+
+            if action == "delete":
+                # HARD DELETE: free the ExpenseItem back to inbox
+                for line in qs:
+                    exp = line.expense_item
+                    line.delete()
+                    if exp:
+                        exp.status = ExpenseItem.Status.SAVED
+                        exp.save(update_fields=["status", "updated_at"])
+                    processed += 1
+
+                req.recalc_total(save=True)
+                # Try to promote after deletions
+                promoted = self._maybe_promote_to_manager(req, request.user)
+                if promoted:
+                    messages.success(request, f"Deleted {processed} bill(s). Approved bills sent to Manager.")
+                    return _redirect_back(request, "reimbursement:finance_pending")
+
+                messages.success(request, f"Deleted {processed} bill(s).")
+                return redirect(request.path + (f"?return={back}" if back else ""))
+
+            # Approve / Reject paths
             for line in qs:
                 try:
                     if action == "approve":
@@ -955,31 +1018,28 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
                     messages.error(request, getattr(e, "message", str(e)) or f"Could not process line #{line.id}")
                     return redirect(request.path + (f"?return={back}" if back else ""))
 
-            # After per-line updates, derive parent status
-            req.apply_derived_status_from_bills(actor=request.user, reason="Finance updated selected bills.")
-            if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
-                req.verified_by = request.user
-                req.verified_at = timezone.now()
-                req.save(update_fields=["verified_by", "verified_at", "updated_at"])
-                _send_safe("send_reimbursement_finance_verified", req)
-                messages.success(request, f"{processed} line(s) processed. All bills are approved; sent to Manager.")
+            # After per-line updates:
+            req.recalc_total(save=True)
+            promoted = self._maybe_promote_to_manager(req, request.user)
+            if promoted:
+                messages.success(request, f"{processed} line(s) processed. Approved bills sent to Manager.")
                 return _redirect_back(request, "reimbursement:finance_pending")
 
+            # Otherwise, re-derive and stay in Finance
+            req.apply_derived_status_from_bills(actor=request.user, reason="Finance updated selected bills.")
             messages.success(request, f"{processed} line(s) processed.")
             return redirect(request.path + (f"?return={back}" if back else ""))
 
-        # Finalize: recompute and send to Manager if possible
+        # Finalize: send approved bills to Manager even if some are rejected
         if action == "finalize":
-            req.apply_derived_status_from_bills(actor=request.user, reason="Finance finalized verification.")
-            if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
-                req.verified_by = request.user
-                req.verified_at = timezone.now()
-                req.save(update_fields=["verified_by", "verified_at", "updated_at"])
-                _send_safe("send_reimbursement_finance_verified", req)
-                messages.success(request, "All bills approved. Sent to Manager.")
+            promoted = self._maybe_promote_to_manager(req, request.user)
+            if promoted:
+                messages.success(request, "Approved bills sent to Manager. Rejected bills returned to employee.")
                 return _redirect_back(request, "reimbursement:finance_pending")
 
-            messages.info(request, "Some bills are not Finance-Approved yet. Remaining in Partial Hold (Finance).")
+            # Nothing approved yet
+            req.apply_derived_status_from_bills(actor=request.user, reason="Finance tried to finalize; no approved bills.")
+            messages.info(request, "No approved bills to send yet.")
             return redirect(request.path + (f"?return={back}" if back else ""))
 
 class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
