@@ -1,3 +1,4 @@
+# apps/leave/tasks.py
 from __future__ import annotations
 
 import logging
@@ -87,7 +88,7 @@ def cleanup_expired_handovers(self):
 def send_leave_emails_async(self, leave_id: int):
     """
     Send leave request emails asynchronously.
-    Respects employee-selected CCs and legacy single CC snapshot.
+    Respects employee-selected CCs and admin default CCs (multi) + legacy single CC.
     """
     try:
         from .models import LeaveRequest, LeaveDecisionAudit, DecisionAction
@@ -99,14 +100,26 @@ def send_leave_emails_async(self, leave_id: int):
             .get(id=leave_id)
         )
 
-        # CC from M2M + legacy/admin CC snapshot
+        # CC from M2M + admin-managed default CCs + legacy single CC snapshot
+        # 1) employee-selected CCs
         user_cc_emails = [u.email for u in leave.cc_users.all() if getattr(u, "email", None)]
-        admin_cc_list = [leave.cc_person.email] if getattr(leave.cc_person, "email", None) else []
+
+        # 2) admin-managed defaults (multi) via resolver
+        admin_multi_cc: List[str] = []
+        try:
+            _rp, cc_users = LeaveRequest.resolve_routing_multi_for(leave.employee)
+            admin_multi_cc = [u.email for u in cc_users if getattr(u, "email", None)]
+        except Exception:
+            admin_multi_cc = []
+
+        # 3) legacy single snapshot on the row
+        legacy_cc = [leave.cc_person.email] if getattr(leave.cc_person, "email", None) else []
+
         # merge & dedupe (case-insensitive)
         seen = set()
         all_cc: List[str] = []
-        for e in admin_cc_list + user_cc_emails:
-            low = e.strip().lower()
+        for e in (admin_multi_cc + legacy_cc + user_cc_emails):
+            low = (e or "").strip().lower()
             if low and low not in seen:
                 seen.add(low)
                 all_cc.append(e)

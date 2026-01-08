@@ -6,8 +6,8 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from datetime import timedelta, date
-from zoneinfo import ZoneInfo
 
+import pytz  # align tz impl with models/forms
 from django.apps import apps as django_apps
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -17,7 +17,12 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import ManyToManyField, Q
 from django.db.utils import OperationalError
-from django.http import HttpRequest, HttpResponse, HttpResponseForbidden, HttpResponseBadRequest
+from django.http import (
+    HttpRequest,
+    HttpResponse,
+    HttpResponseForbidden,
+    HttpResponseBadRequest,
+)
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -41,7 +46,11 @@ from .models import (
 
 # Notification services
 try:
-    from .services.notifications import send_leave_decision_email, send_leave_request_email, send_handover_email
+    from .services.notifications import (
+        send_leave_decision_email,
+        send_leave_request_email,
+        send_handover_email,
+    )
 except Exception:
     send_leave_decision_email = None
     send_leave_request_email = None
@@ -54,7 +63,7 @@ except Exception:
     LeaveDecisionAudit = None
     DecisionAction = None
 
-# Celery tasks
+# Celery tasks (optional)
 try:
     from .tasks import send_leave_emails_async, send_handover_emails_async
 except Exception:
@@ -63,12 +72,12 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
-IST = ZoneInfo("Asia/Kolkata")
+# consistent pytz timezone
+IST = pytz.timezone("Asia/Kolkata")
 TOKEN_SALT = "leave-action-v1"
 TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 days
 
-# Keep allowed list in views too so summary widgets (balances etc.) stay in sync with the form.
-# Half-day is a *duration*, not a leave type, so it is intentionally NOT listed.
+# Half-day is a duration, not a type
 ALLOWED_LEAVE_TYPE_NAMES = {
     "Compensatory Off",
     "Casual Leave",
@@ -79,7 +88,6 @@ ALLOWED_LEAVE_TYPE_NAMES = {
 # Helpers                                                                      #
 # -----------------------------------------------------------------------------#
 def now_ist():
-    """Return current time localized to IST."""
     return timezone.localtime(timezone.now(), IST)
 
 def _model_has_field(model, name: str) -> bool:
@@ -178,21 +186,17 @@ def _client_ip(request: HttpRequest) -> Optional[str]:
         return xff.split(",")[0].strip()
     return request.META.get("REMOTE_ADDR")
 
-# ---------------------- TASK AUTO-SKIP (NEW) -------------------------------- #
+# ---------------------- TASK AUTO-SKIP ---------------------------------------#
 def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = True) -> Dict[str, int]:
     """
-    Immediately mark scheduled tasks as skipped for the leave window.
-    • Runs on leave creation (before approval).
-    • For half-day, only tasks whose planned_date falls inside [start_at, end_at) are skipped.
-    • If exclude_handover=True, tasks explicitly handed over for this leave are NOT skipped.
-    Returns per-model counts of rows updated.
+    Mark scheduled tasks as skipped for the leave window.
+    Runs on leave creation (before approval).
     """
     counts = {"checklist": 0, "delegation": 0, "help_ticket": 0, "fms": 0}
     try:
         start_at = leave.start_at
         end_at = leave.end_at
 
-        # Use DATE range for planned_date to be safe across Date/DateTime fields
         start_date = timezone.localtime(start_at, IST).date() if start_at else None
         end_date = timezone.localtime(end_at, IST).date() if end_at else None
 
@@ -214,7 +218,6 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
             except Exception:
                 pass
 
-        # DATE-based window (inclusive)
         dt_window = Q(planned_date__gte=start_date) & Q(planned_date__lte=end_date)
 
         q = Checklist.objects.filter(assign_to=leave.employee, status='Pending').filter(dt_window)
@@ -227,9 +230,11 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
             q = q.exclude(id__in=exclude_ids["delegation"])
         counts["delegation"] = int(q.update(is_skipped_due_to_leave=True))
 
-        q = HelpTicket.objects.filter(assign_to=leave.employee) \
-                              .exclude(status__in=['Closed', 'COMPLETED', 'Completed', 'Done']) \
-                              .filter(dt_window)
+        q = (
+            HelpTicket.objects.filter(assign_to=leave.employee)
+            .exclude(status__in=['Closed', 'COMPLETED', 'Completed', 'Done'])
+            .filter(dt_window)
+        )
         if exclude_ids["help_ticket"]:
             q = q.exclude(id__in=exclude_ids["help_ticket"])
         counts["help_ticket"] = int(q.update(is_skipped_due_to_leave=True))
@@ -245,7 +250,6 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
     except Exception:
         logger.exception("Auto-skip failed for leave %s", getattr(leave, "id", None))
     return counts
-# -----------------------------------------------------------------------------#
 
 # ---- blocked days math (IST, inclusive) -------------------------------------#
 def _datespan_ist(start_dt, end_dt) -> List[date]:
@@ -363,7 +367,7 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
         form = LeaveRequestForm(request.POST, request.FILES, user=request.user)
         try:
             if form.is_valid():
-                # ---- Robust insert: retry entire transaction if SQLite is busy ----
+                # ---- robust insert: retry if SQLite is busy ----
                 max_attempts = 5
                 base_sleep = 0.25  # seconds
                 handovers_created: List[LeaveHandover] = []
@@ -391,7 +395,6 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
 
                             if delegate_to and (cl_ids or dg_ids or ht_ids):
                                 handovers = []
-                                # SAFELY derive Date fields for effective window
                                 ef_start = getattr(lr, "start_date", None) or timezone.localtime(lr.start_at, IST).date()
                                 ef_end = getattr(lr, "end_date", None) or timezone.localtime(lr.end_at, IST).date()
                                 for tid in cl_ids:
@@ -437,14 +440,15 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                                         )
                                     )
                                 if handovers:
-                                    handovers_created = LeaveHandover.objects.bulk_create(handovers, ignore_conflicts=True)
+                                    handovers_created = LeaveHandover.objects.bulk_create(
+                                        handovers, ignore_conflicts=True
+                                    )
 
-                            # ---------------- NEW: Auto-skip tasks immediately ----------------
+                            # auto-skip tasks immediately
                             skip_counts = _auto_skip_tasks_for_leave(lr, exclude_handover=True)
                             logger.info("Skip counts for leave %s: %s", lr.id, skip_counts)
-                            # -------------------------------------------------------------------
 
-                            # ---------------- Apply handover + Email dispatch (sync or Celery) ----------------
+                            # post-commit: apply handover + emails
                             def _apply_and_send():
                                 try:
                                     try:
@@ -479,10 +483,12 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                                     logger.error("Failed in post-commit apply+emails for leave %s: %s", lr.id, e)
 
                             transaction.on_commit(_apply_and_send)
-                            # ----------------------------------------------------------------
 
                         if handovers_created:
-                            messages.success(request, f"Leave application submitted with {len(handovers_created)} task handovers. Email notifications are being sent.")
+                            messages.success(
+                                request,
+                                f"Leave application submitted with {len(handovers_created)} task handovers. Email notifications are being sent.",
+                            )
                         else:
                             messages.success(request, "Leave application submitted successfully. Email notifications are being sent.")
                         return redirect("leave:dashboard")
@@ -490,26 +496,29 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                     except OperationalError as e:
                         if "database is locked" in str(e).lower() and attempt < max_attempts:
                             sleep_s = base_sleep * (2 ** (attempt - 1))
-                            logger.warning("SQLite busy on apply_leave (attempt %s/%s); retrying in %.2fs.", attempt, max_attempts, sleep_s)
+                            logger.warning(
+                                "SQLite busy on apply_leave (attempt %s/%s); retrying in %.2fs.",
+                                attempt, max_attempts, sleep_s,
+                            )
                             time.sleep(sleep_s)
                             continue
                         logger.exception("apply_leave failed due to OperationalError on attempt %s", attempt)
                         messages.error(request, "Database is busy. Please try again.")
                         break
                     except Exception as e:
-                        # Log full traceback and fall back to form redisplay (never 500)
                         logger.exception("apply_leave failed to create leave and/or handover: %s", e)
-                        messages.error(request, "Could not submit the leave due to an unexpected error. Please review the form and try again.")
+                        messages.error(
+                            request,
+                            "Could not submit the leave due to an unexpected error. Please review the form and try again.",
+                        )
                         break
             else:
-                # Log validation errors for visibility in Render logs
                 try:
                     logger.error("LeaveRequestForm invalid: %s", form.errors.as_json())
                 except Exception:
                     logger.error("LeaveRequestForm invalid (errors could not be serialized).")
                 messages.error(request, "Please fix the errors below.")
         except Exception:
-            # Catch anything else around validation itself
             logger.exception("apply_leave crashed during validation stage")
             messages.error(request, "Something went wrong while validating your request. Please try again.")
     else:
@@ -572,7 +581,10 @@ def _send_leave_emails_sync(leave: LeaveRequest):
         logger.info("Sent leave request email for leave %s", leave.id)
 
     except Exception as e:
-        logger.error("Failed to send leave emails sync for leave %s: %s", leave.id if getattr(leave, 'id', None) else "?", e)
+        logger.error(
+            "Failed to send leave emails sync for leave %s: %s",
+            leave.id if getattr(leave, 'id', None) else "?", e
+        )
 
 def _send_handover_emails_sync(leave: LeaveRequest, handovers: List[LeaveHandover]):
     try:
@@ -593,14 +605,21 @@ def _send_handover_emails_sync(leave: LeaveRequest, handovers: List[LeaveHandove
                 send_handover_email(leave, assignee, user_handovers)
                 if LeaveDecisionAudit and DecisionAction:
                     try:
-                        LeaveDecisionAudit.log(leave, DecisionAction.HANDOVER_EMAIL_SENT, extra={'assignee_id': assignee_id})
+                        LeaveDecisionAudit.log(
+                            leave,
+                            DecisionAction.HANDOVER_EMAIL_SENT,
+                            extra={'assignee_id': assignee_id}
+                        )
                     except Exception:
                         logger.exception("Audit log failed for HANDOVER_EMAIL_SENT on leave %s", leave.id)
             except Exception as e:
                 logger.error("Failed to send handover email to assignee %s: %s", assignee_id, e)
 
     except Exception as e:
-        logger.error("Failed to send handover emails sync for leave %s: %s", leave.id if getattr(leave, 'id', None) else "?", e)
+        logger.error(
+            "Failed to send handover emails sync for leave %s: %s",
+            leave.id if getattr(leave, 'id', None) else "?", e
+        )
 
 @has_permission("leave_list")
 @login_required
@@ -615,11 +634,7 @@ def manager_pending(request: HttpRequest) -> HttpResponse:
         .select_related("employee", "leave_type")
         .order_by("start_at")
     )
-    # No time-based lock for manager decisions. The UI must reflect that.
-    ctx = {
-        "leaves": leaves,
-        "next_url": reverse("leave:manager_pending"),
-    }
+    ctx = {"leaves": leaves, "next_url": reverse("leave:manager_pending")}
     return render(request, "leave/manager_pending.html", ctx)
 
 def _build_approval_context(leave: LeaveRequest) -> Dict[str, object]:
@@ -651,73 +666,9 @@ def _build_approval_context(leave: LeaveRequest) -> Dict[str, object]:
 @login_required
 @require_GET
 def approval_page(request: HttpRequest, pk: int) -> HttpResponse:
-    """
-    GET-only view.
-    Enhancement for Issue 1:
-    - If query param ?a=APPROVED|REJECTED is present and the user is authorized,
-      execute the decision immediately and redirect to next (or manager_pending).
-    - Otherwise render the approval page as before.
-    """
     leave = get_object_or_404(LeaveRequest, pk=pk)
     if not _can_manage(request.user, leave):
         return HttpResponseForbidden("You are not allowed to view this approval page.")
-
-    # NEW: one-click session approval via GET after login (email link with ?a=...).
-    raw_action = (request.GET.get("a") or "").strip().upper()
-    if raw_action in ("APPROVED", "REJECTED"):
-        next_url = _safe_next_url(request, "leave:manager_pending")
-        try:
-            with transaction.atomic():
-                locked = LeaveRequest.objects.select_for_update().get(pk=pk)
-                if locked.is_decided:
-                    messages.info(request, "This leave has already been decided.")
-                    return redirect(next_url)
-
-                if raw_action == "APPROVED":
-                    locked.approve(by_user=request.user, comment="Session decision via emailed link (GET).")
-                    act_label = "APPROVED"
-                    audit_action = getattr(DecisionAction, "APPROVED", "APPROVED") if DecisionAction else "APPROVED"
-                    token_audit = getattr(DecisionAction, "SESSION_APPROVE", "SESSION_APPROVE") if DecisionAction else "SESSION_APPROVE"
-                else:
-                    locked.reject(by_user=request.user, comment="Session decision via emailed link (GET).")
-                    act_label = "REJECTED"
-                    audit_action = getattr(DecisionAction, "REJECTED", "REJECTED") if DecisionAction else "REJECTED"
-                    token_audit = getattr(DecisionAction, "SESSION_REJECT", "SESSION_REJECT") if DecisionAction else "SESSION_REJECT"
-
-            if LeaveDecisionAudit:
-                try:
-                    LeaveDecisionAudit.objects.create(
-                        leave=locked,
-                        action=audit_action,
-                        decided_by=locked.approver,
-                        ip_address=_client_ip(request),
-                        user_agent=(request.META.get("HTTP_USER_AGENT") or ""),
-                        extra={"source": "SESSION_GET"},
-                    )
-                    LeaveDecisionAudit.objects.create(
-                        leave=locked,
-                        action=token_audit,
-                        decided_by=locked.approver,
-                        ip_address=_client_ip(request),
-                        user_agent=(request.META.get("HTTP_USER_AGENT") or ""),
-                        extra={"source": "SESSION_GET"},
-                    )
-                except Exception:
-                    logger.exception("Failed to write session decision audits for leave %s", locked.pk)
-
-            messages.success(request, f"Leave {act_label.lower()} successfully.")
-            return redirect(next_url)
-
-        except ValidationError as e:
-            for msg in getattr(e, "messages", []) or ["Action blocked."]:
-                messages.error(request, msg)
-            return redirect(_safe_next_url(request, "leave:manager_pending"))
-        except Exception:
-            logger.exception("Session GET decision failed for leave %s", pk)
-            messages.error(request, "Could not complete the action. Please try again.")
-            return redirect(_safe_next_url(request, "leave:manager_pending"))
-
-    # No ?a= — show the page as before.
     ctx = _build_approval_context(leave)
     ctx["next_url"] = _safe_next_url(request, "leave:manager_pending")
     return render(request, "leave/approve.html", ctx)
@@ -792,7 +743,7 @@ def delete_leave(request: HttpRequest, pk: int) -> HttpResponse:
         return redirect("leave:dashboard")
 
     leave_type = leave.leave_type.name
-    start_date = leave.start_at.strftime("%B  %d, %Y")
+    start_date = timezone.localtime(leave.start_at, IST).strftime("%B  %d, %Y")
 
     try:
         leave.delete()
@@ -1002,7 +953,10 @@ class TokenDecisionView(View):
         except Exception:
             logger.exception("Failed to write decision audits for leave %s", leave.pk)
 
-        messages.success(request, f"Leave for {leave.employee.get_full_name() or leave.employee.username} has been {leave.get_status_display()}.")
+        messages.success(
+            request,
+            f"Leave for {leave.employee.get_full_name() or leave.employee.username} has been {leave.get_status_display()}."
+        )
         return render(request, self.template_done, {"leave": leave})
 
 # -----------------------------------------------------------------------------#
@@ -1037,7 +991,7 @@ def upload_photo(request: HttpRequest) -> HttpResponse:
     return redirect("leave:dashboard")
 
 # -----------------------------------------------------------------------------#
-# Optional lightweight widget for manager dashboards                            #
+# Manager dashboard widget (pending leaves)                                     #
 # -----------------------------------------------------------------------------#
 @has_permission("leave_pending_manager")
 @login_required
@@ -1156,13 +1110,18 @@ def approver_mapping_edit_field(request: HttpRequest, user_id: int, field: str) 
     User = get_user_model()
     employee = get_object_or_404(User, pk=user_id)
 
-    mapping = ApproverMapping.objects.select_related("employee", "reporting_person", "cc_person") \
-                                     .filter(employee=employee).first()
+    mapping = (
+        ApproverMapping.objects
+        .select_related("employee", "reporting_person", "cc_person")
+        .filter(employee=employee).first()
+    )
 
-    users_qs = User.objects.filter(is_active=True) \
-        .exclude(email__isnull=True).exclude(email__exact="") \
-        .only("id", "first_name", "last_name", "username", "email") \
+    users_qs = (
+        User.objects.filter(is_active=True)
+        .exclude(email__isnull=True).exclude(email__exact="")
+        .only("id", "first_name", "last_name", "username", "email")
         .order_by("first_name", "last_name", "username")
+    )
 
     options = list(users_qs)
 
@@ -1236,7 +1195,11 @@ def cc_config(request: HttpRequest) -> HttpResponse:
     if not getattr(request.user, "is_superuser", False):
         return HttpResponseForbidden("Admins only.")
     add_form = _CCAddForm()
-    rows = list(CCConfiguration.objects.select_related("user").order_by("sort_order", "department", "user__first_name", "user__last_name"))
+    rows = list(
+        CCConfiguration.objects
+        .select_related("user")
+        .order_by("sort_order", "department", "user__first_name", "user__last_name")
+    )
 
     if request.method == "POST":
         updated = 0
@@ -1437,16 +1400,15 @@ def cc_assign(request: HttpRequest) -> HttpResponse:
     return render(request, "leave/cc_assign.html", ctx)
 
 # -----------------------------------------------------------------------------#
-# NEW: Delegate dashboard widget — tasks handed over to the current user        #
+# Delegate dashboard widget — tasks handed over to the current user             #
 # -----------------------------------------------------------------------------#
 @has_permission("leave_list")
 @login_required
 def my_handovers_widget(request: HttpRequest) -> HttpResponse:
     """
     Compact widget listing tasks currently assigned to the user due to a leave handover.
-    Include this on any dashboard.
     """
-    from .models import LeaveHandover, LeaveStatus  # local import to avoid cycles
+    from .models import LeaveHandover  # local import to avoid early app wiring
 
     today = timezone.localdate()
     handovers = (
