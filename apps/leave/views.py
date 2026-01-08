@@ -651,9 +651,73 @@ def _build_approval_context(leave: LeaveRequest) -> Dict[str, object]:
 @login_required
 @require_GET
 def approval_page(request: HttpRequest, pk: int) -> HttpResponse:
+    """
+    GET-only view.
+    Enhancement for Issue 1:
+    - If query param ?a=APPROVED|REJECTED is present and the user is authorized,
+      execute the decision immediately and redirect to next (or manager_pending).
+    - Otherwise render the approval page as before.
+    """
     leave = get_object_or_404(LeaveRequest, pk=pk)
     if not _can_manage(request.user, leave):
         return HttpResponseForbidden("You are not allowed to view this approval page.")
+
+    # NEW: one-click session approval via GET after login (email link with ?a=...).
+    raw_action = (request.GET.get("a") or "").strip().upper()
+    if raw_action in ("APPROVED", "REJECTED"):
+        next_url = _safe_next_url(request, "leave:manager_pending")
+        try:
+            with transaction.atomic():
+                locked = LeaveRequest.objects.select_for_update().get(pk=pk)
+                if locked.is_decided:
+                    messages.info(request, "This leave has already been decided.")
+                    return redirect(next_url)
+
+                if raw_action == "APPROVED":
+                    locked.approve(by_user=request.user, comment="Session decision via emailed link (GET).")
+                    act_label = "APPROVED"
+                    audit_action = getattr(DecisionAction, "APPROVED", "APPROVED") if DecisionAction else "APPROVED"
+                    token_audit = getattr(DecisionAction, "SESSION_APPROVE", "SESSION_APPROVE") if DecisionAction else "SESSION_APPROVE"
+                else:
+                    locked.reject(by_user=request.user, comment="Session decision via emailed link (GET).")
+                    act_label = "REJECTED"
+                    audit_action = getattr(DecisionAction, "REJECTED", "REJECTED") if DecisionAction else "REJECTED"
+                    token_audit = getattr(DecisionAction, "SESSION_REJECT", "SESSION_REJECT") if DecisionAction else "SESSION_REJECT"
+
+            if LeaveDecisionAudit:
+                try:
+                    LeaveDecisionAudit.objects.create(
+                        leave=locked,
+                        action=audit_action,
+                        decided_by=locked.approver,
+                        ip_address=_client_ip(request),
+                        user_agent=(request.META.get("HTTP_USER_AGENT") or ""),
+                        extra={"source": "SESSION_GET"},
+                    )
+                    LeaveDecisionAudit.objects.create(
+                        leave=locked,
+                        action=token_audit,
+                        decided_by=locked.approver,
+                        ip_address=_client_ip(request),
+                        user_agent=(request.META.get("HTTP_USER_AGENT") or ""),
+                        extra={"source": "SESSION_GET"},
+                    )
+                except Exception:
+                    logger.exception("Failed to write session decision audits for leave %s", locked.pk)
+
+            messages.success(request, f"Leave {act_label.lower()} successfully.")
+            return redirect(next_url)
+
+        except ValidationError as e:
+            for msg in getattr(e, "messages", []) or ["Action blocked."]:
+                messages.error(request, msg)
+            return redirect(_safe_next_url(request, "leave:manager_pending"))
+        except Exception:
+            logger.exception("Session GET decision failed for leave %s", pk)
+            messages.error(request, "Could not complete the action. Please try again.")
+            return redirect(_safe_next_url(request, "leave:manager_pending"))
+
+    # No ?a= — show the page as before.
     ctx = _build_approval_context(leave)
     ctx["next_url"] = _safe_next_url(request, "leave:manager_pending")
     return render(request, "leave/approve.html", ctx)
