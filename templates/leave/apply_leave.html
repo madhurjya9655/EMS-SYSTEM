@@ -16,6 +16,14 @@
     </div>
   {% endif %}
 
+  {# NEW: banner if outside apply window #}
+  {% if can_apply_now is not None and not can_apply_now %}
+    <div class="alert alert-warning">
+      Applications are allowed only between <strong>09:30 AM</strong> and <strong>06:00 PM</strong> (IST).
+      Current IST: <strong>{{ now_ist|date:"Y-m-d H:i" }}</strong>.
+    </div>
+  {% endif %}
+
   <div class="card shadow-sm mb-4">
     <div class="card-body">
       <div class="d-flex align-items-center">
@@ -211,7 +219,7 @@
           <a href="{% url 'leave:my_leaves' %}" class="btn btn-outline-secondary me-2">
             <i class="fa-solid fa-list me-1"></i> My Leaves
           </a>
-          <button type="submit" class="btn btn-primary">
+          <button type="submit" class="btn btn-primary" {% if can_apply_now is not None and not can_apply_now %}disabled title="Available 09:30–18:00 IST"{% endif %}>
             <i class="fa-solid fa-paper-plane me-1"></i> Submit Leave
           </button>
         </div>
@@ -221,7 +229,6 @@
 
 </div>
 
-{# Flatpickr for date inputs #}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css"/>
 <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 

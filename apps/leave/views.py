@@ -1,13 +1,12 @@
-# apps/leave/views.py
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
-from datetime import timedelta, date
+from datetime import timedelta, date, time as dtime
 
-import pytz  # align tz impl with models/forms
+import pytz  # ✅ align tz impl with models/forms
 from django.apps import apps as django_apps
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -17,12 +16,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import ManyToManyField, Q
 from django.db.utils import OperationalError
-from django.http import (
-    HttpRequest,
-    HttpResponse,
-    HttpResponseForbidden,
-    HttpResponseBadRequest,
-)
+from django.http import HttpRequest, HttpResponse, HttpResponseForbidden, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -46,11 +40,7 @@ from .models import (
 
 # Notification services
 try:
-    from .services.notifications import (
-        send_leave_decision_email,
-        send_leave_request_email,
-        send_handover_email,
-    )
+    from .services.notifications import send_leave_decision_email, send_leave_request_email, send_handover_email
 except Exception:
     send_leave_decision_email = None
     send_leave_request_email = None
@@ -63,7 +53,7 @@ except Exception:
     LeaveDecisionAudit = None
     DecisionAction = None
 
-# Celery tasks (optional)
+# Celery tasks
 try:
     from .tasks import send_leave_emails_async, send_handover_emails_async
 except Exception:
@@ -72,24 +62,37 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
-# consistent pytz timezone
+# ✅ use pytz (consistent with models/forms)
 IST = pytz.timezone("Asia/Kolkata")
 TOKEN_SALT = "leave-action-v1"
 TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 days
 
-# Half-day is a duration, not a type
+# Keep allowed list in views too so summary widgets (balances etc.) stay in sync with the form.
 ALLOWED_LEAVE_TYPE_NAMES = {
     "Compensatory Off",
     "Casual Leave",
     "Maternity Leave",
 }
 
+# ---- Business-hours gate (apply allowed only 09:30–18:00 IST) ---------------
+WORK_START_IST = dtime(9, 30)
+WORK_END_IST = dtime(18, 0)
+
+def now_ist():
+    """Return current time localized to IST."""
+    return timezone.localtime(timezone.now(), IST)
+
+def _within_apply_window_ist(dt=None) -> bool:
+    """
+    Returns True iff current IST time is within [09:30, 18:00].
+    We allow exactly 18:00 as the last valid moment for submit.
+    """
+    cur = timezone.localtime(dt or timezone.now(), IST).time()
+    return (cur >= WORK_START_IST) and (cur <= WORK_END_IST)
+
 # -----------------------------------------------------------------------------#
 # Helpers                                                                      #
 # -----------------------------------------------------------------------------#
-def now_ist():
-    return timezone.localtime(timezone.now(), IST)
-
 def _model_has_field(model, name: str) -> bool:
     try:
         model._meta.get_field(name)
@@ -129,20 +132,20 @@ def _employee_header(user) -> Dict[str, Optional[str]]:
         if _model_has_field(Profile, "department"):
             header["department"] = (getattr(prof, "department", "") or "").strip()
 
-        if _model_has_field(Profile, "photo"):
-            photo = getattr(prof, "photo", None)
-            if photo and getattr(photo, "url", None):
-                header["photo_url"] = photo.url
+        # Look for a picture field across common names
+        pic_fields = ["photo", "avatar", "image", "profile_photo", "profile_image", "picture"]
+        for fname in pic_fields:
+            if _model_has_field(Profile, fname):
+                img = getattr(prof, fname, None)
+                if img and getattr(img, "url", None):
+                    header["photo_url"] = img.url
+                    break
         return header
     except Exception:
         logger.exception("Failed to load Profile for user id=%s", getattr(user, "id", None))
         return header
 
 def _routing_for_leave(leave: LeaveRequest) -> Tuple[str, List[str]]:
-    """
-    Resolve routing from admin-controlled mapping.
-    returns (manager_email, cc_list) — all lowercased.
-    """
     emp_email = (leave.employee_email or getattr(leave.employee, "email", "") or "").strip().lower()
     r = recipients_for_leave(emp_email)  # {"to": manager, "cc": [..]}
     manager_email = (r.get("to") or "").strip().lower()
@@ -150,10 +153,6 @@ def _routing_for_leave(leave: LeaveRequest) -> Tuple[str, List[str]]:
     return manager_email, cc_list
 
 def _role_for_email(leave: LeaveRequest, email: str) -> Optional[str]:
-    """
-    Classify an email for a given leave as "manager" | "cc" | None,
-    based on the *current* admin mapping (tokens should honor latest mapping).
-    """
     if not email:
         return None
     email = email.strip().lower()
@@ -186,17 +185,21 @@ def _client_ip(request: HttpRequest) -> Optional[str]:
         return xff.split(",")[0].strip()
     return request.META.get("REMOTE_ADDR")
 
-# ---------------------- TASK AUTO-SKIP ---------------------------------------#
+# ---------------------- TASK AUTO-SKIP (NEW) -------------------------------- #
 def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = True) -> Dict[str, int]:
     """
-    Mark scheduled tasks as skipped for the leave window.
-    Runs on leave creation (before approval).
+    Immediately mark scheduled tasks as skipped for the leave window.
+    • Runs on leave creation (before approval).
+    • For half-day, only tasks whose planned_date falls inside [start_at, end_at) are skipped.
+    • If exclude_handover=True, tasks explicitly handed over for this leave are NOT skipped.
+    Returns per-model counts of rows updated.
     """
     counts = {"checklist": 0, "delegation": 0, "help_ticket": 0, "fms": 0}
     try:
         start_at = leave.start_at
         end_at = leave.end_at
 
+        # Use DATE range for planned_date to be safe across Date/DateTime fields
         start_date = timezone.localtime(start_at, IST).date() if start_at else None
         end_date = timezone.localtime(end_at, IST).date() if end_at else None
 
@@ -218,6 +221,7 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
             except Exception:
                 pass
 
+        # DATE-based window (inclusive)
         dt_window = Q(planned_date__gte=start_date) & Q(planned_date__lte=end_date)
 
         q = Checklist.objects.filter(assign_to=leave.employee, status='Pending').filter(dt_window)
@@ -230,11 +234,9 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
             q = q.exclude(id__in=exclude_ids["delegation"])
         counts["delegation"] = int(q.update(is_skipped_due_to_leave=True))
 
-        q = (
-            HelpTicket.objects.filter(assign_to=leave.employee)
-            .exclude(status__in=['Closed', 'COMPLETED', 'Completed', 'Done'])
-            .filter(dt_window)
-        )
+        q = HelpTicket.objects.filter(assign_to=leave.employee) \
+                              .exclude(status__in=['Closed', 'COMPLETED', 'Completed', 'Done']) \
+                              .filter(dt_window)
         if exclude_ids["help_ticket"]:
             q = q.exclude(id__in=exclude_ids["help_ticket"])
         counts["help_ticket"] = int(q.update(is_skipped_due_to_leave=True))
@@ -250,6 +252,7 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
     except Exception:
         logger.exception("Auto-skip failed for leave %s", getattr(leave, "id", None))
     return counts
+# -----------------------------------------------------------------------------#
 
 # ---- blocked days math (IST, inclusive) -------------------------------------#
 def _datespan_ist(start_dt, end_dt) -> List[date]:
@@ -362,12 +365,23 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 def apply_leave(request: HttpRequest) -> HttpResponse:
     header = _employee_header(request.user)
     now = now_ist()
+    can_apply_now = _within_apply_window_ist(now)
 
     if request.method == "POST":
+        # ✅ HARD GATE: block submissions outside 09:30–18:00 IST
+        if not can_apply_now:
+            messages.error(request, "Leave applications are allowed only between 09:30 AM and 06:00 PM (IST). Please try again during working hours.")
+            form = LeaveRequestForm(request.POST, request.FILES, user=request.user)  # keep their input on screen
+            return render(
+                request,
+                "leave/apply_leave.html",
+                {"form": form, "employee_header": header, "now_ist": now, "can_apply_now": can_apply_now},
+            )
+
         form = LeaveRequestForm(request.POST, request.FILES, user=request.user)
         try:
             if form.is_valid():
-                # ---- robust insert: retry if SQLite is busy ----
+                # ---- Robust insert: retry entire transaction if SQLite is busy ----
                 max_attempts = 5
                 base_sleep = 0.25  # seconds
                 handovers_created: List[LeaveHandover] = []
@@ -395,6 +409,7 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
 
                             if delegate_to and (cl_ids or dg_ids or ht_ids):
                                 handovers = []
+                                # SAFELY derive Date fields for effective window
                                 ef_start = getattr(lr, "start_date", None) or timezone.localtime(lr.start_at, IST).date()
                                 ef_end = getattr(lr, "end_date", None) or timezone.localtime(lr.end_at, IST).date()
                                 for tid in cl_ids:
@@ -440,15 +455,14 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                                         )
                                     )
                                 if handovers:
-                                    handovers_created = LeaveHandover.objects.bulk_create(
-                                        handovers, ignore_conflicts=True
-                                    )
+                                    handovers_created = LeaveHandover.objects.bulk_create(handovers, ignore_conflicts=True)
 
-                            # auto-skip tasks immediately
+                            # ---------------- NEW: Auto-skip tasks immediately ----------------
                             skip_counts = _auto_skip_tasks_for_leave(lr, exclude_handover=True)
                             logger.info("Skip counts for leave %s: %s", lr.id, skip_counts)
+                            # -------------------------------------------------------------------
 
-                            # post-commit: apply handover + emails
+                            # ---------------- Apply handover + Email dispatch (sync or Celery) ----------------
                             def _apply_and_send():
                                 try:
                                     try:
@@ -483,12 +497,10 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                                     logger.error("Failed in post-commit apply+emails for leave %s: %s", lr.id, e)
 
                             transaction.on_commit(_apply_and_send)
+                            # ----------------------------------------------------------------
 
                         if handovers_created:
-                            messages.success(
-                                request,
-                                f"Leave application submitted with {len(handovers_created)} task handovers. Email notifications are being sent.",
-                            )
+                            messages.success(request, f"Leave application submitted with {len(handovers_created)} task handovers. Email notifications are being sent.")
                         else:
                             messages.success(request, "Leave application submitted successfully. Email notifications are being sent.")
                         return redirect("leave:dashboard")
@@ -496,29 +508,26 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                     except OperationalError as e:
                         if "database is locked" in str(e).lower() and attempt < max_attempts:
                             sleep_s = base_sleep * (2 ** (attempt - 1))
-                            logger.warning(
-                                "SQLite busy on apply_leave (attempt %s/%s); retrying in %.2fs.",
-                                attempt, max_attempts, sleep_s,
-                            )
+                            logger.warning("SQLite busy on apply_leave (attempt %s/%s); retrying in %.2fs.", attempt, max_attempts, sleep_s)
                             time.sleep(sleep_s)
                             continue
                         logger.exception("apply_leave failed due to OperationalError on attempt %s", attempt)
                         messages.error(request, "Database is busy. Please try again.")
                         break
                     except Exception as e:
+                        # Log full traceback and fall back to form redisplay (never 500)
                         logger.exception("apply_leave failed to create leave and/or handover: %s", e)
-                        messages.error(
-                            request,
-                            "Could not submit the leave due to an unexpected error. Please review the form and try again.",
-                        )
+                        messages.error(request, "Could not submit the leave due to an unexpected error. Please review the form and try again.")
                         break
             else:
+                # Log validation errors for visibility in logs
                 try:
                     logger.error("LeaveRequestForm invalid: %s", form.errors.as_json())
                 except Exception:
                     logger.error("LeaveRequestForm invalid (errors could not be serialized).")
                 messages.error(request, "Please fix the errors below.")
         except Exception:
+            # Catch anything else around validation itself
             logger.exception("apply_leave crashed during validation stage")
             messages.error(request, "Something went wrong while validating your request. Please try again.")
     else:
@@ -531,6 +540,7 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
             "form": form,
             "employee_header": header,
             "now_ist": now,
+            "can_apply_now": can_apply_now,  # 👈 used by template to show banner/disable submit
         },
     )
 
@@ -581,10 +591,7 @@ def _send_leave_emails_sync(leave: LeaveRequest):
         logger.info("Sent leave request email for leave %s", leave.id)
 
     except Exception as e:
-        logger.error(
-            "Failed to send leave emails sync for leave %s: %s",
-            leave.id if getattr(leave, 'id', None) else "?", e
-        )
+        logger.error("Failed to send leave emails sync for leave %s: %s", leave.id if getattr(leave, 'id', None) else "?", e)
 
 def _send_handover_emails_sync(leave: LeaveRequest, handovers: List[LeaveHandover]):
     try:
@@ -605,21 +612,14 @@ def _send_handover_emails_sync(leave: LeaveRequest, handovers: List[LeaveHandove
                 send_handover_email(leave, assignee, user_handovers)
                 if LeaveDecisionAudit and DecisionAction:
                     try:
-                        LeaveDecisionAudit.log(
-                            leave,
-                            DecisionAction.HANDOVER_EMAIL_SENT,
-                            extra={'assignee_id': assignee_id}
-                        )
+                        LeaveDecisionAudit.log(leave, DecisionAction.HANDOVER_EMAIL_SENT, extra={'assignee_id': assignee_id})
                     except Exception:
                         logger.exception("Audit log failed for HANDOVER_EMAIL_SENT on leave %s", leave.id)
             except Exception as e:
                 logger.error("Failed to send handover email to assignee %s: %s", assignee_id, e)
 
     except Exception as e:
-        logger.error(
-            "Failed to send handover emails sync for leave %s: %s",
-            leave.id if getattr(leave, 'id', None) else "?", e
-        )
+        logger.error("Failed to send handover emails sync for leave %s: %s", leave.id if getattr(leave, 'id', None) else "?", e)
 
 @has_permission("leave_list")
 @login_required
@@ -634,7 +634,10 @@ def manager_pending(request: HttpRequest) -> HttpResponse:
         .select_related("employee", "leave_type")
         .order_by("start_at")
     )
-    ctx = {"leaves": leaves, "next_url": reverse("leave:manager_pending")}
+    ctx = {
+        "leaves": leaves,
+        "next_url": reverse("leave:manager_pending"),
+    }
     return render(request, "leave/manager_pending.html", ctx)
 
 def _build_approval_context(leave: LeaveRequest) -> Dict[str, object]:
@@ -953,10 +956,7 @@ class TokenDecisionView(View):
         except Exception:
             logger.exception("Failed to write decision audits for leave %s", leave.pk)
 
-        messages.success(
-            request,
-            f"Leave for {leave.employee.get_full_name() or leave.employee.username} has been {leave.get_status_display()}."
-        )
+        messages.success(request, f"Leave for {leave.employee.get_full_name() or leave.employee.username} has been {leave.get_status_display()}.")
         return render(request, self.template_done, {"leave": leave})
 
 # -----------------------------------------------------------------------------#
@@ -966,10 +966,27 @@ class TokenDecisionView(View):
 @login_required
 @require_POST
 def upload_photo(request: HttpRequest) -> HttpResponse:
+    """
+    Accept an uploaded image and store it on the user's Profile.
+    Supports multiple common field names to avoid schema mismatch:
+    photo, avatar, image, profile_photo, profile_image, picture
+    """
     file = request.FILES.get("photo")
     if not file:
         messages.error(request, "Please choose an image file to upload.")
         return redirect("leave:dashboard")
+
+    # Light validation (size/mime)
+    try:
+        if getattr(file, "size", 0) and file.size > 10 * 1024 * 1024:
+            messages.error(request, "File too large. Max size is 10 MB.")
+            return redirect("leave:dashboard")
+        ctype = (getattr(file, "content_type", "") or "").lower()
+        if ctype and not ctype.startswith("image/"):
+            messages.error(request, "Please upload an image (JPG/PNG/WebP).")
+            return redirect("leave:dashboard")
+    except Exception:
+        pass
 
     try:
         Profile = django_apps.get_model("users", "Profile")
@@ -978,20 +995,44 @@ def upload_photo(request: HttpRequest) -> HttpResponse:
             return redirect("leave:dashboard")
 
         prof, _ = Profile.objects.get_or_create(user=request.user)
-        if _model_has_field(Profile, "photo"):
-            setattr(prof, "photo", file)
-            prof.save(update_fields=["photo"])
-            messages.success(request, "Profile photo updated.")
-        else:
-            messages.error(request, "Profile photo field is not configured.")
+
+        # Try a set of common field names (ImageField/FileField)
+        candidate_fields = [
+            "photo",
+            "avatar",
+            "image",
+            "profile_photo",
+            "profile_image",
+            "picture",
+        ]
+
+        target_field_name = None
+        for fname in candidate_fields:
+            if _model_has_field(Profile, fname):
+                target_field_name = fname
+                break
+
+        if not target_field_name:
+            looked = ", ".join(candidate_fields)
+            messages.error(
+                request,
+                f"Profile photo field is not configured on your Profile model. "
+                f"Tried: {looked}. Please add one of these fields."
+            )
+            return redirect("leave:dashboard")
+
+        setattr(prof, target_field_name, file)
+        prof.save(update_fields=[target_field_name])
+
+        messages.success(request, "Profile photo updated.")
     except Exception as e:
         logger.exception("Photo upload failed: %s", e)
-        messages.error(request, "Could not save photo. Please try again.")
+        messages.error(request, "Could not save photo. Please try again or use a smaller image.")
 
     return redirect("leave:dashboard")
 
 # -----------------------------------------------------------------------------#
-# Manager dashboard widget (pending leaves)                                     #
+# Optional lightweight widget for manager dashboards                            #
 # -----------------------------------------------------------------------------#
 @has_permission("leave_pending_manager")
 @login_required
@@ -1110,18 +1151,13 @@ def approver_mapping_edit_field(request: HttpRequest, user_id: int, field: str) 
     User = get_user_model()
     employee = get_object_or_404(User, pk=user_id)
 
-    mapping = (
-        ApproverMapping.objects
-        .select_related("employee", "reporting_person", "cc_person")
-        .filter(employee=employee).first()
-    )
+    mapping = ApproverMapping.objects.select_related("employee", "reporting_person", "cc_person") \
+                                     .filter(employee=employee).first()
 
-    users_qs = (
-        User.objects.filter(is_active=True)
-        .exclude(email__isnull=True).exclude(email__exact="")
-        .only("id", "first_name", "last_name", "username", "email")
+    users_qs = User.objects.filter(is_active=True) \
+        .exclude(email__isnull=True).exclude(email__exact="") \
+        .only("id", "first_name", "last_name", "username", "email") \
         .order_by("first_name", "last_name", "username")
-    )
 
     options = list(users_qs)
 
@@ -1195,11 +1231,7 @@ def cc_config(request: HttpRequest) -> HttpResponse:
     if not getattr(request.user, "is_superuser", False):
         return HttpResponseForbidden("Admins only.")
     add_form = _CCAddForm()
-    rows = list(
-        CCConfiguration.objects
-        .select_related("user")
-        .order_by("sort_order", "department", "user__first_name", "user__last_name")
-    )
+    rows = list(CCConfiguration.objects.select_related("user").order_by("sort_order", "department", "user__first_name", "user__last_name"))
 
     if request.method == "POST":
         updated = 0
@@ -1400,15 +1432,16 @@ def cc_assign(request: HttpRequest) -> HttpResponse:
     return render(request, "leave/cc_assign.html", ctx)
 
 # -----------------------------------------------------------------------------#
-# Delegate dashboard widget — tasks handed over to the current user             #
+# NEW: Delegate dashboard widget — tasks handed over to the current user        #
 # -----------------------------------------------------------------------------#
 @has_permission("leave_list")
 @login_required
 def my_handovers_widget(request: HttpRequest) -> HttpResponse:
     """
     Compact widget listing tasks currently assigned to the user due to a leave handover.
+    Include this on any dashboard.
     """
-    from .models import LeaveHandover  # local import to avoid early app wiring
+    from .models import LeaveHandover, LeaveStatus  # local import to avoid cycles
 
     today = timezone.localdate()
     handovers = (
