@@ -172,6 +172,14 @@ class Profile(models.Model):
         related_name="profile",
     )
 
+    # Profile photo used by multiple modules (name chosen from the allowed list)
+    photo = models.ImageField(
+        upload_to="profiles/%Y/%m/",
+        null=True,
+        blank=True,
+        verbose_name="Profile Photo",
+    )
+
     # Core fields you already use
     phone = models.CharField(
         max_length=20,
@@ -279,3 +287,12 @@ class Profile(models.Model):
     def cc_emails(self) -> List[str]:
         _, cc = self.resolve_manager_and_cc()
         return cc
+
+    @property
+    def avatar_url(self) -> str:
+        try:
+            if self.photo and hasattr(self.photo, "url"):
+                return self.photo.url
+        except Exception:
+            pass
+        return ""

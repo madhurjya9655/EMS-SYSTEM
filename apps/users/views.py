@@ -70,7 +70,8 @@ def list_users(request: HttpRequest) -> HttpResponse:
 def add_user(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         uf = UserForm(request.POST)
-        pf = ProfileForm(request.POST)
+        # IMPORTANT: include request.FILES so profile photo can be uploaded
+        pf = ProfileForm(request.POST, request.FILES)
 
         if uf.is_valid() and pf.is_valid():
             user = uf.save(commit=False)
@@ -110,7 +111,8 @@ def edit_user(request: HttpRequest, pk: int) -> HttpResponse:
 
     if request.method == "POST":
         uf = UserForm(request.POST, instance=user_obj)
-        pf = ProfileForm(request.POST, instance=profile_obj)
+        # IMPORTANT: include request.FILES so profile photo updates work
+        pf = ProfileForm(request.POST, request.FILES, instance=profile_obj)
 
         if uf.is_valid() and pf.is_valid():
             user = uf.save(commit=False)  # password not touched by the form
