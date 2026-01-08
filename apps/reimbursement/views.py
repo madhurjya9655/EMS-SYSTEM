@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import csv
@@ -57,11 +58,10 @@ from .models import (
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
-# Must match _ACTION_SALT in services/notifications.py
 EMAIL_ACTION_SALT = "reimbursement-email-action"
 
 # ---------------------------------------------------------------------------
-# Helper utilities
+# Helpers
 # ---------------------------------------------------------------------------
 
 def _user_is_admin(user) -> bool:
@@ -87,10 +87,6 @@ def _user_is_manager(user) -> bool:
     )
 
 def _send_safe(func_name: str, *args, **kwargs) -> None:
-    """
-    Call a notification helper from apps.reimbursement.services.notifications,
-    but never break the main flow if emails fail.
-    """
     try:
         from .services import notifications  # type: ignore
         fn = getattr(notifications, func_name, None)
@@ -100,11 +96,6 @@ def _send_safe(func_name: str, *args, **kwargs) -> None:
         logger.exception("Reimbursement notification %s failed", func_name)
 
 def _safe_back_url(value: Optional[str]) -> Optional[str]:
-    """
-    Very small allowlist for back/return URLs:
-    - must be relative
-    - must start with '/' and must NOT contain a scheme or '//' (to avoid open redirects)
-    """
     if not value:
         return None
     v = value.strip()
@@ -113,10 +104,6 @@ def _safe_back_url(value: Optional[str]) -> Optional[str]:
     return None
 
 def _redirect_back(request, fallback_name: str) -> HttpResponse:
-    """
-    Redirect to ?return=<relative-url> if provided, else to reverse(fallback_name).
-    Works for both GET and POST.
-    """
     back = _safe_back_url(request.GET.get("return") or request.POST.get("return"))
     if back:
         return redirect(back)
@@ -127,12 +114,6 @@ def _redirect_back(request, fallback_name: str) -> HttpResponse:
 # ---------------------------------------------------------------------------
 
 class ExpenseInboxView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    Employee "Upload Expenses" page:
-    - Show a form to upload new expenses (bills).
-    - Existing expenses are listed on the right.
-    """
-
     permission_code = "reimbursement_apply"
     template_name = "reimbursement/expense_inbox.html"
 
@@ -172,10 +153,6 @@ class ExpenseInboxView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView
         return super().get(request, *args, **kwargs)
 
 class ExpenseItemUpdateView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
-    """
-    Employee can edit their own draft expenses (not yet locked).
-    """
-
     permission_code = "reimbursement_apply"
     model = ExpenseItem
     form_class = ExpenseItemForm
@@ -196,10 +173,6 @@ class ExpenseItemUpdateView(LoginRequiredMixin, PermissionRequiredMixin, UpdateV
         return super().dispatch(request, *args, **kwargs)
 
 class ExpenseItemDeleteView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    Simple POST-based delete for draft expenses.
-    """
-
     permission_code = "reimbursement_apply"
     template_name = "reimbursement/expense_confirm_delete.html"
 
@@ -229,26 +202,16 @@ class ExpenseItemDeleteView(LoginRequiredMixin, PermissionRequiredMixin, Templat
         return ctx
 
 # ---------------------------------------------------------------------------
-# Employee: Create reimbursement request from multiple expenses
+# Employee: Create reimbursement request
 # ---------------------------------------------------------------------------
 
 class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormView):
-    """
-    Employee clicks "New Request" from My Requests page:
-    - Select multiple ExpenseItems from inbox.
-    - Submit as a single ReimbursementRequest.
-    """
-
     permission_code = "reimbursement_apply"
     template_name = "reimbursement/create_request.html"
     form_class = ReimbursementCreateForm
     success_url = reverse_lazy("reimbursement:my_reimbursements")
 
     def _available_expenses_qs(self):
-        """
-        Expenses for this user that are NOT already attached to any
-        ReimbursementLine (i.e. not part of any reimbursement yet).
-        """
         user = self.request.user
         used_lines = ReimbursementLine.objects.filter(expense_item=OuterRef("pk"))
         return (
@@ -272,12 +235,8 @@ class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormV
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-
         user = self.request.user
-
-        # ✅ Show ONLY bills "pending to send" (available, not attached anywhere)
         all_items = self._available_expenses_qs()
-
         rows = []
         for item in all_items:
             rows.append(
@@ -289,28 +248,21 @@ class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormV
                     "selectable": True,
                 }
             )
-
         ctx["rows"] = rows
-
-        # Manager + finance info for right-side panel
         mapping = ReimbursementApproverMapping.for_employee(user)
         ctx["manager"] = mapping.manager if mapping else None
         finance_emails = ReimbursementSettings.get_solo().finance_email_list()
         ctx["finance_emails"] = finance_emails
-
         return ctx
 
     def form_valid(self, form: ReimbursementCreateForm):
         user = self.request.user
         expense_items: Iterable[ExpenseItem] = form.cleaned_data["expense_items"]
         employee_note: str = form.cleaned_data.get("employee_note") or ""
-
-        # Resolve approvers from mapping
         mapping = ReimbursementApproverMapping.for_employee(user)
         manager = mapping.manager if mapping else None
         management = None
 
-        # Finance-first flow
         req = ReimbursementRequest.objects.create(
             created_by=user,
             status=ReimbursementRequest.Status.PENDING_FINANCE_VERIFY,
@@ -318,7 +270,6 @@ class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormV
             management=management,
         )
 
-        # Attach lines
         for item in expense_items:
             ReimbursementLine.objects.create(
                 request=req,
@@ -331,7 +282,6 @@ class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormV
             item.status = ExpenseItem.Status.SUBMITTED
             item.save(update_fields=["status", "updated_at"])
 
-        # Recalculate total & mark submitted time
         req.recalc_total(save=True)
         if not req.submitted_at:
             req.submitted_at = timezone.now()
@@ -345,10 +295,7 @@ class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormV
             from_status=ReimbursementRequest.Status.DRAFT,
             to_status=req.status,
         )
-
-        # Notify FINANCE (verification stage)
         _send_safe("send_reimbursement_finance_verify", req, employee_note=employee_note)
-
         messages.success(
             self.request,
             "Reimbursement request created and sent to Finance for verification.",
@@ -356,14 +303,10 @@ class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormV
         return super().form_valid(form)
 
 # ---------------------------------------------------------------------------
-# Employee: My Requests + detail + edit/delete + BULK DELETE + RESUBMIT
+# Employee: My Requests (+ bulk delete, edit, resubmit)
 # ---------------------------------------------------------------------------
 
 class MyReimbursementsView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
-    """
-    List of ReimbursementRequest rows for the logged-in employee.
-    """
-
     permission_code = "reimbursement_list"
     model = ReimbursementRequest
     template_name = "reimbursement/my_reimbursements.html"
@@ -377,13 +320,6 @@ class MyReimbursementsView(LoginRequiredMixin, PermissionRequiredMixin, ListView
         )
 
 class ReimbursementBulkDeleteView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    Bulk deletion of reimbursement requests from 'My Requests'.
-    - Only acts on the current user's requests.
-    - Skips Paid requests.
-    - Unlocks attached ExpenseItems back to SAVED.
-    """
-
     permission_code = "reimbursement_list"
     template_name = "reimbursement/my_requests.html"  # not rendered on POST
 
@@ -445,12 +381,6 @@ class ReimbursementBulkDeleteView(LoginRequiredMixin, PermissionRequiredMixin, T
         return redirect("reimbursement:my_reimbursements")
 
 class ReimbursementRequestUpdateView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
-    """
-    Edit an existing reimbursement request.
-    - Employees may edit their own request ONLY when it's REJECTED (to correct a bill).
-    - Admin users (reimbursement_admin / superuser) can edit anytime.
-    """
-
     permission_code = "reimbursement_list"
     model = ReimbursementRequest
     form_class = ReimbursementCreateForm
@@ -461,11 +391,8 @@ class ReimbursementRequestUpdateView(LoginRequiredMixin, PermissionRequiredMixin
         self.object = self.get_object()
         if _user_is_admin(request.user):
             return super().dispatch(request, *args, **kwargs)
-
-        # Owner can edit only if REJECTED
         if self.object.created_by_id == request.user.id and self.object.status == ReimbursementRequest.Status.REJECTED:
             return super().dispatch(request, *args, **kwargs)
-
         messages.error(
             request,
             "You can only edit a request after it is rejected, or contact Admin.",
@@ -484,18 +411,11 @@ class ReimbursementRequestUpdateView(LoginRequiredMixin, PermissionRequiredMixin
         return kwargs
 
     def _allowed_expenses_qs(self):
-        """
-        For editing: allow expenses that are either:
-          - already attached to THIS request, or
-          - not attached to ANY request at all.
-        """
         user = self.request.user
         current_req = self.object
-
         other_lines = ReimbursementLine.objects.filter(
             expense_item=OuterRef("pk")
         ).exclude(request=current_req)
-
         qs = (
             ExpenseItem.objects.filter(created_by=user)
             .annotate(has_other_request=Exists(other_lines))
@@ -506,14 +426,12 @@ class ReimbursementRequestUpdateView(LoginRequiredMixin, PermissionRequiredMixin
 
     def get_form(self, form_class=None):
         form = super().get_form(form_class)
-
         if "expense_items" in form.fields:
             form.fields["expense_items"].queryset = self._allowed_expenses_qs()
             current_ids = list(
                 self.object.lines.values_list("expense_item_id", flat=True)
             )
             form.fields["expense_items"].initial = current_ids
-
         return form
 
     def form_valid(self, form: ReimbursementCreateForm):
@@ -531,9 +449,7 @@ class ReimbursementRequestUpdateView(LoginRequiredMixin, PermissionRequiredMixin
                 exp.status = ExpenseItem.Status.SAVED
                 exp.save(update_fields=["status", "updated_at"])
 
-        existing_ids = set(
-            req.lines.values_list("expense_item_id", flat=True)
-        )
+        existing_ids = set(req.lines.values_list("expense_item_id", flat=True))
         for item in new_items:
             if item.id in existing_ids:
                 continue
@@ -568,10 +484,6 @@ class ReimbursementRequestUpdateView(LoginRequiredMixin, PermissionRequiredMixin
         return super().form_valid(form)
 
 class ReimbursementResubmitView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    Owner resubmits a REJECTED reimbursement after correcting items.
-    """
-
     permission_code = "reimbursement_list"
     template_name = "reimbursement/request_resubmit_confirm.html"
 
@@ -592,12 +504,6 @@ class ReimbursementResubmitView(LoginRequiredMixin, PermissionRequiredMixin, Tem
         return _redirect_back(request, "reimbursement:my_reimbursements")
 
 class ReimbursementRequestDeleteView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    Delete a reimbursement request (for the owner).
-    - Unlocks attached expenses back to the inbox (SAVED).
-    - Paid requests cannot be deleted.
-    """
-
     permission_code = "reimbursement_list"
     template_name = "reimbursement/request_confirm_delete.html"
 
@@ -607,7 +513,6 @@ class ReimbursementRequestDeleteView(LoginRequiredMixin, PermissionRequiredMixin
             pk=kwargs.get("pk"),
             created_by=request.user,
         )
-
         if req.status == ReimbursementRequest.Status.PAID:
             messages.error(request, "Paid reimbursements cannot be deleted.")
             return redirect("reimbursement:my_reimbursements")
@@ -632,10 +537,6 @@ class ReimbursementRequestDeleteView(LoginRequiredMixin, PermissionRequiredMixin
         return ctx
 
 class ReimbursementDetailView(LoginRequiredMixin, PermissionRequiredMixin, DetailView):
-    """
-    Detail page for a single ReimbursementRequest.
-    """
-
     permission_code = "reimbursement_list"
     model = ReimbursementRequest
     template_name = "reimbursement/request_detail.html"
@@ -648,17 +549,14 @@ class ReimbursementDetailView(LoginRequiredMixin, PermissionRequiredMixin, Detai
             .select_related("created_by", "manager", "management")
             .prefetch_related("lines", "logs")
         )
-
         if _user_is_admin(user) or _user_is_finance(user):
             return base
-
         if _user_is_manager(user):
             return base.filter(
                 Q(manager=user)
                 | Q(management=user)
                 | Q(created_by=user)
             )
-
         return base.filter(created_by=user)
 
     def get_context_data(self, **kwargs):
@@ -666,7 +564,6 @@ class ReimbursementDetailView(LoginRequiredMixin, PermissionRequiredMixin, Detai
         req: ReimbursementRequest = self.object
         ctx["lines"] = req.lines.select_related("expense_item")
         ctx["logs"] = req.logs.select_related("actor")
-        # Owner can resubmit when rejected
         ctx["can_resubmit"] = (
             req.status == ReimbursementRequest.Status.REJECTED
             and self.request.user.is_authenticated
@@ -676,14 +573,10 @@ class ReimbursementDetailView(LoginRequiredMixin, PermissionRequiredMixin, Detai
         return ctx
 
 # ---------------------------------------------------------------------------
-# Manager & Management queues
+# Manager & Management
 # ---------------------------------------------------------------------------
 
 class ManagerQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
-    """
-    Manager queue: requests waiting for manager review.
-    """
-
     permission_code = "reimbursement_manager_pending"
     model = ReimbursementRequest
     template_name = "reimbursement/manager_queue.html"
@@ -707,10 +600,6 @@ class ManagerQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
         )
 
 class ManagerReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
-    """
-    Manager review form for a single request.
-    """
-
     permission_code = "reimbursement_manager_review"
     model = ReimbursementRequest
     form_class = ManagerApprovalForm
@@ -739,8 +628,8 @@ class ManagerReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         prev_status = req.status
 
         form.save(commit=True)
-
         decision = form.cleaned_data["decision"]
+
         if decision == "approved":
             if settings_obj.require_management_approval:
                 req.status = ReimbursementRequest.Status.PENDING_MANAGEMENT
@@ -770,7 +659,6 @@ class ManagerReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
             from_status=prev_status,
             to_status=req.status,
         )
-
         _send_safe("send_reimbursement_manager_action", req, decision=decision)
 
         messages.success(self.request, "Manager decision recorded.")
@@ -781,10 +669,6 @@ class ManagerReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         return back or reverse("reimbursement:manager_pending")
 
 class ManagementQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
-    """
-    Management queue: requests waiting for higher-level approval.
-    """
-
     permission_code = "reimbursement_management_pending"
     model = ReimbursementRequest
     template_name = "reimbursement/management_queue.html"
@@ -802,10 +686,6 @@ class ManagementQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView)
         )
 
 class ManagementReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
-    """
-    Management review form for a single request.
-    """
-
     permission_code = "reimbursement_management_review"
     model = ReimbursementRequest
     form_class = ManagementApprovalForm
@@ -855,7 +735,6 @@ class ManagementReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
             from_status=prev_status,
             to_status=req.status,
         )
-
         _send_safe("send_reimbursement_management_action", req, decision=decision)
 
         messages.success(self.request, "Management decision recorded.")
@@ -870,10 +749,6 @@ class ManagementReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
 # ---------------------------------------------------------------------------
 
 class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
-    """
-    Finance work queue: Reimbursement Details for Finance.
-    """
-
     permission_code = "reimbursement_finance_pending"
     model = ReimbursementRequest
     template_name = "reimbursement/finance_queue.html"
@@ -895,17 +770,14 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
 
 class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
-    Finance verification (pre-manager) with per-bill Approve / Reject / Delete selection.
-
-    UPDATED FLOW:
-    - Finance can Approve / Reject / Delete bills (single or bulk).
-    - If there is at least ONE Finance-Approved bill on the request,
-      Finance can Finalize (or it will auto-finalize after actions) to
-      move the request to Manager even if other bills remain Rejected.
-    - Rejected bills are visible to the employee to edit/re-upload and
-      later resubmit; they DO NOT block the approved bills from proceeding.
+    Verification screen. NEW RULE:
+    - Delete: hard-delete selected lines and KEEP the request in Finance
+      (no auto-send). Status becomes PARTIAL_HOLD if any line is not
+      finance-approved; otherwise stays PENDING_FINANCE_VERIFY until you
+      click Finalize / Approve Selected.
+    - Approve/Reject: as before; when *all* included lines are
+      finance-approved, we escalate to Manager here (not on delete).
     """
-
     permission_code = "reimbursement_finance_review"
     template_name = "reimbursement/finance_verify.html"
 
@@ -925,39 +797,44 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
         ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
         return ctx
 
-    def _maybe_promote_to_manager(self, req: ReimbursementRequest, actor) -> bool:
+    def _rederive_status_without_escalation(self, req: ReimbursementRequest) -> None:
         """
-        If there is at least one Finance-Approved bill, move to Pending Manager.
-        Returns True if a promotion happened.
+        Compute a Finance holding status without sending to Manager.
         """
-        approved_qs = req.lines.filter(
-            status=ReimbursementLine.Status.INCLUDED,
-            bill_status="finance_approved",
-        )
-        has_any_approved = approved_qs.exists()
+        qs = req.lines.filter(status=ReimbursementLine.Status.INCLUDED)
+        counts = {
+            "approved": qs.filter(bill_status=ReimbursementLine.BillStatus.FINANCE_APPROVED).count(),
+            "rejected": qs.filter(bill_status=ReimbursementLine.BillStatus.FINANCE_REJECTED).count(),
+            "pending": qs.exclude(
+                bill_status__in=[
+                    ReimbursementLine.BillStatus.FINANCE_APPROVED,
+                    ReimbursementLine.BillStatus.FINANCE_REJECTED,
+                ]
+            ).count(),
+            "total": qs.count(),
+        }
 
-        if not has_any_approved:
-            return False
-
-        prev = req.status
-        req.status = ReimbursementRequest.Status.PENDING_MANAGER
-        if not req.verified_by_id:
-            req.verified_by = actor
-            req.verified_at = timezone.now()
-        req.recalc_total(save=True)
-        req.save(update_fields=["status", "verified_by", "verified_at", "updated_at"])
-
-        ReimbursementLog.log(
-            req,
-            ReimbursementLog.Action.STATUS_CHANGED,
-            actor=actor,
-            message="Finance finalized: approved bills sent to Manager; rejected bills returned to employee.",
-            from_status=prev,
-            to_status=req.status,
+        # If anything non-approved remains, stay in Partial Hold (Finance)
+        # Otherwise keep it in Pending Finance Review, waiting for Finalize/Approve.
+        new_status = (
+            ReimbursementRequest.Status.PARTIAL_HOLD
+            if (counts["pending"] > 0 or counts["rejected"] > 0)
+            else ReimbursementRequest.Status.PENDING_FINANCE_VERIFY
         )
 
-        _send_safe("send_reimbursement_finance_verified", req)
-        return True
+        # Do NOT set verified_by/verified_at here.
+        if req.status != new_status:
+            prev = req.status
+            req.status = new_status
+            req.save(update_fields=["status", "updated_at"])
+            ReimbursementLog.log(
+                req,
+                ReimbursementLog.Action.STATUS_CHANGED,
+                actor=None,
+                message="Finance updated bills; holding in Finance.",
+                from_status=prev,
+                to_status=req.status,
+            )
 
     def post(self, request, *args, **kwargs):
         req = self._get_request(kwargs.get("pk"))
@@ -970,7 +847,6 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
             messages.error(request, "Invalid action.")
             return redirect(request.path)
 
-        # Approve / Reject / Delete selected lines
         if action in {"approve", "reject", "delete"}:
             if not selected_ids:
                 messages.warning(request, "Select at least one bill line.")
@@ -984,7 +860,6 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
             processed = 0
 
             if action == "delete":
-                # HARD DELETE: free the ExpenseItem back to inbox
                 for line in qs:
                     exp = line.expense_item
                     line.delete()
@@ -994,12 +869,8 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
                     processed += 1
 
                 req.recalc_total(save=True)
-                # Try to promote after deletions
-                promoted = self._maybe_promote_to_manager(req, request.user)
-                if promoted:
-                    messages.success(request, f"Deleted {processed} bill(s). Approved bills sent to Manager.")
-                    return _redirect_back(request, "reimbursement:finance_pending")
-
+                # IMPORTANT: do NOT escalate on delete
+                self._rederive_status_without_escalation(req)
                 messages.success(request, f"Deleted {processed} bill(s).")
                 return redirect(request.path + (f"?return={back}" if back else ""))
 
@@ -1018,36 +889,34 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
                     messages.error(request, getattr(e, "message", str(e)) or f"Could not process line #{line.id}")
                     return redirect(request.path + (f"?return={back}" if back else ""))
 
-            # After per-line updates:
-            req.recalc_total(save=True)
-            promoted = self._maybe_promote_to_manager(req, request.user)
-            if promoted:
-                messages.success(request, f"{processed} line(s) processed. Approved bills sent to Manager.")
+            # After approve/reject, derive and escalate if ALL approved
+            req.apply_derived_status_from_bills(actor=request.user, reason="Finance updated selected bills.")
+            if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
+                req.verified_by = request.user
+                req.verified_at = timezone.now()
+                req.save(update_fields=["verified_by", "verified_at", "updated_at"])
+                _send_safe("send_reimbursement_finance_verified", req)
+                messages.success(request, f"{processed} line(s) processed. All bills are approved; sent to Manager.")
                 return _redirect_back(request, "reimbursement:finance_pending")
 
-            # Otherwise, re-derive and stay in Finance
-            req.apply_derived_status_from_bills(actor=request.user, reason="Finance updated selected bills.")
             messages.success(request, f"{processed} line(s) processed.")
             return redirect(request.path + (f"?return={back}" if back else ""))
 
-        # Finalize: send approved bills to Manager even if some are rejected
+        # Finalize: only here we escalate when ALL approved
         if action == "finalize":
-            promoted = self._maybe_promote_to_manager(req, request.user)
-            if promoted:
-                messages.success(request, "Approved bills sent to Manager. Rejected bills returned to employee.")
+            req.apply_derived_status_from_bills(actor=request.user, reason="Finance finalized verification.")
+            if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
+                req.verified_by = request.user
+                req.verified_at = timezone.now()
+                req.save(update_fields=["verified_by", "verified_at", "updated_at"])
+                _send_safe("send_reimbursement_finance_verified", req)
+                messages.success(request, "All bills approved. Sent to Manager.")
                 return _redirect_back(request, "reimbursement:finance_pending")
 
-            # Nothing approved yet
-            req.apply_derived_status_from_bills(actor=request.user, reason="Finance tried to finalize; no approved bills.")
-            messages.info(request, "No approved bills to send yet.")
+            messages.info(request, "Some bills are not Finance-Approved yet. Remaining in Partial Hold (Finance).")
             return redirect(request.path + (f"?return={back}" if back else ""))
 
 class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
-    """
-    Finance review form, including mark-paid (Claim Settled).
-    Uses model.mark_paid() to ensure single, accurate audit entry with actor.
-    """
-
     permission_code = "reimbursement_finance_review"
     model = ReimbursementRequest
     form_class = FinanceProcessForm
@@ -1090,7 +959,6 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         ref: str = form.cleaned_data.get("finance_payment_reference") or ""
         note: str = form.cleaned_data.get("finance_note") or ""
 
-        # Always persist non-status fields first
         req.finance_note = note
         req.finance_payment_reference = ref
         req.save(update_fields=["finance_note", "finance_payment_reference", "updated_at"])
@@ -1104,7 +972,6 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
                     form.add_error("mark_paid", msg)
                     form.add_error(None, msg)
                 return self.form_invalid(form)
-
             try:
                 req.mark_paid(reference=ref, actor=self.request.user, note=note)
             except DjangoCoreValidationError as e:
@@ -1143,13 +1010,10 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         return back or reverse("reimbursement:finance_pending")
 
 # ---------------------------------------------------------------------------
-# Admin dashboards, config & CSV export (ApproverMappingAdminView fixed)
+# Admin dashboards / export
 # ---------------------------------------------------------------------------
 
 class AdminBillsSummaryView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
-    """
-    Admin-only: flat list of all reimbursement lines (bills) across all users.
-    """
     permission_code = "reimbursement_admin"
     model = ReimbursementLine
     template_name = "reimbursement/admin_bills_summary.html"
@@ -1166,10 +1030,6 @@ class AdminBillsSummaryView(LoginRequiredMixin, PermissionRequiredMixin, ListVie
         )
 
 class AdminRequestsListView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
-    """
-    Admin-only: all reimbursement requests.
-    """
-
     permission_code = "reimbursement_admin"
     model = ReimbursementRequest
     template_name = "reimbursement/admin_requests.html"
@@ -1186,10 +1046,6 @@ class AdminRequestsListView(LoginRequiredMixin, PermissionRequiredMixin, ListVie
         )
 
 class AdminEmployeeSummaryView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    Admin-only: aggregate totals per employee.
-    """
-
     permission_code = "reimbursement_admin"
     template_name = "reimbursement/admin_employee_summary.html"
 
@@ -1213,17 +1069,11 @@ class AdminEmployeeSummaryView(LoginRequiredMixin, PermissionRequiredMixin, Temp
         return ctx
 
 class AdminStatusSummaryView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    Admin-only: aggregate totals by request status.
-    """
-
     permission_code = "reimbursement_admin"
     template_name = "reimbursement/admin_status_summary.html"
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-
-        # Raw aggregation
         raw_rows = (
             ReimbursementRequest.objects.values("status")
             .annotate(
@@ -1232,8 +1082,6 @@ class AdminStatusSummaryView(LoginRequiredMixin, PermissionRequiredMixin, Templa
             )
             .order_by("status")
         )
-
-        # Map machine status -> human label once here
         status_labels = dict(ReimbursementRequest.Status.choices)
         rows = []
         for r in raw_rows:
@@ -1243,23 +1091,13 @@ class AdminStatusSummaryView(LoginRequiredMixin, PermissionRequiredMixin, Templa
                 "total_amount": r["total_amount"],
                 "request_count": r["request_count"],
             })
-
         ctx["rows"] = rows
-        # Keep for other templates if needed
         ctx["status_labels"] = status_labels
         return ctx
 
 class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    Admin-only page to manage per-employee approver mapping.
-    - Fixes the previous error by NOT injecting unknown kwargs into forms.
-    - Renders three logical sections that match the provided template:
-      (1) Settings, (2) Bulk apply, (3) Per-employee mapping grid.
-    """
     permission_code = "reimbursement_admin"
     template_name = "reimbursement/admin_approver_mapping.html"
-
-    # ----- helpers -----
 
     def _all_users_for_select(self):
         return User.objects.all().order_by("first_name", "last_name", "username")
@@ -1274,8 +1112,6 @@ class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, Temp
             rows.append({"user": u, "mapping": mappings.get(u.id)})
         return rows
 
-    # ----- GET -----
-
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         settings_obj = ReimbursementSettings.get_solo()
@@ -1285,10 +1121,7 @@ class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, Temp
         ctx["all_users_for_select"] = self._all_users_for_select()
         return ctx
 
-    # ----- POST -----
-
     def post(self, request, *args, **kwargs):
-        # Which form?
         if "save_settings" in request.POST:
             return self._handle_save_settings(request)
         if "apply_bulk" in request.POST:
@@ -1361,10 +1194,6 @@ class ApproverMappingAdminView(LoginRequiredMixin, PermissionRequiredMixin, Temp
         return redirect(request.path)
 
 class ReimbursementExportCSVView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    Admin-only CSV export ("backend sheet") of reimbursements with attachment links.
-    Each line row is exported (1 row per line).
-    """
     permission_code = "reimbursement_admin"
     template_name = "reimbursement/admin_export_dummy.html"  # not used
 
@@ -1432,9 +1261,6 @@ def download_receipt(
     line_id: Optional[int] = None,
     expense_id: Optional[int] = None,
 ):
-    """
-    Serve receipt files securely.
-    """
     user = request.user
     if not user.is_authenticated:
         raise Http404
@@ -1477,17 +1303,11 @@ def download_receipt(
     return FileResponse(file_field.open("rb"), as_attachment=False)
 
 # ---------------------------------------------------------------------------
-# Magic-link email actions (Approve / Reject buttons)
+# Magic-link email actions
 # ---------------------------------------------------------------------------
 
 @csrf_exempt
 def reimbursement_email_action(request):
-    """
-    Endpoint hit from Approve / Reject buttons in email.
-    - Does NOT require login (magic link).
-    - Validates the signed token.
-    - Applies manager / management decision.
-    """
     from django.core import signing
     from django.core.signing import BadSignature
 
@@ -1604,13 +1424,10 @@ def reimbursement_email_action(request):
     return HttpResponse(html)
 
 # ---------------------------------------------------------------------------
-# NEW: Admin Override endpoints (POST-only helpers; wire in urls if needed)
+# Admin overrides
 # ---------------------------------------------------------------------------
 
 class AdminReverseToFinanceVerificationView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    POST-only action for Admins: Reverse back to FINANCE VERIFICATION.
-    """
     permission_code = "reimbursement_admin"
     template_name = "reimbursement/admin_reverse_confirm.html"
 
@@ -1628,9 +1445,6 @@ class AdminReverseToFinanceVerificationView(LoginRequiredMixin, PermissionRequir
         return _redirect_back(request, "reimbursement:admin_requests")
 
 class AdminResendToFinanceView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    POST-only: Resend to Finance Verification (idempotent; always logs).
-    """
     permission_code = "reimbursement_admin"
     template_name = "reimbursement/admin_resend_finance.html"
 
@@ -1648,9 +1462,6 @@ class AdminResendToFinanceView(LoginRequiredMixin, PermissionRequiredMixin, Temp
         return _redirect_back(request, "reimbursement:admin_requests")
 
 class AdminResendToManagerView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    POST-only: Resend to Manager (requires verified_by to be present).
-    """
     permission_code = "reimbursement_admin"
     template_name = "reimbursement/admin_resend_manager.html"
 
@@ -1667,10 +1478,6 @@ class AdminResendToManagerView(LoginRequiredMixin, PermissionRequiredMixin, Temp
         return _redirect_back(request, "reimbursement:admin_requests")
 
 class AdminForceMoveView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    POST-only: Admin can manually move backward/forward **without** bypassing model validations.
-    Disallows direct move to PAID.
-    """
     permission_code = "reimbursement_admin"
     template_name = "reimbursement/admin_force_move.html"
 
@@ -1688,9 +1495,6 @@ class AdminForceMoveView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVi
         return _redirect_back(request, "reimbursement:admin_requests")
 
 class AdminDeleteWithAuditView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    POST-only: Admin delete with strict checks and full audit.
-    """
     permission_code = "reimbursement_admin"
     template_name = "reimbursement/admin_delete_confirm.html"
 
@@ -1707,14 +1511,10 @@ class AdminDeleteWithAuditView(LoginRequiredMixin, PermissionRequiredMixin, Temp
         return _redirect_back(request, "reimbursement:admin_requests")
 
 # ---------------------------------------------------------------------------
-# LEGACY VIEWS (single-bill Reimbursement model)
+# LEGACY screens (unchanged)
 # ---------------------------------------------------------------------------
 
 class LegacyMyReimbursementsView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
-    """
-    Legacy 'My Reimbursements' for the simple Reimbursement model.
-    """
-
     permission_code = "reimbursement_list"
     model = Reimbursement
     template_name = "reimbursement/legacy_my_requests.html"
@@ -1726,10 +1526,6 @@ class LegacyMyReimbursementsView(LoginRequiredMixin, PermissionRequiredMixin, Li
         )
 
 class LegacyReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormView):
-    """
-    Legacy single-bill reimbursement create view.
-    """
-
     permission_code = "reimbursement_apply"
     template_name = "reimbursement/legacy_apply.html"
     form_class = ReimbursementForm
