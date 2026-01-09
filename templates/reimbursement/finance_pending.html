@@ -1,14 +1,17 @@
-<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\reimbursement\finance_pending.html -->
 {% extends 'base.html' %}
 {% block title %}Finance Approvals{% endblock %}
+
 {% block content %}
 <h2>Pending for Finance</h2>
 <table class="table">
-  <thead><tr><th>Employee</th><th>Amount</th><th>Action</th></tr></thead>
+  <thead>
+    <tr><th>Employee</th><th>Amount</th><th>Action</th></tr>
+  </thead>
   <tbody>
     {% for r in items %}
     <tr>
-      <td>{{ r.requester }}</td><td>{{ r.amount }}</td>
+      <td>{{ r.requester }}</td>
+      <td>{{ r.amount }}</td>
       <td><a href="#" class="btn btn-sm btn-success">Pay</a></td>
     </tr>
     {% empty %}

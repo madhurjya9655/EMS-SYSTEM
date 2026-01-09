@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import os
 import csv
 import logging
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional, Sequence
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -109,6 +110,20 @@ def _redirect_back(request, fallback_name: str) -> HttpResponse:
         return redirect(back)
     return redirect(fallback_name)
 
+def _has_finance_rejected_lines_for_expense(expense: ExpenseItem) -> bool:
+    """
+    Safe detector for finance-rejected lines linked to this expense item.
+    Works even if the model doesn't have a helper like `has_finance_rejected_lines()`.
+    """
+    try:
+        return ReimbursementLine.objects.filter(
+            expense_item=expense,
+            status=ReimbursementLine.Status.INCLUDED,
+            bill_status=ReimbursementLine.BillStatus.FINANCE_REJECTED,
+        ).exists()
+    except Exception:
+        return False
+
 # ---------------------------------------------------------------------------
 # Employee: Expense Inbox (upload + list)
 # ---------------------------------------------------------------------------
@@ -134,6 +149,20 @@ class ExpenseInboxView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView
         )
         ctx["items"] = items
         ctx["form"] = getattr(self, "form", self.get_form())
+
+        # Show the blue info hint if any expense looks like a finance return,
+        # either via flags or because it has finance-rejected lines.
+        show_hint = False
+        for it in items:
+            if (
+                getattr(it, "finance_returned", False)
+                or getattr(it, "finance_return_flag", False)
+                or str(getattr(it, "status", "")).upper() in {"FR", "FINANCE_RETURNED"}
+                or _has_finance_rejected_lines_for_expense(it)
+            ):
+                show_hint = True
+                break
+        ctx["show_finance_return_hint"] = show_hint
         return ctx
 
     def get(self, request, *args, **kwargs):
@@ -153,6 +182,12 @@ class ExpenseInboxView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView
         return super().get(request, *args, **kwargs)
 
 class ExpenseItemUpdateView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
+    """
+    Edit Expense page.
+
+    If the expense belongs to a FINANCE_REJECTED bill line, after Save we
+    show a "Proceed to Finance" button so the employee can resubmit it.
+    """
     permission_code = "reimbursement_apply"
     model = ExpenseItem
     form_class = ExpenseItemForm
@@ -164,13 +199,34 @@ class ExpenseItemUpdateView(LoginRequiredMixin, PermissionRequiredMixin, UpdateV
 
     def dispatch(self, request, *args, **kwargs):
         obj = self.get_object()
-        if obj.is_locked:
+        if getattr(obj, "is_locked", False):
             messages.error(
                 request,
                 "This expense is already attached to a request and cannot be edited.",
             )
             return redirect("reimbursement:expense_inbox")
         return super().dispatch(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        expense: ExpenseItem = self.object
+        # Prefer model helper when present; otherwise compute against lines.
+        if hasattr(expense, "has_finance_rejected_lines") and callable(expense.has_finance_rejected_lines):
+            show_proceed = bool(expense.has_finance_rejected_lines())
+        else:
+            show_proceed = _has_finance_rejected_lines_for_expense(expense)
+
+        # Also respect legacy flags, if your model uses them.
+        show_proceed = show_proceed or getattr(expense, "finance_returned", False) or getattr(expense, "finance_return_flag", False)
+        ctx["show_proceed_to_finance"] = show_proceed
+        ctx["back_url"] = _safe_back_url(self.request.GET.get("return")) or reverse("reimbursement:expense_inbox")
+        return ctx
+
+    def form_valid(self, form: ExpenseItemForm):
+        messages.success(self.request, "Expense saved.")
+        response = super().form_valid(form)
+        # Ensure user returns to this screen to see the "Proceed to Finance" button
+        return redirect("reimbursement:expense_edit", pk=self.object.pk)
 
 class ExpenseItemDeleteView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     permission_code = "reimbursement_apply"
@@ -182,7 +238,7 @@ class ExpenseItemDeleteView(LoginRequiredMixin, PermissionRequiredMixin, Templat
             pk=kwargs.get("pk"),
             created_by=request.user,
         )
-        if obj.is_locked:
+        if getattr(obj, "is_locked", False):
             messages.error(
                 request,
                 "This expense is attached to a request and cannot be deleted.",
@@ -200,6 +256,53 @@ class ExpenseItemDeleteView(LoginRequiredMixin, PermissionRequiredMixin, Templat
             created_by=self.request.user,
         )
         return ctx
+
+class ExpenseItemResubmitView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    Resubmit all FINANCE_REJECTED bill lines linked to this expense back to Finance.
+    """
+    permission_code = "reimbursement_apply"
+    template_name = "reimbursement/expense_edit.html"  # not rendered on POST
+
+    def post(self, request, *args, **kwargs):
+        expense = get_object_or_404(
+            ExpenseItem.objects.select_related("created_by"),
+            pk=kwargs.get("pk"),
+            created_by=request.user,
+        )
+        if getattr(expense, "is_locked", False):
+            messages.error(request, "This expense is already attached and cannot be resubmitted.")
+            return redirect("reimbursement:expense_inbox")
+
+        # Prefer model helper if provided in your codebase
+        if hasattr(expense, "resubmit_rejected_lines") and callable(expense.resubmit_rejected_lines):
+            count = expense.resubmit_rejected_lines(actor=request.user)
+        else:
+            # Safe fallback: mark any finance-rejected lines for this expense as employee-resubmitted
+            rejected_qs = ReimbursementLine.objects.filter(
+                expense_item=expense,
+                status=ReimbursementLine.Status.INCLUDED,
+                bill_status=ReimbursementLine.BillStatus.FINANCE_REJECTED,
+            )
+            count = 0
+            for line in rejected_qs:
+                try:
+                    if hasattr(line, "employee_resubmit_bill"):
+                        line.employee_resubmit_bill(actor=request.user)
+                    else:
+                        # Fallback transition if helper is not present
+                        line.bill_status = ReimbursementLine.BillStatus.EMPLOYEE_RESUBMITTED
+                        line.save(update_fields=["bill_status", "updated_at"])
+                    count += 1
+                except Exception:
+                    continue
+
+        if count:
+            messages.success(request, f"Resubmitted {count} corrected bill(s) to Finance.")
+            return _redirect_back(request, "reimbursement:expense_inbox")
+
+        messages.info(request, "No Finance-rejected bills were found for this expense.")
+        return _redirect_back(request, "reimbursement:expense_inbox")
 
 # ---------------------------------------------------------------------------
 # Employee: Create reimbursement request
@@ -569,11 +672,92 @@ class ReimbursementDetailView(LoginRequiredMixin, PermissionRequiredMixin, Detai
             and self.request.user.is_authenticated
             and req.created_by_id == self.request.user.id
         )
+        # Template also shows a warning when any bill is finance_rejected
+        ctx["show_partial_hold_hint"] = req.lines.filter(
+            status=ReimbursementLine.Status.INCLUDED,
+            bill_status=ReimbursementLine.BillStatus.FINANCE_REJECTED,
+        ).exists()
         ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
         return ctx
 
 # ---------------------------------------------------------------------------
-# Manager & Management
+# Manager — BILL-LEVEL queue & actions
+# ---------------------------------------------------------------------------
+
+class ManagerBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
+    """
+    Manager sees only bills (lines) that are FINANCE_APPROVED and INCLUDED.
+    """
+    permission_code = "reimbursement_manager_pending"
+    model = ReimbursementLine
+    template_name = "reimbursement/manager_bills_queue.html"
+    context_object_name = "lines"
+
+    def get_queryset(self):
+        user = self.request.user
+        return (
+            ReimbursementLine.objects.filter(
+                status=ReimbursementLine.Status.INCLUDED,
+                bill_status=ReimbursementLine.BillStatus.FINANCE_APPROVED,
+            )
+            .select_related("request", "request__created_by", "request__manager", "expense_item")
+            .filter(
+                Q(request__manager=user)
+                | Q(request__created_by__reimbursement_approver_mapping__manager=user)
+            )
+            .order_by("-request__created_at", "id")
+        )
+
+class ManagerBillActionView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    Manager approves/rejects a single bill (line).
+    """
+    permission_code = "reimbursement_manager_review"
+    template_name = "reimbursement/manager_bill_action.html"  # not rendered on POST
+
+    def post(self, request, *args, **kwargs):
+        line = get_object_or_404(
+            ReimbursementLine.objects.select_related("request", "expense_item", "request__manager"),
+            pk=kwargs.get("pk"),
+        )
+
+        # Guard: manager must be the routed approver
+        user = request.user
+        if not (_user_is_admin(user) or user == line.request.manager):
+            return HttpResponseForbidden("Not allowed.")
+
+        decision = (request.POST.get("decision") or "").strip().lower()
+        reason = (request.POST.get("reason") or "").strip()
+
+        if decision not in {"approve", "reject"}:
+            messages.error(request, "Invalid decision.")
+            return _redirect_back(request, "reimbursement:manager_bills_pending")
+
+        try:
+            if decision == "approve":
+                # Method expected on the model (added in redesigned flow)
+                line.manager_approve(actor=user)
+                messages.success(request, f"Bill #{line.pk} approved.")
+            else:
+                if not reason:
+                    messages.error(request, "Please provide a reason for rejection.")
+                    return _redirect_back(request, "reimbursement:manager_bills_pending")
+                line.manager_reject(actor=user, reason=reason)
+                messages.success(request, f"Bill #{line.pk} rejected and sent back to the employee.")
+        except DjangoCoreValidationError as e:
+            messages.error(request, getattr(e, "message", str(e)) or "Unable to process the bill.")
+            return _redirect_back(request, "reimbursement:manager_bills_pending")
+
+        # After any bill-level action, re-derive parent request status
+        try:
+            line.request.apply_derived_status_from_bills(actor=user, reason="Manager processed a bill.")
+        except Exception:
+            pass
+
+        return _redirect_back(request, "reimbursement:manager_bills_pending")
+
+# ---------------------------------------------------------------------------
+# Manager & Management (request-level legacy compatibility)
 # ---------------------------------------------------------------------------
 
 class ManagerQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
@@ -745,7 +929,7 @@ class ManagementReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
         return back or reverse("reimbursement:management_pending")
 
 # ---------------------------------------------------------------------------
-# Finance queue & processing
+# Finance queue & verification (bill-level first gate)
 # ---------------------------------------------------------------------------
 
 class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
@@ -814,15 +998,12 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
             "total": qs.count(),
         }
 
-        # If anything non-approved remains, stay in Partial Hold (Finance)
-        # Otherwise keep it in Pending Finance Review, waiting for Finalize/Approve.
         new_status = (
             ReimbursementRequest.Status.PARTIAL_HOLD
             if (counts["pending"] > 0 or counts["rejected"] > 0)
             else ReimbursementRequest.Status.PENDING_FINANCE_VERIFY
         )
 
-        # Do NOT set verified_by/verified_at here.
         if req.status != new_status:
             prev = req.status
             req.status = new_status
@@ -869,12 +1050,10 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
                     processed += 1
 
                 req.recalc_total(save=True)
-                # IMPORTANT: do NOT escalate on delete
                 self._rederive_status_without_escalation(req)
                 messages.success(request, f"Deleted {processed} bill(s).")
                 return redirect(request.path + (f"?return={back}" if back else ""))
 
-            # Approve / Reject paths
             for line in qs:
                 try:
                     if action == "approve":
@@ -889,7 +1068,6 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
                     messages.error(request, getattr(e, "message", str(e)) or f"Could not process line #{line.id}")
                     return redirect(request.path + (f"?return={back}" if back else ""))
 
-            # After approve/reject, derive and escalate if ALL approved
             req.apply_derived_status_from_bills(actor=request.user, reason="Finance updated selected bills.")
             if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
                 req.verified_by = request.user
@@ -902,7 +1080,6 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
             messages.success(request, f"{processed} line(s) processed.")
             return redirect(request.path + (f"?return={back}" if back else ""))
 
-        # Finalize: only here we escalate when ALL approved
         if action == "finalize":
             req.apply_derived_status_from_bills(actor=request.user, reason="Finance finalized verification.")
             if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
@@ -915,6 +1092,119 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
 
             messages.info(request, "Some bills are not Finance-Approved yet. Remaining in Partial Hold (Finance).")
             return redirect(request.path + (f"?return={back}" if back else ""))
+
+# ---------------------------------------------------------------------------
+# Finance — BILL PAYMENT (per-bill paid & reference)
+# ---------------------------------------------------------------------------
+
+class FinanceBillPaymentQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
+    """
+    Finance sees bills that reached MANAGER_APPROVED and are INCLUDED,
+    and can mark them PAID individually with a payment reference.
+    """
+    permission_code = "reimbursement_finance_review"
+    model = ReimbursementLine
+    template_name = "reimbursement/finance_bill_payment_queue.html"
+    context_object_name = "lines"
+
+    def get_queryset(self):
+        return (
+            ReimbursementLine.objects.filter(
+                status=ReimbursementLine.Status.INCLUDED,
+                bill_status=ReimbursementLine.BillStatus.MANAGER_APPROVED,
+            )
+            .select_related("request", "request__created_by", "expense_item")
+            .order_by("-request__created_at", "id")
+        )
+
+class FinanceBillPaymentView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    Mark one or many bills as PAID with a per-bill payment reference.
+    """
+    permission_code = "reimbursement_finance_review"
+    template_name = "reimbursement/finance_bill_payment.html"  # not rendered on POST
+
+    def _fetch_lines(self, ids: Sequence[int]) -> Iterable[ReimbursementLine]:
+        return (
+            ReimbursementLine.objects.filter(
+                pk__in=ids,
+                status=ReimbursementLine.Status.INCLUDED,
+                bill_status=ReimbursementLine.BillStatus.MANAGER_APPROVED,
+            )
+            .select_related("request", "expense_item")
+        )
+
+    def post(self, request, *args, **kwargs):
+        line_ids = [int(x) for x in request.POST.getlist("line_ids") if str(x).isdigit()]
+        reference = (request.POST.get("payment_reference") or "").strip()
+        back = _safe_back_url(request.POST.get("return"))
+
+        if not line_ids:
+            messages.warning(request, "Select at least one bill to mark as paid.")
+            return _redirect_back(request, "reimbursement:finance_bill_payment_queue")
+
+        if not reference:
+            messages.error(request, "Payment reference is required.")
+            return _redirect_back(request, "reimbursement:finance_bill_payment_queue")
+
+        lines = list(self._fetch_lines(line_ids))
+        if not lines:
+            messages.error(request, "No eligible bills found.")
+            return _redirect_back(request, "reimbursement:finance_bill_payment_queue")
+
+        processed = 0
+        touched_requests: set[int] = set()
+        for line in lines:
+            try:
+                # Method expected on the model (added in redesigned flow)
+                line.mark_paid_by_finance(actor=request.user, reference=reference)
+                processed += 1
+                touched_requests.add(line.request_id)
+            except DjangoCoreValidationError as e:
+                messages.error(request, getattr(e, "message", str(e)) or f"Unable to mark bill #{line.pk} as paid.")
+                return _redirect_back(request, "reimbursement:finance_bill_payment_queue")
+
+        # Derive parent request statuses; if all bills of a request are PAID, parent may flip to PAID.
+        for req_id in touched_requests:
+            try:
+                req = ReimbursementRequest.objects.get(pk=req_id)
+                req.apply_derived_status_from_bills(actor=request.user, reason="Finance paid bill(s).")
+                # If ALL included lines are bill-level PAID => set request PAID with a summary note
+                included = req.lines.filter(status=ReimbursementLine.Status.INCLUDED)
+                if included.exists() and not included.exclude(bill_status=ReimbursementLine.BillStatus.PAID).exists():
+                    # Set request-level paid for reporting convenience if not already
+                    if req.status != ReimbursementRequest.Status.PAID:
+                        try:
+                            # Use existing guard: allow from APPROVED or PENDING_FINANCE (legacy),
+                            # but here we directly set if all bills are actually paid.
+                            req.status = ReimbursementRequest.Status.PAID
+                            req.paid_at = timezone.now()
+                            if not req.finance_payment_reference:
+                                req.finance_payment_reference = reference
+                            req.save(update_fields=["status", "paid_at", "finance_payment_reference", "updated_at"])
+                            ReimbursementLog.log(
+                                req,
+                                ReimbursementLog.Action.PAID,
+                                actor=request.user,
+                                message=f"All bills paid (per-bill reference {reference}).",
+                                from_status="",
+                                to_status=req.status,
+                            )
+                            _send_safe("send_reimbursement_paid", req)
+                        except Exception:
+                            # Never block bill-level success due to parent update hiccup
+                            pass
+            except ReimbursementRequest.DoesNotExist:
+                continue
+
+        messages.success(request, f"Marked {processed} bill(s) as paid.")
+        if back:
+            return redirect(back)
+        return redirect("reimbursement:finance_bill_payment_queue")
+
+# ---------------------------------------------------------------------------
+# Finance Review (request-level — kept for backward compatibility)
+# ---------------------------------------------------------------------------
 
 class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
     permission_code = "reimbursement_finance_review"
@@ -1300,7 +1590,16 @@ def download_receipt(
     if not allowed:
         return HttpResponseForbidden("You are not allowed to view this receipt.")
 
-    return FileResponse(file_field.open("rb"), as_attachment=False)
+    # ✅ Defensive: ensure the file exists in the configured storage
+    storage = file_field.storage
+    name = file_field.name
+    if not name or not storage.exists(name):
+        # Avoid a 500 when the blob is missing on disk/S3
+        raise Http404("Receipt file not found.")
+
+    # Use a friendly filename in the response
+    filename = os.path.basename(name)
+    return FileResponse(storage.open(name, "rb"), as_attachment=False, filename=filename)
 
 # ---------------------------------------------------------------------------
 # Magic-link email actions

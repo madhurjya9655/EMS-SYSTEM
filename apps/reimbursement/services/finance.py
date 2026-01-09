@@ -4,15 +4,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from django.db import transaction
-from django.utils import timezone
 
 from apps.reimbursement.models import (
-    ReimbursementRequest,
-    ReimbursementLine,
-    ReimbursementLog,
     ExpenseItem,
+    ReimbursementLine,
+    ReimbursementRequest,
 )
-from . import emails as email_svc
+from .. import emails as email_svc
 
 
 @dataclass(frozen=True)
@@ -34,15 +32,17 @@ def _recalc_request_and_audit(req: ReimbursementRequest, *, actor, reason: str) 
 def finance_approve_bill(line: ReimbursementLine, *, actor) -> BillActionResult:
     """
     Approve only this bill. No changes to siblings.
-    - Does not send emails (email is only required on rejection per spec).
+    - Does not send emails (email is only required on rejection/resubmit per spec).
     - Re-derive parent status.
     """
     req = line.request
     line.approve_by_finance(actor=actor)
-    # Keep the ExpenseItem locked as submitted/attached once line exists.
+
+    # Keep the ExpenseItem locked once a line exists on a request
     if line.expense_item.status != ExpenseItem.Status.SUBMITTED:
         line.expense_item.status = ExpenseItem.Status.SUBMITTED
         line.expense_item.save(update_fields=["status", "updated_at"])
+
     _recalc_request_and_audit(req, actor=actor, reason=f"Bill #{line.pk} finance-approved.")
     return BillActionResult(req.id, line.id, line.bill_status, req.status)
 
@@ -53,7 +53,7 @@ def finance_reject_bill(line: ReimbursementLine, *, actor, reason: str) -> BillA
     Reject only this bill with mandatory reason.
     - Unlock underlying ExpenseItem for employee edits.
     - Email employee ONLY (not manager).
-    - Re-derive parent status (moves to PARTIALLY_REJECTED).
+    - Re-derive parent status.
     """
     req = line.request
     line.reject_by_finance(actor=actor, reason=reason)
@@ -70,7 +70,7 @@ def employee_resubmitted_bill(line: ReimbursementLine, *, actor) -> BillActionRe
     """
     Employee corrected a previously rejected bill and re-submitted.
     - Email finance team with change summary.
-    - Re-derive parent status (mix will typically be PARTIAL_HOLD until all approved).
+    - Re-derive parent status.
     """
     req = line.request
     line.employee_resubmit_bill(actor=actor)

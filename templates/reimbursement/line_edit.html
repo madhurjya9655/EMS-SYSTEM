@@ -46,21 +46,7 @@
 
           <div class="d-flex justify-content-between">
             <button type="submit" class="btn btn-primary">Save</button>
-
-            <div class="d-flex gap-2">
-              {% if object.bill_status == 'finance_rejected' %}
-                <form method="post" action="{% url 'reimbursement:line_delete' object.id %}" onsubmit="return confirm('Permanently delete this bill? This cannot be undone.');">
-                  {% csrf_token %}
-                  <button type="submit" class="btn btn-outline-danger">Delete</button>
-                </form>
-              {% endif %}
-              {% if saved %}
-                <form method="post" action="{% url 'reimbursement:line_proceed' object.id %}">
-                  {% csrf_token %}
-                  <button type="submit" class="btn btn-success">Proceed to Approval</button>
-                </form>
-              {% endif %}
-            </div>
+            <a href="{% url 'reimbursement:reimbursement_detail' request_obj.id %}" class="btn btn-outline-secondary">Cancel</a>
           </div>
         </form>
       </div>
@@ -71,8 +57,7 @@
         <div class="fw-semibold mb-1">About this step</div>
         <ul class="mb-0 small">
           <li>Saving keeps the bill as <em>Rejected</em> but updates the details.</li>
-          <li>Click <strong>Proceed to Approval</strong> to send this corrected bill back into Finance → Manager flow.</li>
-          <li>Delete will permanently remove this bill (no trash), keeping the request if other bills exist.</li>
+          <li>Once corrected, your Finance team will review the request from their queue.</li>
         </ul>
       </div>
     </div>

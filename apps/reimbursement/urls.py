@@ -18,6 +18,7 @@ urlpatterns = [
     # ------------------------------
     path("expenses/", views.ExpenseInboxView.as_view(), name="expense_inbox"),
     path("expenses/<int:pk>/edit/", views.ExpenseItemUpdateView.as_view(), name="expense_edit"),
+    path("expenses/<int:pk>/resubmit/", views.ExpenseItemResubmitView.as_view(), name="expense_resubmit_finance"),
     path("expenses/<int:pk>/delete/", views.ExpenseItemDeleteView.as_view(), name="expense_delete"),
 
     # ------------------------------
@@ -30,10 +31,16 @@ urlpatterns = [
     path("request/<int:pk>/edit/", views.ReimbursementRequestUpdateView.as_view(), name="request_edit"),
     path("request/<int:pk>/delete/", views.ReimbursementRequestDeleteView.as_view(), name="request_delete"),
     path("request/<int:pk>/resubmit/", views.ReimbursementResubmitView.as_view(), name="request_resubmit"),
-    path("<int:pk>/", views.ReimbursementDetailView.as_view(), name="reimbursement_detail"),
+    path("request/<int:pk>/", views.ReimbursementDetailView.as_view(), name="request_detail"),
 
     # ------------------------------
-    # Manager / Management
+    # Manager — BILL-LEVEL
+    # ------------------------------
+    path("manager/bills/", views.ManagerBillsQueueView.as_view(), name="manager_bills_pending"),
+    path("manager/bills/<int:pk>/", views.ManagerBillActionView.as_view(), name="manager_bill_action"),
+
+    # ------------------------------
+    # Manager / Management (legacy request-level compatibility)
     # ------------------------------
     path("manager/", views.ManagerQueueView.as_view(), name="manager_pending"),
     path("manager/<int:pk>/review/", views.ManagerReviewView.as_view(), name="manager_review"),
@@ -46,7 +53,10 @@ urlpatterns = [
     path("finance/", views.FinanceQueueView.as_view(), name="finance_pending"),
     path("finance/<int:pk>/verify/", views.FinanceVerifyView.as_view(), name="finance_verify"),
     path("finance/<int:pk>/review/", views.FinanceReviewView.as_view(), name="finance_review"),
-    # NOTE: no separate line-delete URL — deletion is handled inside FinanceVerifyView.
+
+    # Finance — BILL PAYMENT (bill-level)
+    path("finance/bills/payment/", views.FinanceBillPaymentQueueView.as_view(), name="finance_bill_payment_queue"),
+    path("finance/bills/payment/mark/", views.FinanceBillPaymentView.as_view(), name="finance_bill_payment"),
 
     # ------------------------------
     # Admin dashboards, config & export
@@ -56,7 +66,7 @@ urlpatterns = [
     path("admin/employee-summary/", views.AdminEmployeeSummaryView.as_view(), name="admin_employee_summary"),
     path("admin/status-summary/", views.AdminStatusSummaryView.as_view(), name="admin_status_summary"),
     path("admin/approver-mapping/", approver_mapping_admin_view, name="approver_mapping_admin"),
-    path("admin/export.csv", views.ReimbursementExportCSVView.as_view(), name="admin_export_csv"),
+    path("admin/export.csv", views.ReimbursementExportCSVView.as_view(), name="admin_export"),
 
     # ------------------------------
     # Analytics
@@ -80,7 +90,7 @@ urlpatterns = [
     path("email-action/", views.reimbursement_email_action, name="email_action"),
 
     # ------------------------------
-    # Legacy routes
+    # Legacy routes (simple model)
     # ------------------------------
     path("legacy/apply/", views.LegacyReimbursementCreateView.as_view(), name="legacy_apply"),
     path("legacy/my/", views.LegacyMyReimbursementsView.as_view(), name="legacy_my_reimbursements"),

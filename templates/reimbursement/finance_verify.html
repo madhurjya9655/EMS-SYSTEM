@@ -19,7 +19,6 @@
     </div>
   </div>
 
-  <!-- Request summary -->
   <div class="card mt-3 mb-3">
     <div class="card-body">
       <div class="row">
@@ -41,8 +40,7 @@
     </div>
   </div>
 
-  <!-- Bulk verify/reject/delete form -->
-  <form method="post">
+  <form method="post" novalidate>
     {% csrf_token %}
     {% if back_url %}<input type="hidden" name="return" value="{{ back_url }}">{% endif %}
 
@@ -50,9 +48,7 @@
       <table class="table table-sm table-hover align-middle">
         <thead class="table-light">
           <tr>
-            <th style="width:34px;">
-              <input type="checkbox" id="chk_all">
-            </th>
+            <th style="width:34px;"><input type="checkbox" id="chk_all"></th>
             <th>#</th>
             <th>Type</th>
             <th>Date</th>
@@ -66,9 +62,7 @@
         <tbody>
           {% for line in lines %}
           <tr>
-            <td>
-              <input type="checkbox" name="line_ids" value="{{ line.id }}" class="line-check">
-            </td>
+            <td><input type="checkbox" name="line_ids" value="{{ line.id }}" class="line-check"></td>
             <td>{{ forloop.counter }}</td>
             <td>{{ line.expense_item.get_category_display|default:line.expense_item.category }}</td>
             <td>{{ line.expense_item.date|date:"d M Y" }}</td>
@@ -76,11 +70,7 @@
             <td class="text-end">₹{{ line.amount|floatformat:2 }}</td>
             <td>
               {% url "reimbursement:receipt_line" line.id as receipt_url %}
-              {% if receipt_url %}
-                <a href="{{ receipt_url }}" target="_blank" rel="noopener">View</a>
-              {% else %}
-                -
-              {% endif %}
+              {% if receipt_url %}<a href="{{ receipt_url }}" target="_blank" rel="noopener">View</a>{% else %}-{% endif %}
             </td>
             <td>
               {% if line.bill_status == "finance_approved" %}
@@ -95,36 +85,16 @@
             </td>
             <td>
               <div class="d-flex flex-wrap gap-1">
-                <button type="submit"
-                        class="btn btn-outline-success btn-sm js-one"
-                        name="action"
-                        value="approve"
-                        data-line-id="{{ line.id }}">
-                  Approve
-                </button>
-                <button type="submit"
-                        class="btn btn-outline-danger btn-sm js-one"
-                        name="action"
-                        value="reject"
-                        data-line-id="{{ line.id }}">
-                  Reject
-                </button>
-                <button type="submit"
-                        class="btn btn-outline-secondary btn-sm js-one"
-                        name="action"
-                        value="delete"
-                        data-line-id="{{ line.id }}"
-                        onclick="return confirm('Permanently delete this bill line? This cannot be undone.');">
-                  Delete
-                </button>
+                <button type="submit" class="btn btn-outline-success btn-sm js-one" name="action" value="approve" data-line-id="{{ line.id }}">Approve</button>
+                <button type="submit" class="btn btn-outline-danger btn-sm js-one" name="action" value="reject" data-line-id="{{ line.id }}">Reject</button>
+                <button type="submit" class="btn btn-outline-secondary btn-sm js-one" name="action" value="delete" data-line-id="{{ line.id }}"
+                  onclick="return confirm('Permanently delete this bill line? This cannot be undone.');">Delete</button>
               </div>
             </td>
           </tr>
           {% empty %}
           <tr>
-            <td colspan="9" class="text-center text-muted py-3">
-              No expense lines.
-            </td>
+            <td colspan="9" class="text-center text-muted py-3">No expense lines.</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -139,24 +109,13 @@
       </table>
     </div>
 
-    <!-- Bulk Actions -->
     <div class="mt-3 d-flex flex-column gap-3">
       <div class="d-flex flex-wrap gap-2">
-        <button name="action" value="approve" class="btn btn-success">
-          Approve Selected
-        </button>
-        <button name="action" value="reject" class="btn btn-danger">
-          Reject Selected
-        </button>
-        <button name="action" value="delete" class="btn btn-outline-secondary"
-                onclick="return confirm('Delete selected bill lines? This cannot be undone.');">
-          Delete Selected
-        </button>
-        <button name="action" value="finalize" class="btn btn-primary">
-          Finalize &amp; Send to Manager (approved bills proceed)
-        </button>
+        <button name="action" value="approve" class="btn btn-success">Approve Selected</button>
+        <button name="action" value="reject" class="btn btn-danger">Reject Selected</button>
+        <button name="action" value="delete" class="btn btn-outline-secondary" onclick="return confirm('Delete selected bill lines? This cannot be undone.');">Delete Selected</button>
+        <button name="action" value="finalize" class="btn btn-primary">Finalize &amp; Send to Manager (approved bills proceed)</button>
       </div>
-
       <div>
         <label for="reason" class="form-label fw-semibold">Rejection reason (used only when rejecting)</label>
         <textarea id="reason" name="reason" rows="3" class="form-control" placeholder="Add a clear reason employees can act on..."></textarea>
@@ -166,19 +125,12 @@
 </div>
 
 <script>
-  // Toggle all checkboxes
   document.getElementById('chk_all')?.addEventListener('change', function (e) {
-    var boxes = document.querySelectorAll('.line-check');
-    boxes.forEach(function (b) { b.checked = e.target.checked; });
+    document.querySelectorAll('.line-check').forEach(function (b) { b.checked = e.target.checked; });
   });
-
-  // Helper: select only one checkbox by line id
   function selectOnlyById(id) {
-    var boxes = document.querySelectorAll('.line-check');
-    boxes.forEach(function (b) { b.checked = (b.value === String(id)); });
+    document.querySelectorAll('.line-check').forEach(function (b) { b.checked = (b.value === String(id)); });
   }
-
-  // one-click approve/reject/delete → select that one and let form submit
   document.addEventListener('click', function (e) {
     var btn = e.target.closest('.js-one');
     if (!btn) return;

@@ -7,9 +7,7 @@
 </div>
 
 <div class="card">
-  <div class="card-header">
-    Requests pending finance verification / review / payment
-  </div>
+  <div class="card-header">Requests pending finance verification / review / payment</div>
   <div class="card-body">
     <div class="table-responsive">
       <table class="table table-sm table-hover align-middle">
@@ -31,59 +29,24 @@
             <td>#{{ req.id }}</td>
             <td>{{ req.created_by.get_full_name|default:req.created_by.username }}</td>
             <td>{{ req.submitted_at|default:req.created_at|date:"Y-m-d H:i" }}</td>
-            <td>
-              <span class="badge bg-light text-dark">
-                {{ req.get_status_display }}
-              </span>
-            </td>
+            <td><span class="badge bg-light text-dark">{{ req.get_status_display }}</span></td>
             <td>₹{{ req.total_amount|floatformat:2 }}</td>
-            <td>
-              {% if req.manager %}
-                {{ req.manager.get_full_name|default:req.manager.username }}
-              {% else %}
-                <span class="text-muted small">Not set</span>
-              {% endif %}
-            </td>
-            <td>
-              {% if req.management %}
-                {{ req.management.get_full_name|default:req.management.username }}
-              {% else %}
-                <span class="text-muted small">-</span>
-              {% endif %}
-            </td>
+            <td>{% if req.manager %}{{ req.manager.get_full_name|default:req.manager.username }}{% else %}<span class="text-muted small">Not set</span>{% endif %}</td>
+            <td>{% if req.management %}{{ req.management.get_full_name|default:req.management.username }}{% else %}<span class="text-muted small">-</span>{% endif %}</td>
             <td class="d-flex gap-2">
-              {# For both PENDING_FINANCE_VERIFY and PARTIAL_HOLD we open the verify page #}
               {% if req.status == "pending_finance_verify" or req.status == "partial_hold" %}
-                <a
-                  href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}"
-                  class="btn btn-sm btn-outline-secondary">
-                  View Bills
-                </a>
-                <a
-                  href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}"
-                  class="btn btn-sm btn-outline-warning">
-                  Verify
-                </a>
+                <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-secondary">View Bills</a>
+                <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-warning">Verify</a>
               {% elif req.status == "pending_finance" or req.status == "approved" %}
-                <a
-                  href="{% url 'reimbursement:finance_review' req.id %}?return={{ request.get_full_path|urlencode }}"
-                  class="btn btn-sm btn-outline-primary">
-                  Review / Pay
-                </a>
+                <a href="{% url 'reimbursement:finance_review' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-primary">Review / Pay</a>
               {% else %}
-                <a
-                  href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}"
-                  class="btn btn-sm btn-outline-secondary">
-                  View Bills
-                </a>
+                <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-secondary">View Bills</a>
               {% endif %}
             </td>
           </tr>
           {% empty %}
           <tr>
-            <td colspan="8" class="text-center text-muted py-3">
-              No reimbursement requests pending for finance.
-            </td>
+            <td colspan="8" class="text-center text-muted py-3">No reimbursement requests pending for finance.</td>
           </tr>
           {% endfor %}
         </tbody>

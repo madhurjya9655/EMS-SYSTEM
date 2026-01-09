@@ -1,4 +1,4 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\reimbursement\services\notifications.py
+# apps/reimbursement/services/notifications.py
 from __future__ import annotations
 
 import logging
@@ -10,23 +10,20 @@ from urllib.parse import urlencode, urljoin
 
 from django.conf import settings
 from django.core import signing
-# NOTE: using EmailMultiAlternatives for HTML + attachments
 from django.core.mail import EmailMultiAlternatives, get_connection
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import escape
-from django.contrib.auth import get_user_model
 
 from apps.reimbursement.models import (
-    ReimbursementRequest,
-    ReimbursementSettings,
-    ReimbursementLog,
     ReimbursementApproverMapping,
     ReimbursementLine,
+    ReimbursementLog,
+    ReimbursementRequest,
+    ReimbursementSettings,
 )
 
 logger = logging.getLogger(__name__)
-User = get_user_model()
 
 # ---------------------------------------------------------------------------
 # Hard-coded recipients per workflow requirement
@@ -65,14 +62,17 @@ def _site_base() -> str:
     ).strip()
     return base.rstrip("/") + "/"
 
+
 def _abs_url(path: str) -> str:
     return urljoin(_site_base(), path.lstrip("/"))
+
 
 def _email_enabled() -> bool:
     try:
         return bool(getattr(settings, "FEATURES", {}).get("EMAIL_NOTIFICATIONS", True))
     except Exception:
         return True
+
 
 def _dedupe_lower(emails: Iterable[str]) -> List[str]:
     seen = set()
@@ -87,26 +87,24 @@ def _dedupe_lower(emails: Iterable[str]) -> List[str]:
         out.append(low)
     return out
 
+
 def _employee_display_name(user) -> str:
     try:
-        # Prefer full name; fallback to username; strip spaces
         return (getattr(user, "get_full_name", lambda: "")() or getattr(user, "username", "") or "").strip()
     except Exception:
         return (getattr(user, "username", "") or "").strip()
+
 
 def _format_amount(amount: Decimal | None) -> str:
     try:
         if amount is None:
             return "0.00"
-        # Add thousand separators for INR style readability
         return f"{amount:,.2f}"
     except Exception:
         return str(amount or "0.00")
 
+
 def _format_dt(dt) -> str:
-    """
-    Format a datetime in a friendly local string with tz name.
-    """
     try:
         if not dt:
             return ""
@@ -117,10 +115,8 @@ def _format_dt(dt) -> str:
     except Exception:
         return str(dt)
 
+
 def _collect_receipt_files(req: ReimbursementRequest) -> List:
-    """
-    Collect unique files for the request lines, without size cap enforcement.
-    """
     files = []
     try:
         lines = req.lines.select_related("expense_item")
@@ -138,24 +134,20 @@ def _collect_receipt_files(req: ReimbursementRequest) -> List:
         logger.exception("Failed to collect receipt files for reimbursement #%s", req.id)
     return files
 
+
 def _collect_receipt_files_limited(req: ReimbursementRequest) -> List:
-    """
-    Collect receipt files but stop when the cumulative size approaches the cap.
-    """
     selected = []
     total = 0
     for f in _collect_receipt_files(req):
         try:
             size = getattr(f, "size", None)
             if size is None and hasattr(f, "path"):
-                # As a fallback, attempt os.path.getsize without importing os globally
                 import os
                 size = os.path.getsize(f.path)
             size = int(size or 0)
         except Exception:
             size = 0
 
-        # If single file is absurdly big, skip it but continue others
         if _MAX_ATTACH_TOTAL_BYTES and size > _MAX_ATTACH_TOTAL_BYTES:
             logger.warning("Skipping oversized attachment %r (size=%s)", getattr(f, "name", f), size)
             continue
@@ -168,16 +160,12 @@ def _collect_receipt_files_limited(req: ReimbursementRequest) -> List:
         total += size
     return selected
 
+
 def _amreen_from_email() -> str:
-    """
-    Canonical From header for reimbursement emails (Amreen).
-    """
     return getattr(settings, "REIMBURSEMENT_EMAIL_FROM", None) or getattr(settings, "DEFAULT_FROM_EMAIL", "")
 
+
 def _amreen_reply_to() -> List[str]:
-    """
-    Always provide a stable Reply-To for reimbursement emails (Amreen).
-    """
     from_value = _amreen_from_email()
     if "<" in from_value and ">" in from_value:
         email = from_value[from_value.find("<")+1 : from_value.find(">")].strip()
@@ -185,20 +173,16 @@ def _amreen_reply_to() -> List[str]:
         email = from_value.strip()
     return [email] if email else []
 
+
 def _ensure_cc_amreen(cc: Iterable[str] | None) -> List[str]:
-    """
-    Ensure Amreen is included in CC where business rules require it (final mails).
-    """
     cc_list = list(cc or [])
     am = _amreen_reply_to()
     if am:
         cc_list.extend(am)
     return _dedupe_lower(cc_list)
 
+
 def _as_list(value: Union[str, Iterable[str], None]) -> List[str]:
-    """
-    Normalize incoming recipient(s) to a lowercase, deduped list.
-    """
     if value is None:
         return []
     if isinstance(value, str):
@@ -207,6 +191,7 @@ def _as_list(value: Union[str, Iterable[str], None]) -> List[str]:
         return _dedupe_lower(list(value))
     except Exception:
         return []
+
 
 def _send(
     subject: str,
@@ -220,42 +205,17 @@ def _send(
     bcc: Optional[Iterable[str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
 ) -> bool:
-    """
-    Send an email and log success/failure with full context.
-    Supports multiple recipients in TO/CC/BCC.
-    Returns True on success, False on failure.
-    """
     to_list = _as_list(to_addrs)
     cc_list = _as_list(cc)
     bcc_list = _as_list(bcc)
     reply_to_list = _as_list(reply_to) or _amreen_reply_to()
 
     if not to_list and not cc_list and not bcc_list:
-        logger.warning(
-            "Reimbursement email suppressed: no recipients. subject=%r", subject
-        )
+        logger.warning("Reimbursement email suppressed: no recipients. subject=%r", subject)
         return False
 
     from_email = _amreen_from_email()
-
-    # Per requirement: do NOT fail silently for reimbursement emails.
     fail_silently = False
-
-    try:
-        backend_name = getattr(settings, "EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
-        host = getattr(settings, "EMAIL_HOST", None)
-        port = getattr(settings, "EMAIL_PORT", None)
-        user = getattr(settings, "EMAIL_HOST_USER", None)
-        use_tls = getattr(settings, "EMAIL_USE_TLS", None)
-        use_ssl = getattr(settings, "EMAIL_USE_SSL", None)
-        logger.info(
-            "Reimbursement email attempt: backend=%s host=%s port=%s user=%s TLS=%s SSL=%s "
-            "from=%s to=%s cc=%s bcc=%s reply_to=%s subject=%r",
-            backend_name, host, port, user, use_tls, use_ssl,
-            from_email, to_list, cc_list, bcc_list, reply_to_list, subject
-        )
-    except Exception:
-        pass
 
     try:
         with get_connection() as conn:
@@ -284,23 +244,18 @@ def _send(
             sent = msg.send(fail_silently=fail_silently)
 
         if sent:
-            logger.info(
-                "Reimbursement email sent OK: to=%s cc=%s bcc=%s subject=%r",
-                to_list, cc_list, bcc_list, subject
-            )
+            logger.info("Reimbursement email sent OK: to=%s cc=%s subject=%r", to_list, cc_list, subject)
             return True
 
-        logger.error(
-            "Reimbursement email send returned 0: to=%s cc=%s bcc=%s subject=%r",
-            to_list, cc_list, bcc_list, subject
-        )
+        logger.error("Reimbursement email send returned 0: to=%s cc=%s subject=%r", to_list, cc_list, subject)
         return False
     except Exception as exc:
         logger.exception(
-            "Reimbursement email send FAILED: to=%s cc=%s bcc=%s subject=%r error=%s",
-            to_list, cc_list, bcc_list, subject, exc
+            "Reimbursement email send FAILED: to=%s cc=%s subject=%r error=%s",
+            to_list, cc_list, subject, exc
         )
         return False
+
 
 def _send_and_log(
     req: ReimbursementRequest,
@@ -316,9 +271,6 @@ def _send_and_log(
     bcc: Optional[Iterable[str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
 ) -> None:
-    """
-    Wrapper that sends an email and logs an EMAIL_SENT event with extra.kind for de-dupe.
-    """
     ok = _send(
         subject=subject,
         to_addrs=to_addrs,
@@ -350,6 +302,7 @@ def _send_and_log(
     except Exception:
         logger.exception("Failed to write EMAIL_SENT log for req #%s kind=%s", req.id, kind)
 
+
 def _already_sent_recent(
     req: ReimbursementRequest,
     kind_hint: str,
@@ -377,8 +330,10 @@ class _Recipients:
     to: List[str]
     cc: List[str]
 
+
 def _default_settings() -> ReimbursementSettings:
     return ReimbursementSettings.get_solo()
+
 
 def _admin_emails() -> List[str]:
     try:
@@ -386,11 +341,13 @@ def _admin_emails() -> List[str]:
     except Exception:
         return []
 
+
 def _finance_emails() -> List[str]:
     try:
         return _default_settings().finance_email_list()
     except Exception:
         return []
+
 
 def _management_emails() -> List[str]:
     try:
@@ -398,63 +355,51 @@ def _management_emails() -> List[str]:
     except Exception:
         return []
 
+
 def _manager_email_candidates(req: ReimbursementRequest) -> List[str]:
     candidates: List[str] = []
     try:
         settings_obj = _default_settings()
-        # Global L1 approver first (if set)
         lvl1 = settings_obj.approver_level1()
         if lvl1:
             candidates.append(lvl1)
 
-        # Request's assigned manager
         if req.manager and getattr(req.manager, "email", None):
             candidates.append((req.manager.email or "").strip())
 
-        # Mapping fallback
         mapping = ReimbursementApproverMapping.for_employee(req.created_by)
         if mapping and mapping.manager and mapping.manager.email:
             candidates.append((mapping.manager.email or "").strip())
 
-        # Profile/team_leader fallback (if available)
         profile = getattr(req.created_by, "profile", None)
         if profile and getattr(profile, "team_leader", None) and profile.team_leader.email:
             candidates.append((profile.team_leader.email or "").strip())
     except Exception:
         logger.exception("Failed resolving manager email candidates for reimbursement #%s", req.id)
 
-    # If nothing resolved, you can optionally add a global fallback group here
     return _dedupe_lower(candidates)
+
 
 def _recipients_for_manager(req: ReimbursementRequest) -> _Recipients:
     admin_cc = _admin_emails()
     mgr_list = _manager_email_candidates(req)
-    return _Recipients(
-        to=mgr_list,
-        cc=_dedupe_lower(admin_cc),
-    )
+    return _Recipients(to=mgr_list, cc=_dedupe_lower(admin_cc))
+
 
 def _recipients_for_management(req: ReimbursementRequest) -> _Recipients:
     admin_cc = _admin_emails()
     mgmt_list: List[str] = []
     try:
-        # Direct management user on the request
         if req.management and getattr(req.management, "email", None):
             mgmt_list.append((req.management.email or "").strip())
-        # Plus settings' management_emails
         mgmt_list.extend(_management_emails())
     except Exception:
         logger.exception("Failed resolving management recipients for reimbursement #%s", req.id)
 
-    return _Recipients(
-        to=_dedupe_lower(mgmt_list),
-        cc=_dedupe_lower(admin_cc),
-    )
+    return _Recipients(to=_dedupe_lower(mgmt_list), cc=_dedupe_lower(admin_cc))
+
 
 def _recipients_for_finance(req: ReimbursementRequest) -> _Recipients:
-    """
-    Legacy/settings-based finance resolution (still used for some CC cases).
-    """
     admin_cc = _admin_emails()
     finance_list: List[str] = []
     try:
@@ -465,19 +410,12 @@ def _recipients_for_finance(req: ReimbursementRequest) -> _Recipients:
     except Exception:
         logger.exception("Failed resolving finance recipients for reimbursement #%s", req.id)
 
-    return _Recipients(
-        to=_dedupe_lower(finance_list),
-        cc=_dedupe_lower(admin_cc),
-    )
+    return _Recipients(to=_dedupe_lower(finance_list), cc=_dedupe_lower(admin_cc))
+
 
 def _recipients_for_finance_enforced() -> _Recipients:
-    """
-    Enforced rule: finance verify email must go ONLY to Akshay & Sharyu.
-    """
-    return _Recipients(
-        to=_dedupe_lower(_FINANCE_TEAM),
-        cc=[],
-    )
+    return _Recipients(to=_dedupe_lower(_FINANCE_TEAM), cc=[])
+
 
 def _employee_email(req: ReimbursementRequest) -> Optional[str]:
     try:
@@ -525,6 +463,7 @@ def _lines_for_email(req: ReimbursementRequest) -> List[Dict[str, str]]:
     except Exception:
         logger.exception("Failed building line details for reimbursement #%s", req.id)
     return rows
+
 
 def _build_lines_table_html(req: ReimbursementRequest) -> str:
     rows = _lines_for_email(req)
@@ -579,6 +518,7 @@ def _build_lines_table_html(req: ReimbursementRequest) -> str:
     )
     return "\n".join(parts)
 
+
 def _build_lines_table_text(req: ReimbursementRequest) -> str:
     rows = _lines_for_email(req)
     if not rows:
@@ -589,9 +529,7 @@ def _build_lines_table_text(req: ReimbursementRequest) -> str:
     lines: List[str] = [header, sep]
     for r in rows:
         bill = f"View: {r['bill_url']}" if r["bill_url"] else "-"
-        lines.append(
-            f"{r['category']} | {r['date']} | {r['description']} | {r['amount']} | {bill}"
-        )
+        lines.append(f"{r['category']} | {r['date']} | {r['description']} | {r['amount']} | {bill}")
     return "\n".join(lines)
 
 # ---------------------------------------------------------------------------
@@ -609,6 +547,7 @@ def _build_action_token(req: ReimbursementRequest, role: str, decision: str) -> 
     }
     return signing.dumps(payload, salt=_ACTION_SALT)
 
+
 def _build_action_url(req: ReimbursementRequest, role: str, decision: str) -> str:
     token = _build_action_token(req, role, decision)
     try:
@@ -617,6 +556,7 @@ def _build_action_url(req: ReimbursementRequest, role: str, decision: str) -> st
         path = "/reimbursement/email-action/"
     qs = urlencode({"t": token})
     return _abs_url(f"{path}?{qs}")
+
 
 def _manager_action_buttons(req: ReimbursementRequest) -> str:
     approve_url = _build_action_url(req, role="manager", decision="approved")
@@ -637,6 +577,7 @@ def _manager_action_buttons(req: ReimbursementRequest) -> str:
         </a>
       </div>
     """.strip()
+
 
 def _management_action_buttons(req: ReimbursementRequest) -> str:
     approve_url = _build_action_url(req, role="management", decision="approved")
@@ -684,7 +625,7 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
     amt_str = _format_amount(req.total_amount)
     subject = f"Verify Reimbursement — {emp_name} — ₹{amt_str}"
 
-    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
+    detail_url = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     submitted_at = req.submitted_at or req.created_at
     lines_html = _build_lines_table_html(req)
     lines_txt = _build_lines_table_text(req)
@@ -748,7 +689,6 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
         ]
     )
 
-    # Replies go to employee if available; else to Amreen
     reply_to = [_employee_email(req)] if _employee_email(req) else _amreen_reply_to()
     attachments = _collect_receipt_files_limited(req)
 
@@ -757,13 +697,14 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
         kind=kind,
         subject=subject,
         to_addrs=fin_rec.to,
-        cc=[],  # ENFORCED: no CC
+        cc=[],
         reply_to=reply_to,
         html=html,
         txt=txt,
         attachments=attachments,
         extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "finance_verify"},
     )
+
 
 def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
     """
@@ -789,7 +730,7 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
     amt_str = _format_amount(req.total_amount)
     subject = f"Reimbursement #{req.id} Verified – Pending Manager Approval"
 
-    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
+    detail_url = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     submitted_at = req.submitted_at or req.created_at
     verified_at = req.verified_at or timezone.now()
     verifier_name = _employee_display_name(req.verified_by) if req.verified_by else "Finance"
@@ -799,7 +740,6 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
     lines_txt = _build_lines_table_text(req)
     buttons_html = _manager_action_buttons(req)
 
-    # Build CC: ONLY the verifier if we can resolve their email
     verifier_email = ((req.verified_by.email or "").strip().lower()
                       if (req.verified_by and getattr(req.verified_by, "email", None)) else "")
     cc_list = _dedupe_lower([verifier_email] if verifier_email else [])
@@ -888,6 +828,7 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
         extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "finance_verified"},
     )
 
+
 def send_reimbursement_finance_rejected(req: ReimbursementRequest) -> None:
     if not _email_enabled():
         logger.info("Emails disabled; skipping finance-rejected email for #%s.", req.id)
@@ -907,7 +848,7 @@ def send_reimbursement_finance_rejected(req: ReimbursementRequest) -> None:
     amt_str = _format_amount(req.total_amount)
     subject = f"Reimbursement Rejected by Finance — {emp_name} — ₹{amt_str}"
 
-    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
+    detail_url = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     note_html = escape((req.finance_note or "")).replace("\n", "<br>") if req.finance_note else "-"
 
     html = f"""
@@ -984,13 +925,10 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
 
     mgr_recip = _recipients_for_manager(req)
     if not mgr_recip.to:
-        logger.warning(
-            "Reimbursement submitted email suppressed: no manager/Level-1 email for req #%s.",
-            req.id,
-        )
+        logger.warning("Reimbursement submitted email suppressed: no manager/Level-1 email for req #%s.", req.id)
         return
 
-    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
+    detail_url = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     submitted_at = req.submitted_at or req.created_at
     buttons_html = _manager_action_buttons(req)
     cc_str = ", ".join(mgr_recip.cc) if mgr_recip.cc else ""
@@ -1064,13 +1002,7 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
         "",
     ]
     if employee_note:
-        txt_lines.extend(
-            [
-                "Employee Note -",
-                employee_note,
-                "",
-            ]
-        )
+        txt_lines.extend(["Employee Note -", employee_note, ""])
     lines_txt = _build_lines_table_text(req)
     txt_lines.extend(
         [
@@ -1127,7 +1059,7 @@ def send_reimbursement_admin_summary(req: ReimbursementRequest) -> None:
     amt_str = _format_amount(req.total_amount)
     subject = f"Reimbursement Submitted (Admin Summary) — {emp_name} — ₹{amt_str}"
 
-    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
+    detail_url = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     submitted_at = req.submitted_at or req.created_at
 
     html = f"""
@@ -1193,12 +1125,13 @@ def send_reimbursement_admin_summary(req: ReimbursementRequest) -> None:
         extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "admin_summary"},
     )
 
+
 def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
     """
     STEP 3 — Final email after approval.
     TO:  Jyothi & Chetan
-    CC:  Amreen, Vilas, Akshay, Sharyu  (Amreen also enforced via reply-to helper)
-    Body must include: Bill Amount, Employee Name, Verified By, Approved By, Approval Timestamp.
+    CC:  Amreen, Vilas, Akshay, Sharyu
+    Body includes: Bill Amount, Employee Name, Verified By, Approved By, Approval Timestamp.
     """
     if not _email_enabled():
         logger.info("Emails disabled; skipping final-notification email for #%s.", req.id)
@@ -1223,7 +1156,7 @@ def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
 
     subject = f"Approved Reimbursement — {emp_name} — ₹{amt_str}"
 
-    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
+    detail_url = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     lines_html = _build_lines_table_html(req)
     lines_txt = _build_lines_table_text(req)
 
@@ -1285,13 +1218,14 @@ def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
         kind=kind,
         subject=subject,
         to_addrs=to_list,
-        cc=cc_list,  # must include Akshay & Sharyu regardless of who verified; also Amreen & Vilas
+        cc=cc_list,
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
         attachments=attachments,
         extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "final_notification"},
     )
+
 
 def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: str) -> None:
     if not _email_enabled():
@@ -1322,7 +1256,7 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
         subject = f"Clarification Requested by Manager — {emp_name} — ₹{amt_str}"
         decision_label = "Clarification Required"
 
-    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
+    detail_url = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     manager_comment_html = escape(req.manager_comment or "").replace("\n", "<br>") if req.manager_comment else ""
 
     html = f"""
@@ -1376,10 +1310,6 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
     txt_lines.extend(["View details:", detail_url])
     txt = "\n".join(txt_lines)
 
-    # --- CC rules ---
-    # - Rejected: no CC (unchanged)
-    # - Approved: CC admins + Akshay so he knows the bill is approved
-    # - Clarification: CC admins (unchanged)
     cc_raw: List[str] = [] if decision == "rejected" else _admin_emails()
     if decision == "approved":
         cc_raw.append("akshay@blueoceansteels.com")
@@ -1397,9 +1327,9 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
         extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "manager_action"},
     )
 
-    # On approval, trigger final notification (step 3)
     if decision == "approved":
         send_reimbursement_final_notification(req)
+
 
 def send_reimbursement_management_action(req: ReimbursementRequest, *, decision: str) -> None:
     if not _email_enabled():
@@ -1408,11 +1338,7 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
 
     kind = f"management_{decision}"
     if _already_sent_recent(req, kind_hint=kind):
-        logger.info(
-            "Suppressing duplicate management '%s' email for reimbursement #%s.",
-            decision,
-            req.id,
-        )
+        logger.info("Suppressing duplicate management '%s' email for reimbursement #%s.", decision, req.id)
         return
 
     emp_email = _employee_email(req)
@@ -1434,7 +1360,7 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
         subject = f"Clarification Requested by Management — {emp_name} — ₹{amt_str}"
         decision_label = "Clarification Required"
 
-    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
+    detail_url = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     management_comment_html = escape(req.management_comment or "").replace("\n", "<br>") if req.management_comment else ""
 
     html = f"""
@@ -1507,6 +1433,7 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
         extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "management_action"},
     )
 
+
 def send_reimbursement_paid(req: ReimbursementRequest) -> None:
     if not _email_enabled():
         logger.info("Reimbursement emails disabled; skipping paid email for #%s.", req.id)
@@ -1525,7 +1452,7 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
     amt_str = _format_amount(req.total_amount)
     subject = f"Reimbursement Paid — {emp_name} — ₹{amt_str}"
 
-    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
+    detail_url = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     paid_at = req.paid_at or timezone.now()
 
     html = f"""
@@ -1578,7 +1505,6 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
     cc_list = _admin_emails()
     mgr_to = _manager_email_candidates(req)
     cc_list.extend(mgr_to)
-    # Ensure Amreen is CC'd on the final paid email
     cc = _ensure_cc_amreen(cc_list)
 
     _send_and_log(
@@ -1593,114 +1519,6 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
         extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "paid"},
     )
 
-def send_reimbursement_clarification(req: ReimbursementRequest, *, actor=None) -> None:
-    if not _email_enabled():
-        logger.info("Reimbursement emails disabled; skipping clarification email for #%s.", req.id)
-        return
-
-    if _already_sent_recent(req, kind_hint="clarification"):
-        logger.info("Suppressing duplicate clarification email for reimbursement #%s.", req.id)
-        return
-
-    emp_email = _employee_email(req)
-    if not emp_email:
-        logger.info("Clarification email suppressed: employee has no email (req #%s).", req.id)
-        return
-
-    emp_name = escape(_employee_display_name(req.created_by))
-    amt_str = _format_amount(req.total_amount)
-    subject = f"Clarification Needed — Reimbursement #{req.id} — ₹{amt_str}"
-
-    detail_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
-
-    try:
-        if actor:
-            who = _employee_display_name(actor)
-        elif req.manager_decision == "clarification":
-            who = "Manager"
-        elif req.management_decision == "clarification":
-            who = "Management"
-        else:
-            who = "Finance"
-    except Exception:
-        who = "Approver"
-
-    clarification_msg = (
-        (req.finance_note or "").strip()
-        or (req.management_comment or "").strip()
-        or (req.manager_comment or "").strip()
-    )
-    clarification_msg_html = escape(clarification_msg).replace("\n", "<br>") if clarification_msg else ""
-
-    html = f"""
-<html>
-  <body style="font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif;background:#f3f4f6;padding:16px;">
-    <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:10px;
-                padding:20px;border:1px solid #e5e7eb;">
-      <h2 style="margin-top:0;margin-bottom:12px;color:#111827;">
-        Clarification Needed – Reimbursement #{req.id}
-      </h2>
-
-      <table style="font-size:14px;margin:8px 0 16px 0;">
-        <tr><td style="padding-right:8px;"><strong>Requested By:</strong></td><td>{escape(who)}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Total Amount:</strong></td><td>₹{amt_str}</td></tr>
-        <tr><td style="padding-right:8px;"><strong>Current Status:</strong></td><td>{escape(req.get_status_display())}</td></tr>
-      </table>
-    """
-
-    if clarification_msg:
-        html += f"""
-      <p style="font-size:14px;margin:0 0 12px 0;">
-        <strong>Clarification Details:</strong><br>
-        {clarification_msg_html}
-      </p>
-    """
-
-    html += f"""
-      <p style="font-size:14px;margin:12px 0;">
-        Please review and update your request:<br>
-        <a href="{detail_url}" style="color:#2563eb;text-decoration:none;">{detail_url}</a>
-      </p>
-
-      <p style="font-size:13px;margin-top:16px;color:#4b5563;">
-        Regards,<br>BOS Lakshya
-      </p>
-    </div>
-  </body>
-</html>
-    """
-
-    txt_lines = [
-        f"Clarification is required for your reimbursement #{req.id}.",
-        "",
-        f"Requested By : {who}",
-        f"Total Amount : ₹{amt_str}",
-        f"Current Status: {req.get_status_display()}",
-        "",
-    ]
-    if clarification_msg:
-        txt_lines.extend(
-            [
-                "Clarification Details:",
-                clarification_msg,
-                "",
-            ]
-        )
-    txt_lines.extend(["Review / update:", detail_url])
-    txt = "\n".join(txt_lines)
-
-    _send_and_log(
-        req,
-        kind="clarification",
-        subject=subject,
-        to_addrs=[emp_email],
-        cc=_admin_emails(),
-        reply_to=[],  # defaults to Amreen
-        html=html,
-        txt=txt,
-        extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "clarification"},
-    )
-
 # ---------------------------------------------------------------------------
 # NEW: Bill-level notifications wired for finance-first flow
 # ---------------------------------------------------------------------------
@@ -1710,6 +1528,7 @@ def _bill_view_url(line: ReimbursementLine) -> str:
         return _abs_url(reverse("reimbursement:receipt_line", args=[line.id]))
     except Exception:
         return ""
+
 
 def send_bill_rejected_by_finance(req: ReimbursementRequest, line: ReimbursementLine) -> None:
     """
@@ -1734,7 +1553,7 @@ def send_bill_rejected_by_finance(req: ReimbursementRequest, line: Reimbursement
     amt_str = _format_amount(line.amount or Decimal("0.00"))
     reason_html = escape(line.finance_rejection_reason or "-").replace("\n", "<br>")
     bill_url = _bill_view_url(line)
-    req_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
+    req_url = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
 
     subject = f"Reimbursement #{req.id}: One bill was rejected by Finance"
 
@@ -1795,6 +1614,7 @@ def send_bill_rejected_by_finance(req: ReimbursementRequest, line: Reimbursement
         extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "bill_rejected"},
     )
 
+
 def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *, actor=None) -> None:
     """
     Employee edits/replaces a previously rejected bill — email the Finance team (Akshay & Sharyu).
@@ -1818,7 +1638,7 @@ def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *,
     amt_str = _format_amount(line.amount or Decimal("0.00"))
     resubmitter = _employee_display_name(actor) if actor else emp_name
     bill_url = _bill_view_url(line)
-    req_url = _abs_url(reverse("reimbursement:reimbursement_detail", args=[req.id]))
+    req_url = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
 
     subject = f"Reimbursement #{req.id}: Employee resubmitted a corrected bill"
 

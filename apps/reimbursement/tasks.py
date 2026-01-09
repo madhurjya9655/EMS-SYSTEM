@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import calendar
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -12,6 +14,8 @@ from django.db.models import Sum, Count
 from django.utils import timezone
 
 from .models import ReimbursementRequest, ReimbursementSettings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -50,6 +54,11 @@ def _month_range(target: date | None = None) -> Tuple[datetime, datetime]:
 def _build_monthly_rows(start: datetime, end: datetime) -> List[MonthlySummaryRow]:
     """
     Aggregate totals per employee between [start, end].
+
+    NOTE (flow aligned):
+    - Totals are based on ReimbursementRequest.total_amount for any request
+      submitted in the month. Each request's total comes from INCLUDED lines
+      only, and lines can move independently across Finance/Manager/Payment.
     """
     qs = (
         ReimbursementRequest.objects.filter(
@@ -175,6 +184,10 @@ def send_monthly_admin_summary(target_month: date | None = None, dry_run: bool =
 
     - If `target_month` is None, summarises the previous calendar month.
     - If `dry_run` is True, prints the summary to stdout instead of sending email.
+
+    Flow alignment:
+    - Bill-level independence is already reflected in request totals and statuses.
+      No special handling is required here beyond using request totals.
     """
     # Default: previous month
     if target_month is None:
@@ -200,6 +213,7 @@ def send_monthly_admin_summary(target_month: date | None = None, dry_run: bool =
         # Nowhere to send
         if dry_run:
             print("No admin emails configured; summary not sent.")
+        logger.info("Monthly summary not sent for %s (no admin recipients).", month_label)
         return
 
     html_body, txt_body = _render_email_body(month_label, rows)
@@ -211,19 +225,23 @@ def send_monthly_admin_summary(target_month: date | None = None, dry_run: bool =
         print(txt_body)
         return
 
-    # Use Amreen as sender for the summary, falling back to DEFAULT_FROM_EMAIL
+    # Sender fallback chain
     from_email = getattr(settings, "REIMBURSEMENT_EMAIL_FROM", None) or getattr(settings, "DEFAULT_FROM_EMAIL", None)
     to = [admin_emails[0]]
     cc = list(dict.fromkeys(admin_emails[1:]))
 
-    with get_connection() as conn:
-        msg = EmailMultiAlternatives(
-            subject=subject,
-            body=txt_body,
-            from_email=from_email,
-            to=to,
-            cc=cc or None,
-            connection=conn,
-        )
-        msg.attach_alternative(html_body, "text/html")
-        msg.send(fail_silently=getattr(settings, "EMAIL_FAIL_SILENTLY", True))
+    try:
+        with get_connection() as conn:
+            msg = EmailMultiAlternatives(
+                subject=subject,
+                body=txt_body,
+                from_email=from_email,
+                to=to,
+                cc=cc or None,
+                connection=conn,
+            )
+            msg.attach_alternative(html_body, "text/html")
+            msg.send(fail_silently=getattr(settings, "EMAIL_FAIL_SILENTLY", True))
+        logger.info("Monthly summary email sent for %s to %s (cc=%s).", month_label, to, cc)
+    except Exception:
+        logger.exception("Failed to send monthly summary email for %s", month_label)

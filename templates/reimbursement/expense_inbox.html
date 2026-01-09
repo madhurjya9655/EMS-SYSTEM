@@ -1,4 +1,3 @@
-<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\reimbursement\expense_inbox.html -->
 {% extends "base.html" %}
 {% load widget_tweaks %}
 {% block title %}Upload Expenses{% endblock %}
@@ -16,15 +15,22 @@
   </div>
 </div>
 
+{% if show_finance_return_hint %}
+  <div class="alert alert-info mb-3">
+    If Finance has returned a bill, open it via <strong>Edit</strong>. The edit page will
+    show a <strong>Proceed to Finance</strong> button after you fix and save your changes.
+  </div>
+{% endif %}
+
 <div class="row">
   <div class="col-md-4">
     <div class="card mb-3">
       <div class="card-header">Add Expense</div>
       <div class="card-body">
-        <form method="post" enctype="multipart/form-data">
+        <form method="post" enctype="multipart/form-data" novalidate>
           {% csrf_token %}
           {% for field in form %}
-            {% if field.name == "bill_type" or field.name == "gst_type" or field.name == "gst_bill" %}
+            {% if field.name in "bill_type gst_type gst_bill" %}
               <div class="mb-3">
                 <label class="form-label d-block">Bill Type</label>
                 <div>
@@ -43,14 +49,14 @@
             {% else %}
               <div class="mb-3">
                 {{ field.label_tag }}
-
                 {% if field.name == "receipt_file" %}
-                  {{ field|attr:"accept:.pdf,.jpg,.jpeg,.png,.xls,.xlsx" }}
+                  {{ field|attr:"accept:.pdf,.jpg,.jpeg,.png,.xls,.xlsx"|add_class:"form-control" }}
                   <div class="form-text">Allowed: PDF / JPG / JPEG / PNG / XLS / XLSX</div>
+                {% elif field.field.widget.input_type == "select" %}
+                  {{ field|add_class:"form-select" }}
                 {% else %}
-                  {{ field }}
+                  {{ field|add_class:"form-control" }}
                 {% endif %}
-
                 {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
                 {% if field.errors %}<div class="text-danger small">{{ field.errors }}</div>{% endif %}
               </div>
@@ -77,10 +83,10 @@
                 <th>Category</th>
                 <th>Bill Type</th>
                 <th>Vendor</th>
-                <th>Amount</th>
+                <th class="text-end">Amount</th>
                 <th>Status</th>
                 <th>Bill</th>
-                <th style="width:120px;">Actions</th>
+                <th style="width:160px;">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -89,36 +95,31 @@
                 <td>{{ item.date|date:"Y-m-d" }}</td>
                 <td>{{ item.get_category_display }}</td>
                 <td>
-                  {% if item.gst_type %}
-                    {{ item.get_gst_type_display }}
-                  {% else %}
-                    <span class="text-muted">-</span>
-                  {% endif %}
+                  {% if item.gst_type %}{{ item.get_gst_type_display }}{% else %}<span class="text-muted">-</span>{% endif %}
                 </td>
                 <td>{{ item.vendor|default:"-" }}</td>
-                <td>{{ item.amount }}</td>
+                <td class="text-end">₹{{ item.amount|floatformat:2 }}</td>
                 <td>
-                  <span class="badge bg-light text-dark">
-                    {{ item.get_status_display }}
-                  </span>
+                  <span class="badge bg-light text-dark">{{ item.get_status_display }}</span>
                 </td>
                 <td>
                   {% if item.receipt_file %}
-                    <a href="{% url 'reimbursement:receipt_expense' item.id %}" target="_blank" class="btn btn-sm btn-outline-secondary">
-                      View
-                    </a>
+                    <a href="{% url 'reimbursement:receipt_expense' item.id %}" target="_blank" class="btn btn-sm btn-outline-secondary">View</a>
                   {% else %}
                     <span class="text-muted small">No file</span>
                   {% endif %}
                 </td>
                 <td>
                   {% if not item.is_locked %}
-                    <a href="{% url 'reimbursement:expense_edit' item.id %}" class="btn btn-sm btn-outline-primary me-1">
-                      Edit
-                    </a>
-                    <a href="{% url 'reimbursement:expense_delete' item.id %}" class="btn btn-sm btn-outline-danger">
-                      Delete
-                    </a>
+                    <div class="btn-group">
+                      <a href="{% url 'reimbursement:expense_edit' item.id %}" class="btn btn-sm btn-outline-primary">Edit</a>
+                      <a href="{% url 'reimbursement:expense_delete' item.id %}" class="btn btn-sm btn-outline-danger">Delete</a>
+                    </div>
+                    {% if item.finance_returned or item.finance_return_flag or item.status == 'FINANCE_RETURNED' or item.status == 'FR' %}
+                      <div class="mt-1">
+                        <small class="text-muted">Fix then click <em>Proceed to Finance</em> on the Edit page.</small>
+                      </div>
+                    {% endif %}
                   {% else %}
                     <span class="text-muted small">Locked</span>
                   {% endif %}

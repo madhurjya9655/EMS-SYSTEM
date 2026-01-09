@@ -6,11 +6,14 @@ import json
 import logging
 import mimetypes
 import os
+import random
+import threading
 import time
-from datetime import datetime, timezone
-from typing import Dict, Tuple, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Tuple, List, Optional, Callable, Any
 
 from django.conf import settings
+from django.core.cache import cache
 from django.urls import NoReverseMatch, reverse
 
 __all__ = [
@@ -29,18 +32,20 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Replace with a setting if you prefer:
 SPREADSHEET_ID = getattr(settings, "REIMBURSEMENT_SHEET_ID", "1LOVDkTVMGdEPOP9CQx-WVDv7ZY1TpqiQD82FFCc3t4A")
 
-TAB_MAIN = "Reimbursements"
+TAB_MAIN      = "Reimbursements"
 TAB_CHANGELOG = "ChangeLog"
-TAB_SCHEMA = "Schema"
-TAB_META = "_Meta"
+TAB_SCHEMA    = "Schema"
+TAB_META      = "_Meta"
 
-SYNC_VERSION = 6  # bumped when schema/behavior changes
+SYNC_VERSION = 6  # bump when schema/behavior changes
 
-_WARNED_MISSING_GOOGLE = False
-_WARNED_MISSING_CREDS = False
+# structure checks will run at most once per STRUCTURE_TTL per process
+STRUCTURE_TTL_SECONDS = int(getattr(settings, "REIMBURSEMENT_SHEETS_STRUCTURE_TTL_SECONDS", 600))  # 10 min default
+
+# token-bucket limiter per-process to stay under 60 read/min *per user* with headroom
+READS_PER_MINUTE_BUDGET = int(getattr(settings, "REIMBURSEMENT_SHEETS_READS_PER_MINUTE", 48))
 
 HEADER = [
     "ReimbID","EmployeeID","Employee","Department","Categories","Items","Amount","Currency",
@@ -55,6 +60,9 @@ SCHEMA_HEADER    = ["Version","HeaderJSON","Active","RecordedAtUTC","Note"]
 # ---------------------------------------------------------------------------
 # Google client helpers
 # ---------------------------------------------------------------------------
+
+_WARNED_MISSING_GOOGLE = False
+_WARNED_MISSING_CREDS  = False
 
 def _excel_col(n: int) -> str:
     out=[]
@@ -75,32 +83,20 @@ def _site_url() -> str:
     return (getattr(settings, "SITE_URL", "").rstrip("/")) or "http://127.0.0.1:8000"
 
 def _detail_url(req_id: int) -> str:
-    """
-    Link resolution order:
-      1) Admin reverse (if admin mounted)
-      2) REIMBURSEMENT_DETAIL_URL_TEMPLATE setting or env (supports {id} / {pk})
-      3) Fallback: site root
-    """
     base = _site_url()
-    # 1) Try admin reverse (independent of base path)
     try:
         return f"{base}{reverse('admin:reimbursement_reimbursementrequest_change', args=[req_id])}"
     except NoReverseMatch:
         pass
-    # 2) Template from settings or env
     tmpl = getattr(settings, "REIMBURSEMENT_DETAIL_URL_TEMPLATE", None) or os.environ.get("REIMBURSEMENT_DETAIL_URL_TEMPLATE")
     if tmpl:
         path = tmpl.format(id=req_id, pk=req_id)
         if not path.startswith("/"):
             path = "/" + path
         return f"{base}{path}"
-    # 3) Safe fallback
     return base + "/"
 
 def _google_available() -> bool:
-    """
-    Check libraries and credentials for Sheets/Drive. Log once if missing.
-    """
     global _WARNED_MISSING_GOOGLE, _WARNED_MISSING_CREDS
     try:
         import googleapiclient.discovery  # noqa
@@ -151,27 +147,129 @@ def _svc_drive():
     return build("drive", "v3", credentials=_credentials(), cache_discovery=False)
 
 # ---------------------------------------------------------------------------
-# Spreadsheet structure + formatting
+# Single place for backoff + per-process token bucket for reads
 # ---------------------------------------------------------------------------
 
-def _get_sheet_map() -> Dict[str,int]:
-    resp = _svc_sheets().spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+_bucket_lock = threading.Lock()
+_bucket_next_refill = time.monotonic()
+_bucket_tokens = READS_PER_MINUTE_BUDGET
+
+def _consume_read_token(n: int = 1):
+    """
+    Very simple per-process token bucket to keep us comfortably under
+    the per-minute per-user read limit.
+    """
+    global _bucket_tokens, _bucket_next_refill
+    with _bucket_lock:
+        now = time.monotonic()
+        # refill once per minute
+        if now >= _bucket_next_refill:
+            _bucket_tokens = READS_PER_MINUTE_BUDGET
+            _bucket_next_refill = now + 60.0
+        # if depleted, sleep until next refill boundary
+        if _bucket_tokens < n:
+            sleep_for = max(0.05, _bucket_next_refill - now + 0.01)
+            time.sleep(sleep_for)
+            # refill after waiting
+            now2 = time.monotonic()
+            if now2 >= _bucket_next_refill:
+                _bucket_tokens = READS_PER_MINUTE_BUDGET
+                _bucket_next_refill = now2 + 60.0
+        _bucket_tokens = max(0, _bucket_tokens - n)
+
+def _with_backoff(label: str, is_read: bool, fn: Callable[[], Any]) -> Any:
+    """
+    Wrap API calls with capped exponential backoff and small jitter.
+    Also consumes read tokens for GETs.
+    """
+    if is_read:
+        _consume_read_token()
+
+    delays = [0.2, 0.5, 1.0, 2.0, 4.0]
+    last_exc = None
+    for i, d in enumerate(delays, start=1):
+        try:
+            return fn()
+        except Exception as e:
+            last_exc = e
+            code = getattr(getattr(e, "resp", None), "status", None)
+            # retry on 429/5xx, otherwise fail fast
+            if code not in (429, 500, 502, 503, 504):
+                raise
+            if i == len(delays):
+                break
+            # jitter
+            sleep_for = d + random.uniform(0.0, 0.2)
+            logger.info("Retrying %s after %s (attempt %s/%s)", label, e, i, len(delays))
+            time.sleep(sleep_for)
+    # give up
+    raise last_exc
+
+# ---------------------------------------------------------------------------
+# Spreadsheet structure + formatting (de-duplicated/optimized)
+# ---------------------------------------------------------------------------
+
+# in-process cache to avoid multiple metadata reads per request
+_meta_lock = threading.Lock()
+_meta_cache: Dict[str, Any] = {}
+
+def _spreadsheets_get() -> dict:
+    def _call():
+        return _svc_sheets().spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+    cache_key = f"sheets.meta.{SPREADSHEET_ID}"
+    with _meta_lock:
+        meta = _meta_cache.get(cache_key)
+        if meta:
+            return meta
+        meta = _with_backoff("spreadsheets.get", True, _call)
+        _meta_cache[cache_key] = meta
+        return meta
+
+def _get_sheet_map_from_meta(meta: dict) -> Dict[str, int]:
     out: Dict[str,int] = {}
-    for s in resp.get("sheets", []):
+    for s in meta.get("sheets", []):
         props = s.get("properties", {})
         out[props.get("title")] = props.get("sheetId")
     return out
 
-def _get_sheet_obj(sheet_id: int) -> dict | None:
-    resp = _svc_sheets().spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
-    for s in resp.get("sheets", []):
-        if s.get("properties", {}).get("sheetId") == sheet_id:
-            return s
-    return None
-
 def _batch_update(requests: list) -> None:
-    if not requests: return
-    _svc_sheets().spreadsheets().batchUpdate(spreadsheetId=SPREADSHEET_ID, body={"requests": requests}).execute()
+    if not requests:
+        return
+    def _call():
+        return _svc_sheets().spreadsheets().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID, body={"requests": requests}
+        ).execute()
+    _with_backoff("spreadsheets.batchUpdate", False, _call)
+
+def _values_batch_get(ranges: List[str]) -> List[List[List[str]]]:
+    def _call():
+        return _svc_sheets().values().batchGet(
+            spreadsheetId=SPREADSHEET_ID, ranges=ranges
+        ).execute()
+    resp = _with_backoff("values.batchGet", True, _call)
+    # return list of value grids aligned with ranges
+    return [x.get("values", [[]]) for x in resp.get("valueRanges", [])]
+
+def _values_update(range_: str, values: List[List[Any]]) -> None:
+    def _call():
+        return _svc_sheets().values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range=range_,
+            valueInputOption="RAW",
+            body={"values": values},
+        ).execute()
+    _with_backoff("values.update", False, _call)
+
+def _values_append(range_: str, values: List[List[Any]], user_entered: bool = False) -> dict:
+    def _call():
+        return _svc_sheets().values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range=range_,
+            valueInputOption="USER_ENTERED" if user_entered else "RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": values},
+        ).execute()
+    return _with_backoff("values.append", False, _call)
 
 def _friendly_format_main(sheet_id: int) -> None:
     end_col = len(HEADER)
@@ -186,53 +284,94 @@ def _friendly_format_main(sheet_id: int) -> None:
     requests.append({"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":1,"startColumnIndex":6,"endColumnIndex":7},"cell":{"userEnteredFormat":{"numberFormat":{"type":"NUMBER","pattern":"#,##0.00"}}},"fields":"userEnteredFormat.numberFormat"}})
     for col in [9,11,13,15,17,19,24,25,26]:
         requests.append({"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":1,"startColumnIndex":col-1,"endColumnIndex":col},"cell":{"userEnteredFormat":{"numberFormat":{"type":"DATE_TIME","pattern":"yyyy-mm-dd hh:mm:ss"}}},"fields":"userEnteredFormat.numberFormat"}})
-    has_banding = False
-    try:
-        sheet_obj = _get_sheet_obj(sheet_id)
-        has_banding = bool((sheet_obj or {}).get("bandedRanges", []))
-    except Exception:
-        has_banding = False
-    if not has_banding:
-        requests.append({"addBanding":{"bandedRange":{"range":{"sheetId":sheet_id,"startRowIndex":0,"startColumnIndex":0,"endColumnIndex":end_col},"rowProperties":{"headerColor":{"red":0.95,"green":0.95,"blue":0.95},"firstBandColor":{"red":1.0,"green":1.0,"blue":1.0},"secondBandColor":{"red":0.98,"green":0.98,"blue":0.98}}}}})
     try:
         _batch_update(requests)
     except Exception as e:
         logger.info("Non-fatal formatting skip: %s", e)
 
+# structure guard state (process-local + shared via cache)
+_structure_lock = threading.Lock()
+_last_ensured_ts: float | None = None
+
+def _structure_cache_key() -> str:
+    return f"reimb.sheets.structure.{SPREADSHEET_ID}.v{SYNC_VERSION}"
+
 def ensure_spreadsheet_structure() -> None:
-    if not _google_available(): return
-    values = _svc_sheets().spreadsheets().values()
-    existing = _get_sheet_map()
-    requests=[]
-    for title in [TAB_MAIN,TAB_CHANGELOG,TAB_SCHEMA]:
-        if title not in existing:
-            requests.append({"addSheet":{"properties":{"title":title,"gridProperties":{"rowCount":2000,"columnCount":40}}}})
-    if requests:
+    """
+    Ensures tabs/headers exist. Debounced:
+    - Per-process: at most once per STRUCTURE_TTL_SECONDS
+    - Cross-process: uses Django cache to avoid stampede
+    """
+    if not _google_available():
+        return
+
+    global _last_ensured_ts
+    now = time.monotonic()
+
+    # Cross-process throttle via cache (best effort)
+    ck = _structure_cache_key()
+    cached = cache.get(ck)
+    if cached:
+        return
+
+    with _structure_lock:
+        if _last_ensured_ts and (now - _last_ensured_ts) < STRUCTURE_TTL_SECONDS:
+            # another thread/process did it recently
+            cache.set(ck, True, timeout=STRUCTURE_TTL_SECONDS)
+            return
+
+        # fetch spreadsheet metadata once
+        meta = _spreadsheets_get()
+        existing = _get_sheet_map_from_meta(meta)
+
+        # add missing sheets in one batch
+        requests=[]
+        for title in [TAB_MAIN, TAB_CHANGELOG, TAB_SCHEMA]:
+            if title not in existing:
+                requests.append({"addSheet":{"properties":{"title":title,"gridProperties":{"rowCount":2000,"columnCount":40}}}})
+        if requests:
+            _batch_update(requests)
+            # refresh meta once after creating
+            meta = _spreadsheets_get()
+            existing = _get_sheet_map_from_meta(meta)
+
+        # hide changelog/schema; format main
+        requests=[]
+        for title in [TAB_CHANGELOG, TAB_SCHEMA]:
+            sid = existing.get(title)
+            if sid is not None:
+                requests.append({"updateSheetProperties":{"properties":{"sheetId":sid,"hidden":True},"fields":"hidden"}})
         _batch_update(requests)
-        existing = _get_sheet_map()
-    requests=[]
-    for title in [TAB_CHANGELOG,TAB_SCHEMA]:
-        sid = existing.get(title)
-        if sid is not None:
-            requests.append({"updateSheetProperties":{"properties":{"sheetId":sid,"hidden":True},"fields":"hidden"}})
-    _batch_update(requests)
-    main_id = existing.get(TAB_MAIN)
-    if main_id is not None:
-        _friendly_format_main(main_id)
-    cur = values.get(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!1:1").execute().get("values",[[]])
-    if (cur[0] if cur else []) != HEADER:
-        values.update(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!1:1", valueInputOption="RAW", body={"values":[HEADER]}).execute()
-    cur = values.get(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_CHANGELOG}!1:1").execute().get("values",[[]])
-    if (cur[0] if cur else []) != CHANGELOG_HEADER:
-        values.update(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_CHANGELOG}!1:1", valueInputOption="RAW", body={"values":[CHANGELOG_HEADER]}).execute()
-    cur = values.get(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_SCHEMA}!1:1").execute().get("values",[[]])
-    if (cur[0] if cur else []) != SCHEMA_HEADER:
-        values.update(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_SCHEMA}!1:1", valueInputOption="RAW", body={"values":[SCHEMA_HEADER]}).execute()
-    hb=[SYNC_VERSION, json.dumps(HEADER, ensure_ascii=False), True, _iso(datetime.now(timezone.utc)), "bootstrap/update"]
-    try:
-        values.append(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_SCHEMA}!A:E", valueInputOption="RAW", insertDataOption="INSERT_ROWS", body={"values":[hb]}).execute()
-    except Exception:
-        pass
+
+        main_id = existing.get(TAB_MAIN)
+        if main_id is not None:
+            _friendly_format_main(main_id)
+
+        # batchGet three header rows in a single read
+        ranges = [f"{TAB_MAIN}!1:1", f"{TAB_CHANGELOG}!1:1", f"{TAB_SCHEMA}!1:1"]
+        values_list = _values_batch_get(ranges)
+
+        # MAIN
+        if (values_list[0][0] if values_list and values_list[0] else []) != HEADER:
+            _values_update(f"{TAB_MAIN}!1:1", [HEADER])
+
+        # CHANGELOG
+        if (values_list[1][0] if len(values_list) > 1 and values_list[1] else []) != CHANGELOG_HEADER:
+            _values_update(f"{TAB_CHANGELOG}!1:1", [CHANGELOG_HEADER])
+
+        # SCHEMA
+        if (values_list[2][0] if len(values_list) > 2 and values_list[2] else []) != SCHEMA_HEADER:
+            _values_update(f"{TAB_SCHEMA}!1:1", [SCHEMA_HEADER])
+
+        # append schema heartbeat (best-effort)
+        hb=[SYNC_VERSION, json.dumps(HEADER, ensure_ascii=False), True, _iso(datetime.now(timezone.utc)), "bootstrap/update"]
+        try:
+            _values_append(f"{TAB_SCHEMA}!A:E", [hb], user_entered=False)
+        except Exception:
+            pass
+
+        _last_ensured_ts = time.monotonic()
+        cache.set(ck, True, timeout=STRUCTURE_TTL_SECONDS)
 
 # ---------------------------------------------------------------------------
 # Drive helpers (upload receipts, return shareable links)
@@ -248,41 +387,44 @@ def _drive_domain() -> Optional[str]:
     return os.environ.get("REIMBURSEMENT_DRIVE_DOMAIN") or getattr(settings, "REIMBURSEMENT_DRIVE_DOMAIN", None)
 
 def _drive_find_file_by_name(name: str, parent: str) -> Optional[str]:
-    try:
+    def _call():
         svc = _svc_drive()
-        # Avoid backslash escaping inside the f-string expression (fix Pylance lexer issue)
         safe_name = name.replace("'", "\\'")
         q = f"name = '{safe_name}' and '{parent}' in parents and trashed = false"
-        resp = svc.files().list(q=q, spaces="drive", fields="files(id,name)", pageSize=1).execute()
+        return svc.files().list(q=q, spaces="drive", fields="files(id,name)", pageSize=1).execute()
+    try:
+        resp = _with_backoff("drive.files.list", True, _call)
         items = resp.get("files", [])
         return items[0]["id"] if items else None
     except Exception:
         return None
 
 def _drive_ensure_permission(file_id: str) -> None:
-    try:
+    def _call(body: dict):
         svc = _svc_drive()
+        return svc.permissions().create(fileId=file_id, body=body, fields="id").execute()
+    try:
         if _drive_share_anyone():
             body = {"type": "anyone", "role": "reader"}
         else:
             domain = _drive_domain()
             if not domain:
-                # Fallback to anyone if domain not configured
                 body = {"type": "anyone", "role": "reader"}
             else:
                 body = {"type": "domain", "role": "reader", "domain": domain, "allowFileDiscovery": False}
-        svc.permissions().create(fileId=file_id, body=body, fields="id").execute()
+        _with_backoff("drive.permissions.create", False, lambda: _call(body))
     except Exception as e:
-        # Non-fatal; the file will still exist
         logger.info("Drive permission set failed for %s: %s", file_id, e)
 
 def _drive_upload_bytes(name: str, data: bytes, parent: str, mime: Optional[str]) -> Optional[str]:
     from googleapiclient.http import MediaIoBaseUpload
-    try:
+    def _call():
         svc = _svc_drive()
         media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime or "application/octet-stream", resumable=False)
         body = {"name": name, "parents": [parent]}
-        file = svc.files().create(body=body, media_body=media, fields="id").execute()
+        return svc.files().create(body=body, media_body=media, fields="id").execute()
+    try:
+        file = _with_backoff("drive.files.create", False, _call)
         fid = file.get("id")
         if fid:
             _drive_ensure_permission(fid)
@@ -296,18 +438,12 @@ def _receipt_drive_filename(req_id: int, line_id: int, original_name: str) -> st
     return f"reimb_{req_id}_line_{line_id}_{base}"
 
 def _drive_link(file_id: str) -> str:
-    # Standard Drive view link
     return f"https://drive.google.com/file/d/{file_id}/view?usp=drivesdk"
 
 def _collect_receipt_links_from_drive(req) -> List[str]:
-    """
-    Upload all receipt files for the request to Drive and return shareable links.
-    Deduplicates by deterministic filename (per request/line).
-    """
     folder = _drive_folder_id()
     if not folder:
         return []
-
     links: List[str] = []
     for line in req.lines.select_related("expense_item"):
         f = getattr(line, "receipt_file", None) or getattr(line.expense_item, "receipt_file", None)
@@ -315,16 +451,11 @@ def _collect_receipt_links_from_drive(req) -> List[str]:
             continue
         try:
             name = _receipt_drive_filename(req.id, line.id, getattr(f, "name", "receipt"))
-            # Try to reuse existing file
             existing_id = _drive_find_file_by_name(name, folder)
             if existing_id:
-                links.append(_drive_link(existing_id))
-                continue
-
-            # Read bytes (works with storage backends that support .open)
+                links.append(_drive_link(existing_id)); continue
             with f.open("rb") as fh:
                 data = fh.read()
-
             mime = mimetypes.guess_type(getattr(f, "name", ""))[0]
             file_id = _drive_upload_bytes(name, data, folder, mime)
             if file_id:
@@ -332,8 +463,6 @@ def _collect_receipt_links_from_drive(req) -> List[str]:
         except Exception as e:
             logger.info("Skipping Drive upload for line %s: %s", getattr(line, "id", None), e)
             continue
-
-    # de-dup while preserving order
     out, seen = [], set()
     for u in links:
         if u not in seen:
@@ -365,11 +494,6 @@ def _categories_and_count(req) -> Tuple[str,int]:
     return ",".join(deduped), req.lines.count()
 
 def build_row(req) -> list:
-    """
-    Build a single row of data for the request.
-    Prefers Drive links if a Drive folder is configured and upload succeeds;
-    otherwise falls back to storage URLs.
-    """
     employee = req.created_by
     dept = getattr(employee, "department", "") or (getattr(employee, "profile", None) and getattr(employee.profile, "department","")) or ""
     cats, line_count = _categories_and_count(req)
@@ -426,38 +550,60 @@ def build_row(req) -> list:
     return [row[h] for h in HEADER]
 
 # ---------------------------------------------------------------------------
-# Upsert and changelog
+# Upsert and changelog (with backoff + fewer reads)
 # ---------------------------------------------------------------------------
 
 def _index_by_id() -> Dict[str,int]:
-    resp=_svc_sheets().spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!A2:A").execute()
+    def _call():
+        return _svc_sheets().values().get(
+            spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!A2:A"
+        ).execute()
+    resp = _with_backoff("values.get A2:A", True, _call)
     idx: Dict[str,int] = {}
     for i,v in enumerate(resp.get("values", []), start=2):
         if v: idx[str(v[0])] = i
     return idx
 
 def upsert_row(row: list, reimb_id: int):
-    values=_svc_sheets().spreadsheets().values()
-    idx=_index_by_id()
-    end_col=_header_end_col()
+    values = _svc_sheets().values()
+    idx = _index_by_id()
+    end_col = _header_end_col()
+
     if str(reimb_id) in idx:
-        rn=idx[str(reimb_id)]
-        values.update(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!A{rn}:{end_col}{rn}", valueInputOption="USER_ENTERED", body={"values":[row]}).execute()
+        rn = idx[str(reimb_id)]
+        def _call_update():
+            return values.update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{TAB_MAIN}!A{rn}:{end_col}{rn}",
+                valueInputOption="USER_ENTERED",
+                body={"values":[row]},
+            ).execute()
+        _with_backoff("values.update row", False, _call_update)
         return "update", rn
-    resp=values.append(spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!A:{end_col}", valueInputOption="USER_ENTERED", insertDataOption="INSERT_ROWS", body={"values":[row]}).execute()
+
+    def _call_append():
+        return values.append(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{TAB_MAIN}!A:{end_col}",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values":[row]},
+        ).execute()
+    resp = _with_backoff("values.append row", False, _call_append)
     rng=resp.get("updates", {}).get("updatedRange",""); rn=0
     try: rn=int(rng.split("!")[1].split(":")[0][1:])
     except Exception: pass
     return "insert", rn
 
 def append_changelog(event: str, req_id: int, old: str, new: str, rownum: int, actor: str = "", result: str = "ok", err: str = "") -> None:
-    _svc_sheets().spreadsheets().values().append(
-        spreadsheetId=SPREADSHEET_ID,
-        range=f"{TAB_CHANGELOG}!A:H",
-        valueInputOption="RAW",
-        insertDataOption="INSERT_ROWS",
-        body={"values":[[_iso(datetime.now(timezone.utc)), event, req_id, old or "", new or "", rownum, actor or "", f"{result}: {err}" if err else result]]}
-    ).execute()
+    try:
+        _values_append(
+            f"{TAB_CHANGELOG}!A:H",
+            [[_iso(datetime.now(timezone.utc)), event, req_id, old or "", new or "", rownum, actor or "", f"{result}: {err}" if err else result]],
+            user_entered=False,
+        )
+    except Exception as e:
+        logger.info("Changelog append skipped: %s", e)
 
 # ---------------------------------------------------------------------------
 # Public entry: sync a single request
@@ -469,21 +615,20 @@ def sync_request(req) -> None:
     """
     if not _google_available() or req is None:
         return
+
+    # Ensure structure (debounced / cached)
     ensure_spreadsheet_structure()
+
     row = build_row(req)
 
-    backoffs = [0.2,0.5,1,2,4]
     prev_status = getattr(req, "status", "") or ""
-    for attempt, wait in enumerate(backoffs, start=1):
+    try:
+        action, rn = upsert_row(row, req.id)
+        append_changelog("upsert", req.id, prev_status, req.status, rn, "", action)
+    except Exception as e:
+        logger.exception("Google Sheets sync failed for req %s", req.id)
         try:
-            action, rn = upsert_row(row, req.id)
-            append_changelog("upsert", req.id, prev_status, req.status, rn, "", action)
-            return
-        except Exception as e:
-            code = getattr(getattr(e,"resp",None), "status", None)
-            if code in (429,500,502,503,504) and attempt < len(backoffs):
-                time.sleep(wait); continue
-            logger.exception("Google Sheets sync failed for req %s", req.id)
-            try: append_changelog("error", req.id, prev_status, req.status, 0, err=str(e))
-            except Exception: pass
-            return
+            append_changelog("error", req.id, prev_status, req.status, 0, err=str(e))
+        except Exception:
+            pass
+        return

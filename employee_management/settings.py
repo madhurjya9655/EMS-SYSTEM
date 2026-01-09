@@ -13,6 +13,13 @@ load_dotenv()
 # PATHS
 # -----------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent.parent  # …/employee_management_system
+ON_RENDER = bool(os.environ.get("RENDER"))
+
+# We will default to Render's disk mount path. You don't *need* to set DISK_ROOT.
+DEFAULT_DISK_ROOT = "/opt/render/project/src/db"
+
+# If MEDIA_ROOT is set in env (you have it), we’ll honor it.
+MEDIA_ROOT_ENV = os.getenv("MEDIA_ROOT", "").strip()
 
 # -----------------------------------------------------------------------------
 # ENV HELPERS
@@ -36,12 +43,14 @@ def env_int(name: str, default: int = 0) -> int:
 # -----------------------------------------------------------------------------
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-__dev-only-use-this__")
 DEBUG = env_bool("DEBUG", False)
-SITE_URL = os.getenv("SITE_URL", "https://ems-system-d26q.onrender.com")
-CRON_SECRET = os.getenv("CRON_SECRET", "")
-ON_RENDER = bool(os.environ.get("RENDER"))
 
-# ➕ Serve MEDIA in production behind Django if explicitly enabled.
-#    Default ON for Render so profile photos work without S3/CDN.
+# Both are read by reimbursement code; SITE_BASE_URL falls back to SITE_URL.
+SITE_URL = os.getenv("SITE_URL", "https://ems-system-d26q.onrender.com")
+SITE_BASE_URL = os.getenv("SITE_BASE_URL", SITE_URL)
+
+CRON_SECRET = os.getenv("CRON_SECRET", "")
+
+# Serve MEDIA behind Django (kept ON by default on Render)
 SERVE_MEDIA = env_bool("SERVE_MEDIA", True if ON_RENDER else False)
 
 # Hardened admin path (used in urls.py)
@@ -161,9 +170,7 @@ _template_options = {
     ],
     "libraries": {
         "common_filters": "apps.common.templatetags.common_filters",
-        # keep apps.common alias as 'user_filters'
         "user_filters": "apps.users.templatetags.user_filters",
-        # rename the users app alias to avoid duplicate key:
         "users_filters": "apps.users.templatetags.user_filters",
         "group_tags": "apps.common.templatetags.group_tags",
         "model_extras": "apps.common.templatetags.model_extras",
@@ -220,17 +227,20 @@ if DATABASE_URL and dj_database_url:
         ),
     }
 else:
-    if ON_RENDER:
-        db_path = os.getenv("SQLITE_PATH") or "/var/data/db.sqlite3"
-    else:
-        db_path = os.getenv("SQLITE_PATH") or str(BASE_DIR / "db.sqlite3")
-
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    # Prefer explicit SQLITE_PATH if provided (you have it set)
+    sqlite_path = os.getenv("SQLITE_PATH", "").strip()
+    if not sqlite_path:
+        # Fallback to disk mount
+        disk_root = os.getenv("DISK_ROOT", DEFAULT_DISK_ROOT).strip() or DEFAULT_DISK_ROOT
+        sqlite_dir = Path(disk_root) / "sqlite"
+        sqlite_dir.mkdir(parents=True, exist_ok=True)
+        sqlite_path = str(sqlite_dir / "db.sqlite3")
+    Path(sqlite_path).parent.mkdir(parents=True, exist_ok=True)
 
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
-            "NAME": db_path,
+            "NAME": sqlite_path,
             "OPTIONS": {
                 "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
                 "timeout": 60,
@@ -273,16 +283,8 @@ def _robust_sqlite_decoder(val):
 
 try:
     for dt_type in [
-        "timestamp",
-        "datetime",
-        "timestamptz",
-        "timestamp with time zone",
-        "date",
-        "time",
-        "TIMESTAMP",
-        "DATETIME",
-        "DATE",
-        "TIME",
+        "timestamp","datetime","timestamptz","timestamp with time zone",
+        "date","time","TIMESTAMP","DATETIME","DATE","TIME",
     ]:
         sqlite3.register_converter(dt_type, _robust_sqlite_decoder)
 except Exception:
@@ -301,9 +303,9 @@ def _configure_sqlite_connection(sender, connection, **kwargs):
                 except Exception:
                     return str(data)
             if isinstance(data, (bytes, bytearray)):
-                for enc in ("utf-8", "latin-1", "ascii", "cp1252"):
+                for enc in ("utf-8","latin-1","ascii","cp1252"):
                     try:
-                        res = data.decode(enc).strip().replace("\x00", "")
+                        res = data.decode(enc).strip().replace("\x00","")
                         if res:
                             return res
                     except Exception:
@@ -313,7 +315,7 @@ def _configure_sqlite_connection(sender, connection, **kwargs):
                 except Exception:
                     return str(data)
             if isinstance(data, str):
-                return data.strip().replace("\x00", "")
+                return data.strip().replace("\x00","")
             try:
                 return str(data)
             except Exception:
@@ -380,94 +382,30 @@ LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
-        "verbose": {
-            "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
-            "style": "{",
-        },
-        "simple": {
-            "format": "{levelname} {asctime} {message}",
-            "style": "{",
-        },
-        "detailed": {
-            "format": "[{asctime}] {levelname} {name} {module}.{funcName}:{lineno} - {message}",
-            "style": "{",
-        },
+        "verbose": {"format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}", "style": "{"},
+        "simple": {"format": "{levelname} {asctime} {message}", "style": "{"},
+        "detailed": {"format": "[{asctime}] {levelname} {name} {module}.{funcName}:{lineno} - {message}", "style": "{"},
     },
     "handlers": {
-        "console": {
-            "level": "DEBUG" if DEBUG else "INFO",
-            "class": "logging.StreamHandler",
-            "formatter": "simple",
-        },
-        "file": {
-            "level": "INFO",
-            "class": "logging.FileHandler",
-            "filename": str(LOGS_DIR / "django.log"),
-            "formatter": "verbose",
-            "encoding": "utf-8",
-        },
-        "permissions_file": {
-            "level": "DEBUG" if DEBUG else "INFO",
-            "class": "logging.FileHandler",
-            "filename": str(LOGS_DIR / "permissions.log"),
-            "formatter": "detailed",
-            "encoding": "utf-8",
-        },
-        "tasks_file": {
-            "level": "DEBUG" if DEBUG else "INFO",
-            "class": "logging.FileHandler",
-            "filename": str(LOGS_DIR / "tasks.log"),
-            "formatter": "detailed",
-            "encoding": "utf-8",
-        },
-        "bulk_upload_file": {
-            "level": "INFO",
-            "class": "logging.FileHandler",
-            "filename": str(LOGS_DIR / "bulk_upload.log"),
-            "formatter": "detailed",
-            "encoding": "utf-8",
-        },
-        "mail_admins": {
-            "level": "ERROR",
-            "class": "django.utils.log.AdminEmailHandler",
-        },
+        "console": {"level": "DEBUG" if DEBUG else "INFO","class": "logging.StreamHandler","formatter": "simple"},
+        "file": {"level": "INFO","class": "logging.FileHandler","filename": str(LOGS_DIR / "django.log"),"formatter": "verbose","encoding": "utf-8"},
+        "permissions_file": {"level": "DEBUG" if DEBUG else "INFO","class": "logging.FileHandler","filename": str(LOGS_DIR / "permissions.log"),"formatter": "detailed","encoding": "utf-8"},
+        "tasks_file": {"level": "DEBUG" if DEBUG else "INFO","class": "logging.FileHandler","filename": str(LOGS_DIR / "tasks.log"),"formatter": "detailed","encoding": "utf-8"},
+        "bulk_upload_file": {"level": "INFO","class": "logging.FileHandler","filename": str(LOGS_DIR / "bulk_upload.log"),"formatter": "detailed","encoding": "utf-8"},
+        "mail_admins": {"level": "ERROR","class": "django.utils.log.AdminEmailHandler"},
     },
     "root": {"handlers": ["console"], "level": "WARNING"},
     "loggers": {
         "django": {"handlers": ["file"], "level": "INFO", "propagate": False},
-        "django.request": {
-            "handlers": ["console", "file", "mail_admins"],
-            "level": "ERROR",
-            "propagate": False,
-        },
+        "django.request": {"handlers": ["console", "file", "mail_admins"], "level": "ERROR", "propagate": False},
         "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
-        "apps.users.permissions": {
-            "handlers": ["permissions_file"] + (["console"] if DEBUG else []),
-            "level": "DEBUG" if DEBUG else "INFO",
-            "propagate": False,
-        },
-        "apps.users.middleware": {
-            "handlers": ["permissions_file"] + (["console"] if DEBUG else []),
-            "level": "DEBUG" if DEBUG else "INFO",
-            "propagate": False,
-        },
-        "apps.tasks": {
-            "handlers": ["tasks_file", "console"],
-            "level": "DEBUG" if DEBUG else "INFO",
-            "propagate": False,
-        },
-        "apps.tasks.views": {
-            "handlers": ["bulk_upload_file", "console"],
-            "level": "INFO",
-            "propagate": False,
-        },
+        "apps.users.permissions": {"handlers": ["permissions_file"] + (["console"] if DEBUG else []),"level": "DEBUG" if DEBUG else "INFO","propagate": False},
+        "apps.users.middleware": {"handlers": ["permissions_file"] + (["console"] if DEBUG else []),"level": "DEBUG" if DEBUG else "INFO","propagate": False},
+        "apps.tasks": {"handlers": ["tasks_file", "console"], "level": "DEBUG" if DEBUG else "INFO","propagate": False},
+        "apps.tasks.views": {"handlers": ["bulk_upload_file", "console"], "level": "INFO","propagate": False},
         "apps.tasks.signals": {"handlers": ["tasks_file"], "level": "INFO", "propagate": False},
         "apps.leave": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},
-        "apps.leave.services.notifications": {
-            "handlers": ["file", "console"],
-            "level": "INFO",
-            "propagate": False,
-        },
+        "apps.leave.services.notifications": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},
     },
 }
 
@@ -511,7 +449,8 @@ STORAGES = {
 }
 
 MEDIA_URL = "/media/"
-MEDIA_ROOT = os.getenv("MEDIA_ROOT") or ("/var/data/media" if ON_RENDER else str(BASE_DIR / "media"))
+# Use your explicit MEDIA_ROOT if provided; otherwise default to the Render disk.
+MEDIA_ROOT = MEDIA_ROOT_ENV or os.getenv("DISK_ROOT", DEFAULT_DISK_ROOT)
 Path(MEDIA_ROOT).mkdir(parents=True, exist_ok=True)
 
 # -----------------------------------------------------------------------------
@@ -539,6 +478,12 @@ REIMBURSEMENT_SENDER_NAME = os.getenv("REIMBURSEMENT_SENDER_NAME", "Amreen")
 REIMBURSEMENT_EMAIL_FROM = os.getenv(
     "REIMBURSEMENT_EMAIL_FROM",
     f"{REIMBURSEMENT_SENDER_NAME} <{REIMBURSEMENT_SENDER_EMAIL}>",
+)
+
+# Cap for outbound attachments (bytes) — used by reimbursement notifications.
+REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES = env_int(
+    "REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES",
+    20 * 1024 * 1024,  # 20 MB
 )
 
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
@@ -590,6 +535,9 @@ REIMBURSEMENT_DRIVE_LINK_SHARING = os.getenv("REIMBURSEMENT_DRIVE_LINK_SHARING",
 REIMBURSEMENT_DRIVE_DOMAIN = os.getenv("REIMBURSEMENT_DRIVE_DOMAIN")
 REIMBURSEMENT_DETAIL_URL_TEMPLATE = os.getenv("REIMBURSEMENT_DETAIL_URL_TEMPLATE")
 
+# For Google credentials, keep them in env as JSON or file path:
+# GOOGLE_SERVICE_ACCOUNT_JSON / GOOGLE_SERVICE_ACCOUNT_FILE
+
 # -----------------------------------------------------------------------------
 # TASK SYSTEM
 # -----------------------------------------------------------------------------
@@ -622,7 +570,6 @@ if REDIS_URL:
             "OPTIONS": {
                 "CLIENT_CLASS": "django_redis.client.DefaultClient",
                 "COMPRESSOR": "django_redis.compressors.zlib.ZlibCompressor",
-                # ✅ Force pure-Python parser so Windows dev boxes don't need 'hiredis'
                 "PARSER_CLASS": "redis.connection.PythonParser",
             },
             "TIMEOUT": env_int("CACHE_TIMEOUT", 300),
@@ -679,7 +626,10 @@ def validate_email_settings():
             )
 
 def validate_required_dirs():
-    required_dirs = [MEDIA_ROOT, STATIC_ROOT, LOGS_DIR]
+    required_dirs = [
+        MEDIA_ROOT,
+        STATIC_ROOT,
+    ]
     for dir_path in required_dirs:
         Path(dir_path).mkdir(parents=True, exist_ok=True)
 
@@ -796,6 +746,9 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
+# -----------------------------------------------------------------------------
+# REIMBURSEMENT CONTENT RULES
+# -----------------------------------------------------------------------------
 REIMBURSEMENT_ALLOWED_EXTENSIONS = env_list(
     "REIMBURSEMENT_ALLOWED_EXTENSIONS",
     ".jpg,.jpeg,.png,.pdf,.xls,.xlsx",
