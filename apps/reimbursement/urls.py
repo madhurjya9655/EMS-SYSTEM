@@ -66,7 +66,13 @@ urlpatterns = [
     path("admin/employee-summary/", views.AdminEmployeeSummaryView.as_view(), name="admin_employee_summary"),
     path("admin/status-summary/", views.AdminStatusSummaryView.as_view(), name="admin_status_summary"),
     path("admin/approver-mapping/", approver_mapping_admin_view, name="approver_mapping_admin"),
+
+    # ✅ Canonical export route
     path("admin/export.csv", views.ReimbursementExportCSVView.as_view(), name="admin_export"),
+
+    # ✅ BACKWARD-COMPATIBILITY ALIAS (DO NOT REMOVE)
+    # Required because templates reference: reimbursement:admin_export_csv
+    path("admin/export.csv", views.ReimbursementExportCSVView.as_view(), name="admin_export_csv"),
 
     # ------------------------------
     # Analytics
