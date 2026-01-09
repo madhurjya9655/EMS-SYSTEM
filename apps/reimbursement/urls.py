@@ -31,7 +31,17 @@ urlpatterns = [
     path("request/<int:pk>/edit/", views.ReimbursementRequestUpdateView.as_view(), name="request_edit"),
     path("request/<int:pk>/delete/", views.ReimbursementRequestDeleteView.as_view(), name="request_delete"),
     path("request/<int:pk>/resubmit/", views.ReimbursementResubmitView.as_view(), name="request_resubmit"),
+
+    # Canonical request detail
     path("request/<int:pk>/", views.ReimbursementDetailView.as_view(), name="request_detail"),
+
+    # ✅ BACKWARD COMPATIBILITY (ADMIN / OLD TEMPLATES)
+    # DO NOT REMOVE
+    path(
+        "request/<int:pk>/",
+        views.ReimbursementDetailView.as_view(),
+        name="reimbursement_detail",
+    ),
 
     # ------------------------------
     # Manager — BILL-LEVEL
@@ -40,7 +50,7 @@ urlpatterns = [
     path("manager/bills/<int:pk>/", views.ManagerBillActionView.as_view(), name="manager_bill_action"),
 
     # ------------------------------
-    # Manager / Management (legacy request-level compatibility)
+    # Manager / Management
     # ------------------------------
     path("manager/", views.ManagerQueueView.as_view(), name="manager_pending"),
     path("manager/<int:pk>/review/", views.ManagerReviewView.as_view(), name="manager_review"),
@@ -54,12 +64,11 @@ urlpatterns = [
     path("finance/<int:pk>/verify/", views.FinanceVerifyView.as_view(), name="finance_verify"),
     path("finance/<int:pk>/review/", views.FinanceReviewView.as_view(), name="finance_review"),
 
-    # Finance — BILL PAYMENT (bill-level)
     path("finance/bills/payment/", views.FinanceBillPaymentQueueView.as_view(), name="finance_bill_payment_queue"),
     path("finance/bills/payment/mark/", views.FinanceBillPaymentView.as_view(), name="finance_bill_payment"),
 
     # ------------------------------
-    # Admin dashboards, config & export
+    # Admin dashboards / export
     # ------------------------------
     path("admin/bills/", views.AdminBillsSummaryView.as_view(), name="admin_bills_summary"),
     path("admin/requests/", views.AdminRequestsListView.as_view(), name="admin_requests"),
@@ -67,11 +76,8 @@ urlpatterns = [
     path("admin/status-summary/", views.AdminStatusSummaryView.as_view(), name="admin_status_summary"),
     path("admin/approver-mapping/", approver_mapping_admin_view, name="approver_mapping_admin"),
 
-    # ✅ Canonical export route
+    # Export
     path("admin/export.csv", views.ReimbursementExportCSVView.as_view(), name="admin_export"),
-
-    # ✅ BACKWARD-COMPATIBILITY ALIAS (DO NOT REMOVE)
-    # Required because templates reference: reimbursement:admin_export_csv
     path("admin/export.csv", views.ReimbursementExportCSVView.as_view(), name="admin_export_csv"),
 
     # ------------------------------
@@ -96,7 +102,7 @@ urlpatterns = [
     path("email-action/", views.reimbursement_email_action, name="email_action"),
 
     # ------------------------------
-    # Legacy routes (simple model)
+    # Legacy routes
     # ------------------------------
     path("legacy/apply/", views.LegacyReimbursementCreateView.as_view(), name="legacy_apply"),
     path("legacy/my/", views.LegacyMyReimbursementsView.as_view(), name="legacy_my_reimbursements"),
