@@ -1097,9 +1097,7 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
                     messages.error(request, getattr(e, "message", str(e)) or f"Could not process line #{line.id}")
                     return redirect(request.path + (f"?return={back}" if back else ""))
 
-            # ✅ Use our escalation logic here (do NOT call apply_derived_status_from_bills)
-            self._rederive_status_without_escalation(req)
-
+            req.apply_derived_status_from_bills(actor=request.user, reason="Finance updated selected bills.")
             if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
                 req.verified_by = request.user
                 req.verified_at = timezone.now()
@@ -1112,8 +1110,7 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
             return redirect(request.path + (f"?return={back}" if back else ""))
 
         if action == "finalize":
-            # ✅ Re-derive & escalate if applicable
-            self._rederive_status_without_escalation(req)
+            req.apply_derived_status_from_bills(actor=request.user, reason="Finance finalized verification.")
             if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
                 req.verified_by = request.user
                 req.verified_at = timezone.now()
@@ -1124,6 +1121,55 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
 
             messages.info(request, "Some bills are not Finance-Approved yet. Staying in Finance Verification.")
             return redirect(request.path + (f"?return={back}" if back else ""))
+
+# ---------------------------------------------------------------------------
+# Finance — Request delete (Finance role)
+# ---------------------------------------------------------------------------
+
+class FinanceDeleteRequestView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    Finance deletes an entire reimbursement request (only if not PAID).
+    Shows a confirmation page on GET, performs deletion on POST.
+    """
+    permission_code = "reimbursement_finance_review"
+    template_name = "reimbursement/finance_request_confirm_delete.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        req = get_object_or_404(ReimbursementRequest, pk=self.kwargs.get("pk"))
+        if not (_user_is_admin(self.request.user) or _user_is_finance(self.request.user)):
+            raise Http404
+        ctx["request_obj"] = req
+        ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        if not (_user_is_admin(request.user) or _user_is_finance(request.user)):
+            return HttpResponseForbidden("Not allowed.")
+        req = get_object_or_404(ReimbursementRequest.objects.prefetch_related("lines__expense_item"), pk=kwargs.get("pk"))
+
+        if req.status == ReimbursementRequest.Status.PAID:
+            messages.error(request, "Paid reimbursements cannot be deleted.")
+            return _redirect_back(request, "reimbursement:finance_pending")
+
+        for line in list(req.lines.all()):
+            exp = line.expense_item
+            line.delete()
+            if exp:
+                exp.status = ExpenseItem.Status.SAVED
+                exp.save(update_fields=["status", "updated_at"])
+
+        ReimbursementLog.log(
+            req,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=request.user,
+            message="Request deleted by Finance.",
+            from_status=req.status,
+            to_status="deleted",
+        )
+        req.delete()
+        messages.success(request, "Reimbursement request deleted.")
+        return _redirect_back(request, "reimbursement:finance_pending")
 
 # ---------------------------------------------------------------------------
 # Finance — BILL PAYMENT (per-bill paid & reference)
