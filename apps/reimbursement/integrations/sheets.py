@@ -155,22 +155,15 @@ _bucket_next_refill = time.monotonic()
 _bucket_tokens = READS_PER_MINUTE_BUDGET
 
 def _consume_read_token(n: int = 1):
-    """
-    Very simple per-process token bucket to keep us comfortably under
-    the per-minute per-user read limit.
-    """
     global _bucket_tokens, _bucket_next_refill
     with _bucket_lock:
         now = time.monotonic()
-        # refill once per minute
         if now >= _bucket_next_refill:
             _bucket_tokens = READS_PER_MINUTE_BUDGET
             _bucket_next_refill = now + 60.0
-        # if depleted, sleep until next refill boundary
         if _bucket_tokens < n:
             sleep_for = max(0.05, _bucket_next_refill - now + 0.01)
             time.sleep(sleep_for)
-            # refill after waiting
             now2 = time.monotonic()
             if now2 >= _bucket_next_refill:
                 _bucket_tokens = READS_PER_MINUTE_BUDGET
@@ -178,13 +171,8 @@ def _consume_read_token(n: int = 1):
         _bucket_tokens = max(0, _bucket_tokens - n)
 
 def _with_backoff(label: str, is_read: bool, fn: Callable[[], Any]) -> Any:
-    """
-    Wrap API calls with capped exponential backoff and small jitter.
-    Also consumes read tokens for GETs.
-    """
     if is_read:
         _consume_read_token()
-
     delays = [0.2, 0.5, 1.0, 2.0, 4.0]
     last_exc = None
     for i, d in enumerate(delays, start=1):
@@ -193,28 +181,25 @@ def _with_backoff(label: str, is_read: bool, fn: Callable[[], Any]) -> Any:
         except Exception as e:
             last_exc = e
             code = getattr(getattr(e, "resp", None), "status", None)
-            # retry on 429/5xx, otherwise fail fast
             if code not in (429, 500, 502, 503, 504):
                 raise
             if i == len(delays):
                 break
-            # jitter
             sleep_for = d + random.uniform(0.0, 0.2)
             logger.info("Retrying %s after %s (attempt %s/%s)", label, e, i, len(delays))
             time.sleep(sleep_for)
-    # give up
     raise last_exc
 
 # ---------------------------------------------------------------------------
-# Spreadsheet structure + formatting (de-duplicated/optimized)
+# Spreadsheet structure + formatting
 # ---------------------------------------------------------------------------
 
-# in-process cache to avoid multiple metadata reads per request
 _meta_lock = threading.Lock()
 _meta_cache: Dict[str, Any] = {}
 
 def _spreadsheets_get() -> dict:
     def _call():
+        # ✅ correct usage: spreadsheets().get(...)
         return _svc_sheets().spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
     cache_key = f"sheets.meta.{SPREADSHEET_ID}"
     with _meta_lock:
@@ -236,23 +221,25 @@ def _batch_update(requests: list) -> None:
     if not requests:
         return
     def _call():
+        # ✅ correct usage: spreadsheets().batchUpdate(...)
         return _svc_sheets().spreadsheets().batchUpdate(
             spreadsheetId=SPREADSHEET_ID, body={"requests": requests}
         ).execute()
     _with_backoff("spreadsheets.batchUpdate", False, _call)
 
 def _values_batch_get(ranges: List[str]) -> List[List[List[str]]]:
+    # ✅ FIX: use spreadsheets().values().batchGet(...)
     def _call():
-        return _svc_sheets().values().batchGet(
+        return _svc_sheets().spreadsheets().values().batchGet(
             spreadsheetId=SPREADSHEET_ID, ranges=ranges
         ).execute()
     resp = _with_backoff("values.batchGet", True, _call)
-    # return list of value grids aligned with ranges
     return [x.get("values", [[]]) for x in resp.get("valueRanges", [])]
 
 def _values_update(range_: str, values: List[List[Any]]) -> None:
+    # ✅ FIX: use spreadsheets().values().update(...)
     def _call():
-        return _svc_sheets().values().update(
+        return _svc_sheets().spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
             range=range_,
             valueInputOption="RAW",
@@ -261,8 +248,9 @@ def _values_update(range_: str, values: List[List[Any]]) -> None:
     _with_backoff("values.update", False, _call)
 
 def _values_append(range_: str, values: List[List[Any]], user_entered: bool = False) -> dict:
+    # ✅ FIX: use spreadsheets().values().append(...)
     def _call():
-        return _svc_sheets().values().append(
+        return _svc_sheets().spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID,
             range=range_,
             valueInputOption="USER_ENTERED" if user_entered else "RAW",
@@ -289,7 +277,6 @@ def _friendly_format_main(sheet_id: int) -> None:
     except Exception as e:
         logger.info("Non-fatal formatting skip: %s", e)
 
-# structure guard state (process-local + shared via cache)
 _structure_lock = threading.Lock()
 _last_ensured_ts: float | None = None
 
@@ -297,18 +284,12 @@ def _structure_cache_key() -> str:
     return f"reimb.sheets.structure.{SPREADSHEET_ID}.v{SYNC_VERSION}"
 
 def ensure_spreadsheet_structure() -> None:
-    """
-    Ensures tabs/headers exist. Debounced:
-    - Per-process: at most once per STRUCTURE_TTL_SECONDS
-    - Cross-process: uses Django cache to avoid stampede
-    """
     if not _google_available():
         return
 
     global _last_ensured_ts
     now = time.monotonic()
 
-    # Cross-process throttle via cache (best effort)
     ck = _structure_cache_key()
     cached = cache.get(ck)
     if cached:
@@ -316,26 +297,21 @@ def ensure_spreadsheet_structure() -> None:
 
     with _structure_lock:
         if _last_ensured_ts and (now - _last_ensured_ts) < STRUCTURE_TTL_SECONDS:
-            # another thread/process did it recently
             cache.set(ck, True, timeout=STRUCTURE_TTL_SECONDS)
             return
 
-        # fetch spreadsheet metadata once
         meta = _spreadsheets_get()
         existing = _get_sheet_map_from_meta(meta)
 
-        # add missing sheets in one batch
         requests=[]
         for title in [TAB_MAIN, TAB_CHANGELOG, TAB_SCHEMA]:
             if title not in existing:
                 requests.append({"addSheet":{"properties":{"title":title,"gridProperties":{"rowCount":2000,"columnCount":40}}}})
         if requests:
             _batch_update(requests)
-            # refresh meta once after creating
             meta = _spreadsheets_get()
             existing = _get_sheet_map_from_meta(meta)
 
-        # hide changelog/schema; format main
         requests=[]
         for title in [TAB_CHANGELOG, TAB_SCHEMA]:
             sid = existing.get(title)
@@ -347,23 +323,18 @@ def ensure_spreadsheet_structure() -> None:
         if main_id is not None:
             _friendly_format_main(main_id)
 
-        # batchGet three header rows in a single read
         ranges = [f"{TAB_MAIN}!1:1", f"{TAB_CHANGELOG}!1:1", f"{TAB_SCHEMA}!1:1"]
         values_list = _values_batch_get(ranges)
 
-        # MAIN
         if (values_list[0][0] if values_list and values_list[0] else []) != HEADER:
             _values_update(f"{TAB_MAIN}!1:1", [HEADER])
 
-        # CHANGELOG
         if (values_list[1][0] if len(values_list) > 1 and values_list[1] else []) != CHANGELOG_HEADER:
             _values_update(f"{TAB_CHANGELOG}!1:1", [CHANGELOG_HEADER])
 
-        # SCHEMA
         if (values_list[2][0] if len(values_list) > 2 and values_list[2] else []) != SCHEMA_HEADER:
             _values_update(f"{TAB_SCHEMA}!1:1", [SCHEMA_HEADER])
 
-        # append schema heartbeat (best-effort)
         hb=[SYNC_VERSION, json.dumps(HEADER, ensure_ascii=False), True, _iso(datetime.now(timezone.utc)), "bootstrap/update"]
         try:
             _values_append(f"{TAB_SCHEMA}!A:E", [hb], user_entered=False)
@@ -420,7 +391,7 @@ def _drive_upload_bytes(name: str, data: bytes, parent: str, mime: Optional[str]
     from googleapiclient.http import MediaIoBaseUpload
     def _call():
         svc = _svc_drive()
-        media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime or "application/octet-stream", resumable=False)
+        media = MediaIoBaseUpload(io.BytesIO(data), mimetypes.guess_type(name)[0] or "application/octet-stream", resumable=False)
         body = {"name": name, "parents": [parent]}
         return svc.files().create(body=body, media_body=media, fields="id").execute()
     try:
@@ -498,7 +469,6 @@ def build_row(req) -> list:
     dept = getattr(employee, "department", "") or (getattr(employee, "profile", None) and getattr(employee.profile, "department","")) or ""
     cats, line_count = _categories_and_count(req)
 
-    # Prefer Drive links
     drive_links = []
     try:
         if _google_available() and _drive_folder_id():
@@ -516,8 +486,6 @@ def build_row(req) -> list:
     management_un = getattr(req.management, "username", "") if req.management_id else ""
     finance_un = getattr(req.verified_by, "username", "") if req.verified_by_id else ""
     extra = {}
-
-    # Include a friendly status label in Extra for analytics without changing schema
     try:
         extra["status_label"] = req.get_status_display()
     except Exception:
@@ -556,12 +524,13 @@ def build_row(req) -> list:
     return [row[h] for h in HEADER]
 
 # ---------------------------------------------------------------------------
-# Upsert and changelog (with backoff + fewer reads)
+# Upsert and changelog
 # ---------------------------------------------------------------------------
 
 def _index_by_id() -> Dict[str,int]:
+    # ✅ FIX: use spreadsheets().values().get(...)
     def _call():
-        return _svc_sheets().values().get(
+        return _svc_sheets().spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!A2:A"
         ).execute()
     resp = _with_backoff("values.get A2:A", True, _call)
@@ -571,7 +540,8 @@ def _index_by_id() -> Dict[str,int]:
     return idx
 
 def upsert_row(row: list, reimb_id: int):
-    values = _svc_sheets().values()
+    # ✅ FIX: obtain the values resource from spreadsheets().values()
+    values = _svc_sheets().spreadsheets().values()
     idx = _index_by_id()
     end_col = _header_end_col()
 
@@ -622,7 +592,6 @@ def sync_request(req) -> None:
     if not _google_available() or req is None:
         return
 
-    # Ensure structure (debounced / cached)
     ensure_spreadsheet_structure()
 
     row = build_row(req)
