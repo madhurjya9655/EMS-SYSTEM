@@ -682,7 +682,7 @@ class ReimbursementDetailView(LoginRequiredMixin, PermissionRequiredMixin, Detai
             and self.request.user.is_authenticated
             and req.created_by_id == self.request.user.id
         )
-        # Template also shows a warning when any bill is finance_rejected
+        # Template can show a warning when any bill is finance_rejected
         ctx["show_partial_hold_hint"] = req.lines.filter(
             status=ReimbursementLine.Status.INCLUDED,
             bill_status=ReimbursementLine.BillStatus.FINANCE_REJECTED,
@@ -696,7 +696,7 @@ class ReimbursementDetailView(LoginRequiredMixin, PermissionRequiredMixin, Detai
 
 class ManagerBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
     """
-    Manager sees only bills (lines) that are FINANCE_APPROVED and INCLUDED.
+    Manager sees only bills (lines) that are MANAGER_PENDING and INCLUDED.
     """
     permission_code = "reimbursement_manager_pending"
     model = ReimbursementLine
@@ -708,7 +708,7 @@ class ManagerBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListVie
         return (
             ReimbursementLine.objects.filter(
                 status=ReimbursementLine.Status.INCLUDED,
-                bill_status=ReimbursementLine.BillStatus.FINANCE_APPROVED,
+                bill_status=ReimbursementLine.BillStatus.MANAGER_PENDING,
             )
             .select_related("request", "request__created_by", "request__manager", "expense_item")
             .filter(
@@ -970,9 +970,9 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
             R.objects.filter(
                 status__in=[
                     R.Status.PENDING_FINANCE_VERIFY,
-                    R.Status.PARTIAL_HOLD,
-                    R.Status.PENDING_FINANCE,  # legacy compat
-                    R.Status.APPROVED,         # legacy compat
+                    # keep legacy statuses for compatibility:
+                    R.Status.PENDING_FINANCE,
+                    R.Status.APPROVED,
                 ]
             )
             .annotate(
@@ -990,13 +990,11 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
 
 class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
-    Verification screen. NEW RULE:
-    - Delete: hard-delete selected lines and KEEP the request in Finance
-      (no auto-send). Status becomes PARTIAL_HOLD if any line is not
-      finance-approved; otherwise stays PENDING_FINANCE_VERIFY until you
-      click Finalize / Approve Selected.
-    - Approve/Reject: as before; when *all* included lines are
-      finance-approved, we escalate to Manager here (not on delete).
+    Verification screen. Policy (no partial holds):
+    - Delete: hard-delete selected lines and keep the request in Finance Verification,
+      unless *all* remaining INCLUDED lines are finance-approved, then we escalate.
+    - Approve/Reject: after processing, when *all* INCLUDED lines are finance-approved,
+      we escalate to Manager; otherwise stay in Finance Verification.
     """
     permission_code = "reimbursement_finance_review"
     template_name = "reimbursement/finance_verify.html"
@@ -1019,24 +1017,19 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
 
     def _rederive_status_without_escalation(self, req: ReimbursementRequest) -> None:
         """
-        Compute a Finance holding status without sending to Manager.
+        Compute holding status for Finance without sending to Manager.
+        (No Partial Hold: parent stays PENDING_FINANCE_VERIFY until all INCLUDED
+        lines are exactly FINANCE_APPROVED; then the finalize/approve path will escalate.)
         """
         qs = req.lines.filter(status=ReimbursementLine.Status.INCLUDED)
         counts = {
             "approved": qs.filter(bill_status=ReimbursementLine.BillStatus.FINANCE_APPROVED).count(),
-            "rejected": qs.filter(bill_status=ReimbursementLine.BillStatus.FINANCE_REJECTED).count(),
-            "pending": qs.exclude(
-                bill_status__in=[
-                    ReimbursementLine.BillStatus.FINANCE_APPROVED,
-                    ReimbursementLine.BillStatus.FINANCE_REJECTED,
-                ]
-            ).count(),
             "total": qs.count(),
         }
 
         new_status = (
-            ReimbursementRequest.Status.PARTIAL_HOLD
-            if (counts["pending"] > 0 or counts["rejected"] > 0)
+            ReimbursementRequest.Status.PENDING_MANAGER
+            if (counts["total"] > 0 and counts["approved"] == counts["total"])
             else ReimbursementRequest.Status.PENDING_FINANCE_VERIFY
         )
 
@@ -1048,7 +1041,7 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
                 req,
                 ReimbursementLog.Action.STATUS_CHANGED,
                 actor=None,
-                message="Finance updated bills; holding in Finance.",
+                message="Finance updated bills; status re-derived.",
                 from_status=prev,
                 to_status=req.status,
             )
@@ -1126,7 +1119,7 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
                 messages.success(request, "All bills approved. Sent to Manager.")
                 return _redirect_back(request, "reimbursement:finance_pending")
 
-            messages.info(request, "Some bills are not Finance-Approved yet. Remaining in Partial Hold (Finance).")
+            messages.info(request, "Some bills are not Finance-Approved yet. Staying in Finance Verification.")
             return redirect(request.path + (f"?return={back}" if back else ""))
 
 # ---------------------------------------------------------------------------

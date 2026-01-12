@@ -282,7 +282,7 @@ class ExpenseItem(models.Model):
             for req_id in touched_requests:
                 try:
                     req = ReimbursementRequest.objects.get(pk=req_id)
-                    # Re-derive (will place the request in PARTIAL_HOLD while Finance reviews)
+                    # Re-derive (will keep the request in Finance verification until all bills are approved)
                     req.apply_derived_status_from_bills(actor=actor, reason="Employee resubmitted corrected bill(s).")
                 except ReimbursementRequest.DoesNotExist:
                     continue
@@ -382,30 +382,29 @@ class ReimbursementRequest(models.Model):
 
     def derive_status_from_bills(self) -> str:
         """
-        Pure function: derive a container *holding* status from child bill_statuses.
+        Pure function: container status derived from INCLUDED bill statuses,
+        aligned with the strict workflow (no partial holds, no mixed states).
 
-        Updated rules for bill-level progression:
-          - Any FINANCE_REJECTED / MANAGER_REJECTED / EMPLOYEE_RESUBMITTED => PARTIAL_HOLD (Finance)
-          - Otherwise the container remains at PENDING_FINANCE_VERIFY while Finance is working.
-          - Container no longer auto-moves to PENDING_MANAGER; that happens per-bill via proceed_to_manager().
+        Rules:
+          - If there are no INCLUDED lines -> DRAFT
+          - If ALL INCLUDED lines are exactly FINANCE_APPROVED -> PENDING_MANAGER
+          - Otherwise (any non-approved line, including rejected/resubmitted/pending/manager states) -> PENDING_FINANCE_VERIFY
         """
-        qs = self.lines.all().values_list("bill_status", flat=True)
-        statuses = set(qs)
+        qs = self.lines.filter(status=ReimbursementLine.Status.INCLUDED).values_list("bill_status", flat=True)
+        statuses = list(qs)
         if not statuses:
             return self.Status.DRAFT
 
-        if (
-            ReimbursementLine.BillStatus.FINANCE_REJECTED in statuses
-            or ReimbursementLine.BillStatus.MANAGER_REJECTED in statuses
-            or ReimbursementLine.BillStatus.EMPLOYEE_RESUBMITTED in statuses
-        ):
-            return self.Status.PARTIAL_HOLD
+        all_finance_approved = all(s == ReimbursementLine.BillStatus.FINANCE_APPROVED for s in statuses)
+        if all_finance_approved:
+            return self.Status.PENDING_MANAGER
 
+        # Anything else means Finance has not achieved the "all approved" gate yet.
         return self.Status.PENDING_FINANCE_VERIFY
 
     def apply_derived_status_from_bills(self, *, actor: Optional[models.Model] = None, reason: str = "") -> None:
         """
-        Set parent status strictly according to child bill statuses (holding only).
+        Set parent status strictly according to child bill statuses.
         Emits an audit log only if the status actually changes.
         """
         new_status = self.derive_status_from_bills()
@@ -413,7 +412,6 @@ class ReimbursementRequest(models.Model):
             return
         old = self.status
         self.status = new_status
-        # Submitted_at remains first submit time; do not mutate.
         self.save(update_fields=["status", "updated_at"])
         ReimbursementLog.log(
             self,
@@ -454,7 +452,7 @@ class ReimbursementRequest(models.Model):
         require_mgmt = ReimbursementSettings.get_solo().require_management_approval
 
         if new == self.Status.PENDING_MANAGER and not self.verified_by_id:
-            # Note: request may reach PENDING_MANAGER through legacy flow.
+            # Note: request may reach PENDING_MANAGER through derived status after Finance approval.
             pass
 
         if new == self.Status.PENDING_MANAGEMENT and not self._is_manager_approved():
