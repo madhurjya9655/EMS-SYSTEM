@@ -228,7 +228,7 @@ def _batch_update(requests: list) -> None:
     _with_backoff("spreadsheets.batchUpdate", False, _call)
 
 def _values_batch_get(ranges: List[str]) -> List[List[List[str]]]:
-    # ✅ FIX: use spreadsheets().values().batchGet(...)
+    # ✅ use spreadsheets().values().batchGet(...)
     def _call():
         return _svc_sheets().spreadsheets().values().batchGet(
             spreadsheetId=SPREADSHEET_ID, ranges=ranges
@@ -237,7 +237,7 @@ def _values_batch_get(ranges: List[str]) -> List[List[List[str]]]:
     return [x.get("values", [[]]) for x in resp.get("valueRanges", [])]
 
 def _values_update(range_: str, values: List[List[Any]]) -> None:
-    # ✅ FIX: use spreadsheets().values().update(...)
+    # ✅ use spreadsheets().values().update(...)
     def _call():
         return _svc_sheets().spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
@@ -248,7 +248,7 @@ def _values_update(range_: str, values: List[List[Any]]) -> None:
     _with_backoff("values.update", False, _call)
 
 def _values_append(range_: str, values: List[List[Any]], user_entered: bool = False) -> dict:
-    # ✅ FIX: use spreadsheets().values().append(...)
+    # ✅ use spreadsheets().values().append(...)
     def _call():
         return _svc_sheets().spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID,
@@ -528,7 +528,7 @@ def build_row(req) -> list:
 # ---------------------------------------------------------------------------
 
 def _index_by_id() -> Dict[str,int]:
-    # ✅ FIX: use spreadsheets().values().get(...)
+    # ✅ use spreadsheets().values().get(...)
     def _call():
         return _svc_sheets().spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!A2:A"
@@ -540,7 +540,7 @@ def _index_by_id() -> Dict[str,int]:
     return idx
 
 def upsert_row(row: list, reimb_id: int):
-    # ✅ FIX: obtain the values resource from spreadsheets().values()
+    # ✅ obtain the values resource from spreadsheets().values()
     values = _svc_sheets().spreadsheets().values()
     idx = _index_by_id()
     end_col = _header_end_col()

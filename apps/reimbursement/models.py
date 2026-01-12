@@ -1,3 +1,4 @@
+# apps/reimbursement/models.py
 from __future__ import annotations
 
 import logging
@@ -382,24 +383,28 @@ class ReimbursementRequest(models.Model):
 
     def derive_status_from_bills(self) -> str:
         """
-        Pure function: container status derived from INCLUDED bill statuses,
-        aligned with the strict workflow (no partial holds, no mixed states).
+        Keep the container with Finance until every included bill clears its own workflow.
+        No auto-escalation to Manager at container level.
 
         Rules:
           - If there are no INCLUDED lines -> DRAFT
-          - If ALL INCLUDED lines are exactly FINANCE_APPROVED -> PENDING_MANAGER
-          - Otherwise (any non-approved line, including rejected/resubmitted/pending/manager states) -> PENDING_FINANCE_VERIFY
+          - If ANY included line is in {FINANCE_REJECTED, MANAGER_REJECTED, EMPLOYEE_RESUBMITTED}
+                -> PARTIAL_HOLD
+          - Otherwise -> PENDING_FINANCE_VERIFY
         """
         qs = self.lines.filter(status=ReimbursementLine.Status.INCLUDED).values_list("bill_status", flat=True)
-        statuses = list(qs)
+        statuses = set(qs)
         if not statuses:
             return self.Status.DRAFT
 
-        all_finance_approved = all(s == ReimbursementLine.BillStatus.FINANCE_APPROVED for s in statuses)
-        if all_finance_approved:
-            return self.Status.PENDING_MANAGER
+        if (
+            ReimbursementLine.BillStatus.FINANCE_REJECTED in statuses
+            or ReimbursementLine.BillStatus.MANAGER_REJECTED in statuses
+            or ReimbursementLine.BillStatus.EMPLOYEE_RESUBMITTED in statuses
+        ):
+            return self.Status.PARTIAL_HOLD
 
-        # Anything else means Finance has not achieved the "all approved" gate yet.
+        # Stay with Finance until bills are explicitly sent forward per-line.
         return self.Status.PENDING_FINANCE_VERIFY
 
     def apply_derived_status_from_bills(self, *, actor: Optional[models.Model] = None, reason: str = "") -> None:
