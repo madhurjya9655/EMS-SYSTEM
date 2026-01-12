@@ -63,6 +63,8 @@ urlpatterns = [
     path("finance/", views.FinanceQueueView.as_view(), name="finance_pending"),
     path("finance/<int:pk>/verify/", views.FinanceVerifyView.as_view(), name="finance_verify"),
     path("finance/<int:pk>/review/", views.FinanceReviewView.as_view(), name="finance_review"),
+    # NEW: Finance can delete a whole request (non-PAID)
+    path("finance/<int:pk>/delete/", views.FinanceDeleteRequestView.as_view(), name="finance_delete"),
 
     path("finance/bills/payment/", views.FinanceBillPaymentQueueView.as_view(), name="finance_bill_payment_queue"),
     path("finance/bills/payment/mark/", views.FinanceBillPaymentView.as_view(), name="finance_bill_payment"),

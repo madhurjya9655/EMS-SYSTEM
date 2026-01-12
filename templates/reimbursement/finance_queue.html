@@ -21,7 +21,7 @@
             <th>Total Amount</th>
             <th>Manager</th>
             <th>Management</th>
-            <th style="width:260px;">Actions</th>
+            <th style="width:340px;">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -44,7 +44,7 @@
             <td>₹{{ req.total_amount|floatformat:2 }}</td>
             <td>{% if req.manager %}{{ req.manager.get_full_name|default:req.manager.username }}{% else %}<span class="text-muted small">Not set</span>{% endif %}</td>
             <td>{% if req.management %}{{ req.management.get_full_name|default:req.management.username }}{% else %}<span class="text-muted small">-</span>{% endif %}</td>
-            <td class="d-flex gap-2">
+            <td class="d-flex flex-wrap gap-2">
               {% if req.status == "pending_finance_verify" or req.status == "partial_hold" %}
                 <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-secondary">View Bills</a>
                 <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-warning">Verify</a>
@@ -52,6 +52,21 @@
                 <a href="{% url 'reimbursement:finance_review' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-primary">Review / Pay</a>
               {% else %}
                 <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-secondary">View Bills</a>
+              {% endif %}
+
+              {# NEW: Delete whole request (disabled for PAID) #}
+              {% if req.status != "paid" %}
+              <form method="post"
+                    action="{% url 'reimbursement:finance_delete' req.id %}"
+                    class="d-inline mb-0">
+                {% csrf_token %}
+                <input type="hidden" name="return" value="{{ request.get_full_path }}">
+                <button type="submit"
+                        class="btn btn-sm btn-outline-danger"
+                        onclick="return confirm('Delete the entire reimbursement request #{{ req.id }}? This cannot be undone.');">
+                  Delete Request
+                </button>
+              </form>
               {% endif %}
             </td>
           </tr>
