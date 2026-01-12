@@ -1097,7 +1097,9 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
                     messages.error(request, getattr(e, "message", str(e)) or f"Could not process line #{line.id}")
                     return redirect(request.path + (f"?return={back}" if back else ""))
 
-            req.apply_derived_status_from_bills(actor=request.user, reason="Finance updated selected bills.")
+            # ✅ Use our escalation logic here (do NOT call apply_derived_status_from_bills)
+            self._rederive_status_without_escalation(req)
+
             if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
                 req.verified_by = request.user
                 req.verified_at = timezone.now()
@@ -1110,7 +1112,8 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
             return redirect(request.path + (f"?return={back}" if back else ""))
 
         if action == "finalize":
-            req.apply_derived_status_from_bills(actor=request.user, reason="Finance finalized verification.")
+            # ✅ Re-derive & escalate if applicable
+            self._rederive_status_without_escalation(req)
             if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
                 req.verified_by = request.user
                 req.verified_at = timezone.now()
@@ -1121,52 +1124,6 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
 
             messages.info(request, "Some bills are not Finance-Approved yet. Staying in Finance Verification.")
             return redirect(request.path + (f"?return={back}" if back else ""))
-
-# ---------------------------------------------------------------------------
-# NEW: Finance delete whole request (non-PAID). Uses audited delete if available.
-# ---------------------------------------------------------------------------
-
-class FinanceDeleteRequestView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    permission_code = "reimbursement_finance_review"
-    template_name = "reimbursement/finance_queue.html"  # not rendered on POST
-
-    def post(self, request, *args, **kwargs):
-        req = get_object_or_404(ReimbursementRequest, pk=kwargs.get("pk"))
-
-        # Do not allow deleting paid requests
-        if req.status == ReimbursementRequest.Status.PAID:
-            messages.error(request, "Paid reimbursements cannot be deleted.")
-            return _redirect_back(request, "reimbursement:finance_pending")
-
-        # Prefer a model-level audited delete when present
-        try:
-            if hasattr(req, "delete_with_audit"):
-                req.delete_with_audit(actor=request.user, reason="Finance: delete request")
-                messages.success(request, f"Reimbursement #{req.pk} deleted with audit trail.")
-                return _redirect_back(request, "reimbursement:finance_pending")
-        except DjangoCoreValidationError as e:
-            messages.error(request, getattr(e, "message", str(e)) or "Unable to delete this reimbursement.")
-            return _redirect_back(request, "reimbursement:finance_pending")
-
-        # Fallback: detach expenses, log, and delete request
-        for line in list(req.lines.select_related("expense_item")):
-            exp = line.expense_item
-            line.delete()
-            if exp:
-                exp.status = ExpenseItem.Status.SAVED
-                exp.save(update_fields=["status", "updated_at"])
-
-        ReimbursementLog.log(
-            req,
-            ReimbursementLog.Action.STATUS_CHANGED,
-            actor=request.user,
-            message="Finance deleted the reimbursement (fallback delete).",
-            from_status=req.status,
-            to_status="deleted",
-        )
-        req.delete()
-        messages.success(request, f"Reimbursement #{kwargs.get('pk')} deleted.")
-        return _redirect_back(request, "reimbursement:finance_pending")
 
 # ---------------------------------------------------------------------------
 # Finance — BILL PAYMENT (per-bill paid & reference)
