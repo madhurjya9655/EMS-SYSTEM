@@ -172,6 +172,7 @@ _template_options = {
         "common_filters": "apps.common.templatetags.common_filters",
         "user_filters": "apps.users.templatetags.user_filters",
         "users_filters": "apps.users.templatetags.user_filters",
+        "users_permissions": "apps.users.templatetags.users_permissions",  # ✅ added
         "group_tags": "apps.common.templatetags.group_tags",
         "model_extras": "apps.common.templatetags.model_extras",
     },
@@ -391,7 +392,7 @@ LOGGING = {
         "file": {"level": "INFO","class": "logging.FileHandler","filename": str(LOGS_DIR / "django.log"),"formatter": "verbose","encoding": "utf-8"},
         "permissions_file": {"level": "DEBUG" if DEBUG else "INFO","class": "logging.FileHandler","filename": str(LOGS_DIR / "permissions.log"),"formatter": "detailed","encoding": "utf-8"},
         "tasks_file": {"level": "DEBUG" if DEBUG else "INFO","class": "logging.FileHandler","filename": str(LOGS_DIR / "tasks.log"),"formatter": "detailed","encoding": "utf-8"},
-        "bulk_upload_file": {"level": "INFO","class": "logging.FileHandler","filename": str(LOGS_DIR / "bulk_upload.log"),"formatter": "detailed","encoding": "utf-8"},
+        "bulk_upload_file": {"level": "DEBUG" if DEBUG else "INFO","class": "logging.FileHandler","filename": str(LOGS_DIR / "bulk_upload.log"),"formatter": "detailed","encoding": "utf-8"},
         "mail_admins": {"level": "ERROR","class": "django.utils.log.AdminEmailHandler"},
     },
     "root": {"handlers": ["console"], "level": "WARNING"},
@@ -489,7 +490,6 @@ REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES = env_int(
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
 EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
 SEND_EMAILS_FOR_AUTO_RECUR = env_bool("SEND_EMAILS_FOR_AUTO_RECUR", True)
-SEND_RECUR_EMAILS_ONLY_AT_10AM = env_bool("SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
 SEND_DELEGATION_IMMEDIATE_EMAIL = env_bool("SEND_DELEGATION_IMMEDIATE_EMAIL", False)
 
 EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "[BOS Lakshya] ")

@@ -828,7 +828,8 @@ def send_daily_pending_task_summary(self, force: bool = False) -> dict:
     except Exception:
         admins = []
 
-    recipients = _dedupe_emails((admins or []) + ["pankaj@blueoceansteels.com"])
+    # ⛔ D1/D4: Do NOT force-add Pankaj here. Central utils filtering also protects other paths.
+    recipients = _dedupe_emails((admins or []))
     if not recipients:
         logger.warning(_safe_console_text("[PENDING SUMMARY] No recipients resolved; aborting send"))
         return {"ok": False, "skipped": True, "reason": "no_recipients", "day": day_iso}

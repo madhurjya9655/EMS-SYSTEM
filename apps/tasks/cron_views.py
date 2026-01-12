@@ -62,14 +62,22 @@ def pending_summary_7pm(request):
       - Admin mail with ALL pending.
       - One mail per employee with ONLY their pending.
     GET /internal/cron/pending-7pm/?key=...
+
+    D1/D4 compliance:
+      • Removed hardcoded 'pankaj@blueoceansteels.com' recipient.
+      • Defer recipients to the digest task (which uses admin resolution logic),
+        ensuring no special-case direct emails to Pankaj from this endpoint.
     """
     if not _authorized(request):
         return HttpResponseForbidden("Forbidden")
 
     try:
-        admin_to = "pankaj@blueoceansteels.com"
-        admin = send_admin_all_pending_digest.run(to=admin_to, force=True)
+        # Admin consolidated digest (recipient resolution handled inside task)
+        admin = send_admin_all_pending_digest.run(force=True)
+
+        # Per-employee digests (recipient resolution handled inside task)
         employees = send_daily_employee_pending_digest.run(force=True)
+
         return JsonResponse({"ok": True, "admin": admin, "employees": employees}, status=200)
     except Exception as e:
         return JsonResponse(

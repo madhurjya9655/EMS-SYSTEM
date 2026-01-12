@@ -44,6 +44,27 @@ def _allowed_exts() -> List[str]:
     return [s.strip().lower() for s in str(exts).split(",") if s.strip()]
 
 
+def _accept_attr() -> str:
+    """
+    Browser file picker 'accept' attribute built from allowed extensions.
+    """
+    # Ensure each item starts with a dot and is lowercase
+    cleaned = []
+    for e in _allowed_exts():
+        e = e.strip().lower()
+        if not e:
+            continue
+        cleaned.append(e if e.startswith(".") else f".{e}")
+    # Keep order stable but dedup
+    seen = set()
+    out = []
+    for e in cleaned:
+        if e not in seen:
+            seen.add(e)
+            out.append(e)
+    return ",".join(out)
+
+
 def _max_file_mb() -> int:
     return int(getattr(settings, "REIMBURSEMENT_MAX_RECEIPT_MB", 8))
 
@@ -121,12 +142,9 @@ class ExpenseItemForm(forms.ModelForm):
                 attrs={"class": "form-check-input"},
                 choices=GST_TYPE_CHOICES,
             ),
-            # Advertise Excel & common image/PDF types in the browser picker
+            # 'accept' is set dynamically in __init__
             "receipt_file": forms.FileInput(
-                attrs={
-                    "class": "form-control",
-                    "accept": ".pdf,.jpg,.jpeg,.png,.xls,.xlsx",
-                }
+                attrs={"class": "form-control"}
             ),
         }
 
@@ -141,6 +159,12 @@ class ExpenseItemForm(forms.ModelForm):
         self.fields["category"].label = "Type of Expense"
         self.fields["gst_type"].label = "Bill Type"
         self.fields["gst_type"].initial = "non_gst"
+
+        # Keep browser picker in sync with backend-allowed extensions
+        try:
+            self.fields["receipt_file"].widget.attrs["accept"] = _accept_attr()
+        except Exception:
+            pass
 
     def clean_receipt_file(self):
         f = self.files.get("receipt_file") or self.cleaned_data.get("receipt_file")
@@ -227,6 +251,10 @@ class ReimbursementCreateForm(forms.ModelForm):
 class RequestFilterForm(forms.Form):
     """
     Filter for 'My Requests' and summary pages.
+
+    NEW POLICY:
+    - Remove time-based filters (from_date, to_date).
+    - Keep only status.
     """
     STATUS_CHOICES = [("", "All statuses")] + list(ReimbursementRequest.Status.choices)
 
@@ -235,18 +263,9 @@ class RequestFilterForm(forms.Form):
         required=False,
         widget=forms.Select(attrs={"class": "form-select form-select-sm"}),
     )
-    from_date = forms.DateField(
-        required=False,
-        widget=forms.DateInput(
-            attrs={"type": "date", "class": "form-control form-control-sm"}
-        ),
-    )
-    to_date = forms.DateField(
-        required=False,
-        widget=forms.DateInput(
-            attrs={"type": "date", "class": "form-control form-control-sm"}
-        ),
-    )
+    # Time-based filters removed per requirement:
+    # from_date = forms.DateField(...)
+    # to_date   = forms.DateField(...)
 
 
 # ---------------------------------------------------------------------------
@@ -494,13 +513,16 @@ class EmployeeRejectedBillEditForm(forms.ModelForm):
         widgets = {
             "amount": forms.NumberInput(attrs={"class": "form-control", "min": "0.01", "step": "0.01"}),
             "description": forms.Textarea(attrs={"class": "form-control", "rows": 3, "placeholder": "Optional"}),
-            "receipt_file": forms.FileInput(
-                attrs={
-                    "class": "form-control",
-                    "accept": ".pdf,.jpg,.jpeg,.png,.xls,.xlsx",
-                }
-            ),
+            # 'accept' set dynamically in __init__
+            "receipt_file": forms.FileInput(attrs={"class": "form-control"}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        try:
+            self.fields["receipt_file"].widget.attrs["accept"] = _accept_attr()
+        except Exception:
+            pass
 
     def clean_receipt_file(self):
         f = self.files.get("receipt_file") or self.cleaned_data.get("receipt_file")
@@ -639,14 +661,15 @@ class ApproverMappingBulkForm(forms.Form):
         label="Apply finance to all",
     )
 
+    # Restrict to active users for picker clarity
     manager_for_all = forms.ModelChoiceField(
-        queryset=User.objects.all().order_by("first_name", "last_name", "username"),
+        queryset=User.objects.filter(is_active=True).order_by("first_name", "last_name", "username"),
         required=False,
         widget=forms.Select(attrs={"class": "form-select"}),
         label="Manager (for all)",
     )
     finance_for_all = forms.ModelChoiceField(
-        queryset=User.objects.all().order_by("first_name", "last_name", "username"),
+        queryset=User.objects.filter(is_active=True).order_by("first_name", "last_name", "username"),
         required=False,
         widget=forms.Select(attrs={"class": "form-select"}),
         label="Finance (for all)",
@@ -674,7 +697,8 @@ class ApproverMappingBulkForm(forms.Form):
             return 0  # nothing to do
 
         processed = 0
-        employees = User.objects.all()
+        # Safer scope: only active users
+        employees = User.objects.filter(is_active=True)
 
         for emp in employees:
             mapping, _ = ReimbursementApproverMapping.objects.get_or_create(employee=emp)
@@ -703,13 +727,13 @@ class ApproverDefaultsForm(forms.Form):
     """
 
     default_manager = forms.ModelChoiceField(
-        queryset=User.objects.all().order_by("first_name", "last_name", "username"),
+        queryset=User.objects.filter(is_active=True).order_by("first_name", "last_name", "username"),
         required=False,
         widget=forms.Select(attrs={"class": "form-select form-select-sm"}),
         label="Default Manager",
     )
     default_finance = forms.ModelChoiceField(
-        queryset=User.objects.all().order_by("first_name", "last_name", "username"),
+        queryset=User.objects.filter(is_active=True).order_by("first_name", "last_name", "username"),
         required=False,
         widget=forms.Select(attrs={"class": "form-select form-select-sm"}),
         label="Default Finance",
@@ -750,13 +774,16 @@ class ReimbursementForm(forms.ModelForm):
                 attrs={"class": "form-select"},
                 choices=REIMBURSEMENT_CATEGORY_CHOICES,
             ),
-            "bill": forms.FileInput(
-                attrs={
-                    "class": "form-control",
-                    "accept": ".pdf,.jpg,.jpeg,.png,.xls,.xlsx",
-                }
-            ),
+            # 'accept' set dynamically in __init__
+            "bill": forms.FileInput(attrs={"class": "form-control"}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        try:
+            self.fields["bill"].widget.attrs["accept"] = _accept_attr()
+        except Exception:
+            pass
 
     def clean_bill(self):
         f = self.files.get("bill") or self.cleaned_data.get("bill")

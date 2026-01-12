@@ -8,12 +8,12 @@ from django.db.models import Q
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import Signal, receiver
 from django.utils import timezone
-from zoneinfo import ZoneInfo
+import pytz  # ✅ align tz impl with models/forms
 
 from .models import LeaveRequest, LeaveStatus, ApproverMapping
 
 logger = logging.getLogger(__name__)
-IST = ZoneInfo("Asia/Kolkata")
+IST = pytz.timezone("Asia/Kolkata")
 
 # Re-entrancy guard: this module may be imported multiple times by different
 # app configs; ensure handlers are only connected once.

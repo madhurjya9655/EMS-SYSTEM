@@ -32,6 +32,7 @@ PERMISSIONS_STRUCTURE = {
         ("leave_list", "Leave List"),
         ("leave_pending_manager", "Manager Approvals"),
         ("leave_cc_admin", "Manage CC (Admin)"),
+        ("leave_admin_edit", "Admin Edit Leave"),  # NEW
     ],
     "Checklist": [
         ("add_checklist", "Add Checklist"),

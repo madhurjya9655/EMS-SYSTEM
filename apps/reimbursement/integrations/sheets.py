@@ -517,6 +517,12 @@ def build_row(req) -> list:
     finance_un = getattr(req.verified_by, "username", "") if req.verified_by_id else ""
     extra = {}
 
+    # Include a friendly status label in Extra for analytics without changing schema
+    try:
+        extra["status_label"] = req.get_status_display()
+    except Exception:
+        pass
+
     row = {
         "ReimbID": req.id,
         "EmployeeID": getattr(employee,"id",""),

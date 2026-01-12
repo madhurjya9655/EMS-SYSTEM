@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.urls import path
 
 from . import views
+from . import admin_views  # NEW
 
 app_name = "leave"
 
@@ -44,4 +45,8 @@ urlpatterns = [
     path("cc/config/add/", views.cc_config_add, name="cc_config_add"),
     path("cc/config/<int:pk>/remove/", views.cc_config_remove, name="cc_config_remove"),
     path("cc/assign/", views.cc_assign, name="cc_assign"),
+
+    # --- NEW: Admin edit routes ---
+    path("admin/edit/<int:pk>/", admin_views.admin_edit_leave, name="admin_edit_leave"),
+    path("admin/edit/<int:pk>/recalculate/", admin_views.admin_recalc_window, name="admin_recalc_window"),
 ]

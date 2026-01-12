@@ -1,5 +1,3 @@
-# apps/users/permission_urls.py
-
 PERMISSION_URLS = {
     # -----------------------
     # Leave

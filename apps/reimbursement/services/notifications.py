@@ -1,4 +1,3 @@
-# apps/reimbursement/services/notifications.py
 from __future__ import annotations
 
 import logging
@@ -49,6 +48,9 @@ _FINAL_CC = [
 
 # Attachment cap (bytes) for outbound emails (default: 20 MB)
 _MAX_ATTACH_TOTAL_BYTES = int(getattr(settings, "REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES", 20 * 1024 * 1024))
+
+# De-duplication window for notification spam control (seconds)
+_DUP_WINDOW_SECONDS = int(getattr(settings, "REIMBURSEMENT_EMAIL_DUP_WINDOW_SECONDS", 60))
 
 # ---------------------------------------------------------------------------
 # Utilities
@@ -306,10 +308,18 @@ def _send_and_log(
 def _already_sent_recent(
     req: ReimbursementRequest,
     kind_hint: str,
-    within_seconds: int = 90,
+    within_seconds: Optional[int] = None,
 ) -> bool:
+    """
+    Prevents duplicate emails in a short window.
+    The window defaults to REIMBURSEMENT_EMAIL_DUP_WINDOW_SECONDS (60s) if not provided.
+    """
     try:
-        since = timezone.now() - timedelta(seconds=within_seconds)
+        window = int(within_seconds if within_seconds is not None else _DUP_WINDOW_SECONDS)
+    except Exception:
+        window = _DUP_WINDOW_SECONDS
+    try:
+        since = timezone.now() - timedelta(seconds=window)
         qs = ReimbursementLog.objects.filter(
             request=req,
             action=ReimbursementLog.Action.EMAIL_SENT,
@@ -336,6 +346,7 @@ def _default_settings() -> ReimbursementSettings:
 
 
 def _admin_emails() -> List[str]:
+    # Kept for compatibility, but we will NOT use admins in any CC lists per new policy.
     try:
         return _default_settings().admin_email_list()
     except Exception:
@@ -381,13 +392,13 @@ def _manager_email_candidates(req: ReimbursementRequest) -> List[str]:
 
 
 def _recipients_for_manager(req: ReimbursementRequest) -> _Recipients:
-    admin_cc = _admin_emails()
+    # NEW POLICY: Do not include admins here.
     mgr_list = _manager_email_candidates(req)
-    return _Recipients(to=mgr_list, cc=_dedupe_lower(admin_cc))
+    return _Recipients(to=mgr_list, cc=[])
 
 
 def _recipients_for_management(req: ReimbursementRequest) -> _Recipients:
-    admin_cc = _admin_emails()
+    # NEW POLICY: Do not include admins here.
     mgmt_list: List[str] = []
     try:
         if req.management and getattr(req.management, "email", None):
@@ -396,11 +407,11 @@ def _recipients_for_management(req: ReimbursementRequest) -> _Recipients:
     except Exception:
         logger.exception("Failed resolving management recipients for reimbursement #%s", req.id)
 
-    return _Recipients(to=_dedupe_lower(mgmt_list), cc=_dedupe_lower(admin_cc))
+    return _Recipients(to=_dedupe_lower(mgmt_list), cc=[])
 
 
 def _recipients_for_finance(req: ReimbursementRequest) -> _Recipients:
-    admin_cc = _admin_emails()
+    # NEW POLICY: Do not include admins here.
     finance_list: List[str] = []
     try:
         mapping = ReimbursementApproverMapping.for_employee(req.created_by)
@@ -410,10 +421,11 @@ def _recipients_for_finance(req: ReimbursementRequest) -> _Recipients:
     except Exception:
         logger.exception("Failed resolving finance recipients for reimbursement #%s", req.id)
 
-    return _Recipients(to=_dedupe_lower(finance_list), cc=_dedupe_lower(admin_cc))
+    return _Recipients(to=_dedupe_lower(finance_list), cc=[])
 
 
 def _recipients_for_finance_enforced() -> _Recipients:
+    # Verified “concerned” recipients only
     return _Recipients(to=_dedupe_lower(_FINANCE_TEAM), cc=[])
 
 
@@ -543,7 +555,7 @@ def _build_action_token(req: ReimbursementRequest, role: str, decision: str) -> 
         "req_id": req.id,
         "role": role,
         "decision": decision,
-        "ts": timezone.now().timestamp(),
+        "ts": timezone.now().timestamp(),  # consumer should enforce TTL
     }
     return signing.dumps(payload, salt=_ACTION_SALT)
 
@@ -697,7 +709,7 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
         kind=kind,
         subject=subject,
         to_addrs=fin_rec.to,
-        cc=[],
+        cc=[],  # no admins
         reply_to=reply_to,
         html=html,
         txt=txt,
@@ -820,7 +832,7 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
         kind=kind,
         subject=subject,
         to_addrs=mgr_rec.to,
-        cc=cc_list,          # ENFORCED: only the verifier
+        cc=cc_list,          # ONLY verifier (concerned)
         reply_to=[],         # defaults to Amreen via _send
         html=html,
         txt=txt,
@@ -899,7 +911,7 @@ def send_reimbursement_finance_rejected(req: ReimbursementRequest) -> None:
         kind=kind,
         subject=subject,
         to_addrs=[emp_email],
-        cc=_admin_emails(),
+        cc=[],  # remove admins
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
@@ -931,7 +943,6 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
     detail_url = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     submitted_at = req.submitted_at or req.created_at
     buttons_html = _manager_action_buttons(req)
-    cc_str = ", ".join(mgr_recip.cc) if mgr_recip.cc else ""
     to_str = ", ".join(mgr_recip.to)
     lines_html = _build_lines_table_html(req)
     lines_txt = _build_lines_table_text(req)
@@ -980,7 +991,6 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
 
       <p style="font-size:12px;color:#6b7280;margin-top:16px;">
         This email was sent to: {escape(to_str)}
-        {(" | CC: " + escape(cc_str)) if cc_str else ""}
       </p>
 
       <p style="font-size:13px;margin-top:16px;color:#4b5563;">
@@ -1029,7 +1039,7 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
         kind="submitted",
         subject=subject,
         to_addrs=mgr_recip.to,
-        cc=mgr_recip.cc,
+        cc=[],  # DO NOT CC admins anymore
         reply_to=reply_to,
         html=html,
         txt=txt,
@@ -1042,6 +1052,8 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
 # ---------------------------------------------------------------------------
 
 def send_reimbursement_admin_summary(req: ReimbursementRequest) -> None:
+    # Keeping this function as-is for optional admin reporting, but it is not used
+    # by the main workflow. If you want it completely disabled, remove its calls.
     if not _email_enabled():
         logger.info("Reimbursement emails disabled; skipping admin summary for #%s.", req.id)
         return
@@ -1118,7 +1130,7 @@ def send_reimbursement_admin_summary(req: ReimbursementRequest) -> None:
         kind="admin_summary",
         subject=subject,
         to_addrs=admin_list,
-        cc=[],
+        cc=[],  # never leak admins to other flows
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
@@ -1310,17 +1322,13 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
     txt_lines.extend(["View details:", detail_url])
     txt = "\n".join(txt_lines)
 
-    cc_raw: List[str] = [] if decision == "rejected" else _admin_emails()
-    if decision == "approved":
-        cc_raw.append("akshay@blueoceansteels.com")
-    cc = _dedupe_lower(cc_raw)
-
+    # NEW POLICY: No admin CCs here; only the employee is notified.
     _send_and_log(
         req,
         kind=kind,
         subject=subject,
         to_addrs=[emp_email],
-        cc=cc,
+        cc=[],  # remove admins
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
@@ -1414,19 +1422,13 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
     txt_lines.extend(["View details:", detail_url])
     txt = "\n".join(txt_lines)
 
-    finance_rec = _recipients_for_finance(req)
-    cc_raw: List[str] = []
-    cc_raw.extend(finance_rec.to or [])
-    cc_raw.extend(finance_rec.cc or [])
-    cc_raw.extend(_admin_emails())
-    cc = _dedupe_lower(cc_raw)
-
+    # NEW POLICY: No admin CCs. If you consider Finance “concerned,” you can CC finance mapping here.
     _send_and_log(
         req,
         kind=kind,
         subject=subject,
         to_addrs=[emp_email],
-        cc=cc,
+        cc=[],  # remove admins
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
@@ -1502,17 +1504,12 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
     txt_lines.extend(["", "View request:", detail_url])
     txt = "\n".join(txt_lines)
 
-    cc_list = _admin_emails()
-    mgr_to = _manager_email_candidates(req)
-    cc_list.extend(mgr_to)
-    cc = _ensure_cc_amreen(cc_list)
-
     _send_and_log(
         req,
         kind="paid",
         subject=subject,
         to_addrs=[emp_email],
-        cc=cc,
+        cc=[],  # DO NOT CC managers/admins anymore
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
@@ -1607,7 +1604,7 @@ def send_bill_rejected_by_finance(req: ReimbursementRequest, line: Reimbursement
         kind=kind,
         subject=subject,
         to_addrs=[emp_email],
-        cc=_admin_emails(),
+        cc=[],  # remove admins
         reply_to=[],  # defaults to Amreen
         html=html,
         txt=txt,
@@ -1691,7 +1688,7 @@ def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *,
         kind=kind,
         subject=subject,
         to_addrs=fin_rec.to,
-        cc=[],  # enforced
+        cc=[],  # enforced: only finance team
         reply_to=[emp_email] if emp_email and emp_email != "-" else _amreen_reply_to(),
         html=html,
         txt=txt,

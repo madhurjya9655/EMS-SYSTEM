@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Iterable, List, Sequence, Optional, Dict, Any
-from datetime import datetime, time as _time
+from typing import Iterable, List, Sequence, Optional, Dict, Any, Tuple
+from datetime import datetime, time as _time, date as _date
 import logging
+import os
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -23,15 +24,93 @@ SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 IST = ZoneInfo(getattr(settings, "TIME_ZONE", "Asia/Kolkata")) if ZoneInfo else timezone.get_fixed_timezone(330)  # 330 mins = IST
 DEFAULT_ASSIGN_T = _time(10, 0)
 
+# -------------------------------------------------------------------
+# Special routing – strict Pankaj rules (D1–D4)
+# -------------------------------------------------------------------
+# Configurable via Django settings or ENV; safe fallbacks provided.
+_PANKAJ_EMAIL = (
+    getattr(settings, "PANKAJ_EMAIL", None)
+    or os.getenv("PANKAJ_EMAIL", "")
+    or "pankaj@blueoceansteels.com"
+).strip().lower()
+
+# Prefer an explicit AMREEN_EMAIL; else reuse reimbursement sender as default
+_AMREEN_EMAIL = (
+    getattr(settings, "AMREEN_EMAIL", None)
+    or os.getenv("AMREEN_EMAIL", "")
+    or getattr(settings, "REIMBURSEMENT_SENDER_EMAIL", "")
+).strip().lower()
+
+
+def _ist_today() -> _date:
+    now = timezone.now()
+    try:
+        if ZoneInfo:
+            return now.astimezone(IST).date()  # type: ignore[arg-type]
+    except Exception:
+        pass
+    return timezone.localdate()
+
+
+def _is_pankaj(addr: str | None) -> bool:
+    if not addr:
+        return False
+    try:
+        return addr.strip().lower() == _PANKAJ_EMAIL
+    except Exception:
+        return False
+
+
+def _pankaj_allowed_context(ctx: Dict[str, Any] | None) -> bool:
+    """
+    Allow-list case (D2/D3) for emails to Pankaj:
+      • Only for Delegation
+      • Status == 'Pending'
+      • planned_date < today (IST)
+      • Assigned by Pankaj (self-assign)
+      • Amreen is CC'd (enforced when building recipients)
+    """
+    if not isinstance(ctx, dict):
+        return False
+    try:
+        if (ctx.get("kind") or "").strip() != "Delegation":
+            return False
+
+        status = (ctx.get("raw_status") or "").strip()
+        assigned_by_email = (ctx.get("raw_assigned_by_email") or "").strip().lower()
+        planned_dt = ctx.get("raw_planned_date")
+
+        if status != "Pending":
+            return False
+
+        if not planned_dt:
+            return False
+        if isinstance(planned_dt, datetime):
+            tz = timezone.get_current_timezone()
+            aware = planned_dt if timezone.is_aware(planned_dt) else timezone.make_aware(planned_dt, tz)
+            try:
+                planned_date_ist = timezone.localtime(aware, IST).date() if ZoneInfo else timezone.localtime(aware).date()
+            except Exception:
+                planned_date_ist = aware.date()
+        else:
+            planned_date_ist = planned_dt
+
+        if not (planned_date_ist < _ist_today()):
+            return False
+
+        if assigned_by_email != _PANKAJ_EMAIL:
+            return False
+
+        return True
+    except Exception:
+        return False
+
 
 # -------------------------------------------------------------------
 # Generic helpers
 # -------------------------------------------------------------------
 def _safe_console_text(s: object) -> str:
-    """
-    Console-safe text (avoids encoding errors in logs).
-    Reused by various services (weekly_performance, signals, etc.).
-    """
+    """Console-safe text (avoids encoding errors in logs)."""
     try:
         text = "" if s is None else str(s)
     except Exception:
@@ -68,6 +147,7 @@ def get_admin_emails(exclude: Sequence[str] | None = None) -> List[str]:
     """
     Superusers + members of Admin/Manager/EA/CEO groups.
     Returns a deduped list of emails, excluding any in `exclude`.
+    (Pankaj still gets filtered later by send_html_email; excluding here is optional.)
     """
     try:
         qs = User.objects.filter(is_active=True).exclude(email__isnull=True).exclude(email__exact="")
@@ -169,6 +249,41 @@ def _render_or_fallback(template_name: str, context: Dict[str, Any], fallback: s
         return fallback
 
 
+def _apply_pankaj_block_for_to(to_email: str, context: Dict[str, Any], cc_list: List[str]) -> Tuple[Optional[str], List[str]]:
+    """
+    Enforce D1–D4 on primary recipient.
+      • If recipient is Pankaj → allow ONLY the strict Delegation overdue case and CC Amreen.
+      • Otherwise pass-through.
+    Returns (effective_to_email or None, effective_cc_list).
+    """
+    if not _is_pankaj(to_email):
+        return to_email, cc_list
+
+    if _pankaj_allowed_context(context):
+        # Ensure Amreen is CC'd
+        cc_lc = [e.lower() for e in cc_list]
+        if _AMREEN_EMAIL and _AMREEN_EMAIL not in cc_lc:
+            cc_list.append(_AMREEN_EMAIL)
+        return to_email, cc_list
+
+    logger.info("Suppressed email to Pankaj per D1/D4 (kind=%s)", (context or {}).get("kind"))
+    return None, cc_list
+
+
+def _filter_blocklist(seq: Sequence[str], context: Dict[str, Any]) -> List[str]:
+    """Remove Pankaj from any recipient list unless the context meets D2/D3."""
+    out: List[str] = []
+    for s in seq or []:
+        addr = (s or "").strip()
+        if not addr:
+            continue
+        if _is_pankaj(addr) and not _pankaj_allowed_context(context):
+            logger.info("Suppressed Pankaj from recipients per D1/D4")
+            continue
+        out.append(addr)
+    return _dedupe_emails(out)
+
+
 def _send_unified_assignment_email(
     *,
     subject: str,
@@ -179,7 +294,7 @@ def _send_unified_assignment_email(
     """
     Render standardized TXT + HTML and send safely.
 
-    - Always sends to the assignee (`to_email`).
+    - Always sends to the assignee unless the Pankaj D1–D4 block applies.
     - Optional CC list (e.g. Amreen, reporting officer, colleagues).
     """
     to_email = (to_email or "").strip()
@@ -187,6 +302,11 @@ def _send_unified_assignment_email(
         return
 
     cc_list = _dedupe_emails(cc or [])
+
+    # apply D1–D4 on primary recipient
+    to_email, cc_list = _apply_pankaj_block_for_to(to_email, context, cc_list)
+    if not to_email:
+        return
 
     # Text fallback (simple/plain)
     text_fallback = (
@@ -265,12 +385,14 @@ def send_html_email(
     fail_silently: bool = False,
 ) -> None:
     """Render and send an HTML email using a Django template, with safe fallbacks."""
-    to_list = _dedupe_emails(to or [])
-    if not to_list:
-        return
+    # strip Pankaj from lists unless allow-list applies
+    to_list = _filter_blocklist(list(to or []), context)
+    cc_list = _filter_blocklist(list(cc or []), context)
+    bcc_list = _filter_blocklist(list(bcc or []), context)
 
-    cc_list = _dedupe_emails(cc or [])
-    bcc_list = _dedupe_emails(bcc or [])
+    if not to_list and not cc_list and not bcc_list:
+        logger.info("Suppressed email entirely due to recipient filtering (subject=%s)", subject)
+        return
 
     effective_fail_silently = fail_silently or _fail_silently()
 
@@ -281,7 +403,6 @@ def send_html_email(
         if isinstance(ctx.get("items_table"), (list, tuple)):
             ctx["items_table"] = _fmt_rows(ctx["items_table"])
 
-        # Render; fallback to a minimal shell if missing
         html_message = _render_or_fallback(
             template_name,
             ctx,
@@ -292,14 +413,20 @@ def send_html_email(
             subject=subject,
             body=html_message,
             from_email=_from_email(),
-            to=to_list,
+            to=to_list or None,
             cc=cc_list or None,
             bcc=bcc_list or None,
         )
         msg.attach_alternative(html_message, "text/html")
         msg.send(fail_silently=effective_fail_silently)
 
-        logger.info("Sent HTML email to %d recipient(s): %s", len(to_list), subject)
+        logger.info(
+            "Sent HTML email (to=%d, cc=%d, bcc=%d): %s",
+            len(to_list or []),
+            len(cc_list or []),
+            len(bcc_list or []),
+            subject,
+        )
     except Exception as e:
         logger.error("send_html_email failed: %s", e)
         if not effective_fail_silently:
@@ -316,11 +443,7 @@ def _send_email(
     bcc: Optional[Sequence[str]] = None,
     fail_silently: bool = False,
 ) -> None:
-    """
-    Legacy wrapper so existing code that calls `_send_email(...)` keeps working.
-    Expected pattern:
-        _send_email("Subject", "template.html", ctx, ["to@example.com"])
-    """
+    """Legacy wrapper so existing code that calls `_send_email(...)` keeps working."""
     send_html_email(
         subject=subject,
         template_name=template_name,
@@ -346,11 +469,9 @@ def _build_subject(subject_prefix: str, task_title: str) -> str:
         return task_title
 
     low = sp.lower()
-    # Heuristics that strongly indicate a fully-formed subject
     markers = ("reminder", "scheduled for", "due", "overdue")
     if any(m in low for m in markers):
         return sp
-    # If it already includes the task title, assume it's full
     if task_title and task_title.strip().lower() in low:
         return sp
     return f"{sp}: {task_title}"
@@ -362,10 +483,7 @@ def _build_subject(subject_prefix: str, task_title: str) -> str:
 def send_checklist_assignment_to_user(
     *, task, complete_url: str, subject_prefix: str = "Checklist Assigned"
 ) -> None:
-    """
-    User-facing email for Checklist (assignee-only).
-    NOTE: Assignee must receive the email even if assigner == assignee.
-    """
+    """User-facing email for Checklist (assignee-only)."""
     to_email = getattr(getattr(task, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
@@ -385,7 +503,7 @@ def send_checklist_assignment_to_user(
         "cta_text": "Open the task and mark it complete when done.",
         # extra details
         "task_message": getattr(task, "message", "") or "",
-        "instructions": getattr(task, "message", "") or "",  # normalized key
+        "instructions": getattr(task, "message", "") or "",
         "task_frequency": (
             f"{getattr(task, 'mode', '')} (Every {getattr(task, 'frequency', '')})"
             if getattr(task, "mode", None) and getattr(task, "frequency", None)
@@ -418,11 +536,9 @@ def send_delegation_assignment_to_user(
     """
     User-facing email for Delegation.
 
-    - Always sends to the assignee.
-    - Can CC:
-        * Explicit `cc_users` / `cc_emails` passed from the view (e.g. Amreen, reporting officer, colleagues)
-        * Any future `delegation.cc_users` / `delegation.cc_emails` fields, if added to the model.
-    - Assigner is *never* included in CC.
+    - Sends to assignee (with D1–D4 applied for Pankaj).
+    - Optional CC from explicit users/emails and potential model fields.
+    - Assigner is never included in CC.
     """
     to_email = getattr(getattr(delegation, "assign_to", None), "email", "") or ""
     if not to_email.strip():
@@ -434,7 +550,6 @@ def send_delegation_assignment_to_user(
     # Build CC pool
     cc_pool: List[str] = []
 
-    # From explicit cc_users param
     for u in cc_users or []:
         try:
             em = (getattr(u, "email", "") or "").strip()
@@ -443,13 +558,11 @@ def send_delegation_assignment_to_user(
         except Exception:
             continue
 
-    # From explicit cc_emails param
     for raw in cc_emails or []:
         em = (raw or "").strip()
         if em:
             cc_pool.append(em)
 
-    # From potential model fields (if later added)
     if hasattr(delegation, "cc_users"):
         try:
             for u in delegation.cc_users.all():
@@ -469,7 +582,6 @@ def send_delegation_assignment_to_user(
         except Exception:
             pass
 
-    # Exclude assigner from CC
     assigner_email = ""
     try:
         assigner_email = (getattr(getattr(delegation, "assign_by", None), "email", "") or "").strip()
@@ -478,6 +590,7 @@ def send_delegation_assignment_to_user(
 
     cc_final = _dedupe_emails(_without_emails(cc_pool, [assigner_email] if assigner_email else []))
 
+    # Include RAW values for D2/D3 gate
     ctx = {
         "kind": "Delegation",
         "task_title": task_title,
@@ -499,6 +612,10 @@ def send_delegation_assignment_to_user(
         "site_url": SITE_URL,
         "is_recurring": bool(getattr(delegation, "mode", None) and getattr(delegation, "frequency", None)),
         "task_id": delegation.id,
+        # RAW fields for strict allow-listing:
+        "raw_planned_date": getattr(delegation, "planned_date", None),
+        "raw_status": getattr(delegation, "status", None),
+        "raw_assigned_by_email": assigner_email,
     }
 
     _send_unified_assignment_email(
@@ -512,10 +629,7 @@ def send_delegation_assignment_to_user(
 def send_help_ticket_assignment_to_user(
     *, ticket, complete_url: str, subject_prefix: str = "Help Ticket Assigned"
 ) -> None:
-    """
-    User-facing email for Help Ticket (assignee-only).
-    NOTE: Assignee must receive the email even if assigner == assignee.
-    """
+    """User-facing email for Help Ticket (assignee-only)."""
     to_email = getattr(getattr(ticket, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
@@ -548,12 +662,7 @@ def send_help_ticket_assignment_to_user(
 
 
 def send_checklist_admin_confirmation(*, task, subject_prefix: str = "Checklist Assignment") -> None:
-    """
-    Detailed admin confirmation for checklist.
-
-    IMPORTANT: Excludes the assigner from recipients to satisfy
-    “Assigner should never receive emails”.
-    """
+    """Detailed admin confirmation for checklist (assigner excluded)."""
     exclude = []
     try:
         if getattr(task, "assign_by", None) and getattr(task.assign_by, "email", None):
@@ -786,10 +895,7 @@ def send_task_reminder_email(*, task, task_type: str = "Checklist") -> None:
 
 
 def send_admin_bulk_summary(*, title: str, rows: Sequence[dict], exclude_assigner_email: str | None = None) -> None:
-    """
-    Send clean admin bulk summary with basic stats.
-    IMPORTANT: will exclude the assigner email if provided.
-    """
+    """Send clean admin bulk summary with basic stats (assigner excluded if provided)."""
     exclude = [exclude_assigner_email] if exclude_assigner_email else None
     admins = get_admin_emails(exclude=exclude)
     if not admins or not rows:
@@ -802,7 +908,7 @@ def send_admin_bulk_summary(*, title: str, rows: Sequence[dict], exclude_assigne
     ]
 
     send_html_email(
-        subject=title,  # e.g., "✅ Bulk Upload: 162 Checklist Tasks Created"
+        subject=title,
         template_name="email/admin_assignment_summary.html",
         context={
             "title": title,
@@ -848,10 +954,7 @@ def send_bulk_completion_summary(*, user, completed_tasks: List, date_range: str
 # Welcome email for new users (future use; call from user creation flow)
 # -------------------------------------------------------------------
 def send_welcome_email(*, user: User, raw_password: str | None = None) -> None:
-    """
-    Welcome mail with login details. Skips if user has no email.
-    This does NOT CC/BCC anyone (assigner never receives).
-    """
+    """Welcome mail with login details. Skips if user has no email."""
     to_email = (getattr(user, "email", "") or "").strip()
     if not to_email:
         return
@@ -865,7 +968,6 @@ def send_welcome_email(*, user: User, raw_password: str | None = None) -> None:
         "login_url": SITE_URL,
     }
 
-    # Minimal fallback body
     fallback_html = f"""
     <html><body>
       <h3>Welcome to EMS</h3>

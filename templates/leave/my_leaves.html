@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load tz humanize static %}
+{% load tz humanize static users_permissions %}
 
 {% block title %}My Leaves{% endblock %}
 
@@ -8,9 +8,13 @@
 
   <div class="d-flex align-items-center justify-content-between mb-3">
     <h4 class="mb-0"><i class="fa-solid fa-file-alt me-2"></i>My Leaves</h4>
-    <a href="{% url 'leave:apply_leave' %}" class="btn btn-primary">
-      <i class="fa-solid fa-plus me-1"></i> Submit Leave
-    </a>
+    <div class="d-flex gap-2">
+      {% comment %} Admin Edit entry point for convenience (no specific leave) — optional {% endcomment %}
+      {% include "leave/_admin_edit_button.html" with leave=None next_url=request.get_full_path %}
+      <a href="{% url 'leave:apply_leave' %}" class="btn btn-primary">
+        <i class="fa-solid fa-plus me-1"></i> Submit Leave
+      </a>
+    </div>
   </div>
 
   {% if leaves %}
@@ -30,6 +34,7 @@
               <th>Attachment</th>
               <th>Applied</th>
               <th>Updated</th>
+              <th class="text-end">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -110,6 +115,21 @@
 
               <td>
                 {% timezone "Asia/Kolkata" %}{{ lr.updated_at|date:"M j, Y g:i A" }}{% endtimezone %}
+              </td>
+
+              <td class="text-end">
+                <div class="d-inline-flex gap-1">
+                  {% if lr.status == "PENDING" %}
+                    <form method="post" action="{% url 'leave:delete_leave' lr.id %}" onsubmit="return confirm('Delete this pending leave?');">
+                      {% csrf_token %}
+                      <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete">
+                        <i class="fas fa-trash"></i>
+                      </button>
+                    </form>
+                  {% endif %}
+                  {# Admin Edit button (per-row) #}
+                  {% include "leave/_admin_edit_button.html" with leave=lr next_url=request.get_full_path %}
+                </div>
               </td>
             </tr>
             {% endfor %}

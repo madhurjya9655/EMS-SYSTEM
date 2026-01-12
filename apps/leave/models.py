@@ -1,4 +1,3 @@
-# apps/leave/models.py
 from __future__ import annotations
 
 import hashlib
@@ -1074,7 +1073,8 @@ def _safe_send_request_email(leave: LeaveRequest) -> None:
         # Merge + normalize
         all_cc = list({*(e.strip().lower() for e in admin_cc_list + extra_cc_emails)})
         send_leave_request_email(leave, manager_email=manager_email, cc_list=all_cc)
-        LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT)
+        # ✅ Mark audit with kind="request" so downstream duplicate suppression works reliably
+        LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT, kind="request")
     except Exception:
         logger.exception("Failed to send leave request email")
 

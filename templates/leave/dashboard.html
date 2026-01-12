@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load static %}
+{% load static users_permissions %}
 
 {% block title %}Leave Dashboard{% endblock %}
 
@@ -65,7 +65,9 @@
         </div>
       </div>
     </div>
-    <div>
+    <div class="d-flex gap-2">
+      {% comment %} Quick access Admin Edit for last leave could be added; keeping generic include harmless {% endcomment %}
+      {% include "leave/_admin_edit_button.html" with leave=None next_url=request.get_full_path %}
       <a href="{% url 'leave:apply_leave' %}" class="btn btn-light btn-lg fw-semibold">
         <i class="fas fa-plus me-2"></i>Apply Leave
       </a>
@@ -218,7 +220,7 @@
             <th>Approver</th>
             <th>CC</th>
             <th>Applied</th>
-            <th width="100">Actions</th>
+            <th width="140" class="text-end">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -286,19 +288,21 @@
                 {% endwith %}
               </td>
               <td class="text-nowrap text-muted">{{ lr.applied_at|date:"M d, H:i" }}</td>
-              <td>
-                {% if lr.status == 'PENDING' %}
-                  <button type="button"
-                          class="btn btn-delete btn-sm js-delete-one"
-                          data-leave-id="{{ lr.id }}"
-                          data-leave-type="{{ lr.leave_type.name|escape }}"
-                          data-start-date="{% if lr.start_at %}{{ lr.start_at|date:'M d' }}{% else %}—{% endif %}"
-                          title="Delete leave request">
-                    <i class="fas fa-trash"></i>
-                  </button>
-                {% else %}
-                  <span class="text-muted small">—</span>
-                {% endif %}
+              <td class="text-end">
+                <div class="d-inline-flex gap-1">
+                  {% if lr.status == 'PENDING' %}
+                    <button type="button"
+                            class="btn btn-delete btn-sm js-delete-one"
+                            data-leave-id="{{ lr.id }}"
+                            data-leave-type="{{ lr.leave_type.name|escape }}"
+                            data-start-date="{% if lr.start_at %}{{ lr.start_at|date:'M d' }}{% else %}—{% endif %}"
+                            title="Delete leave request">
+                      <i class="fas fa-trash"></i>
+                    </button>
+                  {% endif %}
+                  {# Admin Edit button (per-row) #}
+                  {% include "leave/_admin_edit_button.html" with leave=lr next_url=request.get_full_path %}
+                </div>
               </td>
             </tr>
           {% endfor %}

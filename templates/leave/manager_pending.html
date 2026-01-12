@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load static %}
+{% load static users_permissions %}
 
 {% block title %}Pending Leaves — Manager{% endblock %}
 
@@ -14,7 +14,9 @@
 
   <div class="d-flex align-items-center justify-content-between mb-3">
     <h3 class="mb-0">Pending Leaves</h3>
-    <a class="btn btn-outline-secondary btn-sm" href="{% url 'leave:dashboard' %}">My Dashboard</a>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary btn-sm" href="{% url 'leave:dashboard' %}">My Dashboard</a>
+    </div>
   </div>
 
   <div class="card">
@@ -93,6 +95,9 @@
                       {% csrf_token %}
                       <button class="btn btn-danger btn-sm" type="submit">Reject</button>
                     </form>
+
+                    {# Admin Edit button (per-row) #}
+                    {% include "leave/_admin_edit_button.html" with leave=lr next_url=request.get_full_path %}
                   </td>
                 </tr>
               {% endfor %}
