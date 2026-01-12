@@ -1,11 +1,6 @@
 {% load users_permissions %}
-{# 
-  Reusable Admin Edit button.
-  Usage: {% include "leave/_admin_edit_button.html" with leave=<LeaveRequest or None> next_url=request.get_full_path %}
-  Shows only if user has the "leave_admin_edit" permission (or is superuser).
-  If "leave" is provided, goes to that LeaveRequest’s admin change page.
-  If "leave" is None, goes to the LeaveRequest changelist.
-#}
+{# Admin Edit button snippet. Requires 'leave_admin_edit' permission. #}
+
 {% if request.user|has_permission:"leave_admin_edit" %}
   {% if leave %}
     <a href="{% url 'admin:leave_leaverequest_change' leave.id %}?_changelist_filters=next={{ next_url|urlencode }}"
