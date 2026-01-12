@@ -9,7 +9,17 @@ from typing import Any, Dict, Iterable, Optional, Sequence
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db.models import Q, Sum, Count, Exists, OuterRef
+from django.db.models import (
+    Q,
+    Sum,
+    Count,
+    Exists,
+    OuterRef,
+    Value,
+    BooleanField,
+    Case,
+    When,
+)
 from django.http import (
     FileResponse,
     Http404,
@@ -939,14 +949,40 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
     context_object_name = "requests"
 
     def get_queryset(self):
+        """
+        Show requests in the Finance queue and annotate:
+        - finance_verified_all: True when ALL INCLUDED bills are already at/after finance approval.
+        """
+        R = ReimbursementRequest
+        inc = ReimbursementLine.objects.filter(
+            request_id=OuterRef("pk"),
+            status=ReimbursementLine.Status.INCLUDED,
+        )
+        ok_statuses = [
+            ReimbursementLine.BillStatus.FINANCE_APPROVED,
+            ReimbursementLine.BillStatus.MANAGER_PENDING,
+            ReimbursementLine.BillStatus.MANAGER_APPROVED,
+            ReimbursementLine.BillStatus.PAID,
+        ]
+        bad = inc.exclude(bill_status__in=ok_statuses)
+
         return (
-            ReimbursementRequest.objects.filter(
+            R.objects.filter(
                 status__in=[
-                    ReimbursementRequest.Status.PENDING_FINANCE_VERIFY,
-                    ReimbursementRequest.Status.PARTIAL_HOLD,
-                    ReimbursementRequest.Status.PENDING_FINANCE,
-                    ReimbursementRequest.Status.APPROVED,
+                    R.Status.PENDING_FINANCE_VERIFY,
+                    R.Status.PARTIAL_HOLD,
+                    R.Status.PENDING_FINANCE,  # legacy compat
+                    R.Status.APPROVED,         # legacy compat
                 ]
+            )
+            .annotate(
+                has_included=Exists(inc),
+                has_bad=Exists(bad),
+                finance_verified_all=Case(
+                    When(has_included=True, has_bad=False, then=Value(True)),
+                    default=Value(False),
+                    output_field=BooleanField(),
+                ),
             )
             .select_related("created_by", "manager", "management")
             .order_by("-created_at")
