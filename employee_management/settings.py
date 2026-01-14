@@ -220,11 +220,14 @@ except Exception:
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
+# ✅ Single source of truth for connection reuse (used for both Postgres + SQLite)
+CONN_MAX_AGE = env_int("CONN_MAX_AGE", 0)
+
 if DATABASE_URL and dj_database_url:
     DATABASES = {
         "default": dj_database_url.parse(
             DATABASE_URL,
-            conn_max_age=env_int("CONN_MAX_AGE", 60),
+            conn_max_age=CONN_MAX_AGE,
             ssl_require=env_bool("DB_SSL_REQUIRE", True),
         ),
     }
@@ -243,6 +246,8 @@ else:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": sqlite_path,
+            # ✅ THIS is the missing piece that caused Django to show CONN_MAX_AGE: 0
+            "CONN_MAX_AGE": CONN_MAX_AGE,
             "OPTIONS": {
                 "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
                 "timeout": 60,
@@ -250,7 +255,6 @@ else:
         },
     }
 
-CONN_MAX_AGE = env_int("CONN_MAX_AGE", 0)
 DATABASE_CONNECTION_POOLING = False
 
 # -----------------------------------------------------------------------------
