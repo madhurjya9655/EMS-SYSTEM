@@ -1,56 +1,54 @@
-# apps/reimbursement/views_analytics.py
 from __future__ import annotations
 
-import calendar
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple
 
+from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import (
     Sum,
     Count,
     Q,
-    F,
     DecimalField,
     Value as V,
+    Max,
+    Min,
 )
-from django.db.models.functions import (
-    Coalesce,
-    TruncWeek,
-    TruncMonth,
-    TruncQuarter,
-    TruncYear,
-)
-from django.http import JsonResponse, HttpResponseForbidden
+from django.db.models.functions import Coalesce, TruncDay, TruncMonth
+from django.http import JsonResponse, HttpResponseForbidden, HttpResponseNotFound
 from django.utils import timezone
 from django.views.generic import TemplateView, View
 
 from .models import (
     ReimbursementRequest,
     ReimbursementLine,
-    ExpenseItem,
     REIMBURSEMENT_CATEGORY_CHOICES,
 )
 from .views import _user_is_admin, _user_is_finance, _user_is_manager  # reuse existing helpers
 
-# ----------------------------
+User = get_user_model()
+
+# ---------------------------------------------------------------------
 # Decimal helpers
-# ----------------------------
+# ---------------------------------------------------------------------
 
 # A reusable "decimal zero" with explicit output_field so Coalesce/Sum remain DecimalField
 DEC0 = V(Decimal("0"), output_field=DecimalField(max_digits=18, decimal_places=2))
 
 
-def d(val: str | int | float) -> Decimal:
+def d(val: str | int | float | Decimal | None) -> Decimal:
     """Safe decimal ctor (e.g., d(0), d('100.50'))."""
-    return Decimal(str(val))
+    try:
+        return Decimal(str(val if val is not None else 0))
+    except Exception:
+        return Decimal("0")
 
 
-# ----------------------------
+# ---------------------------------------------------------------------
 # Access control (role-aware)
-# ----------------------------
+# ---------------------------------------------------------------------
 
 def _user_can_view_analytics(user) -> bool:
     """
@@ -60,137 +58,154 @@ def _user_can_view_analytics(user) -> bool:
     return bool(_user_is_admin(user) or _user_is_finance(user) or _user_is_manager(user))
 
 
-# ----------------------------
-# Filter parsing helpers
-# ----------------------------
+# ---------------------------------------------------------------------
+# Filters (Issue 11 implemented: presets + time granularity + optional categories)
+# ---------------------------------------------------------------------
 
 @dataclass
 class Filters:
+    """
+    Filter set:
+      - employees: CSV of user IDs (used to scope analytics)
+      - status: approved_and_paid | approved_only | paid_only
+      - line_ids: CSV of ReimbursementLine PKs (drives bill-wise scoping)
+      - from_date / to_date: YYYY-MM-DD (inclusive range on expense date)
+      - preset: this_month | last_month | last_90_days | ytd | fytd (ignored if from/to supplied)
+      - granularity: day | month (affects timeseries endpoint only)
+      - categories: CSV of category keys (travel, meal, yard, office, other)
+    """
     employee_ids: List[int]
+    status_mode: str
+    line_ids: List[int]
+    from_date: Optional[date]
+    to_date: Optional[date]
+    preset: Optional[str]
+    granularity: str
     categories: List[str]
-    date_from: Optional[datetime]
-    date_to: Optional[datetime]
-    granularity: str           # 'weekly' | 'monthly' | 'quarterly' | 'yearly'
-    status_mode: str           # 'approved_and_paid' | 'approved_only' | 'paid_only'
 
 
-_CATEGORY_KEYS = {key for key, _ in REIMBURSEMENT_CATEGORY_CHOICES}
-_CATEGORY_LABELS = dict(REIMBURSEMENT_CATEGORY_CHOICES)
-
-_GRANULARITIES = {"weekly", "monthly", "quarterly", "yearly"}
 _STATUS_MODES = {"approved_and_paid", "approved_only", "paid_only"}
+_VALID_PRESETS = {"this_month", "last_month", "last_90_days", "ytd", "fytd"}
+_VALID_GRANULARITY = {"day", "month"}
+_CATEGORY_LABELS = dict(REIMBURSEMENT_CATEGORY_CHOICES)
+_VALID_CATEGORY_KEYS = set(_CATEGORY_LABELS.keys())
 
 
-def _ist_now() -> datetime:
-    tz = timezone.get_current_timezone()
-    return timezone.localtime(timezone.now(), tz)
+def _parse_csv_ints(raw: str) -> List[int]:
+    out: List[int] = []
+    for piece in [p.strip() for p in (raw or "").split(",") if p.strip()]:
+        try:
+            out.append(int(piece))
+        except Exception:
+            continue
+    return out
 
 
-def _month_bounds(dt: date) -> Tuple[datetime, datetime]:
-    start_day = date(dt.year, dt.month, 1)
-    last_day = calendar.monthrange(dt.year, dt.month)[1]
-    end_day = date(dt.year, dt.month, last_day)
-    tz = timezone.get_current_timezone()
-    start_dt = datetime.combine(start_day, datetime.min.time()).replace(tzinfo=tz)
-    end_dt = datetime.combine(end_day, datetime.max.time()).replace(tzinfo=tz)
-    return start_dt, end_dt
+def _parse_csv_strs(raw: str) -> List[str]:
+    return [p.strip().lower() for p in (raw or "").split(",") if p.strip()]
 
 
-def _quarter_bounds(dt: date) -> Tuple[datetime, datetime]:
-    q = (dt.month - 1) // 3 + 1
-    start_month = 3 * (q - 1) + 1
-    end_month = start_month + 2
-    tz = timezone.get_current_timezone()
-    start_dt = datetime(dt.year, start_month, 1, 0, 0, 0, tzinfo=tz)
-    last_day = calendar.monthrange(dt.year, end_month)[1]
-    end_dt = datetime(dt.year, end_month, last_day, 23, 59, 59, tzinfo=tz)
-    return start_dt, end_dt
+def _parse_date(s: Optional[str]) -> Optional[date]:
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s.strip(), "%Y-%m-%d").date()
+    except Exception:
+        return None
 
 
-def _year_bounds(dt: date) -> Tuple[datetime, datetime]:
-    tz = timezone.get_current_timezone()
-    start_dt = datetime(dt.year, 1, 1, 0, 0, 0, tzinfo=tz)
-    end_dt = datetime(dt.year, 12, 31, 23, 59, 59, tzinfo=tz)
-    return start_dt, end_dt
+def _month_bounds(dt: date) -> Tuple[date, date]:
+    start = dt.replace(day=1)
+    if dt.month == 12:
+        end = date(dt.year + 1, 1, 1) - timedelta(days=1)
+    else:
+        end = date(dt.year, dt.month + 1, 1) - timedelta(days=1)
+    return start, end
+
+
+def _fy_start(dt: date) -> date:
+    # Indian FY default (Apr 1)
+    return date(dt.year if dt.month >= 4 else dt.year - 1, 4, 1)
+
+
+def _preset_range(preset: str) -> Tuple[date, date]:
+    today = timezone.localdate()
+    if preset == "this_month":
+        return _month_bounds(today)
+    if preset == "last_month":
+        if today.month == 1:
+            prev = date(today.year - 1, 12, 1)
+        else:
+            prev = date(today.year, today.month - 1, 1)
+        return _month_bounds(prev)
+    if preset == "last_90_days":
+        return today - timedelta(days=89), today
+    if preset == "ytd":
+        return date(today.year, 1, 1), today
+    if preset == "fytd":
+        return _fy_start(today), today
+    # Fallback: this_month
+    return _month_bounds(today)
 
 
 def _parse_filters(request) -> Filters:
     """
-    Query params:
-      - employees: CSV of user IDs
-      - categories: CSV of expense category keys (travel, meal, yard, office, other)
-      - from, to: ISO dates (YYYY-MM-DD) inclusive
-      - preset: weekly | monthly | quarterly | yearly  (sets granularity + default range)
-      - granularity: weekly | monthly | quarterly | yearly
+    Accepted query params:
+      - employees: CSV of user IDs to include (optional)
       - status: approved_and_paid (default) | approved_only | paid_only
+      - line_ids: CSV of line PKs to include (optional; bill-wise filter)
+      - from: YYYY-MM-DD (expense date)
+      - to:   YYYY-MM-DD (expense date)
+      - preset: this_month | last_month | last_90_days | ytd | fytd
+      - granularity: day | month
+      - categories: CSV of category keys (travel, meal, yard, office, other)
     """
-    # employees
-    emp_csv = (request.GET.get("employees") or "").strip()
-    employee_ids: List[int] = []
-    for piece in [p.strip() for p in emp_csv.split(",") if p.strip()]:
-        if piece.isdigit():
-            employee_ids.append(int(piece))
-
-    # categories
-    cat_csv = (request.GET.get("categories") or "").strip().lower()
-    categories = [c for c in [p.strip() for p in cat_csv.split(",") if p.strip()] if c in _CATEGORY_KEYS]
+    # employees (IDs come from dropdown behind the scenes; UI shows names)
+    employee_ids = _parse_csv_ints((request.GET.get("employees") or "").strip())
 
     # status
     status_mode = (request.GET.get("status") or "approved_and_paid").strip().lower()
     if status_mode not in _STATUS_MODES:
         status_mode = "approved_and_paid"
 
-    # granularity & presets
-    preset = (request.GET.get("preset") or "").strip().lower()
-    granularity = (request.GET.get("granularity") or "").strip().lower()
-    if not granularity:
-        granularity = preset or "monthly"
-    if granularity not in _GRANULARITIES:
-        granularity = "monthly"
+    # bill-wise
+    line_ids = _parse_csv_ints((request.GET.get("line_ids") or "").strip())
 
-    # date range (defaults)
-    tz_now = _ist_now()
-    start_dt: Optional[datetime] = None
-    end_dt: Optional[datetime] = None
+    # time windows
+    from_date = _parse_date(request.GET.get("from"))
+    to_date = _parse_date(request.GET.get("to"))
+    preset = (request.GET.get("preset") or "").strip().lower() or None
+    if (from_date is None or to_date is None) and preset in _VALID_PRESETS:
+        start, end = _preset_range(preset)
+        from_date, to_date = start, end
 
-    if preset in {"weekly", "monthly", "quarterly", "yearly"}:
-        today = tz_now.date()
-        if preset == "weekly":
-            # Last 7 days window ending today
-            tz = timezone.get_current_timezone()
-            end_dt = datetime.combine(today, datetime.max.time()).replace(tzinfo=tz)
-            start_dt = end_dt - timedelta(days=6)
-        elif preset == "monthly":
-            start_dt, end_dt = _month_bounds(today)
-        elif preset == "quarterly":
-            start_dt, end_dt = _quarter_bounds(today)
+    # granularity (for timeseries)
+    granularity = (request.GET.get("granularity") or "").strip().lower() or "day"
+    if granularity not in _VALID_GRANULARITY:
+        # Auto default: if range > 90 days -> month; else day
+        if from_date and to_date and (to_date - from_date).days > 90:
+            granularity = "month"
         else:
-            start_dt, end_dt = _year_bounds(today)
+            granularity = "day"
 
-    # explicit from/to override preset
-    raw_from = (request.GET.get("from") or "").strip()
-    raw_to = (request.GET.get("to") or "").strip()
-    tz = timezone.get_current_timezone()
-    if raw_from:
-        y, m, d_ = [int(x) for x in raw_from.split("-")]
-        start_dt = datetime(y, m, d_, 0, 0, 0, tzinfo=tz)
-    if raw_to:
-        y, m, d_ = [int(x) for x in raw_to.split("-")]
-        end_dt = datetime(y, m, d_, 23, 59, 59, tzinfo=tz)
+    # categories (optional)
+    categories = [c for c in _parse_csv_strs(request.GET.get("categories")) if c in _VALID_CATEGORY_KEYS]
 
     return Filters(
         employee_ids=employee_ids,
-        categories=categories,
-        date_from=start_dt,
-        date_to=end_dt,
-        granularity=granularity,
         status_mode=status_mode,
+        line_ids=line_ids,
+        from_date=from_date,
+        to_date=to_date,
+        preset=preset,
+        granularity=granularity,
+        categories=categories,
     )
 
 
-# ----------------------------
-# Base queryset (server-side)
-# ----------------------------
+# ---------------------------------------------------------------------
+# Base queryset (server-side) — BILL-WISE
+# ---------------------------------------------------------------------
 
 def _status_q(status_mode: str) -> Q:
     if status_mode == "approved_only":
@@ -203,7 +218,7 @@ def _status_q(status_mode: str) -> Q:
 
 def _base_lines_qs(f: Filters):
     """
-    Start from ReimbursementLine to keep category fidelity.
+    Start from ReimbursementLine to keep category fidelity and BILL-wise analytics.
     Only INCLUDED lines, joined to request & expense item.
     """
     qs = (
@@ -215,20 +230,26 @@ def _base_lines_qs(f: Filters):
     if f.employee_ids:
         qs = qs.filter(request__created_by_id__in=f.employee_ids)
 
+    # Bill-wise filter must affect analytics
+    if f.line_ids:
+        qs = qs.filter(id__in=f.line_ids)
+
+    # Time window on expense date (Issue 11)
+    if f.from_date:
+        qs = qs.filter(expense_item__date__gte=f.from_date)
+    if f.to_date:
+        qs = qs.filter(expense_item__date__lte=f.to_date)
+
+    # Optional category filter
     if f.categories:
         qs = qs.filter(expense_item__category__in=f.categories)
-
-    if f.date_from:
-        qs = qs.filter(request__submitted_at__gte=f.date_from)
-    if f.date_to:
-        qs = qs.filter(request__submitted_at__lte=f.date_to)
 
     return qs
 
 
-# ----------------------------
+# ---------------------------------------------------------------------
 # Views
-# ----------------------------
+# ---------------------------------------------------------------------
 
 class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
     """
@@ -242,15 +263,44 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
         return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
+        # Provide labels for UI legends
         ctx = super().get_context_data(**kwargs)
-        # Provide labels to JS
-        ctx["categoryLabels"] = _CATEGORY_LABELS
+        ctx["categoryLabels"] = dict(REIMBURSEMENT_CATEGORY_CHOICES)
         return ctx
 
 
-class AnalyticsSummaryAPI(LoginRequiredMixin, View):
+class EmployeeOptionsAPI(LoginRequiredMixin, View):
     """
-    Top KPI cards (dynamic with filters).
+    Populate the 'Employee' dropdown by *name* (Issue 10).
+    Returns: [{id, name}] for active users who have at least one reimbursement line.
+    """
+    def get(self, request, *args, **kwargs):
+        if not _user_can_view_analytics(request.user):
+            return JsonResponse({"detail": "forbidden"}, status=403)
+
+        users_qs = (
+            User.objects.filter(is_active=True, reimbursement_requests__lines__isnull=False)
+            .distinct()
+            .order_by("first_name", "last_name", "username")
+        )
+
+        def _display(u: User) -> str:
+            full = f"{(u.first_name or '').strip()} {(u.last_name or '').strip()}".strip()
+            return full or (u.username or f"User #{u.id}")
+
+        data = [{"id": u.id, "name": _display(u)} for u in users_qs]
+        return JsonResponse(data, safe=False)
+
+
+class BillwiseTableAPI(LoginRequiredMixin, View):
+    """
+    Raw bill-wise rows for the table (read-only).
+    Filters respected:
+      - employees (IDs)
+      - status (mode)
+      - line_ids (bill-wise filter)
+      - from/to/preset
+      - categories
     """
     def get(self, request, *args, **kwargs):
         if not _user_can_view_analytics(request.user):
@@ -259,33 +309,77 @@ class AnalyticsSummaryAPI(LoginRequiredMixin, View):
         f = _parse_filters(request)
         qs = _base_lines_qs(f)
 
-        # Total (current filter window)
+        rows: List[Dict] = []
+        for ln in qs.values(
+            "id",
+            "request_id",
+            "amount",
+            "bill_status",
+            "request__status",
+            "request__submitted_at",
+            "request__updated_at",
+            "request__created_by_id",
+            "request__created_by__first_name",
+            "request__created_by__last_name",
+            "request__created_by__username",
+            "expense_item__date",
+            "expense_item__category",
+            "expense_item__gst_type",
+            "expense_item__vendor",
+            "description",
+        ):
+            fn = (ln.get("request__created_by__first_name") or "").strip()
+            ln_ = (ln.get("request__created_by__last_name") or "").strip()
+            un = (ln.get("request__created_by__username") or "").strip()
+            emp_name = (f"{fn} {ln_}".strip() or un or f"User #{ln['request__created_by_id']}")
+            rows.append(
+                {
+                    "line_id": ln["id"],
+                    "reimb_id": ln["request_id"],
+                    "employee_id": ln["request__created_by_id"],
+                    "employee_name": emp_name,
+                    "amount": float(d(ln["amount"])),
+                    "category": ln["expense_item__category"] or "",
+                    "gst_type": ln["expense_item__gst_type"] or "",
+                    "expense_date": (ln["expense_item__date"].isoformat() if ln["expense_item__date"] else None),
+                    "vendor": ln["expense_item__vendor"] or "",
+                    "description": ln["description"] or "",
+                    "request_status": ln["request__status"] or "",
+                    "bill_status": ln["bill_status"] or "",
+                    "submitted_at": (ln["request__submitted_at"].isoformat() if ln["request__submitted_at"] else None),
+                    "updated_at": (ln["request__updated_at"].isoformat() if ln["request__updated_at"] else None),
+                }
+            )
+        return JsonResponse({"rows": rows})
+
+
+class AnalyticsSummaryAPI(LoginRequiredMixin, View):
+    """
+    KPI cards (BILL-wise; read-only):
+      - total spend
+      - highest bill amount
+      - lowest bill amount
+      - employee-wise spend list (respects all filters)
+      - highest/lowest spender (by employee totals)
+    """
+    def get(self, request, *args, **kwargs):
+        if not _user_can_view_analytics(request.user):
+            return JsonResponse({"detail": "forbidden"}, status=403)
+
+        f = _parse_filters(request)
+        qs = _base_lines_qs(f)
+
+        # Total spend across filtered lines
         total_spend = qs.aggregate(total=Coalesce(Sum("amount"), DEC0))["total"] or d(0)
 
-        # Current Month / Quarter / Year (always IST "now")
-        now = _ist_now().date()
-        m_start, m_end = _month_bounds(now)
-        q_start, q_end = _quarter_bounds(now)
-        y_start, y_end = _year_bounds(now)
+        # Highest/Lowest *single bill*
+        agg_hi = qs.aggregate(hi=Max("amount"))
+        agg_lo = qs.aggregate(lo=Min("amount"))
+        highest_bill = float(d(agg_hi.get("hi"))) if agg_hi.get("hi") is not None else 0.0
+        lowest_bill = float(d(agg_lo.get("lo"))) if agg_lo.get("lo") is not None else 0.0
 
-        def _sum_between(start: datetime, end: datetime) -> Decimal:
-            qs_w = _base_lines_qs(f).filter(
-                request__submitted_at__gte=start,
-                request__submitted_at__lte=end,
-            )
-            return qs_w.aggregate(total=Coalesce(Sum("amount"), DEC0))["total"] or d(0)
-
-        month_spend = _sum_between(m_start, m_end)
-        quarter_spend = _sum_between(q_start, q_end)
-        year_spend = _sum_between(y_start, y_end)
-
-        # Average per employee (unique employees in window)
-        emp_qs = qs.values("request__created_by_id").annotate(s=Coalesce(Sum("amount"), DEC0))
-        emp_count = emp_qs.count()
-        avg_per_employee = (total_spend / d(emp_count)) if emp_count else d(0)
-
-        # Highest spender (within filtered data)
-        top_emp_row = (
+        # Employee aggregates (within current filter)
+        emp_rows = (
             qs.values(
                 "request__created_by_id",
                 "request__created_by__first_name",
@@ -294,99 +388,53 @@ class AnalyticsSummaryAPI(LoginRequiredMixin, View):
             )
             .annotate(total=Coalesce(Sum("amount"), DEC0))
             .order_by("-total")
-            .first()
         )
+
+        employee_spend: List[Dict] = []
+        for r in emp_rows:
+            uid = r["request__created_by_id"]
+            fn = (r.get("request__created_by__first_name") or "").strip()
+            ln = (r.get("request__created_by__last_name") or "").strip()
+            uname = (r.get("request__created_by__username") or "").strip()
+            display = (f"{fn} {ln}".strip() or uname or f"User #{uid}")
+            employee_spend.append(
+                {"employee_id": uid, "employee_name": display, "total": float(d(r["total"]))}
+            )
+
+        # Highest/lowest spender based on employee totals
         highest_spender = None
-        if top_emp_row:
-            fn = (top_emp_row.get("request__created_by__first_name") or "").strip()
-            ln = (top_emp_row.get("request__created_by__last_name") or "").strip()
-            uname = (top_emp_row.get("request__created_by__username") or "").strip()
-            display = (f"{fn} {ln}".strip() or uname or f"User #{top_emp_row['request__created_by_id']}")
-            highest_spender = {
-                "employee_id": top_emp_row["request__created_by_id"],
-                "employee_name": display,
-                "total": float(top_emp_row["total"] or d(0)),
-            }
+        lowest_spender = None
+        if employee_spend:
+            highest_spender = employee_spend[0]  # already ordered desc
+            lowest_spender = sorted(employee_spend, key=lambda x: (x["total"], x["employee_name"]))[0]
 
         data = {
-            "total_spend": float(total_spend),
-            "current_month_spend": float(month_spend),
-            "current_quarter_spend": float(quarter_spend),
-            "current_year_spend": float(year_spend),
-            "average_spend_per_employee": float(avg_per_employee),
-            "highest_spender": highest_spender,
+            "total_spend": float(d(total_spend)),
+            "highest_spend_bill": highest_bill,
+            "lowest_spend_bill": lowest_bill,
+            "employee_wise_spend": employee_spend,
+            "highest_spender": highest_spender,  # {"employee_id","employee_name","total"} or None
+            "lowest_spender": lowest_spender,    # {"employee_id","employee_name","total"} or None
+            "filters_applied": {
+                "employee_ids": f.employee_ids,
+                "status_mode": f.status_mode,
+                "line_ids_count": len(f.line_ids),
+                "from": f.from_date.isoformat() if f.from_date else None,
+                "to": f.to_date.isoformat() if f.to_date else None,
+                "preset": f.preset,
+                "categories": f.categories,
+            },
+            "notes": "All computations are bill-wise. Time/category/granularity filters applied when provided.",
         }
-        return JsonResponse(data, safe=False)
-
-
-class AnalyticsTimeSeriesAPI(LoginRequiredMixin, View):
-    """
-    Time-based spend: weekly / monthly / quarterly / yearly series.
-    """
-    def get(self, request, *args, **kwargs):
-        if not _user_can_view_analytics(request.user):
-            return JsonResponse({"detail": "forbidden"}, status=403)
-
-        f = _parse_filters(request)
-        qs = _base_lines_qs(f)
-
-        if f.granularity == "weekly":
-            trunc = TruncWeek("request__submitted_at")
-        elif f.granularity == "quarterly":
-            trunc = TruncQuarter("request__submitted_at")
-        elif f.granularity == "yearly":
-            trunc = TruncYear("request__submitted_at")
-        else:
-            trunc = TruncMonth("request__submitted_at")
-
-        rows = (
-            qs.annotate(bucket=trunc)
-              .values("bucket")
-              .annotate(total=Coalesce(Sum("amount"), DEC0))
-              .order_by("bucket")
-        )
-
-        out = [{"period": r["bucket"], "total": float(r["total"] or d(0))} for r in rows if r["bucket"]]
-        return JsonResponse(out, safe=False)
-
-
-class AnalyticsCategoryAPI(LoginRequiredMixin, View):
-    """
-    Category breakdown: pie/donut (percentage) & bars (absolute).
-    """
-    def get(self, request, *args, **kwargs):
-        if not _user_can_view_analytics(request.user):
-            return JsonResponse({"detail": "forbidden"}, status=403)
-
-        f = _parse_filters(request)
-        qs = _base_lines_qs(f)
-
-        rows = (
-            qs.values("expense_item__category")
-              .annotate(total=Coalesce(Sum("amount"), DEC0))
-              .order_by("-total")
-        )
-        total_all = sum([float(r["total"] or d(0)) for r in rows]) or 1.0
-        out = []
-        for r in rows:
-            key = r["expense_item__category"]
-            label = _CATEGORY_LABELS.get(key, key.title())
-            value = float(r["total"] or d(0))
-            out.append({
-                "category": key,
-                "label": label,
-                "total": value,
-                "percent": (value / total_all) * 100.0,
-            })
-        return JsonResponse(out, safe=False)
+        return JsonResponse(data)
 
 
 class AnalyticsEmployeeAPI(LoginRequiredMixin, View):
     """
-    Employee spend table + 'Top 5' list.
-    - total amount per employee
-    - number of reimbursement requests (distinct request IDs)
-    - most used expense category
+    Employee-wise spend table (BILL-wise):
+      - total amount per employee
+      - number of reimbursement requests (distinct request IDs)
+      - most used expense category (by amount; ties -> higher count)
     """
     def get(self, request, *args, **kwargs):
         if not _user_can_view_analytics(request.user):
@@ -419,7 +467,7 @@ class AnalyticsEmployeeAPI(LoginRequiredMixin, View):
             rows_map[uid] = {
                 "employee_id": uid,
                 "employee_name": display,
-                "total": float(r["total"] or d(0)),
+                "total": float(d(r["total"])),
                 "request_count": int(r["request_count"] or 0),
                 "top_category": "-",  # fill below
             }
@@ -432,11 +480,12 @@ class AnalyticsEmployeeAPI(LoginRequiredMixin, View):
                   cnt=Count("id"),
               )
         )
+
         best: Dict[int, Tuple[str, float, int]] = {}  # uid -> (key, amt, cnt)
         for r in cat_rows:
             uid = r["request__created_by_id"]
             key = r["expense_item__category"]
-            amt = float(r["amt"] or d(0))
+            amt = float(d(r["amt"]))
             cnt = int(r["cnt"] or 0)
             cur = best.get(uid)
             if cur is None or amt > cur[1] or (amt == cur[1] and cnt > cur[2]):
@@ -445,19 +494,26 @@ class AnalyticsEmployeeAPI(LoginRequiredMixin, View):
         for uid, info in best.items():
             if uid in rows_map:
                 key = info[0]
-                rows_map[uid]["top_category"] = _CATEGORY_LABELS.get(key, key.title())
+                rows_map[uid]["top_category"] = _CATEGORY_LABELS.get(key, (key or "").title())
 
         rows = sorted(rows_map.values(), key=lambda x: (-x["total"], x["employee_name"]))
-        top5 = rows[:5]
-
-        return JsonResponse({"rows": rows, "top5": top5}, safe=False)
+        return JsonResponse({"rows": rows})
 
 
-class AnalyticsHighRiskAPI(LoginRequiredMixin, View):
+# ---------------------------------------------------------------------
+# New (Issue 11): Time-series analytics
+# ---------------------------------------------------------------------
+
+class AnalyticsTimeSeriesAPI(LoginRequiredMixin, View):
     """
-    High-spend detection:
-      - employees whose spend exceeds company average by X% (threshold param)
-    Query param: threshold (default 50 for 50%)
+    Time-series totals over expense date, bill-wise.
+    Query params respected: employees, status, line_ids, from, to, preset, granularity, categories
+    Returns:
+      {
+        "granularity": "day" | "month",
+        "buckets": [{"period": "YYYY-MM-DD" or "YYYY-MM-01", "total": float}, ...],
+        "from": "...", "to": "...",
+      }
     """
     def get(self, request, *args, **kwargs):
         if not _user_can_view_analytics(request.user):
@@ -466,40 +522,89 @@ class AnalyticsHighRiskAPI(LoginRequiredMixin, View):
         f = _parse_filters(request)
         qs = _base_lines_qs(f)
 
-        threshold_pct = 50.0
-        raw = (request.GET.get("threshold") or "").strip()
-        try:
-            if raw:
-                threshold_pct = max(0.0, float(raw))
-        except Exception:
-            pass
+        # Choose the truncate function by granularity
+        if f.granularity == "month":
+            trunc = TruncMonth("expense_item__date")
+            fmt = lambda dt: dt.strftime("%Y-%m-01") if dt else None
+        else:
+            trunc = TruncDay("expense_item__date")
+            fmt = lambda dt: dt.strftime("%Y-%m-%d") if dt else None
 
-        by_emp = (
-            qs.values(
-                "request__created_by_id",
-                "request__created_by__first_name",
-                "request__created_by__last_name",
-                "request__created_by__username",
-            )
-            .annotate(total=Coalesce(Sum("amount"), DEC0))
+        rows = (
+            qs.annotate(period=trunc)
+              .values("period")
+              .annotate(total=Coalesce(Sum("amount"), DEC0))
+              .order_by("period")
         )
-        totals = [float(r["total"] or d(0)) for r in by_emp]
-        if not totals:
-            return JsonResponse({"threshold": threshold_pct, "flags": []}, safe=False)
 
-        avg = sum(totals) / len(totals)
-        cutoff = avg * (1.0 + threshold_pct / 100.0)
+        buckets = []
+        for r in rows:
+            buckets.append({
+                "period": fmt(r["period"]),
+                "total": float(d(r["total"])),
+            })
 
-        flags = []
-        for r in by_emp:
-            val = float(r["total"] or d(0))
-            if val > cutoff:
-                uid = r["request__created_by_id"]
-                fn = (r.get("request__created_by__first_name") or "").strip()
-                ln = (r.get("request__created_by__last_name") or "").strip()
-                uname = (r.get("request__created_by__username") or "").strip()
-                display = (f"{fn} {ln}".strip() or uname or f"User #{uid}")
-                flags.append({"employee_id": uid, "employee_name": display, "total": val})
+        data = {
+            "granularity": f.granularity,
+            "buckets": buckets,
+            "from": f.from_date.isoformat() if f.from_date else None,
+            "to": f.to_date.isoformat() if f.to_date else None,
+            "preset": f.preset,
+        }
+        return JsonResponse(data)
 
-        flags.sort(key=lambda x: -x["total"])
-        return JsonResponse({"threshold": threshold_pct, "average": avg, "cutoff": cutoff, "flags": flags}, safe=False)
+
+# ---------------------------------------------------------------------
+# New (Issue 11): Category totals
+# ---------------------------------------------------------------------
+
+class AnalyticsCategoryAPI(LoginRequiredMixin, View):
+    """
+    Category totals (bill-wise) with labels.
+    Query params respected: employees, status, line_ids, from, to, preset, categories (to subset)
+    Returns:
+      {
+        "rows": [{"key":"travel","label":"Travel Expenses","total":1234.56,"count":17}, ...],
+        "total": 9999.99
+      }
+    """
+    def get(self, request, *args, **kwargs):
+        if not _user_can_view_analytics(request.user):
+            return JsonResponse({"detail": "forbidden"}, status=403)
+
+        f = _parse_filters(request)
+        qs = _base_lines_qs(f)
+
+        aggs = (
+            qs.values("expense_item__category")
+              .annotate(total=Coalesce(Sum("amount"), DEC0), count=Count("id"))
+              .order_by("-total", "expense_item__category")
+        )
+
+        rows = []
+        grand = d(0)
+        for r in aggs:
+            key = r["expense_item__category"]
+            total = d(r["total"])
+            rows.append({
+                "key": key or "",
+                "label": _CATEGORY_LABELS.get(key, (key or "").title()),
+                "total": float(total),
+                "count": int(r["count"] or 0),
+            })
+            grand += total
+
+        return JsonResponse({"rows": rows, "total": float(grand)})
+
+
+# ---------------------------------------------------------------------
+# Deprecated/removed endpoint per requirements
+# (kept disabled intentionally)
+# ---------------------------------------------------------------------
+
+class AnalyticsHighRiskAPI(LoginRequiredMixin, View):
+    """Removed high-risk/high-spend flags (Issue 15)."""
+    def get(self, request, *args, **kwargs):
+        if not _user_can_view_analytics(request.user):
+            return JsonResponse({"detail": "forbidden"}, status=403)
+        return HttpResponseNotFound("High-risk flags disabled.")

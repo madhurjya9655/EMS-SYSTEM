@@ -83,13 +83,16 @@ urlpatterns = [
     path("admin/export.csv", views.ReimbursementExportCSVView.as_view(), name="admin_export_csv"),
 
     # ------------------------------
-    # Analytics
+    # Analytics (Dashboard + APIs)
     # ------------------------------
     path("analytics/", views_analytics.AnalyticsDashboardView.as_view(), name="analytics_dashboard"),
     path("analytics/api/summary/", views_analytics.AnalyticsSummaryAPI.as_view(), name="analytics_api_summary"),
     path("analytics/api/timeseries/", views_analytics.AnalyticsTimeSeriesAPI.as_view(), name="analytics_api_timeseries"),
     path("analytics/api/categories/", views_analytics.AnalyticsCategoryAPI.as_view(), name="analytics_api_categories"),
     path("analytics/api/employees/", views_analytics.AnalyticsEmployeeAPI.as_view(), name="analytics_api_employees"),
+    path("analytics/api/employees/options/", views_analytics.EmployeeOptionsAPI.as_view(), name="analytics_api_employee_options"),
+    path("analytics/api/bills/", views_analytics.BillwiseTableAPI.as_view(), name="analytics_api_bills"),
+    # ✅ Added to match template script call
     path("analytics/api/highrisk/", views_analytics.AnalyticsHighRiskAPI.as_view(), name="analytics_api_highrisk"),
 
     # ------------------------------

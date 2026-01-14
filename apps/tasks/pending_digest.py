@@ -50,6 +50,32 @@ def _display_user(u) -> str:
     return getattr(u, "username", None) or getattr(u, "email", "-") or "-"
 
 
+# --- NEW: central leave-aware guard for “suppress mails during leave” --------
+def _is_on_leave_today(user) -> bool:
+    """
+    Returns True if the user is blocked by leave for *today* (IST),
+    using the same helper used elsewhere so half-days respect the 10:00 gate.
+    Falls back to LeaveRequest.is_user_blocked_on if blocking util is unavailable.
+    """
+    today = timezone.localdate()
+    # Preferred: shared blocking util (date-level, 10:00 IST anchor)
+    try:
+        from apps.tasks.utils.blocking import is_user_blocked  # type: ignore
+        return bool(is_user_blocked(user, today))
+    except Exception:
+        pass
+    # Fallback: model helper if present
+    try:
+        from apps.leave.models import LeaveRequest  # type: ignore
+        fn = getattr(LeaveRequest, "is_user_blocked_on", None)
+        if callable(fn):
+            return bool(fn(user, today))
+    except Exception:
+        pass
+    return False
+# -----------------------------------------------------------------------------
+
+
 def _rows_for_user(user) -> List[Dict[str, Any]]:
     rows: List[Row] = []
 
@@ -262,6 +288,18 @@ def send_daily_employee_pending_digest(
 
     for user in users:
         total_candidates += 1
+
+        # --- NEW: suppress digest if the user is on leave today (IST) --------
+        try:
+            if _is_on_leave_today(user) and not force:
+                skipped += 1
+                logger.info(_safe_console_text(f"[PENDING DIGEST] Suppressed for user_id={getattr(user,'id','?')} (on leave today)"))
+                continue
+        except Exception as e:
+            # Non-fatal; proceed as before if we cannot determine leave status.
+            logger.warning(_safe_console_text(f"[PENDING DIGEST] Leave-check failed for user_id={getattr(user,'id','?')}: {e}"))
+        # ---------------------------------------------------------------------
+
         rows = _rows_for_user(user)
 
         if not rows and not send_even_if_empty and not force:

@@ -309,7 +309,7 @@ class LeaveRequestForm(forms.ModelForm):
             # Must be same calendar date (UI only sends one date anyway)
             end_d = start_d
 
-            # Validate range within work hours and order
+            # Validate range within work hours and order (inclusive edges)
             if not (WORK_FROM <= f < WORK_TO):
                 self.add_error("from_time", "Half-day time must be within 09:30–18:00.")
             if not (WORK_FROM < t <= WORK_TO):

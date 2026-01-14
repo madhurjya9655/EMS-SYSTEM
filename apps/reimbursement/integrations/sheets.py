@@ -1,4 +1,3 @@
-# apps/reimbursement/integrations/sheets.py
 from __future__ import annotations
 
 import io
@@ -16,6 +15,11 @@ from django.conf import settings
 from django.core.cache import cache
 from django.urls import NoReverseMatch, reverse
 
+# ✅ IMPORT NEEDED FOR BILL-WISE FILTER (INCLUDED ONLY)
+from apps.reimbursement.models import ReimbursementLine
+
+logger = logging.getLogger(__name__)
+
 __all__ = [
     "SPREADSHEET_ID",
     "TAB_MAIN",
@@ -23,23 +27,28 @@ __all__ = [
     "TAB_SCHEMA",
     "ensure_spreadsheet_structure",
     "sync_request",
-    "build_row",
+    "build_row",   # kept for compatibility; now returns bill-wise rows
 ]
-
-logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-SPREADSHEET_ID = getattr(settings, "REIMBURSEMENT_SHEET_ID", "1LOVDkTVMGdEPOP9CQx-WVDv7ZY1TpqiQD82FFCc3t4A")
+# Prefer env override first (Render), then settings, then safe dummy
+SPREADSHEET_ID = (
+    os.environ.get("REIMBURSEMENT_SHEET_ID")
+    or getattr(settings, "REIMBURSEMENT_SHEET_ID", None)
+    or getattr(settings, "REIMBURSEMENT_SHEET_ID".lower(), None)  # legacy
+    or "1LOVDkTVMGdEPOP9CQx-WVDv7ZY1TpqiQD82FFCc3t4A"
+)
 
 TAB_MAIN      = "Reimbursements"
 TAB_CHANGELOG = "ChangeLog"
 TAB_SCHEMA    = "Schema"
 TAB_META      = "_Meta"
 
-SYNC_VERSION = 6  # bump when schema/behavior changes
+# 🔼 Bump when schema/behavior changes (bill-wise since v7)
+SYNC_VERSION = 7
 
 # structure checks will run at most once per STRUCTURE_TTL per process
 STRUCTURE_TTL_SECONDS = int(getattr(settings, "REIMBURSEMENT_SHEETS_STRUCTURE_TTL_SECONDS", 600))  # 10 min default
@@ -47,14 +56,22 @@ STRUCTURE_TTL_SECONDS = int(getattr(settings, "REIMBURSEMENT_SHEETS_STRUCTURE_TT
 # token-bucket limiter per-process to stay under 60 read/min *per user* with headroom
 READS_PER_MINUTE_BUDGET = int(getattr(settings, "REIMBURSEMENT_SHEETS_READS_PER_MINUTE", 48))
 
+# ---------------- Bill-wise header (one row per ReimbursementLine) ----------------
+# A: RowKey is "ReimbID-LineID" to keep idempotent upserts
 HEADER = [
-    "ReimbID","EmployeeID","Employee","Department","Categories","Items","Amount","Currency",
-    "Submitted","Status","StatusUpdated","Manager","ManagerDecided","Management","ManagementDecided",
-    "FinanceVerifier","FinanceVerified","PaymentRef","PaidAt","RejectionReason","FinanceNote",
-    "ReceiptLinks","EMSLink","CreatedAt","UpdatedAt","SyncedAt","SyncVersion","Extra",
+    "RowKey","ReimbID","LineID",
+    "Employee","Department",
+    "ExpenseDate","Category","GSTType",
+    "Description","Amount","Currency",
+    "RequestStatus","BillStatus",
+    "Submitted","StatusUpdated",
+    "Manager","Management","FinanceVerifier",
+    "PaymentRef","PaidAt",
+    "ReceiptLink","EMSLink",
+    "CreatedAt","UpdatedAt","SyncedAt","SyncVersion","Extra",
 ]
 
-CHANGELOG_HEADER = ["TimestampUTC","Event","ReimbID","OldStatus","NewStatus","RowNum","Actor","Result"]
+CHANGELOG_HEADER = ["TimestampUTC","Event","RowKey","OldStatus","NewStatus","RowNum","Actor","Result"]
 SCHEMA_HEADER    = ["Version","HeaderJSON","Active","RecordedAtUTC","Note"]
 
 # ---------------------------------------------------------------------------
@@ -74,8 +91,10 @@ def _header_end_col() -> str:
     return _excel_col(len(HEADER))
 
 def _iso(dt):
-    if not dt: return ""
-    if getattr(dt,"tzinfo",None) is None:
+    if not dt:
+        return ""
+    if getattr(dt, "tzinfo", None) is None:
+        # assume naive is UTC
         return datetime.fromtimestamp(dt.timestamp(), tz=timezone.utc).isoformat(timespec="seconds")
     return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
 
@@ -199,7 +218,6 @@ _meta_cache: Dict[str, Any] = {}
 
 def _spreadsheets_get() -> dict:
     def _call():
-        # ✅ correct usage: spreadsheets().get(...)
         return _svc_sheets().spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
     cache_key = f"sheets.meta.{SPREADSHEET_ID}"
     with _meta_lock:
@@ -221,14 +239,12 @@ def _batch_update(requests: list) -> None:
     if not requests:
         return
     def _call():
-        # ✅ correct usage: spreadsheets().batchUpdate(...)
         return _svc_sheets().spreadsheets().batchUpdate(
             spreadsheetId=SPREADSHEET_ID, body={"requests": requests}
         ).execute()
     _with_backoff("spreadsheets.batchUpdate", False, _call)
 
 def _values_batch_get(ranges: List[str]) -> List[List[List[str]]]:
-    # ✅ use spreadsheets().values().batchGet(...)
     def _call():
         return _svc_sheets().spreadsheets().values().batchGet(
             spreadsheetId=SPREADSHEET_ID, ranges=ranges
@@ -237,7 +253,6 @@ def _values_batch_get(ranges: List[str]) -> List[List[List[str]]]:
     return [x.get("values", [[]]) for x in resp.get("valueRanges", [])]
 
 def _values_update(range_: str, values: List[List[Any]]) -> None:
-    # ✅ use spreadsheets().values().update(...)
     def _call():
         return _svc_sheets().spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
@@ -248,7 +263,6 @@ def _values_update(range_: str, values: List[List[Any]]) -> None:
     _with_backoff("values.update", False, _call)
 
 def _values_append(range_: str, values: List[List[Any]], user_entered: bool = False) -> dict:
-    # ✅ use spreadsheets().values().append(...)
     def _call():
         return _svc_sheets().spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID,
@@ -264,13 +278,15 @@ def _friendly_format_main(sheet_id: int) -> None:
     requests = []
     requests.append({"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":1}},"fields":"gridProperties.frozenRowCount"}})
     requests.append({"setBasicFilter":{"filter":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1_000_000,"startColumnIndex":0,"endColumnIndex":end_col}}}})
-    widths={1:90,2:90,3:200,4:150,5:160,6:90,7:120,8:70,9:170,10:150,11:170,12:150,13:170,14:150,15:170,16:150,17:170,18:160,19:170,20:220,21:260,22:260,23:160,24:170,25:170,26:170,27:110,28:180}
+    widths={1:130,2:80,3:80,4:200,5:150,6:110,7:130,8:110,9:260,10:110,11:70,12:150,13:150,14:170,15:170,16:150,17:150,18:170,19:170,20:170,21:260,22:160,23:170,24:170,25:110,26:120,27:200}
     for idx,px in widths.items():
         requests.append({"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":idx-1,"endIndex":idx},"properties":{"pixelSize":px},"fields":"pixelSize"}})
-    for col in [20,21,22]:
+    for col in [9,21,22]:
         requests.append({"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":1,"startColumnIndex":col-1,"endColumnIndex":col},"cell":{"userEnteredFormat":{"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat.wrapStrategy"}})
-    requests.append({"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":1,"startColumnIndex":6,"endColumnIndex":7},"cell":{"userEnteredFormat":{"numberFormat":{"type":"NUMBER","pattern":"#,##0.00"}}},"fields":"userEnteredFormat.numberFormat"}})
-    for col in [9,11,13,15,17,19,24,25,26]:
+    # Amount as number
+    requests.append({"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":1,"startColumnIndex":10-1,"endColumnIndex":10},"cell":{"userEnteredFormat":{"numberFormat":{"type":"NUMBER","pattern":"#,##0.00"}}},"fields":"userEnteredFormat.numberFormat"}})
+    # Date/time columns
+    for col in [14,15,19,20,23,24,25]:
         requests.append({"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":1,"startColumnIndex":col-1,"endColumnIndex":col},"cell":{"userEnteredFormat":{"numberFormat":{"type":"DATE_TIME","pattern":"yyyy-mm-dd hh:mm:ss"}}},"fields":"userEnteredFormat.numberFormat"}})
     try:
         _batch_update(requests)
@@ -306,7 +322,7 @@ def ensure_spreadsheet_structure() -> None:
         requests=[]
         for title in [TAB_MAIN, TAB_CHANGELOG, TAB_SCHEMA]:
             if title not in existing:
-                requests.append({"addSheet":{"properties":{"title":title,"gridProperties":{"rowCount":2000,"columnCount":40}}}})
+                requests.append({"addSheet":{"properties":{"title":title,"gridProperties":{"rowCount":2000,"columnCount":50}}}})
         if requests:
             _batch_update(requests)
             meta = _spreadsheets_get()
@@ -345,7 +361,7 @@ def ensure_spreadsheet_structure() -> None:
         cache.set(ck, True, timeout=STRUCTURE_TTL_SECONDS)
 
 # ---------------------------------------------------------------------------
-# Drive helpers (upload receipts, return shareable links)
+# Drive helpers (upload receipts, return shareable link)
 # ---------------------------------------------------------------------------
 
 def _drive_folder_id() -> Optional[str]:
@@ -411,124 +427,137 @@ def _receipt_drive_filename(req_id: int, line_id: int, original_name: str) -> st
 def _drive_link(file_id: str) -> str:
     return f"https://drive.google.com/file/d/{file_id}/view?usp=drivesdk"
 
-def _collect_receipt_links_from_drive(req) -> List[str]:
-    folder = _drive_folder_id()
-    if not folder:
-        return []
-    links: List[str] = []
-    for line in req.lines.select_related("expense_item"):
-        f = getattr(line, "receipt_file", None) or getattr(line.expense_item, "receipt_file", None)
-        if not f:
-            continue
-        try:
-            name = _receipt_drive_filename(req.id, line.id, getattr(f, "name", "receipt"))
-            existing_id = _drive_find_file_by_name(name, folder)
-            if existing_id:
-                links.append(_drive_link(existing_id)); continue
-            with f.open("rb") as fh:
-                data = fh.read()
-            mime = mimetypes.guess_type(getattr(f, "name", ""))[0]
-            file_id = _drive_upload_bytes(name, data, folder, mime)
-            if file_id:
-                links.append(_drive_link(file_id))
-        except Exception as e:
-            logger.info("Skipping Drive upload for line %s: %s", getattr(line, "id", None), e)
-            continue
-    out, seen = [], set()
-    for u in links:
-        if u not in seen:
-            seen.add(u); out.append(u)
-    return out
-
 # ---------------------------------------------------------------------------
-# Row building
+# Helpers for building rows (bill-wise)
 # ---------------------------------------------------------------------------
 
-def _collect_receipt_urls_storage(req) -> List[str]:
-    urls=[]
-    for line in req.lines.select_related("expense_item"):
-        f = getattr(line, "receipt_file", None) or getattr(line.expense_item, "receipt_file", None)
-        if f and getattr(f, "url", None):
-            urls.append(f.url)
-    out,seen=[],set()
-    for u in urls:
-        if u not in seen:
-            seen.add(u); out.append(u)
-    return out
-
-def _categories_and_count(req) -> Tuple[str,int]:
-    cats=[line.expense_item.category for line in req.lines.select_related("expense_item")]
-    deduped,seen=[],set()
-    for c in cats:
-        if c not in seen:
-            seen.add(c); deduped.append(c)
-    return ",".join(deduped), req.lines.count()
-
-def build_row(req) -> list:
-    employee = req.created_by
-    dept = getattr(employee, "department", "") or (getattr(employee, "profile", None) and getattr(employee.profile, "department","")) or ""
-    cats, line_count = _categories_and_count(req)
-
-    drive_links = []
+def _collect_receipt_link_for_line(req, line) -> str:
+    """
+    Returns a shareable receipt link for a single line.
+    - Prefer Google Drive (if folder configured & google available)
+    - Fallback to storage URL
+    - Fallback to secured EMS download endpoint
+    """
+    # Google Drive path
     try:
         if _google_available() and _drive_folder_id():
-            drive_links = _collect_receipt_links_from_drive(req)
-    except Exception:
-        drive_links = []
+            f = getattr(line, "receipt_file", None) or getattr(line.expense_item, "receipt_file", None)
+            if f:
+                existing_id = _drive_find_file_by_name(
+                    _receipt_drive_filename(req.id, line.id, getattr(f, "name", "receipt")),
+                    _drive_folder_id(),
+                )
+                if existing_id:
+                    return _drive_link(existing_id)
+                with f.open("rb") as fh:
+                    data = fh.read()
+                fid = _drive_upload_bytes(
+                    _receipt_drive_filename(req.id, line.id, getattr(f, "name", "receipt")),
+                    data,
+                    _drive_folder_id(),
+                    mimetypes.guess_type(getattr(f, "name", ""))[0],
+                )
+                if fid:
+                    return _drive_link(fid)
+    except Exception as e:
+        logger.info("Drive link for req=%s line=%s skipped: %s", getattr(req, "id", None), getattr(line, "id", None), e)
 
-    if drive_links:
-        receipts_csv = ",".join(drive_links)
-    else:
-        storage_links = _collect_receipt_urls_storage(req)
-        receipts_csv = ",".join(storage_links)
+    # Storage URL
+    f = getattr(line, "receipt_file", None) or getattr(line.expense_item, "receipt_file", None)
+    if f and getattr(f, "url", None):
+        try:
+            return f.url
+        except Exception:
+            pass
 
-    manager_un = getattr(req.manager, "username", "") if req.manager_id else ""
-    management_un = getattr(req.management, "username", "") if req.management_id else ""
-    finance_un = getattr(req.verified_by, "username", "") if req.verified_by_id else ""
-    extra = {}
+    # EMS secured route (if available in urls)
     try:
-        extra["status_label"] = req.get_status_display()
+        return _site_url() + reverse("reimbursement:receipt_line", args=[line.id])
     except Exception:
-        pass
+        return ""
 
-    row = {
-        "ReimbID": req.id,
-        "EmployeeID": getattr(employee,"id",""),
-        "Employee": (f"{getattr(employee,'first_name','')} {getattr(employee,'last_name','')}".strip() or getattr(employee,"username","") or f"User #{getattr(employee,'id','')}"),
-        "Department": dept,
-        "Categories": cats,
-        "Items": line_count,
-        "Amount": float(req.total_amount or 0),
-        "Currency": "INR",
-        "Submitted": _iso(req.submitted_at),
-        "Status": req.status,
-        "StatusUpdated": _iso(req.updated_at),
-        "Manager": manager_un,
-        "ManagerDecided": _iso(req.manager_decided_at),
-        "Management": management_un,
-        "ManagementDecided": _iso(req.management_decided_at),
-        "FinanceVerifier": finance_un,
-        "FinanceVerified": _iso(req.verified_at),
-        "PaymentRef": req.finance_payment_reference or "",
-        "PaidAt": _iso(req.paid_at),
-        "RejectionReason": req.management_comment if req.status == req.Status.REJECTED else "",
-        "FinanceNote": req.finance_note or "",
-        "ReceiptLinks": receipts_csv,
-        "EMSLink": f'=HYPERLINK("{_detail_url(req.id)}","Open in EMS")',
-        "CreatedAt": _iso(req.created_at),
-        "UpdatedAt": _iso(req.updated_at),
-        "SyncedAt": _iso(datetime.now(timezone.utc)),
-        "SyncVersion": SYNC_VERSION,
-        "Extra": json.dumps(extra, ensure_ascii=False),
-    }
-    return [row[h] for h in HEADER]
+def _employee_display(user) -> str:
+    try:
+        full = f"{getattr(user,'first_name','').strip()} {getattr(user,'last_name','').strip()}".strip()
+        if full:
+            return full
+        return getattr(user, "username", "") or f"User #{getattr(user,'id','')}"
+    except Exception:
+        return f"User #{getattr(user,'id','')}"
+
+def _department_for(user) -> str:
+    return (
+        getattr(user, "department", "")
+        or (getattr(user, "profile", None) and getattr(user.profile, "department", ""))  # type: ignore[attr-defined]
+        or ""
+    )
+
+def _row_key(req_id: int, line_id: int) -> str:
+    return f"{req_id}-{line_id}"
 
 # ---------------------------------------------------------------------------
-# Upsert and changelog
+# Row building (BILL-WISE)
 # ---------------------------------------------------------------------------
 
-def _index_by_id() -> Dict[str,int]:
-    # ✅ use spreadsheets().values().get(...)
+def build_rows(req) -> List[List[Any]]:
+    """
+    Build one row per INCLUDED ReimbursementLine (bill-wise, read-only).
+    """
+    rows: List[List[Any]] = []
+    employee = getattr(req, "created_by", None)
+
+    # ✅ CRITICAL: only INCLUDED lines are exported (bill-wise truth)
+    lines_qs = req.lines.select_related("expense_item").filter(
+        status=ReimbursementLine.Status.INCLUDED
+    )
+
+    for line in lines_qs:
+        expense = line.expense_item
+        row = {
+            "RowKey": _row_key(req.id, line.id),
+            "ReimbID": req.id,
+            "LineID": line.id,
+            "Employee": _employee_display(employee) if employee else "",
+            "Department": _department_for(employee) if employee else "",
+            "ExpenseDate": _iso(getattr(expense, "date", None)),
+            "Category": getattr(expense, "category", "") or "",
+            "GSTType": getattr(expense, "gst_type", "") or "",
+            "Description": (line.description or ""),
+            "Amount": float(line.amount or 0),
+            "Currency": "INR",
+            "RequestStatus": req.status,
+            "BillStatus": line.bill_status,
+            "Submitted": _iso(req.submitted_at),
+            "StatusUpdated": _iso(req.updated_at),
+            "Manager": getattr(getattr(req, "manager", None), "username", "") if getattr(req, "manager_id", None) else "",
+            "Management": getattr(getattr(req, "management", None), "username", "") if getattr(req, "management_id", None) else "",
+            "FinanceVerifier": getattr(getattr(req, "verified_by", None), "username", "") if getattr(req, "verified_by_id", None) else "",
+            "PaymentRef": line.payment_reference or (req.finance_payment_reference or ""),
+            "PaidAt": _iso(line.paid_at or req.paid_at),
+            "ReceiptLink": _collect_receipt_link_for_line(req, line),
+            "EMSLink": f'=HYPERLINK("{_detail_url(req.id)}","Open in EMS")',
+            "CreatedAt": _iso(req.created_at),
+            "UpdatedAt": _iso(req.updated_at),
+            "SyncedAt": _iso(datetime.now(timezone.utc)),
+            "SyncVersion": SYNC_VERSION,
+            "Extra": json.dumps({
+                "request_status_label": getattr(req, "get_status_display", lambda: req.status)(),
+                "category_label": getattr(expense, "get_category_display", lambda: expense.category if expense else "")() if expense else "",
+                "gst_label": getattr(expense, "get_gst_type_display", lambda: expense.gst_type if expense else "")() if expense else "",
+            }, ensure_ascii=False),
+        }
+        rows.append([row[h] for h in HEADER])
+    return rows
+
+# Backward-compatible alias (older code/tests may import build_row and expect a list)
+def build_row(req) -> List[List[Any]]:
+    return build_rows(req)
+
+# ---------------------------------------------------------------------------
+# Upsert and changelog (bill-wise; key=A: RowKey)
+# ---------------------------------------------------------------------------
+
+def _index_by_rowkey() -> Dict[str,int]:
     def _call():
         return _svc_sheets().spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!A2:A"
@@ -536,17 +565,17 @@ def _index_by_id() -> Dict[str,int]:
     resp = _with_backoff("values.get A2:A", True, _call)
     idx: Dict[str,int] = {}
     for i,v in enumerate(resp.get("values", []), start=2):
-        if v: idx[str(v[0])] = i
+        if v:
+            idx[str(v[0])] = i
     return idx
 
-def upsert_row(row: list, reimb_id: int):
-    # ✅ obtain the values resource from spreadsheets().values()
+def upsert_row(row: list, rowkey: str):
     values = _svc_sheets().spreadsheets().values()
-    idx = _index_by_id()
+    idx = _index_by_rowkey()
     end_col = _header_end_col()
 
-    if str(reimb_id) in idx:
-        rn = idx[str(reimb_id)]
+    if str(rowkey) in idx:
+        rn = idx[str(rowkey)]
         def _call_update():
             return values.update(
                 spreadsheetId=SPREADSHEET_ID,
@@ -571,39 +600,44 @@ def upsert_row(row: list, reimb_id: int):
     except Exception: pass
     return "insert", rn
 
-def append_changelog(event: str, req_id: int, old: str, new: str, rownum: int, actor: str = "", result: str = "ok", err: str = "") -> None:
+def append_changelog(event: str, rowkey: str, old: str, new: str, rownum: int, actor: str = "", result: str = "ok", err: str = "") -> None:
     try:
         _values_append(
             f"{TAB_CHANGELOG}!A:H",
-            [[_iso(datetime.now(timezone.utc)), event, req_id, old or "", new or "", rownum, actor or "", f"{result}: {err}" if err else result]],
+            [[_iso(datetime.now(timezone.utc)), event, rowkey, old or "", new or "", rownum, actor or "", f"{result}: {err}" if err else result]],
             user_entered=False,
         )
     except Exception as e:
         logger.info("Changelog append skipped: %s", e)
 
 # ---------------------------------------------------------------------------
-# Public entry: sync a single request
+# Public entry: sync a single request (exports one row per bill)
 # ---------------------------------------------------------------------------
 
 def sync_request(req) -> None:
     """
     Export-only. No status mutations or audit writes. Safe fallbacks.
+    Idempotent per bill via RowKey (ReimbID-LineID).
     """
     if not _google_available() or req is None:
         return
 
     ensure_spreadsheet_structure()
 
-    row = build_row(req)
+    rows = build_rows(req)  # bill-wise rows (INCLUDED only)
 
+    # We log/append per-row. Old/new status tracked on request.status (best effort).
     prev_status = getattr(req, "status", "") or ""
-    try:
-        action, rn = upsert_row(row, req.id)
-        append_changelog("upsert", req.id, prev_status, req.status, rn, "", action)
-    except Exception as e:
-        logger.exception("Google Sheets sync failed for req %s", req.id)
+    for row in rows:
+        rowkey = row[0]  # A: RowKey
         try:
-            append_changelog("error", req.id, prev_status, req.status, 0, err=str(e))
-        except Exception:
-            pass
-        return
+            action, rn = upsert_row(row, rowkey)
+            append_changelog("upsert", rowkey, prev_status, req.status, rn, "", action)
+        except Exception as e:
+            logger.exception("Google Sheets sync failed for rowkey %s (req=%s)", rowkey, getattr(req, "id", None))
+            try:
+                append_changelog("error", rowkey, prev_status, req.status, 0, err=str(e))
+            except Exception:
+                pass
+            # continue other lines without failing the whole sync
+            continue

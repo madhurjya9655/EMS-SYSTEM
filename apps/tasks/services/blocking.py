@@ -1,21 +1,11 @@
-# apps/tasks/services/blocking.py
 from __future__ import annotations
 
 """
-Assignment blocking helpers used across:
-- Recurring generators (10:00 IST checklist generation)
-- Delegation auto-assignment
-- Help-ticket auto-routing
+Assignment blocking helpers.
 
-Keep the Example Flow in mind:
-• As soon as an employee applies, the day is "locked" for that user.
-• Rejected requests *unlock* the day.
-• Approved keeps it locked.
-• All checks are done on IST calendar dates.
-
-This module is intentionally thin and defers the day-level decision to
-`apps.tasks.utils.blocking.is_user_blocked(user, ist_date)` so there is
-exactly one source of truth.
+Single source of truth: LeaveRequest rows that are PENDING/APPROVED and
+cover the IST calendar date. This module exposes small helpers that
+other task generators/routers can call.
 """
 
 import logging
@@ -24,43 +14,36 @@ from zoneinfo import ZoneInfo
 
 from django.utils import timezone
 
-from apps.tasks.utils.blocking import is_user_blocked
+from apps.leave.models import LeaveRequest  # canonical check lives here
 
 logger = logging.getLogger("apps.tasks.blocking")
 IST = ZoneInfo("Asia/Kolkata")
 
 
-# ---------------------------------------------------------------------------
-# Optional hook called by Leave app on apply (best-effort)
-# See: apps.leave.signals._call_optional_blocker
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Optional hook (observability only)
+# -----------------------------------------------------------------------------
 def block_employee_dates(*, user_id: int, dates: list[date], source: str = "") -> None:
     """
-    This function is called immediately after a LeaveRequest is created.
-
-    We do not need to persist anything because assignment-time checks call
-    `is_user_blocked(...)` which evaluates the Leave table live.
-    We keep this hook for observability and future optimization (e.g., caching).
-
-    Args:
-        user_id: Django auth user id
-        dates: list of IST dates that the leave covers (inclusive)
-        source: free-form context like "leave:<id>"
+    Called after a LeaveRequest is created. We don't persist anything here:
+    assignment-time checks query LeaveRequest live.
     """
     try:
         if not user_id or not dates:
             return
         logger.info(
-            "Blocking notice: user_id=%s dates=%s source=%s (live checks via is_user_blocked)",
-            user_id, ",".join(str(d) for d in dates), source or "-"
+            "Blocking notice: user_id=%s dates=%s source=%s",
+            user_id,
+            ",".join(str(d) for d in dates),
+            source or "-",
         )
     except Exception:  # pragma: no cover
         logger.exception("block_employee_dates logging failed")
 
 
-# ---------------------------------------------------------------------------
-# Assignment guards (use these in generators/routers before assigning)
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Core guards
+# -----------------------------------------------------------------------------
 def _ist_date_from_any(dt_or_date) -> date | None:
     """Accept a date or datetime and return the IST calendar date."""
     if dt_or_date is None:
@@ -79,20 +62,17 @@ def _ist_date_from_any(dt_or_date) -> date | None:
 
 def is_user_blocked_for_datetime(user, planned_dt) -> bool:
     """
-    Convenience wrapper when you have a datetime:
-      True -> skip assignment (blocked)
-      False -> safe to consider assigning
+    True -> skip assignment (blocked)
+    False -> safe to consider assigning
     """
     d = _ist_date_from_any(planned_dt)
     if not d:
         return False
-    return is_user_blocked(user, d)
+    return LeaveRequest.is_user_blocked_on(user, d)
 
 
 def should_skip_assignment(user, planned_dt) -> bool:
-    """
-    Alias used by existing assignment code. If True, you must NOT assign.
-    """
+    """Alias used in generators. If True, you must NOT assign."""
     try:
         return is_user_blocked_for_datetime(user, planned_dt)
     except Exception:  # pragma: no cover
@@ -101,15 +81,7 @@ def should_skip_assignment(user, planned_dt) -> bool:
 
 
 def guard_assign(user, planned_dt) -> bool:
-    """
-    Return True if it is OK to assign work to `user` at `planned_dt`.
-
-    Typical usage in generators:
-        if not guard_assign(user, planned_dt):
-            continue  # skip this user
-
-    Equivalent to: not should_skip_assignment(...)
-    """
+    """Return True if it's OK to assign (i.e., NOT blocked)."""
     return not should_skip_assignment(user, planned_dt)
 
 

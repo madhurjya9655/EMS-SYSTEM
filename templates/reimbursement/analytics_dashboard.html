@@ -52,47 +52,19 @@
   /* ---------- Filters ---------- */
   .filters{min-width:0}
   .filters .form-label{font-size:.85rem;color:var(--muted)}
-  .filters .form-control,.filters .form-select{height:40px; min-width:0} /* prevent overflow */
+  .filters .form-control,.filters .form-select{height:40px; min-width:0}
   .filters .form-select[multiple]{height:auto;min-height:172px;padding:.4rem .6rem}
   .filters .btn{height:40px}
+  .help{font-size:.8rem;color:var(--muted)}
 
-  /* Responsive date range row (prevents overflow) */
-  .filters .range{
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:.5rem;
-  }
-  @media (max-width: 1200px){
-    .filters .range{grid-template-columns:1fr}
-  }
-
-  /* ---------- Chart canvases ---------- */
-  canvas{
-    background:var(--surface-alt);
-    border:1px solid var(--border);
-    border-radius:var(--radius);
-  }
-
-  /* Make card bodies a bit tighter for even heights across a row */
-  .card .card-body{padding:1rem}
-
-  /* ---------- Skeleton placeholders ---------- */
-  .skeleton{
-    position:relative;
-    color:transparent !important;
-  }
+  /* ---------- Skeleton ---------- */
+  .skeleton{position:relative;color:transparent !important}
   .skeleton::after{
-    content:"";
-    position:absolute;inset:0;
+    content:"";position:absolute;inset:0;
     background:linear-gradient(90deg, rgba(148,163,184,.15) 25%, rgba(148,163,184,.25) 37%, rgba(148,163,184,.15) 63%);
-    background-size:400% 100%;
-    animation:shimmer 1.2s ease-in-out infinite;
-    border-radius:6px;
+    background-size:400% 100%;animation:shimmer 1.2s ease-in-out infinite;border-radius:6px;
   }
-  @keyframes shimmer{
-    0%{background-position:100% 0}
-    100%{background-position:-100% 0}
-  }
+  @keyframes shimmer{0%{background-position:100% 0}100%{background-position:-100% 0}}
 
   /* ---------- Tables ---------- */
   .table thead th{white-space:nowrap}
@@ -109,14 +81,14 @@
       <small class="text-muted">Approved / Paid datasets • IST</small>
     </div>
     <div class="text-muted small">
-      <span class="pill">Theme: App Shell</span>
-      <span class="pill">Charts: Chart.js</span>
+      <span class="pill">Read-only</span>
+      <span class="pill">Bill-wise truth</span>
     </div>
   </div>
 </div>
 
 <div class="analytics-wrap">
-  <!-- Filters -->
+  <!-- Filters (Issue 11: preset/granularity/date/category removed) -->
   <div class="card filters">
     <div class="card-body">
       <form id="filtersForm">
@@ -130,50 +102,19 @@
         </div>
 
         <div class="mb-3">
-          <label class="form-label" for="preset">Preset</label>
-          <select id="preset" class="form-select">
-            <option value="">Custom / None</option>
-            <option value="weekly">This Week</option>
-            <option value="monthly" selected>Current Month</option>
-            <option value="quarterly">Current Quarter</option>
-            <option value="yearly">Current Year</option>
-          </select>
-        </div>
-
-        <div class="mb-3">
-          <label class="form-label" for="granularity">Granularity</label>
-          <select id="granularity" class="form-select">
-            <option value="weekly">Weekly</option>
-            <option value="monthly" selected>Monthly</option>
-            <option value="quarterly">Quarterly</option>
-            <option value="yearly">Yearly</option>
-          </select>
-        </div>
-
-        <div class="mb-2">
-          <label class="form-label">Date Range</label>
-          <div class="range">
-            <input type="date" id="from" class="form-control" placeholder="From">
-            <input type="date" id="to" class="form-control" placeholder="To">
-          </div>
-        </div>
-
-        <div class="mb-3">
-          <label class="form-label" for="employees">Employees (IDs, comma-separated)</label>
-          <input type="text" id="employees" class="form-control" placeholder="e.g. 12,45,78">
-        </div>
-
-        <div class="mb-3">
           <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-            <label class="form-label mb-0" for="categories">Categories</label>
-            <button type="button" id="categoriesClear" class="btn btn-outline-secondary btn-sm">Clear</button>
+            <label class="form-label mb-0" for="employees">Employees</label>
+            <button type="button" id="empClear" class="btn btn-outline-secondary btn-sm">Clear</button>
           </div>
-          <select id="categories" class="form-select" multiple size="6" aria-describedby="categoriesHelp">
-            {% for key,label in categoryLabels.items %}
-            <option value="{{ key }}">{{ label }}</option>
-            {% endfor %}
-          </select>
-          <div id="categoriesHelp" class="form-text">Hold Ctrl/Cmd to select multiple</div>
+          <!-- Populated from EmployeeOptionsAPI (Issue 10) -->
+          <select id="employees" class="form-select" multiple size="8" aria-describedby="empHelp"></select>
+          <div id="empHelp" class="help">Hold Ctrl/Cmd to select multiple</div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label" for="line_ids">Bill Line IDs (CSV)</label>
+          <input type="text" id="line_ids" class="form-control" placeholder="Optional: e.g. 101,102,205">
+          <div class="help">When provided, analytics recompute strictly over these bills (Issue 14).</div>
         </div>
 
         <div class="d-flex gap-2 mt-3">
@@ -186,108 +127,65 @@
 
   <!-- Main -->
   <div>
-    <!-- KPIs -->
+    <!-- KPIs (only what backend exposes + simple derived) -->
     <div class="kpi-grid mb-3" aria-live="polite" aria-busy="true">
       <div class="kpi-tile">
         <div class="kpi-label">Total Spend</div>
         <div class="kpi-value skeleton" id="kpiTotal">—</div>
       </div>
       <div class="kpi-tile">
-        <div class="kpi-label">Current Month</div>
-        <div class="kpi-value skeleton" id="kpiMonth">—</div>
+        <div class="kpi-label">Highest Bill</div>
+        <div class="kpi-value skeleton" id="kpiHiBill">—</div>
       </div>
       <div class="kpi-tile">
-        <div class="kpi-label">Current Quarter</div>
-        <div class="kpi-value skeleton" id="kpiQuarter">—</div>
-      </div>
-      <div class="kpi-tile">
-        <div class="kpi-label">Current Year</div>
-        <div class="kpi-value skeleton" id="kpiYear">—</div>
-      </div>
-      <div class="kpi-tile">
-        <div class="kpi-label">Avg / Employee</div>
-        <div class="kpi-value skeleton" id="kpiAvg">—</div>
+        <div class="kpi-label">Lowest Bill</div>
+        <div class="kpi-value skeleton" id="kpiLoBill">—</div>
       </div>
       <div class="kpi-tile">
         <div class="kpi-label">Highest Spender</div>
         <div class="kpi-value skeleton" id="kpiTop">—</div>
       </div>
+      <div class="kpi-tile">
+        <div class="kpi-label">Lowest Spender</div>
+        <div class="kpi-value skeleton" id="kpiBottom">—</div>
+      </div>
+      <div class="kpi-tile">
+        <div class="kpi-label">Employees Included</div>
+        <div class="kpi-value skeleton" id="kpiEmpCount">—</div>
+      </div>
     </div>
 
-    <!-- Charts + Lists -->
-    <div class="row g-3">
-      <div class="col-12 col-xl-6">
-        <div class="card h-100">
-          <div class="card-header"><strong>Time-based Spend</strong></div>
-          <div class="card-body">
-            <canvas id="tsChart" height="210"></canvas>
-          </div>
+    <!-- Employee Table -->
+    <div class="card">
+      <div class="card-header"><strong>Employee Spend Analysis</strong></div>
+      <div class="card-body">
+        <div id="top5Pills" class="d-flex flex-wrap gap-2 mb-2"></div>
+        <div class="table-responsive" style="max-height:420px">
+          <table class="table align-middle">
+            <thead class="table-light">
+              <tr>
+                <th>Employee</th>
+                <th>Total Amount</th>
+                <th># Requests</th>
+                <th>Top Category</th>
+              </tr>
+            </thead>
+            <tbody id="empBody">
+              <tr>
+                <td colspan="4" class="text-muted">Loading…</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
-      <div class="col-12 col-xl-6">
-        <div class="card h-100">
-          <div class="card-header"><strong>Category Breakdown (Bar)</strong></div>
-          <div class="card-body">
-            <canvas id="catBar" height="210"></canvas>
-          </div>
-        </div>
-      </div>
+    </div>
 
-      <div class="col-12 col-xl-6">
-        <div class="card h-100">
-          <div class="card-header"><strong>Category Share (Donut)</strong></div>
-          <div class="card-body">
-            <canvas id="catPie" height="230"></canvas>
-          </div>
-        </div>
-      </div>
-
-      <div class="col-12 col-xl-6">
-        <div class="card h-100">
-          <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-            <strong>High-Risk / High-Spend (Avg + X%)</strong>
-            <span class="pill skeleton" id="hrMeta">—</span>
-          </div>
-          <div class="card-body">
-            <div id="hrList" class="d-flex flex-wrap gap-2"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="col-12">
-        <div class="card">
-          <div class="card-header"><strong>Employee Spend Analysis</strong></div>
-          <div class="card-body">
-            <div id="top5Pills" class="d-flex flex-wrap gap-2 mb-2"></div>
-            <div class="table-responsive" style="max-height:420px">
-              <table class="table align-middle">
-                <thead class="table-light">
-                  <tr>
-                    <th>Employee</th>
-                    <th>Total Amount</th>
-                    <th># Requests</th>
-                    <th>Top Category</th>
-                  </tr>
-                </thead>
-                <tbody id="empBody">
-                  <tr>
-                    <td colspan="4" class="text-muted">Loading…</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-
-    </div><!-- /row -->
   </div><!-- /main -->
 </div><!-- /wrap -->
 
 {% endblock %}
 
 {% block extra_js %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
   const fmtMoney = v => '₹' + (Number(v||0)).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
   const qs = (id) => document.getElementById(id);
@@ -297,78 +195,37 @@
     const p = new URLSearchParams(location.search);
     return {
       status: p.get('status') || 'approved_and_paid',
-      preset: p.get('preset') || 'monthly',
-      granularity: p.get('granularity') || 'monthly',
-      from: p.get('from') || '',
-      to: p.get('to') || '',
-      employees: p.get('employees') || '',
-      categories: (p.get('categories') || ''),
-      threshold: p.get('threshold') || '50'
+      employees: p.get('employees') || '',          // CSV of IDs
+      line_ids: p.get('line_ids') || ''             // CSV of ReimbursementLine PKs
     };
   }
   function writeParams(params) {
     const p = new URLSearchParams();
     Object.entries(params).forEach(([k,v]) => { if (v) p.set(k, v); });
-    const url = location.pathname + '?' + p.toString();
+    const url = location.pathname + (p.toString() ? '?' + p.toString() : '');
     history.replaceState(null, '', url);
   }
 
   // Form <> params
   function setFormFromParams(params) {
     qs('status').value = params.status;
-    qs('preset').value = params.preset;
-    qs('granularity').value = params.granularity;
-    qs('from').value = params.from;
-    qs('to').value = params.to;
-    qs('employees').value = params.employees;
-    // categories (multi)
-    const set = new Set((params.categories||'').split(',').filter(Boolean));
-    [...qs('categories').options].forEach(o => o.selected = set.has(o.value));
+    qs('line_ids').value = params.line_ids;
+    // employees (multi) will be selected after options load
   }
   function getFormParams() {
-    const selectedCats = [...qs('categories').selectedOptions].map(o => o.value).join(',');
+    const empIds = [...qs('employees').selectedOptions].map(o => o.value).join(',');
     return {
       status: qs('status').value,
-      preset: qs('preset').value,
-      granularity: qs('granularity').value,
-      from: qs('from').value,
-      to: qs('to').value,
-      employees: (qs('employees').value || '').replace(/\s+/g,''),
-      categories: selectedCats
+      employees: empIds,
+      line_ids: (qs('line_ids').value || '').replace(/\s+/g,'')
     };
-  }
-
-  // Charts
-  let tsChart, catBar, catPie;
-  function ensureCharts() {
-    if (!tsChart) {
-      tsChart = new Chart(qs('tsChart').getContext('2d'), {
-        type: 'line',
-        data: { labels: [], datasets: [{ label: 'Total', data: [] }] },
-        options: { responsive: true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true } } }
-      });
-    }
-    if (!catBar) {
-      catBar = new Chart(qs('catBar').getContext('2d'), {
-        type: 'bar',
-        data: { labels: [], datasets: [{ label: 'Amount', data: [] }] },
-        options: { responsive: true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true } } }
-      });
-    }
-    if (!catPie) {
-      catPie = new Chart(qs('catPie').getContext('2d'), {
-        type: 'doughnut',
-        data: { labels: [], datasets: [{ data: [] }] },
-        options: { responsive: true, maintainAspectRatio:false }
-      });
-    }
   }
 
   // Fetch helper
   async function fetchJSON(url, params) {
-    const p = new URLSearchParams(params);
-    const res = await fetch(url + '?' + p.toString(), { credentials: 'same-origin' });
-    if (!res.ok) throw new Error('Request failed');
+    const p = new URLSearchParams(params || {});
+    const res = await fetch(url + (p.toString() ? '?' + p.toString() : ''), { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('Request failed: ' + res.status);
     return await res.json();
   }
 
@@ -384,53 +241,49 @@
     if (kpiWrap) kpiWrap.setAttribute('aria-busy', 'false');
   }
 
+  // Load employee options for multiselect (Issue 10)
+  async function loadEmployeeOptions(preselectCsv){
+    const opts = await fetchJSON("{% url 'reimbursement:analytics_api_employee_options' %}");
+    const sel = qs('employees');
+    sel.innerHTML = (opts || []).map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+    if (preselectCsv){
+      const set = new Set(preselectCsv.split(',').filter(Boolean));
+      [...sel.options].forEach(o => o.selected = set.has(String(o.value)));
+    }
+  }
+
   async function loadAll() {
     const p = readParams();
     setFormFromParams(p);
-    ensureCharts();
+    await loadEmployeeOptions(p.employees);
 
     const common = {
       status: p.status,
-      preset: p.preset,
-      granularity: p.granularity,
-      from: p.from,
-      to: p.to,
       employees: p.employees,
-      categories: p.categories
+      line_ids: p.line_ids
     };
 
-    // KPIs
+    // Summary KPIs (Issue 13)
     const k = await fetchJSON("{% url 'reimbursement:analytics_api_summary' %}", common);
-    qs('kpiTotal').textContent   = fmtMoney(k.total_spend);
-    qs('kpiMonth').textContent   = fmtMoney(k.current_month_spend);
-    qs('kpiQuarter').textContent = fmtMoney(k.current_quarter_spend);
-    qs('kpiYear').textContent    = fmtMoney(k.current_year_spend);
-    qs('kpiAvg').textContent     = fmtMoney(k.average_spend_per_employee);
-    qs('kpiTop').textContent     = k.highest_spender ? `${k.highest_spender.employee_name} — ${fmtMoney(k.highest_spender.total)}` : '—';
-    clearSkeleton('kpiTotal','kpiMonth','kpiQuarter','kpiYear','kpiAvg','kpiTop');
+    qs('kpiTotal').textContent  = fmtMoney(k.total_spend || 0);
+    qs('kpiHiBill').textContent = fmtMoney(k.highest_spend_bill || 0);
+    qs('kpiLoBill').textContent = fmtMoney(k.lowest_spend_bill || 0);
+    qs('kpiTop').textContent    = k.highest_spender ? `${k.highest_spender.employee_name} — ${fmtMoney(k.highest_spender.total)}` : '—';
+    qs('kpiBottom').textContent = k.lowest_spender ? `${k.lowest_spender.employee_name} — ${fmtMoney(k.lowest_spender.total)}` : '—';
+    const empCount = (k.employee_wise_spend || []).length;
+    qs('kpiEmpCount').textContent = String(empCount);
+    clearSkeleton('kpiTotal','kpiHiBill','kpiLoBill','kpiTop','kpiBottom','kpiEmpCount');
 
-    // Time series
-    const ts = await fetchJSON("{% url 'reimbursement:analytics_api_timeseries' %}", common);
-    tsChart.data.labels = ts.map(r => new Date(r.period).toLocaleDateString('en-IN'));
-    tsChart.data.datasets[0].data = ts.map(r => r.total);
-    tsChart.update();
-
-    // Categories
-    const cats = await fetchJSON("{% url 'reimbursement:analytics_api_categories' %}", common);
-    catBar.data.labels = cats.map(r => r.label);
-    catBar.data.datasets[0].data = cats.map(r => r.total);
-    catBar.update();
-
-    catPie.data.labels = cats.map(r => r.label);
-    catPie.data.datasets[0].data = cats.map(r => r.percent);
-    catPie.update();
-
-    // Employees
+    // Employee table (Issue 14: recomputed by server using same filters)
     const emp = await fetchJSON("{% url 'reimbursement:analytics_api_employees' %}", common);
-    const pills = (emp.top5 || []).map(r => `<span class="pill">${r.employee_name}: ${fmtMoney(r.total)}</span>`).join('');
+
+    // Top 5 pills from rows
+    const rows = emp.rows || [];
+    const top5 = rows.slice(0,5);
+    const pills = top5.map(r => `<span class="pill">${r.employee_name}: ${fmtMoney(r.total)}</span>`).join('');
     qs('top5Pills').innerHTML = pills || '<span class="text-muted">No data</span>';
 
-    qs('empBody').innerHTML = (emp.rows || []).map(r => `
+    qs('empBody').innerHTML = rows.map(r => `
       <tr>
         <td>${r.employee_name}</td>
         <td>${fmtMoney(r.total)}</td>
@@ -438,12 +291,6 @@
         <td>${r.top_category || '-'}</td>
       </tr>
     `).join('') || `<tr><td colspan="4" class="text-muted">No data</td></tr>`;
-
-    // High risk
-    const hr = await fetchJSON("{% url 'reimbursement:analytics_api_highrisk' %}", { ...common, threshold: p.threshold || 50 });
-    qs('hrMeta').textContent = `Avg ${fmtMoney(hr.average||0)} • +${hr.threshold}% ⇒ ${fmtMoney(hr.cutoff||0)}`;
-    qs('hrList').innerHTML = (hr.flags || []).map(f => `<span class="pill">${f.employee_name}: ${fmtMoney(f.total)}</span>`).join('') || '<span class="text-muted">No flags</span>';
-    clearSkeleton('hrMeta');
   }
 
   // Form interactions
@@ -459,18 +306,17 @@
     });
 
     document.getElementById('clearBtn').addEventListener('click', () => {
-      const cleared = { status:'approved_and_paid', preset:'monthly', granularity:'monthly' };
+      const cleared = { status:'approved_and_paid' };
       writeParams(cleared);
       location.reload();
     });
 
-    document.getElementById('categoriesClear').addEventListener('click', () => {
-      [...qs('categories').options].forEach(o => o.selected = false);
+    document.getElementById('empClear').addEventListener('click', () => {
+      [...qs('employees').options].forEach(o => o.selected = false);
     });
 
     // Boot
     const current = readParams();
-    if (!current.preset && !current.from && !current.to) current.preset = 'monthly';
     if (!current.status) current.status = 'approved_and_paid';
     writeParams(current);
     loadAll().catch(err => {

@@ -17,11 +17,13 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .models import Checklist, Delegation, FMS, HelpTicket
-# Final recurrence rules (WORKING-DAY SHIFT; 19:00 IST on next stepped working day)
+# Final recurrence rules:
+# get_next_planned_date → steps by mode/frequency and PINS to 19:00 IST on that stepped date.
+# It does NOT shift Sundays/holidays. Shifting is performed by signals to avoid double-shifts.
 from .recurrence_utils import (
     RECURRING_MODES,
     normalize_mode,
-    get_next_planned_date,  # shifts Sun/holiday → next working day @ 19:00 IST
+    get_next_planned_date,  # pins 19:00 IST, NO working-day shift here
 )
 from .utils import (
     _safe_console_text,
@@ -137,7 +139,7 @@ def _series_q_for_frequency(assign_to_id: int, task_name: str, mode: str, freq_n
     This is the ONLY behavioral change, and it does NOT alter recurrence math/timings;
     it just makes the queries tolerant to legacy rows with frequency=NULL.
     """
-    freq_set = [freq_norm, None]  # <<< tolerate both 1 and NULL
+    freq_set = [freq_norm, None]  # tolerate both exact freq and NULL (legacy)
     q = Q(assign_to_id=assign_to_id, task_name=task_name, mode=mode)
     if group_name:
         q &= Q(group_name=group_name)
@@ -158,8 +160,13 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
         group_name=series.get("group_name"),
     )
 
-    # If ANY Pending exists in this series → do not create a new future one
-    if Checklist.objects.filter(status="Pending").filter(q_series).exists():
+    # If a FUTURE Pending exists in this tolerant series → do not create another.
+    if (
+        Checklist.objects.filter(status="Pending")
+        .filter(q_series)
+        .filter(planned_date__gt=now)
+        .exists()
+    ):
         return 0
 
     # Use latest COMPLETED in the tolerant series as the stepping base
@@ -211,7 +218,7 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
             task_name=completed.task_name,
             message=completed.message,
             assign_to=completed.assign_to,
-            planned_date=next_dt,
+            planned_date=next_dt,  # 19:00 IST pinned by recurrence_utils; shift is handled in signals
             priority=completed.priority,
             attachment_mandatory=completed.attachment_mandatory,
             mode=completed.mode,
