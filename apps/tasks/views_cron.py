@@ -13,8 +13,8 @@ from apps.tasks.services.weekly_performance import (
 # Celery tasks & orchestrators
 from apps.tasks.tasks import (
     generate_recurring_checklists,    # ensure “today” rows exist
-    send_due_today_assignments,       # 10:00 IST fan-out (leave aware)
-    pre10am_unblock_and_generate,     # NEW: 09:55 IST safeguard
+    send_due_today_assignments,       # 10:00 IST fan-out (leave aware; now centrally locked)
+    pre10am_unblock_and_generate,     # 09:55 IST safeguard
 )
 
 import threading
@@ -81,6 +81,9 @@ def _run_due_today_in_background():
     Do the heavy work outside the HTTP request thread to avoid Gunicorn timeouts.
     1) Pre-generate recurring 'today' rows
     2) Send due-today emails
+
+    NOTE: send_due_today_assignments has a cross-process filesystem lock,
+    so even if multiple triggers fire, only one fan-out runs for the day.
     """
     try:
         # Best-effort pre-gen; never crash the thread if gen fails
@@ -89,7 +92,7 @@ def _run_due_today_in_background():
         except Exception:
             pass
 
-        # Actual fan-out (built-in batching/pauses in the task still apply)
+        # Actual fan-out (task contains duplicate guard + leave guard)
         try:
             send_due_today_assignments.run()
         except Exception:

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import os  # ⬅️ added for cross-process file lock
+from pathlib import Path  # ⬅️ added for lock directory
 from datetime import timedelta, datetime, time as dt_time, date as dt_date
 from typing import Tuple, List, Dict, Any
 
@@ -53,14 +55,49 @@ SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
 SEND_RECUR_EMAILS_ONLY_AT_10AM = getattr(settings, "SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
 
+# -------------------------------
+# Cross-process lock (prevents duplicate fan-out across Celery/Web)
+# -------------------------------
+_LOCK_DIR = Path(getattr(settings, "MEDIA_ROOT", "/opt/render/project/src/db")) / "locks"
+
+def _now_ist() -> datetime:
+    return timezone.now().astimezone(IST)
+
+def _daily_mail_lock_path(for_dt_ist: datetime | None = None) -> Path:
+    d = (for_dt_ist or _now_ist()).date().isoformat()
+    return _LOCK_DIR / f"due_today_fanout_{d}.lock"
+
+def _acquire_daily_mail_lock(for_dt_ist: datetime | None = None) -> str | None:
+    """
+    Create a filesystem sentinel that is shared by all processes (web + worker).
+    If the file already exists, another runner has the lock for today's fan-out.
+    """
+    try:
+        _LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # If we cannot ensure dir, don't block execution; proceed without lock.
+        return None
+    lock_path = _daily_mail_lock_path(for_dt_ist)
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+        return str(lock_path)
+    except FileExistsError:
+        return None
+    except Exception:
+        return None
+
+def _release_daily_mail_lock(lock_path: str | None) -> None:
+    try:
+        if lock_path and os.path.exists(lock_path):
+            os.unlink(lock_path)
+    except Exception:
+        # Best-effort; stale locks will naturally change with date.
+        pass
 
 # -------------------------------
 # General IST helpers
 # -------------------------------
-def _now_ist() -> datetime:
-    return timezone.now().astimezone(IST)
-
-
 def _ist_day_bounds(for_dt_ist: datetime) -> Tuple[datetime, datetime]:
     """
     Return (start_aware, end_aware) in PROJECT TZ for the IST day containing for_dt_ist.
@@ -468,70 +505,84 @@ def send_due_today_assignments(self) -> dict:
     🚫 LEAVE AWARE: before emailing each assignee, we call guard_assign(user, 10:00 IST today).
     If it returns False, we **skip** notifying that user for the day because they are on
     APPROVED leave or a qualifying PENDING leave (applied before 09:30 IST).
+
+    🔒 DUPLICATE GUARD (cross-process):
+    We take a same-day filesystem lock so that only one runner (Celery or HTTP cron)
+    performs the fan-out per day, even if both are triggered.
     """
+    # Gate by time first (so we don't take lock before 10:00)
     if not _is_after_10am_ist():
         logger.info(_safe_console_text("[DUE@10] Skipped: before 10:00 IST"))
         return {"sent": 0, "checklists": 0, "delegations": 0, "skipped_before_10": True}
 
-    now_ist = _now_ist()
-    start_dt, end_dt = _ist_day_bounds(now_ist)
-    anchor_dt = _assignment_anchor_for_today_10am_ist()
+    # Acquire a per-day cross-process lock
+    lock_path = _acquire_daily_mail_lock(_now_ist())
+    if not lock_path:
+        logger.info(_safe_console_text("[DUE@10] Skipped: another instance already ran or is running"))
+        return {"sent": 0, "checklists": 0, "delegations": 0, "locked_out": True, "skipped_before_10": False}
 
-    checklists = _fetch_checklists_due_today(start_dt, end_dt)
-    delegations = _fetch_delegations_due_today(start_dt, end_dt)
+    try:
+        now_ist = _now_ist()
+        start_dt, end_dt = _ist_day_bounds(now_ist)
+        anchor_dt = _assignment_anchor_for_today_10am_ist()
 
-    sent = 0
-    cl_sent = 0
-    de_sent = 0
+        checklists = _fetch_checklists_due_today(start_dt, end_dt)
+        delegations = _fetch_delegations_due_today(start_dt, end_dt)
 
-    for obj in checklists:
-        # ⛔ Do not send if user is blocked for 10:00 IST today
-        try:
-            if not guard_assign(obj.assign_to, anchor_dt):
-                logger.info(
-                    _safe_console_text(
-                        f"[DUE@10] Checklist {obj.id} suppressed (assignee on leave @ 10:00 IST)"
+        sent = 0
+        cl_sent = 0
+        de_sent = 0
+
+        for obj in checklists:
+            # ⛔ Do not send if user is blocked for 10:00 IST today
+            try:
+                if not guard_assign(obj.assign_to, anchor_dt):
+                    logger.info(
+                        _safe_console_text(
+                            f"[DUE@10] Checklist {obj.id} suppressed (assignee on leave @ 10:00 IST)"
+                        )
                     )
-                )
+                    continue
+            except Exception:
+                # defensive: if anything goes wrong in guard, do not block
+                pass
+
+            if _already_sent_today("Checklist", obj.id):
                 continue
-        except Exception:
-            # defensive: if anything goes wrong in guard, do not block
-            pass
+            _send_checklist_email(obj)
+            _mark_sent_for_today("Checklist", obj.id)
+            sent += 1
+            cl_sent += 1
 
-        if _already_sent_today("Checklist", obj.id):
-            continue
-        _send_checklist_email(obj)
-        _mark_sent_for_today("Checklist", obj.id)
-        sent += 1
-        cl_sent += 1
-
-    for obj in delegations:
-        # ⛔ Do not send if user is blocked for 10:00 IST today
-        try:
-            if not guard_assign(obj.assign_to, anchor_dt):
-                logger.info(
-                    _safe_console_text(
-                        f"[DUE@10] Delegation {obj.id} suppressed (assignee on leave @ 10:00 IST)"
+        for obj in delegations:
+            # ⛔ Do not send if user is blocked for 10:00 IST today
+            try:
+                if not guard_assign(obj.assign_to, anchor_dt):
+                    logger.info(
+                        _safe_console_text(
+                            f"[DUE@10] Delegation {obj.id} suppressed (assignee on leave @ 10:00 IST)"
+                        )
                     )
-                )
+                    continue
+            except Exception:
+                pass
+
+            if _already_sent_today("Delegation", obj.id):
                 continue
-        except Exception:
-            pass
+            _send_delegation_email(obj)
+            _mark_sent_for_today("Delegation", obj.id)
+            sent += 1
+            de_sent += 1
 
-        if _already_sent_today("Delegation", obj.id):
-            continue
-        _send_delegation_email(obj)
-        _mark_sent_for_today("Delegation", obj.id)
-        sent += 1
-        de_sent += 1
-
-    logger.info(
-        _safe_console_text(
-            f"[DUE@10] Completed fan-out at {now_ist:%Y-%m-%d %H:%M IST}: "
-            f"checklists={cl_sent}, delegations={de_sent}, total={sent}"
+        logger.info(
+            _safe_console_text(
+                f"[DUE@10] Completed fan-out at {now_ist:%Y-%m-%d %H:%M IST}: "
+                f"checklists={cl_sent}, delegations={de_sent}, total={sent}"
+            )
         )
-    )
-    return {"sent": sent, "checklists": cl_sent, "delegations": de_sent, "skipped_before_10": False}
+        return {"sent": sent, "checklists": cl_sent, "delegations": de_sent, "skipped_before_10": False}
+    finally:
+        _release_daily_mail_lock(lock_path)
 
 
 # -------------------------------

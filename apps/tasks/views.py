@@ -56,7 +56,7 @@ from .utils import (
 from .recurrence_utils import preserve_first_occurrence_time
 
 # ✅ Central leave-blocking (date- & time-aware)
-from apps.tasks.utils.blocking import (
+from apps.tasks.utils.blocking import (  # ← kept original import path (no logic change)
     is_user_blocked,         # date-level, 10:00 IST anchor (for CL/DL visibility)
     is_user_blocked_at,      # time-level, exact instant in IST (for Help Tickets / "right now")
 )
@@ -540,6 +540,20 @@ user_cache = UserCache()
 can_create = lambda u: u.is_superuser or u.groups.filter(name__in=["Admin", "Manager", "EA", "CEO"]).exists()
 
 
+# ---- NEW: minimal helper to enforce awareness at save boundaries (no logic change)
+def ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    """Make a naive datetime aware in the current timezone; leave aware/None untouched."""
+    if not dt:
+        return dt
+    if timezone.is_aware(dt):
+        return dt
+    try:
+        tz = timezone.get_current_timezone()
+    except Exception:
+        tz = IST
+    return timezone.make_aware(dt, tz)
+
+
 @robust_db_operation()
 def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, start_idx):
     task_objects, errors = [], []
@@ -572,6 +586,9 @@ def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, star
                 planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(
                     timezone.get_current_timezone()
                 )
+
+            # >>> Ensure timezone awareness before saving to model
+            planned_dt = ensure_aware(planned_dt)
 
             message = _clean_str(row.get("Message"))
             priority = (_clean_str(row.get("Priority")) or "Low").title()
@@ -698,6 +715,9 @@ def process_delegation_batch_excel_ultra_optimized(batch_df, assign_by_user, sta
                 planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(
                     timezone.get_current_timezone()
                 )
+
+            # >>> Ensure timezone awareness before saving to model
+            planned_dt = ensure_aware(planned_dt)
 
             priority = (_clean_str(row.get("Priority")) or "Low").title()
             if priority not in ["Low", "Medium", "High"]:
@@ -975,6 +995,7 @@ def add_checklist(request):
         form = ChecklistForm(request.POST, request.FILES)
         if form.is_valid():
             planned_date = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
+            planned_date = ensure_aware(planned_date)  # <<< ensure aware
             assignee = form.cleaned_data.get("assign_to")
 
             # hard-block holidays and leave (date-level @ 10:00 IST)
@@ -1013,6 +1034,7 @@ def edit_checklist(request, pk):
         form = ChecklistForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
             planned_date = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
+            planned_date = ensure_aware(planned_date)  # <<< ensure aware
             assignee = form.cleaned_data.get("assign_to")
 
             # block rescheduling to holidays / leave
@@ -1136,6 +1158,7 @@ def add_delegation(request):
         form = DelegationForm(request.POST, request.FILES)
         if form.is_valid():
             planned_dt = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
+            planned_dt = ensure_aware(planned_dt)  # <<< ensure aware
             assignee = form.cleaned_data.get("assign_to")
 
             # hard-block holidays and leave
@@ -1248,6 +1271,7 @@ def edit_delegation(request, pk):
         form = DelegationForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
             planned_dt = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
+            planned_dt = ensure_aware(planned_dt)  # <<< ensure aware
             assignee = form.cleaned_data.get("assign_to")
 
             ist_day = planned_dt.astimezone(IST).date() if planned_dt else None
@@ -1336,6 +1360,7 @@ def add_help_ticket(request):
         form = HelpTicketForm(request.POST, request.FILES)
         if form.is_valid():
             planned_date = form.cleaned_data.get("planned_date")
+            planned_date = ensure_aware(planned_date)  # <<< ensure aware
             planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
             assignee = form.cleaned_data.get("assign_to")
 
@@ -1356,6 +1381,8 @@ def add_help_ticket(request):
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "add", "can_create": can_create(request.user)})
 
             ticket = form.save(commit=False)
+            # make sure instance field is aware even if form returned naive
+            ticket.planned_date = ensure_aware(ticket.planned_date)
             ticket.assign_by = request.user
             ticket.save()
 
@@ -1382,6 +1409,7 @@ def edit_help_ticket(request, pk):
         form = HelpTicketForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
             planned_date = form.cleaned_data.get("planned_date")
+            planned_date = ensure_aware(planned_date)  # <<< ensure aware
             planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
             new_assignee = form.cleaned_data.get("assign_to")
 
@@ -1400,7 +1428,9 @@ def edit_help_ticket(request, pk):
                 messages.error(request, "Planned time falls within assignee’s leave window. Choose another time or reassign.")
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "edit", "can_create": can_create(request.user)})
 
-            ticket = form.save()
+            ticket = form.save(commit=False)
+            ticket.planned_date = ensure_aware(ticket.planned_date)  # <<< ensure aware
+            ticket.save()
             complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
             try:
                 if old_assignee and ticket.assign_to_id != old_assignee.id:
