@@ -1,7 +1,6 @@
 # employee_management/urls.py
 from __future__ import annotations
 
-import os
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
@@ -86,8 +85,8 @@ urlpatterns = [
     path("internal/cron/employee-digest/", legacy_cron_views.employee_digest, name="cron-employee-digest"),
 ]
 
-# Serve media in DEBUG (and optionally when SERVE_MEDIA=1)
-if settings.DEBUG or os.getenv("SERVE_MEDIA") == "1":
+# Serve media in DEBUG (and optionally when SERVE_MEDIA is enabled from settings)
+if settings.DEBUG or getattr(settings, "SERVE_MEDIA", False):
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
 # Optional: Django Debug Toolbar

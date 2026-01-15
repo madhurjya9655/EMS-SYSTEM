@@ -15,11 +15,10 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent  # …/employee_management_system
 ON_RENDER = bool(os.environ.get("RENDER"))
 
-# Disk roots
-DEFAULT_DISK_ROOT = "/opt/render/project/src/db"          # for DB and misc data
-DEFAULT_MEDIA_ROOT = "/opt/render/project/src/media"      # dedicated persistent media dir
+# Default Render disk root (where your persistent disk is mounted)
+DEFAULT_DISK_ROOT = "/opt/render/project/src/db"
 
-# If MEDIA_ROOT is set in env (you have it), we’ll honor it.
+# Respect explicit MEDIA_ROOT env (you have it on Render)
 MEDIA_ROOT_ENV = os.getenv("MEDIA_ROOT", "").strip()
 
 # -----------------------------------------------------------------------------
@@ -45,16 +44,12 @@ def env_int(name: str, default: int = 0) -> int:
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-__dev-only-use-this__")
 DEBUG = env_bool("DEBUG", False)
 
-# Both are read by reimbursement code; SITE_BASE_URL falls back to SITE_URL.
 SITE_URL = os.getenv("SITE_URL", "https://ems-system-d26q.onrender.com")
 SITE_BASE_URL = os.getenv("SITE_BASE_URL", SITE_URL)
 
 CRON_SECRET = os.getenv("CRON_SECRET", "")
-
-# Serve MEDIA behind Django (kept ON by default on Render)
 SERVE_MEDIA = env_bool("SERVE_MEDIA", True if ON_RENDER else False)
 
-# Hardened admin path (used in urls.py)
 ADMIN_URL = os.getenv("ADMIN_URL", "super-secret-admin/")
 
 ALLOWED_HOSTS = env_list(
@@ -173,7 +168,7 @@ _template_options = {
         "common_filters": "apps.common.templatetags.common_filters",
         "user_filters": "apps.users.templatetags.user_filters",
         "users_filters": "apps.users.templatetags.user_filters",
-        "users_permissions": "apps.users.templatetags.users_permissions",  # ✅ added
+        "users_permissions": "apps.users.templatetags.users_permissions",
         "group_tags": "apps.common.templatetags.group_tags",
         "model_extras": "apps.common.templatetags.model_extras",
     },
@@ -219,8 +214,6 @@ except Exception:
     dj_database_url = None
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-
-# ✅ Single source of truth for connection reuse (used for both Postgres + SQLite)
 CONN_MAX_AGE = env_int("CONN_MAX_AGE", 0)
 
 if DATABASE_URL and dj_database_url:
@@ -232,10 +225,8 @@ if DATABASE_URL and dj_database_url:
         ),
     }
 else:
-    # Prefer explicit SQLITE_PATH if provided (you have it set)
     sqlite_path = os.getenv("SQLITE_PATH", "").strip()
     if not sqlite_path:
-        # Fallback to disk mount
         disk_root = os.getenv("DISK_ROOT", DEFAULT_DISK_ROOT).strip() or DEFAULT_DISK_ROOT
         sqlite_dir = Path(disk_root) / "sqlite"
         sqlite_dir.mkdir(parents=True, exist_ok=True)
@@ -246,7 +237,6 @@ else:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": sqlite_path,
-            # ✅ THIS is the missing piece that caused Django to show CONN_MAX_AGE: 0
             "CONN_MAX_AGE": CONN_MAX_AGE,
             "OPTIONS": {
                 "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
@@ -402,13 +392,13 @@ LOGGING = {
     },
     "root": {"handlers": ["console"], "level": "WARNING"},
     "loggers": {
-        # Core Django & DB
         "django": {"handlers": ["file"], "level": "INFO", "propagate": False},
         "django.request": {"handlers": ["console", "file", "mail_admins"], "level": "ERROR", "propagate": False},
         "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
 
-        # App-specific
-        "apps": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},  # ✅ ensure app logs visible on Render
+        # ✅ NEW: catch-all so every logger under apps.* appears in Render logs
+        "apps": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},
+
         "apps.users.permissions": {"handlers": ["permissions_file"] + (["console"] if DEBUG else []),"level": "DEBUG" if DEBUG else "INFO","propagate": False},
         "apps.users.middleware": {"handlers": ["permissions_file"] + (["console"] if DEBUG else []),"level": "DEBUG" if DEBUG else "INFO","propagate": False},
         "apps.tasks": {"handlers": ["tasks_file", "console"], "level": "DEBUG" if DEBUG else "INFO","propagate": False},
@@ -459,8 +449,8 @@ STORAGES = {
 }
 
 MEDIA_URL = "/media/"
-# ✅ Put media on a dedicated persistent directory (works on Render)
-MEDIA_ROOT = MEDIA_ROOT_ENV or DEFAULT_MEDIA_ROOT
+# ✅ FINAL: on Render we store uploads on the mounted disk at /opt/render/project/src/db
+MEDIA_ROOT = MEDIA_ROOT_ENV or os.getenv("DISK_ROOT", DEFAULT_DISK_ROOT)
 Path(MEDIA_ROOT).mkdir(parents=True, exist_ok=True)
 
 # -----------------------------------------------------------------------------
@@ -490,11 +480,7 @@ REIMBURSEMENT_EMAIL_FROM = os.getenv(
     f"{REIMBURSEMENT_SENDER_NAME} <{REIMBURSEMENT_SENDER_EMAIL}>",
 )
 
-# Cap for outbound attachments (bytes) — used by reimbursement notifications.
-REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES = env_int(
-    "REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES",
-    20 * 1024 * 1024,  # 20 MB
-)
+REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES = env_int("REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES", 20 * 1024 * 1024)
 
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
 EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
@@ -543,9 +529,6 @@ REIMBURSEMENT_DRIVE_FOLDER_ID = os.getenv("REIMBURSEMENT_DRIVE_FOLDER_ID")
 REIMBURSEMENT_DRIVE_LINK_SHARING = os.getenv("REIMBURSEMENT_DRIVE_LINK_SHARING", "anyone")
 REIMBURSEMENT_DRIVE_DOMAIN = os.getenv("REIMBURSEMENT_DRIVE_DOMAIN")
 REIMBURSEMENT_DETAIL_URL_TEMPLATE = os.getenv("REIMBURSEMENT_DETAIL_URL_TEMPLATE")
-
-# For Google credentials, keep them in env as JSON or file path:
-# GOOGLE_SERVICE_ACCOUNT_JSON / GOOGLE_SERVICE_ACCOUNT_FILE
 
 # -----------------------------------------------------------------------------
 # TASK SYSTEM
