@@ -15,8 +15,9 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent  # …/employee_management_system
 ON_RENDER = bool(os.environ.get("RENDER"))
 
-# We will default to Render's disk mount path. You don't *need* to set DISK_ROOT.
-DEFAULT_DISK_ROOT = "/opt/render/project/src/db"
+# Disk roots
+DEFAULT_DISK_ROOT = "/opt/render/project/src/db"          # for DB and misc data
+DEFAULT_MEDIA_ROOT = "/opt/render/project/src/media"      # dedicated persistent media dir
 
 # If MEDIA_ROOT is set in env (you have it), we’ll honor it.
 MEDIA_ROOT_ENV = os.getenv("MEDIA_ROOT", "").strip()
@@ -401,9 +402,13 @@ LOGGING = {
     },
     "root": {"handlers": ["console"], "level": "WARNING"},
     "loggers": {
+        # Core Django & DB
         "django": {"handlers": ["file"], "level": "INFO", "propagate": False},
         "django.request": {"handlers": ["console", "file", "mail_admins"], "level": "ERROR", "propagate": False},
         "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
+
+        # App-specific
+        "apps": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},  # ✅ ensure app logs visible on Render
         "apps.users.permissions": {"handlers": ["permissions_file"] + (["console"] if DEBUG else []),"level": "DEBUG" if DEBUG else "INFO","propagate": False},
         "apps.users.middleware": {"handlers": ["permissions_file"] + (["console"] if DEBUG else []),"level": "DEBUG" if DEBUG else "INFO","propagate": False},
         "apps.tasks": {"handlers": ["tasks_file", "console"], "level": "DEBUG" if DEBUG else "INFO","propagate": False},
@@ -454,8 +459,8 @@ STORAGES = {
 }
 
 MEDIA_URL = "/media/"
-# Use your explicit MEDIA_ROOT if provided; otherwise default to the Render disk.
-MEDIA_ROOT = MEDIA_ROOT_ENV or os.getenv("DISK_ROOT", DEFAULT_DISK_ROOT)
+# ✅ Put media on a dedicated persistent directory (works on Render)
+MEDIA_ROOT = MEDIA_ROOT_ENV or DEFAULT_MEDIA_ROOT
 Path(MEDIA_ROOT).mkdir(parents=True, exist_ok=True)
 
 # -----------------------------------------------------------------------------
