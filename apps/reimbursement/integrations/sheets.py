@@ -8,7 +8,7 @@ import os
 import random
 import threading
 import time
-from datetime import datetime, timedelta, timezone, date as DateType
+from datetime import datetime, date, timedelta, timezone  # ← added `date`
 from typing import Dict, Tuple, List, Optional, Callable, Any
 
 from django.conf import settings
@@ -92,26 +92,20 @@ def _header_end_col() -> str:
 
 def _iso(dt):
     """
-    Return ISO string (UTC) for datetime/date inputs.
-    - datetime with tz -> convert to UTC
-    - naive datetime -> assume UTC
-    - date -> midnight UTC of that date
-    - falsy -> ""
-    For unknown types, best-effort str().
+    Return UTC ISO8601 with seconds for either a `datetime` or a `date`.
+    - If `date`, coerce to midnight UTC.
+    - If naive datetime, assume UTC.
     """
     if not dt:
         return ""
     try:
         if isinstance(dt, datetime):
             d = dt
-        elif isinstance(dt, DateType):
+        elif isinstance(dt, date):
             d = datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
         else:
-            # Try objects with astimezone (e.g. pendulum), else fallback to str
-            try:
-                return dt.astimezone(timezone.utc).isoformat(timespec="seconds")  # type: ignore[attr-defined]
-            except Exception:
-                return str(dt)
+            # Unknown type; best effort string
+            return str(dt)
         if d.tzinfo is None:
             d = d.replace(tzinfo=timezone.utc)
         else:
