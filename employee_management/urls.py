@@ -13,9 +13,7 @@ from django.views.generic import RedirectView
 from apps.users.views import CustomLoginView
 
 # ✅ Cron endpoints
-# Keep old module for 7PM/admin digests…
 from apps.tasks import cron_views as legacy_cron_views
-# …but switch 10:00 AM fan-out to the hardened hook
 from apps.tasks import views_cron as new_cron_views
 
 # Admin titles
@@ -60,10 +58,10 @@ urlpatterns = [
     path("dashboard/",     include(("dashboard.urls",          "dashboard"),     namespace="dashboard")),
     path("settings/",      include(("apps.settings.urls",      "settings"),      namespace="settings")),
 
-    # Recruitment under its own prefix
+    # Recruitment
     path("recruitment/",   include(("apps.recruitment.urls",   "recruitment"),   namespace="recruitment")),
 
-    # Root → redirect to dashboard
+    # Root → dashboard
     path("", RedirectView.as_view(pattern_name="dashboard:home", permanent=False), name="site-root"),
 
     # Healthcheck aliases
@@ -72,22 +70,20 @@ urlpatterns = [
     path("healthz", healthcheck),
     path("healthz/", healthcheck),
 
-    # Robots + favicon helpers
+    # Robots + favicon
     path("robots.txt", robots_txt),
     re_path(r"^favicon\.ico$", RedirectView.as_view(url=f"{settings.STATIC_URL}favicon.ico", permanent=False)),
 
     # ✅ Internal cron endpoints (protected by CRON_SECRET)
-    # 10:00 AM fan-out — now calls the hardened view that pre-generates “today” and never 500s
     path("internal/cron/due-today/", new_cron_views.due_today_assignments_hook, name="cron-due-today"),
-
-    # Keep your original cron views for the rest (unchanged behavior)
     path("internal/cron/pending-7pm/", legacy_cron_views.pending_summary_7pm, name="cron-pending-7pm"),
     path("internal/cron/employee-digest/", legacy_cron_views.employee_digest, name="cron-employee-digest"),
 ]
 
-# Serve media in DEBUG (and optionally when SERVE_MEDIA is enabled from settings)
-if settings.DEBUG or getattr(settings, "SERVE_MEDIA", False):
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+# ---------------------------------------------------------------------
+# Serve MEDIA in ALL environments (Render)
+# ---------------------------------------------------------------------
+urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
 # Optional: Django Debug Toolbar
 if "debug_toolbar" in settings.INSTALLED_APPS:
@@ -95,7 +91,7 @@ if "debug_toolbar" in settings.INSTALLED_APPS:
 
 
 # ---------------------------------------------------------------------
-# Minimal, safe error handlers (plain text; swap to templates later)
+# Minimal, safe error handlers
 # ---------------------------------------------------------------------
 def _plain(status: int, msg: str):
     return HttpResponse(msg, content_type="text/plain", status=status)
