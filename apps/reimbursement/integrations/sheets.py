@@ -8,7 +8,7 @@ import os
 import random
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date as DateType
 from typing import Dict, Tuple, List, Optional, Callable, Any
 
 from django.conf import settings
@@ -91,12 +91,34 @@ def _header_end_col() -> str:
     return _excel_col(len(HEADER))
 
 def _iso(dt):
+    """
+    Return ISO string (UTC) for datetime/date inputs.
+    - datetime with tz -> convert to UTC
+    - naive datetime -> assume UTC
+    - date -> midnight UTC of that date
+    - falsy -> ""
+    For unknown types, best-effort str().
+    """
     if not dt:
         return ""
-    if getattr(dt, "tzinfo", None) is None:
-        # assume naive is UTC
-        return datetime.fromtimestamp(dt.timestamp(), tz=timezone.utc).isoformat(timespec="seconds")
-    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+    try:
+        if isinstance(dt, datetime):
+            d = dt
+        elif isinstance(dt, DateType):
+            d = datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
+        else:
+            # Try objects with astimezone (e.g. pendulum), else fallback to str
+            try:
+                return dt.astimezone(timezone.utc).isoformat(timespec="seconds")  # type: ignore[attr-defined]
+            except Exception:
+                return str(dt)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        else:
+            d = d.astimezone(timezone.utc)
+        return d.isoformat(timespec="seconds")
+    except Exception:
+        return ""
 
 def _site_url() -> str:
     return (getattr(settings, "SITE_URL", "").rstrip("/")) or "http://127.0.0.1:8000"

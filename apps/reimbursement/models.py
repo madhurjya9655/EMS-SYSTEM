@@ -383,13 +383,14 @@ class ReimbursementRequest(models.Model):
 
     def derive_status_from_bills(self) -> str:
         """
-        Keep the container with Finance until every included bill clears its own workflow.
-        No auto-escalation to Manager at container level.
+        Parent container mirrors bill-level progress.
 
         Rules:
           - If there are no INCLUDED lines -> DRAFT
           - If ANY included line is in {FINANCE_REJECTED, MANAGER_REJECTED, EMPLOYEE_RESUBMITTED}
                 -> PARTIAL_HOLD
+          - If ALL included lines are in {FINANCE_APPROVED, MANAGER_PENDING, MANAGER_APPROVED, PAID}
+                -> PENDING_MANAGER
           - Otherwise -> PENDING_FINANCE_VERIFY
         """
         qs = self.lines.filter(status=ReimbursementLine.Status.INCLUDED).values_list("bill_status", flat=True)
@@ -404,7 +405,18 @@ class ReimbursementRequest(models.Model):
         ):
             return self.Status.PARTIAL_HOLD
 
-        # Stay with Finance until bills are explicitly sent forward per-line.
+        # When all included lines are cleared by Finance (or are already with/after Manager),
+        # escalate the container to manager stage.
+        cleared_for_manager = {
+            ReimbursementLine.BillStatus.FINANCE_APPROVED,
+            ReimbursementLine.BillStatus.MANAGER_PENDING,
+            ReimbursementLine.BillStatus.MANAGER_APPROVED,
+            ReimbursementLine.BillStatus.PAID,
+        }
+        if statuses.issubset(cleared_for_manager):
+            return self.Status.PENDING_MANAGER
+
+        # Otherwise stay in Finance Verification.
         return self.Status.PENDING_FINANCE_VERIFY
 
     def apply_derived_status_from_bills(self, *, actor: Optional[models.Model] = None, reason: str = "") -> None:

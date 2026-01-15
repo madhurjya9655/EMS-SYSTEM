@@ -1017,9 +1017,8 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
 
     def _rederive_status_without_escalation(self, req: ReimbursementRequest) -> None:
         """
-        Compute holding status for Finance without sending to Manager.
-        (No Partial Hold: parent stays PENDING_FINANCE_VERIFY until all INCLUDED
-        lines are exactly FINANCE_APPROVED; then the finalize/approve path will escalate.)
+        Compute holding status for Finance; escalate to manager only when ALL INCLUDED
+        lines are FINANCE_APPROVED.
         """
         qs = req.lines.filter(status=ReimbursementLine.Status.INCLUDED)
         counts = {
@@ -1045,6 +1044,33 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
                 from_status=prev,
                 to_status=req.status,
             )
+
+    def _escalate_lines_to_manager_pending(self, req: ReimbursementRequest) -> int:
+        """
+        When container moves to PENDING_MANAGER, ensure all INCLUDED lines that are
+        FINANCE_APPROVED become MANAGER_PENDING so the manager sees them.
+        No emails are sent here (single manager email is handled separately).
+        """
+        qs = req.lines.filter(
+            status=ReimbursementLine.Status.INCLUDED,
+            bill_status=ReimbursementLine.BillStatus.FINANCE_APPROVED,
+        )
+        now = timezone.now()
+        updated = qs.update(
+            bill_status=ReimbursementLine.BillStatus.MANAGER_PENDING,
+            updated_at=now,
+        )
+        if updated:
+            ReimbursementLog.log(
+                req,
+                ReimbursementLog.Action.STATUS_CHANGED,
+                actor=None,
+                message=f"Escalated {updated} bill(s) to Manager Pending.",
+                from_status="finance_approved",
+                to_status="manager_pending",
+                extra={"type": "bulk_escalate_lines_to_manager"},
+            )
+        return updated
 
     def post(self, request, *args, **kwargs):
         req = self._get_request(kwargs.get("pk"))
@@ -1080,6 +1106,16 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
 
                 req.recalc_total(save=True)
                 self._rederive_status_without_escalation(req)
+                if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
+                    req.verified_by = request.user
+                    req.verified_at = timezone.now()
+                    req.save(update_fields=["verified_by", "verified_at", "updated_at"])
+                    # Promote bills to manager queue
+                    self._escalate_lines_to_manager_pending(req)
+                    _send_safe("send_reimbursement_finance_verified", req)
+                    messages.success(request, f"Deleted {processed} bill(s). All bills are approved; sent to Manager.")
+                    return _redirect_back(request, "reimbursement:finance_pending")
+
                 messages.success(request, f"Deleted {processed} bill(s).")
                 return redirect(request.path + (f"?return={back}" if back else ""))
 
@@ -1097,11 +1133,14 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
                     messages.error(request, getattr(e, "message", str(e)) or f"Could not process line #{line.id}")
                     return redirect(request.path + (f"?return={back}" if back else ""))
 
-            req.apply_derived_status_from_bills(actor=request.user, reason="Finance updated selected bills.")
+            # Re-derive and escalate if ready
+            self._rederive_status_without_escalation(req)
             if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
                 req.verified_by = request.user
                 req.verified_at = timezone.now()
                 req.save(update_fields=["verified_by", "verified_at", "updated_at"])
+                # Promote all finance-approved lines to MANAGER_PENDING so the manager sees them
+                self._escalate_lines_to_manager_pending(req)
                 _send_safe("send_reimbursement_finance_verified", req)
                 messages.success(request, f"{processed} line(s) processed. All bills are approved; sent to Manager.")
                 return _redirect_back(request, "reimbursement:finance_pending")
@@ -1110,11 +1149,14 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
             return redirect(request.path + (f"?return={back}" if back else ""))
 
         if action == "finalize":
-            req.apply_derived_status_from_bills(actor=request.user, reason="Finance finalized verification.")
+            # Finalize acts like a re-derive + escalate when ready
+            self._rederive_status_without_escalation(req)
             if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
                 req.verified_by = request.user
                 req.verified_at = timezone.now()
                 req.save(update_fields=["verified_by", "verified_at", "updated_at"])
+                # Promote all finance-approved lines to MANAGER_PENDING
+                self._escalate_lines_to_manager_pending(req)
                 _send_safe("send_reimbursement_finance_verified", req)
                 messages.success(request, "All bills approved. Sent to Manager.")
                 return _redirect_back(request, "reimbursement:finance_pending")
