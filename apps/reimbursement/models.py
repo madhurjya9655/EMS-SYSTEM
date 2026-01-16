@@ -217,7 +217,8 @@ class ExpenseItem(models.Model):
     date = models.DateField()
     category = models.CharField(max_length=32, choices=REIMBURSEMENT_CATEGORY_CHOICES)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    vendor = models.CharField(max_length=255, blank=True, default="")
+    vendor = models.CharField(max_length=255, blank=True, default=""
+    )
     description = models.TextField(blank=True, default="")
     gst_type = models.CharField(max_length=10, choices=GST_TYPE_CHOICES, default="non_gst")
     receipt_file = models.FileField(upload_to=receipt_upload_path, validators=[validate_receipt_file])
@@ -845,7 +846,19 @@ class ReimbursementLine(models.Model):
                 )
 
     def save(self, *args, **kwargs):
+        # capture old values to detect meaningful changes
         creating = self.pk is None
+        old_status = None
+        old_bill_status = None
+        old_line_status = None
+        if not creating:
+            try:
+                prev = type(self).objects.only("bill_status", "status").get(pk=self.pk)
+                old_bill_status = prev.bill_status
+                old_line_status = prev.status
+            except type(self).DoesNotExist:
+                creating = True
+
         if creating and self.expense_item_id:
             if not self.amount:
                 self.amount = self.expense_item.amount
@@ -853,7 +866,30 @@ class ReimbursementLine(models.Model):
                 self.description = self.expense_item.description
             if not self.receipt_file:
                 self.receipt_file = self.expense_item.receipt_file
+
         super().save(*args, **kwargs)
+
+        # Auto-rederive parent status when a bill becomes submitted/approved/rejected/etc.,
+        # or when a line is newly created/its inclusion status changes.
+        try:
+            should_rederive = False
+            if creating:
+                should_rederive = True
+            else:
+                if (old_bill_status is not None and self.bill_status != old_bill_status):
+                    should_rederive = True
+                if (old_line_status is not None and self.status != old_line_status):
+                    should_rederive = True
+
+            if should_rederive and self.request_id:
+                self.request.apply_derived_status_from_bills(
+                    actor=self.last_modified_by,
+                    reason="Auto-derive after bill line change.",
+                )
+        except Exception:
+            # Never fail the line save due to derive issues; log for ops.
+            logger.exception("Failed to auto-derive parent status on line save (line_id=%s, request_id=%s).",
+                             self.pk, self.request_id)
 
     # ----- Bill-level state transitions (strict) -----------------------------
 

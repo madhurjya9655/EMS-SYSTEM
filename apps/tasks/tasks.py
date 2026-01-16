@@ -220,11 +220,28 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
         completed.planned_date, series["mode"], freq_norm
     )
 
+    # Step forward until strictly after "now" (keeps recurrence strictly future)
     safety = 0
     while next_dt and next_dt <= now and safety < 730:
         next_dt = get_next_planned_date(next_dt, series["mode"], freq_norm)
         safety += 1
     if not next_dt:
+        return 0
+
+    # ⛔ CRITICAL FIX: never (re)create a *today-due* occurrence here.
+    # This respects "recurrence is generated ONLY on completion, NOT on delete".
+    # If a user deletes today's checklist, this generator must *not* repopulate it.
+    try:
+        if next_dt.astimezone(IST).date() == _now_ist().date():
+            logger.info(
+                _safe_console_text(
+                    f"[RECUR GEN] Suppressed creation for TODAY {next_dt.astimezone(IST):%Y-%m-%d} "
+                    f"for series '{series['task_name']}' (assign_to_id={series['assign_to_id']})"
+                )
+            )
+            return 0
+    except Exception:
+        # If timezone conversion fails for any reason, err on the side of not creating
         return 0
 
     # Dupe guard within ±1 minute (still in tolerant series)
