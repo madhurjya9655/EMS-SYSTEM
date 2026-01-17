@@ -56,12 +56,11 @@
           <tr>
             <th style="width:50px;">#</th>
             <th style="width:110px;">Date</th>
-            <th style="width:140px;">Category</th>
-            <th style="width:130px;">Bill Type</th>
+            <th style="width:160px;">Category</th>
             <th>Description</th>
             <th class="text-end" style="width:120px;">Amount</th>
             <th style="width:90px;">Receipt</th>
-            <th style="width:210px;">Bill Status</th>
+            <th style="width:200px;">Bill Status</th>
           </tr>
         </thead>
         <tbody>
@@ -71,40 +70,44 @@
             <td>{{ forloop.counter }}</td>
             <td>{{ line.expense_item.date|date:"Y-m-d" }}</td>
             <td>{{ line.expense_item.get_category_display|default:line.expense_item.category }}</td>
-            <td>{% if line.expense_item.gst_type %}{{ line.expense_item.get_gst_type_display }}{% else %}<span class="text-muted">-</span>{% endif %}</td>
             <td class="small">{{ line.description|default:line.expense_item.description|default:"-" }}</td>
             <td class="text-end">₹{{ line.amount|floatformat:2 }}</td>
             <td>
-              {% if line.receipt_file or line.expense_item.receipt_file %}
+              {% if line.receipt_file || line.expense_item.receipt_file %}
                 <a href="{% url 'reimbursement:receipt_line' line.id %}" target="_blank" class="btn btn-sm btn-outline-secondary">View</a>
               {% else %}
                 <span class="text-muted small">No file</span>
               {% endif %}
             </td>
             <td>
-              {% if line.bill_status == 'finance_rejected' %}
-                <span class="badge bg-danger">Rejected by Finance</span>
-              {% elif line.bill_status == 'finance_approved' %}
+              {# Safe, manager/management-friendly status mapping: no finance-rejection callouts, no reasons #}
+              {% if line.bill_status == 'finance_approved' %}
                 <span class="badge bg-success">Finance Approved</span>
-              {% elif line.bill_status == 'pending_finance' %}
-                <span class="badge bg-warning text-dark">Pending Finance</span>
+              {% elif line.bill_status == 'manager_pending' %}
+                <span class="badge bg-primary">Pending Manager Approval</span>
+              {% elif line.bill_status == 'manager_approved' %}
+                <span class="badge bg-primary-subtle text-dark">Manager Approved</span>
               {% elif line.bill_status == 'employee_resubmitted' %}
                 <span class="badge bg-warning text-dark">Employee Resubmitted</span>
+              {% elif line.bill_status == 'paid' %}
+                <span class="badge bg-success">Paid</span>
+              {% elif line.bill_status == 'submitted' %}
+                <span class="badge bg-secondary">Submitted</span>
               {% else %}
-                <span class="badge bg-secondary">{{ line.bill_status|default:"-"|title }}</span>
+                <span class="badge bg-light text-dark">{{ line.get_bill_status_display }}</span>
               {% endif %}
             </td>
           </tr>
           {% endif %}
           {% empty %}
-          <tr><td colspan="8" class="text-center text-muted py-3">No expense lines.</td></tr>
+          <tr><td colspan="7" class="text-center text-muted py-3">No expense lines.</td></tr>
           {% endfor %}
         </tbody>
         <tfoot>
           <tr>
-            <td colspan="5" class="text-end"><strong>Total</strong></td>
+            <td colspan="3" class="text-end"><strong>Total</strong></td>
             <td class="text-end"><strong>₹{{ request_obj.total_amount|floatformat:2 }}</strong></td>
-            <td colspan="2"></td>
+            <td colspan="3"></td>
           </tr>
         </tfoot>
       </table>

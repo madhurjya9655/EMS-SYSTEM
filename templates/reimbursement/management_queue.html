@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% load i18n %}
+
 {% block title %}Management Reimbursement Queue{% endblock %}
 
 {% block content %}
@@ -20,7 +22,7 @@
             <th>Total Amount</th>
             <th>Manager</th>
             <th>Management</th>
-            <th style="width:120px;">Actions</th>
+            <th style="width:140px;">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -29,7 +31,7 @@
             <td>#{{ req.id }}</td>
             <td>{{ req.created_by.get_full_name|default:req.created_by.username }}</td>
             <td>{{ req.submitted_at|default:req.created_at|date:"Y-m-d H:i" }}</td>
-            <td><span class="badge bg-light text-dark">{{ req.get_status_display }}</span></td>
+            <td><span class="badge bg-primary">{{ req.get_status_display }}</span></td>
             <td>₹{{ req.total_amount|floatformat:2 }}</td>
             <td>
               {% if req.manager %}{{ req.manager.get_full_name|default:req.manager.username }}{% else %}<span class="text-muted small">Not set</span>{% endif %}
@@ -37,8 +39,11 @@
             <td>
               {% if req.management %}{{ req.management.get_full_name|default:req.management.username }}{% else %}<span class="text-muted small">Not set</span>{% endif %}
             </td>
-            <td>
-              <a href="{% url 'reimbursement:management_review' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-primary">Review</a>
+            <td class="d-flex flex-wrap gap-2">
+              <a href="{% url 'reimbursement:request_detail' req.id %}" target="_blank" rel="noopener"
+                 class="btn btn-sm btn-outline-secondary">View</a>
+              <a href="{% url 'reimbursement:management_review' req.id %}?return={{ request.get_full_path|urlencode }}"
+                 class="btn btn-sm btn-outline-primary">Review</a>
             </td>
           </tr>
           {% empty %}

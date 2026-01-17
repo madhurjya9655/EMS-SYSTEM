@@ -1,13 +1,18 @@
 {% extends "base.html" %}
-{% block title %}Finance Reimbursement Queue{% endblock %}
+{% block title %}Finance — Verification Queue{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h2>Finance Reimbursement Queue</h2>
+  <h2>Finance — Verification Queue</h2>
+  <div class="d-flex gap-2">
+    <a class="btn btn-sm btn-outline-warning" href="{% url 'reimbursement:finance_rejected_bills_queue' %}">Rejected Bills Queue</a>
+  </div>
 </div>
 
 <div class="card">
-  <div class="card-header">Requests pending finance verification / review / payment</div>
+  <div class="card-header">
+    Requests waiting for Finance <strong>bill verification</strong> only
+  </div>
   <div class="card-body">
     <div class="table-responsive">
       <table class="table table-sm table-hover align-middle">
@@ -16,12 +21,10 @@
             <th>ID</th>
             <th>Employee</th>
             <th>Submitted</th>
-            <th>Status</th>
             <th>Verification</th>
             <th>Total Amount</th>
             <th>Manager</th>
-            <th>Management</th>
-            <th style="width:340px;">Actions</th>
+            <th style="width:280px;">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -30,40 +33,38 @@
             <td>#{{ req.id }}</td>
             <td>{{ req.created_by.get_full_name|default:req.created_by.username }}</td>
             <td>{{ req.submitted_at|default:req.created_at|date:"Y-m-d H:i" }}</td>
-            <td><span class="badge bg-light text-dark">{{ req.get_status_display }}</span></td>
 
-            {# NEW: Verification badge without changing server-side logic #}
             <td>
-              {% if req.verified_at or req.verified_by or req.status == "pending_finance" or req.status == "approved" %}
-                <span class="badge bg-success">Approved</span>
+              {% if req.finance_verified_all %}
+                <span class="badge bg-success">All bills verified</span>
               {% else %}
-                <span class="badge bg-danger">Pending</span>
+                <span class="badge bg-danger">Verification pending</span>
               {% endif %}
             </td>
 
             <td>₹{{ req.total_amount|floatformat:2 }}</td>
-            <td>{% if req.manager %}{{ req.manager.get_full_name|default:req.manager.username }}{% else %}<span class="text-muted small">Not set</span>{% endif %}</td>
-            <td>{% if req.management %}{{ req.management.get_full_name|default:req.management.username }}{% else %}<span class="text-muted small">-</span>{% endif %}</td>
-            <td class="d-flex flex-wrap gap-2">
-              {% if req.status == "pending_finance_verify" or req.status == "partial_hold" %}
-                <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-secondary">View Bills</a>
-                <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-warning">Verify</a>
-              {% elif req.status == "pending_finance" or req.status == "approved" %}
-                <a href="{% url 'reimbursement:finance_review' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-primary">Review / Pay</a>
+            <td>
+              {% if req.manager %}
+                {{ req.manager.get_full_name|default:req.manager.username }}
               {% else %}
-                <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-secondary">View Bills</a>
+                <span class="text-muted small">Not set</span>
               {% endif %}
+            </td>
 
-              {# NEW: Delete whole request (disabled for PAID) #}
+            <td class="d-flex flex-wrap gap-2">
+              <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-secondary">
+                View Bills
+              </a>
+              <a href="{% url 'reimbursement:finance_verify' req.id %}?return={{ request.get_full_path|urlencode }}" class="btn btn-sm btn-outline-warning">
+                Verify
+              </a>
+
               {% if req.status != "paid" %}
-              <form method="post"
-                    action="{% url 'reimbursement:finance_delete' req.id %}"
-                    class="d-inline mb-0">
+              <form method="post" action="{% url 'reimbursement:finance_delete' req.id %}" class="d-inline mb-0">
                 {% csrf_token %}
                 <input type="hidden" name="return" value="{{ request.get_full_path }}">
-                <button type="submit"
-                        class="btn btn-sm btn-outline-danger"
-                        onclick="return confirm('Delete the entire reimbursement request #{{ req.id }}? This cannot be undone.');">
+                <button type="submit" class="btn btn-sm btn-outline-danger"
+                        onclick="return confirm('Delete reimbursement request #{{ req.id }}? This cannot be undone.');">
                   Delete Request
                 </button>
               </form>
@@ -72,7 +73,9 @@
           </tr>
           {% empty %}
           <tr>
-            <td colspan="9" class="text-center text-muted py-3">No reimbursement requests pending for finance.</td>
+            <td colspan="7" class="text-center text-muted py-3">
+              Nothing to verify. Try the <a href="{% url 'reimbursement:finance_rejected_bills_queue' %}">Rejected Bills Queue</a>.
+            </td>
           </tr>
           {% endfor %}
         </tbody>

@@ -149,25 +149,32 @@
             <td>
               {% if line.bill_status == 'finance_rejected' %}
                 <span class="badge bg-danger">Rejected by Finance</span>
-                {% if line.finance_rejection_reason %}
-                <div class="small text-muted mt-1" style="white-space:pre-line;">Reason: {{ line.finance_rejection_reason }}</div>
+                {# Show reason ONLY to the employee (owner) and superuser. Hide from managers to avoid bias. #}
+                {% if request.user.id == request_obj.created_by_id or request.user.is_superuser %}
+                  {% if line.finance_rejection_reason %}
+                    <div class="small text-muted mt-1" style="white-space:pre-line;">Reason: {{ line.finance_rejection_reason }}</div>
+                  {% endif %}
                 {% endif %}
               {% elif line.bill_status == 'finance_approved' %}
                 <span class="badge bg-success">Finance Approved</span>
-              {% elif line.bill_status == 'pending_finance' %}
-                <span class="badge bg-warning text-dark">Pending Finance</span>
+              {% elif line.bill_status == 'manager_pending' %}
+                <span class="badge bg-primary">Pending Manager Approval</span>
+              {% elif line.bill_status == 'manager_approved' %}
+                <span class="badge bg-primary-subtle text-dark">Manager Approved</span>
               {% elif line.bill_status == 'employee_resubmitted' %}
                 <span class="badge bg-warning text-dark">Employee Resubmitted</span>
+              {% elif line.bill_status == 'paid' %}
+                <span class="badge bg-success">Paid</span>
               {% else %}
-                <span class="badge bg-secondary">{{ line.bill_status|default:"-"|title }}</span>
+                <span class="badge bg-secondary">{{ line.get_bill_status_display }}</span>
               {% endif %}
             </td>
             <td>
-              {% if line.bill_status == 'finance_rejected' %}
+              {% if line.bill_status == 'finance_rejected' and request.user.id == request_obj.created_by_id %}
                 <div class="d-flex flex-column gap-1">
                   <a class="btn btn-sm btn-outline-primary" href="{% url 'reimbursement:expense_edit' line.expense_item.id %}">Edit this Bill</a>
                   <a class="btn btn-sm btn-outline-dark" href="{% url 'reimbursement:expense_inbox' %}">Add New Bill (Replacement)</a>
-                  <div class="small text-muted">After updating or adding a replacement, resubmit the request.</div>
+                  <div class="small text-muted">After updating or adding a replacement, resubmit the bill from your Expenses.</div>
                 </div>
               {% else %}
                 <span class="text-muted small">—</span>
@@ -193,10 +200,11 @@
   </div>
 </div>
 
-{% if show_partial_hold_hint %}
+{# Optional hint for the employee when there are finance-rejected bills #}
+{% if show_partial_hold_hint and request.user.id == request_obj.created_by_id %}
   <div class="alert alert-warning mt-3">
     One or more bills were rejected by Finance. Please edit the rejected bill(s) above
-    or add a new replacement bill. Then resubmit the request.
+    or add a new replacement bill, then resubmit those bill(s) from your Expenses page.
   </div>
 {% endif %}
 {% endblock %}

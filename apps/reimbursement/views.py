@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import csv
 import logging
-from typing import Any, Dict, Iterable, Optional, Sequence
+from typing import Any, Dict, Iterable, Optional, Sequence, Set
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -682,7 +682,7 @@ class ReimbursementDetailView(LoginRequiredMixin, PermissionRequiredMixin, Detai
             and self.request.user.is_authenticated
             and req.created_by_id == self.request.user.id
         )
-        # Template can show a warning when any bill is finance_rejected
+        # Flag for templates: if any bill is finance_rejected
         ctx["show_partial_hold_hint"] = req.lines.filter(
             status=ReimbursementLine.Status.INCLUDED,
             bill_status=ReimbursementLine.BillStatus.FINANCE_REJECTED,
@@ -691,12 +691,13 @@ class ReimbursementDetailView(LoginRequiredMixin, PermissionRequiredMixin, Detai
         return ctx
 
 # ---------------------------------------------------------------------------
-# Manager — BILL-LEVEL queue & actions
+# Manager — BILL-LEVEL queue & actions (legacy; not used in the new flow)
 # ---------------------------------------------------------------------------
 
 class ManagerBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
     """
-    Manager sees only bills (lines) that are MANAGER_PENDING and INCLUDED.
+    Legacy: Manager sees bills (MANAGER_PENDING). Not used in new flow.
+    Will be un-routed in urls.py; kept here for backward compatibility.
     """
     permission_code = "reimbursement_manager_pending"
     model = ReimbursementLine
@@ -720,7 +721,8 @@ class ManagerBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListVie
 
 class ManagerBillActionView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
-    Manager approves/rejects a single bill (line).
+    Legacy: Manager approves/rejects a single bill. Not used in new flow.
+    Will be un-routed in urls.py; kept for backward compatibility.
     """
     permission_code = "reimbursement_manager_review"
     template_name = "reimbursement/manager_bill_action.html"  # not rendered on POST
@@ -745,7 +747,6 @@ class ManagerBillActionView(LoginRequiredMixin, PermissionRequiredMixin, Templat
 
         try:
             if decision == "approve":
-                # Method expected on the model (added in redesigned flow)
                 line.manager_approve(actor=user)
                 messages.success(request, f"Bill #{line.pk} approved.")
             else:
@@ -939,41 +940,50 @@ class ManagementReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
         return back or reverse("reimbursement:management_pending")
 
 # ---------------------------------------------------------------------------
-# Finance queue & verification (bill-level first gate)
+# Finance queue & verification (bill-level only; request auto-advances)
 # ---------------------------------------------------------------------------
 
 class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
+    """
+    STRICT Finance verification queue.
+
+    ✅ Shows ONLY requests where Finance needs to act on bills:
+       - status == PENDING_FINANCE_VERIFY
+       - paid_at IS NULL
+       - manager_decided_at IS NULL  (never show manager-stage or beyond)
+
+    ❌ Hides:
+       - paid / settled
+       - manager/management/finance-review/approved stages
+       - anything the Finance team cannot act on right now
+
+    This aligns with the client's core principles:
+      - Finance approves bills, not requests
+      - UI reflects reality; no paid/settled items reappear
+    """
     permission_code = "reimbursement_finance_pending"
     model = ReimbursementRequest
     template_name = "reimbursement/finance_queue.html"
     context_object_name = "requests"
 
     def get_queryset(self):
-        """
-        Show requests in the Finance queue and annotate:
-        - finance_verified_all: True when ALL INCLUDED bills are already at/after finance approval.
-        """
         R = ReimbursementRequest
+
+        # Included lines for annotations
         inc = ReimbursementLine.objects.filter(
             request_id=OuterRef("pk"),
             status=ReimbursementLine.Status.INCLUDED,
         )
-        ok_statuses = [
-            ReimbursementLine.BillStatus.FINANCE_APPROVED,
-            ReimbursementLine.BillStatus.MANAGER_PENDING,
-            ReimbursementLine.BillStatus.MANAGER_APPROVED,
-            ReimbursementLine.BillStatus.PAID,
-        ]
+
+        ok_statuses = [ReimbursementLine.BillStatus.FINANCE_APPROVED]
         bad = inc.exclude(bill_status__in=ok_statuses)
 
+        # 🔒 Only verification stage; exclude anything paid/manager-stage/final
         return (
             R.objects.filter(
-                status__in=[
-                    R.Status.PENDING_FINANCE_VERIFY,
-                    # keep legacy statuses for compatibility:
-                    R.Status.PENDING_FINANCE,
-                    R.Status.APPROVED,
-                ]
+                status=R.Status.PENDING_FINANCE_VERIFY,
+                paid_at__isnull=True,
+                manager_decided_at__isnull=True,
             )
             .annotate(
                 has_included=Exists(inc),
@@ -990,11 +1000,12 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
 
 class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
-    Verification screen. Policy (no partial holds):
-    - Delete: hard-delete selected lines and keep the request in Finance Verification,
-      unless *all* remaining INCLUDED lines are finance-approved, then we escalate.
-    - Approve/Reject: after processing, when *all* INCLUDED lines are finance-approved,
-      we escalate to Manager; otherwise stay in Finance Verification.
+    Verification screen (new policy, no request-level partial holds):
+    - Approve/Reject bill(s): decisions are bill-level only.
+    - After any action, if ALL INCLUDED bills are FINANCE_APPROVED → request -> PENDING_MANAGER
+      and Manager is emailed (existing notification).
+    - Otherwise request remains PENDING_FINANCE_VERIFY.
+    - No per-bill escalation; no MANAGER_PENDING bill status changes.
     """
     permission_code = "reimbursement_finance_review"
     template_name = "reimbursement/finance_verify.html"
@@ -1015,62 +1026,29 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
         ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
         return ctx
 
-    def _rederive_status_without_escalation(self, req: ReimbursementRequest) -> None:
+    def _rederive_and_escalate_if_ready(self, req: ReimbursementRequest, actor) -> bool:
         """
-        Compute holding status for Finance; escalate to manager only when ALL INCLUDED
-        lines are FINANCE_APPROVED.
+        Re-derive parent request; if all included bills are FINANCE_APPROVED,
+        move request to PENDING_MANAGER, set verified_by/verified_at, and notify Manager.
+        Returns True if escalation occurred.
         """
-        qs = req.lines.filter(status=ReimbursementLine.Status.INCLUDED)
-        counts = {
-            "approved": qs.filter(bill_status=ReimbursementLine.BillStatus.FINANCE_APPROVED).count(),
-            "total": qs.count(),
-        }
-
-        new_status = (
-            ReimbursementRequest.Status.PENDING_MANAGER
-            if (counts["total"] > 0 and counts["approved"] == counts["total"])
-            else ReimbursementRequest.Status.PENDING_FINANCE_VERIFY
-        )
-
-        if req.status != new_status:
-            prev = req.status
-            req.status = new_status
-            req.save(update_fields=["status", "updated_at"])
+        prev = req.status
+        req.apply_derived_status_from_bills(actor=actor, reason="Finance updated bills; re-derived.")
+        if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
+            req.verified_by = actor if hasattr(actor, "pk") else None
+            req.verified_at = timezone.now()
+            req.save(update_fields=["verified_by", "verified_at", "updated_at"])
+            _send_safe("send_reimbursement_finance_verified", req)
             ReimbursementLog.log(
                 req,
-                ReimbursementLog.Action.STATUS_CHANGED,
-                actor=None,
-                message="Finance updated bills; status re-derived.",
+                ReimbursementLog.Action.VERIFIED,
+                actor=actor,
+                message="All bills finance-approved; sent to Manager.",
                 from_status=prev,
                 to_status=req.status,
             )
-
-    def _escalate_lines_to_manager_pending(self, req: ReimbursementRequest) -> int:
-        """
-        When container moves to PENDING_MANAGER, ensure all INCLUDED lines that are
-        FINANCE_APPROVED become MANAGER_PENDING so the manager sees them.
-        No emails are sent here (single manager email is handled separately).
-        """
-        qs = req.lines.filter(
-            status=ReimbursementLine.Status.INCLUDED,
-            bill_status=ReimbursementLine.BillStatus.FINANCE_APPROVED,
-        )
-        now = timezone.now()
-        updated = qs.update(
-            bill_status=ReimbursementLine.BillStatus.MANAGER_PENDING,
-            updated_at=now,
-        )
-        if updated:
-            ReimbursementLog.log(
-                req,
-                ReimbursementLog.Action.STATUS_CHANGED,
-                actor=None,
-                message=f"Escalated {updated} bill(s) to Manager Pending.",
-                from_status="finance_approved",
-                to_status="manager_pending",
-                extra={"type": "bulk_escalate_lines_to_manager"},
-            )
-        return updated
+            return True
+        return False
 
     def post(self, request, *args, **kwargs):
         req = self._get_request(kwargs.get("pk"))
@@ -1079,7 +1057,7 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
         selected_ids = request.POST.getlist("line_ids")
         reason = (request.POST.get("reason") or "").strip()
 
-        if action not in {"approve", "reject", "finalize", "delete"}:
+        if action not in {"approve", "reject", "delete", "finalize"}:
             messages.error(request, "Invalid action.")
             return redirect(request.path)
 
@@ -1105,20 +1083,15 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
                     processed += 1
 
                 req.recalc_total(save=True)
-                self._rederive_status_without_escalation(req)
-                if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
-                    req.verified_by = request.user
-                    req.verified_at = timezone.now()
-                    req.save(update_fields=["verified_by", "verified_at", "updated_at"])
-                    # Promote bills to manager queue
-                    self._escalate_lines_to_manager_pending(req)
-                    _send_safe("send_reimbursement_finance_verified", req)
-                    messages.success(request, f"Deleted {processed} bill(s). All bills are approved; sent to Manager.")
+                escalated = self._rederive_and_escalate_if_ready(req, request.user)
+                if escalated:
+                    messages.success(request, f"Deleted {processed} bill(s). All remaining bills approved; sent to Manager.")
                     return _redirect_back(request, "reimbursement:finance_pending")
 
                 messages.success(request, f"Deleted {processed} bill(s).")
                 return redirect(request.path + (f"?return={back}" if back else ""))
 
+            # approve / reject
             for line in qs:
                 try:
                     if action == "approve":
@@ -1133,36 +1106,110 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
                     messages.error(request, getattr(e, "message", str(e)) or f"Could not process line #{line.id}")
                     return redirect(request.path + (f"?return={back}" if back else ""))
 
-            # Re-derive and escalate if ready
-            self._rederive_status_without_escalation(req)
-            if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
-                req.verified_by = request.user
-                req.verified_at = timezone.now()
-                req.save(update_fields=["verified_by", "verified_at", "updated_at"])
-                # Promote all finance-approved lines to MANAGER_PENDING so the manager sees them
-                self._escalate_lines_to_manager_pending(req)
-                _send_safe("send_reimbursement_finance_verified", req)
-                messages.success(request, f"{processed} line(s) processed. All bills are approved; sent to Manager.")
+            escalated = self._rederive_and_escalate_if_ready(req, request.user)
+            if escalated:
+                messages.success(request, f"{processed} line(s) processed. All bills approved; sent to Manager.")
                 return _redirect_back(request, "reimbursement:finance_pending")
 
             messages.success(request, f"{processed} line(s) processed.")
             return redirect(request.path + (f"?return={back}" if back else ""))
 
         if action == "finalize":
-            # Finalize acts like a re-derive + escalate when ready
-            self._rederive_status_without_escalation(req)
-            if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
-                req.verified_by = request.user
-                req.verified_at = timezone.now()
-                req.save(update_fields=["verified_by", "verified_at", "updated_at"])
-                # Promote all finance-approved lines to MANAGER_PENDING
-                self._escalate_lines_to_manager_pending(req)
-                _send_safe("send_reimbursement_finance_verified", req)
+            escalated = self._rederive_and_escalate_if_ready(req, request.user)
+            if escalated:
                 messages.success(request, "All bills approved. Sent to Manager.")
                 return _redirect_back(request, "reimbursement:finance_pending")
 
             messages.info(request, "Some bills are not Finance-Approved yet. Staying in Finance Verification.")
             return redirect(request.path + (f"?return={back}" if back else ""))
+
+# ---------------------------------------------------------------------------
+# NEW: Finance — Rejected Bills Queue (resubmits only)
+# ---------------------------------------------------------------------------
+
+class FinanceRejectedBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
+    """
+    Finance/Admin only. Shows ONLY bills:
+      - previously FINANCE_REJECTED
+      - corrected by employee and now EMPLOYEE_RESUBMITTED
+    Each row: request id, employee, bill details, previous rejection reason, updated doc.
+    """
+    permission_code = "reimbursement_finance_review"
+    model = ReimbursementLine
+    template_name = "reimbursement/finance_rejected_bills_queue.html"
+    context_object_name = "lines"
+
+    def get_queryset(self):
+        return (
+            ReimbursementLine.objects.filter(
+                status=ReimbursementLine.Status.INCLUDED,
+                bill_status=ReimbursementLine.BillStatus.EMPLOYEE_RESUBMITTED,
+            )
+            .select_related(
+                "request",
+                "request__created_by",
+                "expense_item",
+            )
+            .order_by("-updated_at", "id")
+        )
+
+class FinanceRejectedBillActionView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    Approve/Reject a single resubmitted bill from the Rejected Bills Queue.
+    After processing, if a parent request becomes fully Finance-approved → request moves to Manager and manager is emailed.
+    """
+    permission_code = "reimbursement_finance_review"
+    template_name = "reimbursement/finance_rejected_bills_queue.html"  # not rendered on POST
+
+    def post(self, request, *args, **kwargs):
+        line = get_object_or_404(
+            ReimbursementLine.objects.select_related("request", "expense_item", "request__created_by"),
+            pk=kwargs.get("pk"),
+            status=ReimbursementLine.Status.INCLUDED,
+            bill_status=ReimbursementLine.BillStatus.EMPLOYEE_RESUBMITTED,
+        )
+        decision = (request.POST.get("decision") or "").strip().lower()
+        reason = (request.POST.get("reason") or "").strip()
+        back = _safe_back_url(request.POST.get("return"))
+
+        if decision not in {"approve", "reject"}:
+            messages.error(request, "Invalid decision.")
+            return _redirect_back(request, "reimbursement:finance_rejected_bills_queue")
+
+        try:
+            if decision == "approve":
+                line.approve_by_finance(actor=request.user)
+            else:
+                if not reason:
+                    messages.error(request, "Rejection reason is required.")
+                    return _redirect_back(request, "reimbursement:finance_rejected_bills_queue")
+                line.reject_by_finance(actor=request.user, reason=reason)
+        except DjangoCoreValidationError as e:
+            messages.error(request, getattr(e, "message", str(e)) or "Unable to process this bill.")
+            return _redirect_back(request, "reimbursement:finance_rejected_bills_queue")
+
+        # After processing, re-derive and escalate the parent request if all bills are approved
+        req = line.request
+        prev = req.status
+        req.apply_derived_status_from_bills(actor=request.user, reason="Finance processed a resubmitted bill.")
+        if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
+            req.verified_by = request.user
+            req.verified_at = timezone.now()
+            req.save(update_fields=["verified_by", "verified_at", "updated_at"])
+            _send_safe("send_reimbursement_finance_verified", req)
+            ReimbursementLog.log(
+                req,
+                ReimbursementLog.Action.VERIFIED,
+                actor=request.user,
+                message="All bills finance-approved after resubmission; sent to Manager.",
+                from_status=prev,
+                to_status=req.status,
+            )
+            messages.success(request, f"Bill #{line.pk} processed. Request sent to Manager.")
+        else:
+            messages.success(request, f"Bill #{line.pk} processed.")
+
+        return back and redirect(back) or _redirect_back(request, "reimbursement:finance_rejected_bills_queue")
 
 # ---------------------------------------------------------------------------
 # Finance — Request delete (Finance role)
@@ -1214,14 +1261,10 @@ class FinanceDeleteRequestView(LoginRequiredMixin, PermissionRequiredMixin, Temp
         return _redirect_back(request, "reimbursement:finance_pending")
 
 # ---------------------------------------------------------------------------
-# Finance — BILL PAYMENT (per-bill paid & reference)
+# Finance BILL PAYMENT (legacy per-bill). Not used in new flow; will be un-routed.
 # ---------------------------------------------------------------------------
 
 class FinanceBillPaymentQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
-    """
-    Finance sees bills that reached MANAGER_APPROVED and are INCLUDED,
-    and can mark them PAID individually with a payment reference.
-    """
     permission_code = "reimbursement_finance_review"
     model = ReimbursementLine
     template_name = "reimbursement/finance_bill_payment_queue.html"
@@ -1238,9 +1281,6 @@ class FinanceBillPaymentQueueView(LoginRequiredMixin, PermissionRequiredMixin, L
         )
 
 class FinanceBillPaymentView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    Mark one or many bills as PAID with a per-bill payment reference.
-    """
     permission_code = "reimbursement_finance_review"
     template_name = "reimbursement/finance_bill_payment.html"  # not rendered on POST
 
@@ -1273,30 +1313,26 @@ class FinanceBillPaymentView(LoginRequiredMixin, PermissionRequiredMixin, Templa
             return _redirect_back(request, "reimbursement:finance_bill_payment_queue")
 
         processed = 0
-        touched_requests: set[int] = set()
+        touched_requests: Set[int] = set()
         for line in lines:
             try:
-                # Method expected on the model (added in redesigned flow)
-                line.mark_paid_by_finance(actor=request.user, reference=reference)
+                # Legacy method name in the model: mark_paid (bill-level)
+                line.mark_paid(reference=reference, actor=request.user)
                 processed += 1
                 touched_requests.add(line.request_id)
             except DjangoCoreValidationError as e:
-                messages.error(request, getattr(e, "message", str(e)) or f"Unable to mark bill #{line.pk} as paid.")
+                messages.error(request, getattr(e, "message", str(e)) | f"Unable to mark bill #{line.pk} as paid.")
                 return _redirect_back(request, "reimbursement:finance_bill_payment_queue")
 
-        # Derive parent request statuses; if all bills of a request are PAID, parent may flip to PAID.
+        # Attempt to flip parent to PAID for requests whose all lines are PAID (legacy compatibility)
         for req_id in touched_requests:
             try:
                 req = ReimbursementRequest.objects.get(pk=req_id)
                 req.apply_derived_status_from_bills(actor=request.user, reason="Finance paid bill(s).")
-                # If ALL included lines are bill-level PAID => set request PAID with a summary note
                 included = req.lines.filter(status=ReimbursementLine.Status.INCLUDED)
                 if included.exists() and not included.exclude(bill_status=ReimbursementLine.BillStatus.PAID).exists():
-                    # Set request-level paid for reporting convenience if not already
                     if req.status != ReimbursementRequest.Status.PAID:
                         try:
-                            # Use existing guard: allow from APPROVED or PENDING_FINANCE (legacy),
-                            # but here we directly set if all bills are actually paid.
                             req.status = ReimbursementRequest.Status.PAID
                             req.paid_at = timezone.now()
                             if not req.finance_payment_reference:
@@ -1312,7 +1348,6 @@ class FinanceBillPaymentView(LoginRequiredMixin, PermissionRequiredMixin, Templa
                             )
                             _send_safe("send_reimbursement_paid", req)
                         except Exception:
-                            # Never block bill-level success due to parent update hiccup
                             pass
             except ReimbursementRequest.DoesNotExist:
                 continue

@@ -44,13 +44,7 @@ urlpatterns = [
     ),
 
     # ------------------------------
-    # Manager — BILL-LEVEL
-    # ------------------------------
-    path("manager/bills/", views.ManagerBillsQueueView.as_view(), name="manager_bills_pending"),
-    path("manager/bills/<int:pk>/", views.ManagerBillActionView.as_view(), name="manager_bill_action"),
-
-    # ------------------------------
-    # Manager / Management
+    # Manager / Management (REQUEST-LEVEL ONLY)
     # ------------------------------
     path("manager/", views.ManagerQueueView.as_view(), name="manager_pending"),
     path("manager/<int:pk>/review/", views.ManagerReviewView.as_view(), name="manager_review"),
@@ -63,11 +57,12 @@ urlpatterns = [
     path("finance/", views.FinanceQueueView.as_view(), name="finance_pending"),
     path("finance/<int:pk>/verify/", views.FinanceVerifyView.as_view(), name="finance_verify"),
     path("finance/<int:pk>/review/", views.FinanceReviewView.as_view(), name="finance_review"),
-    # NEW: Finance can delete a whole request (non-PAID)
+    # Finance can delete a whole request (non-PAID)
     path("finance/<int:pk>/delete/", views.FinanceDeleteRequestView.as_view(), name="finance_delete"),
 
-    path("finance/bills/payment/", views.FinanceBillPaymentQueueView.as_view(), name="finance_bill_payment_queue"),
-    path("finance/bills/payment/mark/", views.FinanceBillPaymentView.as_view(), name="finance_bill_payment"),
+    # ✅ NEW: Rejected Bills Queue (resubmitted bills only)
+    path("finance/rejected-bills/", views.FinanceRejectedBillsQueueView.as_view(), name="finance_rejected_bills_queue"),
+    path("finance/rejected-bills/<int:pk>/", views.FinanceRejectedBillActionView.as_view(), name="finance_rejected_bill_action"),
 
     # ------------------------------
     # Admin dashboards / export
@@ -92,7 +87,6 @@ urlpatterns = [
     path("analytics/api/employees/", views_analytics.AnalyticsEmployeeAPI.as_view(), name="analytics_api_employees"),
     path("analytics/api/employees/options/", views_analytics.EmployeeOptionsAPI.as_view(), name="analytics_api_employee_options"),
     path("analytics/api/bills/", views_analytics.BillwiseTableAPI.as_view(), name="analytics_api_bills"),
-    # ✅ Added to match template script call
     path("analytics/api/highrisk/", views_analytics.AnalyticsHighRiskAPI.as_view(), name="analytics_api_highrisk"),
 
     # ------------------------------
@@ -107,7 +101,7 @@ urlpatterns = [
     path("email-action/", views.reimbursement_email_action, name="email_action"),
 
     # ------------------------------
-    # Legacy routes
+    # Legacy routes (intentionally kept)
     # ------------------------------
     path("legacy/apply/", views.LegacyReimbursementCreateView.as_view(), name="legacy_apply"),
     path("legacy/my/", views.LegacyMyReimbursementsView.as_view(), name="legacy_my_reimbursements"),

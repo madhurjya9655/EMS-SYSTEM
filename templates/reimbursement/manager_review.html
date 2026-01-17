@@ -1,20 +1,19 @@
-<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\reimbursement\manager_review.html -->
 {% extends "base.html" %}
+{% load i18n %}
+
 {% block title %}Manager Review – Reimbursement #{{ object.id }}{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h2>Manager Review – Request #{{ object.id }}</h2>
-  <div>
-    {% if back_url %}
-      <a href="{{ back_url }}" class="btn btn-outline-secondary btn-sm">
-        Back to Manager Queue
-      </a>
+  <div class="d-flex gap-2">
+    {% if request.GET.return %}
+      <a href="{{ request.GET.return }}" class="btn btn-outline-secondary btn-sm">Back to Manager Queue</a>
     {% else %}
-      <a href="{% url 'reimbursement:manager_pending' %}" class="btn btn-outline-secondary btn-sm">
-        Back to Manager Queue
-      </a>
+      <a href="{% url 'reimbursement:manager_pending' %}" class="btn btn-outline-secondary btn-sm">Back to Manager Queue</a>
     {% endif %}
+    <a href="{% url 'reimbursement:request_detail' object.id %}" target="_blank" rel="noopener"
+       class="btn btn-outline-secondary btn-sm">View Details</a>
   </div>
 </div>
 
@@ -27,11 +26,12 @@
     <div class="card mb-3">
       <div class="card-header">Manager Decision</div>
       <div class="card-body">
-        <form method="post">
+        <form method="post" novalidate>
           {% csrf_token %}
-          {% if back_url %}
-            <input type="hidden" name="return" value="{{ back_url }}">
-          {% endif %}
+          {% if request.GET.return %}<input type="hidden" name="return" value="{{ request.GET.return }}">{% endif %}
+
+          {{ form.non_field_errors }}
+
           <div class="mb-3">
             {{ form.decision.label_tag }}
             {{ form.decision }}
@@ -39,6 +39,8 @@
               <div class="text-danger small">{{ form.decision.errors }}</div>
             {% endif %}
           </div>
+
+          {% if form.manager_comment %}
           <div class="mb-3">
             {{ form.manager_comment.label_tag }}
             {{ form.manager_comment }}
@@ -46,9 +48,9 @@
               <div class="text-danger small">{{ form.manager_comment.errors }}</div>
             {% endif %}
           </div>
-          <button type="submit" class="btn btn-primary w-100">
-            Submit Decision
-          </button>
+          {% endif %}
+
+          <button type="submit" class="btn btn-primary w-100">Submit Decision</button>
         </form>
       </div>
     </div>

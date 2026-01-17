@@ -1,5 +1,6 @@
-<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\reimbursement\manager_queue.html -->
 {% extends "base.html" %}
+{% load i18n %}
+
 {% block title %}Manager Reimbursement Queue{% endblock %}
 
 {% block content %}
@@ -22,21 +23,23 @@
             <th>Status</th>
             <th>Total Amount</th>
             <th>Current Manager</th>
-            <th style="width:120px;">Actions</th>
+            <th style="width:140px;">Actions</th>
           </tr>
         </thead>
         <tbody>
           {% for req in requests %}
           <tr>
             <td>#{{ req.id }}</td>
-            <td>
-              {{ req.created_by.get_full_name|default:req.created_by.username }}
-            </td>
+            <td>{{ req.created_by.get_full_name|default:req.created_by.username }}</td>
             <td>{{ req.submitted_at|default:req.created_at|date:"Y-m-d H:i" }}</td>
             <td>
-              <span class="badge bg-light text-dark">
-                {{ req.get_status_display }}
-              </span>
+              {% if req.status == "pending_manager" %}
+                <span class="badge bg-primary">Pending Manager Approval</span>
+              {% elif req.status == "clarification_required" %}
+                <span class="badge bg-warning text-dark">Clarification Required</span>
+              {% else %}
+                <span class="badge bg-light text-dark">{{ req.get_status_display }}</span>
+              {% endif %}
             </td>
             <td>₹{{ req.total_amount|floatformat:2 }}</td>
             <td>
@@ -46,11 +49,11 @@
                 <span class="text-muted small">Not set</span>
               {% endif %}
             </td>
-            <td>
+            <td class="d-flex flex-wrap gap-2">
+              <a href="{% url 'reimbursement:request_detail' req.id %}" target="_blank" rel="noopener"
+                 class="btn btn-sm btn-outline-secondary">View</a>
               <a href="{% url 'reimbursement:manager_review' req.id %}?return={{ request.get_full_path|urlencode }}"
-                 class="btn btn-sm btn-outline-primary">
-                Review
-              </a>
+                 class="btn btn-sm btn-outline-primary">Review</a>
             </td>
           </tr>
           {% empty %}

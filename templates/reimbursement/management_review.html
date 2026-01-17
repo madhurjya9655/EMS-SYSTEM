@@ -1,15 +1,19 @@
 {% extends "base.html" %}
+{% load i18n %}
+
 {% block title %}Management Review – Reimbursement #{{ object.id }}{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h2>Management Review – Request #{{ object.id }}</h2>
-  <div>
+  <div class="d-flex gap-2">
     {% if request.GET.return %}
       <a href="{{ request.GET.return }}" class="btn btn-outline-secondary btn-sm">Back to Management Queue</a>
     {% else %}
       <a href="{% url 'reimbursement:management_pending' %}" class="btn btn-outline-secondary btn-sm">Back to Management Queue</a>
     {% endif %}
+    <a href="{% url 'reimbursement:request_detail' object.id %}" target="_blank" rel="noopener"
+       class="btn btn-outline-secondary btn-sm">View Details</a>
   </div>
 </div>
 
@@ -24,17 +28,24 @@
       <div class="card-body">
         <form method="post" novalidate>
           {% csrf_token %}
-          <input type="hidden" name="return" value="{{ request.GET.return|default:request.POST.return }}">
+          {% if request.GET.return %}<input type="hidden" name="return" value="{{ request.GET.return }}">{% endif %}
+
+          {{ form.non_field_errors }}
+
           <div class="mb-3">
             {{ form.decision.label_tag }}
             {{ form.decision }}
             {% if form.decision.errors %}<div class="text-danger small">{{ form.decision.errors }}</div>{% endif %}
           </div>
+
+          {% if form.management_comment %}
           <div class="mb-3">
             {{ form.management_comment.label_tag }}
             {{ form.management_comment }}
             {% if form.management_comment.errors %}<div class="text-danger small">{{ form.management_comment.errors }}</div>{% endif %}
           </div>
+          {% endif %}
+
           <button type="submit" class="btn btn-primary w-100">Submit Decision</button>
         </form>
       </div>

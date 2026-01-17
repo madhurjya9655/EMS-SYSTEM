@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}Finance — Rejected Bills Queue{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width:1100px;margin:20px auto;">
+
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h1 class="h3 mb-1">Finance — Rejected Bills Queue</h1>
+      <div class="text-muted">Only bills that were rejected by Finance and later corrected by the employee (resubmitted).</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-outline-secondary btn-sm" href="{% url 'reimbursement:finance_pending' %}">
+        Back to Verification Queue
+      </a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Bill ID</th>
+              <th>Request</th>
+              <th>Employee</th>
+              <th>Category</th>
+              <th>Date</th>
+              <th class="text-end">Amount</th>
+              <th>Receipt</th>
+              <th>Prev. Rejection Reason</th>
+              <th>Current Status</th>
+              <th style="width:260px;">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for line in lines %}
+            <tr>
+              <td>#{{ line.id }}</td>
+              <td>
+                <a href="{% url 'reimbursement:request_detail' line.request_id %}" target="_blank" rel="noopener">
+                  #{{ line.request_id }}
+                </a>
+              </td>
+              <td>{{ line.request.created_by.get_full_name|default:line.request.created_by.username }}</td>
+              <td>
+                {% if line.expense_item %}
+                  {{ line.expense_item.get_category_display|default:line.expense_item.category|default:"-" }}
+                {% else %}-{% endif %}
+              </td>
+              <td>
+                {% if line.expense_item and line.expense_item.date %}
+                  {{ line.expense_item.date|date:"d M Y" }}
+                {% else %}-{% endif %}
+              </td>
+              <td class="text-end">₹{{ line.amount|floatformat:2 }}</td>
+              <td>
+                {% url "reimbursement:receipt_line" line.id as receipt_url %}
+                {% if receipt_url %}
+                  <a href="{{ receipt_url }}" target="_blank" rel="noopener">View</a>
+                {% else %}-{% endif %}
+              </td>
+              <td style="white-space:pre-line">{{ line.finance_rejection_reason|default:"-" }}</td>
+              <td>
+                {% if line.bill_status == "employee_resubmitted" %}
+                  <span class="badge bg-warning text-dark">Employee Resubmitted</span>
+                {% else %}
+                  <span class="badge bg-secondary">{{ line.get_bill_status_display }}</span>
+                {% endif %}
+              </td>
+              <td>
+                <form method="post"
+                      action="{% url 'reimbursement:finance_rejected_bill_action' line.id %}"
+                      class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="return" value="{{ request.get_full_path }}">
+                  <div class="d-flex flex-wrap gap-1">
+                    <button type="submit" name="decision" value="approve" class="btn btn-sm btn-outline-success">
+                      Approve
+                    </button>
+                    <button type="button"
+                            class="btn btn-sm btn-outline-danger"
+                            data-bs-toggle="collapse"
+                            data-bs-target="#rej-{{ line.id }}">
+                      Reject
+                    </button>
+                  </div>
+                  <div id="rej-{{ line.id }}" class="collapse mt-2">
+                    <label class="form-label fw-semibold small mb-1">Rejection reason</label>
+                    <textarea class="form-control form-control-sm" name="reason" rows="2"
+                              placeholder="Explain what is missing or incorrect…"></textarea>
+                    <div class="mt-2">
+                      <button type="submit" name="decision" value="reject" class="btn btn-sm btn-danger">
+                        Confirm Reject
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </td>
+            </tr>
+            {% empty %}
+            <tr>
+              <td colspan="10" class="text-center text-muted py-3">
+                No resubmitted bills awaiting review.
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
