@@ -1,3 +1,4 @@
+# apps/reimbursement/models.py
 from __future__ import annotations
 
 import logging
@@ -290,7 +291,7 @@ class ReimbursementRequest(models.Model):
         CLARIFICATION_REQUIRED = "clarification_required", _("Clarification Required")
         REJECTED = "rejected", _("Rejected")
         APPROVED = "approved", _("Approved (Ready to Pay)")
-        PAID = "paid", _("Paid")
+        PAID = "paid", _("Paid")  # (= Settled)
 
     # Queues considered "active" for employee & finance dashboards
     ACTIVE_STATUSES: set[str] = {
@@ -378,29 +379,33 @@ class ReimbursementRequest(models.Model):
 
     def derive_status_from_bills(self) -> str:
         """
-        NEW authoritative rules (no request-level partial holds):
+        Spec-aligned derivation (no request-level partial holds):
+          Let:
+            PENDING = {SUBMITTED, EMPLOYEE_RESUBMITTED}
+            APPROVED = {FINANCE_APPROVED}
+            REJECTED = {FINANCE_REJECTED}
+
           - No INCLUDED lines -> DRAFT
-          - If ANY INCLUDED line in {FINANCE_REJECTED, EMPLOYEE_RESUBMITTED} -> PENDING_FINANCE_VERIFY
-          - If ALL INCLUDED lines are FINANCE_APPROVED -> PENDING_MANAGER
-          - Else (i.e., some still SUBMITTED) -> PENDING_FINANCE_VERIFY
+          - If any PENDING -> PENDING_FINANCE_VERIFY
+          - Else (no pending):
+              * if any APPROVED -> PENDING_MANAGER   (even if some are REJECTED)
+              * else (all rejected) -> PENDING_FINANCE_VERIFY  (nothing to send forward)
         """
-        qs = self.lines.filter(status=ReimbursementLine.Status.INCLUDED).values_list("bill_status", flat=True)
+        L = ReimbursementLine
+        qs = self.lines.filter(status=L.Status.INCLUDED).values_list("bill_status", flat=True)
         statuses = set(qs)
+
         if not statuses:
             return self.Status.DRAFT
 
-        # Any rejected/resubmitted bill keeps the request at finance verification
-        if (
-            ReimbursementLine.BillStatus.FINANCE_REJECTED in statuses
-            or ReimbursementLine.BillStatus.EMPLOYEE_RESUBMITTED in statuses
-        ):
+        pending_set = {L.BillStatus.SUBMITTED, L.BillStatus.EMPLOYEE_RESUBMITTED}
+        if statuses & pending_set:
             return self.Status.PENDING_FINANCE_VERIFY
 
-        # All bills finance approved means request is ready for manager
-        if statuses and statuses.issubset({ReimbursementLine.BillStatus.FINANCE_APPROVED}):
+        if L.BillStatus.FINANCE_APPROVED in statuses:
             return self.Status.PENDING_MANAGER
 
-        # Otherwise (submitted/mixed) still with finance
+        # All included bills are rejected -> stays with finance/employee
         return self.Status.PENDING_FINANCE_VERIFY
 
     # ---- Monotonic status order (prevents regressions) ----------------------
@@ -444,7 +449,6 @@ class ReimbursementRequest(models.Model):
 
         # Prevent any automatic regression
         if new_rank < current_rank:
-            # Keep current status; do not log a change to avoid noise
             return
 
         old = self.status
@@ -460,16 +464,28 @@ class ReimbursementRequest(models.Model):
             extra={"type": "derived_status_from_bills"},
         )
 
+    # ---- Helpers for UI (badges, counts) -----------------------------------
+
+    def bill_mix_summary(self) -> dict:
+        L = ReimbursementLine
+        inc = self.lines.filter(status=L.Status.INCLUDED)
+        return {
+            "total": inc.count(),
+            "pending": inc.filter(bill_status__in=[L.BillStatus.SUBMITTED, L.BillStatus.EMPLOYEE_RESUBMITTED]).count(),
+            "approved": inc.filter(bill_status=L.BillStatus.FINANCE_APPROVED).count(),
+            "rejected": inc.filter(bill_status=L.BillStatus.FINANCE_REJECTED).count(),
+            "paid": inc.filter(bill_status=L.BillStatus.PAID).count(),
+        }
+
     # ---- Transition checks --------------------------------------------------
 
     def can_mark_paid(self, reference: str = "") -> Tuple[bool, str]:
         """
-        New rules:
+        Settlement rules:
           - Allowed when request is in Finance settlement stage after manager approval.
-          - Allowed statuses: pending_finance, approved
-          - Idempotent: if already paid, ok
-          - Reference required
-          - All INCLUDED bills must be finance_approved
+          - Allowed statuses: pending_finance, approved, or idempotent if already paid.
+          - Reference required.
+          - All INCLUDED bills must be FINANCE_APPROVED (no pending, no rejected).
         """
         if self.status == self.Status.PAID:
             return True, _("Already paid")
@@ -580,27 +596,26 @@ class ReimbursementRequest(models.Model):
 
     def mark_paid(self, reference: str, *, actor: Optional[models.Model] = None, note: str = "") -> None:
         """
-        New flow settlement:
+        Settlement:
           - Allowed from pending_finance / approved (idempotent if already paid)
           - Ensures all INCLUDED lines are finance_approved
-          - Marks INCLUDED lines as paid (if fields present)
+          - Marks INCLUDED lines as paid (per-bill), then request as paid
         """
         ok, msg = self.can_mark_paid(reference)
         if not ok:
             raise DjangoCoreValidationError(msg)
 
         if self.status == self.Status.PAID:
-            # idempotent
+            # Idempotent
             return
 
         from_status = self.status
 
-        # Mark lines as paid (where applicable)
+        # Mark lines as paid
         L = self.lines.model
         inc = self.lines.filter(status=L.Status.INCLUDED)
         now = timezone.now()
         for ln in inc:
-            # Only bump to PAID if the model supports paid attributes (it does)
             ln.bill_status = L.BillStatus.PAID
             if hasattr(ln, "payment_reference"):
                 ln.payment_reference = (reference or "").strip()
@@ -1169,7 +1184,7 @@ class Reimbursement(models.Model):
 
     employee = models.ForeignKey(UserModel, on_delete=models.CASCADE)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    category = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES)  # fixed: use category choices
     bill = models.FileField(upload_to="bills/")
     submitted_at = models.DateTimeField(default=timezone.now)
     status = models.CharField(max_length=2, choices=STATUS_CHOICES, default="PM")

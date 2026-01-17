@@ -998,6 +998,15 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
             .order_by("-created_at")
         )
 
+    # NEW: supply resubmitted-rejected count for header button & info strip
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["FINANCE_REJECTED_RESUB_COUNT"] = ReimbursementLine.objects.filter(
+            status=ReimbursementLine.Status.INCLUDED,
+            bill_status=ReimbursementLine.BillStatus.EMPLOYEE_RESUBMITTED,
+        ).count()
+        return ctx
+
 class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
     Verification screen (new policy, no request-level partial holds):
@@ -1833,7 +1842,7 @@ def reimbursement_email_action(request):
         note = "Decision recorded via email link."
         req.management_comment = (base_comment + "\n" if base_comment else "") + note
 
-    # management outcomes
+        # management outcomes
         if decision == "approved":
             req.status = ReimbursementRequest.Status.PENDING_FINANCE
         elif decision == "rejected":

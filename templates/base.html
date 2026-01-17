@@ -150,6 +150,34 @@
       display:none;background:none;border:none;color:#fff;font-size:1.15rem;cursor:pointer;
     }
 
+    /* ===== Notif bell & badges ===== */
+    .notif-bell{
+      position:relative;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      width:38px;height:38px;
+      border-radius:10px;
+      background:rgba(255,255,255,.14);
+      border:1px solid rgba(255,255,255,.35);
+      color:#fff;
+    }
+    .notif-bell:hover{background:rgba(255,255,255,.22)}
+    .badge-count{
+      position:absolute; top:-6px; right:-6px;
+      background:#ef4444; color:#fff; font-weight:700; font-size:.7rem; line-height:1;
+      padding:.26rem .38rem; border-radius:999px; border:2px solid var(--primary);
+      min-width:20px; text-align:center;
+    }
+    .badge-dot{
+      display:inline-block; width:8px; height:8px; border-radius:999px; background:#ef4444; vertical-align:middle; margin-left:.35rem;
+      box-shadow:0 0 0 2px #fff;
+    }
+    @media (prefers-color-scheme: dark){
+      .badge-count{ border-color:#0b1220 }
+      .badge-dot{ box-shadow:0 0 0 2px #0b1220 }
+    }
+
     /* =========================
        ✨ FESTIVE HERO CAROUSEL (front-end only)
        ========================= */
@@ -411,6 +439,16 @@
       </div>
 
       <div class="header-actions">
+        <!-- Finance bell (only Finance/Admin & when there are resubmitted rejected bills) -->
+        {% if user|has_permission:"reimbursement_finance_review" or user.is_superuser %}
+          {% if FINANCE_REJECTED_RESUB_COUNT|default:0|add:0 > 0 %}
+            <a class="notif-bell" href="{% url 'reimbursement:finance_rejected_bills_queue' %}" title="Resubmitted rejected bills awaiting review" aria-label="Resubmitted rejected bills">
+              <i class="fa-regular fa-bell" aria-hidden="true"></i>
+              <span class="badge-count" aria-hidden="true">{{ FINANCE_REJECTED_RESUB_COUNT }}</span>
+            </a>
+          {% endif %}
+        {% endif %}
+
         <label class="visually-hidden" for="branchSelect">Branch</label>
         <select class="branch-select" id="branchSelect" aria-label="Select branch" disabled>
           <option>All Branches</option>
@@ -699,6 +737,20 @@
           <a href="{% url 'reimbursement:finance_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}aria-current="page"{% endif %}>
             <i class="fas fa-wallet" aria-hidden="true"></i> Finance Approvals
+            {% if FINANCE_REJECTED_RESUB_COUNT|default:0|add:0 > 0 %}
+              <span class="badge-dot" title="{{ FINANCE_REJECTED_RESUB_COUNT }} resubmitted rejected bill(s) pending"></span>
+            {% endif %}
+          </a>
+          {% endif %}
+
+          {% if user|has_permission:"reimbursement_finance_review" or user.is_superuser %}
+          <a href="{% url 'reimbursement:finance_rejected_bills_queue' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_rejected_bills_queue' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_rejected_bills_queue' %}aria-current="page"{% endif %}>
+            <i class="fas fa-undo-alt" aria-hidden="true"></i> Rejected Bills (Resubmitted)
+            {% if FINANCE_REJECTED_RESUB_COUNT|default:0|add:0 > 0 %}
+              <span class="badge bg-danger ms-2">{{ FINANCE_REJECTED_RESUB_COUNT }}</span>
+            {% endif %}
           </a>
           {% endif %}
 
