@@ -463,10 +463,30 @@ class ReimbursementRequest(models.Model):
     # ---- Transition checks --------------------------------------------------
 
     def can_mark_paid(self, reference: str = "") -> Tuple[bool, str]:
-        if self.status not in {self.Status.APPROVED, self.Status.PAID, self.Status.PENDING_FINANCE}:
+        """
+        New rules:
+          - Allowed when request is in Finance settlement stage after manager approval.
+          - Allowed statuses: pending_finance, approved
+          - Idempotent: if already paid, ok
+          - Reference required
+          - All INCLUDED bills must be finance_approved
+        """
+        if self.status == self.Status.PAID:
+            return True, _("Already paid")
+
+        if self.status not in {self.Status.PENDING_FINANCE, self.Status.APPROVED}:
             return False, _("Cannot mark Paid before Finance settlement after approvals.")
+
         if not (reference or "").strip():
             return False, _("Payment reference is required to mark Paid.")
+
+        L = self.lines.model  # ReimbursementLine
+        inc = self.lines.filter(status=L.Status.INCLUDED)
+        if not inc.exists():
+            return False, _("No included bills to pay.")
+        if inc.exclude(bill_status=L.BillStatus.FINANCE_APPROVED).exists():
+            return False, _("Some bills are not Finance-Approved yet.")
+
         return True, ""
 
     def _is_manager_approved(self) -> bool:
@@ -559,19 +579,43 @@ class ReimbursementRequest(models.Model):
         )
 
     def mark_paid(self, reference: str, *, actor: Optional[models.Model] = None, note: str = "") -> None:
-        if self.is_final and self.status != self.Status.PAID:
-            raise DjangoCoreValidationError(_("Cannot modify a finalized reimbursement."))
-        if self.status not in {self.Status.PENDING_FINANCE, self.Status.APPROVED}:
-            raise DjangoCoreValidationError(_("Cannot mark Paid before Finance review stage after approvals."))
-        if not (reference or "").strip():
-            raise DjangoCoreValidationError(_("Payment reference is required to mark Paid."))
+        """
+        New flow settlement:
+          - Allowed from pending_finance / approved (idempotent if already paid)
+          - Ensures all INCLUDED lines are finance_approved
+          - Marks INCLUDED lines as paid (if fields present)
+        """
+        ok, msg = self.can_mark_paid(reference)
+        if not ok:
+            raise DjangoCoreValidationError(msg)
+
+        if self.status == self.Status.PAID:
+            # idempotent
+            return
+
         from_status = self.status
+
+        # Mark lines as paid (where applicable)
+        L = self.lines.model
+        inc = self.lines.filter(status=L.Status.INCLUDED)
+        now = timezone.now()
+        for ln in inc:
+            # Only bump to PAID if the model supports paid attributes (it does)
+            ln.bill_status = L.BillStatus.PAID
+            if hasattr(ln, "payment_reference"):
+                ln.payment_reference = (reference or "").strip()
+            if hasattr(ln, "paid_at"):
+                ln.paid_at = now
+            ln.save(update_fields=[f for f in ["bill_status", "payment_reference", "paid_at", "updated_at"] if hasattr(ln, f)])
+
+        # Mark request as paid
         self.status = self.Status.PAID
-        self.finance_payment_reference = reference
-        self.paid_at = timezone.now()
+        self.finance_payment_reference = (reference or "").strip()
+        self.paid_at = now
         if note:
             self.finance_note = f"{self.finance_note}\n{note}" if self.finance_note else note
         self.save(update_fields=["status", "finance_payment_reference", "paid_at", "finance_note", "updated_at"])
+
         ReimbursementLog.log(
             self,
             ReimbursementLog.Action.PAID,
@@ -1125,7 +1169,7 @@ class Reimbursement(models.Model):
 
     employee = models.ForeignKey(UserModel, on_delete=models.CASCADE)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES)
+    category = models.CharField(max_length=20, choices=STATUS_CHOICES)
     bill = models.FileField(upload_to="bills/")
     submitted_at = models.DateTimeField(default=timezone.now)
     status = models.CharField(max_length=2, choices=STATUS_CHOICES, default="PM")
