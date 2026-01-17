@@ -1833,6 +1833,7 @@ def reimbursement_email_action(request):
         note = "Decision recorded via email link."
         req.management_comment = (base_comment + "\n" if base_comment else "") + note
 
+    # management outcomes
         if decision == "approved":
             req.status = ReimbursementRequest.Status.PENDING_FINANCE
         elif decision == "rejected":
