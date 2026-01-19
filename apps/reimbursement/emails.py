@@ -7,8 +7,8 @@ from typing import List, Optional
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
+from django.template.exceptions import TemplateDoesNotExist
 from django.urls import reverse
-from django.utils.http import urlencode
 
 from .models import (
     ReimbursementLine,
@@ -49,21 +49,155 @@ def _abs_url(path: str) -> str:
     return f"{base}{path}"
 
 
+def _fallback_render(template_base: str, context: dict) -> tuple[str, str]:
+    """
+    Last-resort bodies when a template is missing.
+    Kept intentionally simple to avoid introducing new dependencies.
+    """
+    # Pull common fields if present
+    req_id = context.get("request_id") or getattr(context.get("request", None), "id", None) \
+             or getattr(context.get("request_obj", None), "id", None)
+    employee = context.get("employee_name") or ""
+    total = context.get("total_amount") or ""
+    detail_url = context.get("detail_url") or ""
+    queue_url = context.get("queue_url") or ""
+    note = context.get("note") or context.get("employee_note") or ""
+
+    if template_base == "reimbursement_finance_verify":
+        txt = (
+            "New reimbursement pending Finance verification\n\n"
+            f"Reimbursement ID: #{req_id}\n"
+            f"Employee        : {employee}\n"
+            f"Total Amount    : {total}\n"
+            f"Note            : {note or '-'}\n"
+            f"Queue           : {queue_url or '-'}\n"
+        )
+        html = f"""<!doctype html>
+<html><body style="font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif">
+  <h2 style="margin:0 0 8px 0;">New reimbursement pending Finance verification</h2>
+  <p style="margin:0 0 12px 0;">A new reimbursement has entered the Finance Verification queue.</p>
+  <table style="border-collapse:collapse;margin:12px 0;">
+    <tr><td style="padding:4px 8px;color:#555;">Reimbursement ID</td><td style="padding:4px 8px;"><strong>#{req_id}</strong></td></tr>
+    <tr><td style="padding:4px 8px;color:#555;">Employee</td><td style="padding:4px 8px;">{employee}</td></tr>
+    <tr><td style="padding:4px 8px;color:#555;">Total Amount</td><td style="padding:4px 8px;">{total}</td></tr>
+    <tr><td style="padding:4px 8px;color:#555;">Employee Note</td><td style="padding:4px 8px;">{note or '-'}</td></tr>
+  </table>
+  <p style="margin-top:12px;">Open EMS → Finance → Verification Queue to review and act.</p>
+</body></html>"""
+        return html, txt
+
+    if template_base in ("reimbursement_request_paid", "reimbursement_paid"):
+        payment_reference = context.get("payment_reference") or "-"
+        paid_at = context.get("paid_at") or "-"
+        txt = (
+            "Reimbursement marked as Paid\n\n"
+            f"Reimbursement ID: #{req_id}\n"
+            f"Total Amount    : {total}\n"
+            f"Reference       : {payment_reference}\n"
+            f"Paid At         : {paid_at}\n"
+            f"Details         : {detail_url or '-'}\n"
+        )
+        html = f"""<!doctype html>
+<html><body style="font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif">
+  <h2 style="margin:0 0 8px 0;">Reimbursement marked as Paid</h2>
+  <table style="border-collapse:collapse;margin:12px 0;">
+    <tr><td style="padding:4px 8px;color:#555;">Reimbursement ID</td><td style="padding:4px 8px;"><strong>#{req_id}</strong></td></tr>
+    <tr><td style="padding:4px 8px;color:#555;">Total Amount</td><td style="padding:4px 8px;">{total}</td></tr>
+    <tr><td style="padding:4px 8px;color:#555;">Reference</td><td style="padding:4px 8px;">{payment_reference}</td></tr>
+    <tr><td style="padding:4px 8px;color:#555;">Paid At</td><td style="padding:4px 8px;">{paid_at}</td></tr>
+  </table>
+  <p style="margin-top:12px;">Details: {detail_url or '-'}</p>
+</body></html>"""
+        return html, txt
+
+    # Generic fallback
+    txt = (
+        f"Notification: {template_base.replace('_', ' ').title()}\n\n"
+        f"Reimbursement ID: #{req_id}\n"
+        f"Employee        : {employee}\n"
+        f"Total Amount    : {total}\n"
+        f"Details         : {detail_url or queue_url or '-'}\n"
+    )
+    html = f"""<!doctype html>
+<html><body style="font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif">
+  <h2 style="margin:0 0 8px 0;">Notification</h2>
+  <p style="margin:0 0 12px 0;">{template_base.replace('_', ' ').title()}</p>
+  <table style="border-collapse:collapse;margin:12px 0;">
+    <tr><td style="padding:4px 8px;color:#555;">Reimbursement ID</td><td style="padding:4px 8px;"><strong>#{req_id}</strong></td></tr>
+    <tr><td style="padding:4px 8px;color:#555;">Employee</td><td style="padding:4px 8px;">{employee}</td></tr>
+    <tr><td style="padding:4px 8px;color:#555;">Total Amount</td><td style="padding:4px 8px;">{total}</td></tr>
+  </table>
+  <p style="margin-top:12px;">Details: {detail_url or queue_url or '-'}</p>
+</body></html>"""
+    return html, txt
+
+
 def _render(template_base: str, context: dict) -> tuple[str, str]:
     """
     Returns (html, text) for an email given a template base name.
     Template files expected at:
       - templates/email/{template_base}.html
       - templates/email/{template_base}.txt
+
+    Hardened: if one or both templates are missing, render a safe fallback body
+    (no exception bubbles up, so emails never block workflows).
     """
-    html = render_to_string(f"email/{template_base}.html", context)
-    txt = render_to_string(f"email/{template_base}.txt", context)
+    html = txt = None
+    # Try primary templates
+    try:
+        html = render_to_string(f"email/{template_base}.html", context)
+    except TemplateDoesNotExist:
+        html = None
+    except Exception:  # pragma: no cover
+        logger.exception("HTML template render failed for %s", template_base)
+        html = None
+
+    try:
+        txt = render_to_string(f"email/{template_base}.txt", context)
+    except TemplateDoesNotExist:
+        txt = None
+    except Exception:  # pragma: no cover
+        logger.exception("TXT template render failed for %s", template_base)
+        txt = None
+
+    # If either part is missing, try a conservative fallback variant mapping
+    if html is None or txt is None:
+        # Map a few known alternate filenames found in some deployments
+        fallback_map = {
+            "reimbursement_finance_verify": "reimbursement_submitted",
+            "reimbursement_request_paid": "reimbursement_paid",
+        }
+        alt = fallback_map.get(template_base)
+        if alt:
+            try:
+                if html is None:
+                    html = render_to_string(f"email/{alt}.html", context)
+                if txt is None:
+                    txt = render_to_string(f"email/{alt}.txt", context)
+            except Exception:
+                # ignore and proceed to synthetic fallback
+                pass
+
+    # Final safety net: generate synthetic bodies if still missing
+    if html is None or txt is None:
+        html_f, txt_f = _fallback_render(template_base, context)
+        html = html or html_f
+        txt = txt or txt_f
+
     return html, txt
 
 
-def _send(to_list: List[str], subject: str, template_base: str, context: dict, *, cc: Optional[List[str]] = None, bcc: Optional[List[str]] = None) -> None:
+def _send(
+    to_list: List[str],
+    subject: str,
+    template_base: str,
+    context: dict,
+    *,
+    cc: Optional[List[str]] = None,
+    bcc: Optional[List[str]] = None,
+) -> None:
     """
-    Minimal, fail-silent sender.
+    Minimal, fail-silent sender with dedup, now resilient to missing templates.
     """
     # Deduplicate while preserving order
     def _dedup(seq: Optional[List[str]]) -> Optional[List[str]]:
@@ -73,9 +207,12 @@ def _send(to_list: List[str], subject: str, template_base: str, context: dict, *
         out = []
         for s in seq:
             s = (s or "").strip()
-            if not s or s.lower() in seen:
+            if not s:
                 continue
-            seen.add(s.lower())
+            low = s.lower()
+            if low in seen:
+                continue
+            seen.add(low)
             out.append(s)
         return out or None
 
@@ -124,7 +261,11 @@ def _finance_emails() -> List[str]:
 def _display_name(user) -> str:
     if not user:
         return ""
-    return (getattr(user, "get_full_name", lambda: "")() or getattr(user, "username", "") or str(user)).strip()
+    return (
+        getattr(user, "get_full_name", lambda: "")()
+        or getattr(user, "username", "")
+        or str(user)
+    ).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +328,6 @@ def send_bill_to_manager(req: ReimbursementRequest, line: ReimbursementLine) -> 
     3️⃣ Finance approved a bill and proceeded it to Manager — email the manager.
     """
     subject = f"Reimbursement #{req.id}: Bill #{line.id} needs your approval"
-    # Link to manager bill queue
     queue_url = _abs_url(reverse("reimbursement:manager_bills_pending"))
     ctx = {
         "manager_name": _display_name(req.manager),
@@ -324,9 +464,8 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
         "manager_name": _display_name(req.manager),
         "decision": decision,
         "request_id": req.id,
-        "total_amount": f"{req.total_amount:.2f}",
-        "detail_url": _abs_url(reverse("reimbursement:request_detail", args=[req.id])),
-    }
+        "total_amount": f"{req.total_amount:.2f}"},
+    ctx["detail_url"] = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     _send(_employee_email(req), subject, "reimbursement_manager_action", ctx)
     ReimbursementLog.log(
         req,
@@ -347,9 +486,8 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
         "management_name": _display_name(req.management),
         "decision": decision,
         "request_id": req.id,
-        "total_amount": f"{req.total_amount:.2f}",
-        "detail_url": _abs_url(reverse("reimbursement:request_detail", args=[req.id])),
-    }
+        "total_amount": f"{req.total_amount:.2f}"},
+    ctx["detail_url"] = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     _send(_employee_email(req), subject, "reimbursement_management_action", ctx)
     ReimbursementLog.log(
         req,
