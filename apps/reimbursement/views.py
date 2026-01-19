@@ -1133,7 +1133,7 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
             return redirect(request.path + (f"?return={back}" if back else ""))
 
 # ---------------------------------------------------------------------------
-# NEW: Finance — Rejected Bills Queue (resubmits only)
+# NEW: Finance — Rejected Bills Queue (resubmits only) + BULK actions
 # ---------------------------------------------------------------------------
 
 class FinanceRejectedBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
@@ -1141,7 +1141,7 @@ class FinanceRejectedBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin,
     Finance/Admin only. Shows ONLY bills:
       - previously FINANCE_REJECTED
       - corrected by employee and now EMPLOYEE_RESUBMITTED
-    Each row: request id, employee, bill details, previous rejection reason, updated doc.
+    Page supports per-line and bulk Approve/Reject/Delete with remarks.
     """
     permission_code = "reimbursement_finance_review"
     model = ReimbursementLine
@@ -1162,63 +1162,107 @@ class FinanceRejectedBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin,
             .order_by("-updated_at", "id")
         )
 
-class FinanceRejectedBillActionView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    Approve/Reject a single resubmitted bill from the Rejected Bills Queue.
-    After processing, if a parent request becomes fully Finance-approved → request moves to Manager and manager is emailed.
-    """
-    permission_code = "reimbursement_finance_review"
-    template_name = "reimbursement/finance_rejected_bills_queue.html"  # not rendered on POST
-
+    # Handle bulk + per-row actions from the same page form
     def post(self, request, *args, **kwargs):
-        line = get_object_or_404(
-            ReimbursementLine.objects.select_related("request", "expense_item", "request__created_by"),
-            pk=kwargs.get("pk"),
-            status=ReimbursementLine.Status.INCLUDED,
-            bill_status=ReimbursementLine.BillStatus.EMPLOYEE_RESUBMITTED,
-        )
-        decision = (request.POST.get("decision") or "").strip().lower()
+        action = (request.POST.get("action") or "").strip().lower()
         reason = (request.POST.get("reason") or "").strip()
-        back = _safe_back_url(request.POST.get("return"))
+        selected_ids = request.POST.getlist("line_ids")
 
-        if decision not in {"approve", "reject"}:
-            messages.error(request, "Invalid decision.")
-            return _redirect_back(request, "reimbursement:finance_rejected_bills_queue")
+        if action not in {"approve", "reject", "delete"}:
+            messages.error(request, "Invalid action.")
+            return redirect("reimbursement:finance_rejected_bills_queue")
 
-        try:
-            if decision == "approve":
-                line.approve_by_finance(actor=request.user)
-            else:
-                if not reason:
-                    messages.error(request, "Rejection reason is required.")
-                    return _redirect_back(request, "reimbursement:finance_rejected_bills_queue")
-                line.reject_by_finance(actor=request.user, reason=reason)
-        except DjangoCoreValidationError as e:
-            messages.error(request, getattr(e, "message", str(e)) or "Unable to process this bill.")
-            return _redirect_back(request, "reimbursement:finance_rejected_bills_queue")
+        if not selected_ids:
+            messages.warning(request, "Select at least one bill line.")
+            return redirect("reimbursement:finance_rejected_bills_queue")
 
-        # After processing, re-derive and escalate the parent request if all bills are approved
-        req = line.request
-        prev = req.status
-        req.apply_derived_status_from_bills(actor=request.user, reason="Finance processed a resubmitted bill.")
-        if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
-            req.verified_by = request.user
-            req.verified_at = timezone.now()
-            req.save(update_fields=["verified_by", "verified_at", "updated_at"])
-            _send_safe("send_reimbursement_finance_verified", req)
-            ReimbursementLog.log(
-                req,
-                ReimbursementLog.Action.VERIFIED,
-                actor=request.user,
-                message="All bills finance-approved after resubmission; sent to Manager.",
-                from_status=prev,
-                to_status=req.status,
+        qs = (
+            ReimbursementLine.objects.filter(
+                pk__in=selected_ids,
+                status=ReimbursementLine.Status.INCLUDED,
             )
-            messages.success(request, f"Bill #{line.pk} processed. Request sent to Manager.")
-        else:
-            messages.success(request, f"Bill #{line.pk} processed.")
+            .select_related("request", "expense_item")
+        )
 
-        return back and redirect(back) or _redirect_back(request, "reimbursement:finance_rejected_bills_queue")
+        processed = 0
+        touched_requests: Set[int] = set()
+
+        if action == "delete":
+            for line in qs:
+                exp = line.expense_item
+                req_id = line.request_id
+                line.delete()
+                if exp:
+                    exp.status = ExpenseItem.Status.SAVED
+                    exp.save(update_fields=["status", "updated_at"])
+                processed += 1
+                touched_requests.add(req_id)
+
+            # re-derive for parents
+            for req_id in touched_requests:
+                try:
+                    req = ReimbursementRequest.objects.get(pk=req_id)
+                    req.recalc_total(save=True)
+                    req.apply_derived_status_from_bills(actor=request.user, reason="Finance deleted resubmitted bill(s).")
+                    if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
+                        req.verified_by = request.user
+                        req.verified_at = timezone.now()
+                        req.save(update_fields=["verified_by", "verified_at", "updated_at"])
+                        _send_safe("send_reimbursement_finance_verified", req)
+                        ReimbursementLog.log(
+                            req,
+                            ReimbursementLog.Action.VERIFIED,
+                            actor=request.user,
+                            message="All bills finance-approved after resubmission; sent to Manager.",
+                            from_status="",
+                            to_status=req.status,
+                        )
+                except ReimbursementRequest.DoesNotExist:
+                    pass
+
+            messages.success(request, f"Deleted {processed} bill(s).")
+            return redirect("reimbursement:finance_rejected_bills_queue")
+
+        # approve / reject
+        for line in qs:
+            try:
+                if action == "approve":
+                    line.approve_by_finance(actor=request.user)
+                else:
+                    if not reason:
+                        messages.error(request, "Rejection reason is required.")
+                        return redirect("reimbursement:finance_rejected_bills_queue")
+                    line.reject_by_finance(actor=request.user, reason=reason)
+                processed += 1
+                touched_requests.add(line.request_id)
+            except DjangoCoreValidationError as e:
+                messages.error(request, getattr(e, "message", str(e)) or f"Could not process line #{line.id}")
+                return redirect("reimbursement:finance_rejected_bills_queue")
+
+        # Try to escalate any request that is now fully finance-approved
+        for req_id in touched_requests:
+            try:
+                req = ReimbursementRequest.objects.get(pk=req_id)
+                prev = req.status
+                req.apply_derived_status_from_bills(actor=request.user, reason="Finance processed resubmitted bill(s).")
+                if req.status == ReimbursementRequest.Status.PENDING_MANAGER and not req.verified_by_id:
+                    req.verified_by = request.user
+                    req.verified_at = timezone.now()
+                    req.save(update_fields=["verified_by", "verified_at", "updated_at"])
+                    _send_safe("send_reimbursement_finance_verified", req)
+                    ReimbursementLog.log(
+                        req,
+                        ReimbursementLog.Action.VERIFIED,
+                        actor=request.user,
+                        message="All bills finance-approved after resubmission; sent to Manager.",
+                        from_status=prev,
+                        to_status=req.status,
+                    )
+            except ReimbursementRequest.DoesNotExist:
+                continue
+
+        messages.success(request, f"{processed} line(s) processed.")
+        return redirect("reimbursement:finance_rejected_bills_queue")
 
 # ---------------------------------------------------------------------------
 # Finance — Request delete (Finance role)

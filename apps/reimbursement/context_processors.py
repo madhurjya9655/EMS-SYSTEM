@@ -38,7 +38,6 @@ def finance_badges(request) -> Dict[str, int]:
     FINANCE_REJECTED_RESUB_COUNT
       = number of INCLUDED bill lines that were previously rejected by Finance
         and have been corrected by the employee (EMPLOYEE_RESUBMITTED).
-      This powers the red badge shown next to the "Rejected Bills" entry.
 
     Design:
     - Zero cost for non-finance users (skip DB).
@@ -61,7 +60,5 @@ def finance_badges(request) -> Dict[str, int]:
     except Exception:
         count = 0
 
-    # Small TTL to keep things fresh while reducing DB hits.
     cache.set(cache_key, count, timeout=30)
-
     return {"FINANCE_REJECTED_RESUB_COUNT": count}

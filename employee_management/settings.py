@@ -159,6 +159,8 @@ _template_options = {
         "django.contrib.auth.context_processors.auth",
         "django.contrib.messages.context_processors.messages",
         "apps.users.permissions.permissions_context",
+        # ✅ New: Finance badges (Rejected Bills resubmitted count)
+        "apps.reimbursement.context_processors.finance_badges",
     ],
     "builtins": [
         "dashboard.templatetags.dashboard_extras",
@@ -396,7 +398,7 @@ LOGGING = {
         "django.request": {"handlers": ["console", "file", "mail_admins"], "level": "ERROR", "propagate": False},
         "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
 
-        # ✅ NEW: catch-all so every logger under apps.* appears in Render logs
+        # ✅ Catch-all for apps.*
         "apps": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},
 
         "apps.users.permissions": {"handlers": ["permissions_file"] + (["console"] if DEBUG else []),"level": "DEBUG" if DEBUG else "INFO","propagate": False},
@@ -678,6 +680,7 @@ def _redis_db(url: str, db: int) -> str:
         return u
     parts = u.rsplit("/", 1)
     if len(parts) == 2 and parts[1].isdigit():
+        # ✅ fixed: removed stray extra brace
         return f"{parts[0]}/{db}"
     if u.endswith("/"):
         return f"{u}{db}"

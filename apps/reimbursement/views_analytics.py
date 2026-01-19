@@ -247,6 +247,17 @@ def _base_lines_qs(f: Filters):
     return qs
 
 
+def _request_qs_scoped_by_lines(f: Filters):
+    """
+    Derive request queryset *scoped by the filtered lines*:
+    - Take distinct request IDs from the current line scope
+    - Then operate request-level counts on that subset
+    """
+    line_qs = _base_lines_qs(f)
+    req_ids = line_qs.values_list("request_id", flat=True).distinct()
+    return ReimbursementRequest.objects.filter(id__in=req_ids)
+
+
 # ---------------------------------------------------------------------
 # Views
 # ---------------------------------------------------------------------
@@ -595,6 +606,88 @@ class AnalyticsCategoryAPI(LoginRequiredMixin, View):
             grand += total
 
         return JsonResponse({"rows": rows, "total": float(grand)})
+
+
+# ---------------------------------------------------------------------
+# NEW: Real-time numbers (wired to current filters)
+# ---------------------------------------------------------------------
+
+class AnalyticsRealtimeNumbersAPI(LoginRequiredMixin, View):
+    """
+    Live counters for dashboards, respecting the same filters as other endpoints.
+    Returns numbers scoped to the set of requests that contain *filtered lines*.
+
+    Example payload:
+    {
+      "scope": {"request_ids": 12, "line_count": 58},
+      "counts": {
+        "finance_pending_requests": 4,
+        "manager_pending_requests": 3,
+        "management_pending_requests": 1,
+        "approved_requests": 2,
+        "paid_requests": 7,
+        "resubmitted_bills": 5,
+        "finance_approved_bills": 41,
+        "submitted_today": 2
+      }
+    }
+    """
+    def get(self, request, *args, **kwargs):
+        if not _user_can_view_analytics(request.user):
+            return JsonResponse({"detail": "forbidden"}, status=403)
+
+        f = _parse_filters(request)
+
+        # Base, filtered by all bill-wise constraints
+        line_qs = _base_lines_qs(f)
+        req_qs = _request_qs_scoped_by_lines(f)
+
+        # Scope sizes
+        scope_request_count = req_qs.values_list("id", flat=True).count()
+        scope_line_count = line_qs.count()
+
+        # Request-level counts within scope
+        counts = {
+            "finance_pending_requests": req_qs.filter(status=ReimbursementRequest.Status.PENDING_FINANCE_VERIFY).count(),
+            "manager_pending_requests": req_qs.filter(status=ReimbursementRequest.Status.PENDING_MANAGER).count(),
+            "management_pending_requests": req_qs.filter(status=ReimbursementRequest.Status.PENDING_MANAGEMENT).count(),
+            "approved_requests": req_qs.filter(status=ReimbursementRequest.Status.APPROVED).count(),
+            "paid_requests": req_qs.filter(status=ReimbursementRequest.Status.PAID).count(),
+        }
+
+        # Bill-level counts within scope
+        counts.update({
+            "resubmitted_bills": line_qs.filter(
+                bill_status=ReimbursementLine.BillStatus.EMPLOYEE_RESUBMITTED
+            ).count(),
+            "finance_approved_bills": line_qs.filter(
+                bill_status=ReimbursementLine.BillStatus.FINANCE_APPROVED
+            ).count(),
+        })
+
+        # "Submitted today" (by request submitted_at) inside scope
+        today = timezone.localdate()
+        counts["submitted_today"] = req_qs.filter(
+            submitted_at__date=today
+        ).count()
+
+        data = {
+            "scope": {
+                "request_ids": scope_request_count,
+                "line_count": scope_line_count,
+            },
+            "counts": counts,
+            "filters_applied": {
+                "employee_ids": f.employee_ids,
+                "status_mode": f.status_mode,
+                "line_ids_count": len(f.line_ids),
+                "from": f.from_date.isoformat() if f.from_date else None,
+                "to": f.to_date.isoformat() if f.to_date else None,
+                "preset": f.preset,
+                "categories": f.categories,
+            },
+        }
+        return JsonResponse(data)
 
 
 # ---------------------------------------------------------------------

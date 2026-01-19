@@ -35,8 +35,7 @@ urlpatterns = [
     # Canonical request detail
     path("request/<int:pk>/", views.ReimbursementDetailView.as_view(), name="request_detail"),
 
-    # ✅ BACKWARD COMPATIBILITY (ADMIN / OLD TEMPLATES)
-    # DO NOT REMOVE
+    # ✅ BACKWARD COMPATIBILITY (ADMIN / OLD TEMPLATES) – kept intentionally
     path(
         "request/<int:pk>/",
         views.ReimbursementDetailView.as_view(),
@@ -62,7 +61,8 @@ urlpatterns = [
 
     # ✅ NEW: Rejected Bills Queue (resubmitted bills only)
     path("finance/rejected-bills/", views.FinanceRejectedBillsQueueView.as_view(), name="finance_rejected_bills_queue"),
-    path("finance/rejected-bills/<int:pk>/", views.FinanceRejectedBillActionView.as_view(), name="finance_rejected_bill_action"),
+    # (If you want single-bill action via POST to a dedicated URL, re-add:)
+    # path("finance/rejected-bills/<int:pk>/", views.FinanceRejectedBillActionView.as_view(), name="finance_rejected_bill_action"),
 
     # ------------------------------
     # Admin dashboards / export
@@ -87,6 +87,7 @@ urlpatterns = [
     path("analytics/api/employees/", views_analytics.AnalyticsEmployeeAPI.as_view(), name="analytics_api_employees"),
     path("analytics/api/employees/options/", views_analytics.EmployeeOptionsAPI.as_view(), name="analytics_api_employee_options"),
     path("analytics/api/bills/", views_analytics.BillwiseTableAPI.as_view(), name="analytics_api_bills"),
+    path("analytics/api/realtime/", views_analytics.AnalyticsRealtimeNumbersAPI.as_view(), name="analytics_api_realtime"),
     path("analytics/api/highrisk/", views_analytics.AnalyticsHighRiskAPI.as_view(), name="analytics_api_highrisk"),
 
     # ------------------------------
