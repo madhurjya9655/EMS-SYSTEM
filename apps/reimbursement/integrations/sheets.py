@@ -14,6 +14,7 @@ from typing import Dict, Tuple, List, Optional, Callable, Any
 from django.conf import settings
 from django.core.cache import cache
 from django.urls import NoReverseMatch, reverse
+from django.db import transaction  # ✅ for on_commit to run after DB save
 
 # ✅ IMPORT NEEDED FOR BILL-WISE FILTER (INCLUDED ONLY)
 from apps.reimbursement.models import ReimbursementLine
@@ -289,6 +290,17 @@ def _values_append(range_: str, values: List[List[Any]], user_entered: bool = Fa
         ).execute()
     return _with_backoff("values.append", False, _call)
 
+def _values_batch_update(data_blocks: List[Dict[str, Any]], input_option: str = "USER_ENTERED") -> None:
+    """Batch multiple range updates in one API call."""
+    if not data_blocks:
+        return
+    def _call():
+        return _svc_sheets().spreadsheets().values().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={"valueInputOption": input_option, "data": data_blocks},
+        ).execute()
+    _with_backoff("values.batchUpdate", False, _call)
+
 def _friendly_format_main(sheet_id: int) -> None:
     end_col = len(HEADER)
     requests = []
@@ -548,12 +560,12 @@ def build_rows(req) -> List[List[Any]]:
             "Manager": getattr(getattr(req, "manager", None), "username", "") if getattr(req, "manager_id", None) else "",
             "Management": getattr(getattr(req, "management", None), "username", "") if getattr(req, "management_id", None) else "",
             "FinanceVerifier": getattr(getattr(req, "verified_by", None), "username", "") if getattr(req, "verified_by_id", None) else "",
-            "PaymentRef": line.payment_reference or (req.finance_payment_reference or ""),
-            "PaidAt": _iso(line.paid_at or req.paid_at),
+            "PaymentRef": getattr(line, "payment_reference", None) or (getattr(req, "finance_payment_reference", None) or ""),
+            "PaidAt": _iso(getattr(line, "paid_at", None) or getattr(req, "paid_at", None)),
             "ReceiptLink": _collect_receipt_link_for_line(req, line),
             "EMSLink": f'=HYPERLINK("{_detail_url(req.id)}","Open in EMS")',
-            "CreatedAt": _iso(req.created_at),
-            "UpdatedAt": _iso(req.updated_at),
+            "CreatedAt": _iso(getattr(req, "created_at", None)),
+            "UpdatedAt": _iso(getattr(req, "updated_at", None)),
             "SyncedAt": _iso(datetime.now(timezone.utc)),
             "SyncVersion": SYNC_VERSION,
             "Extra": json.dumps({
@@ -574,6 +586,7 @@ def build_row(req) -> List[List[Any]]:
 # ---------------------------------------------------------------------------
 
 def _index_by_rowkey() -> Dict[str,int]:
+    """Map RowKey -> row number (reads A2:A once)."""
     def _call():
         return _svc_sheets().spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!A2:A"
@@ -585,36 +598,55 @@ def _index_by_rowkey() -> Dict[str,int]:
             idx[str(v[0])] = i
     return idx
 
-def upsert_row(row: list, rowkey: str):
-    values = _svc_sheets().spreadsheets().values()
-    idx = _index_by_rowkey()
+def _upsert_rows_batch(rows: List[List[Any]]) -> Dict[str, int]:
+    """
+    ⚡ Performance-critical path:
+    - Read the index ONCE
+    - Batch update existing rows via values.batchUpdate
+    - Append all new rows in ONE append call
+    Returns: rowkey -> rownum for written rows (best-effort for appended).
+    """
+    if not rows:
+        return {}
+
+    values_api = _svc_sheets().spreadsheets().values()
     end_col = _header_end_col()
 
-    if str(rowkey) in idx:
-        rn = idx[str(rowkey)]
-        def _call_update():
-            return values.update(
-                spreadsheetId=SPREADSHEET_ID,
-                range=f"{TAB_MAIN}!A{rn}:{end_col}{rn}",
-                valueInputOption="USER_ENTERED",
-                body={"values":[row]},
-            ).execute()
-        _with_backoff("values.update row", False, _call_update)
-        return "update", rn
+    idx = _index_by_rowkey()  # single read
+    updates: List[Dict[str, Any]] = []
+    to_append: List[List[Any]] = []
+    written_map: Dict[str, int] = {}
 
-    def _call_append():
-        return values.append(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"{TAB_MAIN}!A:{end_col}",
-            valueInputOption="USER_ENTERED",
-            insertDataOption="INSERT_ROWS",
-            body={"values":[row]},
-        ).execute()
-    resp = _with_backoff("values.append row", False, _call_append)
-    rng=resp.get("updates", {}).get("updatedRange",""); rn=0
-    try: rn=int(rng.split("!")[1].split(":")[0][1:])
-    except Exception: pass
-    return "insert", rn
+    for row in rows:
+        rowkey = str(row[0])
+        rn = idx.get(rowkey)
+        if rn:
+            updates.append({
+                "range": f"{TAB_MAIN}!A{rn}:{end_col}{rn}",
+                "values": [row],
+            })
+            written_map[rowkey] = rn
+        else:
+            to_append.append(row)
+
+    # Batch update existing rows
+    if updates:
+        _values_batch_update(updates, input_option="USER_ENTERED")
+
+    # Append new rows in one shot
+    if to_append:
+        resp = _values_append(f"{TAB_MAIN}!A:{end_col}", to_append, user_entered=True)
+        # Try to infer first row number from API response (best-effort)
+        try:
+            rng = resp.get("updates", {}).get("updatedRange", "")
+            first_rn = int(rng.split("!")[1].split(":")[0][1:])
+        except Exception:
+            first_rn = 0
+        if first_rn:
+            for i, row in enumerate(to_append):
+                written_map[str(row[0])] = first_rn + i
+
+    return written_map
 
 def append_changelog(event: str, rowkey: str, old: str, new: str, rownum: int, actor: str = "", result: str = "ok", err: str = "") -> None:
     try:
@@ -630,30 +662,80 @@ def append_changelog(event: str, rowkey: str, old: str, new: str, rownum: int, a
 # Public entry: sync a single request (exports one row per bill)
 # ---------------------------------------------------------------------------
 
-def sync_request(req) -> None:
+def _sync_request_impl(req_id: int) -> None:
     """
-    Export-only. No status mutations or audit writes. Safe fallbacks.
-    Idempotent per bill via RowKey (ReimbID-LineID).
+    Actual sync body. Avoid calling this from request cycle.
     """
-    if not _google_available() or req is None:
+    if not _google_available():
+        return
+    # Import lazily to avoid circulars in module import time
+    from apps.reimbursement.models import ReimbursementRequest  # local import
+
+    try:
+        req = (
+            ReimbursementRequest.objects.select_related("created_by", "manager", "management", "verified_by")
+            .prefetch_related("lines__expense_item")
+            .get(pk=req_id)
+        )
+    except Exception:
         return
 
     ensure_spreadsheet_structure()
 
     rows = build_rows(req)  # bill-wise rows (INCLUDED only)
 
-    # We log/append per-row. Old/new status tracked on request.status (best effort).
+    # Batch upsert to keep API calls minimal and fast
+    try:
+        written = _upsert_rows_batch(rows)
+    except Exception as e:
+        logger.exception("Google Sheets batch upsert failed for req=%s: %s", req_id, e)
+        written = {}
+
     prev_status = getattr(req, "status", "") or ""
     for row in rows:
-        rowkey = row[0]  # A: RowKey
+        rk = str(row[0])
+        rn = int(written.get(rk, 0))
         try:
-            action, rn = upsert_row(row, rowkey)
-            append_changelog("upsert", rowkey, prev_status, req.status, rn, "", action)
-        except Exception as e:
-            logger.exception("Google Sheets sync failed for rowkey %s (req=%s)", rowkey, getattr(req, "id", None))
-            try:
-                append_changelog("error", rowkey, prev_status, req.status, 0, err=str(e))
-            except Exception:
-                pass
-            # continue other lines without failing the whole sync
-            continue
+            append_changelog("upsert", rk, prev_status, req.status, rn, "", "ok")
+        except Exception:
+            # best-effort logging; never raise
+            pass
+
+def sync_request(req) -> None:
+    """
+    Export-only. No status mutations or audit writes.
+    **Non-blocking** for the web request:
+      - Debounced per request (30s) via cache
+      - Enqueued after DB commit using transaction.on_commit
+      - Runs in a daemon thread
+    """
+    if req is None:
+        return
+    try:
+        req_id = int(getattr(req, "id", 0)) or 0
+    except Exception:
+        req_id = 0
+    if not req_id:
+        return
+    if not _google_available():
+        return
+
+    # Simple debounce to avoid storm during bulk actions/resubmits
+    lock_key = f"reimb.sheets.sync.lock.{req_id}"
+    if not cache.add(lock_key, True, timeout=30):  # skip if a sync is in-flight/recent
+        return
+
+    def _kick():
+        try:
+            t = threading.Thread(target=_sync_request_impl, args=(req_id,), daemon=True)
+            t.start()
+        except Exception:
+            # if thread start fails, release the lock quickly so a later call can retry
+            cache.delete(lock_key)
+
+    # Ensure we only sync after all DB changes are committed
+    try:
+        transaction.on_commit(_kick)
+    except Exception:
+        # If not in a transaction, run immediately in a thread
+        _kick()

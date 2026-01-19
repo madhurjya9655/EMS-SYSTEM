@@ -98,11 +98,35 @@ def _user_is_manager(user) -> bool:
     )
 
 def _send_safe(func_name: str, *args, **kwargs) -> None:
+    """
+    Robust notifier dispatcher:
+    1) Prefer new services.notifications module (apps/reimbursement/services/notifications.py)
+    2) Fallback to legacy apps/reimbursement/emails.py
+    """
     try:
-        from .services import notifications  # type: ignore
-        fn = getattr(notifications, func_name, None)
+        notif_mod = None
+        legacy_mod = None
+        # Try modern notifications first
+        try:
+            from .services import notifications as notif_mod  # type: ignore
+        except Exception:
+            notif_mod = None
+        # Fallback to legacy emails module
+        try:
+            from . import emails as legacy_mod  # type: ignore
+        except Exception:
+            legacy_mod = None
+
+        fn = None
+        if notif_mod and hasattr(notif_mod, func_name):
+            fn = getattr(notif_mod, func_name)
+        elif legacy_mod and hasattr(legacy_mod, func_name):
+            fn = getattr(legacy_mod, func_name)
+
         if fn:
             fn(*args, **kwargs)
+        else:
+            logger.warning("No notification handler found for %s", func_name)
     except Exception:
         logger.exception("Reimbursement notification %s failed", func_name)
 
@@ -1415,7 +1439,8 @@ class FinanceBillPaymentView(LoginRequiredMixin, PermissionRequiredMixin, Templa
 # ---------------------------------------------------------------------------
 
 class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
-    permission_code = "reimbursement_finance_review"
+    # 🔧 Fix permission to match real-world mapping used elsewhere ('reimbursement_review_finance')
+    permission_code = "reimbursement_review_finance"
     model = ReimbursementRequest
     form_class = FinanceProcessForm
     template_name = "reimbursement/finance_review.html"
