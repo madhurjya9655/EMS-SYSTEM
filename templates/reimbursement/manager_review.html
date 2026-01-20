@@ -19,9 +19,89 @@
 
 <div class="row">
   <div class="col-md-8">
-    {% include "reimbursement/_request_summary_block.html" with request_obj=object only %}
+
+    <!-- Compact request summary (no bill list to avoid showing rejected/pending) -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="row">
+          <div class="col-md-6">
+            <div><strong>Employee:</strong> {{ object.created_by.get_full_name|default:object.created_by.username }}</div>
+            <div><strong>Submitted:</strong> {{ object.submitted_at|default:object.created_at|date:"Y-m-d H:i" }}</div>
+          </div>
+          <div class="col-md-6">
+            <div><strong>Status:</strong> {{ object.get_status_display }}</div>
+            <div><strong>Total:</strong> ₹{{ object.total_amount|floatformat:2 }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bills visible to manager: Finance-Approved only -->
+    <div class="card">
+      <div class="card-header">Bills for Your Approval (Finance-Approved)</div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>#</th>
+                <th>Type</th>
+                <th>Date</th>
+                <th>Description</th>
+                <th class="text-end">Amount</th>
+                <th>Bill</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for line in approved_lines %}
+              <tr>
+                <td>{{ forloop.counter }}</td>
+                <td>{{ line.expense_item.get_category_display|default:line.expense_item.category }}</td>
+                <td>{{ line.expense_item.date|date:"d M Y" }}</td>
+                <td style="white-space:pre-line;">{{ line.description|default:line.expense_item.description|default:"-" }}</td>
+                <td class="text-end">₹{{ line.amount|floatformat:2 }}</td>
+                <td>
+                  {% if line.receipt_file or line.expense_item.receipt_file %}
+                    <a href="{% url 'reimbursement:receipt_line' line.id %}" target="_blank" rel="noopener">View</a>
+                  {% else %}
+                    <span class="text-muted">No file</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% empty %}
+              <tr>
+                <td colspan="6" class="text-center text-muted py-3">
+                  No Finance-Approved bills available for manager approval yet.
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+            {% if approved_lines %}
+            <tfoot>
+              <tr>
+                <td></td>
+                <td colspan="3" class="text-end"><strong>Subtotal (Shown)</strong></td>
+                <td class="text-end">
+                  <strong>
+                    ₹{# sum of shown lines #}
+                    {% with 0 as total %}
+                      {% for l in approved_lines %}
+                        {% if forloop.first %}{% widthratio l.amount 1 1 %}{% endif %}
+                      {% endfor %}
+                    {% endwith %}
+                  </strong>
+                </td>
+                <td></td>
+              </tr>
+            </tfoot>
+            {% endif %}
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 
+  <!-- Decision -->
   <div class="col-md-4">
     <div class="card mb-3">
       <div class="card-header">Manager Decision</div>
