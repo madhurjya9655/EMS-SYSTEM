@@ -31,6 +31,7 @@ from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.clickjacking import xframe_options_sameorigin  # ← added
 from django.views.generic import (
     ListView,
     DetailView,
@@ -270,7 +271,7 @@ class ExpenseItemDeleteView(LoginRequiredMixin, PermissionRequiredMixin, Templat
         obj = get_object_or_404(
             ExpenseItem,
             pk=kwargs.get("pk"),
-            created_by=request.user,
+            created_by=self.request.user,
         )
         if getattr(obj, "is_locked", False):
             messages.error(
@@ -1353,7 +1354,7 @@ class FinanceBillPaymentQueueView(LoginRequiredMixin, PermissionRequiredMixin, L
                 status=ReimbursementLine.Status.INCLUDED,
                 bill_status=ReimbursementLine.BillStatus.MANAGER_APPROVED,
             )
-            .select_related("request", "request__created_by", "expense_item")
+            .select_related("request", "expense_item")
             .order_by("-request__created_at", "id")
         )
 
@@ -1776,9 +1777,10 @@ class ReimbursementExportCSVView(LoginRequiredMixin, PermissionRequiredMixin, Te
         return response
 
 # ---------------------------------------------------------------------------
-# Secure receipt download
+# Secure receipt download  (← add SAMEORIGIN so iframe modal works)
 # ---------------------------------------------------------------------------
 
+@xframe_options_sameorigin
 def download_receipt(
     request,
     line_id: Optional[int] = None,

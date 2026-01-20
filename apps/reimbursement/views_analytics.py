@@ -396,7 +396,7 @@ class AnalyticsSummaryAPI(LoginRequiredMixin, View):
         highest_bill = float(d(agg_hi.get("hi"))) if agg_hi.get("hi") is not None else 0.0
         lowest_bill = float(d(agg_lo.get("lo"))) if agg_lo.get("lo") is not None else 0.0
 
-        # Employee aggregates (within current filter)
+        # Employee aggregates (within current filter) — bill-wise sum and bill counts
         emp_rows = (
             qs.values(
                 "request__created_by_id",
@@ -404,7 +404,10 @@ class AnalyticsSummaryAPI(LoginRequiredMixin, View):
                 "request__created_by__last_name",
                 "request__created_by__username",
             )
-            .annotate(total=Coalesce(Sum("amount"), DEC0))
+            .annotate(
+                total=Coalesce(Sum("amount"), DEC0),
+                bill_count=Count("id"),
+            )
             .order_by("-total")
         )
 
@@ -416,7 +419,12 @@ class AnalyticsSummaryAPI(LoginRequiredMixin, View):
             uname = (r.get("request__created_by__username") or "").strip()
             display = (f"{fn} {ln}".strip() or uname or f"User #{uid}")
             employee_spend.append(
-                {"employee_id": uid, "employee_name": display, "total": float(d(r["total"]))}
+                {
+                    "employee_id": uid,
+                    "employee_name": display,
+                    "total": float(d(r["total"])),
+                    "bill_count": int(r["bill_count"] or 0),
+                }
             )
 
         # Highest/lowest spender based on employee totals
@@ -431,8 +439,8 @@ class AnalyticsSummaryAPI(LoginRequiredMixin, View):
             "highest_spend_bill": highest_bill,
             "lowest_spend_bill": lowest_bill,
             "employee_wise_spend": employee_spend,
-            "highest_spender": highest_spender,  # {"employee_id","employee_name","total"} or None
-            "lowest_spender": lowest_spender,    # {"employee_id","employee_name","total"} or None
+            "highest_spender": highest_spender,  # {"employee_id","employee_name","total","bill_count"} or None
+            "lowest_spender": lowest_spender,    # {"employee_id","employee_name","total","bill_count"} or None
             "filters_applied": {
                 "employee_ids": f.employee_ids,
                 "status_mode": f.status_mode,
@@ -451,6 +459,7 @@ class AnalyticsEmployeeAPI(LoginRequiredMixin, View):
     """
     Employee-wise spend table (BILL-wise):
       - total amount per employee
+      - number of bills (bill_count)
       - number of reimbursement requests (distinct request IDs within scoped bills)
       - most used expense category (by amount; ties -> higher count)
     """
@@ -471,6 +480,7 @@ class AnalyticsEmployeeAPI(LoginRequiredMixin, View):
             )
             .annotate(
                 total=Coalesce(Sum("amount"), DEC0),
+                bill_count=Count("id"),
                 request_count=Count("request_id", distinct=True),
             )
         )
@@ -486,7 +496,11 @@ class AnalyticsEmployeeAPI(LoginRequiredMixin, View):
                 "employee_id": uid,
                 "employee_name": display,
                 "total": float(d(r["total"])),
+
+                # expose both; UI should show bill_count to keep bill-wise semantics visible
+                "bill_count": int(r["bill_count"] or 0),
                 "request_count": int(r["request_count"] or 0),
+
                 "top_category": "-",  # fill below
             }
 

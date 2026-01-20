@@ -56,11 +56,6 @@
   .filters .btn{height:40px}
   .help{font-size:.8rem;color:var(--muted)}
 
-  /* Date presets */
-  .preset-bar{display:flex;flex-wrap:wrap;gap:.4rem;margin:.25rem 0 .5rem}
-  .preset{cursor:pointer;user-select:none}
-  .preset.active{background:#0d6efd;color:#fff;border-color:#0d6efd}
-
   /* ---------- Skeleton ---------- */
   .skeleton{position:relative;color:transparent !important}
   .skeleton::after{
@@ -100,7 +95,7 @@
   <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
     <div>
       <h1 class="page-title mb-0">Reimbursement Analytics</h1>
-      <small class="text-muted">Approved / Paid datasets • IST • Bill-wise</small>
+      <small class="text-muted">Approved / Paid datasets • IST</small>
     </div>
     <div class="text-muted small">
       <span class="pill">Read-only</span>
@@ -114,7 +109,17 @@
   <div class="card filters">
     <div class="card-body">
       <form id="filtersForm">
-        <!-- Status -->
+        <div class="row g-2 mb-2">
+          <div class="col-6">
+            <label class="form-label" for="from_date">From</label>
+            <input type="date" id="from_date" class="form-control" />
+          </div>
+          <div class="col-6">
+            <label class="form-label" for="to_date">To</label>
+            <input type="date" id="to_date" class="form-control" />
+          </div>
+        </div>
+
         <div class="mb-3">
           <label class="form-label" for="status">Status</label>
           <select id="status" class="form-select">
@@ -124,47 +129,22 @@
           </select>
         </div>
 
-        <!-- Date Range -->
-        <div class="mb-2">
-          <label class="form-label">Date Range (Expense Date, IST)</label>
-          <div class="preset-bar" role="group" aria-label="Quick ranges">
-            <span class="pill preset" data-preset="this_month" id="pThisMonth">This Month</span>
-            <span class="pill preset" data-preset="last_month" id="pLastMonth">Last Month</span>
-            <span class="pill preset" data-preset="last_90_days" id="p90">Last 90 Days</span>
-            <span class="pill preset" data-preset="ytd" id="pYTD">YTD</span>
-            <span class="pill preset" data-preset="fytd" id="pFYTD">FYTD</span>
-            <span class="pill preset" data-preset="" id="pClearPreset">Clear</span>
-          </div>
-          <div class="d-flex gap-2">
-            <div class="flex-grow-1">
-              <input type="date" id="from" class="form-control" aria-label="From date" />
-            </div>
-            <div class="flex-grow-1">
-              <input type="date" id="to" class="form-control" aria-label="To date" />
-            </div>
-          </div>
-          <div class="help mt-1">Choose a preset or pick a custom range. If you enter dates, presets are ignored.</div>
-        </div>
-
-        <!-- Employee -->
-        <div class="mb-3 mt-3">
+        <!-- Employees: single select -->
+        <div class="mb-3">
           <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
             <label class="form-label mb-0" for="employees">Employee</label>
             <button type="button" id="empClear" class="btn btn-outline-secondary btn-sm">Clear</button>
           </div>
-          <!-- Populated from EmployeeOptionsAPI; includes "All employees" option -->
           <select id="employees" class="form-select" aria-describedby="empHelp"></select>
           <div id="empHelp" class="help">Leave blank for all employees.</div>
         </div>
 
-        <!-- Bill Line IDs -->
         <div class="mb-3">
           <label class="form-label" for="line_ids">Bill Line IDs (CSV)</label>
           <input type="text" id="line_ids" class="form-control" placeholder="Optional: e.g. 101,102,205">
           <div class="help">When provided, analytics (incl. chart) recompute strictly over these bills.</div>
         </div>
 
-        <!-- Actions -->
         <div class="d-flex gap-2 mt-3">
           <button type="submit" class="btn btn-primary flex-grow-1">Apply</button>
           <button type="button" id="clearBtn" class="btn btn-outline-secondary">Reset</button>
@@ -232,7 +212,7 @@
               <tr>
                 <th>Employee</th>
                 <th>Total Amount</th>
-                <th># Requests</th>
+                <th># Bills</th> <!-- changed from # Requests -->
                 <th>Top Category</th>
               </tr>
             </thead>
@@ -264,8 +244,7 @@
       employees: p.get('employees') || '',
       line_ids: p.get('line_ids') || '',
       from: p.get('from') || '',
-      to: p.get('to') || '',
-      preset: p.get('preset') || ''
+      to: p.get('to') || ''
     };
   }
   function writeParams(params) {
@@ -279,24 +258,18 @@
   function setFormFromParams(params) {
     qs('status').value = params.status;
     qs('line_ids').value = params.line_ids;
-    qs('from').value = params.from;
-    qs('to').value = params.to;
-    // preset chip
-    setActivePreset(params.preset);
+    qs('from_date').value = params.from;
+    qs('to_date').value = params.to;
     // employee dropdown selection is applied inside loadEmployeeOptions()
   }
   function getFormParams() {
     const empId = (qs('employees').value || '').trim();
-    const from = (qs('from').value || '').trim();
-    const to = (qs('to').value || '').trim();
-    const activePreset = getActivePreset();
-    // If custom dates present, ignore preset
-    const preset = (from || to) ? '' : activePreset;
     return {
       status: qs('status').value,
       employees: empId,
       line_ids: (qs('line_ids').value || '').replace(/\s+/g,''),
-      from, to, preset
+      from: qs('from_date').value || '',
+      to: qs('to_date').value || ''
     };
   }
 
@@ -331,7 +304,6 @@
     sel.innerHTML = html;
 
     if (preselectCsv){
-      // If CSV passed, pick first ID to preselect for the single dropdown (backward compatible)
       const firstId = preselectCsv.split(',').map(s => s.trim()).filter(Boolean)[0] || '';
       sel.value = firstId;
     }
@@ -363,25 +335,22 @@
       return;
     }
 
-    // Show up to 20 rows; still scrollable if more
     list.slice(0, 20).forEach(r => {
       const row = document.createElement('div');
       row.className = 'chart-row';
       row.setAttribute('role','listitem');
 
-      // Name
       const name = document.createElement('div');
       name.className = 'chart-name';
       name.textContent = r.employee_name || ('User #' + (r.employee_id||''));
       row.appendChild(name);
 
-      // Bar
       const bar = document.createElement('div');
       bar.className = 'chart-bar';
       const fill = document.createElement('div');
       fill.className = 'chart-fill';
       const val = Number(r.total||0);
-      const pct = Math.max(3, Math.min(100, (val / maxVal) * 100)); // min 3% visible
+      const pct = Math.max(3, Math.min(100, (val / maxVal) * 100));
       fill.style.width = pct.toFixed(2) + '%';
 
       const label = document.createElement('div');
@@ -396,22 +365,6 @@
     });
   }
 
-  // Presets
-  const PRESET_IDS = ['pThisMonth','pLastMonth','p90','pYTD','pFYTD'];
-  function setActivePreset(key){
-    // Clear all
-    document.querySelectorAll('.preset').forEach(el => el.classList.remove('active'));
-    if (key){
-      const el = document.querySelector(`.preset[data-preset="${key}"]`);
-      if (el) el.classList.add('active');
-    }
-  }
-  function getActivePreset(){
-    const el = document.querySelector('.preset.active');
-    return el ? (el.getAttribute('data-preset') || '') : '';
-  }
-
-  // Load all sections
   async function loadAll() {
     const p = readParams();
     setFormFromParams(p);
@@ -422,8 +375,7 @@
       employees: p.employees,
       line_ids: p.line_ids,
       from: p.from,
-      to: p.to,
-      preset: (p.from || p.to) ? '' : p.preset  // ignore preset if custom dates present
+      to: p.to
     };
 
     // Summary KPIs
@@ -443,7 +395,6 @@
     // Employee table
     const emp = await fetchJSON("{% url 'reimbursement:analytics_api_employees' %}", common);
 
-    // Top 5 pills from rows
     const rows = emp.rows || [];
     const top5 = rows.slice(0,5);
     const pills = top5.map(r => `<span class="pill">${r.employee_name}: ${fmtMoney(r.total)}</span>`).join('');
@@ -453,7 +404,7 @@
       <tr>
         <td>${r.employee_name}</td>
         <td>${fmtMoney(r.total)}</td>
-        <td>${r.request_count}</td>
+        <td>${r.bill_count}</td>
         <td>${r.top_category || '-'}</td>
       </tr>
     `).join('') || `<tr><td colspan="4" class="text-muted">No data</td></tr>`;
@@ -461,25 +412,6 @@
 
   // Form interactions
   document.addEventListener('DOMContentLoaded', () => {
-    // Preset click handlers
-    document.querySelectorAll('.preset').forEach(el => {
-      el.addEventListener('click', () => {
-        const key = el.getAttribute('data-preset') || '';
-        setActivePreset(key);
-        if (key) {
-          // Clear manual dates when preset chosen
-          qs('from').value = '';
-          qs('to').value = '';
-        }
-      });
-    });
-
-    // If user types dates, clear preset selection
-    ['from','to'].forEach(id => {
-      qs(id).addEventListener('change', () => setActivePreset(''));
-    });
-
-    // Apply
     document.getElementById('filtersForm').addEventListener('submit', (e) => {
       e.preventDefault();
       const params = { ...readParams(), ...getFormParams() };
@@ -490,16 +422,14 @@
       });
     });
 
-    // Reset
     document.getElementById('clearBtn').addEventListener('click', () => {
       const cleared = { status:'approved_and_paid' };
       writeParams(cleared);
       location.reload();
     });
 
-    // Clear employee selection
     document.getElementById('empClear').addEventListener('click', () => {
-      qs('employees').value = ''; // All employees
+      qs('employees').value = '';
     });
 
     // Boot
