@@ -439,6 +439,118 @@ class ReimbursementBulkDeleteView(LoginRequiredMixin, PermissionRequiredMixin, T
         return redirect("reimbursement:my_reimbursements")
 
 # ---------------------------------------------------------------------------
+# Employee: Single request delete (RESTORED)
+# ---------------------------------------------------------------------------
+
+class ReimbursementRequestDeleteView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    Restored minimal delete view for a single reimbursement request.
+    Behavior mirrors ReimbursementBulkDeleteView for a single pk:
+      - Only the creator (employee) can delete.
+      - Paid requests are not deletable.
+      - On delete: remove lines, reset related ExpenseItem.status to SAVED, log, then delete request.
+    """
+    permission_code = "reimbursement_list"
+    template_name = "reimbursement/request_confirm_delete.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        req = get_object_or_404(
+            ReimbursementRequest.objects.select_related("created_by").prefetch_related("lines__expense_item"),
+            pk=self.kwargs.get("pk"),
+            created_by=self.request.user,
+        )
+        ctx["request_obj"] = req
+        ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        req = get_object_or_404(
+            ReimbursementRequest.objects.select_related("created_by").prefetch_related("lines__expense_item"),
+            pk=kwargs.get("pk"),
+            created_by=request.user,
+        )
+
+        if req.status == ReimbursementRequest.Status.PAID:
+            messages.error(request, "Paid reimbursements cannot be deleted.")
+            return redirect("reimbursement:my_reimbursements")
+
+        for line in list(req.lines.all()):
+            exp = line.expense_item
+            line.delete()
+            if exp:
+                exp.status = ExpenseItem.Status.SAVED
+                exp.save(update_fields=["status", "updated_at"])
+
+        ReimbursementLog.log(
+            req,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=request.user,
+            message="Request deleted.",
+            from_status=req.status,
+            to_status="deleted",
+        )
+        req.delete()
+        messages.success(request, "Reimbursement request deleted.")
+        return redirect("reimbursement:my_reimbursements")
+
+# ---------------------------------------------------------------------------
+# Employee: Request resubmit (RESTORED)
+# ---------------------------------------------------------------------------
+
+class ReimbursementResubmitView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    Minimal resubmit view:
+      - Only the creator can resubmit.
+      - Allowed only when request.status == REJECTED.
+      - Sets status to PENDING_FINANCE_VERIFY, logs, and notifies finance.
+    """
+    permission_code = "reimbursement_list"
+    template_name = "reimbursement/request_resubmit_confirm.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        req = get_object_or_404(
+            ReimbursementRequest.objects.select_related("created_by"),
+            pk=self.kwargs.get("pk"),
+            created_by=self.request.user,
+        )
+        ctx["request_obj"] = req
+        ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        req = get_object_or_404(
+            ReimbursementRequest.objects.select_related("created_by"),
+            pk=kwargs.get("pk"),
+            created_by=request.user,
+        )
+        if req.status != ReimbursementRequest.Status.REJECTED:
+            messages.error(request, "Only rejected requests can be resubmitted.")
+            return redirect("reimbursement:request_detail", pk=req.pk)
+
+        note = (request.POST.get("employee_note") or "").strip()
+        prev_status = req.status
+        req.status = ReimbursementRequest.Status.PENDING_FINANCE_VERIFY
+        if not req.submitted_at:
+            req.submitted_at = timezone.now()
+        req.updated_at = timezone.now()
+        req.save(update_fields=["status", "submitted_at", "updated_at"])
+
+        ReimbursementLog.log(
+            req,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=request.user,
+            message=note or "Employee resubmitted after rejection.",
+            from_status=prev_status,
+            to_status=req.status,
+        )
+        _send_safe("send_reimbursement_finance_verify", req, employee_note=note)
+
+        messages.success(request, "Reimbursement request resubmitted to Finance for verification.")
+        return redirect("reimbursement:request_detail", pk=req.pk)
+
+# ---------------------------------------------------------------------------
 # Edit request (legacy compatibility when allowed)
 # ---------------------------------------------------------------------------
 
