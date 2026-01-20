@@ -53,7 +53,6 @@
   .filters{min-width:0}
   .filters .form-label{font-size:.85rem;color:var(--muted)}
   .filters .form-control,.filters .form-select{height:40px; min-width:0}
-  .filters .form-select[multiple]{height:auto;min-height:172px;padding:.4rem .6rem}
   .filters .btn{height:40px}
   .help{font-size:.8rem;color:var(--muted)}
 
@@ -69,6 +68,24 @@
   /* ---------- Tables ---------- */
   .table thead th{white-space:nowrap}
   .table td,.table th{vertical-align:middle}
+
+  /* ---------- Chart (no external lib) ---------- */
+  .chart-card .legend .pill{white-space:nowrap}
+  .chart-bars{max-height:420px;overflow:auto}
+  .chart-row{display:grid;grid-template-columns:180px 1fr;gap:.75rem;align-items:center;margin-bottom:.6rem}
+  .chart-name{font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chart-bar{
+    position:relative;height:28px;border:1px solid var(--border);border-radius:6px;background:#f8fafc;
+  }
+  .chart-fill{
+    position:absolute;left:0;top:0;bottom:0;border-radius:6px;
+    background:rgba(13,110,253,.35); /* bootstrap primary-ish with transparency */
+  }
+  .chart-val{
+    position:absolute;right:8px;top:50%;transform:translateY(-50%);
+    font-size:.85rem;font-weight:600;color:#0b1324
+  }
+  .chart-empty{color:#6b7280;padding:.5rem 0}
 </style>
 {% endblock %}
 
@@ -88,7 +105,7 @@
 </div>
 
 <div class="analytics-wrap">
-  <!-- Filters (Issue 11: preset/granularity/date/category removed) -->
+  <!-- Filters (Issue 15: time/category/high-risk filters are NOT shown; UI-only removal) -->
   <div class="card filters">
     <div class="card-body">
       <form id="filtersForm">
@@ -101,20 +118,21 @@
           </select>
         </div>
 
+        <!-- CHANGED: Employees now a normal dropdown (single select) -->
         <div class="mb-3">
           <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-            <label class="form-label mb-0" for="employees">Employees</label>
+            <label class="form-label mb-0" for="employees">Employee</label>
             <button type="button" id="empClear" class="btn btn-outline-secondary btn-sm">Clear</button>
           </div>
-          <!-- Populated from EmployeeOptionsAPI (Issue 10) -->
-          <select id="employees" class="form-select" multiple size="8" aria-describedby="empHelp"></select>
-          <div id="empHelp" class="help">Hold Ctrl/Cmd to select multiple</div>
+          <!-- Populated from EmployeeOptionsAPI; includes "All employees" option -->
+          <select id="employees" class="form-select" aria-describedby="empHelp"></select>
+          <div id="empHelp" class="help">Leave blank for all employees.</div>
         </div>
 
         <div class="mb-3">
           <label class="form-label" for="line_ids">Bill Line IDs (CSV)</label>
           <input type="text" id="line_ids" class="form-control" placeholder="Optional: e.g. 101,102,205">
-          <div class="help">When provided, analytics recompute strictly over these bills (Issue 14).</div>
+          <div class="help">When provided, analytics (incl. chart) recompute strictly over these bills.</div>
         </div>
 
         <div class="d-flex gap-2 mt-3">
@@ -127,7 +145,7 @@
 
   <!-- Main -->
   <div>
-    <!-- KPIs (only what backend exposes + simple derived) -->
+    <!-- KPIs -->
     <div class="kpi-grid mb-3" aria-live="polite" aria-busy="true">
       <div class="kpi-tile">
         <div class="kpi-label">Total Spend</div>
@@ -152,6 +170,24 @@
       <div class="kpi-tile">
         <div class="kpi-label">Employees Included</div>
         <div class="kpi-value skeleton" id="kpiEmpCount">—</div>
+      </div>
+    </div>
+
+    <!-- Spend Chart (Employee-wise) -->
+    <div class="card chart-card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Spend Chart (Employee-wise)</strong>
+        <small class="text-muted">Updates with filters &amp; Bill Line IDs</small>
+      </div>
+      <div class="card-body">
+        <div class="legend d-flex flex-wrap gap-2 mb-3">
+          <span class="pill" id="chartTotal">Total: —</span>
+          <span class="pill" id="chartHigh">Highest Spender: —</span>
+          <span class="pill" id="chartLow">Lowest Spender: —</span>
+        </div>
+        <div id="empChart" class="chart-bars" role="list" aria-label="Spend per employee">
+          <div class="chart-empty">Loading chart…</div>
+        </div>
       </div>
     </div>
 
@@ -195,8 +231,9 @@
     const p = new URLSearchParams(location.search);
     return {
       status: p.get('status') || 'approved_and_paid',
-      employees: p.get('employees') || '',          // CSV of IDs
-      line_ids: p.get('line_ids') || ''             // CSV of ReimbursementLine PKs
+      // Backward compatible: could be CSV; if so we keep as-is for API, but UI will preselect the first one.
+      employees: p.get('employees') || '',
+      line_ids: p.get('line_ids') || ''
     };
   }
   function writeParams(params) {
@@ -210,13 +247,14 @@
   function setFormFromParams(params) {
     qs('status').value = params.status;
     qs('line_ids').value = params.line_ids;
-    // employees (multi) will be selected after options load
+    // employee dropdown selection is applied inside loadEmployeeOptions()
   }
   function getFormParams() {
-    const empIds = [...qs('employees').selectedOptions].map(o => o.value).join(',');
+    // Single-select dropdown now
+    const empId = (qs('employees').value || '').trim();
     return {
       status: qs('status').value,
-      employees: empIds,
+      employees: empId,                                // still passes CSV-friendly single id (backend unchanged)
       line_ids: (qs('line_ids').value || '').replace(/\s+/g,'')
     };
   }
@@ -241,15 +279,80 @@
     if (kpiWrap) kpiWrap.setAttribute('aria-busy', 'false');
   }
 
-  // Load employee options for multiselect (Issue 10)
+  // Load employee options for dropdown
   async function loadEmployeeOptions(preselectCsv){
     const opts = await fetchJSON("{% url 'reimbursement:analytics_api_employee_options' %}");
     const sel = qs('employees');
-    sel.innerHTML = (opts || []).map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+
+    // Build options: first is "All employees"
+    let html = `<option value="">All employees</option>`;
+    html += (opts || []).map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+    sel.innerHTML = html;
+
     if (preselectCsv){
-      const set = new Set(preselectCsv.split(',').filter(Boolean));
-      [...sel.options].forEach(o => o.selected = set.has(String(o.value)));
+      // If CSV passed, pick first ID to preselect for the single dropdown (backward compatible)
+      const firstId = preselectCsv.split(',').map(s => s.trim()).filter(Boolean)[0] || '';
+      sel.value = firstId;
     }
+  }
+
+  // SIMPLE BAR CHART (no external library)
+  function renderChart(employeeTotals, summary){
+    const wrap = qs('empChart');
+    wrap.innerHTML = '';
+
+    const list = employeeTotals || [];
+    const maxVal = list.reduce((m, r) => Math.max(m, Number(r.total||0)), 0);
+
+    // Pills
+    qs('chartTotal').textContent = 'Total: ' + fmtMoney(summary.total_spend || 0);
+    if (summary.highest_spender){
+      qs('chartHigh').textContent = `Highest Spender: ${summary.highest_spender.employee_name} — ${fmtMoney(summary.highest_spender.total)}`;
+    } else {
+      qs('chartHigh').textContent = 'Highest Spender: —';
+    }
+    if (summary.lowest_spender){
+      qs('chartLow').textContent = `Lowest Spender: ${summary.lowest_spender.employee_name} — ${fmtMoney(summary.lowest_spender.total)}`;
+    } else {
+      qs('chartLow').textContent = 'Lowest Spender: —';
+    }
+
+    if (!list.length || maxVal <= 0){
+      wrap.innerHTML = '<div class="chart-empty">No data to show.</div>';
+      return;
+    }
+
+    // Show up to 20 rows; still scrollable if more
+    list.slice(0, 20).forEach(r => {
+      const row = document.createElement('div');
+      row.className = 'chart-row';
+      row.setAttribute('role','listitem');
+
+      // Name
+      const name = document.createElement('div');
+      name.className = 'chart-name';
+      name.textContent = r.employee_name || ('User #' + (r.employee_id||''));
+      row.appendChild(name);
+
+      // Bar
+      const bar = document.createElement('div');
+      bar.className = 'chart-bar';
+      const fill = document.createElement('div');
+      fill.className = 'chart-fill';
+      const val = Number(r.total||0);
+      const pct = Math.max(3, Math.min(100, (val / maxVal) * 100)); // min 3% visible
+      fill.style.width = pct.toFixed(2) + '%';
+
+      const label = document.createElement('div');
+      label.className = 'chart-val';
+      label.textContent = fmtMoney(val);
+
+      bar.appendChild(fill);
+      bar.appendChild(label);
+      row.appendChild(bar);
+
+      wrap.appendChild(row);
+    });
   }
 
   async function loadAll() {
@@ -259,11 +362,11 @@
 
     const common = {
       status: p.status,
-      employees: p.employees,
+      employees: p.employees, // passes the (possibly blank) single id; backend accepts CSV-style too
       line_ids: p.line_ids
     };
 
-    // Summary KPIs (Issue 13)
+    // Summary KPIs
     const k = await fetchJSON("{% url 'reimbursement:analytics_api_summary' %}", common);
     qs('kpiTotal').textContent  = fmtMoney(k.total_spend || 0);
     qs('kpiHiBill').textContent = fmtMoney(k.highest_spend_bill || 0);
@@ -274,7 +377,10 @@
     qs('kpiEmpCount').textContent = String(empCount);
     clearSkeleton('kpiTotal','kpiHiBill','kpiLoBill','kpiTop','kpiBottom','kpiEmpCount');
 
-    // Employee table (Issue 14: recomputed by server using same filters)
+    // Render Chart
+    renderChart(k.employee_wise_spend || [], k);
+
+    // Employee table
     const emp = await fetchJSON("{% url 'reimbursement:analytics_api_employees' %}", common);
 
     // Top 5 pills from rows
@@ -312,7 +418,7 @@
     });
 
     document.getElementById('empClear').addEventListener('click', () => {
-      [...qs('employees').options].forEach(o => o.selected = false);
+      qs('employees').value = ''; // clear selection to "All employees"
     });
 
     // Boot

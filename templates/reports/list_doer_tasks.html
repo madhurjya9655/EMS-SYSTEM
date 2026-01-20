@@ -1,4 +1,3 @@
-E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\reports\list_doer_tasks.html:
 {% extends "base.html" %}
 {% load widget_tweaks %}
 
@@ -36,7 +35,7 @@ E:\CLIENT PROJECT\employee management system bos\employee_management_system\temp
             {{ form.date_to|add_class:"form-control" }}
           </div>
 
-          <!-- NEW: Status filter (All / Pending / Completed) -->
+          <!-- Status filter (All / Pending / Completed) -->
           <div class="col-md-3">
             <label for="id_status" class="form-label">Status</label>
             <select id="id_status" name="status" class="form-select">
@@ -48,7 +47,8 @@ E:\CLIENT PROJECT\employee management system bos\employee_management_system\temp
 
           <div class="col-12 text-end">
             <button type="submit" class="btn btn-primary">FILTER</button>
-            <a href="{% url 'reports:doer_tasks' %}" class="btn btn-warning">RESET FILTER</a>
+            <!-- Explicit session reset trigger -->
+            <a href="{% url 'reports:doer_tasks' %}?reset=1" class="btn btn-warning">RESET FILTER</a>
             <button type="submit" name="export" value="csv" class="btn btn-success">DOWNLOAD CSV</button>
           </div>
         </form>
@@ -60,6 +60,7 @@ E:\CLIENT PROJECT\employee management system bos\employee_management_system\temp
   <form id="bulkForm" method="post" novalidate>
     {% csrf_token %}
     <input type="hidden" name="action" id="bulkAction" value="">
+    <!-- Preserve return URL so POST redirect lands back on the same filtered page -->
     <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
@@ -147,6 +148,7 @@ E:\CLIENT PROJECT\employee management system bos\employee_management_system\temp
     {% csrf_token %}
     <input type="hidden" name="action" value="delete_one">
     <input type="hidden" name="pk" id="singleDeletePk">
+    <!-- Preserve return URL so POST redirect lands back on the same filtered page -->
     <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
   </form>
 

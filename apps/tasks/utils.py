@@ -848,6 +848,23 @@ def send_task_reminder_email(*, task, task_type: str = "Checklist") -> None:
     if not to_email.strip():
         return
 
+    # >>> ISSUE 4 GUARD: Only send for Pending tasks with due date today or earlier.
+    pd_raw = getattr(task, "planned_date", None)
+    if not pd_raw:
+        return  # no due date -> do not send
+    if isinstance(pd_raw, datetime):
+        pd_date = timezone.localtime(pd_raw, IST or timezone.get_current_timezone()).date()
+    else:
+        pd_date = pd_raw
+    today = timezone.localdate()
+    if pd_date > today:
+        return  # future task -> do not send
+    # Status check applies to Checklist/Delegation (do not alter other modules’ semantics)
+    kind = (task_type or "").strip().lower()
+    status_val = getattr(task, "status", None)
+    if kind in {"checklist", "delegation"} and status_val and status_val != "Pending":
+        return
+
     if getattr(task, "planned_date", None):
         # planned_date may be date or datetime; normalize to date
         pd = getattr(task, "planned_date")

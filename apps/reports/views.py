@@ -90,15 +90,24 @@ def list_doer_tasks(request):
     """
     Report of checklist tasks, with bulk and single delete.
     Adds optional Status filter (All/Pending/Completed).
+
+    ISSUE 20 fix:
+    - Persist filter state (session-based).
+    - Redirect back to the same filtered URL after POST (bulk/single delete).
     """
-    # ---- handle deletes ----
+    FILTER_SESSION_KEY = "reports__doer_tasks_filter"
+    FILTER_KEYS = {"doer", "department", "date_from", "date_to", "status"}
+
+    # ---- handle deletes (POST) ----
     if request.method == "POST":
         action = request.POST.get("action", "")
+        return_url = request.POST.get("return_url") or request.META.get("HTTP_REFERER")
+
         if action == "bulk_delete":
             ids = request.POST.getlist("sel")
             if not ids:
                 messages.warning(request, "No rows selected.")
-                return redirect("reports:doer_tasks")
+                return redirect(return_url or "reports:doer_tasks")
             try:
                 deleted, _ = Checklist.objects.filter(pk__in=ids).delete()
                 if deleted:
@@ -107,7 +116,7 @@ def list_doer_tasks(request):
                     messages.info(request, "No tasks were deleted.")
             except Exception as e:
                 messages.error(request, f"Error during bulk delete: {e}")
-            return redirect("reports:doer_tasks")
+            return redirect(return_url or "reports:doer_tasks")
 
         if action == "delete_one":
             pk = request.POST.get("pk")
@@ -120,14 +129,33 @@ def list_doer_tasks(request):
                     messages.warning(request, "The task no longer exists.")
                 except Exception as e:
                     messages.error(request, f"Error deleting task: {e}")
-            return redirect("reports:doer_tasks")
+            return redirect(return_url or "reports:doer_tasks")
 
-    # ---- filtering (GET) ----
-    form = PCReportFilterForm(request.GET or None, user=request.user)
+    # ---- filtering (GET) with session persistence ----
+    # Clear saved filters only when explicitly requested.
+    if request.method == "GET" and request.GET.get("reset") == "1":
+        request.session.pop(FILTER_SESSION_KEY, None)
+        return redirect("reports:doer_tasks")
+
+    effective_get = None
+    if request.method == "GET":
+        # If user provided any filter values, save them to session.
+        incoming = {k: v for k, v in request.GET.items() if k in FILTER_KEYS and v}
+        if incoming:
+            request.session[FILTER_SESSION_KEY] = incoming
+            effective_get = incoming
+        else:
+            # No new filters provided; reuse saved ones (if any).
+            saved = request.session.get(FILTER_SESSION_KEY)
+            if saved:
+                effective_get = saved
+
+    form = PCReportFilterForm(effective_get or (request.GET or None), user=request.user)
     items = Checklist.objects.select_related('assign_by', 'assign_to').order_by('planned_date', 'id')
 
-    # Optional status filter (kept local to this view to avoid changing shared form)
-    status = (request.GET.get("status") or "").strip()
+    # Optional status filter (All/Pending/Completed)
+    status_source = effective_get if effective_get is not None else request.GET
+    status = (status_source.get("status") or "").strip() if status_source else ""
     valid_status = {"Pending", "Completed"}
     if status in valid_status:
         items = items.filter(status=status)

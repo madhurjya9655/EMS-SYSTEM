@@ -20,6 +20,19 @@ from .utils import (
     _dedupe_emails,
 )
 
+# ---- ISSUE 18: central guards (config-driven; no hardcoded IDs) ------------
+try:
+    from apps.common.email_guard import (
+        filter_recipients_for_category,
+        strip_rows_to_delegations_only_if_pankaj_target,
+    )
+except Exception:  # graceful fallbacks
+    def filter_recipients_for_category(*, category: str, to=None, cc=None, bcc=None, **_):
+        return list(to or []), list(cc or []), list(bcc or [])
+    def strip_rows_to_delegations_only_if_pankaj_target(rows: List[dict], *, target_email: str) -> List[dict]:
+        return rows
+# ---------------------------------------------------------------------------
+
 logger = logging.getLogger(__name__)
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -50,7 +63,7 @@ def _display_user(u) -> str:
     return getattr(u, "username", None) or getattr(u, "email", "-") or "-"
 
 
-# --- NEW: central leave-aware guard for “suppress mails during leave” --------
+# --- central leave-aware guard for “suppress mails during leave” ------------
 def _is_on_leave_today(user) -> bool:
     """
     Returns True if the user is blocked by leave for *today* (IST),
@@ -271,6 +284,9 @@ def send_daily_employee_pending_digest(
     Sends ONE email per employee containing ALL of THEIR pending tasks.
     - If 'username' is provided, only that user is processed.
     - 'to_override' lets you redirect that employee's email to a tester (safe for dry runs).
+
+    ISSUE 18: If the recipient is Pankaj (configured), send ONLY delegation rows,
+              and pass category 'delegation.pending_digest' through the guard.
     """
     if not _email_notifications_enabled():
         logger.info(_safe_console_text("[PENDING DIGEST] Skipped: email notifications disabled"))
@@ -289,22 +305,16 @@ def send_daily_employee_pending_digest(
     for user in users:
         total_candidates += 1
 
-        # --- NEW: suppress digest if the user is on leave today (IST) --------
+        # Suppress digest if the user is on leave today (IST), unless forced
         try:
             if _is_on_leave_today(user) and not force:
                 skipped += 1
                 logger.info(_safe_console_text(f"[PENDING DIGEST] Suppressed for user_id={getattr(user,'id','?')} (on leave today)"))
                 continue
         except Exception as e:
-            # Non-fatal; proceed as before if we cannot determine leave status.
             logger.warning(_safe_console_text(f"[PENDING DIGEST] Leave-check failed for user_id={getattr(user,'id','?')}: {e}"))
-        # ---------------------------------------------------------------------
 
         rows = _rows_for_user(user)
-
-        if not rows and not send_even_if_empty and not force:
-            skipped += 1
-            continue
 
         # recipients
         recips = [to_override] if to_override else _dedupe_emails([getattr(user, "email", "") or ""])
@@ -312,6 +322,25 @@ def send_daily_employee_pending_digest(
         if not recips:
             skipped += 1
             logger.info(_safe_console_text(f"[PENDING DIGEST] Skip user id={getattr(user,'id','?')} – no email"))
+            continue
+
+        # ISSUE 18: If recipient is Pankaj, keep ONLY Delegation rows
+        # (helper inspects configured identity and filters accordingly)
+        rows = strip_rows_to_delegations_only_if_pankaj_target(rows, target_email=recips[0])
+
+        # After possible filtering, if empty and not forced, skip (matches prior behavior)
+        if not rows and not send_even_if_empty and not force:
+            skipped += 1
+            continue
+
+        # Apply guard with the allowed category for Pankaj (harmless no-op for others)
+        filt_to, _, _ = filter_recipients_for_category(
+            category="delegation.pending_digest",
+            to=recips,
+        )
+        if not filt_to:
+            skipped += 1
+            logger.info(_safe_console_text(f"[PENDING DIGEST] Guard filtered recipients; skip user id={getattr(user,'id','?')}"))
             continue
 
         day_iso = _now_ist().date().isoformat()
@@ -330,10 +359,10 @@ def send_daily_employee_pending_digest(
                     "items_table": rows,
                     "site_url": SITE_URL,
                 },
-                to=recips,
+                to=filt_to,
                 fail_silently=False,
             )
-            logger.info(_safe_console_text(f"[PENDING DIGEST] Sent to {recips[0]} (user_id={getattr(user,'id','?')}, items={len(rows)})"))
+            logger.info(_safe_console_text(f"[PENDING DIGEST] Sent to {filt_to[0]} (user_id={getattr(user,'id','?')}, items={len(rows)})"))
             sent += 1
         except Exception as e:
             skipped += 1
@@ -357,21 +386,38 @@ def send_admin_all_pending_digest(
 ) -> Dict[str, Any]:
     """
     Sends ONE consolidated email containing ALL employees' pending tasks to the admin email.
-    Default recipient: 'pankaj@blueoceansteels.com'.
+    Default recipient: settings.ADMIN_PENDING_DIGEST_TO (if set), else 'pankaj@blueoceansteels.com'.
+
+    ISSUE 18: If the target is Pankaj, include ONLY Delegation rows and
+              send under category 'delegation.pending_digest' (allowed for him).
     """
     if not _email_notifications_enabled():
         logger.info(_safe_console_text("[ADMIN DIGEST] Skipped: email notifications disabled"))
         return {"ok": True, "skipped": True, "reason": "email_notifications_disabled"}
 
-    target = (to or "pankaj@blueoceansteels.com").strip()
+    default_admin = getattr(settings, "ADMIN_PENDING_DIGEST_TO", "pankaj@blueoceansteels.com")
+    target = (to or default_admin or "").strip()
     if not target:
         logger.warning(_safe_console_text("[ADMIN DIGEST] No admin recipient; aborting"))
         return {"ok": False, "skipped": True, "reason": "no_admin_recipient"}
 
     rows = _rows_for_all_users()
+
+    # If target is Pankaj, keep ONLY Delegation rows (others unchanged)
+    rows = strip_rows_to_delegations_only_if_pankaj_target(rows, target_email=target)
+
     if not rows and not force:
         logger.info(_safe_console_text("[ADMIN DIGEST] No pending rows; skipped send"))
         return {"ok": True, "skipped": True, "reason": "empty"}
+
+    # Apply guard for this category (will allow Pankaj only for delegation digests)
+    filt_to, _, _ = filter_recipients_for_category(
+        category="delegation.pending_digest",
+        to=[target],
+    )
+    if not filt_to:
+        logger.info(_safe_console_text("[ADMIN DIGEST] Guard filtered recipient list; no email sent"))
+        return {"ok": True, "skipped": True, "reason": "filtered_by_guard"}
 
     day_iso = _now_ist().date().isoformat()
     subject = f"All Employees – Pending Tasks – {day_iso}"
@@ -389,11 +435,11 @@ def send_admin_all_pending_digest(
                 "items_table": rows,
                 "site_url": SITE_URL,
             },
-            to=[target],
+            to=filt_to,
             fail_silently=False,
         )
-        logger.info(_safe_console_text(f"[ADMIN DIGEST] Sent consolidated pending to {target} items={len(rows)}"))
-        return {"ok": True, "sent": 1, "items": len(rows), "to": target}
+        logger.info(_safe_console_text(f"[ADMIN DIGEST] Sent consolidated pending to {filt_to[0]} items={len(rows)}"))
+        return {"ok": True, "sent": 1, "items": len(rows), "to": filt_to[0]}
     except Exception as e:
         logger.error(_safe_console_text(f"[ADMIN DIGEST] Email failure: {e}"))
         return {"ok": False, "sent": 0, "error": str(e)}

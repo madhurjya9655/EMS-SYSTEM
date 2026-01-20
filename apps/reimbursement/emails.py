@@ -19,6 +19,16 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+# -------------------------------------------------------
+# Central recipient guard (config-driven; no hardcoding)
+# If helper isn't available for any reason, fall back to no-op.
+# -------------------------------------------------------
+try:
+    from apps.common.email_guard import filter_recipients_for_category
+except Exception:  # pragma: no cover
+    def filter_recipients_for_category(*, category: str, to=None, cc=None, bcc=None, **_):
+        return list(to or []), list(cc or []), list(bcc or [])
+
 
 # ---------------------------------------------------------------------------
 # Core helpers
@@ -198,6 +208,7 @@ def _send(
 ) -> None:
     """
     Minimal, fail-silent sender with dedup, now resilient to missing templates.
+    Also applies Pankaj-specific restrictions via central guard (ISSUE 18).
     """
     # Deduplicate while preserving order
     def _dedup(seq: Optional[List[str]]) -> Optional[List[str]]:
@@ -223,14 +234,27 @@ def _send(
     cc = _dedup(cc)
     bcc = _dedup(bcc)
 
+    # ---- ISSUE 18: Remove Pankaj from reimbursement emails ---------------
+    # One category is sufficient: "reimbursement" (blocked unless explicitly allowed in settings)
+    filt_to, filt_cc, filt_bcc = filter_recipients_for_category(
+        category="reimbursement",
+        to=to_list,
+        cc=cc or [],
+        bcc=bcc or [],
+    )
+    if not (filt_to or filt_cc or filt_bcc):
+        # Nothing to send after filtering
+        return
+    # ---------------------------------------------------------------------
+
     html, txt = _render(template_base, context)
     try:
         msg = EmailMultiAlternatives(
             subject=subject,
             body=txt,
-            to=to_list,
-            cc=cc,
-            bcc=bcc,
+            to=filt_to,
+            cc=filt_cc or None,
+            bcc=filt_bcc or None,
             from_email=getattr(settings, "REIMBURSEMENT_EMAIL_FROM", None) or getattr(settings, "DEFAULT_FROM_EMAIL", None),
         )
         msg.attach_alternative(html, "text/html")

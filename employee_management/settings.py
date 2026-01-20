@@ -500,6 +500,22 @@ ASSIGNER_CC_FOR_DELEGATION = {
     "usernames": env_list("DELEGATION_CC_ASSIGNER_USERNAMES", ""),
 }
 
+# ✅ Admin consolidated pending default target (overridable)
+ADMIN_PENDING_DIGEST_TO = os.getenv("ADMIN_PENDING_DIGEST_TO", "pankaj@blueoceansteels.com")
+
+# ✅ EMAIL GUARD CONFIG (ISSUE 18) — no hardcoded IDs
+# Identify Pankaj + allow only specific categories
+PANKAJ_EMAILS = env_list("PANKAJ_EMAILS", "pankaj@blueoceansteels.com")
+PANKAJ_USERNAMES = env_list("PANKAJ_USERNAMES", "")
+# Allowed: delegation assignment where Pankaj is assigner (via guard using assigner_*),
+# and delegation pending digests.
+PANKAJ_ALLOWED_EMAIL_CATEGORIES = env_list(
+    "PANKAJ_ALLOWED_EMAIL_CATEGORIES",
+    "delegation.assignment,delegation.pending_digest",
+)
+# Optional: help-ticket admin exclusions
+HELP_TICKET_ADMIN_EXCLUDE_EMAILS = env_list("HELP_TICKET_ADMIN_EXCLUDE_EMAILS", "")
+
 if ON_RENDER and not os.getenv("EMAIL_HOST_USER"):
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
