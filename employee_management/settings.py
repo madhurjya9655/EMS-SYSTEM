@@ -172,6 +172,7 @@ _template_options = {
         "users_filters": "apps.users.templatetags.user_filters",
         "users_permissions": "apps.users.templatetags.users_permissions",
         "group_tags": "apps.common.templatetags.group_tags",
+        "model_exras": "apps.common.templatetags.model_extras",  # backwards compat alias
         "model_extras": "apps.common.templatetags.model_extras",
     },
     "string_if_invalid": "",
@@ -501,18 +502,26 @@ ASSIGNER_CC_FOR_DELEGATION = {
 }
 
 # ✅ Admin consolidated pending default target (overridable)
+# If you want Pankaj to get the consolidated digest, leave this as pankaj@…
 ADMIN_PENDING_DIGEST_TO = os.getenv("ADMIN_PENDING_DIGEST_TO", "pankaj@blueoceansteels.com")
 
 # ✅ EMAIL GUARD CONFIG (ISSUE 18) — no hardcoded IDs
-# Identify Pankaj + allow only specific categories
+# Identify the restricted person + allow only specific categories
 PANKAJ_EMAILS = env_list("PANKAJ_EMAILS", "pankaj@blueoceansteels.com")
-PANKAJ_USERNAMES = env_list("PANKAJ_USERNAMES", "")
-# Allowed: delegation assignment where Pankaj is assigner (via guard using assigner_*),
-# and delegation pending digests.
-PANKAJ_ALLOWED_EMAIL_CATEGORIES = env_list(
-    "PANKAJ_ALLOWED_EMAIL_CATEGORIES",
-    "delegation.assignment,delegation.pending_digest",
+PANKAJ_USERNAMES = env_list("PANKAJ_USERNAMES", "pankaj")
+# Allowed: delegation CC to assigner (when assigner is Pankaj) and the delegation pending digest
+PANKAJ_ALLOWED_CATEGORIES = env_list(
+    "PANKAJ_ALLOWED_CATEGORIES",
+    "delegation.assigned_by,delegation.pending_digest",
 )
+# Canonical dict consumed by apps.common.email_guard
+EMAIL_RESTRICTIONS = {
+    "pankaj": {
+        "emails": PANKAJ_EMAILS,
+        "usernames": PANKAJ_USERNAMES,
+        "allow": PANKAJ_ALLOWED_CATEGORIES,
+    }
+}
 # Optional: help-ticket admin exclusions
 HELP_TICKET_ADMIN_EXCLUDE_EMAILS = env_list("HELP_TICKET_ADMIN_EXCLUDE_EMAILS", "")
 

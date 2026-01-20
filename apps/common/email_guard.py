@@ -52,10 +52,10 @@ def _cfg() -> dict:
     Supported shapes (all optional):
       1) EMAIL_RESTRICTIONS = {
              "pankaj": {
-                 "emails": ["pankaj@blueoceansteels.com"],
+                 "emails": ["pankaj@blueoceansteels.com"],   # 👈 restricted person
                  "usernames": ["pankaj"],
                  "allow": [
-                     "delegation.assigned_by",         # CC to assigner for delegations assigned by Pankaj
+                     "delegation.assigned_by",         # CC to assigner for delegations when assigner is Pankaj
                      "delegation.pending_digest"       # consolidated delegation-pending digest to Pankaj
                  ]
              }

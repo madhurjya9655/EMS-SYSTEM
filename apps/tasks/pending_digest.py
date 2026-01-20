@@ -386,7 +386,7 @@ def send_admin_all_pending_digest(
 ) -> Dict[str, Any]:
     """
     Sends ONE consolidated email containing ALL employees' pending tasks to the admin email.
-    Default recipient: settings.ADMIN_PENDING_DIGEST_TO (if set), else 'pankaj@blueoceansteels.com'.
+    Default recipient: settings.ADMIN_PENDING_DIGEST_TO (if set).
 
     ISSUE 18: If the target is Pankaj, include ONLY Delegation rows and
               send under category 'delegation.pending_digest' (allowed for him).
@@ -395,7 +395,8 @@ def send_admin_all_pending_digest(
         logger.info(_safe_console_text("[ADMIN DIGEST] Skipped: email notifications disabled"))
         return {"ok": True, "skipped": True, "reason": "email_notifications_disabled"}
 
-    default_admin = getattr(settings, "ADMIN_PENDING_DIGEST_TO", "pankaj@blueoceansteels.com")
+    # Fully config-driven recipient (no hardcoded fallback here).
+    default_admin = getattr(settings, "ADMIN_PENDING_DIGEST_TO", "")
     target = (to or default_admin or "").strip()
     if not target:
         logger.warning(_safe_console_text("[ADMIN DIGEST] No admin recipient; aborting"))
