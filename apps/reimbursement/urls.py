@@ -4,6 +4,7 @@ from django.urls import path
 
 from . import views
 from . import views_analytics
+from . import views_attach  # << NEW
 
 app_name = "reimbursement"
 
@@ -56,13 +57,13 @@ urlpatterns = [
     path("finance/", views.FinanceQueueView.as_view(), name="finance_pending"),
     path("finance/<int:pk>/verify/", views.FinanceVerifyView.as_view(), name="finance_verify"),
     path("finance/<int:pk>/review/", views.FinanceReviewView.as_view(), name="finance_review"),
-    # Finance can delete a whole request (non-PAID)
     path("finance/<int:pk>/delete/", views.FinanceDeleteRequestView.as_view(), name="finance_delete"),
+
+    # ✅ NEW: attach missing receipt to a bill line
+    path("finance/line/<int:pk>/attach/", views_attach.FinanceAttachReceiptView.as_view(), name="finance_attach_receipt"),
 
     # ✅ NEW: Rejected Bills Queue (resubmitted bills only)
     path("finance/rejected-bills/", views.FinanceRejectedBillsQueueView.as_view(), name="finance_rejected_bills_queue"),
-    # (If you want single-bill action via POST to a dedicated URL, re-add:)
-    # path("finance/rejected-bills/<int:pk>/", views.FinanceRejectedBillActionView.as_view(), name="finance_rejected_bill_action"),
 
     # ------------------------------
     # Admin dashboards / export
@@ -88,7 +89,6 @@ urlpatterns = [
     path("analytics/api/employees/options/", views_analytics.EmployeeOptionsAPI.as_view(), name="analytics_api_employee_options"),
     path("analytics/api/bills/", views_analytics.BillwiseTableAPI.as_view(), name="analytics_api_bills"),
     path("analytics/api/realtime/", views_analytics.AnalyticsRealtimeNumbersAPI.as_view(), name="analytics_api_realtime"),
-    path("analytics/api/highrisk/", views_analytics.AnalyticsHighRiskAPI.as_view(), name="analytics_api_highrisk"),
 
     # ------------------------------
     # Secure receipt download

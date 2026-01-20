@@ -59,7 +59,7 @@ def _user_can_view_analytics(user) -> bool:
 
 
 # ---------------------------------------------------------------------
-# Filters (Issue 11 implemented: presets + time granularity + optional categories)
+# Filters (date-range + bill-wise core)
 # ---------------------------------------------------------------------
 
 @dataclass
@@ -67,7 +67,7 @@ class Filters:
     """
     Filter set:
       - employees: CSV of user IDs (used to scope analytics)
-      - status: approved_and_paid | approved_only | paid_only
+      - status: approved_and_paid | approved_only | paid_only   ← applied to BILL STATUS
       - line_ids: CSV of ReimbursementLine PKs (drives bill-wise scoping)
       - from_date / to_date: YYYY-MM-DD (inclusive range on expense date)
       - preset: this_month | last_month | last_90_days | ytd | fytd (ignored if from/to supplied)
@@ -208,12 +208,19 @@ def _parse_filters(request) -> Filters:
 # ---------------------------------------------------------------------
 
 def _status_q(status_mode: str) -> Q:
+    """
+    Status filter applied to *bill* status, per client requirement.
+    - approved_only      -> FINANCE_APPROVED
+    - paid_only          -> PAID
+    - approved_and_paid  -> FINANCE_APPROVED or PAID
+    """
+    BS = ReimbursementLine.BillStatus
     if status_mode == "approved_only":
-        return Q(request__status=ReimbursementRequest.Status.APPROVED)
+        return Q(bill_status=BS.FINANCE_APPROVED)
     if status_mode == "paid_only":
-        return Q(request__status=ReimbursementRequest.Status.PAID)
+        return Q(bill_status=BS.PAID)
     # approved_and_paid (default)
-    return Q(request__status__in=[ReimbursementRequest.Status.APPROVED, ReimbursementRequest.Status.PAID])
+    return Q(bill_status__in=[BS.FINANCE_APPROVED, BS.PAID])
 
 
 def _base_lines_qs(f: Filters):
@@ -234,7 +241,7 @@ def _base_lines_qs(f: Filters):
     if f.line_ids:
         qs = qs.filter(id__in=f.line_ids)
 
-    # Time window on expense date (Issue 11)
+    # Time window on expense date (date-range)
     if f.from_date:
         qs = qs.filter(expense_item__date__gte=f.from_date)
     if f.to_date:
@@ -282,7 +289,7 @@ class AnalyticsDashboardView(LoginRequiredMixin, TemplateView):
 
 class EmployeeOptionsAPI(LoginRequiredMixin, View):
     """
-    Populate the 'Employee' dropdown by *name* (Issue 10).
+    Populate the 'Employee' dropdown by *name*.
     Returns: [{id, name}] for active users who have at least one reimbursement line.
     """
     def get(self, request, *args, **kwargs):
@@ -308,7 +315,7 @@ class BillwiseTableAPI(LoginRequiredMixin, View):
     Raw bill-wise rows for the table (read-only).
     Filters respected:
       - employees (IDs)
-      - status (mode)
+      - status (mode)  ← bill_status
       - line_ids (bill-wise filter)
       - from/to/preset
       - categories
@@ -349,7 +356,7 @@ class BillwiseTableAPI(LoginRequiredMixin, View):
                     "reimb_id": ln["request_id"],
                     "employee_id": ln["request__created_by_id"],
                     "employee_name": emp_name,
-                    "amount": float(d(ln["amount"])),
+                    "amount": float(d(ln["amount"])) if ln["amount"] is not None else 0.0,
                     "category": ln["expense_item__category"] or "",
                     "gst_type": ln["expense_item__gst_type"] or "",
                     "expense_date": (ln["expense_item__date"].isoformat() if ln["expense_item__date"] else None),
@@ -435,7 +442,7 @@ class AnalyticsSummaryAPI(LoginRequiredMixin, View):
                 "preset": f.preset,
                 "categories": f.categories,
             },
-            "notes": "All computations are bill-wise. Time/category/granularity filters applied when provided.",
+            "notes": "All computations are bill-wise. Date/status/category filters applied when provided.",
         }
         return JsonResponse(data)
 
@@ -444,7 +451,7 @@ class AnalyticsEmployeeAPI(LoginRequiredMixin, View):
     """
     Employee-wise spend table (BILL-wise):
       - total amount per employee
-      - number of reimbursement requests (distinct request IDs)
+      - number of reimbursement requests (distinct request IDs within scoped bills)
       - most used expense category (by amount; ties -> higher count)
     """
     def get(self, request, *args, **kwargs):
@@ -512,7 +519,7 @@ class AnalyticsEmployeeAPI(LoginRequiredMixin, View):
 
 
 # ---------------------------------------------------------------------
-# New (Issue 11): Time-series analytics
+# Time-series analytics (bill-wise)
 # ---------------------------------------------------------------------
 
 class AnalyticsTimeSeriesAPI(LoginRequiredMixin, View):
@@ -566,7 +573,7 @@ class AnalyticsTimeSeriesAPI(LoginRequiredMixin, View):
 
 
 # ---------------------------------------------------------------------
-# New (Issue 11): Category totals
+# Category totals (bill-wise)
 # ---------------------------------------------------------------------
 
 class AnalyticsCategoryAPI(LoginRequiredMixin, View):
@@ -609,7 +616,7 @@ class AnalyticsCategoryAPI(LoginRequiredMixin, View):
 
 
 # ---------------------------------------------------------------------
-# NEW: Real-time numbers (wired to current filters)
+# Real-time numbers (scoped to current filtered lines)
 # ---------------------------------------------------------------------
 
 class AnalyticsRealtimeNumbersAPI(LoginRequiredMixin, View):
@@ -646,7 +653,7 @@ class AnalyticsRealtimeNumbersAPI(LoginRequiredMixin, View):
         scope_request_count = req_qs.values_list("id", flat=True).count()
         scope_line_count = line_qs.count()
 
-        # Request-level counts within scope
+        # Request-level counts within scope (kept as-is; these are parent states)
         counts = {
             "finance_pending_requests": req_qs.filter(status=ReimbursementRequest.Status.PENDING_FINANCE_VERIFY).count(),
             "manager_pending_requests": req_qs.filter(status=ReimbursementRequest.Status.PENDING_MANAGER).count(),
@@ -691,12 +698,11 @@ class AnalyticsRealtimeNumbersAPI(LoginRequiredMixin, View):
 
 
 # ---------------------------------------------------------------------
-# Deprecated/removed endpoint per requirements
-# (kept disabled intentionally)
+# Deprecated/removed endpoint per requirements (kept disabled intentionally)
 # ---------------------------------------------------------------------
 
 class AnalyticsHighRiskAPI(LoginRequiredMixin, View):
-    """Removed high-risk/high-spend flags (Issue 15)."""
+    """Removed high-risk/high-spend flags."""
     def get(self, request, *args, **kwargs):
         if not _user_can_view_analytics(request.user):
             return JsonResponse({"detail": "forbidden"}, status=403)

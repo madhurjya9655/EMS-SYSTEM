@@ -168,95 +168,22 @@ def _shift_to_next_working_day_7pm(ist_dt: datetime) -> datetime:
 
 
 # ---------------------------------------------------------------------
-# 10:00 IST email schedulers (adjusted: rely on CRON; no sleeper threads)
+# 10:00 IST email schedulers (adjusted for consolidated checklist emailing)
 # ---------------------------------------------------------------------
 def _schedule_10am_email_for_checklist(obj: Checklist) -> None:
     """
-    For any created checklist:
-      - If it's the planned day and current IST time is AFTER 10:00, send immediately (so cron won't miss it).
-      - Otherwise, do nothing here. Daily 10:00 IST cron will dispatch.
-      - 🔒 Leave guard: if user is blocked for today's 10:00 IST, DO NOT send.
+    CHECKLISTS:
+      Behavioral change per requirement — do NOT send per-task checklist emails from signals.
+      Consolidated checklist reminders are sent once per employee at 10:00 IST by
+      apps/tasks/tasks.py::send_due_today_assignments (grouped digest).
+      This function is intentionally a NO-OP to avoid duplicates.
     """
-    if ENABLE_CELERY_EMAIL or not SEND_EMAILS_FOR_AUTO_RECUR:
-        return
-
-    # Never email the assigner (including self-assign)
-    try:
-        if obj.assign_by_id and obj.assign_by_id == obj.assign_to_id:
-            logger.info(
-                _utils._safe_console_text(
-                    f"Checklist email suppressed for CL-{obj.id}: assigner == assignee."
-                )
-            )
-            return
-    except Exception:
-        pass
-
-    to_email = (getattr(getattr(obj, "assign_to", None), "email", "") or "").strip()
-    if not to_email:
-        logger.info(
-            _utils._safe_console_text(
-                f"Checklist email skipped for CL-{obj.id}: assignee has no email."
-            )
+    logger.info(
+        _utils._safe_console_text(
+            f"Checklist per-task signal email suppressed for CL-{getattr(obj, 'id', '?')} (using consolidated 10:00 digest)."
         )
-        return
-
-    def _send_now():
-        # Final guard at send moment (10:00 anchor logic)
-        try:
-            now_ist = timezone.now().astimezone(IST)
-            anchor_ist = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
-            if not guard_assign(obj.assign_to, anchor_ist):
-                logger.info(
-                    _utils._safe_console_text(
-                        f"Checklist CL-{obj.id} suppressed (assignee on leave @ 10:00 IST)."
-                    )
-                )
-                return
-        except Exception:
-            pass
-
-        try:
-            complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
-        except Exception:
-            complete_url = SITE_URL
-        subject_prefix = f"Today’s Checklist – {obj.task_name}"
-        _utils.send_checklist_assignment_to_user(
-            task=obj,
-            complete_url=complete_url,
-            subject_prefix=subject_prefix,
-        )
-
-    # If not restricting to 10 AM, send immediately
-    if not SEND_RECUR_EMAILS_ONLY_AT_10AM:
-        _on_commit(_send_now)
-        return
-
-    try:
-        planned = obj.planned_date
-        if not planned:
-            # No planned date: send now (still guarded)
-            _on_commit(_send_now)
-            return
-
-        now_ist = timezone.now().astimezone(IST)
-        planned_ist = timezone.localtime(planned, IST)
-        if planned_ist.date() != now_ist.date():
-            # Future/past day: let cron handle it (no sleeper threads)
-            return
-
-        # It's today's task. If we're past 10:00 IST now, send immediately (with guard).
-        anchor_ist = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
-        if now_ist >= anchor_ist:
-            _on_commit(_send_now)
-        # Else before 10:00 IST: do nothing; cron will send.
-    except Exception as e:
-        logger.error(
-            _utils._safe_console_text(
-                f"Checklist email scheduling failed for {obj.id}: {e}"
-            )
-        )
-        # As a fallback: do nothing here; cron remains the source of truth.
+    )
+    return
 
 
 def _schedule_10am_email_for_delegation(obj: Delegation) -> None:

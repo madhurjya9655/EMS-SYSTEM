@@ -56,6 +56,7 @@
     </div>
   </div>
 
+  <!-- Keep this single form for bulk actions only (approve/reject/delete/finalize) -->
   <form method="post" novalidate>
     {% csrf_token %}
     {% if back_url %}<input type="hidden" name="return" value="{{ back_url }}">{% endif %}
@@ -85,8 +86,16 @@
             <td style="white-space:pre-line;">{{ line.description|default:line.expense_item.description|default:"-" }}</td>
             <td class="text-end">₹{{ line.amount|floatformat:2 }}</td>
             <td>
-              {% url "reimbursement:receipt_line" line.id as receipt_url %}
-              {% if receipt_url %}<a href="{{ receipt_url }}" target="_blank" rel="noopener">View</a>{% else %}-{% endif %}
+              {% if line.receipt_file or line.expense_item.receipt_file %}
+                <a href="{% url 'reimbursement:receipt_line' line.id %}" target="_blank" rel="noopener">View</a>
+              {% else %}
+                <a
+                  href="{% url 'reimbursement:finance_attach_receipt' line.id %}{% if back_url %}?return={{ back_url|urlencode }}{% endif %}"
+                  class="btn btn-sm btn-outline-secondary"
+                >
+                  Attach file
+                </a>
+              {% endif %}
             </td>
             <td>
               {% if line.bill_status == "finance_approved" %}

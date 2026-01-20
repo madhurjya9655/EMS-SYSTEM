@@ -229,7 +229,7 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
         return 0
 
     # ⛔ CRITICAL FIX: never (re)create a *today-due* occurrence here.
-    # This respects "recurrence is generated ONLY on completion, NOT on delete".
+    # This respects "recurrence is generated ONLY on completion, NOT on delete"."
     # If a user deletes today's checklist, this generator must *not* repopulate it.
     try:
         if next_dt.astimezone(IST).date() == _now_ist().date():
@@ -514,6 +514,55 @@ def _fetch_checklists_due_today(start_dt, end_dt):
             return []
 
 
+# -------------------------------
+# Consolidated checklist mail (per employee)
+# -------------------------------
+def _emp_day_key(user_id: int, day_iso: str) -> str:
+    return f"due_today_checklist_digest_sent:emp:{user_id}:{day_iso}"
+
+
+def _mark_emp_digest_sent(user_id: int) -> None:
+    day_iso = _now_ist().date().isoformat()
+    key = _emp_day_key(user_id, day_iso)
+    now_ist = _now_ist()
+    # expire at ~03:00 IST next day (or at least 6 hours)
+    next3 = (now_ist + timedelta(days=1)).replace(hour=3, minute=0, second=0, microsecond=0)
+    ttl_seconds = max(int((next3 - now_ist).total_seconds()), 6 * 60 * 60)
+    cache.set(key, True, ttl_seconds)
+
+
+def _already_sent_emp_digest(user_id: int) -> bool:
+    day_iso = _now_ist().date().isoformat()
+    return bool(cache.get(_emp_day_key(user_id, day_iso), False))
+
+
+def _rows_for_checklists(objs: List[Checklist]) -> List[Dict[str, Any]]:
+    """
+    Build rows for the summary template matching the style used by pending_digest.
+    """
+    rows: List[Dict[str, Any]] = []
+    for obj in objs:
+        title = obj.task_name or ""
+        desc = (getattr(obj, "message", "") or "").strip()
+        title_desc = title if not desc else f"{title} — {desc}"
+        rows.append(
+            {
+                "task_id": f"CL-{obj.id}",
+                "task_title": title_desc,
+                "assigned_to": getattr(getattr(obj, "assign_to", None), "get_full_name", lambda: "")() or getattr(getattr(obj, "assign_to", None), "username", "") or getattr(getattr(obj, "assign_to", None), "email", "") or "-",
+                "assigned_by": getattr(getattr(obj, "assign_by", None), "get_full_name", lambda: "")() or getattr(getattr(obj, "assign_by", None), "username", "") or getattr(getattr(obj, "assign_by", None), "email", "") or "-",
+                "due_date": _fmt_dt_date(getattr(obj, "planned_date", None)),
+                "task_type": "Checklist",
+                "status": "Pending",
+            }
+        )
+    try:
+        rows.sort(key=lambda r: (r.get("due_date") or "9999-12-31", r.get("task_id") or ""))
+    except Exception:
+        pass
+    return rows
+
+
 @shared_task(bind=True, max_retries=2, default_retry_delay=30)
 def send_due_today_assignments(self) -> dict:
     """
@@ -526,6 +575,11 @@ def send_due_today_assignments(self) -> dict:
     🔒 DUPLICATE GUARD (cross-process):
     We take a same-day filesystem lock so that only one runner (Celery or HTTP cron)
     performs the fan-out per day, even if both are triggered.
+
+    ✅ BEHAVIORAL CHANGE (Checklists only):
+    Instead of sending one email per checklist, we now send ONE consolidated email
+    per employee containing ALL of their *today-due* Pending checklists.
+    Delegations continue to be sent per task as before.
     """
     # Gate by time first (so we don't take lock before 10:00)
     if not _is_after_10am_ist():
@@ -543,34 +597,102 @@ def send_due_today_assignments(self) -> dict:
         start_dt, end_dt = _ist_day_bounds(now_ist)
         anchor_dt = _assignment_anchor_for_today_10am_ist()
 
+        # Strictly today's PENDING items
         checklists = _fetch_checklists_due_today(start_dt, end_dt)
         delegations = _fetch_delegations_due_today(start_dt, end_dt)
 
-        sent = 0
-        cl_sent = 0
-        de_sent = 0
+        sent_total = 0
 
+        # -----------------------------
+        # CHECKLISTS: Consolidate per employee
+        # -----------------------------
+        # Group non-self-assigned checklists by assignee
+        per_user: Dict[int, List[Checklist]] = {}
         for obj in checklists:
-            # ⛔ Do not send if user is blocked for 10:00 IST today
+            if _is_self_assigned(obj):
+                logger.info(_safe_console_text(f"[DUE@10] Checklist {obj.id} skipped in digest: assigner == assignee"))
+                continue
+            uid = getattr(obj, "assign_to_id", None)
+            if not uid:
+                continue
+            per_user.setdefault(uid, []).append(obj)
+
+        cl_emails_sent = 0
+        cl_tasks_included = 0
+
+        for uid, items in per_user.items():
+            if not items:
+                continue
+            # Resolve the fresh user object (assignee)
             try:
-                if not guard_assign(obj.assign_to, anchor_dt):
-                    logger.info(
-                        _safe_console_text(
-                            f"[DUE@10] Checklist {obj.id} suppressed (assignee on leave @ 10:00 IST)"
-                        )
-                    )
+                user = items[0].assign_to
+            except Exception:
+                user = None
+            if not user:
+                continue
+
+            # Leave guard once per employee at the 10:00 anchor
+            try:
+                if not guard_assign(user, anchor_dt):
+                    logger.info(_safe_console_text(f"[DUE@10] Checklist digest suppressed for user_id={getattr(user,'id','?')} (on leave @ 10:00 IST)"))
                     continue
             except Exception:
-                # defensive: if anything goes wrong in guard, do not block
                 pass
 
-            if _already_sent_today("Checklist", obj.id):
-                continue
-            _send_checklist_email(obj)
-            _mark_sent_for_today("Checklist", obj.id)
-            sent += 1
-            cl_sent += 1
+            # Idempotency: one checklist digest per employee per day
+            try:
+                if _already_sent_emp_digest(uid):
+                    logger.info(_safe_console_text(f"[DUE@10] Checklist digest already sent for user_id={uid}; skip"))
+                    continue
+            except Exception:
+                pass
 
+            # Recipient resolution (assignee only)
+            try:
+                email = (getattr(user, "email", "") or "").strip()
+            except Exception:
+                email = ""
+            to_list = _dedupe_emails([email]) if email else []
+            if not to_list:
+                logger.info(_safe_console_text(f"[DUE@10] Skip checklist digest for user_id={uid} – no email"))
+                continue
+
+            rows = _rows_for_checklists(items)
+            if not rows:
+                continue
+
+            day_iso = now_ist.date().isoformat()
+            subject = f"Checklist Tasks Pending for Today ({len(rows)} Tasks)"
+            title = f"Checklist Tasks Pending for Today — {day_iso}"
+
+            try:
+                send_html_email(
+                    subject=subject,
+                    template_name="email/daily_pending_tasks_summary.html",
+                    context={
+                        "title": title,
+                        "report_date": day_iso,
+                        "total_pending": len(rows),
+                        "has_rows": bool(rows),
+                        "items_table": rows,
+                        "site_url": SITE_URL,
+                        # Note: no special category; utils will apply D1–D4 guards if needed.
+                    },
+                    to=to_list,
+                    fail_silently=False,
+                )
+                _mark_emp_digest_sent(uid)
+                cl_emails_sent += 1
+                cl_tasks_included += len(rows)
+                sent_total += 1
+                logger.info(_safe_console_text(f"[DUE@10] Sent consolidated checklist digest to user_id={uid} items={len(rows)}"))
+            except Exception as e:
+                logger.error(_safe_console_text(f"[DUE@10] Checklist digest email failure for user_id={uid}: {e}"))
+
+        # -----------------------------
+        # DELEGATIONS: unchanged (per-task)
+        # -----------------------------
+        de_sent = 0
         for obj in delegations:
             # ⛔ Do not send if user is blocked for 10:00 IST today
             try:
@@ -588,16 +710,23 @@ def send_due_today_assignments(self) -> dict:
                 continue
             _send_delegation_email(obj)
             _mark_sent_for_today("Delegation", obj.id)
-            sent += 1
+            sent_total += 1
             de_sent += 1
 
         logger.info(
             _safe_console_text(
                 f"[DUE@10] Completed fan-out at {now_ist:%Y-%m-%d %H:%M IST}: "
-                f"checklists={cl_sent}, delegations={de_sent}, total={sent}"
+                f"checklist_emails={cl_emails_sent} (tasks_included={cl_tasks_included}), "
+                f"delegations={de_sent}, total_emails={sent_total}"
             )
         )
-        return {"sent": sent, "checklists": cl_sent, "delegations": de_sent, "skipped_before_10": False}
+        return {
+            "sent": sent_total,
+            "checklists_emails": cl_emails_sent,
+            "checklists_tasks": cl_tasks_included,
+            "delegations": de_sent,
+            "skipped_before_10": False,
+        }
     finally:
         _release_daily_mail_lock(lock_path)
 

@@ -284,13 +284,13 @@ def _get_handover_rows_for_user(user, today_date):
 
     tasks_map = {'checklist': {}, 'delegation': {}, 'help_ticket': {}}
     if ids['checklist']:
-        for t in Checklist.objects.filter(id__in=ids['checklist']).select_related("assign_by", "assign_to"):
+        for t in Checklist.objects.filter(id__in=ids['checklist']).select_related("assign_to", "assign_by"):
             tasks_map['checklist'][t.id] = t
     if ids['delegation']:
-        for t in Delegation.objects.filter(id__in=ids['delegation']).select_related("assign_by", "assign_to"):
+        for t in Delegation.objects.filter(id__in=ids['delegation']).select_related("assign_to", "assign_by"):
             tasks_map['delegation'][t.id] = t
     if ids['help_ticket']:
-        for t in HelpTicket.objects.filter(id__in=ids['help_ticket']).select_related("assign_by", "assign_to"):
+        for t in HelpTicket.objects.filter(id__in=ids['help_ticket']).select_related("assign_to", "assign_by"):
             tasks_map['help_ticket'][t.id] = t
 
     for key in ('checklist', 'delegation', 'help_ticket'):
@@ -882,12 +882,15 @@ def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: O
 @has_permission("list_checklist")
 def list_checklist(request):
     if request.method == "POST":
+        # <<< keep current filters after POST by redirecting to the submitted return_url
+        return_url = request.POST.get("return_url") or reverse("tasks:list_checklist")
+
         if request.POST.get("action") == "delete_series" and request.POST.get("pk"):
             try:
                 obj = Checklist.objects.get(pk=int(request.POST["pk"]))
             except (Checklist.DoesNotExist, ValueError, TypeError):
                 messages.warning(request, "The selected series no longer exists.")
-                return redirect("tasks:list_checklist")
+                return redirect(return_url)
             filters = dict(
                 assign_to_id=obj.assign_to_id,
                 task_name=obj.task_name,
@@ -898,7 +901,7 @@ def list_checklist(request):
             deleted, _ = Checklist.objects.filter(status="Pending", **filters).delete()
             messages.success(request, f"Deleted {deleted} pending occurrence(s) from the series '{obj.task_name}'.")
             request.session["suppress_auto_recur"] = True
-            return redirect("tasks:list_checklist")
+            return redirect(return_url)
 
         ids = request.POST.getlist("sel")
         with_series = bool(request.POST.get("with_series"))
@@ -932,7 +935,7 @@ def list_checklist(request):
                 else:
                     messages.info(request, "Nothing was deleted.")
             request.session["suppress_auto_recur"] = True
-        return redirect("tasks:list_checklist")
+        return redirect(return_url)
 
     qs = Checklist.objects.filter(status="Pending").select_related("assign_by", "assign_to")
 
@@ -1019,7 +1022,8 @@ def add_checklist(request):
                 logger.error("Admin confirmation email failed: %s", e)
 
             messages.success(request, f"Checklist task '{obj.task_name}' created and will notify the assignee at 10:00 AM on the due day.")
-            return redirect("tasks:list_checklist")
+            # <<< keep current filters by honoring ?next=
+            return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
     else:
         # ✅ FIX: use keyword argument, not callable
         form = ChecklistForm(initial={"assign_by": request.user})
@@ -1062,7 +1066,8 @@ def edit_checklist(request, pk):
                 logger.error("Update emails failed: %s", e)
 
             messages.success(request, f"Checklist task '{obj2.task_name}' updated successfully! Assignee will be notified at 10:00 AM on the due day.")
-            return redirect("tasks:list_checklist")
+            # <<< keep current filters by honoring ?next=
+            return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
     else:
         form = ChecklistForm(instance=obj)
     return render(request, "tasks/add_checklist.html", {"form": form})
@@ -1075,7 +1080,8 @@ def delete_checklist(request, pk):
         obj.delete()
         request.session["suppress_auto_recur"] = True
         messages.success(request, f"Deleted checklist task '{obj.task_name}'.")
-        return redirect("tasks:list_checklist")
+        # <<< keep current filters by honoring ?next=
+        return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
     return render(request, "tasks/confirm_delete.html", {"object": obj, "type": "Checklist"})
 
 
@@ -1098,7 +1104,8 @@ def reassign_checklist(request, pk):
                 logger.error("Reassignment emails failed: %s", e)
 
             messages.success(request, f"Task reassigned to {obj.assign_to.get_full_name() or obj.assign_to.username} (assignee will be notified at 10:00 AM on the due day).")
-            return redirect("tasks:list_checklist")
+            # <<< keep current filters by honoring ?next=
+            return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
     return render(request, "tasks/reassign_checklist.html", {"object": obj, "all_users": User.objects.filter(is_active=True).order_by("username")})
 
 

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Attach Receipt – Bill #{{ line.id }}{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width:720px;margin:20px auto;">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="m-0">Attach Receipt</h2>
+    {% if back_url %}
+      <a href="{{ back_url }}" class="btn btn-outline-secondary btn-sm">Back</a>
+    {% else %}
+      <a href="{% url 'reimbursement:finance_verify' request_obj.id %}" class="btn btn-outline-secondary btn-sm">Back</a>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <div class="mb-3">
+        <div><strong>Request:</strong> #{{ request_obj.id }}</div>
+        <div><strong>Employee:</strong> {{ request_obj.created_by.get_full_name|default:request_obj.created_by.username }}</div>
+        <div><strong>Amount:</strong> ₹{{ line.amount|floatformat:2 }}</div>
+        <div><strong>Status:</strong> {{ line.get_bill_status_display }}</div>
+      </div>
+
+      <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        {% if back_url %}<input type="hidden" name="return" value="{{ back_url }}">{% endif %}
+
+        <div class="mb-3">
+          <label class="form-label">Choose receipt file</label>
+          <input type="file" name="receipt_file" class="form-control" required accept=".pdf,.jpg,.jpeg,.png,.xls,.xlsx">
+          <div class="form-text">Allowed: PDF / JPG / JPEG / PNG / XLS / XLSX</div>
+        </div>
+
+        <div class="d-flex gap-2">
+          <button type="submit" class="btn btn-primary">Upload</button>
+          {% if back_url %}
+            <a href="{{ back_url }}" class="btn btn-outline-secondary">Cancel</a>
+          {% else %}
+            <a href="{% url 'reimbursement:finance_verify' request_obj.id %}" class="btn btn-outline-secondary">Cancel</a>
+          {% endif %}
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
