@@ -1,0 +1,10 @@
+Reimbursement #{{ request_id }} is ready for Manager approval
+
+Employee: {{ employee_name }}
+Total Amount: ₹ {{ total_amount }}
+
+Approve: {{ approve_url }}
+Reject: {{ reject_url }}
+
+{% if detail_url %}Details: {{ detail_url }}{% endif %}
+{% if queue_url %}Queue: {{ queue_url }}{% endif %}

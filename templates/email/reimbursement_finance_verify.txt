@@ -1,0 +1,9 @@
+Reimbursement #{{ request_id }} requires Finance verification
+
+Employee: {{ employee_name }} ({{ employee_email|default:"-" }})
+Total Amount: ₹ {{ total_amount }}
+Employee Note: {{ note|default:"-" }}
+
+Approve (in app): {{ approve_url }}
+Reject (in app): {{ reject_url }}
+{% if queue_url %}Queue: {{ queue_url }}{% endif %}

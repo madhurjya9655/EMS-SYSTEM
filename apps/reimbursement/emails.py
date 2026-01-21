@@ -64,7 +64,6 @@ def _fallback_render(template_base: str, context: dict) -> tuple[str, str]:
     Last-resort bodies when a template is missing.
     Kept intentionally simple to avoid introducing new dependencies.
     """
-    # Pull common fields if present
     req_id = context.get("request_id") or getattr(context.get("request", None), "id", None) \
              or getattr(context.get("request_obj", None), "id", None)
     employee = context.get("employee_name") or ""
@@ -72,6 +71,7 @@ def _fallback_render(template_base: str, context: dict) -> tuple[str, str]:
     detail_url = context.get("detail_url") or ""
     queue_url = context.get("queue_url") or ""
     note = context.get("note") or context.get("employee_note") or ""
+    review_url = context.get("review_url") or queue_url or detail_url or "-"
 
     if template_base == "reimbursement_finance_verify":
         txt = (
@@ -79,20 +79,20 @@ def _fallback_render(template_base: str, context: dict) -> tuple[str, str]:
             f"Reimbursement ID: #{req_id}\n"
             f"Employee        : {employee}\n"
             f"Total Amount    : {total}\n"
-            f"Note            : {note or '-'}\n"
+            f"Employee Note   : {note or '-'}\n"
+            f"Review          : {review_url}\n"
             f"Queue           : {queue_url or '-'}\n"
         )
         html = f"""<!doctype html>
 <html><body style="font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif">
-  <h2 style="margin:0 0 8px 0;">New reimbursement pending Finance verification</h2>
-  <p style="margin:0 0 12px 0;">A new reimbursement has entered the Finance Verification queue.</p>
+  <h2 style="margin:0 0 8px 0;">Reimbursement requires Finance verification</h2>
   <table style="border-collapse:collapse;margin:12px 0;">
     <tr><td style="padding:4px 8px;color:#555;">Reimbursement ID</td><td style="padding:4px 8px;"><strong>#{req_id}</strong></td></tr>
     <tr><td style="padding:4px 8px;color:#555;">Employee</td><td style="padding:4px 8px;">{employee}</td></tr>
     <tr><td style="padding:4px 8px;color:#555;">Total Amount</td><td style="padding:4px 8px;">{total}</td></tr>
     <tr><td style="padding:4px 8px;color:#555;">Employee Note</td><td style="padding:4px 8px;">{note or '-'}</td></tr>
   </table>
-  <p style="margin-top:12px;">Open EMS → Finance → Verification Queue to review and act.</p>
+  <p><a href="{review_url}" style="display:inline-block;padding:12px 18px;border-radius:8px;background:#111827;color:#fff;text-decoration:none;font-weight:600;">Open in Finance Review</a></p>
 </body></html>"""
         return html, txt
 
@@ -172,7 +172,6 @@ def _render(template_base: str, context: dict) -> tuple[str, str]:
 
     # If either part is missing, try a conservative fallback variant mapping
     if html is None or txt is None:
-        # Map a few known alternate filenames found in some deployments
         fallback_map = {
             "reimbursement_finance_verify": "reimbursement_submitted",
             "reimbursement_request_paid": "reimbursement_paid",
@@ -208,7 +207,7 @@ def _send(
 ) -> None:
     """
     Minimal, fail-silent sender with dedup, now resilient to missing templates.
-    Also applies Pankaj-specific restrictions via central guard (ISSUE 18).
+    Also applies central recipient guard.
     """
     # Deduplicate while preserving order
     def _dedup(seq: Optional[List[str]]) -> Optional[List[str]]:
@@ -234,8 +233,7 @@ def _send(
     cc = _dedup(cc)
     bcc = _dedup(bcc)
 
-    # ---- ISSUE 18: Remove Pankaj from reimbursement emails ---------------
-    # One category is sufficient: "reimbursement" (blocked unless explicitly allowed in settings)
+    # Recipient guard (e.g., exclusions)
     filt_to, filt_cc, filt_bcc = filter_recipients_for_category(
         category="reimbursement",
         to=to_list,
@@ -243,9 +241,7 @@ def _send(
         bcc=bcc or [],
     )
     if not (filt_to or filt_cc or filt_bcc):
-        # Nothing to send after filtering
         return
-    # ---------------------------------------------------------------------
 
     html, txt = _render(template_base, context)
     try:
@@ -297,9 +293,6 @@ def _display_name(user) -> str:
 # ---------------------------------------------------------------------------
 
 def send_bill_rejected_by_finance(req: ReimbursementRequest, line: ReimbursementLine) -> None:
-    """
-    1️⃣ Finance rejects a single bill — email ONLY the employee with bill details and reason.
-    """
     subject = f"Reimbursement #{req.id}: One bill was rejected by Finance"
     ctx = {
         "employee_name": _display_name(req.created_by),
@@ -322,21 +315,20 @@ def send_bill_rejected_by_finance(req: ReimbursementRequest, line: Reimbursement
 
 
 def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *, actor) -> None:
-    """
-    2️⃣ Employee edits/replaces a previously rejected bill — email Finance team.
-    """
     subject = f"Reimbursement #{req.id}: Employee resubmitted a corrected bill"
-    ctx = {
-        "employee_name": _display_name(req.created_by),
-        "employee_email": getattr(req.created_by, "email", "") or "-",
-        "request_id": req.id,
-        "bill_id": line.id,
-        "bill_amount": f"{line.amount:.2f}",
-        "bill_description": line.description or "-",
-        "resubmitted_by": _display_name(actor),
-        "detail_url": _abs_url(reverse("reimbursement:finance_pending")),
-        "status_label": dict(ReimbursementRequest.Status.choices).get(req.status, req.status),
-    }
+    ctx = (
+        {
+            "employee_name": _display_name(req.created_by),
+            "employee_email": getattr(req.created_by, "email", "") or "-",
+            "request_id": req.id,
+            "bill_id": line.id,
+            "bill_amount": f"{line.amount:.2f}",
+            "bill_description": line.description or "-",
+            "resubmitted_by": _display_name(actor),
+            "detail_url": _abs_url(reverse("reimbursement:finance_pending")),
+            "status_label": dict(ReimbursementRequest.Status.choices).get(req.status, req.status),
+        }
+    )
     _send(_finance_emails(), subject, "reimbursement_bill_resubmitted", ctx)
     ReimbursementLog.log(
         req,
@@ -348,11 +340,7 @@ def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *,
 
 
 def send_bill_to_manager(req: ReimbursementRequest, line: ReimbursementLine) -> None:
-    """
-    3️⃣ Finance approved a bill and proceeded it to Manager — email the manager.
-    """
     subject = f"Reimbursement #{req.id}: Bill #{line.id} needs your approval"
-    # FIX: correct manager queue URL name
     queue_url = _abs_url(reverse("reimbursement:manager_pending"))
     ctx = {
         "manager_name": _display_name(req.manager),
@@ -375,9 +363,6 @@ def send_bill_to_manager(req: ReimbursementRequest, line: ReimbursementLine) -> 
 
 
 def send_bill_rejected_by_manager(req: ReimbursementRequest, line: ReimbursementLine, *, reason: str = "") -> None:
-    """
-    4️⃣ Manager rejects a bill — notify the employee.
-    """
     subject = f"Reimbursement #{req.id}: One bill was rejected by Manager"
     ctx = {
         "employee_name": _display_name(req.created_by),
@@ -400,9 +385,6 @@ def send_bill_rejected_by_manager(req: ReimbursementRequest, line: Reimbursement
 
 
 def send_bill_paid(req: ReimbursementRequest, line: ReimbursementLine) -> None:
-    """
-    5️⃣ Finance marked a bill as PAID — notify the employee.
-    """
     subject = f"Reimbursement #{req.id}: Bill #{line.id} paid"
     ctx = {
         "employee_name": _display_name(req.created_by),
@@ -431,8 +413,10 @@ def send_bill_paid(req: ReimbursementRequest, line: ReimbursementLine) -> None:
 def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_note: str = "") -> None:
     """
     Triggered when an employee creates/resubmits a request. Notifies Finance.
+    Adds review/approve/reject URLs for richer template.
     """
     subject = f"Reimbursement #{req.id}: Submitted for Finance Verification"
+    review_url = _abs_url(reverse("reimbursement:finance_verify", args=[req.id]))
     ctx = {
         "employee_name": _display_name(req.created_by),
         "employee_email": getattr(req.created_by, "email", "") or "-",
@@ -440,6 +424,9 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
         "total_amount": f"{req.total_amount:.2f}",
         "note": employee_note or "-",
         "queue_url": _abs_url(reverse("reimbursement:finance_pending")),
+        "review_url": review_url,   # button target
+        "approve_url": review_url,  # button target
+        "reject_url": review_url,   # button target
         "submitted_at": req.submitted_at,
     }
     _send(_finance_emails(), subject, "reimbursement_finance_verify", ctx)
@@ -455,9 +442,10 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
 def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
     """
     Triggered when Finance finalizes and request moves to manager stage.
+    Adds manager review/approve/reject URLs for richer template.
     """
     subject = f"Reimbursement #{req.id}: Ready for your approval"
-    # FIX: correct manager queue URL name
+    review_url = _abs_url(reverse("reimbursement:manager_review", args=[req.id]))
     ctx = {
         "manager_name": _display_name(req.manager),
         "employee_name": _display_name(req.created_by),
@@ -465,11 +453,13 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
         "total_amount": f"{req.total_amount:.2f}",
         "queue_url": _abs_url(reverse("reimbursement:manager_pending")),
         "detail_url": _abs_url(reverse("reimbursement:request_detail", args=[req.id])),
+        "review_url": review_url,   # button target
+        "approve_url": review_url,  # button target
+        "reject_url": review_url,   # button target
     }
     to = _manager_emails(req)
     if not to:
-        # If manager isn't mapped (or has no email), notify Finance so they can route.
-        to = _finance_emails()
+        to = _finance_emails()  # fallback to finance if manager has no email
     _send(to, subject, "reimbursement_finance_verified", ctx)
     ReimbursementLog.log(
         req,
@@ -485,15 +475,15 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
     Notify stakeholder(s) after manager decision via UI/email link.
     """
     subject = f"Reimbursement #{req.id}: Manager decision — {decision.capitalize()}"
-    # FIX: remove trailing comma that turned dict into a tuple
     ctx = {
         "employee_name": _display_name(req.created_by),
         "manager_name": _display_name(req.manager),
         "decision": decision,
         "request_id": req.id,
         "total_amount": f"{req.total_amount:.2f}",
+        "status_label": dict(ReimbursementRequest.Status.choices).get(req.status, req.status),
+        "detail_url": _abs_url(reverse("reimbursement:request_detail", args=[req.id])),
     }
-    ctx["detail_url"] = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     _send(_employee_email(req), subject, "reimbursement_manager_action", ctx)
     ReimbursementLog.log(
         req,
@@ -509,15 +499,15 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
     Notify employee after management decision.
     """
     subject = f"Reimbursement #{req.id}: Management decision — {decision.capitalize()}"
-    # FIX: remove trailing comma that turned dict into a tuple
     ctx = {
         "employee_name": _display_name(req.created_by),
         "management_name": _display_name(req.management),
         "decision": decision,
         "request_id": req.id,
         "total_amount": f"{req.total_amount:.2f}",
+        "status_label": dict(ReimbursementRequest.Status.choices).get(req.status, req.status),
+        "detail_url": _abs_url(reverse("reimbursement:request_detail", args=[req.id])),
     }
-    ctx["detail_url"] = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     _send(_employee_email(req), subject, "reimbursement_management_action", ctx)
     ReimbursementLog.log(
         req,
