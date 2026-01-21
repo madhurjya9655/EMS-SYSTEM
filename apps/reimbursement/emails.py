@@ -352,7 +352,8 @@ def send_bill_to_manager(req: ReimbursementRequest, line: ReimbursementLine) -> 
     3️⃣ Finance approved a bill and proceeded it to Manager — email the manager.
     """
     subject = f"Reimbursement #{req.id}: Bill #{line.id} needs your approval"
-    queue_url = _abs_url(reverse("reimbursement:manager_bills_pending"))
+    # FIX: correct manager queue URL name
+    queue_url = _abs_url(reverse("reimbursement:manager_pending"))
     ctx = {
         "manager_name": _display_name(req.manager),
         "employee_name": _display_name(req.created_by),
@@ -456,12 +457,13 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
     Triggered when Finance finalizes and request moves to manager stage.
     """
     subject = f"Reimbursement #{req.id}: Ready for your approval"
+    # FIX: correct manager queue URL name
     ctx = {
         "manager_name": _display_name(req.manager),
         "employee_name": _display_name(req.created_by),
         "request_id": req.id,
         "total_amount": f"{req.total_amount:.2f}",
-        "queue_url": _abs_url(reverse("reimbursement:manager_bills_pending")),
+        "queue_url": _abs_url(reverse("reimbursement:manager_pending")),
         "detail_url": _abs_url(reverse("reimbursement:request_detail", args=[req.id])),
     }
     to = _manager_emails(req)
@@ -483,12 +485,14 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
     Notify stakeholder(s) after manager decision via UI/email link.
     """
     subject = f"Reimbursement #{req.id}: Manager decision — {decision.capitalize()}"
+    # FIX: remove trailing comma that turned dict into a tuple
     ctx = {
         "employee_name": _display_name(req.created_by),
         "manager_name": _display_name(req.manager),
         "decision": decision,
         "request_id": req.id,
-        "total_amount": f"{req.total_amount:.2f}"},
+        "total_amount": f"{req.total_amount:.2f}",
+    }
     ctx["detail_url"] = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     _send(_employee_email(req), subject, "reimbursement_manager_action", ctx)
     ReimbursementLog.log(
@@ -505,12 +509,14 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
     Notify employee after management decision.
     """
     subject = f"Reimbursement #{req.id}: Management decision — {decision.capitalize()}"
+    # FIX: remove trailing comma that turned dict into a tuple
     ctx = {
         "employee_name": _display_name(req.created_by),
         "management_name": _display_name(req.management),
         "decision": decision,
         "request_id": req.id,
-        "total_amount": f"{req.total_amount:.2f}"},
+        "total_amount": f"{req.total_amount:.2f}",
+    }
     ctx["detail_url"] = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
     _send(_employee_email(req), subject, "reimbursement_management_action", ctx)
     ReimbursementLog.log(
