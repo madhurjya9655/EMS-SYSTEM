@@ -9,7 +9,7 @@ import random
 import threading
 import time
 from datetime import datetime, date, timezone
-from typing import Dict, Tuple, List, Optional, Callable, Any
+from typing import Dict, List, Optional, Callable, Any, Tuple
 
 from django.conf import settings
 from django.core.cache import cache
@@ -30,6 +30,7 @@ __all__ = [
     "build_row",   # back-compat alias
     "build_rows",
     "reset_main_data",  # utility to clear existing rows below the header
+    "bulk_resync_all_requests",  # NEW: quota-safe full export
 ]
 
 # ---------------------------------------------------------------------------
@@ -55,8 +56,9 @@ SYNC_VERSION = 8
 # Structure checks throttle
 STRUCTURE_TTL_SECONDS = int(getattr(settings, "REIMBURSEMENT_SHEETS_STRUCTURE_TTL_SECONDS", 600))  # 10 min default
 
-# token-bucket limiter per-process to stay under 60 read/min *per user* with headroom
-READS_PER_MINUTE_BUDGET = int(getattr(settings, "REIMBURSEMENT_SHEETS_READS_PER_MINUTE", 48))
+# Quota budgets (per process), defaults keep headroom under Google's 60 writes/min/user limit
+READS_PER_MINUTE_BUDGET  = int(getattr(settings, "REIMBURSEMENT_SHEETS_READS_PER_MINUTE", 48))
+WRITES_PER_MINUTE_BUDGET = int(getattr(settings, "REIMBURSEMENT_SHEETS_WRITES_PER_MINUTE", 30))
 
 # ---------------------------------------------------------------------------
 # ONE ROW PER BILL — business-visible columns (RowKey is hidden)
@@ -192,32 +194,61 @@ def _svc_drive():
     return build("drive", "v3", credentials=_credentials(), cache_discovery=False)
 
 # ---------------------------------------------------------------------------
-# Backoff + per-process token bucket for reads
+# Backoff + per-process token buckets for reads & writes
 # ---------------------------------------------------------------------------
 
-_bucket_lock = threading.Lock()
-_bucket_next_refill = time.monotonic()
-_bucket_tokens = READS_PER_MINUTE_BUDGET
+_rw_lock = threading.Lock()
+_read_next_refill  = time.monotonic()
+_write_next_refill = time.monotonic()
+_read_tokens  = READS_PER_MINUTE_BUDGET
+_write_tokens = WRITES_PER_MINUTE_BUDGET
 
-def _consume_read_token(n: int = 1):
-    global _bucket_tokens, _bucket_next_refill
-    with _bucket_lock:
+def _consume_tokens(kind: str, n: int = 1):
+    """
+    kind: 'read' or 'write'
+    """
+    global _read_tokens, _write_tokens, _read_next_refill, _write_next_refill
+    with _rw_lock:
         now = time.monotonic()
-        if now >= _bucket_next_refill:
-            _bucket_tokens = READS_PER_MINUTE_BUDGET
-            _bucket_next_refill = now + 60.0
-        if _bucket_tokens < n:
-            sleep_for = max(0.05, _bucket_next_refill - now + 0.01)
+        # refill buckets per minute
+        if now >= _read_next_refill:
+            _read_tokens = READS_PER_MINUTE_BUDGET
+            _read_next_refill = now + 60.0
+        if now >= _write_next_refill:
+            _write_tokens = WRITES_PER_MINUTE_BUDGET
+            _write_next_refill = now + 60.0
+
+        if kind == "read":
+            bucket, next_refill = _read_tokens, _read_next_refill
+        else:
+            bucket, next_refill = _write_tokens, _write_next_refill
+
+        if bucket < n:
+            sleep_for = max(0.05, next_refill - now + 0.01)
             time.sleep(sleep_for)
             now2 = time.monotonic()
-            if now2 >= _bucket_next_refill:
-                _bucket_tokens = READS_PER_MINUTE_BUDGET
-                _bucket_next_refill = now2 + 60.0
-        _bucket_tokens = max(0, _bucket_tokens - n)
+            if kind == "read":
+                if now2 >= _read_next_refill:
+                    _read_tokens = READS_PER_MINUTE_BUDGET
+                    _read_next_refill = now2 + 60.0
+                _read_tokens = max(0, _read_tokens - n)
+            else:
+                if now2 >= _write_next_refill:
+                    _write_tokens = WRITES_PER_MINUTE_BUDGET
+                    _write_next_refill = now2 + 60.0
+                _write_tokens = max(0, _write_tokens - n)
+            return
 
-def _with_backoff(label: str, is_read: bool, fn: Callable[[], Any]) -> Any:
-    if is_read:
-        _consume_read_token()
+        if kind == "read":
+            _read_tokens = max(0, _read_tokens - n)
+        else:
+            _write_tokens = max(0, _write_tokens - n)
+
+def _with_backoff(label: str, kind: str, fn: Callable[[], Any]) -> Any:
+    """
+    kind: 'read' or 'write'
+    """
+    _consume_tokens(kind)
     delays = [0.2, 0.5, 1.0, 2.0, 4.0]
     last_exc = None
     for i, d in enumerate(delays, start=1):
@@ -250,7 +281,7 @@ def _spreadsheets_get() -> dict:
         meta = _meta_cache.get(cache_key)
         if meta:
             return meta
-        meta = _with_backoff("spreadsheets.get", True, _call)
+        meta = _with_backoff("spreadsheets.get", "read", _call)
         _meta_cache[cache_key] = meta
         return meta
 
@@ -268,14 +299,14 @@ def _batch_update(requests: list) -> None:
         return _svc_sheets().spreadsheets().batchUpdate(
             spreadsheetId=SPREADSHEET_ID, body={"requests": requests}
         ).execute()
-    _with_backoff("spreadsheets.batchUpdate", False, _call)
+    _with_backoff("spreadsheets.batchUpdate", "write", _call)
 
 def _values_batch_get(ranges: List[str]) -> List[List[List[str]]]:
     def _call():
         return _svc_sheets().spreadsheets().values().batchGet(
             spreadsheetId=SPREADSHEET_ID, ranges=ranges
         ).execute()
-    resp = _with_backoff("values.batchGet", True, _call)
+    resp = _with_backoff("values.batchGet", "read", _call)
     return [x.get("values", [[]]) for x in resp.get("valueRanges", [])]
 
 def _values_update(range_: str, values: List[List[Any]]) -> None:
@@ -286,7 +317,7 @@ def _values_update(range_: str, values: List[List[Any]]) -> None:
             valueInputOption="RAW",
             body={"values": values},
         ).execute()
-    _with_backoff("values.update", False, _call)
+    _with_backoff("values.update", "write", _call)
 
 def _values_append(range_: str, values: List[List[Any]], user_entered: bool = False) -> dict:
     def _call():
@@ -297,7 +328,7 @@ def _values_append(range_: str, values: List[List[Any]], user_entered: bool = Fa
             insertDataOption="INSERT_ROWS",
             body={"values": values},
         ).execute()
-    return _with_backoff("values.append", False, _call)
+    return _with_backoff("values.append", "write", _call)
 
 def _values_batch_update(data_blocks: List[Dict[str, Any]], input_option: str = "USER_ENTERED") -> None:
     if not data_blocks:
@@ -307,7 +338,7 @@ def _values_batch_update(data_blocks: List[Dict[str, Any]], input_option: str = 
             spreadsheetId=SPREADSHEET_ID,
             body={"valueInputOption": input_option, "data": data_blocks},
         ).execute()
-    _with_backoff("values.batchUpdate", False, _call)
+    _with_backoff("values.batchUpdate", "write", _call)
 
 def _friendly_format_main(sheet_id: int) -> None:
     end_col = len(HEADER)
@@ -471,7 +502,7 @@ def _drive_find_file_by_name(name: str, parent: str) -> Optional[str]:
         q = f"name = '{safe_name}' and '{parent}' in parents and trashed = false"
         return svc.files().list(q=q, spaces="drive", fields="files(id,name)", pageSize=1).execute()
     try:
-        resp = _with_backoff("drive.files.list", True, _call)
+        resp = _with_backoff("drive.files.list", "read", _call)
         items = resp.get("files", [])
         return items[0]["id"] if items else None
     except Exception:
@@ -490,7 +521,7 @@ def _drive_ensure_permission(file_id: str) -> None:
                 body = {"type": "anyone", "role": "reader"}
             else:
                 body = {"type": "domain", "role": "reader", "domain": domain, "allowFileDiscovery": False}
-        _with_backoff("drive.permissions.create", False, lambda: _call(body))
+        _with_backoff("drive.permissions.create", "write", lambda: _call(body))
     except Exception as e:
         logger.info("Drive permission set failed for %s: %s", file_id, e)
 
@@ -502,7 +533,7 @@ def _drive_upload_bytes(name: str, data: bytes, parent: str, mime: Optional[str]
         body = {"name": name, "parents": [parent]}
         return svc.files().create(body=body, media_body=media, fields="id").execute()
     try:
-        file = _with_backoff("drive.files.create", False, _call)
+        file = _with_backoff("drive.files.create", "write", _call)
         fid = file.get("id")
         if fid:
             _drive_ensure_permission(fid)
@@ -662,7 +693,7 @@ def build_row(req) -> List[List[Any]]:
     return build_rows(req)
 
 # ---------------------------------------------------------------------------
-# Upsert and changelog (bill-wise; key=A: RowKey)
+# Upsert helpers (bill-wise; key=A: RowKey)
 # ---------------------------------------------------------------------------
 
 def _index_by_rowkey() -> Dict[str,int]:
@@ -671,7 +702,7 @@ def _index_by_rowkey() -> Dict[str,int]:
         return _svc_sheets().spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID, range=f"{TAB_MAIN}!A2:A"
         ).execute()
-    resp = _with_backoff("values.get A2:A", True, _call)
+    resp = _with_backoff("values.get A2:A", "read", _call)
     idx: Dict[str,int] = {}
     for i,v in enumerate(resp.get("values", []), start=2):
         if v:
@@ -680,7 +711,7 @@ def _index_by_rowkey() -> Dict[str,int]:
 
 def _upsert_rows_batch(rows: List[List[Any]]) -> Dict[str, int]:
     """
-    Performance path:
+    Performance path (per-request):
     - Read the index ONCE
     - Batch update existing rows via values.batchUpdate
     - Append all new rows in ONE append call
@@ -822,7 +853,100 @@ def reset_main_data() -> None:
             range=f"{TAB_MAIN}!A2:{end_col}"
         ).execute()
     try:
-        _with_backoff("values.clear", False, _call)
+        _with_backoff("values.clear", "write", _call)
         logger.info("Cleared main sheet data under header.")
     except Exception as e:
         logger.exception("Failed to clear main sheet: %s", e)
+
+# ---------------------------------------------------------------------------
+# NEW: Bulk re-sync (quota-safe)
+# ---------------------------------------------------------------------------
+
+def _collect_all_rows() -> Tuple[List[List[Any]], Dict[str, List[Any]]]:
+    """
+    Build rows for all ReimbursementRequests and return:
+      - all_rows: list of rows
+      - rows_by_rowkey: dict RowKey -> row
+    """
+    from apps.reimbursement.models import ReimbursementRequest
+    all_rows: List[List[Any]] = []
+    rows_by_rowkey: Dict[str, List[Any]] = {}
+
+    qs = ReimbursementRequest.objects.select_related("created_by", "manager", "management", "verified_by") \
+                                     .prefetch_related("lines__expense_item") \
+                                     .only("id")
+    for req in qs.iterator():
+        rows = build_rows(req)
+        all_rows.extend(rows)
+        for r in rows:
+            rows_by_rowkey[str(r[0])] = r
+    return all_rows, rows_by_rowkey
+
+def _chunked(seq: List[Any], size: int) -> List[List[Any]]:
+    return [seq[i:i+size] for i in range(0, len(seq), size)]
+
+def bulk_resync_all_requests(
+    update_chunk_size: int = 500,
+    append_chunk_size: int = 500,
+    sleep_between_append_chunks_sec: int = 65,
+    disable_changelog: bool = True,
+) -> None:
+    """
+    Quota-safe full export:
+      1) Ensure structure.
+      2) Read main sheet RowKey index once.
+      3) Compute updates vs. appends for ALL rows.
+      4) values.batchUpdate in chunks for updates (1 write call per chunk).
+      5) values.append in chunks for appends (1 write call per chunk) with a pause between chunks.
+      6) Optionally skip ChangeLog writes during bulk to preserve write quota.
+    """
+    if not _google_available():
+        return
+
+    ensure_spreadsheet_structure()
+
+    # Build all rows across all requests
+    all_rows, rows_by_rowkey = _collect_all_rows()
+    if not all_rows:
+        logger.info("bulk_resync_all_requests: no rows to write.")
+        return
+
+    # Existing index on the sheet
+    idx = _index_by_rowkey()
+
+    end_col = _header_end_col()
+    updates_blocks: List[Dict[str, Any]] = []
+    appends_rows: List[List[Any]] = []
+
+    for rowkey, row in rows_by_rowkey.items():
+        rn = idx.get(rowkey)
+        if rn:
+            updates_blocks.append({"range": f"{TAB_MAIN}!A{rn}:{end_col}{rn}", "values": [row]})
+        else:
+            appends_rows.append(row)
+
+    # 1) Updates in chunks (batchUpdate)
+    if updates_blocks:
+        for chunk in _chunked(updates_blocks, update_chunk_size):
+            _values_batch_update(chunk, input_option="USER_ENTERED")
+        logger.info("bulk_resync_all_requests: updated %s existing rows.", len(updates_blocks))
+
+    # 2) Appends in chunks with a pause to satisfy write quota
+    if appends_rows:
+        first_chunk = True
+        for chunk in _chunked(appends_rows, append_chunk_size):
+            if not first_chunk:
+                # pause between append chunks to avoid 60 writes/min/user
+                time.sleep(max(1, sleep_between_append_chunks_sec))
+            _values_append(f"{TAB_MAIN}!A:{end_col}", chunk, user_entered=True)
+            first_chunk = False
+        logger.info("bulk_resync_all_requests: appended %s new rows.", len(appends_rows))
+
+    # 3) Changelog (optional; skipped by default to save write quota)
+    if not disable_changelog:
+        now = _iso(datetime.now(timezone.utc))
+        rows = [[now, "bulk_resync", "", "", "", 0, "", "ok"]]
+        try:
+            _values_append(f"{TAB_CHANGELOG}!A:H", rows, user_entered=False)
+        except Exception as e:
+            logger.info("bulk_resync changelog skipped: %s", e)
