@@ -1,4 +1,3 @@
-# apps/reimbursement/models.py
 from __future__ import annotations
 
 import logging
@@ -315,7 +314,8 @@ class ReimbursementRequest(models.Model):
     manager_comment = models.TextField(blank=True, default="")
     manager_decided_at = models.DateTimeField(null=True, blank=True)
 
-    management_decision = models.CharField(max_length=16, blank=True, default="")
+    management_decision = models.CharField(max_length=16, blank=True, default=""
+    )
     management_comment = models.TextField(blank=True, default="")
     management_decided_at = models.DateTimeField(null=True, blank=True)
 
@@ -892,7 +892,7 @@ class ReimbursementLine(models.Model):
                     {"expense_item": _("This expense is already used in another open reimbursement request.")}
                 )
 
-        # Bill description is mandatory for INCLUDED lines
+        # Bill description is mandatory for INCLUDED lines (fallback to expense item allowed)
         if self.status == self.Status.INCLUDED:
             desc = (self.description or "").strip()
             if not desc:
@@ -915,9 +915,7 @@ class ReimbursementLine(models.Model):
             except type(self).DoesNotExist:
                 creating = True
 
-        # Ensure validation (including required description) always runs
-        self.full_clean()
-
+        # >>> CHANGE: copy defaults BEFORE validation so clean() can pass using expense item fallback
         if creating and self.expense_item_id:
             if not self.amount:
                 self.amount = self.expense_item.amount
@@ -925,6 +923,9 @@ class ReimbursementLine(models.Model):
                 self.description = self.expense_item.description
             if not self.receipt_file:
                 self.receipt_file = self.expense_item.receipt_file
+
+        # Ensure validation (including required description) runs after defaults are set
+        self.full_clean()
 
         super().save(*args, **kwargs)
 
