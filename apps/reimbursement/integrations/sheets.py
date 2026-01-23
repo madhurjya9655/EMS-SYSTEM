@@ -387,10 +387,11 @@ def _friendly_format_main(sheet_id: int) -> None:
         17:160, # Payment ref
     }
     for idx, px in widths.items():
-        requests.append({"updateDimensionProperties":{
-            "range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":idx-1,"endIndex":idx},
-            "properties":{"pixelSize":px},"fields":"pixelSize"
-        }})
+        requests.append({"updateDimensionProperties":
+            {
+                "range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":idx-1,"endIndex":idx},
+                "properties":{"pixelSize":px},"fields":"pixelSize"
+            }})
 
     # Wrap long text columns
     for col in [6]:  # Description
@@ -872,10 +873,15 @@ def _collect_all_rows() -> Tuple[List[List[Any]], Dict[str, List[Any]]]:
     all_rows: List[List[Any]] = []
     rows_by_rowkey: Dict[str, List[Any]] = {}
 
-    qs = ReimbursementRequest.objects.select_related("created_by", "manager", "management", "verified_by") \
-                                     .prefetch_related("lines__expense_item") \
-                                     .only("id")
-    for req in qs.iterator():
+    # IMPORTANT: no `.only("id")`; iterator requires chunk_size when used with prefetch_related
+    qs = (
+        ReimbursementRequest.objects
+        .select_related("created_by", "manager", "management", "verified_by")
+        .prefetch_related("lines__expense_item")
+        .order_by("id")
+    )
+
+    for req in qs.iterator(chunk_size=200):
         rows = build_rows(req)
         all_rows.extend(rows)
         for r in rows:
