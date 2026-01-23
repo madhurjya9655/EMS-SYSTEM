@@ -870,6 +870,7 @@ class ReimbursementLine(models.Model):
 
     def clean(self) -> None:
         super().clean()
+        # Prevent same expense item in another open request
         if self.expense_item_id:
             qs = ReimbursementLine.objects.filter(
                 expense_item_id=self.expense_item_id,
@@ -890,6 +891,17 @@ class ReimbursementLine(models.Model):
                 raise DjangoCoreValidationError(
                     {"expense_item": _("This expense is already used in another open reimbursement request.")}
                 )
+
+        # NEW: Bill description is mandatory for INCLUDED lines
+        if self.status == self.Status.INCLUDED:
+            desc = (self.description or "").strip()
+            if not desc:
+                try:
+                    desc = (self.expense_item.description or "").strip()
+                except Exception:
+                    desc = ""
+            if not desc:
+                raise DjangoCoreValidationError({"description": _("Bill description is required for every bill.")})
 
     def save(self, *args, **kwargs):
         creating = self.pk is None
