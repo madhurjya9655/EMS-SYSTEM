@@ -484,6 +484,8 @@ REIMBURSEMENT_EMAIL_FROM = os.getenv(
 )
 
 REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES = env_int("REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES", 20 * 1024 * 1024)
+# ✅ NEW: configure de-dup window for outgoing reimbursement emails
+REIMBURSEMENT_EMAIL_DUP_WINDOW_SECONDS = env_int("REIMBURSEMENT_EMAIL_DUP_WINDOW_SECONDS", 60)
 
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
 EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
@@ -556,6 +558,23 @@ REIMBURSEMENT_DRIVE_FOLDER_ID = os.getenv("REIMBURSEMENT_DRIVE_FOLDER_ID")
 REIMBURSEMENT_DRIVE_LINK_SHARING = os.getenv("REIMBURSEMENT_DRIVE_LINK_SHARING", "anyone")
 REIMBURSEMENT_DRIVE_DOMAIN = os.getenv("REIMBURSEMENT_DRIVE_DOMAIN")
 REIMBURSEMENT_DETAIL_URL_TEMPLATE = os.getenv("REIMBURSEMENT_DETAIL_URL_TEMPLATE")
+
+# ✅ NEW: absolute site base for reimbursement emails (used by notifications)
+REIMBURSEMENT_SITE_BASE = os.getenv("REIMBURSEMENT_SITE_BASE", SITE_BASE_URL)
+
+# ✅ NEW: runtime-configurable recipients used by notifications
+REIMBURSEMENT_FINANCE_TEAM = env_list(
+    "REIMBURSEMENT_FINANCE_TEAM",
+    ""  # leave empty to fall back to defaults in code
+)
+REIMBURSEMENT_FINAL_TO = env_list(
+    "REIMBURSEMENT_FINAL_TO",
+    "jyothi@gasteels.com,chetan.shah@gasteels.com"
+)
+REIMBURSEMENT_FINAL_CC = env_list(
+    "REIMBURSEMENT_FINAL_CC",
+    "amreen@blueoceansteels.com,vilas@blueoceansteels.com,akshay@blueoceansteels.com,sharyu@blueoceansteels.com"
+)
 
 # -----------------------------------------------------------------------------
 # TASK SYSTEM

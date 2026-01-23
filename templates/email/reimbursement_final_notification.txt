@@ -1,0 +1,24 @@
+Approved Reimbursement — {{ employee_name }} — ₹{{ total_amount }}
+
+Request ID -  #{{ request_id }}
+Employee Name -  {{ employee_name }}
+Verified By -  {{ verified_by|default:"Finance" }}
+Approved By -  {{ approved_by|default:"Approver" }}
+Approval Timestamp -  {{ approved_at }}
+
+Expense Details
+Type of Expenses | Date of Expenses | Description | Amount | Bill Attachment
+-------------------------------------------------------------------------------
+{% if lines and lines|length %}
+{% for r in lines -%}
+{{ r.category }} | {{ r.date }} | {{ r.description }} | {{ r.amount }} | {% if r.bill_url %}View: {{ r.bill_url }}{% else %}-{% endif %}
+{%- endfor %}
+{% else %}
+No expense lines attached.
+{% endif %}
+
+{% if detail_url %}View full details in BOS Lakshya:
+{{ detail_url }}
+{% endif %}
+
+This is an automated confirmation after approval.

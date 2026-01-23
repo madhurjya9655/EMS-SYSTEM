@@ -25,21 +25,42 @@ from apps.reimbursement.models import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Hard-coded recipients per workflow requirement
+# Central recipient guard (config-driven; no hardcoding)
+# If helper isn't available for any reason, fall back to no-op.
+# ---------------------------------------------------------------------------
+try:
+    from apps.common.email_guard import filter_recipients_for_category  # type: ignore
+except Exception:  # pragma: no cover
+    def filter_recipients_for_category(*, category: str, to=None, cc=None, bcc=None, **_):
+        return list(to or []), list(cc or []), list(bcc or [])
+
+
+# ---------------------------------------------------------------------------
+# Recipients – pulled from settings with safe fallbacks
 # ---------------------------------------------------------------------------
 
-# Finance verification stage — ONLY these two
-_FINANCE_TEAM = [
+def _as_cfg_list(value) -> List[str]:
+    """
+    Accept list/tuple or comma-separated string from settings and normalize to a list.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(x).strip() for x in value if str(x).strip()]
+    return [part.strip() for part in str(value).split(",") if part.strip()]
+
+# Finance verification stage — ONLY these (settings first; fallback to spec)
+_FINANCE_TEAM = _as_cfg_list(getattr(settings, "REIMBURSEMENT_FINANCE_TEAM", None)) or [
     "akshay@blueoceansteels.com",
     "sharyu@blueoceansteels.com",
 ]
 
-# Final (after approval) — TO + CC
-_FINAL_TO = [
+# Final (after approval) — TO + CC (settings first; fallback to spec)
+_FINAL_TO = _as_cfg_list(getattr(settings, "REIMBURSEMENT_FINAL_TO", None)) or [
     "jyothi@gasteels.com",
     "chetan.shah@gasteels.com",
 ]
-_FINAL_CC = [
+_FINAL_CC = _as_cfg_list(getattr(settings, "REIMBURSEMENT_FINAL_CC", None)) or [
     "amreen@blueoceansteels.com",
     "vilas@blueoceansteels.com",
     "akshay@blueoceansteels.com",
@@ -57,16 +78,31 @@ _DUP_WINDOW_SECONDS = int(getattr(settings, "REIMBURSEMENT_EMAIL_DUP_WINDOW_SECO
 # ---------------------------------------------------------------------------
 
 def _site_base() -> str:
+    """
+    Best-effort absolute base URL. Configure one of:
+      - REIMBURSEMENT_SITE_BASE (preferred)
+      - SITE_URL
+      - APP_BASE_URL
+      - SITE_BASE_URL
+    Fallback to relative links in emails.
+    """
     base = (
-        getattr(settings, "SITE_URL", "")
-        or getattr(settings, "SITE_BASE_URL", "")
-        or "https://ems-system-d26q.onrender.com"
-    ).strip()
-    return base.rstrip("/") + "/"
+        getattr(settings, "REIMBURSEMENT_SITE_BASE", None)
+        or getattr(settings, "SITE_URL", None)
+        or getattr(settings, "APP_BASE_URL", None)
+        or getattr(settings, "SITE_BASE_URL", None)
+        or ""
+    )
+    base = (base or "").strip().rstrip("/")
+    return (base + "/") if base else ""
 
 
 def _abs_url(path: str) -> str:
-    return urljoin(_site_base(), path.lstrip("/"))
+    base = _site_base()
+    if not base:
+        # Ensure root-relative instead of relative-to-current
+        return path if path.startswith("/") else ("/" + path)
+    return urljoin(base, path.lstrip("/"))
 
 
 def _email_enabled() -> bool:
@@ -76,17 +112,23 @@ def _email_enabled() -> bool:
         return True
 
 
-def _dedupe_lower(emails: Iterable[str]) -> List[str]:
+def _dedupe_preserve(emails: Iterable[str]) -> List[str]:
+    """
+    Dedupe emails case-insensitively but preserve original casing and order.
+    """
     seen = set()
     out: List[str] = []
     for e in emails or []:
         if not e:
             continue
-        low = (e or "").strip().lower()
-        if not low or low in seen:
+        raw = (e or "").strip()
+        if not raw:
             continue
-        seen.add(low)
-        out.append(low)
+        key = raw.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(raw)
     return out
 
 
@@ -181,16 +223,16 @@ def _ensure_cc_amreen(cc: Iterable[str] | None) -> List[str]:
     am = _amreen_reply_to()
     if am:
         cc_list.extend(am)
-    return _dedupe_lower(cc_list)
+    return _dedupe_preserve(cc_list)
 
 
 def _as_list(value: Union[str, Iterable[str], None]) -> List[str]:
     if value is None:
         return []
     if isinstance(value, str):
-        return _dedupe_lower([value])
+        return _dedupe_preserve([value])
     try:
-        return _dedupe_lower(list(value))
+        return _dedupe_preserve(list(value))
     except Exception:
         return []
 
@@ -207,13 +249,29 @@ def _send(
     bcc: Optional[Iterable[str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
 ) -> bool:
+    # Normalize lists
     to_list = _as_list(to_addrs)
     cc_list = _as_list(cc)
     bcc_list = _as_list(bcc)
     reply_to_list = _as_list(reply_to) or _amreen_reply_to()
 
+    # Apply central recipient guard (category = reimbursement)
+    try:
+        filt_to, filt_cc, filt_bcc = filter_recipients_for_category(
+            category="reimbursement",
+            to=to_list,
+            cc=cc_list,
+            bcc=bcc_list,
+        )
+        to_list = _dedupe_preserve(filt_to)
+        cc_list = _dedupe_preserve(filt_cc)
+        bcc_list = _dedupe_preserve(filt_bcc)
+    except Exception:
+        # Fail open if guard is unavailable; we already have normalized lists
+        pass
+
     if not to_list and not cc_list and not bcc_list:
-        logger.warning("Reimbursement email suppressed: no recipients. subject=%r", subject)
+        logger.warning("Reimbursement email suppressed: no recipients after guard. subject=%r", subject)
         return False
 
     from_email = _amreen_from_email()
@@ -388,7 +446,7 @@ def _manager_email_candidates(req: ReimbursementRequest) -> List[str]:
     except Exception:
         logger.exception("Failed resolving manager email candidates for reimbursement #%s", req.id)
 
-    return _dedupe_lower(candidates)
+    return _dedupe_preserve(candidates)
 
 
 def _recipients_for_manager(req: ReimbursementRequest) -> _Recipients:
@@ -407,7 +465,7 @@ def _recipients_for_management(req: ReimbursementRequest) -> _Recipients:
     except Exception:
         logger.exception("Failed resolving management recipients for reimbursement #%s", req.id)
 
-    return _Recipients(to=_dedupe_lower(mgmt_list), cc=[])
+    return _Recipients(to=_dedupe_preserve(mgmt_list), cc=[])
 
 
 def _recipients_for_finance(req: ReimbursementRequest) -> _Recipients:
@@ -421,12 +479,12 @@ def _recipients_for_finance(req: ReimbursementRequest) -> _Recipients:
     except Exception:
         logger.exception("Failed resolving finance recipients for reimbursement #%s", req.id)
 
-    return _Recipients(to=_dedupe_lower(finance_list), cc=[])
+    return _Recipients(to=_dedupe_preserve(finance_list), cc=[])
 
 
 def _recipients_for_finance_enforced() -> _Recipients:
     # Verified “concerned” recipients only
-    return _Recipients(to=_dedupe_lower(_FINANCE_TEAM), cc=[])
+    return _Recipients(to=_dedupe_preserve(_FINANCE_TEAM), cc=[])
 
 
 def _employee_email(req: ReimbursementRequest) -> Optional[str]:
@@ -595,7 +653,7 @@ def _management_action_buttons(req: ReimbursementRequest) -> str:
     approve_url = _build_action_url(req, role="management", decision="approved")
     reject_url = _build_action_url(req, role="management", decision="rejected")
     return f"""
-      <div style="margin:16px 0;">
+      <div style="margin:16px 0%;">
         <a href="{approve_url}"
            style="display:inline-block;padding:10px 16px;margin-right:8px;
                   background-color:#16a34a;color:#ffffff;text-decoration:none;
@@ -752,9 +810,9 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
     lines_txt = _build_lines_table_text(req)
     buttons_html = _manager_action_buttons(req)
 
-    verifier_email = ((req.verified_by.email or "").strip().lower()
+    verifier_email = ((req.verified_by.email or "").strip()
                       if (req.verified_by and getattr(req.verified_by, "email", None)) else "")
-    cc_list = _dedupe_lower([verifier_email] if verifier_email else [])
+    cc_list = _dedupe_preserve([verifier_email] if verifier_email else [])
 
     html = f"""
 <html>
@@ -959,7 +1017,7 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
 
       <p style="margin:0 0 8px 0;">New Reimbursement Request from {emp_name}</p>
 
-      <table style="font-size:14px;margin:8px 0 16px 0;">
+      <table style="font-size:14px;margin:8px 0 16px 0%;">
         <tr><td style="padding-right:8px;"><strong>Request ID -</strong></td><td>#{req.id}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Employee Name -</strong></td><td>{emp_name}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Date of Submission -</strong></td><td>{_format_dt(submitted_at)}</td></tr>
@@ -1091,7 +1149,7 @@ def send_reimbursement_admin_summary(req: ReimbursementRequest) -> None:
         <tr><td style="padding-right:8px;"><strong>Submitted On:</strong></td><td>{_format_dt(submitted_at)}</td></tr>
       </table>
 
-      <p style="font-size:14px;margin:12px 0;">
+      <p style="font-size:14px;margin:12px 0%;">
         View request:<br>
         <a href="{detail_url}" style="color:#2563eb;text-decoration:none;">{detail_url}</a>
       </p>
@@ -1154,7 +1212,7 @@ def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
         logger.info("Suppressing duplicate final notification for reimbursement #%s.", req.id)
         return
 
-    to_list = _dedupe_lower(_FINAL_TO)
+    to_list = _dedupe_preserve(_FINAL_TO)
     if not to_list:
         logger.warning("Final notification suppressed: no TO list configured for req #%s.", req.id)
         return

@@ -971,9 +971,17 @@ class ReimbursementLine(models.Model):
         exp.status = ExpenseItem.Status.SAVED
         exp.save(update_fields=["status", "updated_at"])
 
+        # Prefer the new notifications service; fall back to legacy templates safely.
         try:
-            from .emails import send_bill_rejected_by_finance
-            send_bill_rejected_by_finance(self.request, self)
+            try:
+                from .services import notifications as _notif
+                if hasattr(_notif, "send_bill_rejected_by_finance"):
+                    _notif.send_bill_rejected_by_finance(self.request, self)
+                else:
+                    raise ImportError
+            except Exception:
+                from .emails import send_bill_rejected_by_finance as _legacy_send_bill_rejected_by_finance
+                _legacy_send_bill_rejected_by_finance(self.request, self)
         except Exception:
             logger.exception("Failed to send bill-rejected email for req=%s line=%s", self.request_id, self.pk)
 
@@ -1006,9 +1014,17 @@ class ReimbursementLine(models.Model):
         except Exception:
             pass
 
+        # Prefer the new notifications service; fall back to legacy templates safely.
         try:
-            from .emails import send_bill_resubmitted
-            send_bill_resubmitted(self.request, self, actor=actor)
+            try:
+                from .services import notifications as _notif
+                if hasattr(_notif, "send_bill_resubmitted"):
+                    _notif.send_bill_resubmitted(self.request, self, actor=actor)
+                else:
+                    raise ImportError
+            except Exception:
+                from .emails import send_bill_resubmitted as _legacy_send_bill_resubmitted
+                _legacy_send_bill_resubmitted(self.request, self, actor=actor)
         except Exception:
             logger.exception("Failed to send bill-resubmitted email for req=%s line=%s", self.request_id, self.pk)
 
