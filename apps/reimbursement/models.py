@@ -892,14 +892,9 @@ class ReimbursementLine(models.Model):
                     {"expense_item": _("This expense is already used in another open reimbursement request.")}
                 )
 
-        # Bill description is mandatory for INCLUDED lines (fallback to expense item allowed)
+        # Bill description is mandatory for INCLUDED lines — must be on the line (no fallback here).
         if self.status == self.Status.INCLUDED:
             desc = (self.description or "").strip()
-            if not desc:
-                try:
-                    desc = (self.expense_item.description or "").strip()
-                except Exception:
-                    desc = ""
             if not desc:
                 raise DjangoCoreValidationError({"description": _("Bill description is required for every bill.")})
 
@@ -915,7 +910,7 @@ class ReimbursementLine(models.Model):
             except type(self).DoesNotExist:
                 creating = True
 
-        # >>> CHANGE: copy defaults BEFORE validation so clean() can pass using expense item fallback
+        # Copy defaults BEFORE validation so new lines inherit from expense_item seamlessly.
         if creating and self.expense_item_id:
             if not self.amount:
                 self.amount = self.expense_item.amount
