@@ -892,7 +892,7 @@ class ReimbursementLine(models.Model):
                     {"expense_item": _("This expense is already used in another open reimbursement request.")}
                 )
 
-        # NEW: Bill description is mandatory for INCLUDED lines
+        # Bill description is mandatory for INCLUDED lines
         if self.status == self.Status.INCLUDED:
             desc = (self.description or "").strip()
             if not desc:
@@ -914,6 +914,9 @@ class ReimbursementLine(models.Model):
                 old_line_status = prev.status
             except type(self).DoesNotExist:
                 creating = True
+
+        # Ensure validation (including required description) always runs
+        self.full_clean()
 
         if creating and self.expense_item_id:
             if not self.amount:
