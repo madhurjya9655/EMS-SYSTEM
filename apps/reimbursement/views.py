@@ -1148,7 +1148,7 @@ class FinanceSettlementQueueView(LoginRequiredMixin, PermissionRequiredMixin, Li
     Annotates:
       - can_mark_paid: True when all INCLUDED lines are FINANCE_APPROVED/PAID
     """
-    permission_code = "reimbursement_review_finance"
+    permission_code = "reimbursement_finance_review"
     model = ReimbursementRequest
     template_name = "reimbursement/finance_settlement_queue.html"
     context_object_name = "requests"
@@ -1314,7 +1314,7 @@ class FinanceBillPaymentView(LoginRequiredMixin, PermissionRequiredMixin, Templa
 # ---------------------------------------------------------------------------
 
 class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView):
-    permission_code = "reimbursement_review_finance"
+    permission_code = "reimbursement_finance_review"
     model = ReimbursementRequest
     form_class = FinanceProcessForm
     template_name = "reimbursement/finance_review.html"
