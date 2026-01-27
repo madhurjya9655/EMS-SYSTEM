@@ -151,6 +151,52 @@ def _has_finance_rejected_lines_for_expense(expense: ExpenseItem) -> bool:
         return False
 
 # ---------------------------------------------------------------------------
+# Finance shared helpers (mixin)
+# ---------------------------------------------------------------------------
+
+class _FinanceHelperMixin:
+    """
+    Small shared helpers for Finance views to keep UX robust and error handling friendly.
+    """
+
+    def _ensure_description(self, line: ReimbursementLine) -> None:
+        """
+        If description is empty or a placeholder ('-'/'—'), fill from expense/category
+        or default to 'No description' so model validation passes on approval.
+        """
+        raw = (getattr(line, "description", "") or "").strip()
+        if raw and raw not in {"-", "—"}:
+            return
+        fallback = None
+        exp = getattr(line, "expense_item", None)
+        if exp:
+            fallback = (getattr(exp, "description", "") or "").strip() or None
+            if not fallback:
+                cat = getattr(exp, "category", None)
+                if cat:
+                    fallback = getattr(cat, "name", None) or str(cat)
+        line.description = fallback or "No description"
+        try:
+            line.save(update_fields=["description"])
+        except Exception:
+            # non-fatal: approval will still try
+            pass
+
+    def _humanize_error(self, err: Exception) -> str:
+        if isinstance(err, DjangoCoreValidationError):
+            if hasattr(err, "message_dict"):
+                parts = []
+                for v in err.message_dict.values():
+                    if isinstance(v, (list, tuple)):
+                        parts.extend([str(x) for x in v])
+                    else:
+                        parts.append(str(v))
+                return "; ".join(parts)
+            if getattr(err, "message", ""):
+                return str(err.message)
+        return str(err) if str(err) else "Validation failed."
+
+# ---------------------------------------------------------------------------
 # Employee: Expense inbox (upload + list)
 # ---------------------------------------------------------------------------
 
@@ -894,7 +940,7 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
         ).count()
         return ctx
 
-class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+class FinanceVerifyView(_FinanceHelperMixin, LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
     Finance verification screen (approve/reject/delete at bill level).
 
@@ -911,43 +957,6 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
 
     def _get_request(self, pk):
         return get_object_or_404(ReimbursementRequest.objects.select_related("created_by", "manager"), pk=pk)
-
-    def _ensure_description(self, line: ReimbursementLine) -> None:
-        """
-        If description is empty or a placeholder ('-'/'—'), fill from expense/category
-        or default to 'No description' so model validation passes on approval.
-        """
-        raw = (getattr(line, "description", "") or "").strip()
-        if raw and raw not in {"-", "—"}:
-            return
-        fallback = None
-        exp = getattr(line, "expense_item", None)
-        if exp:
-            fallback = (getattr(exp, "description", "") or "").strip() or None
-            if not fallback:
-                cat = getattr(exp, "category", None)
-                if cat:
-                    fallback = getattr(cat, "name", None) or str(cat)
-        line.description = fallback or "No description"
-        try:
-            line.save(update_fields=["description"])
-        except Exception:
-            # non-fatal: approval will still try
-            pass
-
-    def _humanize_error(self, err: Exception) -> str:
-        if isinstance(err, DjangoCoreValidationError):
-            if hasattr(err, "message_dict"):
-                parts = []
-                for v in err.message_dict.values():
-                    if isinstance(v, (list, tuple)):
-                        parts.extend([str(x) for x in v])
-                    else:
-                        parts.append(str(v))
-                return "; ".join(parts)
-            if getattr(err, "message", ""):
-                return str(err.message)
-        return str(err) if str(err) else "Validation failed."
 
     def _rederive_and_escalate_if_ready(self, req: ReimbursementRequest, actor) -> bool:
         prev = req.status
@@ -1070,7 +1079,7 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
 # Finance — Rejected Bills (Resubmitted)
 # ---------------------------------------------------------------------------
 
-class FinanceRejectedBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
+class FinanceRejectedBillsQueueView(_FinanceHelperMixin, LoginRequiredMixin, PermissionRequiredMixin, ListView):
     permission_code = "reimbursement_finance_review"
     model = ReimbursementLine
     template_name = "reimbursement/finance_rejected_bills_queue.html"
@@ -1092,7 +1101,7 @@ class FinanceRejectedBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin,
         reason = (request.POST.get("reason") or "").strip()
         selected_ids = request.POST.getlist("line_ids")
 
-        if action not in {"approve", "reject"} | {"delete"}:
+        if action not in {"approve", "reject", "delete"}:
             messages.error(request, "Invalid action.")
             return redirect("reimbursement:finance_rejected_bills_queue")
 
@@ -1103,6 +1112,7 @@ class FinanceRejectedBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin,
         qs = ReimbursementLine.objects.filter(
             pk__in=selected_ids,
             status=ReimbursementLine.Status.INCLUDED,
+            bill_status=ReimbursementLine.BillStatus.EMPLOYEE_RESUBMITTED,  # strict: only resubmitted belong here
         ).select_related("request", "expense_item")
 
         processed = 0
@@ -1385,14 +1395,8 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         return ctx
 
     def get_form(self, form_class=None):
-        form = super().get_form(form_class)
-        try:
-            can, _ = self.object.can_mark_paid(self.object.finance_payment_reference or "")
-            if not can and "mark_paid" in form.fields:
-                form.fields["mark_paid"].disabled = True
-        except Exception:
-            pass
-        return form
+        # Keep the checkbox enabled; rely on server-side validation => fixes “button not clickable”.
+        return super().get_form(form_class)
 
     def form_valid(self, form: FinanceProcessForm):
         req: ReimbursementRequest = self.object
@@ -1613,6 +1617,7 @@ class ReimbursementExportCSVView(LoginRequiredMixin, PermissionRequiredMixin, Te
     def get(self, request, *args, **kwargs):
         qs = ReimbursementLine.objects.select_related("request", "expense_item", "request__created_by").order_by("request_id", "id")
         response = HttpResponse(content_type="text/csv")
+        # FIX: corrected unterminated string (properly closed quotes)
         response["Content-Disposition"] = 'attachment; filename="reimbursements_export.csv"'
         writer = csv.writer(response)
         writer.writerow([

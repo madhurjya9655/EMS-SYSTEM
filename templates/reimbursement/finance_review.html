@@ -10,7 +10,8 @@
     {% if back_url %}
       <a href="{{ back_url }}" class="btn btn-outline-secondary btn-sm">Back to Finance Queue</a>
     {% else %}
-      <a href="{% url 'reimbursement:finance_settlement' %}" class="btn btn-outline-secondary btn-sm">Back to Finance Queue</a>
+      {# fall back to verification queue which is known to exist #}
+      <a href="{% url 'reimbursement:finance_pending' %}" class="btn btn-outline-secondary btn-sm">Back to Finance Queue</a>
     {% endif %}
   </div>
 </div>
@@ -38,7 +39,7 @@
         <div class="row mb-2">
           <div class="col-sm-4 text-muted">Total</div>
           <div class="col-sm-8">
-            {% if object.total_amount %}₹{{ object.total_amount|floatformat:2|intcomma }}{% else %}—{% endif %}
+            {% if object.total_amount is not None %}₹{{ object.total_amount|floatformat:2|intcomma }}{% else %}—{% endif %}
           </div>
         </div>
         <div class="row">
@@ -61,31 +62,50 @@
     <div class="card">
       <div class="card-header">Settlement</div>
       <div class="card-body">
+        {% if can_mark_paid %}
+          <div class="alert alert-success py-2 mb-3">
+            All included bills are Finance-approved. You may mark as <strong>Claim Settled</strong>.
+          </div>
+        {% else %}
+          <div class="alert alert-warning py-2 mb-3">
+            Some bills still need verification. You can save notes/reference now; settlement will be blocked server-side until ready.
+          </div>
+        {% endif %}
+
         <form method="post" novalidate class="vstack gap-3">
           {% csrf_token %}
+          {{ form.non_field_errors }}
           {% if back_url %}<input type="hidden" name="return" value="{{ back_url }}">{% endif %}
 
           <div>
             {{ form.finance_note.label_tag }}
             {{ form.finance_note }}
-            {% if form.finance_note.errors %}<div class="text-danger small">{{ form.finance_note.errors }}</div>{% endif %}
+            {% if form.finance_note.errors %}
+              <div class="text-danger small">{{ form.finance_note.errors }}</div>
+            {% endif %}
           </div>
 
           <div>
             {{ form.finance_payment_reference.label_tag }}
             {{ form.finance_payment_reference }}
-            {% if form.finance_payment_reference.errors %}<div class="text-danger small">{{ form.finance_payment_reference.errors }}</div>{% endif %}
+            {% if form.finance_payment_reference.errors %}
+              <div class="text-danger small">{{ form.finance_payment_reference.errors }}</div>
+            {% endif %}
+            <div class="form-text">Bank UTR / transaction reference used for settlement.</div>
           </div>
 
           <div class="form-check">
+            {# IMPORTANT: do not disable this checkbox; server validation decides #}
             {{ form.mark_paid }}
-            {{ form.mark_paid.label_tag }}
-            {% if form.mark_paid.errors %}<div class="text-danger small">{{ form.mark_paid.errors }}</div>{% endif %}
-            {% if form.mark_paid.field.disabled or not can_mark_paid %}
-              <div class="form-text">Available after all included bills are Finance-approved, and requires a payment reference.</div>
-            {% else %}
-              <div class="form-text">Tick this and provide a payment reference / UTR to mark as Paid.</div>
+            <label class="form-check-label" for="{{ form.mark_paid.id_for_label }}">
+              Mark as <strong>Claim Settled</strong>
+            </label>
+            {% if form.mark_paid.errors %}
+              <div class="text-danger small">{{ form.mark_paid.errors }}</div>
             {% endif %}
+            <div class="form-text">
+              Tick this and provide a payment reference/UTR to mark as Settled.
+            </div>
           </div>
 
           <button type="submit" class="btn btn-primary w-100">Save Finance Details</button>

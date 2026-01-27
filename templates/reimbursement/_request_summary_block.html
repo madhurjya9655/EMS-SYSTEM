@@ -73,14 +73,14 @@
             <td class="small">{{ line.description|default:line.expense_item.description|default:"-" }}</td>
             <td class="text-end">₹{{ line.amount|floatformat:2 }}</td>
             <td>
-              {% if line.receipt_file || line.expense_item.receipt_file %}
+              {% if line.receipt_file or line.expense_item.receipt_file %}
                 <a href="{% url 'reimbursement:receipt_line' line.id %}" target="_blank" class="btn btn-sm btn-outline-secondary">View</a>
               {% else %}
                 <span class="text-muted small">No file</span>
               {% endif %}
             </td>
             <td>
-              {# Safe, manager/management-friendly status mapping: no finance-rejection callouts, no reasons #}
+              {# Manager/management-friendly status mapping #}
               {% if line.bill_status == 'finance_approved' %}
                 <span class="badge bg-success">Finance Approved</span>
               {% elif line.bill_status == 'manager_pending' %}
@@ -105,9 +105,9 @@
         </tbody>
         <tfoot>
           <tr>
-            <td colspan="3" class="text-end"><strong>Total</strong></td>
+            <td colspan="4" class="text-end"><strong>Total</strong></td>
             <td class="text-end"><strong>₹{{ request_obj.total_amount|floatformat:2 }}</strong></td>
-            <td colspan="3"></td>
+            <td colspan="2"></td>
           </tr>
         </tfoot>
       </table>

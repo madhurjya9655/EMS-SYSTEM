@@ -432,11 +432,6 @@ class ReimbursementRequest(models.Model):
     def apply_derived_status_from_bills(self, *, actor: Optional[models.Model] = None, reason: str = "") -> None:
         """
         Apply derived status but never regress automatically.
-        This enforces:
-          - No backslide from Manager (or beyond) to Finance.
-          - No backslide from Finance-Verify to Draft.
-        Explicit methods (e.g., reverse_to_finance_verification, admin_force_move)
-        are still allowed to set earlier statuses deliberately.
         """
         if self.is_final:
             return
@@ -447,7 +442,6 @@ class ReimbursementRequest(models.Model):
         current_rank = self._status_rank(self.status)
         new_rank = self._status_rank(new_status)
 
-        # Prevent any automatic regression
         if new_rank < current_rank:
             return
 
@@ -892,10 +886,11 @@ class ReimbursementLine(models.Model):
                     {"expense_item": _("This expense is already used in another open reimbursement request.")}
                 )
 
-        # Bill description is mandatory for INCLUDED lines — must be on the line (no fallback here).
+        # Bill description is mandatory for INCLUDED lines — must exist either on the line or via expense fallback
         if self.status == self.Status.INCLUDED:
             desc = (self.description or "").strip()
-            if not desc:
+            exp_desc = (self.expense_item.description or "").strip() if self.expense_item_id else ""
+            if not (desc or exp_desc):
                 raise DjangoCoreValidationError({"description": _("Bill description is required for every bill.")})
 
     def save(self, *args, **kwargs):
@@ -910,11 +905,12 @@ class ReimbursementLine(models.Model):
             except type(self).DoesNotExist:
                 creating = True
 
-        # Copy defaults BEFORE validation so new lines inherit from expense_item seamlessly.
-        if creating and self.expense_item_id:
+        # Copy defaults BEFORE validation so new or legacy lines inherit from expense_item seamlessly.
+        if self.expense_item_id:
             if not self.amount:
                 self.amount = self.expense_item.amount
-            if not self.description:
+            if not (self.description or "").strip():
+                # fallback to expense description if line description empty
                 self.description = self.expense_item.description
             if not self.receipt_file:
                 self.receipt_file = self.expense_item.receipt_file
@@ -1005,8 +1001,6 @@ class ReimbursementLine(models.Model):
             to_status=self.bill_status,
             extra={"line_id": self.pk, "reason": self.finance_rejection_reason, "type": "bill_finance_rejected"},
         )
-
-    # (Removed per new flow) proceed_to_manager() was legacy; manager acts only at request level now.
 
     # ---- Employee actions ----
     def employee_resubmit_bill(self, *, actor: Optional[models.Model]) -> None:
@@ -1099,10 +1093,16 @@ class ReimbursementLine(models.Model):
             extra={"line_id": self.pk, "type": "bill_manager_rejected"},
         )
 
-    # ---- Legacy per-bill Finance payment (not used in new flow) ----
+    # ---- Per-bill Finance payment (updated to accept FINANCE_APPROVED) ----
     def mark_paid(self, reference: str, *, actor: Optional[models.Model] = None) -> None:
-        if self.bill_status != self.BillStatus.MANAGER_APPROVED:
-            raise DjangoCoreValidationError(_("Only Manager-Approved bills can be marked Paid."))
+        """
+        Allow Finance to mark an individual bill Paid after approvals.
+        Accepted bill statuses for payment:
+          - FINANCE_APPROVED (new flow)
+          - MANAGER_APPROVED (legacy compatibility)
+        """
+        if self.bill_status not in (self.BillStatus.FINANCE_APPROVED, self.BillStatus.MANAGER_APPROVED):
+            raise DjangoCoreValidationError(_("Only Finance-Approved bills can be marked Paid."))
         if not (reference or "").strip():
             raise DjangoCoreValidationError(_("Payment reference is required to mark Paid."))
 

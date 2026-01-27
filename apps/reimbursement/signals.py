@@ -140,6 +140,6 @@ def _recalc_parent_on_line_delete(sender, instance: ReimbursementLine, **kwargs)
                 )
                 sync_request(full)
         except Exception:
-            logger.exception("Sheets sync scheduling failed for ReimbursementRequest %s", instance.pk)
+            logger.exception("Sheets sync scheduling failed for ReimbursementRequest %s", req.pk)
 
     transaction.on_commit(_do)
