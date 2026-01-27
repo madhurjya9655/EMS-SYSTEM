@@ -1133,6 +1133,51 @@ class FinanceRejectedBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin,
         return redirect("reimbursement:finance_rejected_bills_queue")
 
 # ---------------------------------------------------------------------------
+# ✅ Finance — Settlement Queue (NEW)
+# ---------------------------------------------------------------------------
+
+class FinanceSettlementQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
+    """
+    Settlement queue for Finance/Admin.
+
+    ✅ Shows requests awaiting settlement or marked Ready to Pay:
+       - request.status in {PENDING_FINANCE, APPROVED}
+       - not already PAID
+       - has INCLUDED lines
+    """
+    permission_code = "reimbursement_review_finance"
+    model = ReimbursementRequest
+    template_name = "reimbursement/finance_settlement_queue.html"
+    context_object_name = "requests"
+
+    def get_queryset(self):
+        R = ReimbursementRequest
+        L = ReimbursementLine
+
+        inc = L.objects.filter(request_id=OuterRef("pk"), status=L.Status.INCLUDED)
+        # All included lines should be FINANCE_APPROVED (new flow) or PAID if partially paid idempotence
+        bad = inc.exclude(bill_status__in=[L.BillStatus.FINANCE_APPROVED, L.BillStatus.PAID])
+
+        return (
+            R.objects.filter(
+                status__in=[R.Status.PENDING_FINANCE, R.Status.APPROVED],
+                paid_at__isnull=True,
+            )
+            .annotate(
+                has_included=Exists(inc),
+                has_bad=Exists(bad),
+                can_mark_paid=Case(
+                    When(has_included=True, has_bad=False, then=Value(True)),
+                    default=Value(False),
+                    output_field=BooleanField(),
+                ),
+            )
+            .filter(has_included=True)
+            .select_related("created_by", "manager", "management")
+            .order_by("-created_at")
+        )
+
+# ---------------------------------------------------------------------------
 # Finance delete whole request
 # ---------------------------------------------------------------------------
 

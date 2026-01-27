@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Finance — Settlement Queue</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; color: #111827; }
+    h1 { margin: 0 0 16px 0; font-size: 20px; }
+    .hint { margin: 6px 0 18px; font-size: 13px; color: #6b7280; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+    th { font-size: 12px; text-transform: uppercase; letter-spacing: .02em; color: #6b7280; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 12px; }
+    .badge-warn { background: #fff7ed; color: #9a3412; border: 1px solid #fdba74; }
+    .badge-ok { background: #ecfdf5; color: #065f46; border: 1px solid #6ee7b7; }
+    .actions a { text-decoration: none; padding: 6px 10px; border-radius: 6px; border: 1px solid #d1d5db; }
+    .actions a.primary { border-color: #2563eb; color: #ffffff; background: #2563eb; }
+    .toolbar { margin-bottom: 14px; display:flex; gap:8px; }
+    .empty { padding: 18px; background:#f9fafb; border:1px dashed #e5e7eb; border-radius:8px; color:#6b7280; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  </style>
+</head>
+<body>
+  <h1>Finance — Settlement Queue</h1>
+  <div class="hint">
+    Items appear here <strong>after manager/management approval</strong>. Use “Review / Settle” to enter UTR / payment reference and mark Paid.
+  </div>
+
+  {% if messages %}
+    <ul>
+      {% for message in messages %}
+        <li>{{ message }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if requests and requests|length %}
+    <table aria-label="Settlement Queue">
+      <thead>
+        <tr>
+          <th>Request #</th>
+          <th>Employee</th>
+          <th>Status</th>
+          <th>Total</th>
+          <th>Submitted</th>
+          <th>Ready to Settle</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in requests %}
+          <tr>
+            <td class="mono">#{{ r.id }}</td>
+            <td>
+              {% if r.created_by %}
+                {{ r.created_by.get_full_name|default:r.created_by.username }}
+                <div class="hint mono">{{ r.created_by.email }}</div>
+              {% else %}
+                —
+              {% endif %}
+            </td>
+            <td>
+              {% if r.get_status_display %}
+                {{ r.get_status_display }}
+              {% else %}
+                {{ r.status }}
+              {% endif %}
+            </td>
+            <td class="mono">
+              {% if r.total_amount %}₹{{ r.total_amount }}{% else %}—{% endif %}
+            </td>
+            <td class="mono">
+              {% if r.submitted_at %}{{ r.submitted_at|date:"Y-m-d H:i" }}{% else %}—{% endif %}
+            </td>
+            <td>
+              {% if r.can_mark_paid %}
+                <span class="badge badge-ok">All bills verified</span>
+              {% else %}
+                <span class="badge badge-warn">Needs check</span>
+              {% endif %}
+            </td>
+            <td class="actions">
+              <a class="primary" href="{% url 'reimbursement:finance_review' r.id %}">Review / Settle</a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">No requests awaiting settlement.</div>
+  {% endif %}
+</body>
+</html>

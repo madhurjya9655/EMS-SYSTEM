@@ -57,6 +57,8 @@ urlpatterns = [
     path("finance/", views.FinanceQueueView.as_view(), name="finance_pending"),
     path("finance/<int:pk>/verify/", views.FinanceVerifyView.as_view(), name="finance_verify"),
     path("finance/<int:pk>/review/", views.FinanceReviewView.as_view(), name="finance_review"),
+    # ✅ NEW: Finance settlement queue (manager/management approved → ready to pay)
+    path("finance/settlement/", views.FinanceSettlementQueueView.as_view(), name="finance_settlement"),
     path("finance/<int:pk>/delete/", views.FinanceDeleteRequestView.as_view(), name="finance_delete"),
 
     # ✅ NEW: attach missing receipt to a bill line
