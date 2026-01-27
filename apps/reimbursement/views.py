@@ -612,8 +612,9 @@ class ReimbursementRequestUpdateView(LoginRequiredMixin, PermissionRequiredMixin
             if line.expense_item_id not in keep_ids:
                 exp = line.expense_item
                 line.delete()
-                exp.status = ExpenseItem.Status.SAVED
-                exp.save(update_fields=["status", "updated_at"])
+                if exp:
+                    exp.status = ExpenseItem.Status.SAVED
+                    exp.save(update_fields=["status", "updated_at"])
 
         existing_ids = set(req.lines.values_list("expense_item_id", flat=True))
         for item in new_items:
@@ -1042,7 +1043,7 @@ class FinanceRejectedBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin,
         reason = (request.POST.get("reason") or "").strip()
         selected_ids = request.POST.getlist("line_ids")
 
-        if action not in {"approve", "reject", "delete"}:
+        if action not in {"approve", "reject"} | {"delete"}:
             messages.error(request, "Invalid action.")
             return redirect("reimbursement:finance_rejected_bills_queue")
 
@@ -1138,12 +1139,14 @@ class FinanceRejectedBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin,
 
 class FinanceSettlementQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
     """
-    Settlement queue for Finance/Admin.
+    Settlement visibility for Finance/Admin only.
 
-    ✅ Shows requests awaiting settlement or marked Ready to Pay:
-       - request.status in {PENDING_FINANCE, APPROVED}
-       - not already PAID
-       - has INCLUDED lines
+    Shows requests that reached Finance settlement stage:
+      - request.status in {PENDING_FINANCE, APPROVED}
+      - not paid yet
+      - has at least one INCLUDED line
+    Annotates:
+      - can_mark_paid: True when all INCLUDED lines are FINANCE_APPROVED/PAID
     """
     permission_code = "reimbursement_review_finance"
     model = ReimbursementRequest
@@ -1153,19 +1156,12 @@ class FinanceSettlementQueueView(LoginRequiredMixin, PermissionRequiredMixin, Li
     def get_queryset(self):
         R = ReimbursementRequest
         L = ReimbursementLine
-
         inc = L.objects.filter(request_id=OuterRef("pk"), status=L.Status.INCLUDED)
-        # All included lines should be FINANCE_APPROVED (new flow) or PAID if partially paid idempotence
-        bad = inc.exclude(bill_status__in=[L.BillStatus.FINANCE_APPROVED, L.BillStatus.PAID])
-
         return (
-            R.objects.filter(
-                status__in=[R.Status.PENDING_FINANCE, R.Status.APPROVED],
-                paid_at__isnull=True,
-            )
+            R.objects.filter(status__in=[R.Status.PENDING_FINANCE, R.Status.APPROVED], paid_at__isnull=True)
             .annotate(
                 has_included=Exists(inc),
-                has_bad=Exists(bad),
+                has_bad=Exists(inc.exclude(bill_status__in=[L.BillStatus.FINANCE_APPROVED, L.BillStatus.PAID])),
                 can_mark_paid=Case(
                     When(has_included=True, has_bad=False, then=Value(True)),
                     default=Value(False),
