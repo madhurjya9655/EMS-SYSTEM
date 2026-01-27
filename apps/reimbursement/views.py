@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, Optional, Sequence, Set
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db import transaction
 from django.db.models import (
     Q,
     Sum,
@@ -415,8 +416,9 @@ class ReimbursementBulkDeleteView(LoginRequiredMixin, PermissionRequiredMixin, T
             for line in list(req.lines.all()):
                 exp = line.expense_item
                 line.delete()
-                exp.status = ExpenseItem.Status.SAVED
-                exp.save(update_fields=["status", "updated_at"])
+                if exp:
+                    exp.status = ExpenseItem.Status.SAVED
+                    exp.save(update_fields=["status", "updated_at"])
             ReimbursementLog.log(
                 req,
                 ReimbursementLog.Action.STATUS_CHANGED,
@@ -894,31 +896,58 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
 
 class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
-    Verification screen (new policy):
-    - Approve/Reject bill(s) at bill level.
-    - Escalate to Manager when ALL INCLUDED bills are FINANCE_APPROVED.
-    - STRICT: hide FINANCE_REJECTED and EMPLOYEE_RESUBMITTED lines here.
+    Finance verification screen (approve/reject/delete at bill level).
+
+    UX fixes:
+      - Auto-fill a sensible description when missing so approval doesn't raise
+        a ValidationError (previously leaked {'description': [...]}).
+      - Never bubble raw ValidationError dicts to the template; turn them into
+        human-readable flashes.
     """
     permission_code = "reimbursement_finance_review"
     template_name = "reimbursement/finance_verify.html"
 
+    # ---------------- internal helpers ----------------
+
     def _get_request(self, pk):
         return get_object_or_404(ReimbursementRequest.objects.select_related("created_by", "manager"), pk=pk)
 
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        req = self._get_request(self.kwargs.get("pk"))
-        ctx["request_obj"] = req
-        ctx["lines"] = req.lines.select_related("expense_item").filter(
-            status=ReimbursementLine.Status.INCLUDED
-        ).exclude(
-            bill_status__in=[
-                ReimbursementLine.BillStatus.FINANCE_REJECTED,
-                ReimbursementLine.BillStatus.EMPLOYEE_RESUBMITTED,
-            ]
-        )
-        ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
-        return ctx
+    def _ensure_description(self, line: ReimbursementLine) -> None:
+        """
+        If description is empty or a placeholder ('-'/'—'), fill from expense/category
+        or default to 'No description' so model validation passes on approval.
+        """
+        raw = (getattr(line, "description", "") or "").strip()
+        if raw and raw not in {"-", "—"}:
+            return
+        fallback = None
+        exp = getattr(line, "expense_item", None)
+        if exp:
+            fallback = (getattr(exp, "description", "") or "").strip() or None
+            if not fallback:
+                cat = getattr(exp, "category", None)
+                if cat:
+                    fallback = getattr(cat, "name", None) or str(cat)
+        line.description = fallback or "No description"
+        try:
+            line.save(update_fields=["description"])
+        except Exception:
+            # non-fatal: approval will still try
+            pass
+
+    def _humanize_error(self, err: Exception) -> str:
+        if isinstance(err, DjangoCoreValidationError):
+            if hasattr(err, "message_dict"):
+                parts = []
+                for v in err.message_dict.values():
+                    if isinstance(v, (list, tuple)):
+                        parts.extend([str(x) for x in v])
+                    else:
+                        parts.append(str(v))
+                return "; ".join(parts)
+            if getattr(err, "message", ""):
+                return str(err.message)
+        return str(err) if str(err) else "Validation failed."
 
     def _rederive_and_escalate_if_ready(self, req: ReimbursementRequest, actor) -> bool:
         prev = req.status
@@ -939,6 +968,24 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
             return True
         return False
 
+    # ---------------- view methods ----------------
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        req = self._get_request(self.kwargs.get("pk"))
+        ctx["request_obj"] = req
+        ctx["lines"] = req.lines.select_related("expense_item").filter(
+            status=ReimbursementLine.Status.INCLUDED
+        ).exclude(
+            bill_status__in=[
+                ReimbursementLine.BillStatus.FINANCE_REJECTED,
+                ReimbursementLine.BillStatus.EMPLOYEE_RESUBMITTED,
+            ]
+        )
+        ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
+        return ctx
+
+    @transaction.atomic
     def post(self, request, *args, **kwargs):
         req = self._get_request(kwargs.get("pk"))
         back = _safe_back_url(request.POST.get("return"))
@@ -989,6 +1036,8 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
             for line in qs:
                 try:
                     if action == "approve":
+                        # ensure description so validation does not explode
+                        self._ensure_description(line)
                         line.approve_by_finance(actor=request.user)
                     else:
                         if not reason:
@@ -997,7 +1046,7 @@ class FinanceVerifyView(LoginRequiredMixin, PermissionRequiredMixin, TemplateVie
                         line.reject_by_finance(actor=request.user, reason=reason)
                     processed += 1
                 except DjangoCoreValidationError as e:
-                    messages.error(request, getattr(e, "message", str(e)) or f"Could not process line #{line.id}")
+                    messages.error(request, self._humanize_error(e))
                     return redirect(request.path + (f"?return={back}" if back else ""))
 
             escalated = self._rederive_and_escalate_if_ready(req, request.user)
@@ -1097,6 +1146,7 @@ class FinanceRejectedBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin,
         for line in qs:
             try:
                 if action == "approve":
+                    self._ensure_description(line)
                     line.approve_by_finance(actor=request.user)
                 else:
                     if not reason:
@@ -1106,7 +1156,7 @@ class FinanceRejectedBillsQueueView(LoginRequiredMixin, PermissionRequiredMixin,
                 processed += 1
                 touched_requests.add(line.request_id)
             except DjangoCoreValidationError as e:
-                messages.error(request, getattr(e, "message", str(e)) or f"Could not process line #{line.id}")
+                messages.error(request, self._humanize_error(e))
                 return redirect("reimbursement:finance_rejected_bills_queue")
 
         for req_id in touched_requests:

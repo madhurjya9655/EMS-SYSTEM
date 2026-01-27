@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load i18n %}
+{% load i18n humanize %}
 
 {% block title %}Finance Verification – Reimbursement #{{ request_obj.id }}{% endblock %}
 
@@ -7,19 +7,23 @@
 <div class="container" style="max-width:1000px;margin:20px auto;">
   <div class="d-flex justify-content-between align-items-center">
     <div>
-      <h1 style="margin:0 0 8px 0;">Finance Verification</h1>
-      <p class="text-muted" style="margin:0;">Reimbursement #{{ request_obj.id }}</p>
+      <h1 style="margin:0 0 8px 0;">{% trans "Finance Verification" %}</h1>
+      <p class="text-muted" style="margin:0;">{% trans "Reimbursement" %} #{{ request_obj.id }}</p>
     </div>
     <div class="d-flex flex-wrap gap-2">
-      <a href="{% url 'reimbursement:finance_rejected_bills_queue' %}" class="btn btn-outline-warning btn-sm">Rejected Bills Queue</a>
+      <a href="{% url 'reimbursement:finance_rejected_bills_queue' %}" class="btn btn-outline-warning btn-sm">
+        {% trans "Rejected Bills Queue" %}
+      </a>
 
       {% if back_url %}
-        <a href="{{ back_url }}" class="btn btn-outline-secondary btn-sm">Back to Finance Queue</a>
+        <a href="{{ back_url }}" class="btn btn-outline-secondary btn-sm">{% trans "Back to Finance Queue" %}</a>
       {% else %}
-        <a href="{% url 'reimbursement:finance_pending' %}" class="btn btn-outline-secondary btn-sm">Back to Finance Queue</a>
+        <a href="{% url 'reimbursement:finance_pending' %}" class="btn btn-outline-secondary btn-sm">
+          {% trans "Back to Finance Queue" %}
+        </a>
       {% endif %}
 
-      {% if request_obj.status != "paid" %}
+      {% if request_obj.status|lower != "paid" %}
       <form method="post"
             action="{% url 'reimbursement:finance_delete' request_obj.id %}"
             class="d-inline mb-0">
@@ -28,7 +32,7 @@
         <button type="submit"
                 class="btn btn-outline-danger btn-sm"
                 onclick="return confirm('Delete the entire reimbursement request #{{ request_obj.id }}? This cannot be undone.');">
-          Delete Request
+          {% trans "Delete Request" %}
         </button>
       </form>
       {% endif %}
@@ -39,25 +43,50 @@
     <div class="card-body">
       <div class="row">
         <div class="col-md-6">
-          <div><strong>Employee:</strong> {{ request_obj.created_by.get_full_name|default:request_obj.created_by.username }}</div>
-          <div><strong>Submitted:</strong> {{ request_obj.submitted_at|default:request_obj.created_at|date:"Y-m-d H:i" }}</div>
+          <div>
+            <strong>{% trans "Employee" %}:</strong>
+            {% if request_obj.created_by %}
+              {{ request_obj.created_by.get_full_name|default:request_obj.created_by.username }}
+            {% else %}—{% endif %}
+          </div>
+          <div>
+            <strong>{% trans "Submitted" %}:</strong>
+            {% if request_obj.submitted_at %}
+              {{ request_obj.submitted_at|date:"Y-m-d H:i" }}
+            {% elif request_obj.created_at %}
+              {{ request_obj.created_at|date:"Y-m-d H:i" }}
+            {% else %}—{% endif %}
+          </div>
         </div>
         <div class="col-md-6">
-          <div><strong>Status:</strong> {{ request_obj.get_status_display }}</div>
-          <div><strong>Total:</strong> ₹{{ request_obj.total_amount|floatformat:2 }}</div>
+          <div>
+            <strong>{% trans "Status" %}:</strong>
+            {% if request_obj.get_status_display %}
+              {{ request_obj.get_status_display }}
+            {% else %}
+              {{ request_obj.status|title }}
+            {% endif %}
+          </div>
+          <div>
+            <strong>{% trans "Total" %}:</strong>
+            {% if request_obj.total_amount is not None %}
+              ₹{{ request_obj.total_amount|floatformat:2|intcomma }}
+            {% else %}—{% endif %}
+          </div>
         </div>
       </div>
+
       {% if request_obj.finance_note %}
       <div class="mt-2">
-        <strong>Finance Note:</strong>
+        <strong>{% trans "Finance Note" %}:</strong>
         <div style="white-space:pre-line">{{ request_obj.finance_note }}</div>
       </div>
       {% endif %}
     </div>
   </div>
 
-  <!-- Bulk form -->
-  <form method="post" novalidate>
+  <!-- Bulk form covering table + bulk buttons -->
+  <form method="post" novalidate id="bulk-form">
     {% csrf_token %}
     {% if back_url %}<input type="hidden" name="return" value="{{ back_url }}">{% endif %}
 
@@ -67,13 +96,13 @@
           <tr>
             <th style="width:34px;"><input type="checkbox" id="chk_all"></th>
             <th>#</th>
-            <th>Type</th>
-            <th>Date</th>
-            <th>Description</th>
-            <th class="text-end">Amount</th>
-            <th>Bill</th>
-            <th>Bill Status</th>
-            <th style="width:260px;">Actions</th>
+            <th>{% trans "Type" %}</th>
+            <th>{% trans "Date" %}</th>
+            <th>{% trans "Description" %}</th>
+            <th class="text-end">{% trans "Amount" %}</th>
+            <th>{% trans "Bill" %}</th>
+            <th>{% trans "Bill Status" %}</th>
+            <th style="width:260px;">{% trans "Actions" %}</th>
           </tr>
         </thead>
         <tbody>
@@ -81,78 +110,140 @@
           <tr>
             <td><input type="checkbox" name="line_ids" value="{{ line.id }}" class="line-check"></td>
             <td>{{ forloop.counter }}</td>
-            <td>{{ line.expense_item.get_category_display|default:line.expense_item.category }}</td>
-            <td>{{ line.expense_item.date|date:"d M Y" }}</td>
-            <td style="white-space:pre-line;">{{ line.description|default:line.expense_item.description|default:"-" }}</td>
-            <td class="text-end">₹{{ line.amount|floatformat:2 }}</td>
+
+            <!-- Type -->
             <td>
-              {% if line.receipt_file or line.expense_item.receipt_file %}
-                <a href="{% url 'reimbursement:receipt_line' line.id %}" target="_blank" rel="noopener">View</a>
+              {% if line.expense_item %}
+                {% if line.expense_item.get_category_display %}
+                  {{ line.expense_item.get_category_display }}
+                {% else %}
+                  {{ line.expense_item.category|default:"—" }}
+                {% endif %}
+              {% else %}—{% endif %}
+            </td>
+
+            <!-- Date -->
+            <td>
+              {% if line.expense_item and line.expense_item.date %}
+                {{ line.expense_item.date|date:"d M Y" }}
+              {% else %}—{% endif %}
+            </td>
+
+            <!-- Description (safe fallback + highlight when missing) -->
+            <td style="white-space:pre-line;">
+              {% with d=line.description|default_if_none:'' %}
+                {% if d|trim %}
+                  {{ d }}
+                {% else %}
+                  {% if line.expense_item and line.expense_item.description %}
+                    {{ line.expense_item.description }}
+                  {% else %}
+                    <span class="text-danger">— {% trans "Missing description" %} —</span>
+                  {% endif %}
+                {% endif %}
+              {% endwith %}
+            </td>
+
+            <!-- Amount -->
+            <td class="text-end">₹{{ line.amount|floatformat:2|intcomma }}</td>
+
+            <!-- Bill / receipt -->
+            <td>
+              {% if line.receipt_file %}
+                <a href="{% url 'reimbursement:receipt_line' line.id %}" target="_blank" rel="noopener">{% trans "View" %}</a>
+              {% elif line.expense_item and line.expense_item.receipt_file %}
+                <a href="{% url 'reimbursement:receipt_line' line.id %}" target="_blank" rel="noopener">{% trans "View" %}</a>
               {% else %}
                 <a
                   href="{% url 'reimbursement:finance_attach_receipt' line.id %}{% if back_url %}?return={{ back_url|urlencode }}{% endif %}"
                   class="btn btn-sm btn-outline-secondary"
                 >
-                  Attach file
+                  {% trans "Attach file" %}
                 </a>
               {% endif %}
             </td>
+
+            <!-- Bill status -->
             <td>
               {% if line.bill_status == "finance_approved" %}
-                <span class="badge bg-success">Finance Approved</span>
+                <span class="badge bg-success">{% trans "Finance Approved" %}</span>
               {% elif line.bill_status == "finance_rejected" %}
-                <span class="badge bg-danger">Finance Rejected</span>
+                <span class="badge bg-danger">{% trans "Finance Rejected" %}</span>
               {% elif line.bill_status == "employee_resubmitted" %}
-                <span class="badge bg-warning text-dark">Employee Resubmitted</span>
+                <span class="badge bg-warning text-dark">{% trans "Employee Resubmitted" %}</span>
               {% else %}
-                <span class="badge bg-secondary">Pending Finance Verification</span>
+                <span class="badge bg-secondary">{% trans "Pending Finance Verification" %}</span>
               {% endif %}
             </td>
+
+            <!-- Row actions (single-line submit by pre-selecting only that checkbox) -->
             <td>
               <div class="d-flex flex-wrap gap-1">
-                <button type="submit" class="btn btn-outline-success btn-sm js-one" name="action" value="approve" data-line-id="{{ line.id }}">Approve</button>
-                <button type="submit" class="btn btn-outline-danger btn-sm js-one" name="action" value="reject" data-line-id="{{ line.id }}">Reject</button>
+                <button type="submit" class="btn btn-outline-success btn-sm js-one" name="action" value="approve" data-line-id="{{ line.id }}">
+                  {% trans "Approve" %}
+                </button>
+                <button type="submit" class="btn btn-outline-danger btn-sm js-one" name="action" value="reject" data-line-id="{{ line.id }}">
+                  {% trans "Reject" %}
+                </button>
                 <button type="submit" class="btn btn-outline-secondary btn-sm js-one" name="action" value="delete" data-line-id="{{ line.id }}"
-                  onclick="return confirm('Permanently delete this bill line? This cannot be undone.');">Delete</button>
+                        onclick="return confirm('{% blocktrans %}Permanently delete this bill line? This cannot be undone.{% endblocktrans %}');">
+                  {% trans "Delete" %}
+                </button>
               </div>
             </td>
           </tr>
           {% empty %}
           <tr>
-            <td colspan="9" class="text-center text-muted py-3">No expense lines.</td>
+            <td colspan="9" class="text-center text-muted py-3">{% trans "No expense lines." %}</td>
           </tr>
           {% endfor %}
         </tbody>
+
+        {% if lines and lines|length %}
         <tfoot>
           <tr>
             <td></td>
-            <td colspan="4" class="text-end"><strong>Total</strong></td>
-            <td class="text-end"><strong>₹{{ request_obj.total_amount|floatformat:2 }}</strong></td>
+            <td colspan="4" class="text-end"><strong>{% trans "Total" %}</strong></td>
+            <td class="text-end"><strong>
+              {% if request_obj.total_amount is not None %}
+                ₹{{ request_obj.total_amount|floatformat:2|intcomma }}
+              {% else %}—{% endif %}
+            </strong></td>
             <td colspan="3"></td>
           </tr>
         </tfoot>
+        {% endif %}
       </table>
     </div>
 
     <div class="mt-3 d-flex flex-column gap-3">
       <div class="d-flex flex-wrap gap-2">
-        <button name="action" value="approve" class="btn btn-success">Approve Selected</button>
-        <button name="action" value="reject" class="btn btn-danger">Reject Selected</button>
-        <button name="action" value="delete" class="btn btn-outline-secondary" onclick="return confirm('Delete selected bill lines? This cannot be undone.');">Delete Selected</button>
-        <button name="action" value="finalize" class="btn btn-primary">Finalize &amp; Send to Manager</button>
+        <button name="action" value="approve" class="btn btn-success">{% trans "Approve Selected" %}</button>
+        <button name="action" value="reject" class="btn btn-danger">{% trans "Reject Selected" %}</button>
+        <button name="action" value="delete" class="btn btn-outline-secondary"
+                onclick="return confirm('{% blocktrans %}Delete selected bill lines? This cannot be undone.{% endblocktrans %}');">
+          {% trans "Delete Selected" %}
+        </button>
+        <button name="action" value="finalize" class="btn btn-primary">
+          {% trans "Finalize & Send to Manager" %}
+        </button>
       </div>
       <div>
-        <label for="reason" class="form-label fw-semibold">Rejection reason (used only when rejecting)</label>
-        <textarea id="reason" name="reason" rows="3" class="form-control" placeholder="Add a clear reason employees can act on..."></textarea>
+        <label for="reason" class="form-label fw-semibold">{% trans "Rejection reason (used only when rejecting)" %}</label>
+        <textarea id="reason" name="reason" rows="3" class="form-control"
+                  placeholder="{% trans 'Add a clear reason employees can act on...' %}"></textarea>
       </div>
     </div>
   </form>
 </div>
 
 <script>
+  // Select / unselect all
   document.getElementById('chk_all')?.addEventListener('change', function (e) {
     document.querySelectorAll('.line-check').forEach(function (b) { b.checked = e.target.checked; });
   });
+
+  // For single-line actions: select only that line before submit
   function selectOnlyById(id) {
     document.querySelectorAll('.line-check').forEach(function (b) { b.checked = (b.value === String(id)); });
   }

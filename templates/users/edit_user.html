@@ -11,7 +11,7 @@
 
 <div class="card mb-5">
   <div class="card-body">
-    <form method="post" class="row g-4">
+    <form method="post" class="row g-4" enctype="multipart/form-data">
       {% csrf_token %}
 
       {% if uf.non_field_errors or pf.non_field_errors %}

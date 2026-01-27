@@ -191,7 +191,9 @@ _SYNONYMS = {
     # Delegation
     "list_delegation": {"mt_list_delegation"},
     "add_delegation": {"mt_add_delegation"},
-    # (Add more synonyms here if needed)
+
+    # Finance (reimburse) — support legacy alias so both codes work
+    "reimbursement_finance_review": {"reimbursement_review_finance"},
 }
 
 

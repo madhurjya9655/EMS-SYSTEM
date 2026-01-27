@@ -748,6 +748,15 @@
           </a>
           {% endif %}
 
+          {# NEW — Settlement (Ready to Pay) #}
+          {% if user|has_any_permission:"reimbursement_finance_review,reimbursement_review_finance" or user.is_superuser %}
+          <a href="{% url 'reimbursement:finance_settlement' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_settlement' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_settlement' %}aria-current="page"{% endif %}>
+            <i class="fas fa-hand-holding-usd" aria-hidden="true"></i> Settlement (Ready to Pay)
+          </a>
+          {% endif %}
+
           {% if user|has_permission:"reimbursement_finance_review" or user.is_superuser %}
           <a href="{% url 'reimbursement:finance_rejected_bills_queue' %}"
              class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_rejected_bills_queue' %}active{% endif %}"

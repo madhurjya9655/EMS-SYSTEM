@@ -57,9 +57,10 @@ PERMISSION_URLS = {
     "reimbursement_management_pending": "reimbursement:management_pending",
     "reimbursement_management_review": "reimbursement:management_pending",
 
-    # Finance — your templates use reimbursement:finance_pending
+    # Finance — sidebar/login should work for both spellings
     "reimbursement_finance_pending": "reimbursement:finance_pending",
     "reimbursement_finance_review": "reimbursement:finance_pending",
+    "reimbursement_review_finance": "reimbursement:finance_pending",  # legacy alias
 
     # Admin console — your sidebar links to reimbursement:admin_requests
     "reimbursement_admin": "reimbursement:admin_requests",

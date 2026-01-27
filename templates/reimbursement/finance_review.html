@@ -1,51 +1,90 @@
 {% extends "base.html" %}
-{% block title %}Finance Review – Reimbursement #{{ object.id }}{% endblock %}
+{% load humanize %}
+
+{% block title %}Finance — Review & Settle #{{ object.id }}{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h2>Finance Review – Request #{{ object.id }}</h2>
+<div class="page-header mb-3 d-flex align-items-center justify-content-between">
+  <h2 class="page-title">Finance — Review &amp; Settle <span class="text-muted">#{{ object.id }}</span></h2>
   <div>
     {% if back_url %}
       <a href="{{ back_url }}" class="btn btn-outline-secondary btn-sm">Back to Finance Queue</a>
     {% else %}
-      <a href="{% url 'reimbursement:finance_pending' %}" class="btn btn-outline-secondary btn-sm">Back to Finance Queue</a>
+      <a href="{% url 'reimbursement:finance_settlement' %}" class="btn btn-outline-secondary btn-sm">Back to Finance Queue</a>
     {% endif %}
   </div>
 </div>
 
-<div class="row">
-  <div class="col-md-8">
-    {% include "reimbursement/_request_summary_block.html" with request_obj=object only %}
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-header">Request Summary</div>
+      <div class="card-body">
+        <div class="row mb-2">
+          <div class="col-sm-4 text-muted">Employee</div>
+          <div class="col-sm-8">
+            {% if object.created_by %}
+              <div class="fw-semibold">{{ object.created_by.get_full_name|default:object.created_by.username }}</div>
+              <div class="small text-muted">{{ object.created_by.email }}</div>
+            {% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="row mb-2">
+          <div class="col-sm-4 text-muted">Status</div>
+          <div class="col-sm-8">
+            {% if object.get_status_display %}{{ object.get_status_display }}{% else %}{{ object.status|title }}{% endif %}
+          </div>
+        </div>
+        <div class="row mb-2">
+          <div class="col-sm-4 text-muted">Total</div>
+          <div class="col-sm-8">
+            {% if object.total_amount %}₹{{ object.total_amount|floatformat:2|intcomma }}{% else %}—{% endif %}
+          </div>
+        </div>
+        <div class="row">
+          <div class="col-sm-4 text-muted">Submitted</div>
+          <div class="col-sm-8">
+            {% if object.submitted_at %}
+              {{ object.submitted_at|date:"Y-m-d H:i" }}
+            {% elif object.created_at %}
+              {{ object.created_at|date:"Y-m-d H:i" }}
+            {% else %}
+              —
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <div class="col-md-4">
-    <div class="card mb-3">
-      <div class="card-header">Finance Processing</div>
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header">Settlement</div>
       <div class="card-body">
-        <form method="post" novalidate>
+        <form method="post" novalidate class="vstack gap-3">
           {% csrf_token %}
-          <input type="hidden" name="return" value="{{ back_url }}">
+          {% if back_url %}<input type="hidden" name="return" value="{{ back_url }}">{% endif %}
 
-          <div class="mb-3">
+          <div>
             {{ form.finance_note.label_tag }}
             {{ form.finance_note }}
             {% if form.finance_note.errors %}<div class="text-danger small">{{ form.finance_note.errors }}</div>{% endif %}
           </div>
 
-          <div class="mb-3">
+          <div>
             {{ form.finance_payment_reference.label_tag }}
             {{ form.finance_payment_reference }}
             {% if form.finance_payment_reference.errors %}<div class="text-danger small">{{ form.finance_payment_reference.errors }}</div>{% endif %}
           </div>
 
-          <div class="form-check mb-3">
+          <div class="form-check">
             {{ form.mark_paid }}
             {{ form.mark_paid.label_tag }}
             {% if form.mark_paid.errors %}<div class="text-danger small">{{ form.mark_paid.errors }}</div>{% endif %}
             {% if form.mark_paid.field.disabled or not can_mark_paid %}
-              <div class="form-text">Available after approvals during Finance review, and requires a payment reference.</div>
+              <div class="form-text">Available after all included bills are Finance-approved, and requires a payment reference.</div>
             {% else %}
-              <div class="form-text">Tick this and provide a payment reference to mark as Paid.</div>
+              <div class="form-text">Tick this and provide a payment reference / UTR to mark as Paid.</div>
             {% endif %}
           </div>
 
