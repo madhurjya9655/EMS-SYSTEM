@@ -7,7 +7,7 @@
 <div class="card">
   <div class="card-header">Edit Expense</div>
   <div class="card-body">
-    <form method="post" enctype="multipart/form-data">
+    <form method="post" enctype="multipart/form-data" novalidate>
       {% csrf_token %}
 
       <div class="mb-3">
@@ -26,8 +26,16 @@
         {{ form.vendor.label_tag }} {{ form.vendor|add_class:"form-control" }}
         {{ form.vendor.errors }}
       </div>
+
+      {# Make description explicitly required on the client; server already enforces it #}
       <div class="mb-3">
-        {{ form.description.label_tag }} {{ form.description|add_class:"form-control" }}
+        {{ form.description.label_tag }}
+        {{ form.description
+            |add_class:"form-control"
+            |attr:"required:required"
+            |attr:"minlength:2"
+            |attr:"placeholder:Bill description (what is this bill for?)" }}
+        <div class="form-text">A short, clear bill description is required.</div>
         {{ form.description.errors }}
       </div>
 

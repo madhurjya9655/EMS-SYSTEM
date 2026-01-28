@@ -35,10 +35,18 @@
             <tbody>
               {% if rows %}
                 {% for row in rows %}
+                {# expose description to JS for client-side validation; do not use |trim filter #}
+                {% with desc=row.item.description|default_if_none:"" %}
                 <tr class="{% if not row.selectable %}text-muted{% endif %}">
                   <td>
                     {% if row.selectable %}
-                      <input type="checkbox" name="expense_items" value="{{ row.item.id }}" form="reimb-form">
+                      <input type="checkbox"
+                             name="expense_items"
+                             value="{{ row.item.id }}"
+                             data-desc="{{ desc }}"
+                             data-rowid="{{ row.item.id }}"
+                             data-date="{{ row.item.date|date:'Y-m-d' }}"
+                             form="reimb-form">
                     {% endif %}
                   </td>
                   <td>{{ row.item.date|date:"Y-m-d" }}</td>
@@ -61,8 +69,12 @@
                       {% else %}bg-secondary{% endif %}">
                       {{ row.status_label }}
                     </span>
+                    {% if not desc %}
+                      <span class="badge bg-warning text-dark ms-1">Missing description</span>
+                    {% endif %}
                   </td>
                 </tr>
+                {% endwith %}
                 {% endfor %}
               {% else %}
                 <tr>
@@ -118,11 +130,28 @@
 </div>
 
 <script>
+  function isBlank(str) { return !str || String(str).replace(/\s+/g,'') === ''; }
+
   document.getElementById("reimb-form").addEventListener("submit", function (e) {
-    const boxes = document.querySelectorAll('input[name="expense_items"]:checked');
+    const boxes = Array.from(document.querySelectorAll('input[name="expense_items"]:checked'));
     if (!boxes.length) {
       e.preventDefault();
       alert("Please select at least one expense to submit.");
+      return;
+    }
+
+    // Block submission if any selected expense has no description.
+    const bad = boxes
+      .filter(cb => isBlank(cb.dataset.desc))
+      .map(cb => `ID ${cb.dataset.rowid}${cb.dataset.date ? " ("+cb.dataset.date+")" : ""}`);
+
+    if (bad.length) {
+      e.preventDefault();
+      alert(
+        "Each bill must have a description before it can be included.\n" +
+        "Missing description for: " + bad.join(", ") + "\n\n" +
+        "Open each expense and add a clear bill description, then try again."
+      );
     }
   });
 </script>
