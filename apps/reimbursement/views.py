@@ -380,10 +380,22 @@ class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormV
         ctx["finance_emails"] = finance_emails
         return ctx
 
+    @transaction.atomic
     def form_valid(self, form: ReimbursementCreateForm):
+        """
+        HARD GUARD: never create a request with zero lines.
+        (We keep the existing logic intact; just enforce a precondition.)
+        """
         user = self.request.user
-        expense_items: Iterable[ExpenseItem] = form.cleaned_data["expense_items"]
+        expense_items: Iterable[ExpenseItem] = list(form.cleaned_data.get("expense_items") or [])
         employee_note: str = form.cleaned_data.get("employee_note") or ""
+
+        # --- SERVER-SIDE PRECONDITION ---
+        if not expense_items:
+            messages.error(self.request, "Please select at least one expense to submit.")
+            # Re-render form with errors (consistent with FormView semantics)
+            return self.form_invalid(form)
+
         mapping = ReimbursementApproverMapping.for_employee(user)
         manager = mapping.manager if mapping else None
         management = None
