@@ -132,7 +132,7 @@
             <!-- Description (safe fallback + highlight when missing) -->
             <td style="white-space:pre-line;">
               {% with d=line.description|default_if_none:'' %}
-                {% if d|trim %}
+                {% if d %}
                   {{ d }}
                 {% else %}
                   {% if line.expense_item and line.expense_item.description %}
