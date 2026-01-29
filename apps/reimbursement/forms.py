@@ -130,11 +130,12 @@ class ExpenseItemForm(forms.ModelForm):
                     "placeholder": "Amount",
                 }
             ),
+            # UI text fixed: not optional
             "description": forms.Textarea(
                 attrs={
                     "class": "form-control",
                     "rows": 3,
-                    "placeholder": "Description (optional)",
+                    "placeholder": "Describe the bill (required)",
                 }
             ),
             "gst_type": forms.RadioSelect(
@@ -158,6 +159,16 @@ class ExpenseItemForm(forms.ModelForm):
         self.fields["category"].label = "Type of Expense"
         self.fields["gst_type"].label = "Bill Type"
         self.fields["gst_type"].initial = "non_gst"
+
+        # ✅ Align with domain rule: bill description is mandatory downstream
+        self.fields["description"].required = True
+        # Make the label explicit so templates show it clearly
+        self.fields["description"].label = "Description (required)"
+        try:
+            # ensure placeholder is not stale if widget was overridden elsewhere
+            self.fields["description"].widget.attrs["placeholder"] = "Describe the bill (required)"
+        except Exception:
+            pass
 
         # Keep browser picker in sync with backend-allowed extensions
         try:
@@ -630,7 +641,6 @@ class ApproverMappingForm(forms.ModelForm):
     """
     Per-employee mapping row (used in admin UI).
     """
-
     class Meta:
         model = ReimbursementApproverMapping
         fields = ["employee", "manager", "finance"]
