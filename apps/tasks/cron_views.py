@@ -1,7 +1,7 @@
 # apps/tasks/cron_views.py
 from __future__ import annotations
 
-from datetime import datetime, time as dt_time, timedelta
+from datetime import datetime, time as dt_time, timedelta, date
 
 import pytz
 from django.conf import settings
@@ -16,7 +16,6 @@ from .pending_digest import (
     send_daily_employee_pending_digest,
     send_admin_all_pending_digest,
 )
-
 
 IST = pytz.timezone(getattr(settings, "TIME_ZONE", "Asia/Kolkata"))
 
@@ -85,6 +84,29 @@ def _release_fanout_lock(day_iso: str) -> None:
         pass
 
 
+# -----------------------------
+# Working-day helpers (IST)
+# -----------------------------
+def _today_ist() -> date:
+    return timezone.now().astimezone(IST).date()
+
+
+def _is_sunday_ist(d: date) -> bool:
+    return d.weekday() == 6  # Sunday == 6
+
+
+def _is_holiday_ist(d: date) -> bool:
+    try:
+        from apps.settings.models import Holiday  # optional
+        return Holiday.objects.filter(date=d).exists()
+    except Exception:
+        return False
+
+
+def _is_working_day_ist(d: date) -> bool:
+    return (not _is_sunday_ist(d)) and (not _is_holiday_ist(d))
+
+
 def due_today(request):
     """
     10:00 IST fan-out (safe at any time; task guards pre-10:00 IST itself).
@@ -134,20 +156,23 @@ def pending_summary_7pm(request):
       - One mail per employee with ONLY their pending.
     GET /internal/cron/pending-7pm/?key=...
 
-    D1/D4 compliance:
-      • Removed hardcoded 'pankaj@blueoceansteels.com' recipient.
-      • Defer recipients to the digest task (which uses admin resolution logic),
-        ensuring no special-case direct emails to Pankaj from this endpoint.
+    NOTE:
+      • Runs only on working days (skips Sundays and configured holidays).
+      • Leaves are handled inside the tasks (they suppress per-employee mails).
+      • Uses non-forced mode so task-level guards (working-day/leave) remain effective.
     """
     if not _authorized(request):
         return HttpResponseForbidden("Forbidden")
 
-    try:
-        # Admin consolidated digest (recipient resolution handled inside task)
-        admin = send_admin_all_pending_digest.run(force=True)
+    # Skip on non-working days (no behavioural change to other endpoints)
+    today = _today_ist()
+    if not _is_working_day_ist(today):
+        return JsonResponse({"ok": True, "triggered": False, "reason": "non_working_day"}, status=200)
 
-        # Per-employee digests (recipient resolution handled inside task)
-        employees = send_daily_employee_pending_digest.run(force=True)
+    try:
+        # Do NOT force — keeps “skip on holiday/leave” and “only past/today items” intact.
+        admin = send_admin_all_pending_digest.run(force=False)
+        employees = send_daily_employee_pending_digest.run(force=False)
 
         return JsonResponse({"ok": True, "admin": admin, "employees": employees}, status=200)
     except Exception as e:

@@ -17,7 +17,7 @@ from django.utils import timezone
 from .models import Checklist, Delegation, HelpTicket
 from . import utils as _utils  # email helpers & console-safe logging
 
-# Working-day (holiday/Sunday) shifts on recurrence
+# Working-day (holiday/Sunday) checks for recurrence (no shifting)
 from apps.settings.models import Holiday
 
 # Leave-blocking helpers
@@ -141,30 +141,13 @@ def _on_commit(fn):
 
 
 # ---------------------------------------------------------------------
-# Working-day helpers (skip Sunday & holidays) for recurrence
+# Working-day helpers (no shifting)
 # ---------------------------------------------------------------------
 def _is_working_day(d):
     # Sunday == 6
     if d.weekday() == 6:
         return False
     return not Holiday.objects.filter(date=d).exists()
-
-
-def _shift_to_next_working_day_7pm(ist_dt: datetime) -> datetime:
-    """
-    Given an IST datetime, shift the DATE forward while it's not a working day.
-    Return 19:00 IST of that shifted date, converted back to project TZ.
-    """
-    tz = timezone.get_current_timezone()
-    base_ist = ist_dt.astimezone(IST)
-    d = base_ist.date()
-    for _ in range(120):  # safety
-        if _is_working_day(d):
-            new_ist = IST.localize(datetime.combine(d, dt_time(19, 0)))
-            return new_ist.astimezone(tz)
-        d = d + timedelta(days=1)
-    # Fallback: just pin 19:00 of original date
-    return IST.localize(datetime.combine(base_ist.date(), dt_time(19, 0))).astimezone(tz)
 
 
 # ---------------------------------------------------------------------
@@ -384,7 +367,7 @@ def force_delegation_planned_time(sender, instance: Delegation, **kwargs):
 
 # ---------------------------------------------------------------------
 # CREATE NEXT RECURRING CHECKLIST
-# (stepped date → then shift to next working day @ 19:00 IST)
+# (stepped date @ 19:00 IST → NO shift; SKIP on holiday/leave)
 # ---------------------------------------------------------------------
 def _series_q_for_frequency(
     assign_to_id: int,
@@ -408,12 +391,13 @@ def _series_q_for_frequency(
 def create_next_recurring_checklist(sender, instance: Checklist, created: bool, **kwargs):
     """
     When a recurring checklist is marked 'Completed', create the next occurrence:
-      • Valid only for modes in RECURRING_MODES
-      • Trigger on update (not initial create)
-      • Next occurrence is scheduled at 19:00 IST on the stepped date,
-        then SHIFTED to the next working day (skip Sunday/holidays)
-      • Prevent duplicates within a 1-minute window
-      • Do NOT send email here; a generic 'created' handler will schedule the 10:00 email.
+      • modes in RECURRING_MODES only
+      • trigger on status=Completed (not initial create)
+      • compute stepped date → pin 19:00 IST (NO shift)
+      • if Sunday/holiday → SKIP (no row, no memory)
+      • if assignee is on leave at 19:00 IST → SKIP
+      • duplicate guard ±1 minute
+      • no emails here (10:00 cron handles)
     """
     # Only recurring series
     if normalize_mode(getattr(instance, "mode", None)) not in RECURRING_MODES:
@@ -446,7 +430,7 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
     ):
         return
 
-    # Compute next planned date at fixed 19:00 IST (no shift yet)
+    # Compute next planned date at fixed 19:00 IST (no shift)
     next_dt = None
     try:
         if _compute_next_fixed_7pm:
@@ -474,9 +458,6 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                 nxt_ist = prev_ist + relativedelta(years=step)
             d = nxt_ist.date()
             next_dt = IST.localize(datetime.combine(d, dt_time(19, 0))).astimezone(tz)
-
-        # NOW: shift to next working day (Sunday/holiday) and pin 19:00
-        next_dt = _shift_to_next_working_day_7pm(next_dt)
     except Exception as e:
         logger.error(
             _utils._safe_console_text(
@@ -493,7 +474,7 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
         )
         return
 
-    # Catch-up loop: ensure next occurrence lands in the future
+    # Catch-up loop: ensure next occurrence lands in the future (no shift)
     safety = 0
     while next_dt and next_dt <= now and safety < 730:  # ~2 years safety
         try:
@@ -521,8 +502,7 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                     nxt_ist = prev_ist + relativedelta(years=step)
                 d = nxt_ist.date()
                 tmp = IST.localize(datetime.combine(d, dt_time(19, 0))).astimezone(tz)
-
-            next_dt = _shift_to_next_working_day_7pm(tmp)
+            next_dt = tmp
         except Exception:
             break
         safety += 1
@@ -533,6 +513,32 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                 f"Could not find a future date for series '{instance.task_name}'"
             )
         )
+        return
+
+    # ⛔ Guards BEFORE insert:
+    # 1) Sunday/holiday → SKIP (no row)
+    try:
+        ist = timezone.localtime(next_dt, IST)
+        if not _is_working_day(ist.date()):
+            logger.info(
+                _utils._safe_console_text(
+                    f"[RECUR] Skip creation for CL-{instance.id}: holiday/Sunday {ist:%Y-%m-%d}"
+                )
+            )
+            return
+    except Exception:
+        # Fail-safe: if we cannot evaluate, skip
+        return
+    # 2) Leave overlap at the instant (19:00 IST) → SKIP (no row)
+    try:
+        if is_user_blocked_at(instance.assign_to, timezone.localtime(next_dt, IST)):
+            logger.info(
+                _utils._safe_console_text(
+                    f"[RECUR] Skip creation for CL-{instance.id}: assignee on leave @ 19:00 IST"
+                )
+            )
+            return
+    except Exception:
         return
 
     # Duplicate guard (±1 minute window) using tolerant series Q
@@ -560,7 +566,7 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
                 task_name=instance.task_name,
                 message=instance.message,
                 assign_to=instance.assign_to,
-                planned_date=next_dt,  # shifted to next working day @ 19:00 IST
+                planned_date=next_dt,  # fixed 19:00 IST
                 priority=instance.priority,
                 attachment_mandatory=instance.attachment_mandatory,
                 mode=instance.mode,

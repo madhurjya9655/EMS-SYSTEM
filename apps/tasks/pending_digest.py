@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Dict, List, Any, Optional
+from datetime import datetime, date
+from typing import Dict, List, Any, Optional, Tuple
 
 import pytz
 from celery import shared_task
@@ -50,7 +50,30 @@ class Row:
     status: str = "Pending"
 
 
-def _now_ist() -> datetime:
+# ---------------- Working-day / holiday helpers (IST) ----------------
+def _today_ist() -> date:
+    return timezone.now().astimezone(IST).date()
+
+
+def _is_sunday_ist(d: date) -> bool:
+    return d.weekday() == 6  # Sunday == 6
+
+
+def _is_holiday_ist(d: date) -> bool:
+    try:
+        from apps.settings.models import Holiday  # type: ignore
+        return Holiday.objects.filter(date=d).exists()
+    except Exception:
+        # If Holiday model not available, treat only Sundays as non-working
+        return False
+
+
+def _is_working_day_ist(d: date) -> bool:
+    return (not _is_sunday_ist(d)) and (not _is_holiday_ist(d))
+# ---------------------------------------------------------------------
+
+
+def _now_ist_dt() -> datetime:
     return timezone.now().astimezone(IST)
 
 
@@ -66,18 +89,15 @@ def _display_user(u) -> str:
 # --- central leave-aware guard for “suppress mails during leave” ------------
 def _is_on_leave_today(user) -> bool:
     """
-    Returns True if the user is blocked by leave for *today* (IST),
-    using the same helper used elsewhere so half-days respect the 10:00 gate.
-    Falls back to LeaveRequest.is_user_blocked_on if blocking util is unavailable.
+    True if user is blocked by leave for *today* (IST).
+    Uses shared date-level guard (10:00 IST anchor), with model fallback.
     """
     today = timezone.localdate()
-    # Preferred: shared blocking util (date-level, 10:00 IST anchor)
     try:
         from apps.tasks.utils.blocking import is_user_blocked  # type: ignore
         return bool(is_user_blocked(user, today))
     except Exception:
         pass
-    # Fallback: model helper if present
     try:
         from apps.leave.models import LeaveRequest  # type: ignore
         fn = getattr(LeaveRequest, "is_user_blocked_on", None)
@@ -89,7 +109,52 @@ def _is_on_leave_today(user) -> bool:
 # -----------------------------------------------------------------------------
 
 
+# ---------------- Helpers to include ONLY past/today items -------------------
+def _planned_date_to_ist_date(pd) -> Optional[date]:
+    """
+    Convert model planned_date (date or datetime or None) to an IST calendar date.
+    Returns None if cannot parse.
+    """
+    if not pd:
+        return None
+    try:
+        if isinstance(pd, datetime):
+            return timezone.localtime(pd, IST).date()
+        # It is already a date
+        return pd
+    except Exception:
+        try:
+            # Last resort: treat as naive datetime
+            if isinstance(pd, datetime):
+                return pd.date()
+        except Exception:
+            return None
+    return None
+
+
+def _include_only_past_and_today(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Keep rows where planned_date <= today IST.
+    """
+    today = _today_ist()
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        pd = r.get("_planned_date_raw")
+        d = _planned_date_to_ist_date(pd)
+        if d is None:
+            # If no due date, be conservative: exclude from pending digest
+            continue
+        if d <= today:
+            out.append(r)
+    return out
+# -----------------------------------------------------------------------------
+
+
 def _rows_for_user(user) -> List[Dict[str, Any]]:
+    """
+    Build rows for a single user.
+    IMPORTANT: This function now filters to planned_date <= today IST only.
+    """
     rows: List[Row] = []
 
     # Checklist (Pending for this user)
@@ -111,7 +176,7 @@ def _rows_for_user(user) -> List[Dict[str, Any]]:
                     assigned_by=_display_user(obj.assign_by),
                     due_date=_fmt_dt_date(getattr(obj, "planned_date", None)),
                     task_type="Checklist",
-                ).__dict__
+                ).__dict__ | {"_planned_date_raw": getattr(obj, "planned_date", None)}
             )
     except Exception as e:
         logger.error(_safe_console_text(f"[PENDING DIGEST] Checklist fetch failed for user {getattr(user,'id','?')}: {e}"))
@@ -135,7 +200,7 @@ def _rows_for_user(user) -> List[Dict[str, Any]]:
                     assigned_by=_display_user(obj.assign_by),
                     due_date=_fmt_dt_date(getattr(obj, "planned_date", None)),
                     task_type="Delegation",
-                ).__dict__
+                ).__dict__ | {"_planned_date_raw": getattr(obj, "planned_date", None)}
             )
     except Exception as e:
         logger.error(_safe_console_text(f"[PENDING DIGEST] Delegation fetch failed for user {getattr(user,'id','?')}: {e}"))
@@ -161,23 +226,33 @@ def _rows_for_user(user) -> List[Dict[str, Any]]:
                     due_date=_fmt_dt_date(getattr(obj, "planned_date", None)),
                     task_type="Help Ticket",
                     status=getattr(obj, "status", "Pending") or "Pending",
-                ).__dict__
+                ).__dict__ | {"_planned_date_raw": getattr(obj, "planned_date", None)}
             )
     except Exception as e:
         logger.error(_safe_console_text(f"[PENDING DIGEST] HelpTicket fetch failed for user {getattr(user,'id','?')}: {e}"))
 
+    # Filter out future-dated rows
+    filtered = _include_only_past_and_today([dict(r) for r in rows])
+
+    # Stable sort
     try:
-        rows.sort(key=lambda r: (r.get("due_date") or "9999-12-31", r.get("task_type") or "", r.get("task_id") or ""))
+        filtered.sort(key=lambda r: (r.get("due_date") or "9999-12-31", r.get("task_type") or "", r.get("task_id") or ""))
     except Exception:
         pass
 
-    return rows
+    # Drop internal field
+    for r in filtered:
+        r.pop("_planned_date_raw", None)
+
+    return filtered
 
 
 def _rows_for_all_users() -> List[Dict[str, Any]]:
     """
     Build one big table containing ALL employees’ pending tasks (across all three types),
     including 'Assigned To' and 'Assigned By', suitable for the admin consolidated mail.
+
+    IMPORTANT: Filters to planned_date <= today IST only.
     """
     rows: List[Dict[str, Any]] = []
 
@@ -200,7 +275,7 @@ def _rows_for_all_users() -> List[Dict[str, Any]]:
                     assigned_by=_display_user(obj.assign_by),
                     due_date=_fmt_dt_date(getattr(obj, "planned_date", None)),
                     task_type="Checklist",
-                ).__dict__
+                ).__dict__ | {"_planned_date_raw": getattr(obj, "planned_date", None)}
             )
     except Exception as e:
         logger.error(_safe_console_text(f"[ADMIN DIGEST] Checklist fetch failed: {e}"))
@@ -224,7 +299,7 @@ def _rows_for_all_users() -> List[Dict[str, Any]]:
                     assigned_by=_display_user(obj.assign_by),
                     due_date=_fmt_dt_date(getattr(obj, "planned_date", None)),
                     task_type="Delegation",
-                ).__dict__
+                ).__dict__ | {"_planned_date_raw": getattr(obj, "planned_date", None)}
             )
     except Exception as e:
         logger.error(_safe_console_text(f"[ADMIN DIGEST] Delegation fetch failed: {e}"))
@@ -249,17 +324,25 @@ def _rows_for_all_users() -> List[Dict[str, Any]]:
                     due_date=_fmt_dt_date(getattr(obj, "planned_date", None)),
                     task_type="Help Ticket",
                     status=getattr(obj, "status", "Pending") or "Pending",
-                ).__dict__
+                ).__dict__ | {"_planned_date_raw": getattr(obj, "planned_date", None)}
             )
     except Exception as e:
         logger.error(_safe_console_text(f"[ADMIN DIGEST] HelpTicket fetch failed: {e}"))
 
+    # Filter out future-dated rows
+    filtered = _include_only_past_and_today(rows)
+
+    # Stable sort
     try:
-        rows.sort(key=lambda r: (r.get("due_date") or "9999-12-31", r.get("assigned_to") or "", r.get("task_type") or "", r.get("task_id") or ""))
+        filtered.sort(key=lambda r: (r.get("due_date") or "9999-12-31", r.get("assigned_to") or "", r.get("task_type") or "", r.get("task_id") or ""))
     except Exception:
         pass
 
-    return rows
+    # Drop internal field
+    for r in filtered:
+        r.pop("_planned_date_raw", None)
+
+    return filtered
 
 
 def _email_notifications_enabled() -> bool:
@@ -281,16 +364,19 @@ def send_daily_employee_pending_digest(
     to_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Sends ONE email per employee containing ALL of THEIR pending tasks.
-    - If 'username' is provided, only that user is processed.
-    - 'to_override' lets you redirect that employee's email to a tester (safe for dry runs).
-
-    ISSUE 18: If the recipient is Pankaj (configured), send ONLY delegation rows,
-              and pass category 'delegation.pending_digest' through the guard.
+    Sends ONE email per employee containing ALL of THEIR pending tasks
+    where planned_date <= today IST.
+    Skips if user is on leave today (IST), unless force=True.
     """
     if not _email_notifications_enabled():
         logger.info(_safe_console_text("[PENDING DIGEST] Skipped: email notifications disabled"))
         return {"ok": True, "skipped": True, "reason": "email_notifications_disabled"}
+
+    # Skip on non-working days (Sunday/holidays) unless force=True
+    today = _today_ist()
+    if not force and not _is_working_day_ist(today):
+        logger.info(_safe_console_text(f"[PENDING DIGEST] Skipped (non-working day {today})"))
+        return {"ok": True, "skipped": True, "reason": "non_working_day"}
 
     User = get_user_model()
     base_qs = User.objects.filter(is_active=True)
@@ -305,18 +391,13 @@ def send_daily_employee_pending_digest(
     for user in users:
         total_candidates += 1
 
-        # Suppress digest if the user is on leave today (IST), unless forced
-        try:
-            if _is_on_leave_today(user) and not force:
-                skipped += 1
-                logger.info(_safe_console_text(f"[PENDING DIGEST] Suppressed for user_id={getattr(user,'id','?')} (on leave today)"))
-                continue
-        except Exception as e:
-            logger.warning(_safe_console_text(f"[PENDING DIGEST] Leave-check failed for user_id={getattr(user,'id','?')}: {e}"))
+        if _is_on_leave_today(user) and not force:
+            skipped += 1
+            logger.info(_safe_console_text(f"[PENDING DIGEST] Suppressed for user_id={getattr(user,'id','?')} (on leave today)"))
+            continue
 
         rows = _rows_for_user(user)
 
-        # recipients
         recips = [to_override] if to_override else _dedupe_emails([getattr(user, "email", "") or ""])
         recips = [r for r in recips if r]
         if not recips:
@@ -324,16 +405,12 @@ def send_daily_employee_pending_digest(
             logger.info(_safe_console_text(f"[PENDING DIGEST] Skip user id={getattr(user,'id','?')} – no email"))
             continue
 
-        # ISSUE 18: If recipient is Pankaj, keep ONLY Delegation rows
-        # (helper inspects configured identity and filters accordingly)
         rows = strip_rows_to_delegations_only_if_pankaj_target(rows, target_email=recips[0])
 
-        # After possible filtering, if empty and not forced, skip (matches prior behavior)
         if not rows and not send_even_if_empty and not force:
             skipped += 1
             continue
 
-        # Apply guard with the allowed category for Pankaj (harmless no-op for others)
         filt_to, _, _ = filter_recipients_for_category(
             category="delegation.pending_digest",
             to=recips,
@@ -343,7 +420,7 @@ def send_daily_employee_pending_digest(
             logger.info(_safe_console_text(f"[PENDING DIGEST] Guard filtered recipients; skip user id={getattr(user,'id','?')}"))
             continue
 
-        day_iso = _now_ist().date().isoformat()
+        day_iso = today.isoformat()
         subject = f"Your Pending Tasks – {day_iso}"
         title = f"Your Pending Tasks ({day_iso})"
 
@@ -370,7 +447,7 @@ def send_daily_employee_pending_digest(
 
     logger.info(
         _safe_console_text(
-            f"[PENDING DIGEST] Completed at {_now_ist():%Y-%m-%d %H:%M IST}: "
+            f"[PENDING DIGEST] Completed at {_now_ist_dt():%Y-%m-%d %H:%M IST}: "
             f"sent={sent}, skipped={skipped}, candidates={total_candidates}, "
             f"username_filter={'yes' if username else 'no'}, to_override={'yes' if to_override else 'no'}"
         )
@@ -386,16 +463,18 @@ def send_admin_all_pending_digest(
 ) -> Dict[str, Any]:
     """
     Sends ONE consolidated email containing ALL employees' pending tasks to the admin email.
-    Default recipient: settings.ADMIN_PENDING_DIGEST_TO (if set).
-
-    ISSUE 18: If the target is Pankaj, include ONLY Delegation rows and
-              send under category 'delegation.pending_digest' (allowed for him).
+    Includes ONLY items with planned_date <= today IST.
+    Skips on non-working days unless force=True.
     """
     if not _email_notifications_enabled():
         logger.info(_safe_console_text("[ADMIN DIGEST] Skipped: email notifications disabled"))
         return {"ok": True, "skipped": True, "reason": "email_notifications_disabled"}
 
-    # Fully config-driven recipient (no hardcoded fallback here).
+    today = _today_ist()
+    if not force and not _is_working_day_ist(today):
+        logger.info(_safe_console_text(f"[ADMIN DIGEST] Skipped (non-working day {today})"))
+        return {"ok": True, "skipped": True, "reason": "non_working_day"}
+
     default_admin = getattr(settings, "ADMIN_PENDING_DIGEST_TO", "")
     target = (to or default_admin or "").strip()
     if not target:
@@ -403,15 +482,12 @@ def send_admin_all_pending_digest(
         return {"ok": False, "skipped": True, "reason": "no_admin_recipient"}
 
     rows = _rows_for_all_users()
-
-    # If target is Pankaj, keep ONLY Delegation rows (others unchanged)
     rows = strip_rows_to_delegations_only_if_pankaj_target(rows, target_email=target)
 
     if not rows and not force:
         logger.info(_safe_console_text("[ADMIN DIGEST] No pending rows; skipped send"))
         return {"ok": True, "skipped": True, "reason": "empty"}
 
-    # Apply guard for this category (will allow Pankaj only for delegation digests)
     filt_to, _, _ = filter_recipients_for_category(
         category="delegation.pending_digest",
         to=[target],
@@ -420,7 +496,7 @@ def send_admin_all_pending_digest(
         logger.info(_safe_console_text("[ADMIN DIGEST] Guard filtered recipient list; no email sent"))
         return {"ok": True, "skipped": True, "reason": "filtered_by_guard"}
 
-    day_iso = _now_ist().date().isoformat()
+    day_iso = today.isoformat()
     subject = f"All Employees – Pending Tasks – {day_iso}"
     title = f"All Employees – Pending Tasks ({day_iso})"
 
