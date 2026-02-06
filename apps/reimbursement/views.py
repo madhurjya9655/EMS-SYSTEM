@@ -21,6 +21,7 @@ from django.db.models import (
     Case,
     When,
 )
+from django.db.models.deletion import ProtectedError
 from django.http import (
     FileResponse,
     Http404,
@@ -286,8 +287,28 @@ class ExpenseItemDeleteView(LoginRequiredMixin, PermissionRequiredMixin, Templat
         if getattr(obj, "is_locked", False):
             messages.error(request, "This expense is attached to a request and cannot be deleted.")
         else:
-            obj.delete()
-            messages.success(request, "Expense deleted.")
+            try:
+                obj.delete()
+                messages.success(request, "Expense deleted.")
+            except ProtectedError:
+                # Gather referencing reimbursement request IDs (best effort)
+                req_ids = list(
+                    ReimbursementLine.objects.filter(expense_item=obj)
+                    .values_list("request_id", flat=True)
+                    .distinct()
+                )
+                if req_ids:
+                    messages.error(
+                        request,
+                        "Cannot delete this expense because it is used in reimbursement request(s): "
+                        + ", ".join(str(i) for i in sorted(req_ids))
+                        + ". Remove it from those request(s) first."
+                    )
+                else:
+                    messages.error(
+                        request,
+                        "Cannot delete this expense because it is linked to other records."
+                    )
         return redirect("reimbursement:expense_inbox")
 
     def get_context_data(self, **kwargs):
