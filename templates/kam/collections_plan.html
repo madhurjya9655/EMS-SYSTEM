@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% load humanize crispy_forms_tags %}
+{% block title %}Collections Plan{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between">
+  <h1 class="page-title m-0">Collections Plan</h1>
+  <form class="d-flex gap-2" method="get">
+    <select name="period" class="form-select form-select-sm">
+      <option value="week" {% if period_type == 'WEEK' %}selected{% endif %}>Week</option>
+      <option value="month" {% if period_type == 'MONTH' %}selected{% endif %}>Month</option>
+      <option value="quarter" {% if period_type == 'QUARTER' %}selected{% endif %}>Quarter</option>
+      <option value="year" {% if period_type == 'YEAR' %}selected{% endif %}>Year</option>
+      <option value="custom" {% if period_type == 'CUSTOM' %}selected{% endif %}>Custom</option>
+      <option value="all" {% if period_type == 'ALL' %}selected{% endif %}>All</option>
+    </select>
+    <input name="asof" placeholder="YYYY[-MM[-DD]]" value="{{ request.GET.asof }}" class="form-control form-control-sm"/>
+    <input name="from" placeholder="YYYY[-MM[-DD]] (From)" value="{{ request.GET.from }}" class="form-control form-control-sm"/>
+    <input name="to" placeholder="YYYY[-MM[-DD]] (To)" value="{{ request.GET.to }}" class="form-control form-control-sm"/>
+    <button class="btn btn-sm btn-primary">Apply</button>
+  </form>
+</div>
+
+<div class="card p-3 my-3">
+  <h6 class="fw-bold mb-2">Add / Update Plan</h6>
+  <!-- Supports either Period Type + Period Id OR From–To range -->
+  <form method="post" class="row g-2" novalidate>
+    {% csrf_token %}
+    <div class="col-md-2">{{ form.period_type.label_tag }} {{ form.period_type }}</div>
+    <div class="col-md-2">{{ form.period_id.label_tag }} {{ form.period_id }}</div>
+    <div class="col-md-2">{{ form.from_date.label_tag }} {{ form.from_date }}</div>
+    <div class="col-md-2">{{ form.to_date.label_tag }} {{ form.to_date }}</div>
+    <div class="col-md-2">{{ form.customer.label_tag }} {{ form.customer }}</div>
+    <div class="col-md-2">{{ form.planned_amount.label_tag }} {{ form.planned_amount }}</div>
+    <div class="col-12 small text-muted">
+      Use either <em>Period Type + Period Id</em> (e.g., MONTH + 2026-02) or a <em>From–To</em> date range.
+      If both are provided, the range is stored and used for comparisons in the selected window.
+    </div>
+    <div class="col-12 d-grid"><button class="btn btn-primary">Save</button></div>
+  </form>
+</div>
+
+<div class="card p-3">
+  <h6 class="fw-bold mb-2">Planned vs Actual (₹)</h6>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead>
+        <tr>
+          <th>Customer</th>
+          <th>KAM</th>
+          <th class="text-end">Overdues (latest)</th>
+          <th class="text-end">Planned</th>
+          <th class="text-end">Actual</th>
+          <th class="text-center">Plan Window</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.customer.name }}</td>
+          <td>{{ r.kam.username }}</td>
+          <td class="text-end">₹ {{ r.overdue|floatformat:2|intcomma }}</td>
+          <td class="text-end">₹ {{ r.planned|floatformat:2|intcomma }}</td>
+          <td class="text-end">₹ {{ r.actual|floatformat:2|intcomma }}</td>
+          <td class="text-center">
+            {% if r.from_date and r.to_date %}
+              {{ r.from_date }} → {{ r.to_date }}
+            {% elif r.period_type and r.period_id %}
+              {{ r.period_type }} • {{ r.period_id }}
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6" class="text-muted">No plans for this window.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

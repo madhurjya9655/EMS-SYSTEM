@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags humanize %}
+{% block title %}Collection Entry{% endblock %}
+
+{% block content %}
+<h2 class="page-title">Collection Entry</h2>
+<div class="card p-3">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {{ form|crispy }}
+    <div class="d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Save</button>
+      <a class="btn btn-outline-secondary" href="{% url 'kam:visits' %}">Back</a>
+    </div>
+  </form>
+  <div class="small text-muted mt-2">
+    Entries are additive; multiple partials are allowed.
+    Efficiency is computed against plan if available; otherwise shown vs overdue.
+  </div>
+</div>
+{% endblock %}

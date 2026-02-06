@@ -252,7 +252,14 @@ img { max-width: 100%; display: block; }
 .table .text-muted { color: var(--muted) !important; }
 
 /* Selected row highlight (used by JS bulk tool) */
-tr.is-selected > td { background: rgba(59,130,246,.1) !important; }
+tr.is-selected > td {
+  background: rgba(59,130,246,.10) !important;
+  box-shadow: inset 3px 0 0 0 var(--brand-600);
+}
+tr.is-dim > td { opacity: .65; }
+
+/* A tiny checkbox column helper, if needed */
+th.col-check, td.col-check { width: 36px; }
 
 /* Alerts */
 .alert {
@@ -302,6 +309,7 @@ footer {
   .card-header { padding: .7rem .85rem; }
   .btn, .btn-primary, .btn-outline-secondary { font-size: .88rem; }
 
+  /* Mobile-friendly “cards” table layout */
   .table thead { display: none; }
   .table tbody tr { display: grid; grid-template-columns: 1fr 1fr; gap: .25rem .75rem; padding: .6rem .5rem; border-top: 1px solid var(--border); }
   .table tbody td {
@@ -322,3 +330,15 @@ footer {
 .rounded-10 { border-radius: 10px; }
 .shadow-1 { box-shadow: var(--shadow-1); }
 .shadow-2 { box-shadow: var(--shadow-2); }
+
+/* Optional mini-toolbar for bulk forms */
+.bulk-toolbar {
+  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+}
+.bulk-chip {
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  padding: .25rem .6rem;
+  font-weight: 700; color: var(--brand-700);
+}

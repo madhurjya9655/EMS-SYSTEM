@@ -69,8 +69,6 @@
       --hero-grad-dark: linear-gradient(135deg, rgba(37,99,235,1) 0%, rgba(37,99,235,.8) 50%, rgba(17,24,39,.85) 100%);
     }
 
-    /* System dark-mode definitions exist for back-compat,
-       but will be neutralized by the "force light" overrides below. */
     @media (prefers-color-scheme: dark){
       :root{
         --bg:#0b1220;
@@ -86,9 +84,6 @@
       }
     }
 
-    /* =========================
-       BASE
-       ========================= */
     *{box-sizing:border-box}
     html,body{height:100%}
     body{
@@ -115,9 +110,6 @@
       border-radius:6px;
     }
 
-    /* =========================
-       HEADER
-       ========================= */
     .header{
       position:fixed; inset:0 0 auto 0; height:var(--header-h);
       background:var(--primary); color:#fff; z-index:1000;
@@ -156,7 +148,6 @@
       display:none;background:none;border:none;color:#fff;font-size:1.15rem;cursor:pointer;
     }
 
-    /* ===== Notif bell & badges ===== */
     .notif-bell{
       position:relative;
       display:inline-flex;
@@ -180,9 +171,6 @@
       box-shadow:0 0 0 2px #fff;
     }
 
-    /* =========================
-       ✨ FESTIVE HERO CAROUSEL
-       ========================= */
     .hero-wrap{
       position:fixed;
       top:var(--header-h);
@@ -193,8 +181,6 @@
       box-shadow: 0 18px 40px rgba(2,6,23,.16);
       backdrop-filter: blur(2px);
     }
-    /* (A dark override exists later; we re-assert light in the force-light block) */
-
     .hero{
       position:relative;
       border-bottom:3px solid var(--gold);
@@ -257,9 +243,6 @@
       100%{ transform: translateY(-260px) scale(1.25); opacity:0 }
     }
 
-    /* =========================
-       SIDEBAR
-       ========================= */
     .sidebar{
       position:fixed;
       top:var(--header-h);
@@ -292,11 +275,6 @@
     .submenu{display:none;margin:.2rem .6rem .6rem 1.1rem;border-left:2px solid var(--border);padding:.2rem 0}
     .submenu .nav-item{margin:.1rem .25rem;padding:.6rem 1rem;font-weight:500;font-size:.9rem}
 
-    /* Dark-mode hover overrides existed here; we re-assert light in force-light block. */
-
-    /* =========================
-       MAIN
-       ========================= */
     .main-content{
       margin-left:var(--sidebar-w);
       margin-top:var(--header-h);
@@ -306,7 +284,6 @@
     }
     .main-content.expanded{margin-left:0}
 
-    /* Pushdown when hero visible */
     .has-hero .main-content{ margin-top:calc(var(--header-h) + 260px); }
     .has-hero .sidebar{ top:calc(var(--header-h) + 260px); height:calc(100vh - var(--header-h) - 260px); }
 
@@ -366,6 +343,15 @@
     .nav-tabs{border-bottom:1px solid var(--border);flex-wrap:nowrap;overflow-x:auto;gap:.25rem}
     .nav-tabs .nav-link{white-space:nowrap}
 
+    /* Overlay loader */
+    .page-overlay{
+      position:fixed; inset:var(--header-h) 0 0 0; background:rgba(255,255,255,.55);
+      backdrop-filter:saturate(120%) blur(2px); display:none; place-items:center; z-index:1200;
+    }
+    .page-overlay.show{display:grid}
+    .spinner{width:44px;height:44px;border-radius:50%;border:4px solid #c7d2fe;border-top-color:#3b82f6;animation:spin .9s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
     @media (max-width:576px){
       .nav-tabs{flex-wrap:wrap;overflow-x:hidden}
       .nav-tabs .nav-link{flex:1 1 100%;text-align:center}
@@ -405,9 +391,6 @@
       .main-content{margin:0;padding:0}
     }
 
-    /* =========================================================
-       FORCE LIGHT THEME (wins over any prefers-color-scheme)
-       ========================================================= */
     :root[data-theme="light"]{
       --bg:#f6f8fb;
       --surface:#ffffff;
@@ -421,15 +404,15 @@
       --shadow-2:0 8px 24px rgba(15,23,42,.14);
     }
 
-    /* Re-assert light equivalents for selectors that had dark-only overrides */
     .nav-item:hover{background:#eef2ff;color:#3b82f6}
     .nav-item.active,
     .nav-item[aria-current="page"]{background:#e7efff;color:#3b82f6;border-left-color:#3b82f6}
     .alert-info{background:#eef4ff;color:var(--text)}
-    .hero-wrap{ background:var(--hero-grad); } /* always light gradient */
+    .hero-wrap{ background:var(--hero-grad); }
   </style>
 </head>
 <body>
+  {% block body_start %}{% endblock %}
   <a href="#mainContent" class="skip-link">Skip to content</a>
 
   {% url 'dashboard:home' as dashboard_home_url %}
@@ -446,7 +429,6 @@
       </div>
 
       <div class="header-actions">
-        <!-- Finance bell (only Finance/Admin & when there are resubmitted rejected bills) -->
         {% if user|has_permission:"reimbursement_finance_review" or user.is_superuser %}
           {% if FINANCE_REJECTED_RESUB_COUNT|default:0|add:0 > 0 %}
             <a class="notif-bell" href="{% url 'reimbursement:finance_rejected_bills_queue' %}" title="Resubmitted rejected bills awaiting review" aria-label="Resubmitted rejected bills">
@@ -571,7 +553,6 @@
         </a>
         {% endif %}
 
-        {# Leave Application #}
         {% if user|has_any_permission:"leave_list,leave_apply,leave_pending_manager" or user|has_group:"Manager" or user|has_group:"HR" or user.is_superuser %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="leaveSubmenu" data-submenu-toggle data-submenu-key="leave">
           <i class="fas fa-calendar-day" aria-hidden="true"></i> Leave Application (Vishram Register) <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
@@ -612,7 +593,7 @@
           {% endif %}
           {% if user|has_permission:"list_checklist" %}
           <a href="{% url 'tasks:list_checklist' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}aria-current="page"{% endif %}>
+             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}aria-current="page"%}{% endif %}>
             <i class="fas fa-clipboard-list" aria-hidden="true"></i> List Checklist (Lakshya Suchi)
           </a>
           {% endif %}
@@ -673,6 +654,85 @@
           <a href="{% url 'tasks:assigned_by_me' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_by_me' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_by_me' %}aria-current="page"{% endif %}>
             <i class="fas fa-user-plus" aria-hidden="true"></i> Assigned by Me
+          </a>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        <!-- 🌟 KAM (Key Account Management) – gated ONLY by app-level permissions -->
+        {% if user|has_module_permission:"KAM (Key Accounts)" %}
+        <button type="button" class="nav-item" aria-expanded="false" aria-controls="kamSubmenu" data-submenu-toggle data-submenu-key="kam">
+          <i class="fas fa-id-badge" aria-hidden="true"></i> KAM (Key Accounts)
+          <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+        </button>
+        <div class="submenu" id="kamSubmenu" role="group" aria-label="KAM">
+          {% if user|has_permission:"kam_dashboard" %}
+          <a href="{% url 'kam:dashboard' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'dashboard' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'dashboard' %}aria-current="page"{% endif %}>
+            <i class="fas fa-gauge" aria-hidden="true"></i> KAM Dashboard
+          </a>
+          {% endif %}
+
+          {% if user|has_permission:"kam_plan" %}
+          <a href="{% url 'kam:plan' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'plan' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'plan' %}aria-current="page"{% endif %}>
+            <i class="fas fa-calendar-check" aria-hidden="true"></i> Weekly Plan
+          </a>
+          {% endif %}
+
+          {% if user|has_any_permission:"kam_visits,kam_call_new,kam_collection_new" %}
+          <a href="{% url 'kam:visits' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'visits' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'visits' %}aria-current="page"{% endif %}>
+            <i class="fas fa-phone-volume" aria-hidden="true"></i> Visits &amp; Calls
+          </a>
+          {% endif %}
+
+          {% if user|has_permission:"kam_customers" %}
+          <a href="{% url 'kam:customers' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'customers' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'customers' %}aria-current="page"{% endif %}>
+            <i class="fas fa-address-book" aria-hidden="true"></i> Customers
+          </a>
+          {% endif %}
+
+          {% if user|has_any_permission:"kam_targets,kam_targets_lines" %}
+          <a href="{% url 'kam:targets' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'targets' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'targets' %}aria-current="page"{% endif %}>
+            <i class="fas fa-bullseye" aria-hidden="true"></i> Targets
+          </a>
+          {% endif %}
+
+          {% if user|has_any_permission:"kam_manager,kam_manager_kpis,kam_reports" %}
+          <a href="{% url 'kam:manager' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'manager' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'manager' %}aria-current="page"{% endif %}>
+            <i class="fas fa-briefcase" aria-hidden="true"></i> Manager Console
+          </a>
+          {% endif %}
+
+          {% if user|has_any_permission:"kam_manager_kpis,kam_reports" %}
+          <a href="{% url 'kam:manager_kpis' %}?period=week"
+             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'manager_kpis' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'manager_kpis' %}aria-current="page"{% endif %}>
+            <i class="fas fa-chart-line" aria-hidden="true"></i> KAM Reports
+          </a>
+          {% endif %}
+
+          {% if user|has_any_permission:"kam_collections_plan" %}
+          <a href="{% url 'kam:collections_plan' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'collections_plan' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'collections_plan' %}aria-current="page"{% endif %}>
+            <i class="fas fa-money-bill-wave" aria-hidden="true"></i> Collections Plan
+          </a>
+          {% endif %}
+
+          {% if user|has_any_permission:"kam_sync_now,kam_sync_trigger,kam_sync_step" %}
+          <a href="{% url 'kam:sync_now' %}" class="nav-item">
+            <i class="fas fa-rotate" aria-hidden="true"></i> Sync now
           </a>
           {% endif %}
         </div>
@@ -748,7 +808,6 @@
           </a>
           {% endif %}
 
-          {# NEW — Settlement (Ready to Pay) #}
           {% if user|has_any_permission:"reimbursement_finance_review,reimbursement_review_finance" or user.is_superuser %}
           <a href="{% url 'reimbursement:finance_settlement' %}"
              class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_settlement' %}active{% endif %}"
@@ -773,13 +832,16 @@
              {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'admin_requests' %}aria-current="page"{% endif %}>
             <i class="fas fa-list-alt" aria-hidden="true"></i> Admin – All Requests
           </a>
-          <a href="{% url 'reimbursement:admin_bills_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_bills_summary' %}active{% endif %}">
+          <a href="{% url 'reimbursement:admin_bills_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_bills_summary' %}active{% endif %}"
+             {% if request.resolver_match.url_name == 'admin_bills_summary' %}aria-current="page"{% endif %}>
             <i class="fas fa-table" aria-hidden="true"></i> Admin – Bills Summary
           </a>
-          <a href="{% url 'reimbursement:admin_status_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_status_summary' %}active{% endif %}">
+          <a href="{% url 'reimbursement:admin_status_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_status_summary' %}active{% endif %}"
+             {% if request.resolver_match.url_name == 'admin_status_summary' %}aria-current="page"{% endif %}>
             <i class="fas fa-signal" aria-hidden="true"></i> Admin – Status Summary
           </a>
-          <a href="{% url 'reimbursement:admin_employee_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_employee_summary' %}active{% endif %}">
+          <a href="{% url 'reimbursement:admin_employee_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_employee_summary' %}active{% endif %}"
+             {% if request.resolver_match.url_name == 'admin_employee_summary' %}aria-current="page"{% endif %}>
             <i class="fas fa-user-tie" aria-hidden="true"></i> Admin – Employee Summary
           </a>
           <a href="{% url 'reimbursement:approver_mapping_admin' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'approver_mapping_admin' %}active{% endif %}"
@@ -847,30 +909,6 @@
         </div>
         {% endif %}
 
-        {% if user|has_any_permission:"authorized_numbers,system_settings" or user.is_superuser %}
-        <button type="button" class="nav-item" aria-expanded="false" aria-controls="settingsSubmenu" data-submenu-toggle data-submenu-key="settings">
-          <i class="fas fa-cog" aria-hidden="true"></i> Settings <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
-        </button>
-        <div class="submenu" id="settingsSubmenu" role="group" aria-label="Settings">
-          {% if user|has_permission:"authorized_numbers" %}
-          <a href="{% url 'settings:authorized_list' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}aria-current="page"{% endif %}>
-            <i class="fas fa-phone" aria-hidden="true"></i> Authorized Numbers
-          </a>
-          {% endif %}
-          <a href="{% url 'settings:holiday_list' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}aria-current="page"{% endif %}>
-            <i class="fas fa-calendar-day" aria-hidden="true"></i> Holiday List
-          </a>
-          {% if user|has_permission:"system_settings" %}
-          <a href="{% url 'settings:system_settings' %}" class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}aria-current="page"{% endif %}>
-            <i class="fas fa-sliders-h" aria-hidden="true"></i> System Settings
-          </a>
-          {% endif %}
-        </div>
-        {% endif %}
-
         {% if user.is_superuser %}
         <a href="{% url 'users:debug_permissions' %}" class="nav-item {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'debug_permissions' %}active{% endif %}"
            {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'debug_permissions' %}aria-current="page"{% endif %}>
@@ -878,6 +916,7 @@
         </a>
         {% endif %}
       </div>
+      {% block sidebar_extra %}{% endblock %}
     </nav>
     <div class="sidebar-overlay" data-sidebar-overlay aria-hidden="true"></div>
   {% endif %}
@@ -901,11 +940,16 @@
     </footer>
   {% endif %}
 
-  <!-- Vendor JS -->
+  <!-- GLOBAL PORTALS -->
+  <div id="modalHost"><!-- bootstrap modals can be appended here --></div>
+  <div id="toastHost" class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 1400;"></div>
+  <div id="pageOverlay" class="page-overlay"><div class="spinner" role="status" aria-label="Loading"></div></div>
+
   <script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"
           integrity="sha384-geWF76RCwLtnZ8qwWowPQNguL3RmwHVBC9FhGdlKrxdiJJigb/j/68SIy3Te4Bkz"
           crossorigin="anonymous"></script>
 
+  <!-- App boot JS -->
   <script>
     (function(){
       function getCookie(name){
@@ -914,11 +958,10 @@
       }
       const CSRF_COOKIE = 'csrftoken';
       const SIDEBAR_KEY = 'ems:sidebar-collapsed';
-      const SUBMENU_KEY_PREFIX = 'ems:submenu:';
       const HERO_KEY = 'ems:hero:dismissed:2026';
 
       document.addEventListener('DOMContentLoaded', () => {
-        /* Auto-inject CSRF in POST forms */
+        // CSRF hardening for any stray POST forms
         document.querySelectorAll('form[method="post"]').forEach(form => {
           const hasToken = form.querySelector('input[name="csrfmiddlewaretoken"]');
           if (!hasToken) {
@@ -933,7 +976,7 @@
           }
         });
 
-        /* Show festive hero if it exists and not dismissed */
+        // Festive hero — strictly client-side, dismissible, no server coupling
         try{
           const heroWrap = document.getElementById('heroWrap');
           const bodyEl = document.body;
@@ -959,7 +1002,7 @@
         }catch(_e){/* no-op */ }
       });
 
-      /* Fetch CSRF patch */
+      // Fetch CSRF patch
       (function patchFetch(){
         const _fetch = window.fetch;
         window.fetch = function(input, init){
@@ -981,7 +1024,7 @@
         };
       })();
 
-      /* XHR CSRF patch */
+      // XHR CSRF patch
       (function patchXHR(){
         const origOpen = XMLHttpRequest.prototype.open;
         const origSend = XMLHttpRequest.prototype.send;
@@ -1003,7 +1046,7 @@
         };
       })();
 
-      /* Sidebar + submenu behavior */
+      // Sidebar / submenu toggles
       function toggleSidebar(){
         const sidebar=document.getElementById('sidebar');
         const overlay=document.querySelector('[data-sidebar-overlay]');
@@ -1031,7 +1074,7 @@
           sidebar.classList.toggle('collapsed');
           const collapsed = sidebar.classList.contains('collapsed');
           main.classList.toggle('expanded', collapsed);
-          try{ localStorage.setItem('ems:sidebar-collapsed', collapsed ? '1':'0'); }catch(_e){}
+          try{ localStorage.setItem(SIDEBAR_KEY, collapsed ? '1':'0'); }catch(_e){}
         }
       }
 
@@ -1104,7 +1147,7 @@
         try{
           const sidebar = document.getElementById('sidebar');
           const main = document.getElementById('mainContent');
-          if (window.innerWidth>768 && localStorage.getItem('ems:sidebar-collapsed')==='1') {
+          if (window.innerWidth>768 && localStorage.getItem(SIDEBAR_KEY)==='1') {
             sidebar?.classList.add('collapsed');
             main?.classList.add('expanded');
           }
@@ -1128,11 +1171,12 @@
         });
       });
 
+      // Service worker (optional)
       if ('serviceWorker' in navigator){
         try{ navigator.serviceWorker.register('{% static "sw.js" %}').catch(()=>{}); }catch(_e){}
       }
 
-      /* Lightweight Fireworks + Confetti */
+      // Simple canvas anims (pure cosmetic)
       let fwRAF=null, fwCtx=null, fwParticles=[];
       function startFireworks(id){
         const canvas = document.getElementById(id);
@@ -1237,11 +1281,32 @@
         if (id === 'confettiCanvas' && cfRAF){ cancelAnimationFrame(cfRAF); cfRAF=null; cfCtx=null; confetti=[]; }
       }
 
+      // Toast helper & overlay API
+      window.BOS = window.BOS || {};
+      BOS.toast = function(msg, type){
+        try{
+          const host = document.getElementById('toastHost');
+          const el = document.createElement('div');
+          el.className = 'toast align-items-center text-bg-' + (type || 'primary') + ' border-0';
+          el.role = 'status'; el.ariaLive = 'polite'; el.ariaAtomic = 'true';
+          el.innerHTML = '<div class="d-flex"><div class="toast-body">'+ msg +'</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button></div>';
+          host.appendChild(el);
+          const t = new bootstrap.Toast(el, { delay: 3200 });
+          t.show();
+          el.addEventListener('hidden.bs.toast', () => el.remove());
+        }catch(_e){}
+      };
+      BOS.overlay = {
+        show(){ const o=document.getElementById('pageOverlay'); if(o) o.classList.add('show'); },
+        hide(){ const o=document.getElementById('pageOverlay'); if(o) o.classList.remove('show'); }
+      };
+
       window.fitCanvas = fitCanvas;
       window.stopCanvas = stopCanvas;
     })();
   </script>
 
   {% block extra_js %}{% endblock %}
+  {% block body_end %}{% endblock %}
 </body>
 </html>

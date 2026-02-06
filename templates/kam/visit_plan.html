@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block title %}Plan Visit{% endblock %}
+
+{% block content %}
+<style>
+  /* Keep both panels visually aligned and same height */
+  .plan-grid .card { height: 100%; }
+  /* Make the right panel controls compact & aligned */
+  .form-inline-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .5rem .75rem;
+  }
+  .form-inline-grid .wide { grid-column: 1 / -1; }
+  @media (max-width: 992px) {
+    .form-inline-grid { grid-template-columns: 1fr; }
+  }
+  /* Multiselect min-height for better usability */
+  .customer-multiselect { min-height: 220px; }
+  /* Keep helper lines subtle */
+  .form-help { font-size: .85rem; color: #6c757d; }
+</style>
+
+<div class="page-header d-flex align-items-center justify-content-between">
+  <h1 class="page-title m-0">Plan Visit</h1>
+</div>
+
+<div class="row g-3 plan-grid">
+  <!-- Left: Single Visit (unchanged form binding) -->
+  <div class="col-lg-6">
+    <div class="card p-3">
+      <h5 class="mb-3">Single Visit</h5>
+      <form method="post" novalidate>
+        {% csrf_token %}
+        {{ form|crispy }}
+        <div class="d-flex gap-2">
+          <button class="btn btn-primary" type="submit">Save</button>
+          <a href="{% url 'kam:plan' %}" class="btn btn-outline-secondary">Reset</a>
+        </div>
+      </form>
+      <div class="form-help mt-2">
+        Max <strong>6</strong> planned visits per ISO week. Unplanned does not require approval.
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: Batch Submission (aligned with left) -->
+  <div class="col-lg-6">
+    <div class="card p-3">
+      <h5 class="mb-3">Batch Submission</h5>
+
+      <!--
+        POSTS BACK TO SAME VIEW.
+        Distinguish in your view with:
+          if request.POST.get("mode") == "batch":  # handle batch creation
+        Keep names generic; no assumption about server-side forms.
+      -->
+      <form method="post" novalidate>
+        {% csrf_token %}
+        <input type="hidden" name="mode" value="batch"/>
+
+        <div class="form-inline-grid">
+          <!-- Visit category -->
+          <div>
+            <label class="form-label mb-1">Visit category*</label>
+            <select name="batch_visit_category" class="form-select">
+              <option value="">---------</option>
+              <option value="CUSTOMER">Customer Visit</option>
+              <option value="SUPPLIER">Supplier Visit</option>
+              <option value="WAREHOUSE">Warehouse Visit</option>
+            </select>
+          </div>
+
+          <!-- From / To dates -->
+          <div>
+            <label class="form-label mb-1">From date</label>
+            <input type="date" name="batch_from_date" class="form-control" />
+          </div>
+          <div>
+            <label class="form-label mb-1">To date</label>
+            <input type="date" name="batch_to_date" class="form-control" />
+          </div>
+
+          <!-- Purpose -->
+          <div class="wide">
+            <label class="form-label mb-1">Purpose</label>
+            <input type="text" name="batch_purpose" class="form-control" placeholder="Common purpose (optional)"/>
+          </div>
+
+          <!-- Customers multiselect -->
+          <div class="wide">
+            <label class="form-label mb-1">Customers (multi-select)</label>
+            <!--
+              If your view provides a customers list in context (e.g. customers),
+              render it here. Fallback: keep the select empty and let JS or server fill.
+            -->
+            <select name="batch_customers" class="form-select customer-multiselect" multiple>
+              {% if customers %}
+                {% for c in customers %}
+                  <option value="{{ c.id }}">{{ c.name }}</option>
+                {% endfor %}
+              {% else %}
+                <!-- Example static placeholder; safe if context empty -->
+                {% comment %} Options should be provided by the view {% endcomment %}
+              {% endif %}
+            </select>
+            <div class="form-help">Hold Ctrl / Cmd to select multiple customers.</div>
+          </div>
+        </div>
+
+        <div class="d-flex align-items-center gap-2 mt-3">
+          <button class="btn btn-primary" type="submit" name="submit_batch" value="1">Submit Batch</button>
+          <a class="btn btn-outline-secondary" href="{% url 'kam:plan' %}">Reset</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Below: weekly list stays full width -->
+<div class="row g-3 mt-1">
+  <div class="col-12">
+    <div class="card p-3">
+      <h5 class="mb-3">This Week’s Plans</h5>
+      {% if plans %}
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Customer</th>
+                <th>Type</th>
+                <th>Expected Sales (MT)</th>
+                <th>Expected Collection (₹)</th>
+                <th>Status</th>
+                <th>Post</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for p in plans %}
+              <tr>
+                <td>{{ p.visit_date }}</td>
+                <td>{{ p.customer.name }}</td>
+                <td>{{ p.get_visit_type_display }}</td>
+                <td>{{ p.expected_sales_mt|default:"—" }}</td>
+                <td>{{ p.expected_collection|default:"—" }}</td>
+                <td>{{ p.get_approval_status_display }}</td>
+                <td>
+                  {% if p.actual_id %}
+                    <span class="badge bg-success">Done</span>
+                  {% else %}
+                    <a class="btn btn-sm btn-outline-primary" href="{% url 'kam:visits' %}?plan_id={{ p.id }}">Post</a>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="text-muted m-0">No plans for this week.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,3 +1,4 @@
+# apps/leave/admin.py
 from __future__ import annotations
 
 import json
@@ -143,7 +144,7 @@ class LeaveRequestAdmin(admin.ModelAdmin):
     Production-minded admin:
       • Rich list with filters/search
       • Inline audits
-      • Safe bulk approve/reject (model validations & 10:00 IST respected)
+      • Safe bulk approve/reject (model validations)
       • Routing-map viewer endpoint under this model
     """
 
@@ -309,11 +310,10 @@ class LeaveRequestAdmin(admin.ModelAdmin):
     # ---------- bulk actions ----------
     actions = ("action_bulk_approve", "action_bulk_reject")
 
-    @admin.action(description="Approve selected (respects 10:00 AM IST cutoff)")
+    @admin.action(description="Approve selected")
     def action_bulk_approve(self, request: HttpRequest, queryset):
         """
-        Use the model helper (approve) so audits + decision emails are sent,
-        and the 10:00 AM IST gate is enforced consistently.
+        Use the model helper (approve) so audits + decision emails are sent.
         """
         changed, blocked = 0, 0
         for lr in queryset:
@@ -329,15 +329,14 @@ class LeaveRequestAdmin(admin.ModelAdmin):
         if blocked:
             self.message_user(
                 request,
-                f"{blocked} item(s) could not be approved (cutoff/validation).",
+                f"{blocked} item(s) could not be approved (validation).",
                 level=messages.WARNING,
             )
 
-    @admin.action(description="Reject selected (respects 10:00 AM IST cutoff)")
+    @admin.action(description="Reject selected")
     def action_bulk_reject(self, request: HttpRequest, queryset):
         """
-        Use the model helper (reject) so audits + decision emails are sent,
-        and the 10:00 AM IST gate is enforced consistently.
+        Use the model helper (reject) so audits + decision emails are sent.
         """
         changed, blocked = 0, 0
         for lr in queryset:
@@ -353,7 +352,7 @@ class LeaveRequestAdmin(admin.ModelAdmin):
         if blocked:
             self.message_user(
                 request,
-                f"{blocked} item(s) could not be rejected (cutoff/validation).",
+                f"{blocked} item(s) could not be rejected (validation).",
                 level=messages.WARNING,
             )
 
@@ -560,32 +559,6 @@ class ApproverMappingAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request: HttpRequest, obj=None) -> bool:
         return bool(getattr(request.user, "is_superuser", False))
-
-
-# ---------------------------------------------------------------------
-# LeaveType admin (restricted to allowed names)
-# ---------------------------------------------------------------------
-@admin.register(LeaveType)
-class LeaveTypeAdmin(admin.ModelAdmin):
-    list_display = ("name", "default_days")
-    search_fields = ("name",)
-    ordering = ("name",)
-
-    def has_add_permission(self, request):
-        # allow adding, but we gate the actual name in save_model
-        return super().has_add_permission(request)
-
-    def has_delete_permission(self, request, obj=None):
-        # optional: allow delete, but you likely don't want to delete the 3 canonical rows
-        return super().has_delete_permission(request, obj)
-
-    def save_model(self, request, obj: LeaveType, form, change):
-        # enforce canonical names
-        if obj.name not in ALLOWED_LEAVE_TYPE_NAMES:
-            raise ValidationError(
-                "Only these Leave Types are allowed: Casual Leave, Maternity Leave, Compensatory Off."
-            )
-        super().save_model(request, obj, form, change)
 
 
 # ---------------------------------------------------------------------

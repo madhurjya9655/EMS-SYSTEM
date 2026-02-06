@@ -1,4 +1,6 @@
 # apps/tasks/views_cron.py
+from __future__ import annotations
+
 from django.conf import settings
 from django.http import JsonResponse, HttpResponseForbidden
 from django.views.decorators.csrf import csrf_exempt
@@ -10,12 +12,18 @@ from apps.tasks.services.weekly_performance import (
     upsert_weekly_scores_for_last_week,  # pure ORM scorer
 )
 
-# Celery tasks & orchestrators
+# Celery tasks & orchestrators (existing core)
 from apps.tasks.tasks import (
-    generate_recurring_checklists,    # ensure “today” rows exist
-    send_due_today_assignments,       # 10:00 IST fan-out (leave aware; now centrally locked)
+    generate_recurring_checklists,    # ensure “future” rows exist (not today)
+    send_due_today_assignments,       # 10:00 IST fan-out (leave aware; centrally locked)
     pre10am_unblock_and_generate,     # 09:55 IST safeguard
 )
+
+# ✅ NEW: lightweight “today-only” materializer (safe, no emails)
+try:
+    from apps.tasks.materializer import materialize_today_for_all  # type: ignore
+except Exception:  # pragma: no cover
+    materialize_today_for_all = None  # type: ignore
 
 import threading
 import datetime
@@ -79,20 +87,31 @@ def weekly_congrats_hook(request, token: str = ""):
 def _run_due_today_in_background():
     """
     Do the heavy work outside the HTTP request thread to avoid Gunicorn timeouts.
-    1) Pre-generate recurring 'today' rows
-    2) Send due-today emails
+
+    Order of operations (all best-effort; each guarded so one failure doesn’t kill the run):
+      0) (NEW) Materialize missing *today* rows for recurring series (skip users on leave @10:00 IST)
+      1) Pre-generate future recurring rows (existing generator; never creates “today”)
+      2) Send due-today emails (existing, leave-aware + cross-process lock)
 
     NOTE: send_due_today_assignments has a cross-process filesystem lock,
     so even if multiple triggers fire, only one fan-out runs for the day.
     """
     try:
-        # Best-effort pre-gen; never crash the thread if gen fails
+        # 0) Today-only materialization (no emails; safe if module absent)
+        try:
+            if callable(materialize_today_for_all):
+                materialize_today_for_all(dry_run=False)
+        except Exception:
+            # keep silent here; details should be in app logs
+            pass
+
+        # 1) Best-effort pre-gen (future occurrences); never crash the thread if gen fails
         try:
             generate_recurring_checklists.run(dry_run=False)
         except Exception:
             pass
 
-        # Actual fan-out (task contains duplicate guard + leave guard)
+        # 2) Actual fan-out (task contains duplicate guard + leave guard)
         try:
             send_due_today_assignments.run()
         except Exception:
@@ -131,7 +150,7 @@ def due_today_assignments_hook(request, token: str = ""):
                 "accepted": True,
                 "method": request.method,
                 "at": datetime.datetime.utcnow().isoformat(),
-                "note": "Fan-out running in background thread",
+                "note": "Fan-out running in background thread (with today-materialize pre-step)",
             }
         )
     except Exception as e:
@@ -150,6 +169,9 @@ def pre10am_unblock_and_generate_hook(request, token: str = ""):
       1) Complete overdue daily 'Pending' rows (yesterday or earlier)
       2) Generate 'today' items so dashboard & 10AM mails are correct
     Optional: ?user_id=123 to target a single user.
+
+    (Note: The due-today endpoint will still run the lightweight 'today' materializer
+    before mailing, so running both is safe and idempotent.)
     """
     try:
         if not _cron_authorized(request, token):
@@ -161,6 +183,14 @@ def pre10am_unblock_and_generate_hook(request, token: str = ""):
         except Exception:
             uid = None
 
+        # NEW: opportunistically materialize “today” before the legacy pre10 step
+        mat = {}
+        try:
+            if callable(materialize_today_for_all):
+                mat = materialize_today_for_all(user_id=uid, dry_run=False).__dict__
+        except Exception:
+            mat = {"created": 0, "error": "materializer_failed"}
+
         result = pre10am_unblock_and_generate(user_id=uid)
 
         return JsonResponse(
@@ -168,6 +198,7 @@ def pre10am_unblock_and_generate_hook(request, token: str = ""):
                 "ok": True,
                 "method": request.method,
                 "at": timezone.now().isoformat(),
+                "materialize_today": mat,   # visibility for logs
                 **result,
             }
         )

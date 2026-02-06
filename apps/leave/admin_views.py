@@ -1,121 +1,141 @@
+#apps/leave/admin_views.py
 from __future__ import annotations
 
-from django import forms
+import logging
+from datetime import datetime
+
+import pytz
 from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.http import HttpRequest, HttpResponse, HttpResponseForbidden, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django import forms
 
-from apps.users.permissions import has_permission
-from .models import LeaveRequest, LeaveStatus
-from .forms import LeaveRequestForm, IST
+from .models import LeaveRequest, LeaveStatus, LeaveType
+
+logger = logging.getLogger(__name__)
+IST = pytz.timezone("Asia/Kolkata")
 
 
-class AdminLeaveEditForm(LeaveRequestForm):
+class _AdminLeaveEditForm(forms.ModelForm):
     """
-    Extends LeaveRequestForm with a Status selector for admins.
-    Reuses all LeaveRequestForm validation (tz-aware & overlap checks).
+    Minimal admin-side edit form.
+    Lets admins correct dates, half-day flag, type, reason, and status.
     """
-    status = forms.ChoiceField(
-        choices=LeaveStatus.choices,
+    start_at = forms.DateTimeField(
+        widget=forms.DateTimeInput(attrs={"type": "datetime-local"}),
+        input_formats=["%Y-%m-%dT%H:%M"],
         required=True,
-        label="Status",
-        widget=forms.Select(attrs={"class": "form-select"}),
-        help_text="Changing status here immediately affects approvals.",
+        label="Start (IST)",
+    )
+    end_at = forms.DateTimeField(
+        widget=forms.DateTimeInput(attrs={"type": "datetime-local"}),
+        input_formats=["%Y-%m-%dT%H:%M"],
+        required=True,
+        label="End (IST)",
+    )
+    status = forms.ChoiceField(choices=LeaveStatus.choices, required=True)
+    leave_type = forms.ModelChoiceField(queryset=LeaveType.objects.order_by("name"), required=True)
+
+    class Meta:
+        model = LeaveRequest
+        fields = ["leave_type", "start_at", "end_at", "is_half_day", "reason", "status"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Pre-fill IST-local values into datetime-local inputs
+        if self.instance and self.instance.pk:
+            self.initial["start_at"] = timezone.localtime(self.instance.start_at, IST).strftime("%Y-%m-%dT%H:%M")
+            self.initial["end_at"] = timezone.localtime(self.instance.end_at, IST).strftime("%Y-%m-%dT%H:%M")
+
+    def clean_start_at(self):
+        val = self.cleaned_data["start_at"]
+        # Treat input as IST and convert to aware
+        if timezone.is_naive(val):
+            val = IST.localize(val)
+        return val
+
+    def clean_end_at(self):
+        val = self.cleaned_data["end_at"]
+        # Treat input as IST and convert to aware
+        if timezone.is_naive(val):
+            val = IST.localize(val)
+        return val
+
+    def save(self, commit=True):
+        obj: LeaveRequest = super().save(commit=False)
+        # Force IST timezone awareness
+        if timezone.is_naive(obj.start_at):
+            obj.start_at = IST.localize(obj.start_at)
+        if timezone.is_naive(obj.end_at):
+            obj.end_at = IST.localize(obj.end_at)
+        if commit:
+            obj.save()
+        return obj
+
+
+@login_required
+def admin_edit_leave(request: HttpRequest, pk: int) -> HttpResponse:
+    """Admin-only: edit a leave inline (dates, type, reason, flags, status)."""
+    if not getattr(request.user, "is_superuser", False):
+        return HttpResponseForbidden("Admins only.")
+
+    leave = get_object_or_404(
+        LeaveRequest.objects.select_related("employee", "leave_type", "reporting_person"),
+        pk=pk,
     )
 
-    class Meta(LeaveRequestForm.Meta):
-        fields = [
-            "duration_type", "leave_type",
-            "start_at", "end_at",
-            "from_time", "to_time",
-            "reason", "attachment",
-            "delegate_to", "handover_checklist", "handover_delegation",
-            "handover_help_ticket", "handover_message",
-            "status",
-        ]
-
-
-@has_permission("leave_admin_edit")
-def admin_edit_leave(request, pk: int):
-    """
-    Admin can modify any leave safely:
-      - Dates (full/half-day), type, reason, attachment, handover fields
-      - Status (Pending/Approved/Rejected)
-    Keeps tz-aware datetimes and overlap checks from base form.
-    """
-    leave = get_object_or_404(LeaveRequest, pk=pk)
-
-    before = {
-        "start_at": leave.start_at,
-        "end_at": leave.end_at,
-        "leave_type_id": getattr(leave.leave_type, "id", None),
-        "status": leave.status,
-        "is_half_day": leave.is_half_day,
-        "reason": leave.reason,
-    }
+    next_url = request.GET.get("next") or reverse("leave:dashboard")
 
     if request.method == "POST":
-        form = AdminLeaveEditForm(request.POST, request.FILES, instance=leave, user=leave.employee)
-        if form.is_valid():
-            obj = form.save(commit=False)
-            obj.status = form.cleaned_data.get("status", obj.status)
-            obj.save()
-            form.save_m2m()
-
-            # Optional: plug in your email/signal hooks here
-            try:
-                if before["status"] != obj.status:
-                    # send_status_change_email(obj)  # implement if needed
-                    pass
-                if (before["start_at"], before["end_at"], before["is_half_day"]) != (
-                    obj.start_at, obj.end_at, obj.is_half_day
-                ):
-                    # send_window_update_email(obj)  # implement if needed
-                    pass
-            except Exception:
-                pass
-
-            messages.success(request, "Leave updated successfully.")
-            next_url = request.GET.get("next") or reverse("leave:dashboard")
-            return redirect(next_url)
-        else:
-            messages.error(request, "Please fix the errors below.")
+        form = _AdminLeaveEditForm(request.POST, instance=leave)
+        try:
+            if form.is_valid():
+                with transaction.atomic():
+                    obj = form.save(commit=True)
+                messages.success(request, "Leave updated.")
+                return redirect(next_url)
+            else:
+                messages.error(request, "Please correct the errors below.")
+        except ValidationError as e:
+            for msg in e.messages:
+                messages.error(request, msg)
+        except Exception:
+            logger.exception("Admin edit failed for leave %s", pk)
+            messages.error(request, "Failed to update leave. Please try again.")
     else:
-        initial = {"status": leave.status}
-        form = AdminLeaveEditForm(instance=leave, user=leave.employee, initial=initial)
+        form = _AdminLeaveEditForm(instance=leave)
 
     ctx = {
-        "form": form,
         "leave": leave,
-        "employee_full_name": leave.employee.get_full_name() or leave.employee.get_username(),
-        "employee_email": getattr(leave.employee, "email", ""),
-        "now_ist": timezone.localtime(timezone.now(), IST),
-        "next_url": request.GET.get("next") or request.META.get("HTTP_REFERER") or reverse("leave:dashboard"),
+        "form": form,
+        "next_url": next_url,
     }
-    return render(request, "leave/admin_edit.html", ctx)
+    return render(request, "leave/admin_edit_leave.html", ctx)
 
 
-@has_permission("leave_admin_edit")
-def admin_recalc_window(request, pk: int):
+@login_required
+@transaction.atomic
+def admin_recalc_window(request: HttpRequest, pk: int) -> HttpResponse:
     """
-    Helper to refresh handover lists after a quick date tweak via querystring.
-    Example: /leave/admin/edit/123/recalculate/?start=2026-01-10&end=2026-01-12
+    Admin-only: force recompute of IST date snapshots and blocked_days after any manual fixes.
     """
+    if not getattr(request.user, "is_superuser", False):
+        return HttpResponseForbidden("Admins only.")
+
     leave = get_object_or_404(LeaveRequest, pk=pk)
-    start = request.GET.get("start")
-    end = request.GET.get("end") or start
     try:
-        dummy_post = {
-            "duration_type": "FULL",
-            "leave_type": getattr(leave.leave_type, "id", None),
-            "start_at": start,
-            "end_at": end,
-            "reason": leave.reason,
-        }
-        # Build a form so __init__ runs _load_handover_choices; we ignore its result.
-        _ = AdminLeaveEditForm(dummy_post, instance=leave, user=leave.employee)
-        messages.info(request, "Handover options refreshed for the selected date range.")
+        # Trigger model logic (_snapshot_dates + _recompute_blocked_days) via save()
+        leave.save()
+        messages.success(request, "Recalculated date snapshots and blocked days.")
     except Exception:
-        messages.error(request, "Could not refresh handover options for the provided dates.")
-    return redirect(reverse("leave:admin_edit_leave", args=[leave.id]))
+        logger.exception("Admin recalc failed for leave %s", pk)
+        messages.error(request, "Recalculation failed.")
+
+    next_url = request.GET.get("next") or reverse("leave:admin_edit_leave", args=[pk])
+    return redirect(next_url)

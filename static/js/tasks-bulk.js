@@ -22,6 +22,12 @@
     const row = cb.closest("tr");
     if (!row) return;
     row.classList.toggle("is-selected", cb.checked);
+    row.classList.toggle("is-dim", cb.disabled);
+  };
+
+  const withinViewport = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
   };
 
   // ---------- 1) Global [data-confirm] guard ----------
@@ -58,18 +64,22 @@
 
   // ---------- 3) Bulk-form initializer ----------
   function initBulkForm(form) {
-    if (form._bulkInit) return;        // idempotent
+    if (!form || form._bulkInit) return;  // idempotent
     form._bulkInit = true;
 
     const selectAll       = qs("[data-select-all]", form);
+    const selectNoneBtn   = qs("[data-select-none]", form);
+    const invertBtn       = qs("[data-select-invert]", form);
     const submitBtn       = qs("[data-bulk-submit]", form);
     const selectedCountEl = qs("[data-selected-count]", form) || qs("[data-selected-count]");
+    const totalCountEl    = qs("[data-total-count]", form);
 
-    // Only visible & enabled row checkboxes within this form.
+    // Only visible & enabled row checkboxes within this form (skip hidden rows)
     const getRowChecks = () =>
       qsa("[data-row-check]", form).filter(cb => {
         const row = cb.closest("tr");
-        return !cb.disabled && (!row || !row.classList.contains("d-none"));
+        const visible = (!row || !row.classList.contains("d-none")) && withinViewport(cb);
+        return visible && !cb.disabled;
       });
 
     function updateState() {
@@ -77,9 +87,10 @@
       const selected = checks.filter(cb => cb.checked).length;
       const total    = checks.length;
 
-      // Button state + counter
+      // Button state + counters
       if (submitBtn) submitBtn.disabled = selected === 0;
       if (selectedCountEl) selectedCountEl.textContent = String(selected);
+      if (totalCountEl) totalCountEl.textContent = String(total);
 
       // Select-all state
       if (selectAll) {
@@ -88,13 +99,34 @@
       }
 
       // Selected row highlight
-      checks.forEach(setSelectedVisual);
+      qsa("[data-row-check]", form).forEach(setSelectedVisual);
+
+      // Notify listeners (e.g., pages that want to enable extra controls)
+      form.dispatchEvent(new CustomEvent("bulk:change", {
+        bubbles: true,
+        detail: { selected, total }
+      }));
     }
 
     // Toggle all
     if (selectAll) {
       selectAll.addEventListener("change", () => {
         getRowChecks().forEach(cb => { cb.checked = selectAll.checked; });
+        updateState();
+      });
+    }
+    // Optional helpers: None / Invert
+    if (selectNoneBtn) {
+      selectNoneBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        getRowChecks().forEach(cb => cb.checked = false);
+        updateState();
+      });
+    }
+    if (invertBtn) {
+      invertBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        getRowChecks().forEach(cb => cb.checked = !cb.checked);
         updateState();
       });
     }
@@ -107,7 +139,7 @@
       }
     });
 
-    // Shift-click range selection
+    // Shift-click range selection (works even after sorting/hiding)
     (function enableShiftRange() {
       let last = null;
       form.addEventListener("click", (e) => {
@@ -135,7 +167,7 @@
     // Keyboard helpers: A = toggle all (when focused inside table), Esc = clear all
     form.addEventListener("keydown", (e) => {
       const tag = (e.target.tagName || "").toLowerCase();
-      const inInput = ["input","textarea","select"].includes(tag);
+      const inInput = ["input","textarea","select","button"].includes(tag);
       if (inInput) return;
 
       if (e.key.toLowerCase() === "a") {
@@ -155,7 +187,8 @@
 
     // Confirm on submit + avoid double submit
     form.addEventListener("submit", (e) => {
-      const anySelected = getRowChecks().some(cb => cb.checked);
+      const checks = getRowChecks();
+      const anySelected = checks.some(cb => cb.checked);
       if (!anySelected) {
         e.preventDefault();
         return;
@@ -168,6 +201,13 @@
       }
 
       if (submitBtn) submitBtn.disabled = true;
+
+      // Optional global overlay (from base.html)
+      if (window.BOS && BOS.overlay && typeof BOS.overlay.show === "function") {
+        BOS.overlay.show();
+        // hide after navigation or if the form was blocked by client-side validation
+        setTimeout(() => BOS.overlay.hide(), 6000);
+      }
     });
 
     // Initial paint
@@ -175,7 +215,7 @@
 
     // If rows are added/removed dynamically, keep state correct
     const mo = new MutationObserver(throttle(updateState, 120));
-    mo.observe(form, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "disabled"] });
+    mo.observe(form, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "disabled", "style"] });
   }
 
   // ---------- 4) Boot (support multiple bulk forms per page) ----------
@@ -185,4 +225,8 @@
   // In case content is swapped via HTMX/Turbo/partial reloads:
   document.addEventListener("htmx:afterSwap", boot);
   document.addEventListener("turbo:render", boot);
+
+  // Expose for manual re-init if needed by pages
+  window.BOS = window.BOS || {};
+  window.BOS.bulkBoot = boot;
 })();

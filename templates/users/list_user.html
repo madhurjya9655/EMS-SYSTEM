@@ -1,4 +1,3 @@
-E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\users\list_user.html:
 {% extends "base.html" %}
 {% block title %}Users{% endblock %}
 
@@ -22,7 +21,7 @@ E:\CLIENT PROJECT\employee management system bos\employee_management_system\temp
           <th>Role</th>
           <th>Department</th>
           <th class="text-center">Status</th>
-          <th style="width:160px;">Action</th>
+          <th style="width:200px;">Action</th>
         </tr>
       </thead>
       <tbody>
@@ -68,28 +67,25 @@ E:\CLIENT PROJECT\employee management system bos\employee_management_system\temp
           </td>
 
           <td>
-            <div class="d-flex gap-2">
-              {% if request.user.is_superuser %}
-                <a href="{% url 'users:edit_user' u.pk %}?next={{ request.get_full_path|urlencode }}"
-                   class="btn btn-sm btn-primary"
-                   title="Edit user">
-                  <i class="fas fa-edit"></i>
-                </a>
-              {% endif %}
+            <div class="d-flex flex-wrap gap-2">
+              <a href="{% url 'users:edit_user' u.pk %}?next={{ request.get_full_path|urlencode }}"
+                 class="btn btn-sm btn-primary"
+                 title="Edit user">
+                <i class="fas fa-edit"></i> Edit
+              </a>
 
               <a href="{% url 'users:delete_user' u.pk %}?next={{ request.get_full_path|urlencode }}"
                  class="btn btn-sm btn-danger"
-                 title="Delete user">
-                <i class="fas fa-trash"></i>
+                 title="Delete user"
+                 onclick="return confirm('Delete this user?');">
+                <i class="fas fa-trash"></i> Delete
               </a>
 
-              {% if request.user.is_superuser %}
-                <a href="{% url 'users:toggle_active' u.pk %}?next={{ request.get_full_path|urlencode }}"
-                   class="btn btn-sm {% if u.is_active %}btn-outline-secondary{% else %}btn-outline-success{% endif %}"
-                   title="{% if u.is_active %}Deactivate{% else %}Activate{% endif %} user">
-                  {% if u.is_active %}Deactivate{% else %}Activate{% endif %}
-                </a>
-              {% endif %}
+              <a href="{% url 'users:toggle_active' u.pk %}?next={{ request.get_full_path|urlencode }}"
+                 class="btn btn-sm {% if u.is_active %}btn-outline-secondary{% else %}btn-outline-success{% endif %}"
+                 title="{% if u.is_active %}Deactivate{% else %}Activate{% endif %} user">
+                {% if u.is_active %}Deactivate{% else %}Activate{% endif %}
+              </a>
             </div>
           </td>
         </tr>

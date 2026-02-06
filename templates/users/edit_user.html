@@ -11,7 +11,7 @@
 
 <div class="card mb-5">
   <div class="card-body">
-    <form method="post" class="row g-4" enctype="multipart/form-data">
+    <form method="post" class="row g-4" enctype="multipart/form-data" novalidate>
       {% csrf_token %}
 
       {% if uf.non_field_errors or pf.non_field_errors %}
@@ -45,7 +45,7 @@
       <div class="col-md-4">
         <label for="id_username" class="form-label">Username</label>
         <input type="text" name="username" id="id_username" class="form-control"
-               value="{{ uf.username.value|default_if_none:'' }}" autocomplete="username">
+               value={{ uf.username.value|default_if_none:''|add:"" }} autocomplete="username">
         {% for error in uf.username.errors %}
           <div class="invalid-feedback d-block">{{ error }}</div>
         {% endfor %}
@@ -211,8 +211,7 @@
   // On any permission checkbox change, sync its module header
   document.querySelectorAll('.permission-checkbox').forEach(function(cb) {
     cb.addEventListener('change', function() {
-      const classes = Array.from(cb.classList);
-      const modClass = classes.find(c => c.startsWith('module-'));
+      const modClass = Array.from(cb.classList).find(c => c.startsWith('module-'));
       if (modClass) {
         const slug = modClass.replace('module-', '');
         syncModuleHeader(slug);

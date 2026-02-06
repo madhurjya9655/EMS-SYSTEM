@@ -16,7 +16,6 @@
     </div>
   {% endif %}
 
-  {# NEW: banner if outside apply window #}
   {% if can_apply_now is not None and not can_apply_now %}
     <div class="alert alert-warning">
       Applications are allowed only between <strong>09:30 AM</strong> and <strong>06:00 PM</strong> (IST).
@@ -65,15 +64,14 @@
           </div>
         {% endif %}
 
-        <div class="row g-3">
+        <div class="row g-3 align-items-end">
           <!-- Duration -->
-          <div class="col-md-4">
+          <div class="col-lg-4 col-md-6">
             <label class="form-label">Duration</label>
-            <div id="durationRadios">
+            <div id="durationRadios" class="d-flex align-items-center flex-wrap gap-3 py-1">
               {% for val, label in form.duration_type.field.choices %}
-                <div class="form-check form-check-inline">
-                  <input class="form-check-input"
-                         type="radio"
+                <div class="form-check">
+                  <input class="form-check-input" type="radio"
                          name="{{ form.duration_type.html_name }}"
                          id="id_duration_{{ forloop.counter }}"
                          value="{{ val }}"
@@ -82,18 +80,19 @@
                 </div>
               {% endfor %}
             </div>
-            {% if form.duration_type.errors %}<div class="invalid-feedback d-block">{{ form.duration_type.errors|striptags }}</div>{% endif %}
             <div class="form-text">Half-day is a time range within <strong>09:30–18:00</strong> (≤ 6 hours).</div>
+            {% if form.duration_type.errors %}<div class="invalid-feedback d-block">{{ form.duration_type.errors|striptags }}</div>{% endif %}
           </div>
 
           <!-- Leave Type -->
-          <div class="col-md-4">
+          <div class="col-lg-4 col-md-6">
             <label class="form-label" for="{{ form.leave_type.id_for_label }}">Leave Type</label>
             {{ form.leave_type }}
+            <div id="ltHelp" class="form-text">
+              <span class="text-danger fw-semibold" id="ltReqFlag">Required for Full Day</span>; optional for Half Day.
+            </div>
             {% if form.leave_type.errors %}<div class="invalid-feedback d-block">{{ form.leave_type.errors|striptags }}</div>{% endif %}
           </div>
-
-          <div class="col-md-4"></div>
         </div>
 
         <!-- Dates -->
@@ -104,9 +103,7 @@
               {{ form.start_at }}
               <span class="input-group-text" id="start_date_icon" style="cursor:pointer;">📅</span>
             </div>
-            <div class="form-text">
-              Full Day uses <code>09:30 → 18:00</code>. For Half Day, set the time range below (same date).
-            </div>
+            <div class="form-text">Full Day uses <code>09:30 → 18:00</code>. For Half Day, set the time range below (same date).</div>
             {% if form.start_at.errors %}<div class="invalid-feedback d-block">{{ form.start_at.errors|striptags }}</div>{% endif %}
           </div>
 
@@ -124,8 +121,14 @@
         <!-- Half Day times -->
         <div id="half-day-slot" class="mt-2" style="display:none;">
           <div class="row g-3">
-            <div class="col-md-6">{{ form.from_time|as_crispy_field }}</div>
-            <div class="col-md-6">{{ form.to_time|as_crispy_field }}</div>
+            <div class="col-md-6">
+              {{ form.from_time|as_crispy_field }}
+              <div class="form-text">Only when Duration = Half Day. Must be within 09:30–18:00.</div>
+            </div>
+            <div class="col-md-6">
+              {{ form.to_time|as_crispy_field }}
+              <div class="form-text">Only when Duration = Half Day. Must be within 09:30–18:00.</div>
+            </div>
           </div>
           <div class="form-text">Choose a window within <strong>09:30–18:00</strong> (max 6 hours).</div>
         </div>
@@ -163,14 +166,10 @@
             <div class="handover-list form-control">
               {% for cb in form.handover_checklist %}
                 <div class="form-check">
-                  {{ cb.tag }}
-                  <label class="form-check-label" for="{{ cb.id_for_label }}">{{ cb.choice_label }}</label>
+                  {{ cb.tag }} <label class="form-check-label" for="{{ cb.id_for_label }}">{{ cb.choice_label }}</label>
                 </div>
-              {% empty %}
-                <div class="text-muted small">No checklist tasks in range.</div>
-              {% endfor %}
+              {% empty %}<div class="text-muted small">No checklist tasks in range.</div>{% endfor %}
             </div>
-            {% if form.handover_checklist.errors %}<div class="invalid-feedback d-block">{{ form.handover_checklist.errors|striptags }}</div>{% endif %}
           </div>
           {% endif %}
 
@@ -180,14 +179,10 @@
             <div class="handover-list form-control">
               {% for cb in form.handover_delegation %}
                 <div class="form-check">
-                  {{ cb.tag }}
-                  <label class="form-check-label" for="{{ cb.id_for_label }}">{{ cb.choice_label }}</label>
+                  {{ cb.tag }} <label class="form-check-label" for="{{ cb.id_for_label }}">{{ cb.choice_label }}</label>
                 </div>
-              {% empty %}
-                <div class="text-muted small">No delegation tasks in range.</div>
-              {% endfor %}
+              {% empty %}<div class="text-muted small">No delegation tasks in range.</div>{% endfor %}
             </div>
-            {% if form.handover_delegation.errors %}<div class="invalid-feedback d-block">{{ form.handover_delegation.errors|striptags }}</div>{% endif %}
           </div>
           {% endif %}
 
@@ -197,14 +192,10 @@
             <div class="handover-list form-control">
               {% for cb in form.handover_help_ticket %}
                 <div class="form-check">
-                  {{ cb.tag }}
-                  <label class="form-check-label" for="{{ cb.id_for_label }}">{{ cb.choice_label }}</label>
+                  {{ cb.tag }} <label class="form-check-label" for="{{ cb.id_for_label }}">{{ cb.choice_label }}</label>
                 </div>
-              {% empty %}
-                <div class="text-muted small">No help tickets in range.</div>
-              {% endfor %}
+              {% empty %}<div class="text-muted small">No help tickets in range.</div>{% endfor %}
             </div>
-            {% if form.handover_help_ticket.errors %}<div class="invalid-feedback d-block">{{ form.handover_help_ticket.errors|striptags }}</div>{% endif %}
           </div>
           {% endif %}
         </div>
@@ -239,6 +230,8 @@ document.addEventListener('DOMContentLoaded', function () {
   const endCol = document.getElementById("end-date-col");
   const startInput = document.getElementById("id_start_at");
   const endInput = document.getElementById("id_end_at");
+  const leaveTypeSelect = document.getElementById("id_leave_type");
+  const ltReqFlag = document.getElementById("ltReqFlag");
 
   let startPicker = null, endPicker = null;
 
@@ -279,11 +272,20 @@ document.addEventListener('DOMContentLoaded', function () {
         endInput.removeAttribute("disabled");
       }
     }
+
+    // Toggle 'required' on Leave Type visually & via attribute
+    if (leaveTypeSelect) {
+      if (isHalf) {
+        leaveTypeSelect.removeAttribute('required');
+        if (ltReqFlag) ltReqFlag.classList.remove('text-danger');
+      } else {
+        leaveTypeSelect.setAttribute('required', 'required');
+        if (ltReqFlag) ltReqFlag.classList.add('text-danger');
+      }
+    }
   }
 
-  for (var j = 0; j < radios.length; j++) {
-    radios[j].addEventListener("change", updateUI);
-  }
+  for (var j = 0; j < radios.length; j++) { radios[j].addEventListener("change", updateUI); }
 
   if (startInput) {
     startInput.addEventListener("change", function () {
@@ -298,8 +300,12 @@ document.addEventListener('DOMContentLoaded', function () {
 </script>
 
 <style>
-.handover-list { max-height: 180px; overflow: auto; padding: 8px 10px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; }
+/* Subtle polish for the form */
+.handover-list { max-height: 200px; overflow: auto; padding: 8px 10px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; }
 .handover-list .form-check { margin-bottom: 6px; }
 #handover-message-wrap { clear: both; }
+
+.card-header h5 { display:flex; align-items:center; gap:.5rem; }
+#durationRadios .form-check { margin-right: 1rem; }
 </style>
 {% endblock %}

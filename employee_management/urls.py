@@ -1,4 +1,3 @@
-# employee_management/urls.py
 from __future__ import annotations
 
 from django.conf import settings
@@ -60,6 +59,9 @@ urlpatterns = [
 
     # Recruitment
     path("recruitment/",   include(("apps.recruitment.urls",   "recruitment"),   namespace="recruitment")),
+
+    # ✅ KAM (Performance) module
+    path("kam/",           include(("apps.kam.urls",           "kam"),           namespace="kam")),
 
     # Root → dashboard
     path("", RedirectView.as_view(pattern_name="dashboard:home", permanent=False), name="site-root"),

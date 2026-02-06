@@ -1,5 +1,4 @@
-﻿# employee_management/settings.py
-import os
+﻿import os
 import sqlite3
 from pathlib import Path
 from typing import List
@@ -122,6 +121,8 @@ LOCAL_APPS = [
     "apps.users.apps.UsersConfig",
     "dashboard.apps.DashboardConfig",
     "apps.settings.apps.SettingsConfig",
+    # ✅ KAM module under apps/ (use the AppConfig path)
+    "apps.kam.apps.KamConfig",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -159,7 +160,7 @@ _template_options = {
         "django.contrib.auth.context_processors.auth",
         "django.contrib.messages.context_processors.messages",
         "apps.users.permissions.permissions_context",
-        # ✅ New: Finance badges (Rejected Bills resubmitted count)
+        # ✅ Finance badges (Rejected Bills resubmitted count)
         "apps.reimbursement.context_processors.finance_badges",
     ],
     "builtins": [
@@ -182,7 +183,7 @@ if DEBUG:
     TEMPLATES = [
         {
             "BACKEND": "django.template.backends.django.DjangoTemplates",
-            "DIRS": [BASE_DIR / "templates"],
+            "DIRS": [BASE_DIR / "templates"],  # global templates (templates/kam/… used)
             "APP_DIRS": True,
             "OPTIONS": _template_options,
         }
@@ -687,6 +688,11 @@ FEATURES = {
     "ADVANCED_REPORTING": env_bool("FEATURE_ADVANCED_REPORTING", True),
     "AUDIT_LOGGING": env_bool("FEATURE_AUDIT_LOGGING", True),
 }
+
+# ✅ KAM feature toggles (used by views/templates)
+KAM_FEATURE_ENABLED = env_bool("KAM_FEATURE_ENABLED", True)
+KAM_DEFAULT_CALLS_PER_WEEK = env_int("KAM_DEFAULT_CALLS_PER_WEEK", 24)
+KAM_DEFAULT_VISITS_PER_WEEK = env_int("KAM_DEFAULT_VISITS_PER_WEEK", 6)
 
 # -----------------------------------------------------------------------------
 # CONSTANTS

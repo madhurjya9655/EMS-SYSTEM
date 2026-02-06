@@ -7,11 +7,12 @@ from typing import Optional
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required, user_passes_test
+from django.contrib.auth.models import Permission
 from django.contrib.auth.views import LoginView
 from django.http import HttpRequest, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import NoReverseMatch, reverse, reverse_lazy
-from django.views.decorators.http import require_http_methods  # <-- changed
+from django.views.decorators.http import require_http_methods
 from django.utils.http import url_has_allowed_host_and_scheme
 
 from .forms import CustomAuthForm, ProfileForm, UserForm
@@ -26,6 +27,39 @@ logger = logging.getLogger(__name__)
 
 def admin_only(user) -> bool:
     return bool(getattr(user, "is_superuser", False))
+
+
+def _set_kam_access(target_user: User, enabled: bool, *, actor: Optional[User]) -> None:
+    """
+    Grant/revoke explicit KAM module access using the Django permission 'kam.access_kam_module'.
+    Idempotent. Logs an audit trail entry.
+    """
+    try:
+        perm = Permission.objects.get(codename="access_kam_module", content_type__app_label="kam")
+    except Permission.DoesNotExist:
+        logger.error("KAM permission 'kam.access_kam_module' not found. Ensure KAM app declares it.")
+        return
+    except Exception as e:
+        logger.exception("Error fetching KAM permission: %s", e)
+        return
+
+    try:
+        if enabled:
+            target_user.user_permissions.add(perm)
+            logger.info(
+                "KAM access ENABLED for user_id=%s by actor_id=%s",
+                getattr(target_user, "id", "?"),
+                getattr(actor, "id", None),
+            )
+        else:
+            target_user.user_permissions.remove(perm)
+            logger.info(
+                "KAM access DISABLED for user_id=%s by actor_id=%s",
+                getattr(target_user, "id", "?"),
+                getattr(actor, "id", None),
+            )
+    except Exception:
+        logger.exception("Failed to update KAM access for user %s", getattr(target_user, "id", "?"))
 
 
 class CustomLoginView(LoginView):
@@ -70,7 +104,7 @@ def list_users(request: HttpRequest) -> HttpResponse:
 def add_user(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         uf = UserForm(request.POST)
-        # IMPORTANT: include request.FILES so profile photo can be uploaded
+        # include request.FILES so profile photo can be uploaded
         pf = ProfileForm(request.POST, request.FILES)
 
         if uf.is_valid() and pf.is_valid():
@@ -87,6 +121,10 @@ def add_user(request: HttpRequest) -> HttpResponse:
             profile.user = user
             profile.permissions = pf.cleaned_data.get("permissions") or []
             profile.save()
+
+            # Explicit KAM access toggle (Option B: Django permission)
+            enable_kam = bool(request.POST.get("enable_kam"))
+            _set_kam_access(user, enable_kam, actor=request.user)
 
             messages.success(request, "User created successfully.")
             return redirect("users:list_users")
@@ -111,7 +149,7 @@ def edit_user(request: HttpRequest, pk: int) -> HttpResponse:
 
     if request.method == "POST":
         uf = UserForm(request.POST, instance=user_obj)
-        # IMPORTANT: include request.FILES so profile photo updates work
+        # include request.FILES so profile photo updates work
         pf = ProfileForm(request.POST, request.FILES, instance=profile_obj)
 
         if uf.is_valid() and pf.is_valid():
@@ -125,6 +163,10 @@ def edit_user(request: HttpRequest, pk: int) -> HttpResponse:
             profile.user = user
             profile.permissions = pf.cleaned_data.get("permissions") or []
             profile.save()
+
+            # Explicit KAM access toggle (Option B: Django permission)
+            enable_kam = bool(request.POST.get("enable_kam"))
+            _set_kam_access(user, enable_kam, actor=request.user)
 
             messages.success(request, "User updated successfully.")
             return redirect("users:list_users")
@@ -178,7 +220,7 @@ def delete_user(request: HttpRequest, pk: int) -> HttpResponse:
 
 @login_required
 @user_passes_test(admin_only)
-@require_http_methods(["GET", "POST"])  # <-- accept GET (UI link) and POST (form)
+@require_http_methods(["GET", "POST"])
 def toggle_active(request: HttpRequest, pk: int) -> HttpResponse:
     u = get_object_or_404(User, pk=pk)
     if u == request.user:
@@ -209,21 +251,25 @@ def debug_permissions(request: HttpRequest) -> HttpResponse:
         if code.lower() in user_perms or getattr(user, "is_superuser", False):
             try:
                 url = reverse(url_name)
-                permission_urls[code] = {'url_name': url_name, 'url': url}
+                permission_urls[code] = {"url_name": url_name, "url": url}
             except NoReverseMatch:
-                permission_urls[code] = {'url_name': url_name, 'url': None, 'error': 'URL not found'}
+                permission_urls[code] = {"url_name": url_name, "url": None, "error": "URL not found"}
 
     url_to_perms = {}
     for code, url in PERMISSION_URLS.items():
         url_to_perms.setdefault(url, []).append(code)
 
-    return render(request, 'users/debug_permissions.html', {
-        'user': user,
-        'is_superuser': user.is_superuser,
-        'is_staff': user.is_staff,
-        'permissions': sorted(user_perms),
-        'permission_urls': permission_urls,
-        'url_to_perms': url_to_perms,
-        'all_permissions': sorted(PERMISSION_URLS.keys()),
-        'context': permissions_context(request),
-    })
+    return render(
+        request,
+        "users/debug_permissions.html",
+        {
+            "user": user,
+            "is_superuser": user.is_superuser,
+            "is_staff": user.is_staff,
+            "permissions": sorted(user_perms),
+            "permission_urls": permission_urls,
+            "url_to_perms": url_to_perms,
+            "all_permissions": sorted(PERMISSION_URLS.keys()),
+            "context": permissions_context(request),
+        },
+    )

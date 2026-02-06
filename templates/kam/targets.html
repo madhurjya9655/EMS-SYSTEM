@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Targets (Manager){% endblock %}
+
+{% block content %}
+<div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+  <h1 class="page-title m-0">Target Setting (Manager)</h1>
+  <a class="btn btn-outline-secondary btn-sm" href="{% url 'kam:targets_lines' %}">Go to Target Lines</a>
+</div>
+
+<div class="card p-3 mb-3">
+  <form method="post" class="row g-3 align-items-end" novalidate>
+    {% csrf_token %}
+
+    <div class="col-12 col-md-3">
+      <label class="form-label mb-1 small">Period Type</label>
+      <select name="period_type" class="form-select form-select-sm">
+        <option value="WEEK">WEEK</option>
+        <option value="MONTH">MONTH</option>
+      </select>
+    </div>
+
+    <div class="col-12 col-md-4">
+      <label class="form-label mb-1 small">Period Id</label>
+      <input
+        class="form-control form-control-sm"
+        name="period_id"
+        placeholder="e.g. 2026-W05 or 2026-02"
+      />
+    </div>
+
+    <div class="col-12 col-md-5 d-flex gap-2">
+      <button type="submit" class="btn btn-primary btn-sm">Save</button>
+      <button name="lock" value="1" class="btn btn-outline-danger btn-sm">Lock &amp; Publish</button>
+    </div>
+
+    <div class="col-12">
+      <p class="small text-muted m-0">
+        (Inline KAM lines are separate: use <strong>Target Lines</strong>. This step only creates/locks the period header.)
+      </p>
+    </div>
+  </form>
+</div>
+
+<div class="card p-3">
+  <h5 class="mb-3">Recent Target Periods</h5>
+  {% if headers %}
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead>
+          <tr>
+            <th>Created</th>
+            <th>Period Type</th>
+            <th>Period Id</th>
+            <th>Manager</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for h in headers %}
+          <tr>
+            <td>{{ h.created_at }}</td>
+            <td>{{ h.get_period_type_display }}</td>
+            <td><strong>{{ h.period_id }}</strong></td>
+            <td>{% if h.manager %}{{ h.manager.get_full_name|default:h.manager.username }}{% else %}—{% endif %}</td>
+            <td>
+              {% if h.locked_at %}
+                <span class="badge bg-danger">Locked</span>
+              {% else %}
+                <span class="badge bg-secondary">Draft</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="text-muted m-0">No target periods yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

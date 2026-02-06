@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}Manager KPIs{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between">
+  <h1 class="page-title m-0">Manager KPIs</h1>
+  <form class="d-flex gap-2" method="get">
+    <select name="period" class="form-select form-select-sm">
+      <option value="week">This Week</option>
+      <option value="month">This Month</option>
+      <option value="quarter">This Quarter</option>
+      <option value="year">This Year</option>
+      <option value="all">All</option>
+    </select>
+    <input name="asof" placeholder="YYYY[-MM[-DD]]" value="{{ request.GET.asof }}" class="form-control form-control-sm"/>
+    <button class="btn btn-sm btn-primary">Apply</button>
+  </form>
+</div>
+
+<p class="text-muted mb-2">Period: <strong>{{ period_id }}</strong></p>
+
+<div class="card p-3 mb-3">
+  <h6 class="fw-bold mb-2">KAM-wise KPIs</h6>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead>
+        <tr>
+          <th>KAM</th>
+          <th class="text-end">Sales (MT)</th>
+          <th class="text-end">Visits</th>
+          <th class="text-end">Visit Success %</th>
+          <th class="text-end">Calls</th>
+          <th class="text-end">Collections (₹)</th>
+          <th class="text-end">Lead Conv %</th>
+          <th class="text-end">Risk Ratio</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.kam.username }}</td>
+          <td class="text-end">{{ r.sales_mt|floatformat:3 }}</td>
+          <td class="text-end">{{ r.visits_actual }}</td>
+          <td class="text-end">{% if r.visit_success_pct %}{{ r.visit_success_pct|floatformat:1 }}%{% else %}—{% endif %}</td>
+          <td class="text-end">{{ r.calls }}</td>
+          <td class="text-end">₹ {{ r.collections_actual|floatformat:2|intcomma }}</td>
+          <td class="text-end">{% if r.lead_conv_pct %}{{ r.lead_conv_pct|floatformat:1 }}%{% else %}—{% endif %}</td>
+          <td class="text-end">{% if r.risk_ratio %}{{ r.risk_ratio|floatformat:2 }}{% else %}—{% endif %}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="8" class="text-muted">No data.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card p-3">
+  <h6 class="fw-bold mb-2">Overdue Risk Customers (Top 50)</h6>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead>
+        <tr>
+          <th>Customer</th>
+          <th class="text-end">Credit Limit (₹)</th>
+          <th class="text-end">Exposure (₹)</th>
+          <th class="text-end">Overdue (₹)</th>
+          <th class="text-end">Risk Ratio</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in risky %}
+        <tr>
+          <td>{{ c.name }}</td>
+          <td class="text-end">₹ {{ c.credit_limit|floatformat:2|intcomma }}</td>
+          <td class="text-end">₹ {{ c.exposure|floatformat:2|intcomma }}</td>
+          <td class="text-end">₹ {{ c.overdue|floatformat:2|intcomma }}</td>
+          <td class="text-end">{% if c.risk_ratio %}{{ c.risk_ratio|floatformat:2 }}{% else %}—{% endif %}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" class="text-muted">No risk rows.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

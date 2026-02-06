@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block title %}KAM Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+  <h1 class="page-title m-0">KAM Dashboard</h1>
+
+  <form class="d-flex align-items-end gap-2 flex-wrap" method="get">
+    <div>
+      <label class="form-label mb-1 small">Period</label>
+      <select name="period" class="form-select form-select-sm">
+        <option value="week"  {% if period_type == 'WEEK' %}selected{% endif %}>This Week</option>
+        <option value="month" {% if period_type == 'MONTH' %}selected{% endif %}>This Month</option>
+        <option value="quarter" {% if period_type == 'QUARTER' %}selected{% endif %}>This Quarter</option>
+        <option value="year" {% if period_type == 'YEAR' %}selected{% endif %}>This Year</option>
+        <option value="all"   {% if period_type == 'ALL' %}selected{% endif %}>All Time</option>
+        <option value="custom" {% if period_type == 'CUSTOM' %}selected{% endif %}>Custom Range</option>
+      </select>
+    </div>
+
+    <div>
+      <label class="form-label mb-1 small">As of (anchor)</label>
+      <input type="text" name="asof" value="{{ request.GET.asof }}" placeholder="YYYY or YYYY-MM or YYYY-MM-DD" class="form-control form-control-sm" />
+      <div class="form-text small">Anchors week/month/quarter/year.</div>
+    </div>
+
+    <div>
+      <label class="form-label mb-1 small">From</label>
+      <input type="text" name="from" value="{{ request.GET.from }}" placeholder="YYYY / YYYY-MM / YYYY-MM-DD" class="form-control form-control-sm" />
+    </div>
+    <div>
+      <label class="form-label mb-1 small">To</label>
+      <input type="text" name="to" value="{{ request.GET.to }}" placeholder="YYYY / YYYY-MM / YYYY-MM-DD" class="form-control form-control-sm" />
+      <div class="form-text small">From–To overrides Period.</div>
+    </div>
+
+    {% if kam_options %}
+      <div>
+        <label class="form-label mb-1 small">KAM</label>
+        <select name="user" class="form-select form-select-sm">
+          <option value="">ALL</option>
+          {% for uname in kam_options %}
+            <option value="{{ uname }}" {% if request.GET.user == uname %}selected{% endif %}>{{ uname }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    {% endif %}
+
+    <div class="d-flex align-items-center gap-2">
+      <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+      <a class="btn btn-sm btn-outline-secondary" href="?period=week">Reset</a>
+    </div>
+  </form>
+</div>
+
+<div class="mb-2 text-muted">
+  <small>
+    Period: <strong>{{ period_id }}</strong>
+    {% if scope_label %} • KAM: <strong>{{ scope_label }}</strong>{% endif %}
+  </small>
+</div>
+
+<div class="row g-3">
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <div class="fw-bold mb-1">Sales (MT)</div>
+      <div class="d-flex align-items-end justify-content-between">
+        <div class="fs-3">{{ kpi.sales_mt|floatformat:3 }}</div>
+        <div class="text-end">
+          <div class="small text-muted">Target: {{ kpi.sales_target_mt|floatformat:3 }}</div>
+          <div class="small">
+            {% if kpi.sales_ach_pct is not None %}Achv: {{ kpi.sales_ach_pct|floatformat:1 }}%{% else %}<span class="text-muted">Achv: —</span>{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <div class="fw-bold mb-1">Visits</div>
+      <div class="d-flex align-items-end justify-content-between">
+        <div>
+          <div>Planned: <strong>{{ kpi.visits_planned }}</strong></div>
+          <div>Actual: <strong>{{ kpi.visits_actual }}</strong></div>
+        </div>
+        <div class="text-end">
+          <div class="small text-muted">Target: {{ kpi.visits_target }}</div>
+          <div class="small">
+            {% if kpi.visit_ach_pct is not None %}Achv: {{ kpi.visit_ach_pct|floatformat:1 }}%{% else %}<span class="text-muted">Achv: —</span>{% endif %}
+          </div>
+          <div class="small">
+            {% if kpi.visit_success_pct is not None %}Success: {{ kpi.visit_success_pct|floatformat:1 }}%{% else %}<span class="text-muted">Success: —</span>{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <div class="fw-bold mb-1">Calls</div>
+      <div class="d-flex align-items-end justify-content-between">
+        <div class="fs-3">{{ kpi.calls }}</div>
+        <div class="text-end">
+          <div class="small text-muted">Target: {{ kpi.calls_target }}</div>
+          <div class="small">
+            {% if kpi.call_ach_pct is not None %}Achv: {{ kpi.call_ach_pct|floatformat:1 }}%{% else %}<span class="text-muted">Achv: —</span>{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <div class="fw-bold mb-1">Leads (MT)</div>
+      <div class="d-flex align-items-end justify-content-between">
+        <div>
+          <div>Total: <strong>{{ kpi.leads_total_mt|floatformat:3 }}</strong></div>
+          <div>Won: <strong>{{ kpi.leads_won_mt|floatformat:3 }}</strong></div>
+        </div>
+        <div class="text-end">
+          <div class="small">
+            {% if kpi.lead_conv_pct is not None %}Conversion: {{ kpi.lead_conv_pct|floatformat:1 }}%{% else %}<span class="text-muted">Conversion: —</span>{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <div class="fw-bold mb-1">Collections (₹)</div>
+      <div class="d-flex align-items-end justify-content-between">
+        <div class="fs-4">₹ {{ kpi.collections_actual|floatformat:2|intcomma }}</div>
+        <div class="text-end">
+          {% if kpi.collections_eff_pct is not None %}
+            <div class="small">Efficiency: {{ kpi.collections_eff_pct|floatformat:1 }}%</div>
+          {% else %}
+            <div class="small">Efficiency: <span class="text-muted">vs overdue / plan</span></div>
+          {% endif %}
+        </div>
+      </div>
+      {% if kpi.prev_overdue_sum %}
+        <div class="small text-muted mt-2">Prev Overdue: ₹ {{ kpi.prev_overdue_sum|floatformat:2|intcomma }}</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card p-3 h-100">
+      <div class="fw-bold mb-1">Overdues &amp; Risk</div>
+      <div class="mb-1">Overdue: <strong>₹ {{ kpi.overdue_sum|floatformat:2|intcomma }}</strong></div>
+      <div class="mb-1">Exposure: ₹ {{ kpi.exposure_sum|floatformat:2|intcomma }}</div>
+      <div class="mb-1">Credit Limit: ₹ {{ kpi.credit_limit_sum|floatformat:2|intcomma }}</div>
+      <div class="mt-2">
+        <div class="small">
+          {% if kpi.overdue_reduction_pct is not None %}Overdue Reduction: {{ kpi.overdue_reduction_pct|floatformat:1 }}%{% else %}Overdue Reduction: <span class="text-muted">—</span>{% endif %}
+        </div>
+        <div class="small">
+          {% if kpi.overdue_risk_ratio %}Risk Ratio: {{ kpi.overdue_risk_ratio|floatformat:2 }}{% else %}Risk Ratio: <span class="text-muted">—</span>{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mt-1">
+  <div class="col-lg-6">
+    <div class="card p-3">
+      <h6 class="fw-bold mb-2">Product Mix by Grade</h6>
+      {% if prod_by_grade %}
+      <table class="table table-sm">
+        <thead><tr><th>Grade</th><th class="text-end">MT</th></tr></thead>
+        <tbody>
+        {% for r in prod_by_grade %}
+          <tr><td>{{ r.grade|default:"—" }}</td><td class="text-end">{{ r.mt|floatformat:3 }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <p class="text-muted m-0">No data.</p>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card p-3">
+      <h6 class="fw-bold mb-2">Product Mix by Size</h6>
+      {% if prod_by_size %}
+      <table class="table table-sm">
+        <thead><tr><th>Size</th><th class="text-end">MT</th></tr></thead>
+        <tbody>
+        {% for r in prod_by_size %}
+          <tr><td>{{ r.size|default:"—" }}</td><td class="text-end">{{ r.mt|floatformat:3 }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <p class="text-muted m-0">No data.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="card p-3 mt-3">
+  <h6 class="fw-bold mb-2">4-week Trend</h6>
+  {% if trend_rows %}
+  <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead>
+        <tr>
+          <th>Week</th>
+          <th class="text-end">Sales (MT)</th>
+          <th class="text-end">Visits</th>
+          <th class="text-end">Calls</th>
+          <th class="text-end">Collections (₹)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in trend_rows %}
+          <tr>
+            <td>{{ row.week }}</td>
+            <td class="text-end">{{ row.sales_mt|floatformat:3 }}</td>
+            <td class="text-end">{{ row.visits }}</td>
+            <td class="text-end">{{ row.calls }}</td>
+            <td class="text-end">₹ {{ row.collections|floatformat:2|intcomma }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <p class="text-muted m-0">No trend data.</p>
+  {% endif %}
+</div>
+
+<hr class="my-4"/>
+
+<div class="row g-2">
+  <div class="col-auto"><a href="{% url 'kam:plan' %}" class="btn btn-outline-secondary">Plan Visit</a></div>
+  <div class="col-auto"><a href="{% url 'kam:visits' %}" class="btn btn-outline-secondary">Post Visit</a></div>
+  <div class="col-auto"><a href="{% url 'kam:call_new' %}" class="btn btn-outline-secondary">Log Call</a></div>
+  <div class="col-auto"><a href="{% url 'kam:collection_new' %}" class="btn btn-outline-secondary">Add Collection</a></div>
+  <div class="col-auto"><a href="{% url 'kam:customers' %}" class="btn btn-outline-secondary">Customer 360</a></div>
+  {% if kam_options %}
+  <div class="col-auto"><a href="{% url 'kam:manager_kpis' %}?period=week" class="btn btn-primary">Manager KPIs</a></div>
+  <div class="col-auto"><a href="{% url 'kam:collections_plan' %}?period=month" class="btn btn-outline-primary">Collections Plan</a></div>
+  {% endif %}
+</div>
+{% endblock %}

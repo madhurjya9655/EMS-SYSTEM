@@ -1,3 +1,7 @@
+# apps/users/permission_urls.py
+# Central map from our app-level permission codes → URL names.
+# Used by menus, quick-links, and middleware to resolve where a permission should point.
+
 PERMISSION_URLS = {
     # -----------------------
     # Leave
@@ -43,13 +47,35 @@ PERMISSION_URLS = {
     "list_sales_plan": "sales:sales_plan_list",
 
     # -----------------------
+    # KAM (Key Accounts) — behaves like any other module
+    # Mirrors apps.kam.urls names
+    "kam_dashboard": "kam:dashboard",
+    "kam_manager": "kam:manager",
+    "kam_manager_kpis": "kam:manager_kpis",
+    "kam_plan": "kam:plan",
+    "kam_visits": "kam:visits",
+    "kam_visit_approve": "kam:visit_approve",
+    "kam_visit_reject": "kam:visit_reject",
+    "kam_call_new": "kam:call_new",
+    "kam_collection_new": "kam:collection_new",
+    "kam_customers": "kam:customers",
+    "kam_targets": "kam:targets",
+    "kam_targets_lines": "kam:targets_lines",
+    "kam_reports": "kam:reports",
+    "kam_collections_plan": "kam:collections_plan",
+    "kam_export_kpi_csv": "kam:export_kpi_csv",
+    "kam_sync_now": "kam:sync_now",
+    "kam_sync_trigger": "kam:sync_trigger",
+    "kam_sync_step": "kam:sync_step",
+
+    # -----------------------
     # Reimbursement
     # -----------------------
     # Employee
     "reimbursement_apply": "reimbursement:my_reimbursements",
     "reimbursement_list": "reimbursement:my_reimbursements",
 
-    # Manager — your templates use reimbursement:manager_pending
+    # Manager — sidebar/login uses reimbursement:manager_pending
     "reimbursement_manager_pending": "reimbursement:manager_pending",
     "reimbursement_manager_review": "reimbursement:manager_pending",
 
@@ -57,15 +83,15 @@ PERMISSION_URLS = {
     "reimbursement_management_pending": "reimbursement:management_pending",
     "reimbursement_management_review": "reimbursement:management_pending",
 
-    # Finance — sidebar/login should work for both spellings
+    # Finance — keep legacy alias
     "reimbursement_finance_pending": "reimbursement:finance_pending",
     "reimbursement_finance_review": "reimbursement:finance_pending",
-    "reimbursement_review_finance": "reimbursement:finance_pending",  # legacy alias
+    "reimbursement_review_finance": "reimbursement:finance_pending",
 
     # Admin console — your sidebar links to reimbursement:admin_requests
     "reimbursement_admin": "reimbursement:admin_requests",
 
-    # NEW: Reimbursement Analytics
+    # Analytics
     "reimbursement_analytics": "reimbursement:analytics_dashboard",
 
     # -----------------------

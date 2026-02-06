@@ -1,3 +1,4 @@
+# apps/users/permissions.py
 from __future__ import annotations
 
 import json
@@ -25,6 +26,8 @@ except Exception:  # pragma: no cover
 
 # -----------------------------------------------------------------------------
 # Public: PERMISSIONS_STRUCTURE describes all possible app-level permissions.
+# These codes are stored in Profile.permissions (JSONField) and are independent
+# of Django's built-in auth permissions.
 # -----------------------------------------------------------------------------
 PERMISSIONS_STRUCTURE = {
     "Leave": [
@@ -32,7 +35,7 @@ PERMISSIONS_STRUCTURE = {
         ("leave_list", "Leave List"),
         ("leave_pending_manager", "Manager Approvals"),
         ("leave_cc_admin", "Manage CC (Admin)"),
-        ("leave_admin_edit", "Admin Edit Leave"),  # NEW
+        ("leave_admin_edit", "Admin Edit Leave"),
     ],
     "Checklist": [
         ("add_checklist", "Add Checklist"),
@@ -56,22 +59,39 @@ PERMISSIONS_STRUCTURE = {
         ("add_sales_plan", "Add Sales Plan"),
         ("list_sales_plan", "List Sales Plan"),
     ],
+
+    # KAM behaves exactly like other modules now — no separate toggle.
+    "KAM (Key Accounts)": [
+        ("kam_dashboard", "Dashboard"),
+        ("kam_manager", "Manager Overview"),
+        ("kam_manager_kpis", "Manager KPIs"),
+        ("kam_plan", "Weekly Plan"),
+        ("kam_visits", "Visits (List)"),
+        ("kam_visit_approve", "Visit Approve"),
+        ("kam_visit_reject", "Visit Reject"),
+        ("kam_call_new", "Log Call"),
+        ("kam_collection_new", "Log Collection"),
+        ("kam_customers", "Customers"),
+        ("kam_targets", "Targets – Header"),
+        ("kam_targets_lines", "Targets – Lines"),
+        ("kam_reports", "Reports"),
+        ("kam_collections_plan", "Collections Plan"),
+        ("kam_export_kpi_csv", "Export KPI CSV"),
+        ("kam_sync_now", "Sync Now"),
+        ("kam_sync_trigger", "Sync Trigger"),
+        ("kam_sync_step", "Sync Step"),
+    ],
+
     "Reimbursement": [
-        # Employee
         ("reimbursement_apply", "Reimbursement Apply (My Inbox / New)"),
         ("reimbursement_list", "Reimbursement List (My Requests)"),
-        # Manager
         ("reimbursement_manager_pending", "Manager Queue (Pending Requests)"),
         ("reimbursement_manager_review", "Manager Review (Single Request)"),
-        # Management (optional; only if you use these views)
         ("reimbursement_management_pending", "Management Queue (Pending Requests)"),
         ("reimbursement_management_review", "Management Review (Single Request)"),
-        # Finance
         ("reimbursement_finance_pending", "Finance Queue (Pending Requests)"),
         ("reimbursement_finance_review", "Finance Review (Single Request)"),
-        # Admin console (Bills / Requests / Employee / Status / Mapping)
         ("reimbursement_admin", "Admin – Reimbursement Console"),
-        # NEW: Analytics dashboard (keeps analytics inside main app theme)
         ("reimbursement_analytics", "Analytics Dashboard"),
     ],
     "Reports": [
@@ -191,11 +211,11 @@ _SYNONYMS = {
     # Delegation
     "list_delegation": {"mt_list_delegation"},
     "add_delegation": {"mt_add_delegation"},
-
-    # Finance (reimburse) — support legacy alias so both codes work
+    # Finance legacy alias
     "reimbursement_finance_review": {"reimbursement_review_finance"},
+    # KAM convenience
+    "kam_visits": {"kam_plan"},  # planning usually goes with visits in UI bundles
 }
-
 
 def _expand_synonyms(codes: Set[str]) -> Set[str]:
     out = set(codes)
@@ -229,7 +249,6 @@ def _codes_from_groups(user) -> Set[str]:
         grants.add("reimbursement_analytics")
 
     # Add other group → code mappings here as your org evolves.
-
     return grants
 
 
@@ -245,8 +264,8 @@ def _codes_from_mapping(user) -> Set[str]:
         if Mapping.objects.filter(reporting_person_id=getattr(user, "id", 0)).exists():
             return {"leave_pending_manager"}
     except Exception:
-        # Be silent; never break permission checks
-        logger.exception("Error checking ApproverMapping")
+        if PERMISSION_DEBUG:
+            logger.exception("Error checking ApproverMapping")
         pass
     return set()
 
@@ -329,14 +348,8 @@ def has_permission(*required: str):
     """
     Usage:
         @has_permission("list_checklist")
-        @has_permission("leave_pending_manager")  # manager approval views
-
-    Rules:
-        • Anonymous  -> redirect to login
-        • Superuser  -> allow
-        • '*' or 'all' in Profile.permissions -> allow
-        • Case-insensitive
-        • Honors grants from Django Groups and ApproverMapping (RP auto-grant)
+        @has_permission("kam_dashboard")
+        @has_permission("leave_pending_manager")
     """
     need = {str(c).strip().lower() for c in required if c}
 
@@ -386,7 +399,7 @@ def user_has_permission(user, code: str) -> bool:
 def user_has_any_permission(user, csv_codes: str) -> bool:
     """
     Check if the user has any permission from a CSV string of codes.
-    Example: {% if user|has_any_permission:"add_ticket,list_all_tickets" %} ... {% endif %}
+    Example: {% if user|has_any_permission:"kam_dashboard,kam_customers" %} ... {% endif %}
     """
     if not getattr(user, "is_authenticated", False):
         return False
@@ -403,7 +416,7 @@ def user_has_any_permission(user, csv_codes: str) -> bool:
 def user_has_module_permission(user, module_name: str) -> bool:
     """
     Check if user has any permission in a given module.
-    Usage: {% if user|has_module_permission:'Leave' %} ... {% endif %}
+    Usage: {% if user|has_module_permission:'KAM (Key Accounts)' %} ... {% endif %}
     """
     if not getattr(user, "is_authenticated", False):
         return False
@@ -440,7 +453,7 @@ def permissions_context(request):
     for module_name in PERMISSIONS_STRUCTURE.keys():
         module_access[module_name] = user_has_module_permission(request.user, module_name)
 
-    # Create permission checks for specific features
+    # Example flags frequently used in sidebars
     sidebar_flags = {
         "show_manager_approvals": bool(
             getattr(request.user, "is_superuser", False)
@@ -452,6 +465,8 @@ def permissions_context(request):
         "can_add_checklist": "add_checklist" in user_perms or getattr(request.user, "is_superuser", False),
         "can_view_delegation": "list_delegation" in user_perms or getattr(request.user, "is_superuser", False),
         "can_add_delegation": "add_delegation" in user_perms or getattr(request.user, "is_superuser", False),
+        # KAM now follows the same rule as other modules
+        "show_kam_module": module_access.get("KAM (Key Accounts)", False),
     }
 
     return {

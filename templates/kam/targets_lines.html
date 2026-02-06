@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% load humanize crispy_forms_tags %}
+{% block title %}Target Lines (Manager){% endblock %}
+
+{% block content %}
+<div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+  <h1 class="page-title m-0">Target Lines (Per KAM)</h1>
+  <a href="{% url 'kam:targets' %}" class="btn btn-outline-secondary btn-sm">Back to Headers</a>
+</div>
+
+<div class="card p-3 mb-3">
+  <form method="get" class="row g-3 align-items-end">
+    <div class="col-12 col-md-4">
+      <label class="form-label mb-1 small">Select Header</label>
+      <select name="header_id" class="form-select form-select-sm" onchange="this.form.submit()">
+        <option value="">— choose —</option>
+        {% for h in headers %}
+          <option value="{{ h.id }}" {% if selected_header and h.id == selected_header.id %}selected{% endif %}>
+            {{ h.get_period_type_display }} • {{ h.period_id }}{% if h.locked_at %} (Locked){% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-12 col-md-2 d-flex gap-2">
+      <button class="btn btn-primary btn-sm" type="submit">Open</button>
+      <a class="btn btn-outline-secondary btn-sm" href="{% url 'kam:targets_lines' %}">Reset</a>
+    </div>
+    <div class="col-12">
+      <p class="small text-muted m-0">
+        Pick a Target Header (Week/Month). Lines are created/updated for each KAM under that header.
+      </p>
+    </div>
+  </form>
+</div>
+
+{% if selected_header %}
+  {% if selected_header.locked_at %}
+    <div class="alert alert-warning py-2 mb-3">
+      <strong>Locked:</strong> This header was locked at {{ selected_header.locked_at }}. Editing lines is disabled.
+    </div>
+  {% endif %}
+
+  <div class="row g-3">
+    <div class="col-lg-5">
+      <div class="card p-3 h-100">
+        <h5 class="mb-3">Add / Update KAM Target</h5>
+        <form method="post" novalidate>
+          {% csrf_token %}
+          {{ form|crispy }}
+          <div class="d-flex gap-2">
+            <button class="btn btn-primary" type="submit" {% if selected_header.locked_at %}disabled{% endif %}>Save</button>
+            <a class="btn btn-outline-secondary" href="{% url 'kam:targets_lines' %}?header_id={{ selected_header.id }}">Clear</a>
+          </div>
+        </form>
+        <div class="small text-muted mt-2">
+          Defaults: Visits = 6/week, Calls = 24/week. Collections Plan (₹) is optional but enables efficiency KPI (Actual / Plan).
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-7">
+      <div class="card p-3 h-100">
+        <div class="d-flex align-items-center justify-content-between">
+          <h5 class="mb-3">Existing KAM Targets — {{ selected_header.get_period_type_display }} {{ selected_header.period_id }}</h5>
+        </div>
+
+        {% if lines %}
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead>
+                <tr>
+                  <th>KAM</th>
+                  <th class="text-end">Sales Target (MT)</th>
+                  <th class="text-end">Visits</th>
+                  <th class="text-end">Calls</th>
+                  <th class="text-end">Leads Target (MT)</th>
+                  <th class="text-end">NBD (Monthly)</th>
+                  <th class="text-end">Collections Plan (₹)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for tl in lines %}
+                  <tr>
+                    <td>{{ tl.kam.get_full_name|default:tl.kam.username }}</td>
+                    <td class="text-end">{{ tl.sales_target_mt|floatformat:3 }}</td>
+                    <td class="text-end">{{ tl.visits_target }}</td>
+                    <td class="text-end">{{ tl.calls_target }}</td>
+                    <td class="text-end">{{ tl.leads_target_mt|floatformat:3 }}</td>
+                    <td class="text-end">{{ tl.nbd_target_monthly }}</td>
+                    <td class="text-end">₹ {{ tl.collections_plan_amount|floatformat:2|intcomma }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="text-muted m-0">No lines yet for this header. Use the form to add one.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+{% else %}
+  <div class="card p-3">
+    <p class="text-muted m-0">Select a header to manage per-KAM targets.</p>
+  </div>
+{% endif %}
+{% endblock %}
