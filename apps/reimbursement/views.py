@@ -768,6 +768,109 @@ class ReimbursementDetailView(LoginRequiredMixin, PermissionRequiredMixin, Detai
         return ctx
 
 # ---------------------------------------------------------------------------
+# NEW: Employee-side per-line delete + bulk delete from Request Detail
+# ---------------------------------------------------------------------------
+
+class RequestLineDeleteView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    Allow the request owner (or admin) to delete a single INCLUDED line from a request
+    as long as the request is not paid and the line is not paid.
+    """
+    permission_code = "reimbursement_list"
+    template_name = "reimbursement/request_detail.html"  # not rendered on POST
+
+    def post(self, request, *args, **kwargs):
+        req = get_object_or_404(
+            ReimbursementRequest.objects.select_related("created_by"),
+            pk=kwargs.get("pk"),
+        )
+        if not (_user_is_admin(request.user) or req.created_by_id == request.user.id):
+            return HttpResponseForbidden("Not allowed.")
+
+        if req.status == ReimbursementRequest.Status.PAID:
+            messages.error(request, "Paid reimbursements cannot be modified.")
+            return redirect("reimbursement:request_detail", pk=req.pk)
+
+        line_id = request.POST.get("line_id")
+        if not line_id:
+            messages.warning(request, "No bill line selected.")
+            return redirect("reimbursement:request_detail", pk=req.pk)
+
+        line = get_object_or_404(
+            ReimbursementLine.objects.select_related("expense_item"),
+            pk=line_id,
+            request=req,
+            status=ReimbursementLine.Status.INCLUDED,
+        )
+
+        if line.bill_status == ReimbursementLine.BillStatus.PAID:
+            messages.error(request, f"Bill #{line.pk} is already paid and cannot be deleted.")
+            return redirect("reimbursement:request_detail", pk=req.pk)
+
+        exp = line.expense_item
+        line.delete()
+        if exp:
+            exp.status = ExpenseItem.Status.SAVED
+            exp.save(update_fields=["status", "updated_at"])
+
+        req.recalc_total(save=True)
+        # Re-derive status from remaining bills, e.g., move back to finance verify if needed
+        req.apply_derived_status_from_bills(actor=request.user, reason="Employee deleted a bill from request.")
+
+        messages.success(request, "Bill removed from the request.")
+        return redirect("reimbursement:request_detail", pk=req.pk)
+
+class RequestLinesBulkDeleteView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
+    """
+    Bulk delete multiple INCLUDED lines chosen by the request owner (or admin).
+    Same constraints as single delete.
+    """
+    permission_code = "reimbursement_list"
+    template_name = "reimbursement/request_detail.html"  # not rendered on POST
+
+    def post(self, request, *args, **kwargs):
+        req = get_object_or_404(
+            ReimbursementRequest.objects.select_related("created_by"),
+            pk=kwargs.get("pk"),
+        )
+        if not (_user_is_admin(request.user) or req.created_by_id == request.user.id):
+            return HttpResponseForbidden("Not allowed.")
+
+        if req.status == ReimbursementRequest.Status.PAID:
+            messages.error(request, "Paid reimbursements cannot be modified.")
+            return redirect("reimbursement:request_detail", pk=req.pk)
+
+        ids = [x for x in request.POST.getlist("line_ids") if str(x).isdigit()]
+        if not ids:
+            messages.warning(request, "Select at least one bill line to delete.")
+            return redirect("reimbursement:request_detail", pk=req.pk)
+
+        qs = req.lines.filter(
+            pk__in=ids,
+            status=ReimbursementLine.Status.INCLUDED,
+        ).exclude(
+            bill_status=ReimbursementLine.BillStatus.PAID
+        ).select_related("expense_item")
+
+        processed = 0
+        for line in qs:
+            exp = line.expense_item
+            line.delete()
+            if exp:
+                exp.status = ExpenseItem.Status.SAVED
+                exp.save(update_fields=["status", "updated_at"])
+            processed += 1
+
+        req.recalc_total(save=True)
+        req.apply_derived_status_from_bills(actor=request.user, reason="Employee bulk-deleted bill(s) from request.")
+
+        if processed:
+            messages.success(request, f"Deleted {processed} bill(s) from the request.")
+        else:
+            messages.info(request, "No eligible bills were deleted.")
+        return redirect("reimbursement:request_detail", pk=req.pk)
+
+# ---------------------------------------------------------------------------
 # Manager (request-level)
 # ---------------------------------------------------------------------------
 
@@ -1489,7 +1592,7 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         return back or reverse("reimbursement:finance_pending")
 
 # ---------------------------------------------------------------------------
-# Admin dashboards / export (unchanged)
+# Admin dashboards / export (unchanged except CSV header fix)
 # ---------------------------------------------------------------------------
 
 class AdminBillsSummaryView(LoginRequiredMixin, PermissionRequiredMixin, ListView):

@@ -112,10 +112,22 @@
     </div>
   </div>
   <div class="card-body p-0">
+
+    {# Bulk delete for owner when request not paid #}
+    {% if request.user.id == request_obj.created_by_id and not request_obj.paid_at %}
+    <form method="post" action="{% url 'reimbursement:request_lines_bulk_delete' request_obj.id %}">
+      {% csrf_token %}
+    {% endif %}
+
     <div class="table-responsive">
       <table class="table table-sm table-hover align-middle mb-0">
         <thead class="table-light">
           <tr>
+            <th style="width:36px;">
+              {% if request.user.id == request_obj.created_by_id and not request_obj.paid_at %}
+                <input type="checkbox" id="chk_all" onclick="document.querySelectorAll('.chk-line').forEach(cb=>cb.checked=this.checked)">
+              {% endif %}
+            </th>
             <th style="width:50px;">#</th>
             <th style="width:110px;">Date</th>
             <th style="width:140px;">Category</th>
@@ -124,13 +136,18 @@
             <th class="text-end" style="width:120px;">Amount</th>
             <th style="width:90px;">Receipt</th>
             <th style="width:210px;">Bill Status</th>
-            <th style="width:220px;">Actions</th>
+            <th style="width:240px;">Actions</th>
           </tr>
         </thead>
         <tbody>
           {% for line in request_obj.lines.all %}
           {% if line.status == "included" %}
           <tr>
+            <td>
+              {% if request.user.id == request_obj.created_by_id and not request_obj.paid_at and line.bill_status != 'paid' %}
+                <input type="checkbox" class="chk-line" name="line_ids" value="{{ line.id }}">
+              {% endif %}
+            </td>
             <td>{{ forloop.counter }}</td>
             <td>{{ line.expense_item.date|date:"Y-m-d" }}</td>
             <td>{{ line.expense_item.get_category_display|default:line.expense_item.category }}</td>
@@ -149,7 +166,6 @@
             <td>
               {% if line.bill_status == 'finance_rejected' %}
                 <span class="badge bg-danger">Rejected by Finance</span>
-                {# Show reason ONLY to the employee (owner) and superuser. Hide from managers to avoid bias. #}
                 {% if request.user.id == request_obj.created_by_id or request.user.is_superuser %}
                   {% if line.finance_rejection_reason %}
                     <div class="small text-muted mt-1" style="white-space:pre-line;">Reason: {{ line.finance_rejection_reason }}</div>
@@ -170,11 +186,20 @@
               {% endif %}
             </td>
             <td>
-              {% if line.bill_status == 'finance_rejected' and request.user.id == request_obj.created_by_id %}
+              {% if request.user.id == request_obj.created_by_id and not request_obj.paid_at %}
                 <div class="d-flex flex-column gap-1">
-                  <a class="btn btn-sm btn-outline-primary" href="{% url 'reimbursement:expense_edit' line.expense_item.id %}">Edit this Bill</a>
-                  <a class="btn btn-sm btn-outline-dark" href="{% url 'reimbursement:expense_inbox' %}">Add New Bill (Replacement)</a>
-                  <div class="small text-muted">After updating or adding a replacement, resubmit the bill from your Expenses.</div>
+                  {% if line.bill_status != 'paid' %}
+                    <form method="post" action="{% url 'reimbursement:line_delete' line.id %}">
+                      {% csrf_token %}
+                      <input type="hidden" name="return" value="{% url 'reimbursement:request_detail' request_obj.id %}">
+                      <button type="submit" class="btn btn-sm btn-outline-danger">Delete this Bill</button>
+                    </form>
+                  {% endif %}
+                  {% if line.bill_status == 'finance_rejected' %}
+                    <a class="btn btn-sm btn-outline-primary" href="{% url 'reimbursement:expense_edit' line.expense_item.id %}">Edit this Bill</a>
+                    <a class="btn btn-sm btn-outline-dark" href="{% url 'reimbursement:expense_inbox' %}">Add New Bill (Replacement)</a>
+                    <div class="small text-muted">After updating or adding a replacement, resubmit the bill from your Expenses.</div>
+                  {% endif %}
                 </div>
               {% else %}
                 <span class="text-muted small">—</span>
@@ -184,23 +209,32 @@
           {% endif %}
           {% empty %}
           <tr>
-            <td colspan="9" class="text-center text-muted py-3">No expense lines.</td>
+            <td colspan="10" class="text-center text-muted py-3">No expense lines.</td>
           </tr>
           {% endfor %}
         </tbody>
         <tfoot>
           <tr>
+            <td></td>
             <td colspan="5" class="text-end"><strong>Total</strong></td>
             <td class="text-end"><strong>₹{{ request_obj.total_amount|floatformat:2 }}</strong></td>
-            <td colspan="3"></td>
+            <td colspan="3">
+              {% if request.user.id == request_obj.created_by_id and not request_obj.paid_at %}
+                <button type="submit" class="btn btn-sm btn-danger">Delete Selected</button>
+              {% endif %}
+            </td>
           </tr>
         </tfoot>
       </table>
     </div>
+
+    {% if request.user.id == request_obj.created_by_id and not request_obj.paid_at %}
+    </form>
+    {% endif %}
+
   </div>
 </div>
 
-{# Optional hint for the employee when there are finance-rejected bills #}
 {% if show_partial_hold_hint and request.user.id == request_obj.created_by_id %}
   <div class="alert alert-warning mt-3">
     One or more bills were rejected by Finance. Please edit the rejected bill(s) above

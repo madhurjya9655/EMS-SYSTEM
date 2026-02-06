@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import logging
@@ -831,6 +832,7 @@ class ReimbursementLine(models.Model):
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.TextField(blank=True, default="")
     receipt_file = models.FileField(upload_to=receipt_upload_path, validators=[validate_receipt_file], blank=True, null=True)
+    # FIX: use Django's correct kwarg name 'max_length'
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.INCLUDED, db_index=True)
 
     bill_status = models.CharField(
@@ -1004,15 +1006,25 @@ class ReimbursementLine(models.Model):
 
     # ---- Employee actions ----
     def employee_resubmit_bill(self, *, actor: Optional[models.Model]) -> None:
+        """
+        On resubmission, move to EMPLOYEE_RESUBMITTED *and* sync the latest
+        receipt from the linked ExpenseItem so Finance sees the new attachment.
+        """
         if self.bill_status not in (self.BillStatus.FINANCE_REJECTED, self.BillStatus.MANAGER_REJECTED):
             raise DjangoCoreValidationError(_("Only rejected bills can be resubmitted by employee."))
         prev = self.bill_status
+
+        exp = self.expense_item
+        update_fields = ["bill_status", "last_modified_by", "updated_at"]
+        if exp and getattr(exp, "receipt_file", None):
+            self.receipt_file = exp.receipt_file
+            update_fields.append("receipt_file")
+
         self.bill_status = self.BillStatus.EMPLOYEE_RESUBMITTED
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
-        self.save(update_fields=["bill_status", "last_modified_by", "updated_at"])
+        self.save(update_fields=update_fields)
 
         try:
-            exp = self.expense_item
             if exp and exp.status != ExpenseItem.Status.SUBMITTED:
                 exp.status = ExpenseItem.Status.SUBMITTED
                 exp.save(update_fields=["status", "updated_at"])

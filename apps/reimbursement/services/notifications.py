@@ -73,6 +73,9 @@ _MAX_ATTACH_TOTAL_BYTES = int(getattr(settings, "REIMBURSEMENT_EMAIL_ATTACHMENTS
 # De-duplication window for notification spam control (seconds)
 _DUP_WINDOW_SECONDS = int(getattr(settings, "REIMBURSEMENT_EMAIL_DUP_WINDOW_SECONDS", 60))
 
+# Should we attach receipts to manager-facing emails?
+_ATTACH_TO_MANAGER = bool(getattr(settings, "REIMBURSEMENT_ATTACH_TO_MANAGER", False))
+
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
@@ -883,7 +886,9 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
         ]
     )
 
-    attachments = _collect_receipt_files_limited(req)
+    # *** PERMANENT FIX ***
+    # Manager-facing email: do NOT attach receipts unless explicitly enabled via settings.
+    attachments = _collect_receipt_files_limited(req) if _ATTACH_TO_MANAGER else []
 
     _send_and_log(
         req,
@@ -906,7 +911,7 @@ def send_reimbursement_finance_rejected(req: ReimbursementRequest) -> None:
 
     kind = "finance_rejected"
     if _already_sent_recent(req, kind):
-        logger.info("Suppressing duplicate '%s' email for req #%s.", kind, req.id)
+        logger.info("Suppressing duplicate '%s' email for req #%s.", req.id)
         return
 
     emp_email = _employee_email(req)
@@ -1090,6 +1095,7 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
     txt = "\n".join(txt_lines)
 
     reply_to = [_employee_email(req)] if _employee_email(req) else _amreen_reply_to()
+    # KEEP attachments in the "submitted" email (historical workflow ok)
     attachments = _collect_receipt_files_limited(req)
 
     _send_and_log(
@@ -1158,7 +1164,7 @@ def send_reimbursement_admin_summary(req: ReimbursementRequest) -> None:
         This summary was sent to: {", ".join([escape(x) for x in admin_list])}
       </p>
 
-      <p style="font-size:13px;margin-top:16px;color:#4b5563;">
+      <p style="font-size:13px;margin-top:16px;color:#4b5563%;">
         Regards,<br>BOS Lakshya
       </p>
     </div>
@@ -1438,7 +1444,7 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
         Management Decision for Reimbursement #{req.id}
       </h2>
 
-      <table style="font-size:14px;margin:8px 0 16px 0;">
+      <table style="font-size:14px;margin:8px 0 16px 0%;">
         <tr><td style="padding-right:8px;"><strong>Decision:</strong></td><td>{escape(decision_label)}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Total Amount:</strong></td><td>₹{amt_str}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Current Status:</strong></td><td>{escape(status_label)}</td></tr>
@@ -1447,14 +1453,14 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
 
     if req.management_comment:
         html += f"""
-      <p style="font-size:14px;margin:0 0 12px 0;">
+      <p style="font-size:14px;margin:0 0 12px 0%;">
         <strong>Management Comment:</strong><br>
         {management_comment_html}
       </p>
     """
 
     html += f"""
-      <p style="font-size:14px;margin:12px 0;">
+      <p style="font-size:14px;margin:12px 0%;">
         View full details:<br>
         <a href="{detail_url}" style="color:#2563eb;text-decoration:none;">{detail_url}</a>
       </p>

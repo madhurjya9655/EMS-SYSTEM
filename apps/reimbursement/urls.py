@@ -35,6 +35,9 @@ urlpatterns = [
 
     # Canonical request detail
     path("request/<int:pk>/", views.ReimbursementDetailView.as_view(), name="request_detail"),
+    # ✅ NEW: per-line & bulk delete on request page
+    path("line/<int:pk>/delete/", views.RequestLineDeleteView.as_view(), name="line_delete"),
+    path("request/<int:pk>/lines/delete/", views.RequestLinesBulkDeleteView.as_view(), name="request_lines_bulk_delete"),
 
     # ✅ BACKWARD COMPATIBILITY (ADMIN / OLD TEMPLATES) – kept intentionally
     path(
