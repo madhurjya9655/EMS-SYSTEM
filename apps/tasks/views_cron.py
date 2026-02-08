@@ -1,12 +1,16 @@
 # apps/tasks/views_cron.py
 from __future__ import annotations
 
+import datetime
+import threading
+
 from django.conf import settings
 from django.http import JsonResponse, HttpResponseForbidden
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
-from django.utils import timezone
 
+# Weekly performance services
 from apps.tasks.services.weekly_performance import (
     send_weekly_congratulations_mails,
     upsert_weekly_scores_for_last_week,  # pure ORM scorer
@@ -14,43 +18,47 @@ from apps.tasks.services.weekly_performance import (
 
 # Celery tasks & orchestrators (existing core)
 from apps.tasks.tasks import (
-    generate_recurring_checklists,    # ensure “future” rows exist (not today)
+    generate_recurring_checklists,    # ensure future rows exist (not today)
     send_due_today_assignments,       # 10:00 IST fan-out (leave aware; centrally locked)
     pre10am_unblock_and_generate,     # 09:55 IST safeguard
 )
 
-# ✅ NEW: lightweight “today-only” materializer (safe, no emails)
+# Optional lightweight “today-only” materializer (safe, no emails)
 try:
     from apps.tasks.materializer import materialize_today_for_all  # type: ignore
 except Exception:  # pragma: no cover
     materialize_today_for_all = None  # type: ignore
 
-import threading
-import datetime
 
-
+# -----------------------------------------------------------------------------
+# Auth helpers (accept old + new headers/params)
+# -----------------------------------------------------------------------------
 def _get_cron_token(request, token: str = "") -> str:
     """
-    IMPORTANT: do NOT touch request.POST here.
-    We accept token via:
-      - path
-      - header
-      - querystring
+    Accept token via:
+      - explicit view 'token' argument (path converter if used)
+      - headers: X-CRON-TOKEN, X-Cron-Key
+      - querystring: ?token=..., ?key=...
     """
     return (
         token
         or request.headers.get("X-CRON-TOKEN", "")
+        or request.headers.get("X-Cron-Key", "")
         or request.GET.get("token", "")
+        or request.GET.get("key", "")
     )
 
 
 def _cron_authorized(request, token: str = "") -> bool:
-    expected = getattr(settings, "CRON_SECRET", "") or ""
-    provided = _get_cron_token(request, token)
-    # If CRON_SECRET is empty, allow (useful for dev)
+    expected = (getattr(settings, "CRON_SECRET", "") or "").strip()
+    provided = (_get_cron_token(request, token) or "").strip()
+    # If CRON_SECRET is empty, allow (useful for local/dev)
     return True if not expected else (provided == expected)
 
 
+# -----------------------------------------------------------------------------
+# Weekly congrats hook
+# -----------------------------------------------------------------------------
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
 def weekly_congrats_hook(request, token: str = ""):
@@ -84,17 +92,18 @@ def weekly_congrats_hook(request, token: str = ""):
         )
 
 
+# -----------------------------------------------------------------------------
+# Due-today fan-out (10:00 IST) – do heavy work in a background thread
+# -----------------------------------------------------------------------------
 def _run_due_today_in_background():
     """
-    Do the heavy work outside the HTTP request thread to avoid Gunicorn timeouts.
-
     Order of operations (all best-effort; each guarded so one failure doesn’t kill the run):
       0) (NEW) Materialize missing *today* rows for recurring series (skip users on leave @10:00 IST)
       1) Pre-generate future recurring rows (existing generator; never creates “today”)
       2) Send due-today emails (existing, leave-aware + cross-process lock)
 
-    NOTE: send_due_today_assignments has a cross-process filesystem lock,
-    so even if multiple triggers fire, only one fan-out runs for the day.
+    NOTE: send_due_today_assignments has a cross-process lock, so even if multiple triggers fire,
+    only one fan-out runs for the day.
     """
     try:
         # 0) Today-only materialization (no emails; safe if module absent)
@@ -141,7 +150,7 @@ def due_today_assignments_hook(request, token: str = ""):
             )
 
         # Start background job
-        t = threading.Thread(target=_run_due_today_in_background, daemon=True)
+        t = threading.Thread(target=_run_due_today_in_background, daemon=True, name="cron-due-today-bg")
         t.start()
 
         return JsonResponse(
@@ -161,6 +170,9 @@ def due_today_assignments_hook(request, token: str = ""):
         )
 
 
+# -----------------------------------------------------------------------------
+# 09:55 IST safeguard
+# -----------------------------------------------------------------------------
 @csrf_exempt
 @require_http_methods(["GET"])
 def pre10am_unblock_and_generate_hook(request, token: str = ""):
@@ -177,17 +189,19 @@ def pre10am_unblock_and_generate_hook(request, token: str = ""):
         if not _cron_authorized(request, token):
             return HttpResponseForbidden("Forbidden")
 
-        uid = request.GET.get("user_id")
+        uid_param = request.GET.get("user_id")
         try:
-            uid = int(uid) if uid else None
+            uid = int(uid_param) if uid_param else None
         except Exception:
             uid = None
 
-        # NEW: opportunistically materialize “today” before the legacy pre10 step
+        # Opportunistically materialize “today” before the legacy pre10 step
         mat = {}
         try:
             if callable(materialize_today_for_all):
-                mat = materialize_today_for_all(user_id=uid, dry_run=False).__dict__
+                # Assume it may return a dataclass-like object; serialize defensively
+                mat_res = materialize_today_for_all(user_id=uid, dry_run=False)
+                mat = getattr(mat_res, "__dict__", {}) if mat_res is not None else {"created": 0}
         except Exception:
             mat = {"created": 0, "error": "materializer_failed"}
 
@@ -199,7 +213,7 @@ def pre10am_unblock_and_generate_hook(request, token: str = ""):
                 "method": request.method,
                 "at": timezone.now().isoformat(),
                 "materialize_today": mat,   # visibility for logs
-                **result,
+                **(result or {}),
             }
         )
     except Exception as e:

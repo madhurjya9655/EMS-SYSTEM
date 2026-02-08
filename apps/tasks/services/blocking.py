@@ -1,3 +1,4 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\services\blocking.py
 from __future__ import annotations
 
 """
@@ -51,7 +52,11 @@ def _ist_date_from_any(dt_or_date) -> date | None:
     if isinstance(dt_or_date, date) and not isinstance(dt_or_date, datetime):
         return dt_or_date
     try:
-        aware = timezone.localtime(dt_or_date, IST) if timezone.is_aware(dt_or_date) else dt_or_date.replace(tzinfo=IST)
+        aware = (
+            timezone.localtime(dt_or_date, IST)
+            if timezone.is_aware(dt_or_date)
+            else dt_or_date.replace(tzinfo=IST)
+        )
         return aware.date()
     except Exception:
         try:
@@ -76,7 +81,11 @@ def should_skip_assignment(user, planned_dt) -> bool:
     try:
         return is_user_blocked_for_datetime(user, planned_dt)
     except Exception:  # pragma: no cover
-        logger.exception("should_skip_assignment failed (user_id=%s, dt=%r)", getattr(user, "id", None), planned_dt)
+        logger.exception(
+            "should_skip_assignment failed (user_id=%s, dt=%r)",
+            getattr(user, "id", None),
+            planned_dt,
+        )
         return False
 
 
