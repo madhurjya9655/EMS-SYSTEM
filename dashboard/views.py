@@ -413,7 +413,7 @@ def dashboard_home(request):
     - Hides tasks the current user handed over AWAY during an active leave window.
     - Checklist visibility: only after 10:00 IST of the planned day; past-incomplete remain; future hidden.
     - Help Tickets: appear immediately (no 10:00 gating).
-    - Original owner's block: recently “Completed by delegate”.
+    - On non-working days (Sundays/holidays): hide *today* items (show only past-due).
     """
     now_ist = timezone.localtime(timezone.now(), IST)
     today_ist = now_ist.date()
@@ -509,15 +509,17 @@ def dashboard_home(request):
     handover_incoming = _get_handover_tasks_for_user(request.user, today_ist)
     handover_outgoing = _get_outgoing_handover_ids_for_user(request.user, today_ist)
 
-    # Gate anchor
+    # Gates
     ten_am = dt_time(10, 0, 0)
     after_10 = now_ist.timetz().replace(tzinfo=None) >= ten_am
+    non_working = not is_working_day(today_ist)  # **NEW**: Sunday/holiday flag
 
     try:
         # -------------------- Checklists --------------------
-        # IMPORTANT: base list respects 10AM gate using DB filter to avoid loading hidden rows
         if today_only:
-            if after_10:
+            if non_working:
+                base_checklists = []  # hide 'today' on non-working days
+            elif after_10:
                 base_checklists = list(
                     Checklist.objects
                     .filter(
@@ -533,10 +535,12 @@ def dashboard_home(request):
             else:
                 base_checklists = []
         else:
-            if after_10:
+            if non_working:
+                planned_filter = {'planned_date__lt': start_today_proj}  # only past-due
+            elif after_10:
                 planned_filter = {'planned_date__lte': end_today_proj}
             else:
-                planned_filter = {'planned_date__lt': start_today_proj}  # hide today's items before 10AM
+                planned_filter = {'planned_date__lt': start_today_proj}  # hide 'today' pre-10
             base_checklists = list(
                 Checklist.objects
                 .filter(assign_to=request.user, status='Pending', **planned_filter)
@@ -545,11 +549,11 @@ def dashboard_home(request):
                 .order_by('planned_date')
             )
 
-        # Include handed-over checklists (always visible per existing behavior)
         if handover_incoming['checklist']:
+            ho_filter = {'planned_date__lte': (end_today_proj if not non_working else start_today_proj)}
             ho_qs = list(
                 Checklist.objects
-                .filter(id__in=handover_incoming['checklist'], status='Pending', planned_date__lte=end_today_proj)
+                .filter(id__in=handover_incoming['checklist'], status='Pending', **ho_filter)
                 .select_related('assign_by', 'assign_to')
                 .order_by('planned_date')
             )
@@ -560,11 +564,14 @@ def dashboard_home(request):
             all_checklists = base_checklists
 
         if today_only:
-            checklist_qs = [
-                c for c in all_checklists
-                if (_ist_date(c.planned_date) == today_ist) and
-                   (getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist))
-            ]
+            if non_working:
+                checklist_qs = []
+            else:
+                checklist_qs = [
+                    c for c in all_checklists
+                    if (_ist_date(c.planned_date) == today_ist) and
+                       (getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist))
+                ]
         else:
             checklist_qs = [
                 c for c in all_checklists
@@ -573,7 +580,7 @@ def dashboard_home(request):
 
         # ------------------- Delegations -------------------
         if today_only:
-            base_delegations = list(
+            base_delegations = [] if non_working else list(
                 Delegation.objects.filter(
                     assign_to=request.user, status='Pending',
                     planned_date__gte=start_today_proj,
@@ -584,10 +591,10 @@ def dashboard_home(request):
                 .order_by('planned_date')
             )
         else:
+            del_filter = {'planned_date__lt': start_today_proj} if non_working else {'planned_date__lte': end_today_proj}
             base_delegations = list(
                 Delegation.objects.filter(
-                    assign_to=request.user, status='Pending',
-                    planned_date__lte=end_today_proj
+                    assign_to=request.user, status='Pending', **del_filter
                 )
                 .exclude(id__in=handover_outgoing['delegation'])
                 .select_related('assign_by', 'assign_to')
@@ -595,10 +602,10 @@ def dashboard_home(request):
             )
 
         if handover_incoming['delegation']:
+            ho_del_filter = {'planned_date__lt': start_today_proj} if non_working else {'planned_date__lte': end_today_proj}
             ho_del = list(
                 Delegation.objects.filter(
-                    id__in=handover_incoming['delegation'], status='Pending',
-                    planned_date__lte=end_today_proj
+                    id__in=handover_incoming['delegation'], status='Pending', **ho_del_filter
                 )
                 .select_related('assign_by', 'assign_to')
                 .order_by('planned_date')
@@ -611,7 +618,7 @@ def dashboard_home(request):
 
         # ------------------- Help Tickets -------------------
         if today_only:
-            base_help = list(
+            base_help = [] if non_working else list(
                 HelpTicket.objects.filter(
                     assign_to=request.user,
                     planned_date__gte=start_today_proj,
@@ -623,9 +630,10 @@ def dashboard_home(request):
                 .order_by('planned_date')
             )
         else:
+            help_filter = {'planned_date__lt': start_today_proj} if non_working else {'planned_date__lte': end_today_proj}
             base_help = list(
                 HelpTicket.objects.filter(
-                    assign_to=request.user, planned_date__lte=end_today_proj
+                    assign_to=request.user, **help_filter
                 )
                 .exclude(status='Closed')
                 .exclude(id__in=handover_outgoing['help_ticket'])
@@ -634,10 +642,10 @@ def dashboard_home(request):
             )
 
         if handover_incoming['help_ticket']:
+            ho_help_filter = {'planned_date__lt': start_today_proj} if non_working else {'planned_date__lte': end_today_proj}
             ho_help = list(
                 HelpTicket.objects.filter(
-                    id__in=handover_incoming['help_ticket'],
-                    planned_date__lte=end_today_proj
+                    id__in=handover_incoming['help_ticket'], **ho_help_filter
                 )
                 .exclude(status='Closed')
                 .select_related('assign_by', 'assign_to')
@@ -651,7 +659,7 @@ def dashboard_home(request):
 
         logger.info(_safe_console_text(
             f"Dashboard filter for {request.user.username} | today_only={today_only} "
-            f"| checklist={len(checklist_qs)} delegation={len(delegation_qs)} help={len(help_ticket_qs)} "
+            f"| non_working={non_working} | checklist={len(checklist_qs)} delegation={len(delegation_qs)} help={len(help_ticket_qs)} "
             f"| incoming handover: CL={len(handover_incoming['checklist'])} DL={len(handover_incoming['delegation'])} HT={len(handover_incoming['help_ticket'])} "
             f"| outgoing hidden: CL={len(handover_outgoing['checklist'])} DL={len(handover_outgoing['delegation'])} HT={len(handover_outgoing['help_ticket'])}"
         ))
