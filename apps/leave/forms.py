@@ -43,9 +43,7 @@ class LeaveRequestForm(forms.ModelForm):
     """
     Employee-facing form used by /leave/apply/.
 
-    Requirement:
-      • When Duration = HALF, `leave_type` is OPTIONAL.
-      • When Duration = FULL,  `leave_type` is REQUIRED.
+    NOTE: Model requires leave_type; the form enforces it for BOTH Full and Half Day.
     """
 
     # Helper radio (not stored on the model)
@@ -75,11 +73,11 @@ class LeaveRequestForm(forms.ModelForm):
 
     reason = forms.CharField(widget=forms.Textarea(attrs={"rows": 3}), required=False)
 
-    # We keep this NOT required at field level; enforce conditionally in clean()
+    # Keep required True to match model (no schema change)
     leave_type = forms.ModelChoiceField(
         queryset=LeaveType.objects.filter(name__in=ALLOWED_LEAVE_TYPE_NAMES).order_by("name"),
         empty_label="-- Select Type --",
-        required=False,
+        required=True,
         label="Leave Type",
     )
 
@@ -125,9 +123,6 @@ class LeaveRequestForm(forms.ModelForm):
             User.objects.filter(is_active=True).exclude(id=getattr(user, "id", None))
         )
 
-        # Conditional: keep leave_type not required; enforce in clean()
-        self.fields["leave_type"].required = False
-
         self._populate_handover_choices()
 
     # ----- dynamic handover choices (safe to be empty) -----
@@ -160,9 +155,9 @@ class LeaveRequestForm(forms.ModelForm):
         duration = (cd.get("duration_type") or DURATION_FULL).upper()
         is_half = duration == DURATION_HALF
 
-        # Conditional: leave_type required for FULL day
-        if not is_half and not cd.get("leave_type"):
-            self.add_error("leave_type", "This field is required for Full Day leave.")
+        # Leave type is required for both Full & Half Day to match model
+        if not cd.get("leave_type"):
+            self.add_error("leave_type", "Please select a leave type.")
 
         # Dates & times
         start_date = cd.get("start_at")
@@ -218,7 +213,7 @@ class LeaveRequestForm(forms.ModelForm):
         cd = self.cleaned_data
         instance = LeaveRequest(
             employee=self.user,
-            leave_type=cd.get("leave_type"),  # may be None for half-day (model must allow null)
+            leave_type=cd.get("leave_type"),
             start_at=cd["_computed_start_at"],
             end_at=cd["_computed_end_at"],
             is_half_day=cd["_computed_is_half_day"],
@@ -234,7 +229,7 @@ class LeaveRequestForm(forms.ModelForm):
 
 class AdminLeaveEditForm(forms.ModelForm):
     """
-    Admin-facing edit with the same conditional rule for leave_type.
+    Admin-facing edit (keeps same constraints).
     """
     duration_type = forms.ChoiceField(
         choices=DURATION_CHOICES, initial=DURATION_FULL, widget=forms.RadioSelect
@@ -247,7 +242,7 @@ class AdminLeaveEditForm(forms.ModelForm):
     leave_type = forms.ModelChoiceField(
         queryset=LeaveType.objects.filter(name__in=ALLOWED_LEAVE_TYPE_NAMES).order_by("name"),
         empty_label="-- Select Type --",
-        required=False,
+        required=True,
         label="Leave Type",
     )
 
@@ -281,15 +276,13 @@ class AdminLeaveEditForm(forms.ModelForm):
                 self.fields["from_time"].initial = ist_start.time().replace(second=0, microsecond=0)
                 self.fields["to_time"].initial = ist_end.time().replace(second=0, microsecond=0)
 
-        self.fields["leave_type"].required = False  # conditional in clean()
-
     def clean(self):
         cd = super().clean()
         duration = (cd.get("duration_type") or DURATION_FULL).upper()
         is_half = duration == DURATION_HALF
 
-        if not is_half and not cd.get("leave_type"):
-            self.add_error("leave_type", "This field is required for Full Day leave.")
+        if not cd.get("leave_type"):
+            self.add_error("leave_type", "Please select a leave type.")
 
         start_date = cd.get("start_at")
         end_date = cd.get("end_at")
@@ -340,7 +333,7 @@ class AdminLeaveEditForm(forms.ModelForm):
 
         cd = self.cleaned_data
         inst: LeaveRequest = super().save(commit=False)
-        inst.leave_type = cd.get("leave_type")  # may be None for half-day
+        inst.leave_type = cd.get("leave_type")
         inst.start_at = cd["_computed_start_at"]
         inst.end_at = cd["_computed_end_at"]
         inst.is_half_day = cd["_computed_is_half_day"]

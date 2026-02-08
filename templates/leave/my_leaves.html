@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load tz humanize static users_permissions %}
+{% load tz humanize static permission_tags %}
 
 {% block title %}My Leaves{% endblock %}
 
@@ -9,7 +9,7 @@
   <div class="d-flex align-items-center justify-content-between mb-3">
     <h4 class="mb-0"><i class="fa-solid fa-file-alt me-2"></i>My Leaves</h4>
     <div class="d-flex gap-2">
-      {% comment %} Admin Edit entry point for convenience (no specific leave) — optional {% endcomment %}
+      {# Admin Edit entry point for convenience (no specific leave) — optional #}
       {% include "leave/_admin_edit_button.html" with leave=None next_url=request.get_full_path %}
       <a href="{% url 'leave:apply_leave' %}" class="btn btn-primary">
         <i class="fa-solid fa-plus me-1"></i> Submit Leave

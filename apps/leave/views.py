@@ -85,7 +85,7 @@ ALLOWED_LEAVE_TYPE_NAMES = {
     "Maternity Leave",
 }
 
-# ---- Business-hours gate (apply allowed only 09:30–18:00 IST) ---------------
+# ---- Working window constants (used by UI hints only) ----------------------
 WORK_START_IST = dtime(9, 30)
 WORK_END_IST = dtime(18, 0)
 
@@ -110,7 +110,7 @@ def now_ist():
 def _within_apply_window_ist(dt=None) -> bool:
     """
     Returns True iff current IST time is within [09:30, 18:00].
-    We allow exactly 18:00 as the last valid moment for submit.
+    NOTE: kept for UI hints; NOT used as a hard server-side gate anymore.
     """
     cur = timezone.localtime(dt or timezone.now(), IST).time()
     return (cur >= WORK_START_IST) and (cur <= WORK_END_IST)
@@ -425,22 +425,10 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 def apply_leave(request: HttpRequest) -> HttpResponse:
     header = _employee_header(request.user)
     now = now_ist()
-    can_apply_now = _within_apply_window_ist(now)
+    # IMPORTANT: Do NOT hard-gate by current time. This breaks Full Day rules.
+    can_apply_now = None  # keep template from disabling submit; still show IST clock
 
     if request.method == "POST":
-        # ✅ HARD GATE: block submissions outside 09:30–18:00 IST
-        if not can_apply_now:
-            messages.error(
-                request,
-                "Leave applications are allowed only between 09:30 AM and 06:00 PM (IST). Please try again during working hours.",
-            )
-            form = LeaveRequestForm(request.POST, request.FILES, user=request.user)  # keep their input on screen
-            return render(
-                request,
-                "leave/apply_leave.html",
-                {"form": form, "employee_header": header, "now_ist": now, "can_apply_now": can_apply_now},
-            )
-
         form = LeaveRequestForm(request.POST, request.FILES, user=request.user)
         try:
             if form.is_valid():
@@ -451,7 +439,13 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                 for attempt in range(1, max_attempts + 1):
                     try:
                         with transaction.atomic():
-                            lr = form.save(commit=True)
+                            try:
+                                lr = form.save(commit=True)
+                            except ValidationError as ve:
+                                # Surface precise messages to the user
+                                for msg in getattr(ve, "messages", []) or [str(ve)]:
+                                    messages.error(request, msg)
+                                break  # stop retry loop; nothing to commit
 
                             cd = form.cleaned_data
                             delegate_to = cd.get("delegate_to")
@@ -526,10 +520,6 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                             # -------------------------------------------------------------------
 
                             # ---------------- Apply handover + Email dispatch ----------------
-                            # IMPORTANT CHANGE:
-                            # We no longer send the initial leave request email or handover emails from the view.
-                            # The model signal (apps/leave/models.py::_on_leave_created) and signals module
-                            # handle both handover application and all email notifications after commit.
                             def _apply_and_send_noop():
                                 try:
                                     logger.info(
@@ -565,6 +555,11 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                         logger.exception("apply_leave failed due to OperationalError on attempt %s", attempt)
                         messages.error(request, "Database is busy. Please try again.")
                         break
+                    except ValidationError as ve:
+                        # If model raised after transaction block (defensive)
+                        for msg in getattr(ve, "messages", []) or [str(ve)]:
+                            messages.error(request, msg)
+                        break
                     except Exception as e:
                         # Log full traceback and fall back to form redisplay (never 500)
                         logger.exception("apply_leave failed to create leave and/or handover: %s", e)
@@ -594,7 +589,7 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
             "form": form,
             "employee_header": header,
             "now_ist": now,
-            "can_apply_now": can_apply_now,  # 👈 used by template to show banner/disable submit
+            "can_apply_now": can_apply_now,  # 👈 no hard disable
         },
     )
 
@@ -1149,7 +1144,7 @@ def manager_widget(request: HttpRequest) -> HttpResponse:
             f"<td>"
             f"<a class='btn btn-sm btn-outline-primary' href='{reverse('leave:approval_page', args=[lr.id])}'>Open</a> "
             f"<form method='post' action='{reverse('leave:manager_decide_approve', args=[lr.id])}?next={_safe_next_url(request, 'leave:manager_pending')}' style='display:inline'>{_csrf_input(request)}"
-            f"<button class='btn btn-sm btn-success'>Approve</button></form> "
+            f"<button class='btn btn-sm btn	success'>Approve</button></form> "
             f"<form method='post' action='{reverse('leave:manager_decide_reject', args=[lr.id])}?next={_safe_next_url(request, 'leave:manager_pending')}' style='display:inline'>{_csrf_input(request)}"
             f"<button class='btn btn-sm btn-danger'>Reject</button></form>"
             f"</td></tr>"

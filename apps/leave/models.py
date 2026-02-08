@@ -1,4 +1,4 @@
-#apps\leave\models.py
+# apps/leave/models.py
 from __future__ import annotations
 
 import hashlib
@@ -25,7 +25,7 @@ UserType = AbstractUser
 # Single source of truth for all time-gated rules (IST)
 IST = pytz.timezone("Asia/Kolkata")
 
-# Working window (used for Half Day guards)
+# Working window (used for Half Day guards and Full Day same-day cutoff)
 WORK_START_IST = time(9, 30)
 WORK_END_IST = time(18, 0)
 
@@ -303,7 +303,14 @@ class LeaveRequest(models.Model):
         help_text="Additional CC recipients selected by the employee from admin-configured options."
     )
 
-    leave_type = models.ForeignKey(LeaveType, on_delete=models.PROTECT, related_name="leave_requests")
+    # IMPORTANT: allow null/blank so Half Day can omit type (form condition)
+    leave_type = models.ForeignKey(
+        LeaveType,
+        on_delete=models.PROTECT,
+        related_name="leave_requests",
+        null=True,
+        blank=True,
+    )
 
     # Period (tz-aware; end_at is treated as *inclusive* in IST calendar)
     start_at = models.DateTimeField()
@@ -354,7 +361,8 @@ class LeaveRequest(models.Model):
     def __str__(self) -> str:
         sa = timezone.localtime(self.start_at, IST) if self.start_at else None
         ea = timezone.localtime(self.end_at, IST) if self.end_at else None
-        return f"{self.employee} • {self.leave_type} • {sa:%Y-%m-%d %H:%M} → {ea:%Y-%m-%d %H:%M} • {self.get_status_display()}"
+        lt = self.leave_type.name if self.leave_type else "-"
+        return f"{self.employee} • {lt} • {sa:%Y-%m-%d %H:%M} → {ea:%Y-%m-%d %H:%M} • {self.get_status_display()}"
 
     @property
     def manager(self):
@@ -456,14 +464,24 @@ class LeaveRequest(models.Model):
     def _validate_apply_rules(self) -> None:
         """
         Application rules (IST):
-        • Past dates are not allowed.
-        • Same-day applications are allowed at any time (no cut-off).
-        • Half-day is still limited to ≤ 6 hours within working window (handled below).
+        • No past dates.
+        • Full Day for *today* must be applied before 09:30 IST.
+        • Half Day has no application-time restriction.
         """
         now = now_ist()
         start_day = _ist_date(self.start_at)
+
+        # No past dates at all
         if start_day < now.date():
             raise ValidationError("You cannot apply for leave for past dates.")
+
+        # Enforce same-day FULL-DAY cutoff at 09:30 IST
+        is_half = bool(self.is_half_day or self._is_half_window_by_times())
+        if not is_half and start_day == now.date():
+            if now.time() >= WORK_START_IST:
+                raise ValidationError("Full-day leave for today must be applied before 09:30 AM.")
+
+        # No restriction for future days (handled implicitly)
 
     def _validate_decision_cutoff(self, new_status: str) -> None:
         """
@@ -530,7 +548,7 @@ class LeaveRequest(models.Model):
             if s_local < WORK_START_IST or e_local > WORK_END_IST:
                 raise ValidationError({"is_half_day": "Half-day time must be within 09:30–18:00 IST."})
 
-        # Application rules (no time cut-offs; only 'no past date')
+        # Application rules (includes same-day FULL DAY cutoff)
         if not self.pk:
             self._validate_apply_rules()
 

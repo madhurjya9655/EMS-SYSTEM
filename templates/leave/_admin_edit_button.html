@@ -1,7 +1,7 @@
-{% load users_permissions %}
-{# Admin Edit button snippet. Requires 'leave_admin_edit' permission. #}
+{% load permission_tags %}
+{# Admin Edit button snippet. Visible to admins (superuser or Admin group). #}
 
-{% if request.user|has_permission:"leave_admin_edit" %}
+{% if request.user|is_admin %}
   {% if leave %}
     <a href="{% url 'admin:leave_leaverequest_change' leave.id %}?_changelist_filters=next={{ next_url|urlencode }}"
        class="btn btn-outline-dark btn-sm"
