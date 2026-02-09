@@ -463,25 +463,11 @@ class LeaveRequest(models.Model):
 
     def _validate_apply_rules(self) -> None:
         """
-        Application rules (IST):
-        • No past dates.
-        • Full Day for *today* must be applied before 09:30 IST.
-        • Half Day has no application-time restriction.
+        NO-OP BY DESIGN.
+        Business rules like same-day full-day cutoff live in forms/services.
+        Keeping this function allows existing call sites to remain untouched.
         """
-        now = now_ist()
-        start_day = _ist_date(self.start_at)
-
-        # No past dates at all
-        if start_day < now.date():
-            raise ValidationError("You cannot apply for leave for past dates.")
-
-        # Enforce same-day FULL-DAY cutoff at 09:30 IST
-        is_half = bool(self.is_half_day or self._is_half_window_by_times())
-        if not is_half and start_day == now.date():
-            if now.time() >= WORK_START_IST:
-                raise ValidationError("Full-day leave for today must be applied before 09:30 AM.")
-
-        # No restriction for future days (handled implicitly)
+        return
 
     def _validate_decision_cutoff(self, new_status: str) -> None:
         """
@@ -548,9 +534,8 @@ class LeaveRequest(models.Model):
             if s_local < WORK_START_IST or e_local > WORK_END_IST:
                 raise ValidationError({"is_half_day": "Half-day time must be within 09:30–18:00 IST."})
 
-        # Application rules (includes same-day FULL DAY cutoff)
-        if not self.pk:
-            self._validate_apply_rules()
+        # Application-time rules are handled at the form/service layer; do not enforce here.
+        # self._validate_apply_rules()  # intentionally a NO-OP
 
         # Disallow overlaps
         self._validate_no_overlap()

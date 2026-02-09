@@ -1,5 +1,5 @@
+# File: apps/leave/forms.py
 from __future__ import annotations
-
 from datetime import datetime, time as dtime
 from typing import List, Tuple
 
@@ -26,8 +26,13 @@ ALLOWED_LEAVE_TYPE_NAMES = {
     "Maternity Leave",
 }
 
+# Working window for HALF DAY and the same-day cutoff gate
 WORK_START = dtime(9, 30)
 WORK_END = dtime(18, 0)
+
+# Canonical full-day normalization (IST)
+FULL_DAY_START = dtime(0, 0, 0)
+FULL_DAY_END = dtime(23, 59, 59)
 
 
 def _ist_date(dt: datetime) -> datetime:
@@ -37,6 +42,10 @@ def _ist_date(dt: datetime) -> datetime:
 def _combine_ist(date_value, t: dtime) -> datetime:
     naive = datetime.combine(date_value, t)
     return IST.localize(naive)
+
+
+def _now_ist():
+    return timezone.localtime(timezone.now(), IST)
 
 
 class LeaveRequestForm(forms.ModelForm):
@@ -199,11 +208,44 @@ class LeaveRequestForm(forms.ModelForm):
                 self.add_error("end_at", "End date cannot be before the start date.")
                 return cd
 
-            cd["_computed_start_at"] = _combine_ist(start_date, WORK_START)
-            cd["_computed_end_at"] = _combine_ist(end_date, WORK_END)
+            # Same-day full-day cutoff (FORM-LAYER; model no longer enforces)
+            now = _now_ist()
+            if start_date == now.date() and now.time() >= WORK_START:
+                raise ValidationError("Full-day leave for today must be applied before 09:30 AM.")
+
+            # Normalize to full calendar days in IST
+            cd["_computed_start_at"] = _combine_ist(start_date, FULL_DAY_START)
+            cd["_computed_end_at"] = _combine_ist(end_date, FULL_DAY_END)
             cd["_computed_is_half_day"] = False
 
         return cd
+
+    # ----- ensure instance correctness before model.clean() runs -----
+    def _post_clean(self):
+        """
+        Critical: before Django calls instance.full_clean(), inject the computed, timezone-aware
+        datetimes and attach the employee so model.clean() can safely run integrity checks.
+        """
+        cd = getattr(self, "cleaned_data", {}) or {}
+
+        # Attach computed aware datetimes to both cleaned_data and instance
+        if "_computed_start_at" in cd and "_computed_end_at" in cd:
+            aware_start = cd["_computed_start_at"]
+            aware_end = cd["_computed_end_at"]
+            self.cleaned_data["start_at"] = aware_start
+            self.cleaned_data["end_at"] = aware_end
+
+            # Ensure the instance carries the correct values during model validation
+            self.instance.start_at = aware_start
+            self.instance.end_at = aware_end
+            self.instance.is_half_day = bool(cd.get("_computed_is_half_day"))
+
+        # Attach employee before model.clean()—prevents RelatedObjectDoesNotExist crash
+        if self.user and not getattr(self.instance, "employee_id", None):
+            self.instance.employee = self.user
+
+        # Continue with default flow (assigns fields and calls instance.full_clean)
+        super()._post_clean()
 
     # ----- persistence -----
     def save(self, commit: bool = True) -> LeaveRequest:
@@ -321,11 +363,28 @@ class AdminLeaveEditForm(forms.ModelForm):
                 self.add_error("end_at", "End date cannot be before the start date.")
                 return cd
 
-            cd["_computed_start_at"] = _combine_ist(start_date, WORK_START)
-            cd["_computed_end_at"] = _combine_ist(end_date, WORK_END)
+            # Admin edits are NOT restricted by the same-day cutoff.
+            cd["_computed_start_at"] = _combine_ist(start_date, FULL_DAY_START)
+            cd["_computed_end_at"] = _combine_ist(end_date, FULL_DAY_END)
             cd["_computed_is_half_day"] = False
 
         return cd
+
+    def _post_clean(self):
+        """
+        Same fix as the user form: ensure timezone-aware datetimes are on the instance
+        before model.clean() runs, avoiding naive datetime warnings during admin edits.
+        """
+        cd = getattr(self, "cleaned_data", {}) or {}
+        if "_computed_start_at" in cd and "_computed_end_at" in cd:
+            aware_start = cd["_computed_start_at"]
+            aware_end = cd["_computed_end_at"]
+            self.cleaned_data["start_at"] = aware_start
+            self.cleaned_data["end_at"] = aware_end
+            self.instance.start_at = aware_start
+            self.instance.end_at = aware_end
+            self.instance.is_half_day = bool(cd.get("_computed_is_half_day"))
+        super()._post_clean()
 
     def save(self, commit: bool = True) -> LeaveRequest:
         if not self.is_valid():
