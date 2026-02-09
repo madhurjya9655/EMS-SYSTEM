@@ -413,7 +413,8 @@ def dashboard_home(request):
     - Hides tasks the current user handed over AWAY during an active leave window.
     - Checklist visibility: only after 10:00 IST of the planned day; past-incomplete remain; future hidden.
     - Help Tickets: appear immediately (no 10:00 gating).
-    - On non-working days (Sundays/holidays): hide *today* items (show only past-due).
+    - Original owner's block: recently “Completed by delegate”.
+    - **Non-working day mode:** if today is Sunday OR a configured Holiday, show NO tasks at all.
     """
     now_ist = timezone.localtime(timezone.now(), IST)
     today_ist = now_ist.date()
@@ -422,6 +423,80 @@ def dashboard_home(request):
     now_project_tz = timezone.localtime(now_ist, project_tz)
 
     logger.info(_safe_console_text(f"Dashboard accessed by {request.user.username} at {now_ist.strftime('%Y-%m-%d %H:%M:%S IST')}"))
+
+    # ---- NON-WORKING MODE: short-circuit completely (Sunday OR Holiday) ----
+    try:
+        is_holiday_today = Holiday.objects.filter(date=today_ist).exists()
+    except Exception:
+        is_holiday_today = False
+    is_sunday_today = today_ist.weekday() == 6
+
+    if is_sunday_today or is_holiday_today:
+        logger.info(_safe_console_text(f"Non-working day mode ON for {today_ist}: hiding all dashboard tasks."))
+        # We still compute weekly numbers (optionally) but show empty task lists.
+        start_current = today_ist - timedelta(days=today_ist.weekday())  # Monday this week
+        start_prev = start_current - timedelta(days=7)                    # Monday last week
+        end_prev = start_current - timedelta(days=1)                      # Sunday last week
+
+        try:
+            curr_start_dt, curr_end_dt = _ist_span_to_project_bounds(start_current, today_ist)
+            prev_start_dt, prev_end_dt = _ist_span_to_project_bounds(start_prev, end_prev)
+
+            curr_chk = Checklist.objects.filter(
+                assign_to=request.user, status='Completed',
+                planned_date__gte=curr_start_dt, planned_date__lt=curr_end_dt,
+            ).count()
+            prev_chk = Checklist.objects.filter(
+                assign_to=request.user, status='Completed',
+                planned_date__gte=prev_start_dt, planned_date__lt=prev_end_dt,
+            ).count()
+
+            curr_del = Delegation.objects.filter(
+                assign_to=request.user, status='Completed',
+                planned_date__gte=curr_start_dt, planned_date__lt=curr_end_dt,
+            ).count()
+            prev_del = Delegation.objects.filter(
+                assign_to=request.user, status='Completed',
+                planned_date__gte=prev_start_dt, planned_date__lt=prev_end_dt,
+            ).count()
+
+            curr_help = HelpTicket.objects.filter(
+                assign_to=request.user, status='Closed',
+                planned_date__gte=curr_start_dt, planned_date__lt=curr_end_dt,
+            ).count()
+            prev_help = HelpTicket.objects.filter(
+                assign_to=request.user, status='Closed',
+                planned_date__gte=prev_start_dt, planned_date__lt=prev_end_dt,
+            ).count()
+
+            week_score = {
+                'checklist':   {'previous': prev_chk,   'current': curr_chk},
+                'delegation':  {'previous': prev_del,   'current': curr_del},
+                'help_ticket': {'previous': prev_help,  'current': curr_help},
+            }
+        except Exception as e:
+            logger.error(_safe_console_text(f"Error calculating weekly scores (non-working mode): {e}"))
+            week_score = {
+                'checklist': {'previous': 0, 'current': 0},
+                'delegation': {'previous': 0, 'current': 0},
+                'help_ticket': {'previous': 0, 'current': 0},
+            }
+
+        pending_tasks = {'checklist': 0, 'delegation': 0, 'help_ticket': 0}
+        prev_min = curr_min = prev_min_del = curr_min_del = 0
+
+        return render(request, 'dashboard/dashboard.html', {
+            'week_score':            week_score,
+            'pending_tasks':         pending_tasks,
+            'tasks':                 [],        # nothing shown
+            'selected':              request.GET.get('task_type'),
+            'prev_time':             minutes_to_hhmm(prev_min + prev_min_del),
+            'curr_time':             minutes_to_hhmm(curr_min + curr_min_del),
+            'today_only':            (request.GET.get('today') == '1' or request.GET.get('today_only') == '1'),
+            'handed_over':           {'checklist': [], 'delegation': [], 'help_ticket': []},
+            'completed_by_delegate': {'checklist': [], 'delegation': [], 'help_ticket': []},
+            'holiday_today':         True,      # template can optionally show a banner
+        })
 
     # Week windows (Mon..Sun) for scorecards (date-only)
     start_current = today_ist - timedelta(days=today_ist.weekday())  # Monday this week
@@ -509,17 +584,15 @@ def dashboard_home(request):
     handover_incoming = _get_handover_tasks_for_user(request.user, today_ist)
     handover_outgoing = _get_outgoing_handover_ids_for_user(request.user, today_ist)
 
-    # Gates
+    # Gate anchor
     ten_am = dt_time(10, 0, 0)
     after_10 = now_ist.timetz().replace(tzinfo=None) >= ten_am
-    non_working = not is_working_day(today_ist)  # **NEW**: Sunday/holiday flag
 
     try:
         # -------------------- Checklists --------------------
+        # IMPORTANT: base list respects 10AM gate using DB filter to avoid loading hidden rows
         if today_only:
-            if non_working:
-                base_checklists = []  # hide 'today' on non-working days
-            elif after_10:
+            if after_10:
                 base_checklists = list(
                     Checklist.objects
                     .filter(
@@ -535,12 +608,10 @@ def dashboard_home(request):
             else:
                 base_checklists = []
         else:
-            if non_working:
-                planned_filter = {'planned_date__lt': start_today_proj}  # only past-due
-            elif after_10:
+            if after_10:
                 planned_filter = {'planned_date__lte': end_today_proj}
             else:
-                planned_filter = {'planned_date__lt': start_today_proj}  # hide 'today' pre-10
+                planned_filter = {'planned_date__lt': start_today_proj}  # hide today's items before 10AM
             base_checklists = list(
                 Checklist.objects
                 .filter(assign_to=request.user, status='Pending', **planned_filter)
@@ -549,11 +620,11 @@ def dashboard_home(request):
                 .order_by('planned_date')
             )
 
-        if handover_incoming['checklist']:
-            ho_filter = {'planned_date__lte': (end_today_proj if not non_working else start_today_proj)}
+        # Include handed-over checklists (always visible per existing behavior)
+        if handover_incoming['checklist'] and not today_only:
             ho_qs = list(
                 Checklist.objects
-                .filter(id__in=handover_incoming['checklist'], status='Pending', **ho_filter)
+                .filter(id__in=handover_incoming['checklist'], status='Pending', planned_date__lte=end_today_proj)
                 .select_related('assign_by', 'assign_to')
                 .order_by('planned_date')
             )
@@ -564,14 +635,11 @@ def dashboard_home(request):
             all_checklists = base_checklists
 
         if today_only:
-            if non_working:
-                checklist_qs = []
-            else:
-                checklist_qs = [
-                    c for c in all_checklists
-                    if (_ist_date(c.planned_date) == today_ist) and
-                       (getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist))
-                ]
+            checklist_qs = [
+                c for c in all_checklists
+                if (_ist_date(c.planned_date) == today_ist) and
+                   (getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist))
+            ]
         else:
             checklist_qs = [
                 c for c in all_checklists
@@ -580,7 +648,7 @@ def dashboard_home(request):
 
         # ------------------- Delegations -------------------
         if today_only:
-            base_delegations = [] if non_working else list(
+            base_delegations = list(
                 Delegation.objects.filter(
                     assign_to=request.user, status='Pending',
                     planned_date__gte=start_today_proj,
@@ -591,21 +659,21 @@ def dashboard_home(request):
                 .order_by('planned_date')
             )
         else:
-            del_filter = {'planned_date__lt': start_today_proj} if non_working else {'planned_date__lte': end_today_proj}
             base_delegations = list(
                 Delegation.objects.filter(
-                    assign_to=request.user, status='Pending', **del_filter
+                    assign_to=request.user, status='Pending',
+                    planned_date__lte=end_today_proj
                 )
                 .exclude(id__in=handover_outgoing['delegation'])
                 .select_related('assign_by', 'assign_to')
                 .order_by('planned_date')
             )
 
-        if handover_incoming['delegation']:
-            ho_del_filter = {'planned_date__lt': start_today_proj} if non_working else {'planned_date__lte': end_today_proj}
+        if handover_incoming['delegation'] and not today_only:
             ho_del = list(
                 Delegation.objects.filter(
-                    id__in=handover_incoming['delegation'], status='Pending', **ho_del_filter
+                    id__in=handover_incoming['delegation'], status='Pending',
+                    planned_date__lte=end_today_proj
                 )
                 .select_related('assign_by', 'assign_to')
                 .order_by('planned_date')
@@ -618,7 +686,7 @@ def dashboard_home(request):
 
         # ------------------- Help Tickets -------------------
         if today_only:
-            base_help = [] if non_working else list(
+            base_help = list(
                 HelpTicket.objects.filter(
                     assign_to=request.user,
                     planned_date__gte=start_today_proj,
@@ -630,10 +698,9 @@ def dashboard_home(request):
                 .order_by('planned_date')
             )
         else:
-            help_filter = {'planned_date__lt': start_today_proj} if non_working else {'planned_date__lte': end_today_proj}
             base_help = list(
                 HelpTicket.objects.filter(
-                    assign_to=request.user, **help_filter
+                    assign_to=request.user, planned_date__lte=end_today_proj
                 )
                 .exclude(status='Closed')
                 .exclude(id__in=handover_outgoing['help_ticket'])
@@ -641,11 +708,11 @@ def dashboard_home(request):
                 .order_by('planned_date')
             )
 
-        if handover_incoming['help_ticket']:
-            ho_help_filter = {'planned_date__lt': start_today_proj} if non_working else {'planned_date__lte': end_today_proj}
+        if handover_incoming['help_ticket'] and not today_only:
             ho_help = list(
                 HelpTicket.objects.filter(
-                    id__in=handover_incoming['help_ticket'], **ho_help_filter
+                    id__in=handover_incoming['help_ticket'],
+                    planned_date__lte=end_today_proj
                 )
                 .exclude(status='Closed')
                 .select_related('assign_by', 'assign_to')
@@ -659,7 +726,7 @@ def dashboard_home(request):
 
         logger.info(_safe_console_text(
             f"Dashboard filter for {request.user.username} | today_only={today_only} "
-            f"| non_working={non_working} | checklist={len(checklist_qs)} delegation={len(delegation_qs)} help={len(help_ticket_qs)} "
+            f"| checklist={len(checklist_qs)} delegation={len(delegation_qs)} help={len(help_ticket_qs)} "
             f"| incoming handover: CL={len(handover_incoming['checklist'])} DL={len(handover_incoming['delegation'])} HT={len(handover_incoming['help_ticket'])} "
             f"| outgoing hidden: CL={len(handover_outgoing['checklist'])} DL={len(handover_outgoing['delegation'])} HT={len(handover_outgoing['help_ticket'])}"
         ))
@@ -804,4 +871,5 @@ def dashboard_home(request):
         'today_only':          today_only,
         'handed_over':         handed_over_full,
         'completed_by_delegate': completed_by_delegate,
+        'holiday_today':       False,  # normal day
     })

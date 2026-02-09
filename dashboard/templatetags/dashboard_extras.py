@@ -1,4 +1,5 @@
-﻿from __future__ import annotations
+﻿# E:\CLIENT PROJECT\employee management system bos\employee_management_system\dashboard\templatetags\dashboard_extras.py
+from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional, Any
@@ -40,7 +41,7 @@ def delay_since(value: Any, mode: str = "") -> str:
     try:
         return _df.delay_since(value, mode)
     except Exception:
-        return "00:00"
+        return "—"
 
 
 @register.filter(name="priority_badge_class")
@@ -61,12 +62,12 @@ def hhmm(total_minutes: Optional[int]) -> str:
 @register.filter(name="istfmt")
 def istdatetime_format(dt: Optional[datetime], fmt: str = "%d %b, %Y %H:%M") -> str:
     try:
-        return _to_ist(dt).strftime(fmt) if dt else "â€”"
+        return _to_ist(dt).strftime(fmt) if dt else "—"
     except Exception:
         try:
             return _to_ist(dt).isoformat()
         except Exception:
-            return "â€”"
+            return "—"
 
 
 @register.simple_tag
@@ -78,6 +79,5 @@ def now_ist(fmt: str = "%d %b, %Y %H:%M") -> str:
 
 
 @register.filter(name="coalesce")
-def coalesce(value: Any, default: str = "â€”"):
+def coalesce(value: Any, default: str = "—"):
     return value if value not in (None, "", [], {}) else default
-
