@@ -154,16 +154,17 @@ def _rows_for_user(user) -> List[Dict[str, Any]]:
     """
     Build rows for a single user.
     IMPORTANT: This function now filters to planned_date <= today IST only.
+    Also excludes voided rows (is_skipped_due_to_leave=True) if that field exists.
     """
     rows: List[Row] = []
 
     # Checklist (Pending for this user)
     try:
-        qs = (
-            Checklist.objects.filter(status="Pending", assign_to=user)
-            .select_related("assign_to", "assign_by")
-            .order_by("planned_date", "id")
-        )
+        qs = Checklist.objects.filter(status="Pending", assign_to=user)
+        if hasattr(Checklist, "is_skipped_due_to_leave"):
+            qs = qs.filter(is_skipped_due_to_leave=False)
+        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
         for obj in qs:
             title = obj.task_name or ""
             desc = (obj.message or "").strip()
@@ -183,11 +184,11 @@ def _rows_for_user(user) -> List[Dict[str, Any]]:
 
     # Delegation (Pending for this user)
     try:
-        qs = (
-            Delegation.objects.filter(status="Pending", assign_to=user)
-            .select_related("assign_to", "assign_by")
-            .order_by("planned_date", "id")
-        )
+        qs = Delegation.objects.filter(status="Pending", assign_to=user)
+        if hasattr(Delegation, "is_skipped_due_to_leave"):
+            qs = qs.filter(is_skipped_due_to_leave=False)
+        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
         for obj in qs:
             title = obj.task_name or ""
             desc = (getattr(obj, "message", "") or "").strip() or (getattr(obj, "description", "") or "").strip()
@@ -207,12 +208,11 @@ def _rows_for_user(user) -> List[Dict[str, Any]]:
 
     # Help Ticket (not Closed for this user)
     try:
-        qs = (
-            HelpTicket.objects.exclude(status="Closed")
-            .filter(assign_to=user)
-            .select_related("assign_to", "assign_by")
-            .order_by("planned_date", "id")
-        )
+        qs = HelpTicket.objects.exclude(status="Closed").filter(assign_to=user)
+        if hasattr(HelpTicket, "is_skipped_due_to_leave"):
+            qs = qs.filter(is_skipped_due_to_leave=False)
+        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
         for obj in qs:
             title = obj.title or ""
             desc = (obj.description or "").strip()
@@ -253,16 +253,17 @@ def _rows_for_all_users() -> List[Dict[str, Any]]:
     including 'Assigned To' and 'Assigned By', suitable for the admin consolidated mail.
 
     IMPORTANT: Filters to planned_date <= today IST only.
+    Also excludes voided rows (is_skipped_due_to_leave=True) if that field exists.
     """
     rows: List[Dict[str, Any]] = []
 
     # Checklist
     try:
-        qs = (
-            Checklist.objects.filter(status="Pending")
-            .select_related("assign_to", "assign_by")
-            .order_by("planned_date", "id")
-        )
+        qs = Checklist.objects.filter(status="Pending")
+        if hasattr(Checklist, "is_skipped_due_to_leave"):
+            qs = qs.filter(is_skipped_due_to_leave=False)
+        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
         for obj in qs:
             title = obj.task_name or ""
             desc = (obj.message or "").strip()
@@ -282,11 +283,11 @@ def _rows_for_all_users() -> List[Dict[str, Any]]:
 
     # Delegation
     try:
-        qs = (
-            Delegation.objects.filter(status="Pending")
-            .select_related("assign_to", "assign_by")
-            .order_by("planned_date", "id")
-        )
+        qs = Delegation.objects.filter(status="Pending")
+        if hasattr(Delegation, "is_skipped_due_to_leave"):
+            qs = qs.filter(is_skipped_due_to_leave=False)
+        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
         for obj in qs:
             title = obj.task_name or ""
             desc = (getattr(obj, "message", "") or "").strip() or (getattr(obj, "description", "") or "").strip()
@@ -306,11 +307,11 @@ def _rows_for_all_users() -> List[Dict[str, Any]]:
 
     # Help Ticket (not Closed)
     try:
-        qs = (
-            HelpTicket.objects.exclude(status="Closed")
-            .select_related("assign_to", "assign_by")
-            .order_by("planned_date", "id")
-        )
+        qs = HelpTicket.objects.exclude(status="Closed")
+        if hasattr(HelpTicket, "is_skipped_due_to_leave"):
+            qs = qs.filter(is_skipped_due_to_leave=False)
+        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
         for obj in qs:
             title = obj.title or ""
             desc = (obj.description or "").strip()

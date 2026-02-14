@@ -174,7 +174,7 @@ def _schedule_10am_email_for_delegation(obj: Delegation) -> None:
     For delegations:
       - We already send an immediate "New Delegation Assigned" on create.
       - Schedule a day-of 10:00 IST reminder ONLY if creation is before 10:00 IST of the planned day.
-        (Avoid duplicate if creation happens after 10:00 IST.)
+        (Avoid duplicate if creation happens after 10:00 IST. )
     """
     if ENABLE_CELERY_EMAIL or not SEND_EMAILS_FOR_AUTO_RECUR:
         return
@@ -264,7 +264,7 @@ def _send_delegation_assignment_immediate(obj: Delegation) -> None:
     Daily / 10:00 AM reminders are handled separately.
 
     🔒 LEAVE GUARD: if the assignee is on leave *right now*, suppress the immediate mail.
-    (The task may still exist; visibility & reminders are governed elsewhere.)
+    (The task may still exist; visibility & reminders are governed elsewhere. )
     """
     if ENABLE_CELERY_EMAIL or not SEND_EMAILS_FOR_AUTO_RECUR:
         return
@@ -399,6 +399,10 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
       • duplicate guard ±1 minute
       • no emails here (10:00 cron handles)
     """
+    # Defensive: never spawn from a voided row
+    if bool(getattr(instance, "is_skipped_due_to_leave", False)):
+        return
+
     # Only recurring series
     if normalize_mode(getattr(instance, "mode", None)) not in RECURRING_MODES:
         return
@@ -422,6 +426,8 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
     )
 
     # If a future Pending in this tolerant series already exists, don't create another.
+    # NOTE: we intentionally do NOT filter is_skipped_due_to_leave here,
+    # because a voided future row must suppress re-creation.
     if (
         Checklist.objects.filter(status="Pending")
         .filter(q_series)
@@ -609,6 +615,8 @@ def create_next_recurring_checklist(sender, instance: Checklist, created: bool, 
 def schedule_checklist_email_on_create(sender, instance: Checklist, created: bool, **kwargs):
     if not created or ENABLE_CELERY_EMAIL:
         return
+    if bool(getattr(instance, "is_skipped_due_to_leave", False)):
+        return
     try:
         _on_commit(lambda: _schedule_10am_email_for_checklist(instance))
     except Exception:
@@ -621,6 +629,8 @@ def schedule_checklist_email_on_create(sender, instance: Checklist, created: boo
 @receiver(post_save, sender=Delegation, dispatch_uid="tasks.delegation.postsave.schedule_create")
 def schedule_delegation_email_on_create(sender, instance: Delegation, created: bool, **kwargs):
     if not created or ENABLE_CELERY_EMAIL:
+        return
+    if bool(getattr(instance, "is_skipped_due_to_leave", False)):
         return
     # 1) Immediate "New Delegation Assigned" email (with leave guard)
     try:
@@ -640,6 +650,8 @@ def schedule_delegation_email_on_create(sender, instance: Delegation, created: b
 @receiver(post_save, sender=HelpTicket, dispatch_uid="tasks.helpticket.postsave.send_create")
 def send_help_ticket_email_on_create(sender, instance: HelpTicket, created: bool, **kwargs):
     if not created:
+        return
+    if bool(getattr(instance, "is_skipped_due_to_leave", False)):
         return
 
     # If assignee is on leave NOW, or the planned timestamp lies within a leave window,

@@ -368,7 +368,8 @@ def calculate_delegation_assigned_time_safe(assign_to_user, date_from, date_to):
                 assign_to=assign_to_user,
                 planned_date__gte=start_dt,
                 planned_date__lt=end_dt,
-                status='Pending'
+                status='Pending',
+                is_skipped_due_to_leave=False,  # ✅ FIX: do not count skipped/tombstoned
             )
             .aggregate(total=Sum("time_per_task_minutes"))
         )
@@ -386,7 +387,8 @@ def calculate_delegation_assigned_time_safe(assign_to_user, date_from, date_to):
             assign_to=assign_to_user,
             planned_date__gte=start_dt,
             planned_date__lt=end_dt,
-            status='Pending'
+            status='Pending',
+            is_skipped_due_to_leave=False,  # ✅ FIX: do not count skipped/tombstoned
         ).only("planned_date", "time_per_task_minutes")
         for d in delegations:
             total += d.time_per_task_minutes or 0
@@ -445,28 +447,34 @@ def dashboard_home(request):
             curr_chk = Checklist.objects.filter(
                 assign_to=request.user, status='Completed',
                 planned_date__gte=curr_start_dt, planned_date__lt=curr_end_dt,
+                is_skipped_due_to_leave=False,  # ✅ FIX
             ).count()
             prev_chk = Checklist.objects.filter(
                 assign_to=request.user, status='Completed',
                 planned_date__gte=prev_start_dt, planned_date__lt=prev_end_dt,
+                is_skipped_due_to_leave=False,  # ✅ FIX
             ).count()
 
             curr_del = Delegation.objects.filter(
                 assign_to=request.user, status='Completed',
                 planned_date__gte=curr_start_dt, planned_date__lt=curr_end_dt,
+                is_skipped_due_to_leave=False,  # ✅ FIX
             ).count()
             prev_del = Delegation.objects.filter(
                 assign_to=request.user, status='Completed',
                 planned_date__gte=prev_start_dt, planned_date__lt=prev_end_dt,
+                is_skipped_due_to_leave=False,  # ✅ FIX
             ).count()
 
             curr_help = HelpTicket.objects.filter(
                 assign_to=request.user, status='Closed',
                 planned_date__gte=curr_start_dt, planned_date__lt=curr_end_dt,
+                is_skipped_due_to_leave=False,  # ✅ FIX
             ).count()
             prev_help = HelpTicket.objects.filter(
                 assign_to=request.user, status='Closed',
                 planned_date__gte=prev_start_dt, planned_date__lt=prev_end_dt,
+                is_skipped_due_to_leave=False,  # ✅ FIX
             ).count()
 
             week_score = {
@@ -518,28 +526,34 @@ def dashboard_home(request):
             curr_chk = Checklist.objects.filter(
                 assign_to=request.user, status='Completed',
                 planned_date__gte=curr_start_dt, planned_date__lt=curr_end_dt,
+                is_skipped_due_to_leave=False,  # ✅ FIX
             ).count()
             prev_chk = Checklist.objects.filter(
                 assign_to=request.user, status='Completed',
                 planned_date__gte=prev_start_dt, planned_date__lt=prev_end_dt,
+                is_skipped_due_to_leave=False,  # ✅ FIX
             ).count()
 
             curr_del = Delegation.objects.filter(
                 assign_to=request.user, status='Completed',
                 planned_date__gte=curr_start_dt, planned_date__lt=curr_end_dt,
+                is_skipped_due_to_leave=False,  # ✅ FIX
             ).count()
             prev_del = Delegation.objects.filter(
                 assign_to=request.user, status='Completed',
                 planned_date__gte=prev_start_dt, planned_date__lt=prev_end_dt,
+                is_skipped_due_to_leave=False,  # ✅ FIX
             ).count()
 
             curr_help = HelpTicket.objects.filter(
                 assign_to=request.user, status='Closed',
                 planned_date__gte=curr_start_dt, planned_date__lt=curr_end_dt,
+                is_skipped_due_to_leave=False,  # ✅ FIX
             ).count()
             prev_help = HelpTicket.objects.filter(
                 assign_to=request.user, status='Closed',
                 planned_date__gte=prev_start_dt, planned_date__lt=prev_end_dt,
+                is_skipped_due_to_leave=False,  # ✅ FIX
             ).count()
 
             week_score = {
@@ -549,9 +563,9 @@ def dashboard_home(request):
             }
 
             pending_tasks = {
-                'checklist':   Checklist.objects.filter(assign_to=request.user, status='Pending').count(),
-                'delegation':  Delegation.objects.filter(assign_to=request.user, status='Pending').count(),
-                'help_ticket': HelpTicket.objects.filter(assign_to=request.user).exclude(status='Closed').count(),
+                'checklist':   Checklist.objects.filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False).count(),  # ✅ FIX
+                'delegation':  Delegation.objects.filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False).count(),  # ✅ FIX
+                'help_ticket': HelpTicket.objects.filter(assign_to=request.user, is_skipped_due_to_leave=False).exclude(status='Closed').count(),  # ✅ FIX
             }
 
             cache.set(cache_key_week, week_score, _DASH_FAST_TTL)
@@ -600,6 +614,7 @@ def dashboard_home(request):
                         status='Pending',
                         planned_date__gte=start_today_proj,
                         planned_date__lte=end_today_proj,
+                        is_skipped_due_to_leave=False,  # ✅ FIX
                     )
                     .exclude(id__in=handover_outgoing['checklist'])
                     .select_related('assign_by', 'assign_to')
@@ -614,7 +629,7 @@ def dashboard_home(request):
                 planned_filter = {'planned_date__lt': start_today_proj}  # hide today's items before 10AM
             base_checklists = list(
                 Checklist.objects
-                .filter(assign_to=request.user, status='Pending', **planned_filter)
+                .filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False, **planned_filter)  # ✅ FIX
                 .exclude(id__in=handover_outgoing['checklist'])
                 .select_related('assign_by', 'assign_to')
                 .order_by('planned_date')
@@ -624,7 +639,12 @@ def dashboard_home(request):
         if handover_incoming['checklist'] and not today_only:
             ho_qs = list(
                 Checklist.objects
-                .filter(id__in=handover_incoming['checklist'], status='Pending', planned_date__lte=end_today_proj)
+                .filter(
+                    id__in=handover_incoming['checklist'],
+                    status='Pending',
+                    planned_date__lte=end_today_proj,
+                    is_skipped_due_to_leave=False,  # ✅ FIX
+                )
                 .select_related('assign_by', 'assign_to')
                 .order_by('planned_date')
             )
@@ -653,6 +673,7 @@ def dashboard_home(request):
                     assign_to=request.user, status='Pending',
                     planned_date__gte=start_today_proj,
                     planned_date__lte=now_project_tz,
+                    is_skipped_due_to_leave=False,  # ✅ FIX
                 )
                 .exclude(id__in=handover_outgoing['delegation'])
                 .select_related('assign_by', 'assign_to')
@@ -662,7 +683,8 @@ def dashboard_home(request):
             base_delegations = list(
                 Delegation.objects.filter(
                     assign_to=request.user, status='Pending',
-                    planned_date__lte=end_today_proj
+                    planned_date__lte=end_today_proj,
+                    is_skipped_due_to_leave=False,  # ✅ FIX
                 )
                 .exclude(id__in=handover_outgoing['delegation'])
                 .select_related('assign_by', 'assign_to')
@@ -673,7 +695,8 @@ def dashboard_home(request):
             ho_del = list(
                 Delegation.objects.filter(
                     id__in=handover_incoming['delegation'], status='Pending',
-                    planned_date__lte=end_today_proj
+                    planned_date__lte=end_today_proj,
+                    is_skipped_due_to_leave=False,  # ✅ FIX
                 )
                 .select_related('assign_by', 'assign_to')
                 .order_by('planned_date')
@@ -691,6 +714,7 @@ def dashboard_home(request):
                     assign_to=request.user,
                     planned_date__gte=start_today_proj,
                     planned_date__lte=now_project_tz,
+                    is_skipped_due_to_leave=False,  # ✅ FIX
                 )
                 .exclude(status='Closed')
                 .exclude(id__in=handover_outgoing['help_ticket'])
@@ -700,7 +724,8 @@ def dashboard_home(request):
         else:
             base_help = list(
                 HelpTicket.objects.filter(
-                    assign_to=request.user, planned_date__lte=end_today_proj
+                    assign_to=request.user, planned_date__lte=end_today_proj,
+                    is_skipped_due_to_leave=False,  # ✅ FIX
                 )
                 .exclude(status='Closed')
                 .exclude(id__in=handover_outgoing['help_ticket'])
@@ -712,7 +737,8 @@ def dashboard_home(request):
             ho_help = list(
                 HelpTicket.objects.filter(
                     id__in=handover_incoming['help_ticket'],
-                    planned_date__lte=end_today_proj
+                    planned_date__lte=end_today_proj,
+                    is_skipped_due_to_leave=False,  # ✅ FIX
                 )
                 .exclude(status='Closed')
                 .select_related('assign_by', 'assign_to')
@@ -744,12 +770,13 @@ def dashboard_home(request):
         tasks = checklist_qs
 
     try:
+        # ✅ FIX: exclude skipped/tombstoned from time rollups too
         prev_min = calculate_checklist_assigned_time(
-            Checklist.objects.filter(assign_to=request.user, status='Pending'),
+            Checklist.objects.filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False),
             start_prev, end_prev
         )
         curr_min = calculate_checklist_assigned_time(
-            Checklist.objects.filter(assign_to=request.user, status='Pending'),
+            Checklist.objects.filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False),
             start_current, today_ist
         )
         prev_min_del = calculate_delegation_assigned_time_safe(request.user, start_prev, end_prev)
@@ -790,9 +817,19 @@ def dashboard_home(request):
         dl_ids = [h.original_task_id for h in active_handover if _normalize_task_type(h.task_type) == "delegation"]
         ht_ids = [h.original_task_id for h in active_handover if _normalize_task_type(h.task_type) == "help_ticket"]
 
-        checklist_map = {t.id: t for t in Checklist.objects.filter(id__in=cl_ids).select_related("assign_by", "assign_to")}
-        delegation_map = {t.id: t for t in Delegation.objects.filter(id__in=dl_ids).select_related("assign_by", "assign_to")}
-        help_map = {t.id: t for t in HelpTicket.objects.filter(id__in=ht_ids).select_related("assign_by", "assign_to")}
+        # ✅ FIX: do not show tombstoned items even inside handover blocks
+        checklist_map = {
+            t.id: t for t in Checklist.objects.filter(id__in=cl_ids, is_skipped_due_to_leave=False)
+            .select_related("assign_by", "assign_to")
+        }
+        delegation_map = {
+            t.id: t for t in Delegation.objects.filter(id__in=dl_ids, is_skipped_due_to_leave=False)
+            .select_related("assign_by", "assign_to")
+        }
+        help_map = {
+            t.id: t for t in HelpTicket.objects.filter(id__in=ht_ids, is_skipped_due_to_leave=False)
+            .select_related("assign_by", "assign_to")
+        }
 
         for ho in active_handover:
             key = _normalize_task_type(ho.task_type)
@@ -823,9 +860,9 @@ def dashboard_home(request):
             cb_dl_ids = [h.original_task_id for h in recent_handover if _normalize_task_type(h.task_type) == "delegation"]
             cb_ht_ids = [h.original_task_id for h in recent_handover if _normalize_task_type(h.task_type) == "help_ticket"]
 
-            cb_cls = Checklist.objects.filter(id__in=cb_cl_ids, status="Completed")
-            cb_dls = Delegation.objects.filter(id__in=cb_dl_ids, status="Completed")
-            cb_hts = HelpTicket.objects.filter(id__in=cb_ht_ids, status="Closed")
+            cb_cls = Checklist.objects.filter(id__in=cb_cl_ids, status="Completed", is_skipped_due_to_leave=False)  # ✅ FIX
+            cb_dls = Delegation.objects.filter(id__in=cb_dl_ids, status="Completed", is_skipped_due_to_leave=False)  # ✅ FIX
+            cb_hts = HelpTicket.objects.filter(id__in=cb_ht_ids, status="Closed", is_skipped_due_to_leave=False)  # ✅ FIX
 
             cb_cls = [t for t in cb_cls if getattr(t, "updated_at", since_dt) >= since_dt]
             cb_dls = [t for t in cb_dls if getattr(t, "updated_at", since_dt) >= since_dt]

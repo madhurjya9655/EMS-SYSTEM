@@ -1,3 +1,6 @@
+# apps/tasks/dashboard_query.py
+# Updated: 2026-02-14
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,7 +11,9 @@ import pytz
 from django.utils import timezone
 
 from .models import Checklist, Delegation, HelpTicket
-from .recurrence import RECURRING_MODES  # source of truth
+
+# ✅ Source of truth (matches tasks.py/signals/materializer)
+from .recurrence_utils import RECURRING_MODES
 
 # --------------------------
 # Timezone helpers
@@ -33,10 +38,31 @@ def _ist_day_bounds_in_project_tz(anchor: date) -> Tuple[datetime, datetime]:
 
 
 def _end_of_today_project_tz(now: datetime) -> datetime:
-    """Return end-of-today (23:59:59.999) IST converted to project timezone."""
+    """Return end-of-today (23:59:59.999999) IST converted to project timezone."""
     now_ist = _to_ist(now)
     _, end_proj = _ist_day_bounds_in_project_tz(now_ist.date())
     return end_proj
+
+
+def _exclude_voided(qs):
+    """
+    Exclude voided/skipped rows if the model has the boolean field.
+    This keeps the query safe even if migrations are not applied yet.
+    """
+    try:
+        # Django model field existence check (safe)
+        Checklist._meta.get_field("is_skipped_due_to_leave")  # type: ignore[attr-defined]
+        return qs.filter(is_skipped_due_to_leave=False)
+    except Exception:
+        return qs
+
+
+def _exclude_voided_any_model(qs, model):
+    try:
+        model._meta.get_field("is_skipped_due_to_leave")  # type: ignore[attr-defined]
+        return qs.filter(is_skipped_due_to_leave=False)
+    except Exception:
+        return qs
 
 
 # --------------------------
@@ -60,7 +86,6 @@ def is_checklist_visible_now(planned_dt: datetime, *, now: datetime | None = Non
     if due_ist.date() > now_ist.date():
         return False
 
-    # Same IST day → strictly from 10:00 IST
     ten_am_ist = now_ist.replace(hour=10, minute=0, second=0, microsecond=0)
     return now_ist >= ten_am_ist
 
@@ -138,55 +163,61 @@ def fetch_dashboard_lists(
     """
     Fetch dashboard lists for a specific user, enforcing visibility rules.
 
-    Filtering strategy:
-      • DB pre-filter to reduce volume (status and day bounds).
-      • Python-level gating to enforce unified visibility (strict 10:00 IST for checklists).
+    IMPORTANT:
+      - Excludes voided/skipped rows (is_skipped_due_to_leave=True).
+        This flag is also used as a generic “voided” tombstone to prevent
+        recurring materializers from recreating deleted occurrences.
     """
     now = timezone.now()
     now_ist = _to_ist(now)
     start_today_proj, end_today_proj = _ist_day_bounds_in_project_tz(now_ist.date())
 
-    # Choose a DB cutoff:
-    #  - For "today_only": we include today's whole IST day in DB filter,
-    #    then Python gating will restrict visibility.
-    #  - Otherwise: include everything up to end-of-today (IST) in project TZ.
     cutoff_all = end_today_proj
 
     # --- Base DB filters (do not create recurrences here) ---
-    # Checklists: include up to end-of-day; if today_only, constrain to today's bounds.
-    cl_base_qs = Checklist.objects.filter(assign_to=user, status="Pending", planned_date__lte=cutoff_all)
+    cl_base_qs = Checklist.objects.filter(
+        assign_to=user,
+        status="Pending",
+        planned_date__lte=cutoff_all,
+    )
+    cl_base_qs = _exclude_voided(cl_base_qs)
+
     if today_only:
         cl_base_qs = cl_base_qs.filter(planned_date__gte=start_today_proj, planned_date__lte=end_today_proj)
+
     cl_base = cl_base_qs.select_related("assign_by", "assign_to").order_by("planned_date", "id")
 
-    # Delegations/HelpTickets: visible at/after planned time; for today_only,
-    # DB-filter to today's items up to *now* for efficiency.
     if today_only:
-        dl_base = (
-            Delegation.objects.filter(assign_to=user, status="Pending",
-                                      planned_date__gte=start_today_proj, planned_date__lte=now)
-            .select_related("assign_by", "assign_to")
-            .order_by("planned_date", "id")
+        dl_base_qs = Delegation.objects.filter(
+            assign_to=user,
+            status="Pending",
+            planned_date__gte=start_today_proj,
+            planned_date__lte=now,
         )
-        ht_base = (
-            HelpTicket.objects.filter(assign_to=user,
-                                      planned_date__gte=start_today_proj, planned_date__lte=now)
-            .exclude(status="Closed")
-            .select_related("assign_by", "assign_to")
-            .order_by("planned_date", "id")
-        )
+        dl_base_qs = _exclude_voided_any_model(dl_base_qs, Delegation)
+
+        ht_base_qs = HelpTicket.objects.filter(
+            assign_to=user,
+            planned_date__gte=start_today_proj,
+            planned_date__lte=now,
+        ).exclude(status="Closed")
+        ht_base_qs = _exclude_voided_any_model(ht_base_qs, HelpTicket)
     else:
-        dl_base = (
-            Delegation.objects.filter(assign_to=user, status="Pending", planned_date__lte=cutoff_all)
-            .select_related("assign_by", "assign_to")
-            .order_by("planned_date", "id")
+        dl_base_qs = Delegation.objects.filter(
+            assign_to=user,
+            status="Pending",
+            planned_date__lte=cutoff_all,
         )
-        ht_base = (
-            HelpTicket.objects.filter(assign_to=user, planned_date__lte=cutoff_all)
-            .exclude(status="Closed")
-            .select_related("assign_by", "assign_to")
-            .order_by("planned_date", "id")
-        )
+        dl_base_qs = _exclude_voided_any_model(dl_base_qs, Delegation)
+
+        ht_base_qs = HelpTicket.objects.filter(
+            assign_to=user,
+            planned_date__lte=cutoff_all,
+        ).exclude(status="Closed")
+        ht_base_qs = _exclude_voided_any_model(ht_base_qs, HelpTicket)
+
+    dl_base = dl_base_qs.select_related("assign_by", "assign_to").order_by("planned_date", "id")
+    ht_base = ht_base_qs.select_related("assign_by", "assign_to").order_by("planned_date", "id")
 
     # --- Python-level gating ---
     checklists: List[Checklist] = [c for c in cl_base if _gate_checklist(c, now, today_only)]
@@ -213,7 +244,6 @@ def compute_week_buckets(
     if anchor_today_ist is None:
         anchor_today_ist = now_ist.date()
 
-    # Week boundaries (Mon..Sun)
     start_current = anchor_today_ist - timedelta(days=anchor_today_ist.weekday())
     start_prev = start_current - timedelta(days=7)
     end_prev = start_current - timedelta(days=1)
@@ -231,51 +261,77 @@ def compute_week_buckets(
 
 
 def weekly_score_counts(*, user) -> Dict[str, Dict[str, int]]:
-    """
-    Mirror of dashboard "week score" counters using the planned_date field (sacred).
-    Returns dict of:
-    {
-      'checklist':  {'previous': int, 'current': int},
-      'delegation': {'previous': int, 'current': int},
-      'help_ticket':{'previous': int, 'current': int},
-    }
-    """
     (prev_start, prev_end), (curr_start, curr_end) = compute_week_buckets(user=user)
 
-    checklist_prev = Checklist.objects.filter(
-        assign_to=user, planned_date__gte=prev_start, planned_date__lte=prev_end, status="Completed"
-    ).count()
-    checklist_curr = Checklist.objects.filter(
-        assign_to=user, planned_date__gte=curr_start, planned_date__lte=curr_end, status="Completed"
-    ).count()
+    cl_prev_qs = Checklist.objects.filter(
+        assign_to=user,
+        planned_date__gte=prev_start,
+        planned_date__lte=prev_end,
+        status="Completed",
+    )
+    cl_prev_qs = _exclude_voided(cl_prev_qs)
 
-    delegation_prev = Delegation.objects.filter(
-        assign_to=user, planned_date__gte=prev_start, planned_date__lte=prev_end, status="Completed"
-    ).count()
-    delegation_curr = Delegation.objects.filter(
-        assign_to=user, planned_date__gte=curr_start, planned_date__lte=curr_end, status="Completed"
-    ).count()
+    cl_curr_qs = Checklist.objects.filter(
+        assign_to=user,
+        planned_date__gte=curr_start,
+        planned_date__lte=curr_end,
+        status="Completed",
+    )
+    cl_curr_qs = _exclude_voided(cl_curr_qs)
 
-    help_prev = HelpTicket.objects.filter(
-        assign_to=user, planned_date__gte=prev_start, planned_date__lte=prev_end, status="Closed"
-    ).count()
-    help_curr = HelpTicket.objects.filter(
-        assign_to=user, planned_date__gte=curr_start, planned_date__lte=curr_end, status="Closed"
-    ).count()
+    dl_prev_qs = Delegation.objects.filter(
+        assign_to=user,
+        planned_date__gte=prev_start,
+        planned_date__lte=prev_end,
+        status="Completed",
+    )
+    dl_prev_qs = _exclude_voided_any_model(dl_prev_qs, Delegation)
+
+    dl_curr_qs = Delegation.objects.filter(
+        assign_to=user,
+        planned_date__gte=curr_start,
+        planned_date__lte=curr_end,
+        status="Completed",
+    )
+    dl_curr_qs = _exclude_voided_any_model(dl_curr_qs, Delegation)
+
+    ht_prev_qs = HelpTicket.objects.filter(
+        assign_to=user,
+        planned_date__gte=prev_start,
+        planned_date__lte=prev_end,
+        status="Closed",
+    )
+    ht_prev_qs = _exclude_voided_any_model(ht_prev_qs, HelpTicket)
+
+    ht_curr_qs = HelpTicket.objects.filter(
+        assign_to=user,
+        planned_date__gte=curr_start,
+        planned_date__lte=curr_end,
+        status="Closed",
+    )
+    ht_curr_qs = _exclude_voided_any_model(ht_curr_qs, HelpTicket)
 
     return {
-        "checklist": {"previous": checklist_prev, "current": checklist_curr},
-        "delegation": {"previous": delegation_prev, "current": delegation_curr},
-        "help_ticket": {"previous": help_prev, "current": help_curr},
+        "checklist": {"previous": cl_prev_qs.count(), "current": cl_curr_qs.count()},
+        "delegation": {"previous": dl_prev_qs.count(), "current": dl_curr_qs.count()},
+        "help_ticket": {"previous": ht_prev_qs.count(), "current": ht_curr_qs.count()},
     }
 
 
 def pending_counts(*, user) -> Dict[str, int]:
-    """Pending totals (without visibility gating) for quick header badges."""
+    cl_qs = Checklist.objects.filter(assign_to=user, status="Pending")
+    cl_qs = _exclude_voided(cl_qs)
+
+    dl_qs = Delegation.objects.filter(assign_to=user, status="Pending")
+    dl_qs = _exclude_voided_any_model(dl_qs, Delegation)
+
+    ht_qs = HelpTicket.objects.filter(assign_to=user).exclude(status="Closed")
+    ht_qs = _exclude_voided_any_model(ht_qs, HelpTicket)
+
     return {
-        "checklist": Checklist.objects.filter(assign_to=user, status="Pending").count(),
-        "delegation": Delegation.objects.filter(assign_to=user, status="Pending").count(),
-        "help_ticket": HelpTicket.objects.filter(assign_to=user).exclude(status="Closed").count(),
+        "checklist": cl_qs.count(),
+        "delegation": dl_qs.count(),
+        "help_ticket": ht_qs.count(),
     }
 
 

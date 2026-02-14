@@ -1,3 +1,4 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\recurrence.py
 from __future__ import annotations
 
 import logging
@@ -113,6 +114,7 @@ def preserve_first_occurrence_time(planned_dt: Optional[datetime]) -> Optional[d
 
 # -------------------------------------------------------------------
 # Schedulers for 10 AM / preserve-time / 7 PM
+# (these keep their existing behavior including working-day shift where present)
 # -------------------------------------------------------------------
 def schedule_recurring_at_10am(planned_dt: Optional[datetime]) -> Optional[datetime]:
     if not planned_dt:
@@ -152,19 +154,28 @@ def schedule_recurring_at_7pm(planned_dt: Optional[datetime]) -> Optional[dateti
 
 
 # -------------------------------------------------------------------
-# Core recurrence: next working day at 19:00 IST
+# Core recurrence: step by mode/frequency, PIN TIME to 19:00 IST
+# ✅ FIX: NO shifting off Sun/holidays here (callers handle shift if desired)
 # -------------------------------------------------------------------
 def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> Optional[datetime]:
     """
     Step forward by `frequency` units in the given `mode`,
-    then shift to the next working day (if needed) at 19:00 IST.
+    then pin to 19:00 IST on that stepped date.
+    NO working-day shift here.
     """
     if not prev_dt:
         return None
     m = normalize_mode(mode)
     if m not in RECURRING_MODES:
         return None
-    step = max(int(frequency or 1), 1)
+
+    # Clamp frequency to 1..10 (matches your dashboard helper/spec)
+    try:
+        step = int(frequency or 1)
+    except Exception:
+        step = 1
+    step = max(1, min(step, 10))
+
     prev_ist = _to_ist(prev_dt)
     try:
         if m == "Daily":
@@ -178,14 +189,9 @@ def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> Optio
         else:
             return None
 
-        nxt_date = nxt_ist.date()
-        if not is_working_day(nxt_date):
-            nxt_date = next_working_day(nxt_date)
-
-        nxt_19_ist = IST.localize(
-            datetime.combine(nxt_date, dt_time(EVENING_HOUR, EVENING_MINUTE))
-        )
-        return _from_ist(nxt_19_ist)
+        # Pin to 19:00 IST (no shift)
+        nxt_ist = nxt_ist.replace(hour=EVENING_HOUR, minute=EVENING_MINUTE, second=0, microsecond=0)
+        return _from_ist(nxt_ist)
     except Exception as e:
         logger.error(
             "Error calculating next planned date (mode=%s, freq=%s): %s", m, step, e
@@ -207,8 +213,8 @@ def get_next_fixed_7pm(
     Wrapper used by signals:
 
       • Steps according to mode/frequency
-      • Shifts Sun/holiday → next working day
       • Pins time to 19:00 IST
+      • NO working-day shift here
       • Ignores end_date (kept for API compatibility)
     """
     return get_next_planned_date(prev_dt, mode, frequency)
@@ -223,9 +229,7 @@ def get_next_same_time(
 ) -> Optional[datetime]:
     """
     Step forward preserving IST wall-clock time instead of forcing 19:00.
-
-    Still applies working-day shift, but keeps the same time-of-day
-    (useful if any code wants "same hour/minute" recurrence).
+    ✅ FIX: NO working-day shift here (callers handle shift if desired).
     """
     if not prev_dt:
         return None
@@ -233,7 +237,13 @@ def get_next_same_time(
     if m not in RECURRING_MODES:
         return None
 
-    step = max(int(frequency or 1), 1)
+    # Clamp frequency to 1..10
+    try:
+        step = int(frequency or 1)
+    except Exception:
+        step = 1
+    step = max(1, min(step, 10))
+
     prev_ist = _to_ist(prev_dt)
     t = dt_time(
         prev_ist.hour,
@@ -254,11 +264,9 @@ def get_next_same_time(
         else:
             return None
 
-        nxt_date = nxt_ist.date()
-        if not is_working_day(nxt_date):
-            nxt_date = next_working_day(nxt_date)
-
-        nxt_ist_fixed = IST.localize(datetime.combine(nxt_date, t))
+        nxt_ist_fixed = nxt_ist.replace(
+            hour=t.hour, minute=t.minute, second=t.second, microsecond=t.microsecond
+        )
         return _from_ist(nxt_ist_fixed)
     except Exception as e:
         logger.error(

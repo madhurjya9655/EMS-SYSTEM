@@ -23,15 +23,14 @@ This module fills ONLY that gap:
 Safe to call multiple times per day.
 """
 
-from datetime import datetime, time as dt_time
-from typing import Dict, List, Tuple, Any
+from datetime import datetime, time as dt_time, timedelta
+from typing import Dict, List, Any
 
 import pytz
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from django.conf import settings
-from django.urls import reverse
 
 from .models import Checklist
 from .recurrence_utils import (
@@ -72,22 +71,41 @@ def _series_q_tolerant(assign_to_id: int, task_name: str, mode: str, freq_norm: 
 def _today_row_exists(q_series) -> bool:
     """
     Does a *today-due* item already exist in this tolerant series?
+
+    IMPORTANT:
+      - We consider *any* row (Pending/Completed, skipped/not skipped) as "exists"
+        for idempotency. If today's row was voided (is_skipped_due_to_leave=True),
+        we MUST NOT recreate it.
     """
     today_ist = _now_ist().date()
     # We check both exact “today by date()” and a loose ±1 minute around the 19:00 pin.
     pinned_19 = IST.localize(datetime.combine(today_ist, dt_time(19, 0)))
+
     try:
         exists_by_date = Checklist.objects.filter(q_series).filter(planned_date__date=today_ist).exists()
     except Exception:
         exists_by_date = False
+
     try:
         exists_by_pin = Checklist.objects.filter(q_series).filter(
-            planned_date__gte=pinned_19 - timezone.timedelta(minutes=1),
-            planned_date__lt=pinned_19 + timezone.timedelta(minutes=1),
+            planned_date__gte=pinned_19 - timedelta(minutes=1),
+            planned_date__lt=pinned_19 + timedelta(minutes=1),
         ).exists()
     except Exception:
         exists_by_pin = False
+
     return bool(exists_by_date or exists_by_pin)
+
+
+def _future_pending_exists(q_series) -> bool:
+    """
+    Defensive: if a future Pending exists in the series (including skipped ones),
+    do not create another "today" row. This also prevents resurrection loops.
+    """
+    try:
+        return Checklist.objects.filter(status="Pending").filter(q_series).filter(planned_date__gt=timezone.now()).exists()
+    except Exception:
+        return False
 
 
 def _resolve_next_after_completed(latest_completed_dt: datetime | None, mode: str, freq: int) -> datetime | None:
@@ -147,6 +165,7 @@ class MaterializeResult:
         self.skipped_exists: int = 0
         self.skipped_no_completed: int = 0
         self.skipped_not_today: int = 0
+        self.skipped_future_pending: int = 0
         self.per_user: Dict[int, int] = {}
         self.details: List[Dict[str, Any]] = []
 
@@ -162,6 +181,7 @@ class MaterializeResult:
             "skipped_exists": self.skipped_exists,
             "skipped_no_completed": self.skipped_no_completed,
             "skipped_not_today": self.skipped_not_today,
+            "skipped_future_pending": self.skipped_future_pending,
             "per_user": self.per_user,
             "details": self.details[:100],  # keep payload compact
         }
@@ -182,6 +202,10 @@ def materialize_today_for_all(*, user_id: int | None = None, dry_run: bool = Fal
       • Requires at least one COMPLETED occurrence to compute the next step.
       • No emails are sent here.
 
+    IMPORTANT:
+      • If a today's row exists but is voided (is_skipped_due_to_leave=True),
+        it still counts as "exists" and WILL NOT be recreated.
+
     Args:
         user_id: limit to a single user (optional).
         dry_run: when True, do not insert rows; only report what would happen.
@@ -192,7 +216,10 @@ def materialize_today_for_all(*, user_id: int | None = None, dry_run: bool = Fal
     anchor10 = _assignment_anchor_for_today_10am_ist(now_ist)
 
     # Seed series from *existing* recurring checklists (any status); distinct by identity fields
+    # IMPORTANT: ignore voided rows as seeds so they don’t drive series reconstruction.
     filters = {"mode__in": RECURRING_MODES}
+    if hasattr(Checklist, "is_skipped_due_to_leave"):
+        filters["is_skipped_due_to_leave"] = False
     if user_id:
         filters["assign_to_id"] = user_id
 
@@ -219,18 +246,24 @@ def materialize_today_for_all(*, user_id: int | None = None, dry_run: bool = Fal
         )
 
         # Idempotency: already have a “today” row in this tolerant series?
+        # (Counts voided rows too — do NOT recreate.)
         if _today_row_exists(q_series):
             res.skipped_exists += 1
             res.add(uid, None, f"exists:{s['task_name']}")
             continue
 
+        # Defensive: if a future pending exists already, do not create another
+        if _future_pending_exists(q_series):
+            res.skipped_future_pending += 1
+            res.add(uid, None, f"future_pending:{s['task_name']}")
+            continue
+
         # Need a completed occurrence to step from (strict rule preserved)
-        completed = (
-            Checklist.objects.filter(status="Completed")
-            .filter(q_series)
-            .order_by("-planned_date", "-id")
-            .first()
-        )
+        completed_qs = Checklist.objects.filter(status="Completed").filter(q_series)
+        if hasattr(Checklist, "is_skipped_due_to_leave"):
+            completed_qs = completed_qs.filter(is_skipped_due_to_leave=False)
+
+        completed = completed_qs.order_by("-planned_date", "-id").first()
         if not completed:
             res.skipped_no_completed += 1
             res.add(uid, None, f"no_completed:{s['task_name']}")

@@ -1,4 +1,4 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
+# apps/tasks/views.py
 import csv
 import logging
 import pytz
@@ -284,13 +284,22 @@ def _get_handover_rows_for_user(user, today_date):
 
     tasks_map = {'checklist': {}, 'delegation': {}, 'help_ticket': {}}
     if ids['checklist']:
-        for t in Checklist.objects.filter(id__in=ids['checklist']).select_related("assign_to", "assign_by"):
+        for t in Checklist.objects.filter(
+            id__in=ids['checklist'],
+            is_skipped_due_to_leave=False,
+        ).select_related("assign_to", "assign_by"):
             tasks_map['checklist'][t.id] = t
     if ids['delegation']:
-        for t in Delegation.objects.filter(id__in=ids['delegation']).select_related("assign_to", "assign_by"):
+        for t in Delegation.objects.filter(
+            id__in=ids['delegation'],
+            is_skipped_due_to_leave=False,
+        ).select_related("assign_to", "assign_by"):
             tasks_map['delegation'][t.id] = t
     if ids['help_ticket']:
-        for t in HelpTicket.objects.filter(id__in=ids['help_ticket']).select_related("assign_to", "assign_by"):
+        for t in HelpTicket.objects.filter(
+            id__in=ids['help_ticket'],
+            is_skipped_due_to_leave=False,
+        ).select_related("assign_to", "assign_by"):
             tasks_map['help_ticket'][t.id] = t
 
     for key in ('checklist', 'delegation', 'help_ticket'):
@@ -552,6 +561,22 @@ def ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
     except Exception:
         tz = IST
     return timezone.make_aware(dt, tz)
+
+
+# ---- NEW: “void” (soft-delete) helper to prevent recurring re-materialization
+def _void_task_row(obj) -> None:
+    """
+    Soft-delete / tombstone a task occurrence so:
+      - it disappears from dashboards/lists/digests (filtered by is_skipped_due_to_leave=False)
+      - it is NOT recreated by recurring materializers (row still exists)
+    """
+    if not obj:
+        return
+    if hasattr(obj, "is_skipped_due_to_leave"):
+        obj.is_skipped_due_to_leave = True
+        obj.save(update_fields=["is_skipped_due_to_leave"])
+        return
+    obj.delete()
 
 
 @robust_db_operation()
@@ -898,7 +923,7 @@ def list_checklist(request):
                 frequency=obj.frequency,
                 group_name=getattr(obj, "group_name", None),
             )
-            deleted, _ = Checklist.objects.filter(status="Pending", **filters).delete()
+            deleted = Checklist.objects.filter(status="Pending", **filters).update(is_skipped_due_to_leave=True)
             messages.success(request, f"Deleted {deleted} pending occurrence(s) from the series '{obj.task_name}'.")
             request.session["suppress_auto_recur"] = True
             return redirect(return_url)
@@ -918,17 +943,17 @@ def list_checklist(request):
                     if key in series_seen:
                         continue
                     series_seen.add(key)
-                    deleted, _ = Checklist.objects.filter(status="Pending", **{
+                    deleted = Checklist.objects.filter(status="Pending", **{
                         "assign_to_id": obj.assign_to_id,
                         "task_name": obj.task_name,
                         "mode": obj.mode,
                         "frequency": obj.frequency,
                         "group_name": obj.group_name,
-                    }).delete()
+                    }).update(is_skipped_due_to_leave=True)
                     total_deleted += deleted
                 messages.success(request, f"Deleted {total_deleted} pending occurrence(s) across selected series.")
             else:
-                deleted, _ = Checklist.objects.filter(pk__in=ids).delete()
+                deleted = Checklist.objects.filter(pk__in=ids).update(is_skipped_due_to_leave=True)
                 total_deleted += deleted
                 if deleted:
                     messages.success(request, f"Deleted {deleted} selected task(s).")
@@ -937,7 +962,7 @@ def list_checklist(request):
             request.session["suppress_auto_recur"] = True
         return redirect(return_url)
 
-    qs = Checklist.objects.filter(status="Pending").select_related("assign_by", "assign_to")
+    qs = Checklist.objects.filter(status="Pending", is_skipped_due_to_leave=False).select_related("assign_by", "assign_to")
 
     kw = request.GET.get("keyword", "").strip()
     if kw:
@@ -1077,10 +1102,9 @@ def edit_checklist(request, pk):
 def delete_checklist(request, pk):
     obj = get_object_or_404(Checklist, pk=pk)
     if request.method == "POST":
-        obj.delete()
+        _void_task_row(obj)
         request.session["suppress_auto_recur"] = True
         messages.success(request, f"Deleted checklist task '{obj.task_name}'.")
-        # <<< keep current filters by honoring ?next=
         return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
     return render(request, "tasks/confirm_delete.html", {"object": obj, "type": "Checklist"})
 
@@ -1204,7 +1228,7 @@ def list_delegation(request):
             return_url = request.POST.get("return_url") or reverse("tasks:list_delegation")
             if ids:
                 try:
-                    deleted, _ = Delegation.objects.filter(pk__in=ids).delete()
+                    deleted = Delegation.objects.filter(pk__in=ids).update(is_skipped_due_to_leave=True)
                     if deleted:
                         messages.success(request, f"Successfully deleted {deleted} delegation task(s).")
                     else:
@@ -1219,7 +1243,7 @@ def list_delegation(request):
             return redirect("tasks:list_delegation")
 
     # Start from ALL, then apply filters. Default behavior keeps Pending unless status filter says otherwise.
-    base_qs = Delegation.objects.select_related("assign_by", "assign_to")
+    base_qs = Delegation.objects.select_related("assign_by", "assign_to").filter(is_skipped_due_to_leave=False)
     status_param = (request.GET.get("status") or "").strip()
 
     if not status_param or status_param == "Pending":
@@ -1305,7 +1329,7 @@ def edit_delegation(request, pk):
 def delete_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
     if request.method == "POST":
-        obj.delete()
+        _void_task_row(obj)
         messages.success(request, f"Deleted delegation task '{obj.task_name}'.")
         return redirect(request.GET.get("next", reverse("tasks:list_delegation")))
     return render(request, "tasks/confirm_delete.html", {"object": obj, "type": "Delegation"})
@@ -1466,7 +1490,7 @@ def list_help_ticket(request):
             ids = request.POST.getlist("sel")
             if ids:
                 try:
-                    deleted, _ = HelpTicket.objects.filter(pk__in=ids).delete()
+                    deleted = HelpTicket.objects.filter(pk__in=ids).update(is_skipped_due_to_leave=True)
                     if deleted:
                         messages.success(request, f"Successfully deleted {deleted} help ticket(s).")
                     else:
@@ -1479,7 +1503,7 @@ def list_help_ticket(request):
             messages.warning(request, "Invalid action specified.")
         return redirect("tasks:list_help_ticket")
 
-    qs = HelpTicket.objects.select_related("assign_by", "assign_to").exclude(status="Closed")
+    qs = HelpTicket.objects.select_related("assign_by", "assign_to").filter(is_skipped_due_to_leave=False).exclude(status="Closed")
     if not can_create(request.user):
         qs = qs.filter(assign_to=request.user)
 
@@ -1520,7 +1544,7 @@ def list_help_ticket(request):
 @login_required
 def assigned_to_me(request):
     items = (
-        HelpTicket.objects.filter(assign_to=request.user)
+        HelpTicket.objects.filter(assign_to=request.user, is_skipped_due_to_leave=False)
         .exclude(status="Closed")
         .select_related("assign_by", "assign_to")
         .order_by("-planned_date")
@@ -1542,7 +1566,7 @@ def assigned_by_me(request):
             ids = request.POST.getlist("sel")
             if ids:
                 try:
-                    deleted, _ = HelpTicket.objects.filter(pk__in=ids, assign_by=request.user).delete()
+                    deleted = HelpTicket.objects.filter(pk__in=ids, assign_by=request.user).update(is_skipped_due_to_leave=True)
                     if deleted:
                         messages.success(request, f"Successfully deleted {deleted} help tickets(s).")
                     else:
@@ -1557,7 +1581,7 @@ def assigned_by_me(request):
 
     items = (
         HelpTicket.objects
-        .filter(assign_by=request.user)
+        .filter(assign_by=request.user, is_skipped_due_to_leave=False)
         .select_related("assign_by", "assign_to")
         .order_by("-planned_date")
     )
@@ -1637,7 +1661,7 @@ def delete_help_ticket(request, pk):
         return redirect("tasks:assigned_by_me")
     if request.method == "POST":
         title = ticket.title
-        ticket.delete()
+        _void_task_row(ticket)
         messages.success(request, f'Deleted help ticket "{title}".')
         return redirect(request.GET.get("next", "tasks:assigned_by_me"))
     return render(request, "tasks/confirm_delete.html", {"object": ticket, "type": "Help Ticket"})
@@ -1801,12 +1825,12 @@ def dashboard_home(request):
 
     # Scorecards
     try:
-        curr_chk = Checklist.objects.filter(assign_to=request.user, planned_date__date__gte=start_current, planned_date__date__lte=today_ist, status='Completed').count()
-        prev_chk = Checklist.objects.filter(assign_to=request.user, planned_date__date__gte=start_prev, planned_date__date__lte=end_prev, status='Completed').count()
-        curr_del = Delegation.objects.filter(assign_to=request.user, planned_date__date__gte=start_current, planned_date__date__lte=today_ist, status='Completed').count()
-        prev_del = Delegation.objects.filter(assign_to=request.user, planned_date__date__gte=start_prev, planned_date__date__lte=end_prev, status='Completed').count()
-        curr_help = HelpTicket.objects.filter(assign_to=request.user, planned_date__date__gte=start_current, planned_date__date__lte=today_ist, status='Closed').count()
-        prev_help = HelpTicket.objects.filter(assign_to=request.user, planned_date__date__gte=start_prev, planned_date__date__lte=end_prev, status='Closed').count()
+        curr_chk = Checklist.objects.filter(assign_to=request.user, planned_date__date__gte=start_current, planned_date__date__lte=today_ist, status='Completed', is_skipped_due_to_leave=False).count()
+        prev_chk = Checklist.objects.filter(assign_to=request.user, planned_date__date__gte=start_prev, planned_date__date__lte=end_prev, status='Completed', is_skipped_due_to_leave=False).count()
+        curr_del = Delegation.objects.filter(assign_to=request.user, planned_date__date__gte=start_current, planned_date__date__lte=today_ist, status='Completed', is_skipped_due_to_leave=False).count()
+        prev_del = Delegation.objects.filter(assign_to=request.user, planned_date__date__gte=start_prev, planned_date__date__lte=end_prev, status='Completed', is_skipped_due_to_leave=False).count()
+        curr_help = HelpTicket.objects.filter(assign_to=request.user, planned_date__date__gte=start_current, planned_date__date__lte=today_ist, status='Closed', is_skipped_due_to_leave=False).count()
+        prev_help = HelpTicket.objects.filter(assign_to=request.user, planned_date__date__gte=start_prev, planned_date__date__lte=end_prev, status='Closed', is_skipped_due_to_leave=False).count()
     except Exception as e:
         logger.error(_safe_console_text(f"Error calculating weekly scores: {e}"))
         curr_chk = prev_chk = curr_del = prev_del = curr_help = prev_help = 0
@@ -1820,9 +1844,9 @@ def dashboard_home(request):
     # Pending counts
     try:
         pending_tasks = {
-            'checklist':   Checklist.objects.filter(assign_to=request.user, status='Pending').count(),
-            'delegation':  Delegation.objects.filter(assign_to=request.user, status='Pending').count(),
-            'help_ticket': HelpTicket.objects.filter(assign_to=request.user).exclude(status='Closed').count(),
+            'checklist':   Checklist.objects.filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False).count(),
+            'delegation':  Delegation.objects.filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False).count(),
+            'help_ticket': HelpTicket.objects.filter(assign_to=request.user, is_skipped_due_to_leave=False).exclude(status='Closed').count(),
         }
     except Exception as e:
         logger.error(_safe_console_text(f"Error calculating pending counts: {e}"))
@@ -1838,14 +1862,14 @@ def dashboard_home(request):
         if today_only:
             base_checklists = list(
                 Checklist.objects
-                .filter(assign_to=request.user, status='Pending', planned_date__date=today_ist)
+                .filter(assign_to=request.user, status='Pending', planned_date__date=today_ist, is_skipped_due_to_leave=False)
                 .select_related('assign_by')
                 .order_by('planned_date')
             )
         else:
             base_checklists = list(
                 Checklist.objects
-                .filter(assign_to=request.user, status='Pending')
+                .filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False)
                 .select_related('assign_by')
                 .order_by('planned_date')
             )
@@ -1854,7 +1878,7 @@ def dashboard_home(request):
         if ho_ids_checklist:
             ho_checklists = list(
                 Checklist.objects
-                .filter(id__in=ho_ids_checklist, status='Pending')
+                .filter(id__in=ho_ids_checklist, status='Pending', is_skipped_due_to_leave=False)
                 .select_related('assign_by')
                 .order_by('planned_date')
             )
@@ -1888,12 +1912,14 @@ def dashboard_home(request):
                 Delegation.objects.filter(
                     assign_to=request.user, status='Pending',
                     planned_date__date=today_ist,
+                    is_skipped_due_to_leave=False,
                 ).select_related('assign_by').order_by('planned_date')
             )
         else:
             base_delegations = list(
                 Delegation.objects.filter(
-                    assign_to=request.user, status='Pending'
+                    assign_to=request.user, status='Pending',
+                    is_skipped_due_to_leave=False,
                 ).select_related('assign_by').order_by('planned_date')
             )
 
@@ -1902,6 +1928,7 @@ def dashboard_home(request):
             ho_delegations = list(
                 Delegation.objects.filter(
                     id__in=ho_ids_delegation, status='Pending',
+                    is_skipped_due_to_leave=False,
                 ).select_related('assign_by').order_by('planned_date')
             )
             for t in ho_delegations:
@@ -1927,12 +1954,14 @@ def dashboard_home(request):
                 HelpTicket.objects.filter(
                     assign_to=request.user,
                     planned_date__date=today_ist,
+                    is_skipped_due_to_leave=False,
                 ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
             )
         else:
             base_help = list(
                 HelpTicket.objects.filter(
-                    assign_to=request.user
+                    assign_to=request.user,
+                    is_skipped_due_to_leave=False,
                 ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
             )
 
@@ -1940,7 +1969,8 @@ def dashboard_home(request):
         if ho_ids_help:
             ho_help = list(
                 HelpTicket.objects.filter(
-                    id__in=ho_ids_help
+                    id__in=ho_ids_help,
+                    is_skipped_due_to_leave=False,
                 ).exclude(status='Closed').select_related('assign_by').order_by('planned_date')
             )
             for t in ho_help:

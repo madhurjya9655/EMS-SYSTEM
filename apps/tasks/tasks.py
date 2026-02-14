@@ -198,6 +198,8 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
     )
 
     # If a FUTURE Pending exists in this tolerant series → do not create another.
+    # NOTE: we intentionally do NOT filter is_skipped_due_to_leave here,
+    # because a "voided" future row must still suppress re-creation.
     if (
         Checklist.objects.filter(status="Pending")
         .filter(q_series)
@@ -466,11 +468,16 @@ def _fetch_delegations_due_today(start_dt, end_dt):
 
     try:
         qs = Delegation.objects.filter(status="Pending", planned_date__gte=start_dt, planned_date__lte=end_dt)
+        if hasattr(Delegation, "is_skipped_due_to_leave"):
+            qs = qs.filter(is_skipped_due_to_leave=False)
+
         if qs.exists():
             return list(qs)
 
         today_ist = _now_ist().date()
         qs2 = Delegation.objects.filter(status="Pending", planned_date__date=today_ist)
+        if hasattr(Delegation, "is_skipped_due_to_leave"):
+            qs2 = qs2.filter(is_skipped_due_to_leave=False)
         return list(qs2)
     except (OperationalError, ProgrammingError) as e:
         logger.warning(_safe_console_text(f"[DUE@10] Delegation skipped (DB not ready): {e}"))
@@ -496,11 +503,16 @@ def _fetch_checklists_due_today(start_dt, end_dt):
 
     try:
         qs = Checklist.objects.filter(status="Pending", planned_date__gte=start_dt, planned_date__lte=end_dt)
+        if hasattr(Checklist, "is_skipped_due_to_leave"):
+            qs = qs.filter(is_skipped_due_to_leave=False)
+
         if qs.exists():
             return list(qs)
 
         today_ist = _now_ist().date()
         qs2 = Checklist.objects.filter(status="Pending", planned_date__date=today_ist)
+        if hasattr(Checklist, "is_skipped_due_to_leave"):
+            qs2 = qs2.filter(is_skipped_due_to_leave=False)
         return list(qs2)
 
     except (OperationalError, ProgrammingError) as e:
@@ -796,7 +808,10 @@ def dispatch_delegation_reminders(self) -> dict:
         reminder_time__isnull=False,
         reminder_sent_at__isnull=True,
         reminder_time__lte=now,
-    ).order_by("reminder_time", "id")
+    )
+    if hasattr(Delegation, "is_skipped_due_to_leave"):
+        qs = qs.filter(is_skipped_due_to_leave=False)
+    qs = qs.order_by("reminder_time", "id")
 
     for obj in qs:
         if not obj.reminder_time:
@@ -900,9 +915,11 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
         qs = (
             Checklist.objects.filter(status="Pending")
             .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
-            .select_related("assign_to", "assign_by")
-            .order_by("planned_date", "id")
         )
+        if hasattr(Checklist, "is_skipped_due_to_leave"):
+            qs = qs.filter(is_skipped_due_to_leave=False)
+        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
         for obj in qs:
             title = obj.task_name or ""
             desc = (obj.message or "").strip()
@@ -926,9 +943,11 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
         qs = (
             Delegation.objects.filter(status="Pending")
             .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
-            .select_related("assign_to", "assign_by")
-            .order_by("planned_date", "id")
         )
+        if hasattr(Delegation, "is_skipped_due_to_leave"):
+            qs = qs.filter(is_skipped_due_to_leave=False)
+        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
         for obj in qs:
             title = obj.task_name or ""
             desc = (getattr(obj, "message", "") or "").strip() or (getattr(obj, "description", "") or "").strip()
@@ -952,9 +971,12 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
         qs = (
             FMS.objects.filter(status="Pending")
             .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
-            .select_related("assign_to", "assign_by")
-            .order_by("planned_date", "id")
         )
+        # Apply skip filter only if model has that field (won’t break older schema)
+        if hasattr(FMS, "is_skipped_due_to_leave"):
+            qs = qs.filter(is_skipped_due_to_leave=False)
+
+        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
         for obj in qs:
             due = ""
             try:
@@ -980,9 +1002,11 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
         qs = (
             HelpTicket.objects.exclude(status="Closed")
             .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
-            .select_related("assign_to", "assign_by")
-            .order_by("planned_date", "id")
         )
+        if hasattr(HelpTicket, "is_skipped_due_to_leave"):
+            qs = qs.filter(is_skipped_due_to_leave=False)
+        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
         for obj in qs:
             title = obj.title or ""
             desc = (obj.description or "").strip()
@@ -1074,6 +1098,9 @@ def auto_unblock_overdue_dailies(*, user_id: int | None = None, dry_run: bool = 
       - Marks them COMPLETED (admin/system action) to unblock the next recurrence
 
     Preserves rule: "next occurrence spawns only on completion".
+
+    IMPORTANT: excludes rows that were "voided" (is_skipped_due_to_leave=True).
+    Completing voided rows can re-trigger recurrence and resurrect deleted items.
     """
     today = timezone.localdate()
 
@@ -1082,6 +1109,9 @@ def auto_unblock_overdue_dailies(*, user_id: int | None = None, dry_run: bool = 
         planned_date__date__lt=today,
         status="Pending",
     )
+    if hasattr(Checklist, "is_skipped_due_to_leave"):
+        qs = qs.filter(is_skipped_due_to_leave=False)
+
     if user_id:
         qs = qs.filter(assign_to_id=user_id)
 
