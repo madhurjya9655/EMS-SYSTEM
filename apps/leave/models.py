@@ -1,4 +1,4 @@
-# apps/leave/models.py
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\leave\models.py
 from __future__ import annotations
 
 import hashlib
@@ -68,6 +68,20 @@ def _daterange_inclusive(d1: date, d2: date) -> Iterable[date]:
     while cur <= d2:
         yield cur
         cur += timedelta(days=1)
+
+
+def _to_ist(dt: Optional[datetime]) -> Optional[datetime]:
+    if not dt:
+        return None
+    try:
+        return timezone.localtime(dt, IST)
+    except Exception:
+        if timezone.is_naive(dt):
+            try:
+                return dt.replace(tzinfo=IST)
+            except Exception:
+                return dt
+        return dt
 
 
 # ---------------------------------------------------------------------------
@@ -265,9 +279,9 @@ class LeaveRequestQuerySet(models.QuerySet):
         return self.filter(start_date__lte=d, end_date__gte=d)
 
     def active_today(self) -> "LeaveRequestQuerySet":
-        """Get leaves that are active today"""
-        today = timezone.now().date()
-        return self.active_for_blocking().covering_ist_date(today)
+        """Get leaves that are active today (IST date)."""
+        today_ist = timezone.localtime(timezone.now(), IST).date()
+        return self.active_for_blocking().covering_ist_date(today_ist)
 
 
 class LeaveRequest(models.Model):
@@ -389,8 +403,8 @@ class LeaveRequest(models.Model):
         """Check if leave is currently active (today falls within leave period)"""
         if not self.active_for_blocking:
             return False
-        today = timezone.now().date()
-        return self.includes_ist_date(today)
+        today_ist = timezone.localtime(timezone.now(), IST).date()
+        return self.includes_ist_date(today_ist)
 
     def ist_dates(self) -> List[date]:
         if not self.start_at or not self.end_at:
@@ -599,9 +613,72 @@ class LeaveRequest(models.Model):
             LeaveDecisionAudit.log(self, DecisionAction.REJECTED, decided_by=by_user)
         _safe_send_decision_email(self)
 
+    # -----------------------------
+    # BLOCKING (TIME-AWARE, IST)
+    # -----------------------------
+    @staticmethod
+    def is_user_blocked_at(user: UserType, when_dt: datetime) -> bool:
+        """
+        TIME-AWARE check (IST).
+
+        - Blocks if any leave exists with status in {PENDING, APPROVED}
+        - HALF DAY: blocks only [start_at, end_at) in IST
+        - FULL DAY: blocks entire IST calendar day (00:00 → next 00:00) for each day covered
+        """
+        if not getattr(user, "id", None) or when_dt is None:
+            return False
+
+        # Ensure aware IST
+        if timezone.is_naive(when_dt):
+            when_ist = when_dt.replace(tzinfo=IST)
+        else:
+            try:
+                when_ist = when_dt.astimezone(IST)
+            except Exception:
+                when_ist = _to_ist(when_dt) or when_dt
+
+        try:
+            target_day = when_ist.date()
+            day_start = datetime.combine(target_day, time.min).replace(tzinfo=IST)
+            next_day_start = datetime.combine(target_day + timedelta(days=1), time.min).replace(tzinfo=IST)
+
+            qs = (
+                LeaveRequest.objects.filter(employee=user, status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED])
+                .filter(start_at__lt=next_day_start, end_at__gt=day_start)
+                .only("start_at", "end_at", "status", "is_half_day")
+            )
+
+            for lr in qs:
+                if getattr(lr, "is_half_day", False):
+                    s = _to_ist(lr.start_at) or lr.start_at
+                    e = _to_ist(lr.end_at) or lr.end_at
+                    if e < s:
+                        s, e = e, s
+                    if s <= when_ist < e:
+                        return True
+                else:
+                    # FULL DAY => whole target calendar day in IST
+                    return True
+
+            return False
+
+        except Exception:
+            logger.exception(
+                "LeaveRequest.is_user_blocked_at failed for user_id=%s, when_dt=%r",
+                getattr(user, "id", None),
+                when_dt,
+            )
+            return False
+
     @staticmethod
     def is_user_blocked_on(user: UserType, d: date) -> bool:
-        return LeaveRequest.objects.active_for_blocking().filter(employee=user).covering_ist_date(d).exists()
+        """
+        DATE-LEVEL API (legacy-safe):
+        - Full-day leaves block the day.
+        - Half-day leaves block only if they overlap the 10:00 IST anchor.
+        """
+        anchor = datetime.combine(d, time(10, 0)).replace(tzinfo=IST)
+        return LeaveRequest.is_user_blocked_at(user, anchor)
 
     @staticmethod
     def get_user_active_leaves(user: UserType) -> "LeaveRequestQuerySet":

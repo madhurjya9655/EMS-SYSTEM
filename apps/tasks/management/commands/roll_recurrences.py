@@ -2,41 +2,87 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta, time as dt_time, date
 from typing import Optional
 
 import pytz
 from dateutil.relativedelta import relativedelta
 from django.core.management.base import BaseCommand
 from django.db import transaction
-from django.utils import timezone
 from django.db.models import Q
+from django.utils import timezone
 
-from apps.tasks.models import Checklist, Delegation
 from apps.settings.models import Holiday
+from apps.tasks.models import Checklist, Delegation
+
+# ✅ unified leave blocking source of truth (time-aware)
+from apps.tasks.utils.blocking import is_user_blocked_at
 
 logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
 
 RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
-EVENING_HOUR = 19
-EVENING_MINUTE = 0
+DUE_T = dt_time(19, 0)
+ASSIGN_ANCHOR_T = dt_time(10, 0)
 
 
-def _is_working_day(d) -> bool:
+def _safe_console_text(s: object) -> str:
+    try:
+        return ("" if s is None else str(s)).encode("utf-8", "replace").decode("utf-8", "replace")
+    except Exception:
+        try:
+            return repr(s)
+        except Exception:
+            return ""
+
+
+def _is_working_day(d: date) -> bool:
     try:
         # Sunday = 6
-        return d.weekday() != 6 and not Holiday.objects.filter(date=d).exists()
+        if d.weekday() == 6:
+            return False
     except Exception:
-        return d.weekday() != 6
+        pass
+    try:
+        return not Holiday.objects.filter(date=d).exists()
+    except Exception:
+        return True
 
 
-def _next_working_day(d):
+def _next_working_day(d: date) -> date:
     cur = d
     for _ in range(0, 90):
         if _is_working_day(cur):
             return cur
-        cur = cur + timedelta(days=1)
+        cur += timedelta(days=1)
+    return cur
+
+
+def _get_user(user_id: int):
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    return User.objects.filter(id=user_id, is_active=True).first()
+
+
+def _blocked_at_10am(user_id: int, d: date) -> bool:
+    user = _get_user(user_id)
+    if not user:
+        return False
+    anchor_ist = IST.localize(datetime.combine(d, ASSIGN_ANCHOR_T))
+    return bool(is_user_blocked_at(user, anchor_ist))
+
+
+def _push_to_next_allowed_date(user_id: int, d: date) -> date:
+    """
+    Advance until:
+      - working day (Mon–Sat, not a Holiday)
+      - not blocked by leave at 10:00 IST
+    """
+    cur = d
+    for _ in range(0, 120):
+        if _is_working_day(cur) and (not _blocked_at_10am(user_id, cur)):
+            return cur
+        cur += timedelta(days=1)
     return cur
 
 
@@ -49,10 +95,11 @@ def _aware_in_project_tz(dt: datetime) -> datetime:
 
 def get_next_planned_datetime(prev_dt: datetime, mode: str, frequency: int | None) -> Optional[datetime]:
     """
-    FINAL RULE for this command:
-      • Step the DATE by Daily/Weekly/Monthly/Yearly with freq (>=1).
-      • Shift to the **next working day** (Mon–Sat, not a Holiday).
-      • Pin the TIME to **19:00 IST** (7 PM).
+    Roll command rule:
+      • Step DATE by mode/frequency (>=1)
+      • Shift to the next working day (Mon–Sat; Holiday excluded)
+      • Pin TIME to 19:00 IST
+      • Leave shift is applied by caller (needs user_id)
     """
     if (mode or "") not in RECURRING_MODES:
         return None
@@ -76,17 +123,17 @@ def get_next_planned_datetime(prev_dt: datetime, mode: str, frequency: int | Non
         cur_ist = cur_ist + relativedelta(years=step)
 
     next_date = _next_working_day(cur_ist.date())
-    next_ist = IST.localize(datetime.combine(next_date, dt_time(EVENING_HOUR, EVENING_MINUTE)))
+    next_ist = IST.localize(datetime.combine(next_date, DUE_T))
     return next_ist.astimezone(timezone.get_current_timezone())
 
 
 def _series_q(assign_to_id: int, task_name: str, mode: str, frequency: int | None, group_name: str | None):
-    """Legacy-tolerant grouping: treat NULL frequency as 1."""
+    """Legacy-tolerant grouping: treat NULL frequency as 1. Exclude tombstoned."""
     try:
         freq = max(int(frequency or 1), 1)
     except Exception:
         freq = 1
-    q = Q(assign_to_id=assign_to_id, task_name=task_name, mode=mode)
+    q = Q(assign_to_id=assign_to_id, task_name=task_name, mode=mode, is_skipped_due_to_leave=False)
     if group_name:
         q &= Q(group_name=group_name)
     q &= Q(frequency__in=[freq, None])
@@ -97,7 +144,8 @@ class Command(BaseCommand):
     help = (
         "Roll due recurring CHECKLIST tasks only.\n"
         "STRICT: create next only when stepping base is the latest COMPLETED and there is NO Pending in series.\n"
-        "Next planned is 19:00 IST on next working day (Sun/holiday skipped). Delegations are one-time."
+        "Next planned is 19:00 IST on next working day (Sun/holiday skipped) and shifted off leave (10:00 IST anchor).\n"
+        "Delegations are one-time."
     )
 
     def add_arguments(self, parser):
@@ -126,7 +174,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **opts):
         action = opts["action"]
-        dry_run = opts.get("dry_run", False)
+        dry_run = bool(opts.get("dry_run", False))
 
         if dry_run:
             self.stdout.write(self.style.WARNING("DRY RUN — no data will be modified.\n"))
@@ -169,13 +217,13 @@ class Command(BaseCommand):
         Create next ONLY when:
           • No Pending exists in the tolerant series
           • There is a COMPLETED base
-          • The next due time (19:00 IST working day) is <= now
+          • The next due time (19:00 IST working day + leave shift) is <= now (IST)
         """
         user_id = opts.get("user_id")
         now = timezone.now()
         now_ist = now.astimezone(IST)
 
-        filters = {"mode__in": RECURRING_MODES}
+        filters = {"mode__in": RECURRING_MODES, "is_skipped_due_to_leave": False}
         if user_id:
             filters["assign_to_id"] = user_id
 
@@ -212,21 +260,28 @@ class Command(BaseCommand):
             if not next_dt:
                 continue
 
+            # Shift off leave (10:00 IST anchor) after working-day shift
+            next_date_ist = next_dt.astimezone(IST).date()
+            safe_date = _push_to_next_allowed_date(s["assign_to_id"], next_date_ist)
+            if safe_date != next_date_ist:
+                next_dt = IST.localize(datetime.combine(safe_date, DUE_T)).astimezone(
+                    timezone.get_current_timezone()
+                )
+
             # Only if due now (<= IST now)
             if next_dt.astimezone(IST) > now_ist:
                 continue
 
-            # No dupe pending in ±1 minute
-            exists = Checklist.objects.filter(
-                status="Pending",
-                assign_to_id=s["assign_to_id"],
-                task_name=s["task_name"],
-                mode=s["mode"],
-                frequency__in=[freq_norm, None],
-                group_name=s["group_name"],
-                planned_date__gte=next_dt - timedelta(minutes=1),
-                planned_date__lt=next_dt + timedelta(minutes=1),
-            ).exists()
+            # No dupe pending in ±1 minute (tolerant series)
+            exists = (
+                Checklist.objects.filter(status="Pending")
+                .filter(q_series)
+                .filter(
+                    planned_date__gte=next_dt - timedelta(minutes=1),
+                    planned_date__lt=next_dt + timedelta(minutes=1),
+                )
+                .exists()
+            )
             if exists:
                 continue
 
@@ -240,6 +295,7 @@ class Command(BaseCommand):
                     kwargs = dict(
                         assign_by=getattr(base, "assign_by", None),
                         task_name=base.task_name,
+                        message=getattr(base, "message", "") or "",
                         assign_to=base.assign_to,
                         planned_date=next_dt,
                         priority=getattr(base, "priority", None),
@@ -247,9 +303,9 @@ class Command(BaseCommand):
                         mode=base.mode,
                         frequency=freq_norm,
                         status="Pending",
+                        is_skipped_due_to_leave=False,
                     )
                     for opt in (
-                        "message",
                         "time_per_task_minutes",
                         "remind_before_days",
                         "assign_pc",
@@ -267,6 +323,7 @@ class Command(BaseCommand):
                         if hasattr(base, opt):
                             kwargs[opt] = getattr(base, opt)
                     Checklist.objects.create(**kwargs)
+
                 created_count += 1
                 self.stdout.write(self.style.SUCCESS(f"Created Checklist: '{base.task_name}' at {next_dt}"))
             except Exception as e:
@@ -307,11 +364,11 @@ class Command(BaseCommand):
         user_id = opts.get("user_id")
         issues = []
 
-        f = {}
+        f = {"is_skipped_due_to_leave": False}
         if user_id:
             f["assign_to_id"] = user_id
 
-        invalid = Checklist.objects.filter(mode__isnull=False).exclude(mode__in=RECURRING_MODES)
+        invalid = Checklist.objects.filter(**f).filter(mode__isnull=False).exclude(mode__in=RECURRING_MODES)
         for obj in invalid:
             issues.append(f"Checklist {obj.id}: invalid mode '{obj.mode}'")
 

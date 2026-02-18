@@ -39,7 +39,10 @@ __all__ = [
 ]
 
 
-def _ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
+def _ensure_aware_project(dt: Optional[datetime]) -> Optional[datetime]:
+    """
+    If naive, make aware in PROJECT timezone (not IST).
+    """
     if dt is None:
         return None
     if timezone.is_aware(dt):
@@ -48,8 +51,8 @@ def _ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 def _to_ist(dt: datetime) -> datetime:
-    dt = _ensure_aware(dt)
-    return dt.astimezone(IST)  # type: ignore[union-attr]
+    aware = _ensure_aware_project(dt)  # type: ignore[arg-type]
+    return aware.astimezone(IST)  # type: ignore[union-attr]
 
 
 def _from_ist(dt: datetime) -> datetime:
@@ -80,6 +83,10 @@ def normalize_mode(mode: Optional[str]) -> str:
 
 
 def is_working_day(d: date) -> bool:
+    """
+    Working day helper remains available for callers,
+    but core "next planned" functions DO NOT shift automatically.
+    """
     try:
         if d.weekday() == 6:  # Sunday
             return False
@@ -114,7 +121,7 @@ def preserve_first_occurrence_time(planned_dt: Optional[datetime]) -> Optional[d
 
 # -------------------------------------------------------------------
 # Schedulers for 10 AM / preserve-time / 7 PM
-# (these keep their existing behavior including working-day shift where present)
+# These are explicit "scheduler" helpers and MAY shift holidays.
 # -------------------------------------------------------------------
 def schedule_recurring_at_10am(planned_dt: Optional[datetime]) -> Optional[datetime]:
     if not planned_dt:
@@ -132,12 +139,7 @@ def schedule_recurring_preserve_time(planned_dt: Optional[datetime]) -> Optional
         return planned_dt
     planned_ist = _to_ist(planned_dt)
     d = planned_ist.date()
-    t = dt_time(
-        planned_ist.hour,
-        planned_ist.minute,
-        planned_ist.second,
-        planned_ist.microsecond,
-    )
+    t = dt_time(planned_ist.hour, planned_ist.minute, planned_ist.second, planned_ist.microsecond)
     if not is_working_day(d):
         d = next_working_day(d)
     recur_ist = IST.localize(datetime.combine(d, t))
@@ -154,22 +156,16 @@ def schedule_recurring_at_7pm(planned_dt: Optional[datetime]) -> Optional[dateti
 
 
 # -------------------------------------------------------------------
-# Core recurrence: step by mode/frequency, PIN TIME to 19:00 IST
-# ✅ FIX: NO shifting off Sun/holidays here (callers handle shift if desired)
+# Core recurrence: step by mode/frequency
+# ✅ NO working-day/holiday shift here. Callers decide.
 # -------------------------------------------------------------------
 def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> Optional[datetime]:
-    """
-    Step forward by `frequency` units in the given `mode`,
-    then pin to 19:00 IST on that stepped date.
-    NO working-day shift here.
-    """
     if not prev_dt:
         return None
     m = normalize_mode(mode)
     if m not in RECURRING_MODES:
         return None
 
-    # Clamp frequency to 1..10 (matches your dashboard helper/spec)
     try:
         step = int(frequency or 1)
     except Exception:
@@ -189,19 +185,14 @@ def get_next_planned_date(prev_dt: datetime, mode: str, frequency: int) -> Optio
         else:
             return None
 
-        # Pin to 19:00 IST (no shift)
+        # Default rule for tasks: pin to 19:00 IST
         nxt_ist = nxt_ist.replace(hour=EVENING_HOUR, minute=EVENING_MINUTE, second=0, microsecond=0)
         return _from_ist(nxt_ist)
     except Exception as e:
-        logger.error(
-            "Error calculating next planned date (mode=%s, freq=%s): %s", m, step, e
-        )
+        logger.error("Error calculating next planned date (mode=%s, freq=%s): %s", m, step, e)
         return None
 
 
-# -------------------------------------------------------------------
-# Helpers expected by signals.py
-# -------------------------------------------------------------------
 def get_next_fixed_7pm(
     prev_dt: datetime,
     mode: str,
@@ -209,14 +200,7 @@ def get_next_fixed_7pm(
     *,
     end_date: Optional[date] = None,
 ) -> Optional[datetime]:
-    """
-    Wrapper used by signals:
-
-      • Steps according to mode/frequency
-      • Pins time to 19:00 IST
-      • NO working-day shift here
-      • Ignores end_date (kept for API compatibility)
-    """
+    # end_date kept for compatibility; callers enforce it if needed
     return get_next_planned_date(prev_dt, mode, frequency)
 
 
@@ -227,17 +211,12 @@ def get_next_same_time(
     *,
     end_date: Optional[date] = None,
 ) -> Optional[datetime]:
-    """
-    Step forward preserving IST wall-clock time instead of forcing 19:00.
-    ✅ FIX: NO working-day shift here (callers handle shift if desired).
-    """
     if not prev_dt:
         return None
     m = normalize_mode(mode)
     if m not in RECURRING_MODES:
         return None
 
-    # Clamp frequency to 1..10
     try:
         step = int(frequency or 1)
     except Exception:
@@ -245,12 +224,7 @@ def get_next_same_time(
     step = max(1, min(step, 10))
 
     prev_ist = _to_ist(prev_dt)
-    t = dt_time(
-        prev_ist.hour,
-        prev_ist.minute,
-        prev_ist.second,
-        prev_ist.microsecond,
-    )
+    t = dt_time(prev_ist.hour, prev_ist.minute, prev_ist.second, prev_ist.microsecond)
 
     try:
         if m == "Daily":
@@ -264,30 +238,18 @@ def get_next_same_time(
         else:
             return None
 
-        nxt_ist_fixed = nxt_ist.replace(
-            hour=t.hour, minute=t.minute, second=t.second, microsecond=t.microsecond
-        )
+        nxt_ist_fixed = nxt_ist.replace(hour=t.hour, minute=t.minute, second=t.second, microsecond=t.microsecond)
         return _from_ist(nxt_ist_fixed)
     except Exception as e:
-        logger.error(
-            "Error calculating next same-time datetime (mode=%s, freq=%s): %s",
-            m,
-            step,
-            e,
-        )
+        logger.error("Error calculating next same-time datetime (mode=%s, freq=%s): %s", m, step, e)
         return None
 
 
-# -------------------------------------------------------------------
-# Misc helpers
-# -------------------------------------------------------------------
 def extract_ist_wallclock(dt: datetime) -> Tuple[date, dt_time]:
     if timezone.is_naive(dt):
-        dt = IST.localize(dt)
+        dt = timezone.make_aware(dt, timezone.get_current_timezone())
     dt_ist = dt.astimezone(IST)
-    return dt_ist.date(), dt_time(
-        dt_ist.hour, dt_ist.minute, dt_ist.second, dt_ist.microsecond
-    )
+    return dt_ist.date(), dt_time(dt_ist.hour, dt_ist.minute, dt_ist.second, dt_ist.microsecond)
 
 
 def ist_wallclock_to_project_tz(d: date, t: dt_time) -> datetime:
@@ -296,5 +258,4 @@ def ist_wallclock_to_project_tz(d: date, t: dt_time) -> datetime:
 
 
 def get_next_planned_datetime(prev_dt: datetime, mode: str, freq: int) -> Optional[datetime]:
-    """Alias kept for backwards compatibility."""
     return get_next_planned_date(prev_dt, mode, freq)

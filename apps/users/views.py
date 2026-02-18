@@ -12,8 +12,8 @@ from django.contrib.auth.views import LoginView
 from django.http import HttpRequest, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import NoReverseMatch, reverse, reverse_lazy
-from django.views.decorators.http import require_http_methods
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.views.decorators.http import require_http_methods
 
 from .forms import CustomAuthForm, ProfileForm, UserForm
 from .models import Profile
@@ -31,13 +31,18 @@ def admin_only(user) -> bool:
 
 def _set_kam_access(target_user: User, enabled: bool, *, actor: Optional[User]) -> None:
     """
-    Grant/revoke explicit KAM module access using the Django permission 'kam.access_kam_module'.
-    Idempotent. Logs an audit trail entry.
+    Backward-compatible helper: grant/revoke explicit KAM module access using
+    Django permission 'kam.access_kam_module'.
+
+    NOTE:
+      - If your project has removed the KAM hard-gate, this becomes a no-op
+        (permission may not exist). It is safe and idempotent.
+      - Keep it for deployments where the perm still exists.
     """
     try:
         perm = Permission.objects.get(codename="access_kam_module", content_type__app_label="kam")
     except Permission.DoesNotExist:
-        logger.error("KAM permission 'kam.access_kam_module' not found. Ensure KAM app declares it.")
+        # If you removed the KAM hard gate, permission might not exist anymore.
         return
     except Exception as e:
         logger.exception("Error fetching KAM permission: %s", e)
@@ -104,13 +109,11 @@ def list_users(request: HttpRequest) -> HttpResponse:
 def add_user(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         uf = UserForm(request.POST)
-        # include request.FILES so profile photo can be uploaded
         pf = ProfileForm(request.POST, request.FILES)
 
         if uf.is_valid() and pf.is_valid():
             user = uf.save(commit=False)
             raw_pwd = uf.cleaned_data.get("password")
-            # On create it's guaranteed by the form; still guard:
             if raw_pwd:
                 user.set_password(raw_pwd)
             user.is_staff = False
@@ -122,9 +125,13 @@ def add_user(request: HttpRequest) -> HttpResponse:
             profile.permissions = pf.cleaned_data.get("permissions") or []
             profile.save()
 
-            # Explicit KAM access toggle (Option B: Django permission)
-            enable_kam = bool(request.POST.get("enable_kam"))
-            _set_kam_access(user, enable_kam, actor=request.user)
+            # ---- KAM access strategy ----
+            # KAM now behaves like other modules via Profile.permissions.
+            # For backward compatibility: if a deployment still hard-gates /kam/
+            # using the Django perm, auto-enable it when user has ANY KAM code.
+            perms = set((pf.cleaned_data.get("permissions") or []))
+            has_any_kam = any(str(c).lower().startswith("kam_") for c in perms)
+            _set_kam_access(user, has_any_kam, actor=request.user)
 
             messages.success(request, "User created successfully.")
             return redirect("users:list_users")
@@ -149,14 +156,13 @@ def edit_user(request: HttpRequest, pk: int) -> HttpResponse:
 
     if request.method == "POST":
         uf = UserForm(request.POST, instance=user_obj)
-        # include request.FILES so profile photo updates work
         pf = ProfileForm(request.POST, request.FILES, instance=profile_obj)
 
         if uf.is_valid() and pf.is_valid():
-            user = uf.save(commit=False)  # password not touched by the form
+            user = uf.save(commit=False)
             pwd = uf.cleaned_data.get("password")
             if pwd:
-                user.set_password(pwd)     # only when a new password was provided
+                user.set_password(pwd)
             user.save()
 
             profile = pf.save(commit=False)
@@ -164,16 +170,17 @@ def edit_user(request: HttpRequest, pk: int) -> HttpResponse:
             profile.permissions = pf.cleaned_data.get("permissions") or []
             profile.save()
 
-            # Explicit KAM access toggle (Option B: Django permission)
-            enable_kam = bool(request.POST.get("enable_kam"))
-            _set_kam_access(user, enable_kam, actor=request.user)
+            # ---- KAM access strategy (same as add_user) ----
+            perms = set((pf.cleaned_data.get("permissions") or []))
+            has_any_kam = any(str(c).lower().startswith("kam_") for c in perms)
+            _set_kam_access(user, has_any_kam, actor=request.user)
 
             messages.success(request, "User updated successfully.")
             return redirect("users:list_users")
 
         messages.error(request, "Please correct the errors below.")
     else:
-        uf = UserForm(instance=user_obj)   # no password initial needed anymore
+        uf = UserForm(instance=user_obj)
         pf = ProfileForm(instance=profile_obj)
 
     return render(
@@ -229,7 +236,6 @@ def toggle_active(request: HttpRequest, pk: int) -> HttpResponse:
     if getattr(u, "is_superuser", False) and not getattr(request.user, "is_superuser", False):
         return HttpResponseForbidden("Only a superuser can change another superuser's status.")
 
-    # Flip and persist
     u.is_active = not u.is_active
     u.save(update_fields=["is_active"])
 

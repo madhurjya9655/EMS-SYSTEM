@@ -1,7 +1,8 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\management\commands\send_reminders_and_autoclose.py
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, time as dt_time
 
 import pytz
 from django.conf import settings
@@ -12,10 +13,21 @@ from django.utils import timezone
 from apps.tasks.models import Checklist, Delegation
 from apps.tasks import utils as _utils
 
+# ✅ canonical leave-blocking (time-aware)
+from apps.tasks.utils.blocking import is_user_blocked_at
+
 logger = logging.getLogger(__name__)
 
 IST = pytz.timezone("Asia/Kolkata")
 SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
+
+ASSIGN_HOUR = 10
+ASSIGN_MINUTE = 0
+
+
+def _anchor_10am_ist(today_ist) -> datetime:
+    """10:00 IST anchor datetime for a given IST date."""
+    return IST.localize(datetime.combine(today_ist, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE)))
 
 
 class Command(BaseCommand):
@@ -44,15 +56,16 @@ class Command(BaseCommand):
     def handle(self, *args, **kwargs):
         now = timezone.now()
         today_ist = now.astimezone(IST).date()
+        anchor_ist = _anchor_10am_ist(today_ist)
 
         self.stdout.write(
             self.style.NOTICE(
-                f"[send_reminders_and_autoclose] Running for {today_ist} (IST)"
+                f"[send_reminders_and_autoclose] Running for {today_ist} (IST) @ {anchor_ist:%Y-%m-%d %H:%M IST}"
             )
         )
 
-        cl_sent = self._send_checklist_reminders(today_ist)
-        dl_sent = self._send_delegation_reminders(today_ist)
+        cl_sent = self._send_checklist_reminders(today_ist, anchor_ist)
+        dl_sent = self._send_delegation_reminders(today_ist, anchor_ist)
         closed = self._auto_close_checklists(now)
 
         self.stdout.write(self.style.SUCCESS(f"Checklist reminders sent: {cl_sent}"))
@@ -62,19 +75,20 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------ #
     # CHECKLIST REMINDERS (EVERY DAY 10:00 IST UNTIL COMPLETED)
     # ------------------------------------------------------------------ #
-    def _send_checklist_reminders(self, today_ist):
+    def _send_checklist_reminders(self, today_ist, anchor_ist: datetime) -> int:
         """
         For each Checklist:
           • set_reminder = True
           • status != 'Completed'
+          • is_skipped_due_to_leave = False (tombstone excluded)
           • today's date >= (planned_date.date - remind_before_days)
 
-        One reminder per day (because this command runs once per day).
-        Time-of-day is controlled by cron/Celery (10:00 AM IST).
+        Leave rule:
+          • If assignee is blocked at 10:00 IST today -> DO NOT email today.
         """
         qs = (
             Checklist.objects.select_related("assign_to", "assign_by")
-            .filter(set_reminder=True)
+            .filter(set_reminder=True, is_skipped_due_to_leave=False)
             .exclude(status="Completed")
         )
 
@@ -88,7 +102,11 @@ class Command(BaseCommand):
 
                 assignee = getattr(task, "assign_to", None)
                 to_email = (getattr(assignee, "email", "") or "").strip()
-                if not to_email:
+                if not assignee or not to_email:
+                    continue
+
+                # 🔒 Leave guard at 10:00 IST for today
+                if is_user_blocked_at(assignee, anchor_ist):
                     continue
 
                 # Determine when reminders should start
@@ -132,21 +150,25 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------ #
     # DELEGATION REMINDERS (EVERY DAY 10:00 IST UNTIL COMPLETED)
     # ------------------------------------------------------------------ #
-    def _send_delegation_reminders(self, today_ist):
+    def _send_delegation_reminders(self, today_ist, anchor_ist: datetime) -> int:
         """
         For each Delegation:
           • set_reminder = True
           • status != 'Completed'
+          • is_skipped_due_to_leave = False (tombstone excluded)
           • today's date >= reminder start date
 
         Reminder start date:
           • if reminder_time set  -> date(reminder_time in IST)
           • elif planned_date set -> date(planned_date in IST)
           • else                  -> today
+
+        Leave rule:
+          • If assignee is blocked at 10:00 IST today -> DO NOT email today.
         """
         qs = (
             Delegation.objects.select_related("assign_to", "assign_by")
-            .filter(set_reminder=True)
+            .filter(set_reminder=True, is_skipped_due_to_leave=False)
             .exclude(status="Completed")
         )
 
@@ -160,11 +182,15 @@ class Command(BaseCommand):
 
                 assignee = getattr(dl, "assign_to", None)
                 to_email = (getattr(assignee, "email", "") or "").strip()
-                if not to_email:
+                if not assignee or not to_email:
+                    continue
+
+                # 🔒 Leave guard at 10:00 IST for today
+                if is_user_blocked_at(assignee, anchor_ist):
                     continue
 
                 # Determine when reminders should start
-                if dl.reminder_time:
+                if getattr(dl, "reminder_time", None):
                     start_ist = timezone.localtime(dl.reminder_time, IST)
                     start_date = start_ist.date()
                 elif dl.planned_date:
@@ -199,13 +225,14 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------ #
     # AUTO-CLOSE CHECKLISTS
     # ------------------------------------------------------------------ #
-    def _auto_close_checklists(self, now):
+    def _auto_close_checklists(self, now) -> int:
         """
-        Keep the old auto-close behaviour:
+        Auto-close behaviour:
 
           • checklist_auto_close = True
           • checklist_auto_close_days >= 1
           • status = 'Pending'
+          • is_skipped_due_to_leave = False (tombstone excluded)
           • planned_date + checklist_auto_close_days <= now
 
         When closing, mark status='Completed' and set completed_at.
@@ -214,6 +241,7 @@ class Command(BaseCommand):
             status="Pending",
             checklist_auto_close=True,
             checklist_auto_close_days__gte=1,
+            is_skipped_due_to_leave=False,
         )
 
         closed = 0

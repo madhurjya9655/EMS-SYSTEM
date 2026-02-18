@@ -1,4 +1,6 @@
-# apps/tasks/views.py
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
+from __future__ import annotations
+
 import csv
 import logging
 import pytz
@@ -30,7 +32,6 @@ from apps.users.permissions import has_permission
 from apps.settings.models import Holiday
 
 # LeaveRequest/Leave* may cause circular imports at import-time in some setups.
-# Make this import tolerant and fall back to None; callsites already guard via getattr/apps.get_model.
 try:
     from apps.leave.models import LeaveHandover, LeaveStatus, LeaveRequest  # noqa: F401
 except Exception:  # pragma: no cover
@@ -55,10 +56,10 @@ from .utils import (
 )
 from .recurrence_utils import preserve_first_occurrence_time
 
-# ✅ Central leave-blocking (date- & time-aware)
-from apps.tasks.utils.blocking import (  # ← kept original import path (no logic change)
-    is_user_blocked,         # date-level, 10:00 IST anchor (for CL/DL visibility)
-    is_user_blocked_at,      # time-level, exact instant in IST (for Help Tickets / "right now")
+# ✅ Single source of truth: leave blocking
+from apps.tasks.utils.blocking import (
+    is_user_blocked,         # date-level @ 10:00 IST anchor (legacy visibility)
+    is_user_blocked_at,      # time-aware exact instant (preferred)
 )
 
 logger = logging.getLogger(__name__)
@@ -73,10 +74,12 @@ SEND_RECUR_EMAILS_ONLY_AT_10AM = getattr(settings, "SEND_RECUR_EMAILS_ONLY_AT_10
 RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
 
 BULK_BATCH_SIZE = 500
-
 site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
 
+# -----------------------------------------------------------------------------
+# Threads / utilities
+# -----------------------------------------------------------------------------
 def _background(target, /, *args, **kwargs):
     thread_name = kwargs.pop("thread_name", "bulk-bg")
 
@@ -132,9 +135,7 @@ def robust_db_operation(max_retries=3, base_delay=0.05):
                         logger.warning("DB locked; retrying %s/%s in %.3fs", attempt + 1, max_retries, delay)
                         time.sleep(delay)
                         continue
-                    else:
-                        # Not a lock, or out of retries -> re-raise
-                        raise
+                    raise
             if last is not None:
                 raise last
             return None
@@ -162,9 +163,11 @@ def _minutes_between(now_dt: datetime, planned_dt: datetime) -> int:
     return max(int((now_dt - planned_dt).total_seconds() // 60), 0)
 
 
+# -----------------------------------------------------------------------------
+# Date/holiday helpers
+# -----------------------------------------------------------------------------
 def is_working_day(d: date) -> bool:
-    # Sunday (weekday=6) is off
-    if d.weekday() == 6:
+    if d.weekday() == 6:  # Sunday
         return False
     return not Holiday.objects.filter(date=d).exists()
 
@@ -175,13 +178,44 @@ def next_working_day(d: date) -> date:
     return d
 
 
-# Next working day that also skips the assignee's leave window (for Checklist/Delegation only)
+def _ist_date(dt: datetime) -> Optional[date]:
+    if not dt:
+        return None
+    if timezone.is_aware(dt):
+        return dt.astimezone(IST).date()
+    return IST.localize(dt).date()
+
+
+def _as_ist_aware(dt: datetime) -> datetime:
+    """
+    Ensure dt is IST-aware.
+    If naive, assume project timezone then convert to IST.
+    """
+    if timezone.is_aware(dt):
+        return dt.astimezone(IST)
+    try:
+        proj = timezone.get_current_timezone()
+        aware = timezone.make_aware(dt, proj)
+        return aware.astimezone(IST)
+    except Exception:
+        return IST.localize(dt)
+
+
+# -----------------------------------------------------------------------------
+# Leave-aware working day shift (Checklist/Delegation only)
+# -----------------------------------------------------------------------------
 def next_working_day_skip_leaves(assign_to: User, d: date) -> date:
-    # FIX: guard against projects where LeaveRequest doesn't expose helper method
-    is_blocked = getattr(LeaveRequest, "is_user_blocked_on", None)
+    """
+    Shift forward until:
+      - working day (not holiday + not Sunday)
+      - NOT blocked by leave at 10:00 IST for that date
+    """
     for _ in range(0, 120):
-        if is_working_day(d) and (not is_blocked or not is_blocked(assign_to, d)):
-            return d
+        if is_working_day(d):
+            anchor = datetime.combine(d, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE))
+            anchor_ist = IST.localize(anchor)
+            if not is_user_blocked_at(assign_to, anchor_ist):
+                return d
         d += timedelta(days=1)
     return d
 
@@ -199,15 +233,9 @@ def span_bounds(d_from: date, d_to_inclusive: date):
     return start, end
 
 
-def _ist_date(dt: datetime) -> Optional[date]:
-    if not dt:
-        return None
-    if timezone.is_aware(dt):
-        return dt.astimezone(IST).date()
-    # FIX: don't localize an already-aware dt; handled above
-    return IST.localize(dt).date()
-
-
+# -----------------------------------------------------------------------------
+# Normalizers
+# -----------------------------------------------------------------------------
 def _normalize_task_type(val) -> Optional[str]:
     if val is None:
         return None
@@ -224,6 +252,9 @@ def _normalize_task_type(val) -> Optional[str]:
     return None
 
 
+# -----------------------------------------------------------------------------
+# Handover helpers
+# -----------------------------------------------------------------------------
 def _get_handover_tasks_for_user(user, today_date):
     try:
         LeaveHandover = apps.get_model("leave", "LeaveHandover")
@@ -320,10 +351,13 @@ def _get_handover_rows_for_user(user, today_date):
     return rows
 
 
+# -----------------------------------------------------------------------------
+# Visibility gates (10 AM IST rule for CL/DL; HT immediate)
+# -----------------------------------------------------------------------------
 def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     if not task_dt:
         return False
-    dt_ist = task_dt.astimezone(IST) if timezone.is_aware(task_dt) else IST.localize(task_dt)
+    dt_ist = _as_ist_aware(task_dt)
     task_date = dt_ist.date()
     today = now_ist.date()
     if task_date < today:
@@ -334,11 +368,10 @@ def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     return now_ist >= anchor_10am
 
 
-# Use same 10AM gate for Delegation (today/past), Help Tickets are immediate
 def _should_show_today_or_past(task_dt: datetime, now_ist: datetime) -> bool:
     if not task_dt:
         return False
-    dt_ist = task_dt.astimezone(IST) if timezone.is_aware(task_dt) else IST.localize(task_dt)
+    dt_ist = _as_ist_aware(task_dt)
     d = dt_ist.date()
     today = now_ist.date()
     if d < today:
@@ -349,6 +382,9 @@ def _should_show_today_or_past(task_dt: datetime, now_ist: datetime) -> bool:
     return now_ist >= anchor_10am
 
 
+# -----------------------------------------------------------------------------
+# Parsing helpers (unchanged)
+# -----------------------------------------------------------------------------
 def parse_datetime_flexible(value):
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
@@ -549,9 +585,11 @@ user_cache = UserCache()
 can_create = lambda u: u.is_superuser or u.groups.filter(name__in=["Admin", "Manager", "EA", "CEO"]).exists()
 
 
-# ---- NEW: minimal helper to enforce awareness at save boundaries (no logic change)
+# -----------------------------------------------------------------------------
+# NEW: enforce awareness at save boundaries
+# -----------------------------------------------------------------------------
 def ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
-    """Make a naive datetime aware in the current timezone; leave aware/None untouched."""
+    """Make naive datetime aware in the project timezone; leave aware/None untouched."""
     if not dt:
         return dt
     if timezone.is_aware(dt):
@@ -563,12 +601,14 @@ def ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
     return timezone.make_aware(dt, tz)
 
 
-# ---- NEW: “void” (soft-delete) helper to prevent recurring re-materialization
+# -----------------------------------------------------------------------------
+# NEW: “void” helper to prevent recurring re-materialization
+# -----------------------------------------------------------------------------
 def _void_task_row(obj) -> None:
     """
-    Soft-delete / tombstone a task occurrence so:
-      - it disappears from dashboards/lists/digests (filtered by is_skipped_due_to_leave=False)
-      - it is NOT recreated by recurring materializers (row still exists)
+    Soft-delete / tombstone:
+      - excluded from dashboards/lists (filter is_skipped_due_to_leave=False)
+      - NOT recreated by recurring materializers (row still exists)
     """
     if not obj:
         return
@@ -579,6 +619,9 @@ def _void_task_row(obj) -> None:
     obj.delete()
 
 
+# -----------------------------------------------------------------------------
+# Bulk upload: Checklist
+# -----------------------------------------------------------------------------
 @robust_db_operation()
 def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, start_idx):
     task_objects, errors = [], []
@@ -604,15 +647,13 @@ def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, star
                 continue
             planned_dt = preserve_first_occurrence_time(planned_dt)
 
-            # Enforce holiday/leave blocking for bulk uploads (shift forward)
-            planned_ist_date = (planned_dt if timezone.is_aware(planned_dt) else IST.localize(planned_dt)).astimezone(IST).date()
+            planned_ist_date = _as_ist_aware(ensure_aware(planned_dt)).date()  # type: ignore[arg-type]
             safe_date = next_working_day_skip_leaves(assign_to, planned_ist_date)
             if safe_date != planned_ist_date:
                 planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(
                     timezone.get_current_timezone()
                 )
 
-            # >>> Ensure timezone awareness before saving to model
             planned_dt = ensure_aware(planned_dt)
 
             message = _clean_str(row.get("Message"))
@@ -708,6 +749,9 @@ def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, star
     return created, errors
 
 
+# -----------------------------------------------------------------------------
+# Bulk upload: Delegation
+# -----------------------------------------------------------------------------
 @robust_db_operation()
 def process_delegation_batch_excel_ultra_optimized(batch_df, assign_by_user, start_idx):
     task_objects, errors = [], []
@@ -733,15 +777,13 @@ def process_delegation_batch_excel_ultra_optimized(batch_df, assign_by_user, sta
                 continue
             planned_dt = preserve_first_occurrence_time(planned_dt)
 
-            # Shift to next safe day (holiday + leave)
-            planned_ist_date = (planned_dt if timezone.is_aware(planned_dt) else IST.localize(planned_dt)).astimezone(IST).date()
+            planned_ist_date = _as_ist_aware(ensure_aware(planned_dt)).date()  # type: ignore[arg-type]
             safe_date = next_working_day_skip_leaves(assign_to, planned_ist_date)
             if safe_date != planned_ist_date:
                 planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(
                     timezone.get_current_timezone()
                 )
 
-            # >>> Ensure timezone awareness before saving to model
             planned_dt = ensure_aware(planned_dt)
 
             priority = (_clean_str(row.get("Priority")) or "Low").title()
@@ -847,11 +889,10 @@ def process_delegation_bulk_upload_excel_friendly(file, assign_by_user):
 
 def _send_bulk_emails_by_ids(task_ids, *, task_type: str):
     """
-    NOTE: We now respect SEND_RECUR_EMAILS_ONLY_AT_10AM.
-    If True (default), we DO NOT send immediate assignee emails here; 10AM schedulers/signals will handle it.
+    If SEND_RECUR_EMAILS_ONLY_AT_10AM is True (default), DO NOT send immediate assignee emails here.
     """
     if SEND_RECUR_EMAILS_ONLY_AT_10AM:
-        return  # skip immediate fan-out; rely on 10 AM flow
+        return
 
     Model = Checklist if task_type == "Checklist" else Delegation
     CHUNK = 100
@@ -904,10 +945,12 @@ def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: O
     _background(_safe_call, thread_name="bulk-admin-summary")
 
 
+# -----------------------------------------------------------------------------
+# Checklist views (only changes: unified leave blocking + aware dt)
+# -----------------------------------------------------------------------------
 @has_permission("list_checklist")
 def list_checklist(request):
     if request.method == "POST":
-        # <<< keep current filters after POST by redirecting to the submitted return_url
         return_url = request.POST.get("return_url") or reverse("tasks:list_checklist")
 
         if request.POST.get("action") == "delete_series" and request.POST.get("pk"):
@@ -1023,34 +1066,34 @@ def add_checklist(request):
         form = ChecklistForm(request.POST, request.FILES)
         if form.is_valid():
             planned_date = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
-            planned_date = ensure_aware(planned_date)  # <<< ensure aware
+            planned_date = ensure_aware(planned_date)
             assignee = form.cleaned_data.get("assign_to")
 
-            # hard-block holidays and leave (date-level @ 10:00 IST)
-            ist_day = planned_date.astimezone(IST).date() if planned_date else None
+            ist_day = _as_ist_aware(planned_date).date() if planned_date else None
             if ist_day and not is_working_day(ist_day):
                 messages.error(request, "This day is holiday")
                 return render(request, "tasks/add_checklist.html", {"form": form})
-            if assignee and ist_day and getattr(LeaveRequest, "is_user_blocked_on", lambda *a, **k: False)(assignee, ist_day):
-                messages.error(request, "Assignee is on leave during this period.")
-                return render(request, "tasks/add_checklist.html", {"form": form})
+
+            # ✅ Leave blocking: date-level anchor (10:00 IST) to match CL/DL rules
+            if assignee and ist_day:
+                anchor_ist = IST.localize(datetime.combine(ist_day, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE)))
+                if is_user_blocked_at(assignee, anchor_ist):
+                    messages.error(request, "Assignee is on leave during this period.")
+                    return render(request, "tasks/add_checklist.html", {"form": form})
 
             obj = form.save(commit=False)
             obj.planned_date = planned_date
             obj.save()
             form.save_m2m()
 
-            # DO NOT send assignee email immediately; 10 AM scheduler will do it.
             try:
                 send_checklist_admin_confirmation(task=obj, subject_prefix="Checklist Task Assignment")
             except Exception as e:
                 logger.error("Admin confirmation email failed: %s", e)
 
             messages.success(request, f"Checklist task '{obj.task_name}' created and will notify the assignee at 10:00 AM on the due day.")
-            # <<< keep current filters by honoring ?next=
             return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
     else:
-        # ✅ FIX: use keyword argument, not callable
         form = ChecklistForm(initial={"assign_by": request.user})
     return render(request, "tasks/add_checklist.html", {"form": form})
 
@@ -1063,24 +1106,25 @@ def edit_checklist(request, pk):
         form = ChecklistForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
             planned_date = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
-            planned_date = ensure_aware(planned_date)  # <<< ensure aware
+            planned_date = ensure_aware(planned_date)
             assignee = form.cleaned_data.get("assign_to")
 
-            # block rescheduling to holidays / leave
-            ist_day = planned_date.astimezone(IST).date() if planned_date else None
+            ist_day = _as_ist_aware(planned_date).date() if planned_date else None
             if ist_day and not is_working_day(ist_day):
                 messages.error(request, "This day is holiday")
                 return render(request, "tasks/add_checklist.html", {"form": form})
-            if assignee and ist_day and getattr(LeaveRequest, "is_user_blocked_on", lambda *a, **k: False)(assignee, ist_day):
-                messages.error(request, "Assignee is on leave during this period.")
-                return render(request, "tasks/add_checklist.html", {"form": form})
+
+            if assignee and ist_day:
+                anchor_ist = IST.localize(datetime.combine(ist_day, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE)))
+                if is_user_blocked_at(assignee, anchor_ist):
+                    messages.error(request, "Assignee is on leave during this period.")
+                    return render(request, "tasks/add_checklist.html", {"form": form})
 
             obj2 = form.save(commit=False)
             obj2.planned_date = planned_date
             obj2.save()
             form.save_m2m()
 
-            # Do not email assignee immediately; only admin confirmations + old-assignee notice if changed
             try:
                 if old_assignee and obj2.assign_to_id != old_assignee.id:
                     send_checklist_unassigned_notice(task=obj2, old_user=old_assignee)
@@ -1091,7 +1135,6 @@ def edit_checklist(request, pk):
                 logger.error("Update emails failed: %s", e)
 
             messages.success(request, f"Checklist task '{obj2.task_name}' updated successfully! Assignee will be notified at 10:00 AM on the due day.")
-            # <<< keep current filters by honoring ?next=
             return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
     else:
         form = ChecklistForm(instance=obj)
@@ -1119,7 +1162,6 @@ def reassign_checklist(request, pk):
             obj.assign_to = User.objects.get(pk=uid)
             obj.save()
 
-            # No immediate assignee email; keep old-assignee notice + admin confirmation
             try:
                 if old_assignee and old_assignee.id != obj.assign_to_id:
                     send_checklist_unassigned_notice(task=obj, old_user=old_assignee)
@@ -1128,7 +1170,6 @@ def reassign_checklist(request, pk):
                 logger.error("Reassignment emails failed: %s", e)
 
             messages.success(request, f"Task reassigned to {obj.assign_to.get_full_name() or obj.assign_to.username} (assignee will be notified at 10:00 AM on the due day).")
-            # <<< keep current filters by honoring ?next=
             return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
     return render(request, "tasks/reassign_checklist.html", {"object": obj, "all_users": User.objects.filter(is_active=True).order_by("username")})
 
@@ -1183,23 +1224,28 @@ def complete_checklist(request, pk):
     return redirect(request.GET.get("next", "dashboard:home"))
 
 
+# -----------------------------------------------------------------------------
+# Delegation views (unified leave blocking)
+# -----------------------------------------------------------------------------
 @has_permission("add_delegation")
 def add_delegation(request):
     if request.method == "POST":
         form = DelegationForm(request.POST, request.FILES)
         if form.is_valid():
             planned_dt = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
-            planned_dt = ensure_aware(planned_dt)  # <<< ensure aware
+            planned_dt = ensure_aware(planned_dt)
             assignee = form.cleaned_data.get("assign_to")
 
-            # hard-block holidays and leave
-            ist_day = planned_dt.astimezone(IST).date() if planned_dt else None
+            ist_day = _as_ist_aware(planned_dt).date() if planned_dt else None
             if ist_day and not is_working_day(ist_day):
                 messages.error(request, "This day is holiday")
                 return render(request, "tasks/add_delegation.html", {"form": form})
-            if assignee and ist_day and getattr(LeaveRequest, "is_user_blocked_on", lambda *a, **k: False)(assignee, ist_day):
-                messages.error(request, "Assignee is on leave during this period.")
-                return render(request, "tasks/add_delegation.html", {"form": form})
+
+            if assignee and ist_day:
+                anchor_ist = IST.localize(datetime.combine(ist_day, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE)))
+                if is_user_blocked_at(assignee, anchor_ist):
+                    messages.error(request, "Assignee is on leave during this period.")
+                    return render(request, "tasks/add_delegation.html", {"form": form})
 
             obj = form.save(commit=False)
             obj.planned_date = planned_dt
@@ -1207,20 +1253,15 @@ def add_delegation(request):
             obj.frequency = None
             obj.save()
 
-            # DO NOT email assignee immediately; signals handle immediate + 10:00 reminder logic.
             messages.success(request, f"Delegation task '{obj.task_name}' created. Assignee will be notified appropriately.")
             return redirect("tasks:list_delegation")
     else:
-        # ✅ FIX: use keyword argument, not callable
         form = DelegationForm(initial={"assign_by": request.user})
     return render(request, "tasks/add_delegation.html", {"form": form})
 
 
 @has_permission("list_delegation")
 def list_delegation(request):
-    """
-    Delegation list with persistent filters.
-    """
     if request.method == "POST":
         action = request.POST.get("action", "")
         if action == "bulk_delete":
@@ -1238,11 +1279,9 @@ def list_delegation(request):
             else:
                 messages.warning(request, "No delegation tasks were selected for deletion.")
             return redirect(return_url)
-        else:
-            messages.warning(request, "Invalid action specified.")
-            return redirect("tasks:list_delegation")
+        messages.warning(request, "Invalid action specified.")
+        return redirect("tasks:list_delegation")
 
-    # Start from ALL, then apply filters. Default behavior keeps Pending unless status filter says otherwise.
     base_qs = Delegation.objects.select_related("assign_by", "assign_to").filter(is_skipped_due_to_leave=False)
     status_param = (request.GET.get("status") or "").strip()
 
@@ -1273,10 +1312,7 @@ def list_delegation(request):
         today = timezone.localdate()
         qs = qs.filter(planned_date__date=today)
 
-    agg = qs.aggregate(
-        assign_time=Sum("time_per_task_minutes"),
-        actual_time=Sum("actual_duration_minutes"),
-    )
+    agg = qs.aggregate(assign_time=Sum("time_per_task_minutes"), actual_time=Sum("actual_duration_minutes"))
     assign_time = agg.get("assign_time") or 0
     actual_time = agg.get("actual_time") or 0
 
@@ -1302,16 +1338,19 @@ def edit_delegation(request, pk):
         form = DelegationForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
             planned_dt = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
-            planned_dt = ensure_aware(planned_dt)  # <<< ensure aware
+            planned_dt = ensure_aware(planned_dt)
             assignee = form.cleaned_data.get("assign_to")
 
-            ist_day = planned_dt.astimezone(IST).date() if planned_dt else None
+            ist_day = _as_ist_aware(planned_dt).date() if planned_dt else None
             if ist_day and not is_working_day(ist_day):
                 messages.error(request, "This day is holiday")
                 return render(request, "tasks/add_delegation.html", {"form": form})
-            if assignee and ist_day and getattr(LeaveRequest, "is_user_blocked_on", lambda *a, **k: False)(assignee, ist_day):
-                messages.error(request, "Assignee is on leave during this period.")
-                return render(request, "tasks/add_delegation.html", {"form": form})
+
+            if assignee and ist_day:
+                anchor_ist = IST.localize(datetime.combine(ist_day, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE)))
+                if is_user_blocked_at(assignee, anchor_ist):
+                    messages.error(request, "Assignee is on leave during this period.")
+                    return render(request, "tasks/add_delegation.html", {"form": form})
 
             obj2 = form.save(commit=False)
             obj2.planned_date = planned_dt
@@ -1385,45 +1424,40 @@ def complete_delegation(request, pk):
     return redirect(request.GET.get("next", "dashboard:home"))
 
 
+# -----------------------------------------------------------------------------
+# Help tickets: time-aware blocking
+# -----------------------------------------------------------------------------
 @login_required
 def add_help_ticket(request):
     if request.method == "POST":
         form = HelpTicketForm(request.POST, request.FILES)
         if form.is_valid():
-            planned_date = form.cleaned_data.get("planned_date")
-            planned_date = ensure_aware(planned_date)  # <<< ensure aware
-            planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
+            planned_date = ensure_aware(form.cleaned_data.get("planned_date"))
+            planned_date_local = _as_ist_aware(planned_date).date() if planned_date else None
             assignee = form.cleaned_data.get("assign_to")
 
-            # Block creation on holidays / Sundays ONLY (as before) …
             if planned_date_local and not is_working_day(planned_date_local):
                 messages.error(request, "This is a holiday; you cannot add on this day.")
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "add", "can_create": can_create(request.user)})
 
-            # …and CRITICALLY block if the assignee is ON LEAVE at the time of assignment
             now_ist = timezone.now().astimezone(IST)
             if assignee and is_user_blocked_at(assignee, now_ist):
                 messages.error(request, "Assignee is currently on leave. Please reassign or create after the leave window.")
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "add", "can_create": can_create(request.user)})
 
-            # Also block if the planned timestamp itself lies within the leave window
             if assignee and planned_date and is_user_blocked_at(assignee, planned_date.astimezone(IST)):
                 messages.error(request, "Planned time falls within assignee’s leave window. Choose another time or reassign.")
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "add", "can_create": can_create(request.user)})
 
             ticket = form.save(commit=False)
-            # make sure instance field is aware even if form returned naive
             ticket.planned_date = ensure_aware(ticket.planned_date)
             ticket.assign_by = request.user
             ticket.save()
 
-            complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
             try:
-                # IMPORTANT: DO NOT send the assignee mail here (signal handles create).
-                # Still send admin confirmation.
                 send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Assignment")
             except Exception as e:
-                logger.error("Help-ticket assignment/admin emails failed: %s", e)
+                logger.error("Help-ticket admin email failed: %s", e)
 
             messages.success(request, f"Help ticket '{ticket.title}' created and assigned successfully!")
             return redirect("tasks:list_help_ticket")
@@ -1439,17 +1473,14 @@ def edit_help_ticket(request, pk):
     if request.method == "POST":
         form = HelpTicketForm(request.POST, request.FILES, instance=obj)
         if form.is_valid():
-            planned_date = form.cleaned_data.get("planned_date")
-            planned_date = ensure_aware(planned_date)  # <<< ensure aware
-            planned_date_local = planned_date.astimezone(IST).date() if planned_date else None
+            planned_date = ensure_aware(form.cleaned_data.get("planned_date"))
+            planned_date_local = _as_ist_aware(planned_date).date() if planned_date else None
             new_assignee = form.cleaned_data.get("assign_to")
 
-            # Block moving onto holidays/Sundays ONLY
             if planned_date_local and not is_working_day(planned_date_local):
                 messages.error(request, "This is a holiday; you cannot add on this day.")
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "edit", "can_create": can_create(request.user)})
 
-            # Leave blocking: if changing assignee/time, prevent assigning into an active leave window
             now_ist = timezone.now().astimezone(IST)
             if new_assignee and is_user_blocked_at(new_assignee, now_ist):
                 messages.error(request, "Assignee is currently on leave. Please reassign or update after the leave window.")
@@ -1460,8 +1491,9 @@ def edit_help_ticket(request, pk):
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "edit", "can_create": can_create(request.user)})
 
             ticket = form.save(commit=False)
-            ticket.planned_date = ensure_aware(ticket.planned_date)  # <<< ensure aware
+            ticket.planned_date = ensure_aware(ticket.planned_date)
             ticket.save()
+
             complete_url = f"{site_url}{reverse('tasks:note_help_ticket', args=[ticket.id])}"
             try:
                 if old_assignee and ticket.assign_to_id != old_assignee.id:
@@ -1469,7 +1501,6 @@ def edit_help_ticket(request, pk):
                     send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Reassigned")
                     send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Reassigned")
                 else:
-                    # On edit (same assignee), notify assignee + admin
                     send_help_ticket_assignment_to_user(ticket=ticket, complete_url=complete_url, subject_prefix="Help Ticket Updated")
                     send_help_ticket_admin_confirmation(ticket=ticket, subject_prefix="Help Ticket Updated")
             except Exception as e:
@@ -1535,7 +1566,6 @@ def list_help_ticket(request):
             "current_tab": "all",
             "can_create": can_create(request.user),
             "users": User.objects.filter(is_active=True).order_by("username"),
-            # FIX: be tolerant if STATUS_CHOICES is absent on model in some envs
             "status_choices": getattr(HelpTicket, "STATUS_CHOICES", (("Open", "Open"), ("Closed", "Closed"))),
         },
     )
@@ -1550,8 +1580,7 @@ def assigned_to_me(request):
         .order_by("-planned_date")
     )
 
-    # Leave-blocking for Help Tickets on personal "assigned to me" view:
-    # If user is on leave RIGHT NOW, hide all items.
+    # If user is on leave RIGHT NOW, hide all help tickets.
     if is_user_blocked_at(request.user, timezone.now().astimezone(IST)):
         items = HelpTicket.objects.none()
 
@@ -1590,14 +1619,7 @@ def assigned_by_me(request):
         t.assign_by_display = (t.assign_by.get_full_name() or t.assign_by.username) if t.assign_by else "-"
         t.assign_to_display = (t.assign_to.get_full_name() or t.assign_to.username) if t.assign_to else "-"
 
-    return render(
-        request,
-        "tasks/list_help_ticket_assigned_by.html",
-        {
-            "items": items,
-            "current_tab": "assigned_by",
-        },
-    )
+    return render(request, "tasks/list_help_ticket_assigned_by.html", {"items": items, "current_tab": "assigned_by"})
 
 
 @login_required
@@ -1645,7 +1667,6 @@ def note_help_ticket(request, pk):
 
         messages.success(request, f"Note saved for HT-{ticket.id}.")
         return redirect(request.GET.get("next", reverse("tasks:assigned_to_me")))
-    # FIX: render a dedicated note template instead of the list (avoids context assumptions)
     return render(
         request,
         "tasks/note_help_ticket.html",
@@ -1809,8 +1830,9 @@ def close_help_ticket(request, pk: int):
     return redirect(request.GET.get("next", reverse("tasks:assigned_to_me")))
 
 
-# --------------- DASHBOARD (visibility rules + leave gating) ----------------
-
+# -----------------------------------------------------------------------------
+# DASHBOARD (visibility + leave gating)
+# -----------------------------------------------------------------------------
 @login_required
 def dashboard_home(request):
     now_ist = timezone.now().astimezone(IST)
@@ -1818,12 +1840,10 @@ def dashboard_home(request):
 
     logger.info(_safe_console_text(f"Dashboard accessed by {request.user.username} at {now_ist.strftime('%Y-%m-%d %H:%M:%S IST')}"))
 
-    # Weekly scorecards (Mon..Sun)
     start_current = today_ist - timedelta(days=today_ist.weekday())
     start_prev = start_current - timedelta(days=7)
     end_prev = start_current - timedelta(days=1)
 
-    # Scorecards
     try:
         curr_chk = Checklist.objects.filter(assign_to=request.user, planned_date__date__gte=start_current, planned_date__date__lte=today_ist, status='Completed', is_skipped_due_to_leave=False).count()
         prev_chk = Checklist.objects.filter(assign_to=request.user, planned_date__date__gte=start_prev, planned_date__date__lte=end_prev, status='Completed', is_skipped_due_to_leave=False).count()
@@ -1841,7 +1861,6 @@ def dashboard_home(request):
         'help_ticket': {'previous': prev_help,  'current': curr_help},
     }
 
-    # Pending counts
     try:
         pending_tasks = {
             'checklist':   Checklist.objects.filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False).count(),
@@ -1852,9 +1871,7 @@ def dashboard_home(request):
         logger.error(_safe_console_text(f"Error calculating pending counts: {e}"))
         pending_tasks = {'checklist': 0, 'delegation': 0, 'help_ticket': 0}
 
-    selected = request.GET.get('task_type')
     today_only = (request.GET.get('today') == '1' or request.GET.get('today_only') == '1')
-
     handed_over = _get_handover_rows_for_user(request.user, today_ist)
 
     try:
@@ -1900,11 +1917,11 @@ def dashboard_home(request):
                 if getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist)
             ]
 
-        # Leave-filter for Checklist: hide any date that is blocked (10:00 IST anchor)
-        try:
-            checklist_qs = [c for c in checklist_qs if not is_user_blocked(request.user, _ist_date(c.planned_date))]
-        except Exception:
-            pass
+        # ✅ Leave filter: hide checklists whose planned DATE is blocked at 10:00 IST
+        checklist_qs = [
+            c for c in checklist_qs
+            if (_ist_date(c.planned_date) is not None) and not is_user_blocked(request.user, _ist_date(c.planned_date))
+        ]
 
         # ------------------- Delegations -------------------
         if today_only:
@@ -1942,11 +1959,11 @@ def dashboard_home(request):
         else:
             delegation_qs = [d for d in delegation_qs if _ist_date(d.planned_date) == today_ist and (getattr(d, 'is_handover', False) or _should_show_today_or_past(d.planned_date, now_ist))]
 
-        # Leave-filter for Delegation: hide any date that is blocked (10:00 IST anchor)
-        try:
-            delegation_qs = [d for d in delegation_qs if not is_user_blocked(request.user, _ist_date(d.planned_date))]
-        except Exception:
-            pass
+        # ✅ Leave filter: hide delegations whose planned DATE is blocked at 10:00 IST
+        delegation_qs = [
+            d for d in delegation_qs
+            if (_ist_date(d.planned_date) is not None) and not is_user_blocked(request.user, _ist_date(d.planned_date))
+        ]
 
         # ------------------- Help Tickets -------------------
         if today_only:
@@ -1984,12 +2001,9 @@ def dashboard_home(request):
         else:
             help_ticket_qs = [h for h in help_ticket_qs if _ist_date(h.planned_date) == today_ist]
 
-        # Leave-filter for Help Tickets: if user is on leave RIGHT NOW, hide all
-        try:
-            if is_user_blocked_at(request.user, now_ist):
-                help_ticket_qs = []
-        except Exception:
-            pass
+        # ✅ Leave filter for HT: if user is blocked RIGHT NOW, hide all HT
+        if is_user_blocked_at(request.user, now_ist):
+            help_ticket_qs = []
 
         logger.info(_safe_console_text(
             f"Dashboard filtering for {request.user.username}: today_only={today_only} | "
@@ -2002,28 +2016,9 @@ def dashboard_home(request):
         delegation_qs = []
         help_ticket_qs = []
 
-    # ✅ FINAL LEAVE GUARD (FIXED):
-    # If the user is on leave today, hide ONLY today's CL/DL (respecting half-day by 10:00 gate elsewhere).
-    # DO NOT hide overdue items (they must remain visible).
-    try:
-        if is_user_blocked(request.user, today_ist):
-            checklist_qs = [c for c in checklist_qs if _ist_date(c.planned_date) and _ist_date(c.planned_date) < today_ist]
-            delegation_qs = [d for d in delegation_qs if _ist_date(d.planned_date) and _ist_date(d.planned_date) < today_ist]
-    except Exception:
-        pass
-
     tasks = checklist_qs if request.GET.get('task_type') not in ('delegation', 'help_ticket') else (
         delegation_qs if request.GET.get('task_type') == 'delegation' else help_ticket_qs
     )
-
-    if tasks:
-        for i, task in enumerate(tasks[:3], start=1):
-            tdt = task.planned_date.astimezone(IST) if task.planned_date else None
-            handover_info = " (HANDOVER)" if getattr(task, 'is_handover', False) else ""
-            logger.info(_safe_console_text(
-                f"  - Sample task {i}: '{getattr(task, 'task_name', getattr(task, 'title', ''))}' "
-                f"planned {tdt.strftime('%Y-%m-%d %H:%M IST') if tdt else 'No date'}{handover_info}"
-            ))
 
     return render(request, 'dashboard/dashboard.html', {
         'week_score':    week_score,

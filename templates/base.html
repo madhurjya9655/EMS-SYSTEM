@@ -1,3 +1,6 @@
+<!--
+FILE: E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\base.html
+-->
 {% load static user_filters %}
 <!DOCTYPE html>
 <html lang="en" data-theme="light">
@@ -6,9 +9,11 @@
   <meta charset="utf-8">
   <meta http-equiv="x-ua-compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+
   <!-- Force light mode for consistent UI across browsers/accounts -->
   <meta name="color-scheme" content="light">
   <meta name="theme-color" content="#3b82f6">
+
   <title>{% block title %}BOS Lakshya{% endblock %}</title>
 
   <!-- Ensure data-theme=light is present before CSS parses -->
@@ -69,19 +74,19 @@
       --hero-grad-dark: linear-gradient(135deg, rgba(37,99,235,1) 0%, rgba(37,99,235,.8) 50%, rgba(17,24,39,.85) 100%);
     }
 
-    @media (prefers-color-scheme: dark){
-      :root{
-        --bg:#0b1220;
-        --surface:#0b1220;
-        --surface-alt:#0b1220;
+    /* IMPORTANT: dark theme tokens apply ONLY when explicitly enabled.
+       You force light via data-theme="light". */
+    :root[data-theme="dark"]{
+      --bg:#0b1220;
+      --surface:#0b1220;
+      --surface-alt:#0b1220;
 
-        --text:#e5e7eb;
-        --muted:#9ca3af;
-        --border:#1f2937;
+      --text:#e5e7eb;
+      --muted:#9ca3af;
+      --border:#1f2937;
 
-        --shadow-1:0 1px 3px rgba(0,0,0,.7);
-        --shadow-2:0 10px 30px rgba(0,0,0,.8);
-      }
+      --shadow-1:0 1px 3px rgba(0,0,0,.7);
+      --shadow-2:0 10px 30px rgba(0,0,0,.8);
     }
 
     *{box-sizing:border-box}
@@ -593,7 +598,7 @@
           {% endif %}
           {% if user|has_permission:"list_checklist" %}
           <a href="{% url 'tasks:list_checklist' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}aria-current="page"%}{% endif %}>
+             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}aria-current="page"{% endif %}>
             <i class="fas fa-clipboard-list" aria-hidden="true"></i> List Checklist (Lakshya Suchi)
           </a>
           {% endif %}
@@ -659,8 +664,8 @@
         </div>
         {% endif %}
 
-        <!-- 🌟 KAM (Key Account Management) – gated ONLY by app-level permissions -->
-        {% if user|has_module_permission:"KAM (Key Accounts)" %}
+        <!-- 🌟 KAM (Key Account Management) – gated ONLY by app-level permission codes -->
+        {% if user|has_any_permission:"kam_dashboard,kam_plan,kam_visits,kam_customers,kam_reports,kam_manager,kam_manager_kpis,kam_call_new,kam_collection_new,kam_targets,kam_targets_lines,kam_collections_plan,kam_sync_now,kam_sync_trigger,kam_sync_step,kam_export_kpi_csv,kam_visit_approve,kam_visit_reject" or user.is_superuser %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="kamSubmenu" data-submenu-toggle data-submenu-key="kam">
           <i class="fas fa-id-badge" aria-hidden="true"></i> KAM (Key Accounts)
           <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
@@ -678,7 +683,13 @@
           <a href="{% url 'kam:plan' %}"
              class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'plan' %}active{% endif %}"
              {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'plan' %}aria-current="page"{% endif %}>
-            <i class="fas fa-calendar-check" aria-hidden="true"></i> Weekly Plan
+            <i class="fas fa-calendar-check" aria-hidden="true"></i> Plan Visit
+          </a>
+          {% endif %}
+
+          {% if user|has_permission:"kam_manager" or user.is_superuser %}
+          <a href="{% url 'kam:visit_batches' %}" class="nav-item">
+            <i class="fas fa-layer-group" aria-hidden="true"></i> Visit Batches
           </a>
           {% endif %}
 
@@ -714,10 +725,10 @@
           </a>
           {% endif %}
 
-          {% if user|has_any_permission:"kam_manager_kpis,kam_reports" %}
-          <a href="{% url 'kam:manager_kpis' %}?period=week"
-             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'manager_kpis' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'manager_kpis' %}aria-current="page"{% endif %}>
+          {% if user|has_permission:"kam_reports" %}
+          <a href="{% url 'kam:reports' %}?metric=sales"
+             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'reports' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'reports' %}aria-current="page"{% endif %}>
             <i class="fas fa-chart-line" aria-hidden="true"></i> KAM Reports
           </a>
           {% endif %}
@@ -775,7 +786,6 @@
           <i class="fas fa-receipt" aria-hidden="true"></i> BOS Reimburse Log <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
         </button>
         <div class="submenu" id="reimbursementSubmenu" role="group" aria-label="Reimbursement">
-
           {% if user|has_permission:"reimbursement_apply" %}
           <a href="{% url 'reimbursement:expense_inbox' %}"
              class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'expense_inbox' %}active{% endif %}"
@@ -918,6 +928,7 @@
       </div>
       {% block sidebar_extra %}{% endblock %}
     </nav>
+
     <div class="sidebar-overlay" data-sidebar-overlay aria-hidden="true"></div>
   {% endif %}
 
@@ -980,14 +991,22 @@
         try{
           const heroWrap = document.getElementById('heroWrap');
           const bodyEl = document.body;
+
           if (heroWrap){
             const dismissed = localStorage.getItem(HERO_KEY) === '1';
             if (!dismissed){
               heroWrap.hidden = false;
               bodyEl.classList.add('has-hero');
-              startFireworks('fwCanvas');
-              startConfetti('confettiCanvas');
+
+              // ensure canvas fits AFTER hero is visible
+              setTimeout(() => {
+                fitCanvas('fwCanvas');
+                fitCanvas('confettiCanvas');
+                startFireworks('fwCanvas');
+                startConfetti('confettiCanvas');
+              }, 0);
             }
+
             const close = document.getElementById('heroDismiss');
             if (close){
               close.addEventListener('click', ()=>{
@@ -1015,7 +1034,7 @@
               init = init || {};
               init.headers = new Headers(init.headers || {});
               if (!init.headers.has('X-CSRFToken')) {
-                const token = getCookie('csrftoken');
+                const token = getCookie(CSRF_COOKIE);
                 if (token) init.headers.set('X-CSRFToken', token);
               }
             }
@@ -1037,8 +1056,7 @@
           try{
             const safe = /^(GET|HEAD|OPTIONS|TRACE)$/i.test(this._method || 'GET');
             if (this._isSameOrigin && !safe) {
-              const m = document.cookie.match('(^|;)\\s*csrftoken\\s*=\\s*([^;]+)');
-              const token = m ? decodeURIComponent(m.pop()) : null;
+              const token = getCookie(CSRF_COOKIE);
               if (token) this.setRequestHeader('X-CSRFToken', token);
             }
           }catch(_e){}
@@ -1091,8 +1109,10 @@
         const chev = btn.querySelector('.chevron');
         const key = btn.getAttribute('data-submenu-key') || id;
         if(!submenu) return;
-        const isOpen = typeof desired === 'boolean' ? !desired : submenu.style.display === 'block';
-        const willOpen = !isOpen;
+
+        const isOpen = submenu.style.display === 'block';
+        const willOpen = (typeof desired === 'boolean') ? desired : !isOpen;
+
         submenu.style.display = willOpen ? 'block' : 'none';
         if(chev) chev.style.transform = willOpen ? 'rotate(180deg)' : 'rotate(0deg)';
         btn.setAttribute('aria-expanded', String(willOpen));
@@ -1158,6 +1178,7 @@
           const overlay=document.querySelector('[data-sidebar-overlay]');
           const main=document.getElementById('mainContent');
           if(!sidebar || !main) return;
+
           if(window.innerWidth>768){
             sidebar.classList.remove('show');
             overlay && overlay.classList.remove('show');
@@ -1166,6 +1187,7 @@
             sidebar.classList.remove('collapsed');
             main.classList.remove('expanded');
           }
+
           fitCanvas('fwCanvas');
           fitCanvas('confettiCanvas');
         });
@@ -1232,9 +1254,9 @@
         fitCanvas(id);
 
         const Wc = canvas.clientWidth, Hc = canvas.clientHeight;
-        confetti = Array.from({length: 80}, ()=>({
+        confetti = Array.from({length: 80}, () => ({
           x: Math.random()*Wc,
-          y: Math.random()*( -Hc ),
+          y: Math.random()*(-Hc),
           s: 4 + Math.random()*4,
           a: Math.random()*Math.PI*2,
           v: 1 + Math.random()*1.2,
@@ -1269,6 +1291,7 @@
         const cvs = document.getElementById(id);
         if(!cvs) return;
         const rect = cvs.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
         cvs.width = Math.max(1, Math.floor(rect.width * devicePixelRatio));
         cvs.height = Math.max(1, Math.floor(rect.height * devicePixelRatio));
       }

@@ -4,9 +4,7 @@
 
 {% block content %}
 <div class="page-header mb-4">
-  <h2 class="page-title">
-    Edit {{ user_obj.get_full_name|default:user_obj.username }}
-  </h2>
+  <h2 class="page-title">Edit User</h2>
 </div>
 
 <div class="card mb-5">
@@ -45,7 +43,7 @@
       <div class="col-md-4">
         <label for="id_username" class="form-label">Username</label>
         <input type="text" name="username" id="id_username" class="form-control"
-               value={{ uf.username.value|default_if_none:''|add:"" }} autocomplete="username">
+               value="{{ uf.username.value|default_if_none:'' }}" autocomplete="username">
         {% for error in uf.username.errors %}
           <div class="invalid-feedback d-block">{{ error }}</div>
         {% endfor %}
@@ -62,8 +60,11 @@
 
       <div class="col-md-4">
         <label for="id_password" class="form-label">Password</label>
-        <input type="password" name="password" id="id_password" class="form-control"
-               placeholder="Leave blank to keep current" autocomplete="new-password">
+        <input type="password" name="password" id="id_password" class="form-control" autocomplete="new-password"
+               placeholder="Leave blank to keep current">
+        {% if uf.password.help_text %}
+          <div class="form-text">{{ uf.password.help_text }}</div>
+        {% endif %}
         {% for error in uf.password.errors %}
           <div class="invalid-feedback d-block">{{ error }}</div>
         {% endfor %}
@@ -134,7 +135,7 @@
         <hr class="my-4">
         <div class="d-flex align-items-center justify-content-between mb-2">
           <h5 class="mb-0">Select User Privilege</h5>
-          <div class="d-none d-md-block text-muted small">Tip: use the module checkbox to select/deselect all in a group.</div>
+          <div class="d-none d-md-block text-muted small">Tip: use the module checkboxes to select/deselect all in a group.</div>
         </div>
 
         <div class="row">
@@ -170,9 +171,9 @@
         {% endfor %}
       </div>
 
-      <div class="col-12 text-end">
-        <button type="submit" class="btn btn-primary">Save Changes</button>
-        <a href="{% url 'users:list_users' %}" class="btn btn-secondary ms-2">Cancel</a>
+      <div class="col-12 d-flex justify-content-end gap-2">
+        <a href="{% url 'users:list_users' %}" class="btn btn-light px-4">Cancel</a>
+        <button type="submit" class="btn btn-primary px-5">Save</button>
       </div>
     </form>
   </div>
@@ -219,7 +220,7 @@
     });
   });
 
-  // Initial sync on page load (pre-checked state)
+  // Initial sync on page load (useful on pre-checked state)
   document.addEventListener('DOMContentLoaded', function() {
     const modules = new Set();
     document.querySelectorAll('.permission-checkbox').forEach(cb => {

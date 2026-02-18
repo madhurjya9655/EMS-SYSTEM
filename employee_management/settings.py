@@ -505,19 +505,15 @@ ASSIGNER_CC_FOR_DELEGATION = {
 }
 
 # ✅ Admin consolidated pending default target (overridable)
-# If you want Pankaj to get the consolidated digest, leave this as pankaj@…
 ADMIN_PENDING_DIGEST_TO = os.getenv("ADMIN_PENDING_DIGEST_TO", "pankaj@blueoceansteels.com")
 
 # ✅ EMAIL GUARD CONFIG (ISSUE 18) — no hardcoded IDs
-# Identify the restricted person + allow only specific categories
 PANKAJ_EMAILS = env_list("PANKAJ_EMAILS", "pankaj@blueoceansteels.com")
 PANKAJ_USERNAMES = env_list("PANKAJ_USERNAMES", "pankaj")
-# Allowed: delegation CC to assigner (when assigner is Pankaj) and the delegation pending digest
 PANKAJ_ALLOWED_CATEGORIES = env_list(
     "PANKAJ_ALLOWED_CATEGORIES",
     "delegation.assigned_by,delegation.pending_digest",
 )
-# Canonical dict consumed by apps.common.email_guard
 EMAIL_RESTRICTIONS = {
     "pankaj": {
         "emails": PANKAJ_EMAILS,
@@ -525,7 +521,6 @@ EMAIL_RESTRICTIONS = {
         "allow": PANKAJ_ALLOWED_CATEGORIES,
     }
 }
-# Optional: help-ticket admin exclusions
 HELP_TICKET_ADMIN_EXCLUDE_EMAILS = env_list("HELP_TICKET_ADMIN_EXCLUDE_EMAILS", "")
 
 if ON_RENDER and not os.getenv("EMAIL_HOST_USER"):
@@ -560,14 +555,9 @@ REIMBURSEMENT_DRIVE_LINK_SHARING = os.getenv("REIMBURSEMENT_DRIVE_LINK_SHARING",
 REIMBURSEMENT_DRIVE_DOMAIN = os.getenv("REIMBURSEMENT_DRIVE_DOMAIN")
 REIMBURSEMENT_DETAIL_URL_TEMPLATE = os.getenv("REIMBURSEMENT_DETAIL_URL_TEMPLATE")
 
-# ✅ NEW: absolute site base for reimbursement emails (used by notifications)
 REIMBURSEMENT_SITE_BASE = os.getenv("REIMBURSEMENT_SITE_BASE", SITE_BASE_URL)
 
-# ✅ NEW: runtime-configurable recipients used by notifications
-REIMBURSEMENT_FINANCE_TEAM = env_list(
-    "REIMBURSEMENT_FINANCE_TEAM",
-    ""  # leave empty to fall back to defaults in code
-)
+REIMBURSEMENT_FINANCE_TEAM = env_list("REIMBURSEMENT_FINANCE_TEAM", "")
 REIMBURSEMENT_FINAL_TO = env_list(
     "REIMBURSEMENT_FINAL_TO",
     "jyothi@gasteels.com,chetan.shah@gasteels.com"
@@ -592,7 +582,7 @@ DASHBOARD_CACHE_TIMEOUT = env_int("DASHBOARD_CACHE_TIMEOUT", 300)
 TASK_LIST_PAGE_SIZE = env_int("TASK_LIST_PAGE_SIZE", 50)
 
 # -----------------------------------------------------------------------------
-# PERFORMANCE / CACHING
+# PERFORMANCE / CACHING  ✅ FIXED FOR CROSS-PROCESS LOCKING
 # -----------------------------------------------------------------------------
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
 SESSION_COOKIE_AGE = 60 * 60 * 24 * 7
@@ -601,6 +591,7 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = env_int("DATA_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 *
 DATA_UPLOAD_MAX_NUMBER_FIELDS = env_int("DATA_UPLOAD_MAX_NUMBER_FIELDS", 2000)
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
+
 if REDIS_URL:
     CACHES = {
         "default": {
@@ -616,14 +607,32 @@ if REDIS_URL:
     }
     SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 else:
-    CACHES = {
-        "default": {
-            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-            "LOCATION": "ems-fast-cache",
-            "TIMEOUT": 300,
-            "OPTIONS": {"MAX_ENTRIES": 2000, "CULL_FREQUENCY": 3},
-        },
-    }
+    # ✅ CRITICAL FIX:
+    # LocMemCache is per-process => locks & "already_done" keys DO NOT work across workers.
+    # On Render, prefer FileBasedCache on the mounted disk so all processes share one cache.
+    if ON_RENDER:
+        CACHE_DIR = Path(MEDIA_ROOT) / "django_cache"
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        CACHES = {
+            "default": {
+                "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+                "LOCATION": str(CACHE_DIR),
+                "TIMEOUT": env_int("CACHE_TIMEOUT", 300),
+                "OPTIONS": {"MAX_ENTRIES": env_int("CACHE_MAX_ENTRIES", 20000)},
+            },
+        }
+        # Keep DB sessions (file cache is fine for locks; sessions stable in DB)
+        SESSION_ENGINE = "django.contrib.sessions.backends.db"
+    else:
+        # Local/dev fallback
+        CACHES = {
+            "default": {
+                "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+                "LOCATION": "ems-fast-cache",
+                "TIMEOUT": 300,
+                "OPTIONS": {"MAX_ENTRIES": 2000, "CULL_FREQUENCY": 3},
+            },
+        }
 
 JSON_DUMPS_PARAMS = {"ensure_ascii": False}
 
@@ -689,7 +698,6 @@ FEATURES = {
     "AUDIT_LOGGING": env_bool("FEATURE_AUDIT_LOGGING", True),
 }
 
-# ✅ KAM feature toggles (used by views/templates)
 KAM_FEATURE_ENABLED = env_bool("KAM_FEATURE_ENABLED", True)
 KAM_DEFAULT_CALLS_PER_WEEK = env_int("KAM_DEFAULT_CALLS_PER_WEEK", 24)
 KAM_DEFAULT_VISITS_PER_WEEK = env_int("KAM_DEFAULT_VISITS_PER_WEEK", 6)
@@ -730,7 +738,6 @@ def _redis_db(url: str, db: int) -> str:
         return u
     parts = u.rsplit("/", 1)
     if len(parts) == 2 and parts[1].isdigit():
-        # ✅ fixed: removed stray extra brace
         return f"{parts[0]}/{db}"
     if u.endswith("/"):
         return f"{u}{db}"
@@ -759,6 +766,8 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
+# ✅ FIX: run the 10:00 fanout ONCE (not 10:00/10:05/10:10).
+# Multiple triggers are a major source of duplicates if cache isn't shared.
 CELERY_BEAT_SCHEDULE = {
     "pre10am_unblock_and_generate_0955": {
         "task": "apps.tasks.tasks.run_pre10am_unblock_and_generate",
@@ -766,7 +775,7 @@ CELERY_BEAT_SCHEDULE = {
     },
     "tasks_due_today_10am_fanout": {
         "task": "apps.tasks.tasks.send_due_today_assignments",
-        "schedule": crontab(hour=10, minute="0-10/5"),
+        "schedule": crontab(hour=10, minute=0),
     },
     "delegation_reminders_every_5_minutes": {
         "task": "apps.tasks.tasks.dispatch_delegation_reminders",

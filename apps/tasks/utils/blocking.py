@@ -1,37 +1,31 @@
+# apps/tasks/utils/blocking.py
 from __future__ import annotations
 
 """
-Single source of truth to decide if a user is BLOCKED by leave.
+Canonical Leave Blocking (IST)
 
-✅ Non-negotiable rule (IST-based):
-    From the moment a leave exists in PENDING or APPROVED, NO task of ANY type
-    must be assigned/emailed/shown to that user during the leave window.
-
-Key details:
-- Timezone: Asia/Kolkata (IST). All checks are done in IST.
-- Full day: blocks whole 00:00:00–23:59:59 of that date.  ⟵ enforced here
-- Half day: blocks only the exact [start_at, end_at) time window.
-- Pending vs Approved: both block.
+Rule:
+- If a leave exists with status PENDING or APPROVED, the user is BLOCKED inside its window.
+- FULL DAY leave: blocks the entire IST calendar day(s) it covers.
+- HALF DAY leave: blocks ONLY the exact [start_at, end_at) interval in IST.
 - Rejected: never blocks.
-- IMPORTANT: We **do not** gate on `applied_at`. As soon as a leave is recorded,
-  any check for a time inside its window is considered blocked.
 
-APIs:
-    is_user_blocked_at(user, when_dt_ist)        # time-aware (preferred)
-    is_user_blocked(user, ist_date)              # date-level @ 10:00 IST (legacy anchor)
-    is_user_blocked_for_task_time(user, ist_date, at_time_ist)
+Public APIs:
+    is_user_blocked_at(user, when_dt)                 -> bool   (preferred)
+    is_user_blocked(user, ist_date)                   -> bool   (legacy @ 10:00 IST anchor)
+    is_user_blocked_for_task_time(user, ist_date, t)  -> bool
 """
 
-from datetime import date, datetime, time, timedelta
 import logging
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 
 from django.apps import apps
+from django.db.models import Q
 from django.utils import timezone
 
-# Robust IST tzinfo with graceful fallback
 try:
-    from zoneinfo import ZoneInfo  # Python 3.9+
+    from zoneinfo import ZoneInfo
     IST = ZoneInfo("Asia/Kolkata")
 except Exception:  # pragma: no cover
     try:
@@ -42,11 +36,9 @@ except Exception:  # pragma: no cover
 
 logger = logging.getLogger("apps.tasks.blocking")
 
-# Assignment anchor for date-level checks (preserves existing 10:00 AM behavior)
 ASSIGN_ANCHOR_IST = time(10, 0)
 
 
-# ------------------------- IST helpers -------------------------
 def _to_ist(dt: Optional[datetime]) -> Optional[datetime]:
     if not dt:
         return None
@@ -55,59 +47,60 @@ def _to_ist(dt: Optional[datetime]) -> Optional[datetime]:
     except Exception:
         if timezone.is_naive(dt):
             try:
-                return dt.replace(tzinfo=IST)
+                return timezone.make_aware(dt, IST)
             except Exception:
-                return dt
+                try:
+                    return dt.replace(tzinfo=IST)
+                except Exception:
+                    return dt
         return dt
 
 
-def _inside_inclusive_window(when_ist: datetime, start_at: datetime, end_at: datetime) -> bool:
-    """
-    True if 'when_ist' lies inside [start_at, end_at) evaluated in IST.
-    """
-    s = _to_ist(start_at) or start_at
-    e = _to_ist(end_at) or end_at
-    if e < s:
-        s, e = e, s
-    return s <= when_ist < e
+def _ensure_aware_ist(dt: datetime) -> datetime:
+    if timezone.is_naive(dt):
+        try:
+            return timezone.make_aware(dt, IST)
+        except Exception:
+            return dt.replace(tzinfo=IST)
+    try:
+        return dt.astimezone(IST)
+    except Exception:
+        return dt
 
 
-# ----------------------------- public -----------------------------
-def is_user_blocked_at(user, when_dt_ist: datetime) -> bool:
-    """
-    Return True if `user` is blocked for an assignment exactly at `when_dt_ist` (IST).
+def _ist_day_bounds(d: date) -> tuple[datetime, datetime]:
+    day_start = datetime.combine(d, time.min)
+    next_day_start = datetime.combine(d + timedelta(days=1), time.min)
+    return _ensure_aware_ist(day_start), _ensure_aware_ist(next_day_start)
 
-    Blocking logic:
-      - consider only leaves overlapping the checked day
-      - status in {PENDING, APPROVED}
-      - HALF DAY: use the exact [start_at, end_at)
-      - FULL DAY: expand to the entire calendar day 00:00 → next 00:00 (IST)
-      - NOTE: we intentionally ignore `applied_at` to enforce retroactive blocking
-        for any checks within the window as soon as the leave exists.
+
+def is_user_blocked_at(user, when_dt) -> bool:
     """
-    if not getattr(user, "id", None):
+    Return True if `user` is blocked for an assignment exactly at `when_dt` (any tz/naive allowed).
+
+    IMPORTANT:
+    - We DO NOT gate on applied_at. If leave exists, it blocks inside its window immediately.
+    """
+    user_id = getattr(user, "id", None)
+    if not user_id:
         return False
 
-    # Ensure aware IST
-    if timezone.is_naive(when_dt_ist):
-        when_ist = when_dt_ist.replace(tzinfo=IST)
-    else:
-        when_ist = when_dt_ist.astimezone(IST)
-
     try:
+        if isinstance(when_dt, date) and not isinstance(when_dt, datetime):
+            when_dt = datetime.combine(when_dt, ASSIGN_ANCHOR_IST)
+
+        when_ist = _ensure_aware_ist(when_dt)
+
         LeaveRequest = apps.get_model("leave", "LeaveRequest")
         if LeaveRequest is None:
             return False
 
-        # Window for the calendar day of 'when'
         target_day = when_ist.date()
-        day_start = datetime.combine(target_day, time.min).replace(tzinfo=IST)
-        next_day_start = datetime.combine(target_day + timedelta(days=1), time.min).replace(tzinfo=IST)
+        day_start, next_day_start = _ist_day_bounds(target_day)
 
-        # Fetch only leaves overlapping the target day; include is_half_day for logic
         qs = (
-            LeaveRequest.objects.filter(employee=user)
-            .filter(start_at__lt=next_day_start, end_at__gt=day_start)
+            LeaveRequest.objects.filter(employee_id=user_id)
+            .filter(Q(start_at__lt=next_day_start) & Q(end_at__gt=day_start))
             .only("start_at", "end_at", "status", "is_half_day")
         )
 
@@ -116,15 +109,16 @@ def is_user_blocked_at(user, when_dt_ist: datetime) -> bool:
             if status not in ("PENDING", "APPROVED"):
                 continue
 
-            s = _to_ist(lr.start_at) or lr.start_at
-            e = _to_ist(lr.end_at) or lr.end_at
+            s = _to_ist(getattr(lr, "start_at", None)) or getattr(lr, "start_at", None)
+            e = _to_ist(getattr(lr, "end_at", None)) or getattr(lr, "end_at", None)
+            if not (s and e):
+                continue
+
             if e < s:
                 s, e = e, s
 
-            # Expand FULL DAY leaves to whole calendar day of the check in IST
-            if not getattr(lr, "is_half_day", False):
-                s = day_start
-                e = next_day_start
+            if not bool(getattr(lr, "is_half_day", False)):
+                s, e = day_start, next_day_start
 
             if s <= when_ist < e:
                 return True
@@ -132,29 +126,24 @@ def is_user_blocked_at(user, when_dt_ist: datetime) -> bool:
         return False
 
     except Exception:
-        # Never break assignment flows on unexpected issues.
+        try:
+            when_dbg = str(when_dt)
+        except Exception:
+            when_dbg = "<unprintable>"
         logger.exception(
-            "is_user_blocked_at failed for user_id=%s, when_dt_ist=%s",
-            getattr(user, "id", None), when_ist
+            "is_user_blocked_at failed for user_id=%s, when=%s",
+            user_id, when_dbg
         )
         return False
 
 
 def is_user_blocked(user, ist_date: date) -> bool:
-    """
-    Date-level API used by existing code (recurring visibility/email at 10:00 IST).
-    - Full-day leaves block the entire day.
-    - Half-day leaves block only if they overlap the anchor (10:00 IST).
-    """
-    anchor_dt = datetime.combine(ist_date, ASSIGN_ANCHOR_IST).replace(tzinfo=IST)
+    anchor_dt = _ensure_aware_ist(datetime.combine(ist_date, ASSIGN_ANCHOR_IST))
     return is_user_blocked_at(user, anchor_dt)
 
 
 def is_user_blocked_for_task_time(user, ist_date: date, at_time_ist: time) -> bool:
-    """
-    Convenience: check at a specific IST time on a given date.
-    """
-    when = datetime.combine(ist_date, at_time_ist).replace(tzinfo=IST)
+    when = _ensure_aware_ist(datetime.combine(ist_date, at_time_ist))
     return is_user_blocked_at(user, when)
 
 

@@ -4,31 +4,28 @@ from __future__ import annotations
 """
 Assignment blocking helpers.
 
-Single source of truth: LeaveRequest rows that are PENDING/APPROVED and
-cover the IST calendar date. This module exposes small helpers that
-other task generators/routers can call.
+✅ Single source of truth:
+    apps.tasks.utils.blocking   (time-aware + date-aware, IST rules)
+
+This module provides small helpers for generators/routers.
+Do NOT re-implement leave window logic here.
 """
 
 import logging
 from datetime import date, datetime
-from zoneinfo import ZoneInfo
 
 from django.utils import timezone
 
-from apps.leave.models import LeaveRequest  # canonical check lives here
+from apps.tasks.utils.blocking import (
+    is_user_blocked_at,  # time-aware
+    is_user_blocked,     # date-level (10:00 IST anchor)
+)
 
 logger = logging.getLogger("apps.tasks.blocking")
-IST = ZoneInfo("Asia/Kolkata")
 
 
-# -----------------------------------------------------------------------------
-# Optional hook (observability only)
-# -----------------------------------------------------------------------------
 def block_employee_dates(*, user_id: int, dates: list[date], source: str = "") -> None:
-    """
-    Called after a LeaveRequest is created. We don't persist anything here:
-    assignment-time checks query LeaveRequest live.
-    """
+    """Observability hook only (no persistence)."""
     try:
         if not user_id or not dates:
             return
@@ -42,51 +39,48 @@ def block_employee_dates(*, user_id: int, dates: list[date], source: str = "") -
         logger.exception("block_employee_dates logging failed")
 
 
-# -----------------------------------------------------------------------------
-# Core guards
-# -----------------------------------------------------------------------------
-def _ist_date_from_any(dt_or_date) -> date | None:
-    """Accept a date or datetime and return the IST calendar date."""
-    if dt_or_date is None:
-        return None
-    if isinstance(dt_or_date, date) and not isinstance(dt_or_date, datetime):
-        return dt_or_date
-    try:
-        aware = (
-            timezone.localtime(dt_or_date, IST)
-            if timezone.is_aware(dt_or_date)
-            else dt_or_date.replace(tzinfo=IST)
-        )
-        return aware.date()
-    except Exception:
-        try:
-            return dt_or_date.date()  # type: ignore[attr-defined]
-        except Exception:
-            return None
-
-
 def is_user_blocked_for_datetime(user, planned_dt) -> bool:
     """
-    True -> skip assignment (blocked)
+    True  -> skip assignment (blocked)
     False -> safe to consider assigning
+
+    Accepts:
+      - datetime (naive or aware): checked at that exact instant (IST rules internally)
+      - date: checked using date-level legacy rule (10:00 IST anchor)
     """
-    d = _ist_date_from_any(planned_dt)
-    if not d:
+    if not getattr(user, "id", None) or planned_dt is None:
         return False
-    return LeaveRequest.is_user_blocked_on(user, d)
 
+    # date-only: treat as whole-day check with 10:00 IST anchor
+    if isinstance(planned_dt, date) and not isinstance(planned_dt, datetime):
+        try:
+            return bool(is_user_blocked(user, planned_dt))
+        except Exception:
+            logger.exception(
+                "is_user_blocked_for_datetime(date) failed (user_id=%s, planned_dt=%r)",
+                getattr(user, "id", None),
+                planned_dt,
+            )
+            return False
 
-def should_skip_assignment(user, planned_dt) -> bool:
-    """Alias used in generators. If True, you must NOT assign."""
+    # datetime: time-aware exact check
     try:
-        return is_user_blocked_for_datetime(user, planned_dt)
-    except Exception:  # pragma: no cover
+        # If naive, interpret in project tz before blocking util converts to IST
+        if timezone.is_naive(planned_dt):
+            planned_dt = timezone.make_aware(planned_dt, timezone.get_current_timezone())
+        return bool(is_user_blocked_at(user, planned_dt))
+    except Exception:
         logger.exception(
-            "should_skip_assignment failed (user_id=%s, dt=%r)",
+            "is_user_blocked_for_datetime(datetime) failed (user_id=%s, planned_dt=%r)",
             getattr(user, "id", None),
             planned_dt,
         )
         return False
+
+
+def should_skip_assignment(user, planned_dt) -> bool:
+    """Alias used in generators. If True, you must NOT assign."""
+    return is_user_blocked_for_datetime(user, planned_dt)
 
 
 def guard_assign(user, planned_dt) -> bool:

@@ -1,8 +1,9 @@
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\pending_digest.py
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 
 import pytz
@@ -11,6 +12,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 from django.utils import timezone
+from django.core.cache import cache
 
 from .models import Checklist, Delegation, HelpTicket
 from .utils import (
@@ -27,15 +29,16 @@ try:
         strip_rows_to_delegations_only_if_pankaj_target,
     )
 except Exception:  # graceful fallbacks
-    def filter_recipients_for_category(*, category: str, to=None, cc=None, bcc=None, **_):
+    def filter_recipients_for_category(*, category: str, to=None, cc=None, bcc=None, **_) -> Tuple[list, list, list]:
         return list(to or []), list(cc or []), list(bcc or [])
+
     def strip_rows_to_delegations_only_if_pankaj_target(rows: List[dict], *, target_email: str) -> List[dict]:
         return rows
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
 
-IST = pytz.timezone("Asia/Kolkata")
+IST = pytz.timezone(getattr(settings, "TIME_ZONE", "Asia/Kolkata"))
 SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
 
@@ -50,11 +53,23 @@ class Row:
     status: str = "Pending"
 
 
-# ---------------- Working-day / holiday helpers (IST) ----------------
+# ---------------- IST helpers ----------------
+def _now_ist_dt() -> datetime:
+    return timezone.now().astimezone(IST)
+
+
 def _today_ist() -> date:
-    return timezone.now().astimezone(IST).date()
+    return _now_ist_dt().date()
 
 
+def _ttl_until_next_3am_ist(now_ist: Optional[datetime] = None) -> int:
+    n = now_ist or _now_ist_dt()
+    next3 = (n + timedelta(days=1)).replace(hour=3, minute=0, second=0, microsecond=0)
+    return max(int((next3 - n).total_seconds()), 60)
+# ---------------------------------------------------------------------
+
+
+# ---------------- Working-day / holiday helpers (IST) ----------------
 def _is_sunday_ist(d: date) -> bool:
     return d.weekday() == 6  # Sunday == 6
 
@@ -73,16 +88,15 @@ def _is_working_day_ist(d: date) -> bool:
 # ---------------------------------------------------------------------
 
 
-def _now_ist_dt() -> datetime:
-    return timezone.now().astimezone(IST)
-
-
 def _display_user(u) -> str:
     if not u:
         return "-"
-    full = u.get_full_name()
-    if full:
-        return full
+    try:
+        full = u.get_full_name()
+        if full:
+            return full
+    except Exception:
+        pass
     return getattr(u, "username", None) or getattr(u, "email", "-") or "-"
 
 
@@ -92,12 +106,14 @@ def _is_on_leave_today(user) -> bool:
     True if user is blocked by leave for *today* (IST).
     Uses shared date-level guard (10:00 IST anchor), with model fallback.
     """
-    today = timezone.localdate()
+    today = _today_ist()
+
     try:
         from apps.tasks.utils.blocking import is_user_blocked  # type: ignore
         return bool(is_user_blocked(user, today))
     except Exception:
         pass
+
     try:
         from apps.leave.models import LeaveRequest  # type: ignore
         fn = getattr(LeaveRequest, "is_user_blocked_on", None)
@@ -105,6 +121,7 @@ def _is_on_leave_today(user) -> bool:
             return bool(fn(user, today))
     except Exception:
         pass
+
     return False
 # -----------------------------------------------------------------------------
 
@@ -119,12 +136,13 @@ def _planned_date_to_ist_date(pd) -> Optional[date]:
         return None
     try:
         if isinstance(pd, datetime):
+            # timezone.localtime requires aware dt; tolerate naive by forcing current TZ
+            if timezone.is_naive(pd):
+                pd = timezone.make_aware(pd, timezone.get_current_timezone())
             return timezone.localtime(pd, IST).date()
-        # It is already a date
-        return pd
+        return pd  # already a date
     except Exception:
         try:
-            # Last resort: treat as naive datetime
             if isinstance(pd, datetime):
                 return pd.date()
         except Exception:
@@ -150,13 +168,37 @@ def _include_only_past_and_today(rows: List[Dict[str, Any]]) -> List[Dict[str, A
 # -----------------------------------------------------------------------------
 
 
+# -----------------------------------------------------------------------------
+# Idempotency keys (cache-backed)
+# -----------------------------------------------------------------------------
+def _emp_digest_key(day_iso: str, user_id: int) -> str:
+    return f"pending_digest:emp:{user_id}:{day_iso}"
+
+
+def _admin_digest_key(day_iso: str, target_email: str) -> str:
+    safe = (target_email or "").strip().lower() or "unknown"
+    return f"pending_digest:admin:{safe}:{day_iso}"
+
+
+def _try_claim(key: str, ttl: int) -> bool:
+    """
+    Atomic claim using cache.add. If cache is unavailable, allow best-effort send.
+    """
+    try:
+        return bool(cache.add(key, True, ttl))
+    except Exception:
+        logger.warning(_safe_console_text(f"[PENDING DIGEST] Cache claim unavailable for key={key}; continuing best-effort"))
+        return True
+# -----------------------------------------------------------------------------
+
+
 def _rows_for_user(user) -> List[Dict[str, Any]]:
     """
     Build rows for a single user.
-    IMPORTANT: This function now filters to planned_date <= today IST only.
-    Also excludes voided rows (is_skipped_due_to_leave=True) if that field exists.
+    Filters to planned_date <= today IST only.
+    Excludes voided rows (is_skipped_due_to_leave=True) if that field exists.
     """
-    rows: List[Row] = []
+    rows: List[Dict[str, Any]] = []
 
     # Checklist (Pending for this user)
     try:
@@ -167,7 +209,7 @@ def _rows_for_user(user) -> List[Dict[str, Any]]:
 
         for obj in qs:
             title = obj.task_name or ""
-            desc = (obj.message or "").strip()
+            desc = (getattr(obj, "message", "") or "").strip()
             title_desc = title if not desc else f"{title} — {desc}"
             rows.append(
                 Row(
@@ -214,8 +256,8 @@ def _rows_for_user(user) -> List[Dict[str, Any]]:
         qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
 
         for obj in qs:
-            title = obj.title or ""
-            desc = (obj.description or "").strip()
+            title = getattr(obj, "title", "") or ""
+            desc = (getattr(obj, "description", "") or "").strip()
             title_desc = title if not desc else f"{title} — {desc}"
             rows.append(
                 Row(
@@ -231,16 +273,13 @@ def _rows_for_user(user) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(_safe_console_text(f"[PENDING DIGEST] HelpTicket fetch failed for user {getattr(user,'id','?')}: {e}"))
 
-    # Filter out future-dated rows
-    filtered = _include_only_past_and_today([dict(r) for r in rows])
+    filtered = _include_only_past_and_today(rows)
 
-    # Stable sort
     try:
         filtered.sort(key=lambda r: (r.get("due_date") or "9999-12-31", r.get("task_type") or "", r.get("task_id") or ""))
     except Exception:
         pass
 
-    # Drop internal field
     for r in filtered:
         r.pop("_planned_date_raw", None)
 
@@ -249,11 +288,9 @@ def _rows_for_user(user) -> List[Dict[str, Any]]:
 
 def _rows_for_all_users() -> List[Dict[str, Any]]:
     """
-    Build one big table containing ALL employees’ pending tasks (across all three types),
-    including 'Assigned To' and 'Assigned By', suitable for the admin consolidated mail.
-
-    IMPORTANT: Filters to planned_date <= today IST only.
-    Also excludes voided rows (is_skipped_due_to_leave=True) if that field exists.
+    Build one big table containing ALL employees’ pending tasks.
+    Filters to planned_date <= today IST only.
+    Excludes voided rows (is_skipped_due_to_leave=True) if that field exists.
     """
     rows: List[Dict[str, Any]] = []
 
@@ -263,10 +300,9 @@ def _rows_for_all_users() -> List[Dict[str, Any]]:
         if hasattr(Checklist, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
         qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
-
         for obj in qs:
             title = obj.task_name or ""
-            desc = (obj.message or "").strip()
+            desc = (getattr(obj, "message", "") or "").strip()
             title_desc = title if not desc else f"{title} — {desc}"
             rows.append(
                 Row(
@@ -287,7 +323,6 @@ def _rows_for_all_users() -> List[Dict[str, Any]]:
         if hasattr(Delegation, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
         qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
-
         for obj in qs:
             title = obj.task_name or ""
             desc = (getattr(obj, "message", "") or "").strip() or (getattr(obj, "description", "") or "").strip()
@@ -311,10 +346,9 @@ def _rows_for_all_users() -> List[Dict[str, Any]]:
         if hasattr(HelpTicket, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
         qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
-
         for obj in qs:
-            title = obj.title or ""
-            desc = (obj.description or "").strip()
+            title = getattr(obj, "title", "") or ""
+            desc = (getattr(obj, "description", "") or "").strip()
             title_desc = title if not desc else f"{title} — {desc}"
             rows.append(
                 Row(
@@ -330,16 +364,20 @@ def _rows_for_all_users() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(_safe_console_text(f"[ADMIN DIGEST] HelpTicket fetch failed: {e}"))
 
-    # Filter out future-dated rows
     filtered = _include_only_past_and_today(rows)
 
-    # Stable sort
     try:
-        filtered.sort(key=lambda r: (r.get("due_date") or "9999-12-31", r.get("assigned_to") or "", r.get("task_type") or "", r.get("task_id") or ""))
+        filtered.sort(
+            key=lambda r: (
+                r.get("due_date") or "9999-12-31",
+                r.get("assigned_to") or "",
+                r.get("task_type") or "",
+                r.get("task_id") or "",
+            )
+        )
     except Exception:
         pass
 
-    # Drop internal field
     for r in filtered:
         r.pop("_planned_date_raw", None)
 
@@ -349,7 +387,7 @@ def _rows_for_all_users() -> List[Dict[str, Any]]:
 def _email_notifications_enabled() -> bool:
     try:
         feats = getattr(settings, "FEATURES", {})
-        if isinstance(feats, dict):
+        if isinstance(feats, dict) and "EMAIL_NOTIFICATIONS" in feats:
             return bool(feats.get("EMAIL_NOTIFICATIONS", True))
     except Exception:
         pass
@@ -365,15 +403,16 @@ def send_daily_employee_pending_digest(
     to_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Sends ONE email per employee containing ALL of THEIR pending tasks
-    where planned_date <= today IST.
+    Sends ONE email per employee containing ALL of THEIR pending tasks (planned_date <= today IST).
     Skips if user is on leave today (IST), unless force=True.
+
+    Idempotency:
+      - Per user/day cache claim, unless force=True.
     """
     if not _email_notifications_enabled():
         logger.info(_safe_console_text("[PENDING DIGEST] Skipped: email notifications disabled"))
         return {"ok": True, "skipped": True, "reason": "email_notifications_disabled"}
 
-    # Skip on non-working days (Sunday/holidays) unless force=True
     today = _today_ist()
     if not force and not _is_working_day_ist(today):
         logger.info(_safe_console_text(f"[PENDING DIGEST] Skipped (non-working day {today})"))
@@ -388,6 +427,8 @@ def send_daily_employee_pending_digest(
     sent = 0
     skipped = 0
     total_candidates = 0
+    day_iso = today.isoformat()
+    ttl = _ttl_until_next_3am_ist(_now_ist_dt())
 
     for user in users:
         total_candidates += 1
@@ -397,8 +438,6 @@ def send_daily_employee_pending_digest(
             logger.info(_safe_console_text(f"[PENDING DIGEST] Suppressed for user_id={getattr(user,'id','?')} (on leave today)"))
             continue
 
-        rows = _rows_for_user(user)
-
         recips = [to_override] if to_override else _dedupe_emails([getattr(user, "email", "") or ""])
         recips = [r for r in recips if r]
         if not recips:
@@ -406,6 +445,15 @@ def send_daily_employee_pending_digest(
             logger.info(_safe_console_text(f"[PENDING DIGEST] Skip user id={getattr(user,'id','?')} – no email"))
             continue
 
+        # Per-user/day claim to prevent duplicates across celery schedules/retries
+        if not force:
+            key = _emp_digest_key(day_iso, int(getattr(user, "id", 0) or 0))
+            if not _try_claim(key, ttl):
+                skipped += 1
+                logger.info(_safe_console_text(f"[PENDING DIGEST] Already sent/claimed user_id={getattr(user,'id','?')} day={day_iso}"))
+                continue
+
+        rows = _rows_for_user(user)
         rows = strip_rows_to_delegations_only_if_pankaj_target(rows, target_email=recips[0])
 
         if not rows and not send_even_if_empty and not force:
@@ -421,7 +469,6 @@ def send_daily_employee_pending_digest(
             logger.info(_safe_console_text(f"[PENDING DIGEST] Guard filtered recipients; skip user id={getattr(user,'id','?')}"))
             continue
 
-        day_iso = today.isoformat()
         subject = f"Your Pending Tasks – {day_iso}"
         title = f"Your Pending Tasks ({day_iso})"
 
@@ -440,7 +487,9 @@ def send_daily_employee_pending_digest(
                 to=filt_to,
                 fail_silently=False,
             )
-            logger.info(_safe_console_text(f"[PENDING DIGEST] Sent to {filt_to[0]} (user_id={getattr(user,'id','?')}, items={len(rows)})"))
+            logger.info(_safe_console_text(
+                f"[PENDING DIGEST] Sent to {filt_to[0]} (user_id={getattr(user,'id','?')}, items={len(rows)})"
+            ))
             sent += 1
         except Exception as e:
             skipped += 1
@@ -466,6 +515,9 @@ def send_admin_all_pending_digest(
     Sends ONE consolidated email containing ALL employees' pending tasks to the admin email.
     Includes ONLY items with planned_date <= today IST.
     Skips on non-working days unless force=True.
+
+    Idempotency:
+      - Per target email/day cache claim, unless force=True.
     """
     if not _email_notifications_enabled():
         logger.info(_safe_console_text("[ADMIN DIGEST] Skipped: email notifications disabled"))
@@ -482,6 +534,15 @@ def send_admin_all_pending_digest(
         logger.warning(_safe_console_text("[ADMIN DIGEST] No admin recipient; aborting"))
         return {"ok": False, "skipped": True, "reason": "no_admin_recipient"}
 
+    day_iso = today.isoformat()
+    ttl = _ttl_until_next_3am_ist(_now_ist_dt())
+
+    if not force:
+        key = _admin_digest_key(day_iso, target)
+        if not _try_claim(key, ttl):
+            logger.info(_safe_console_text(f"[ADMIN DIGEST] Already sent/claimed for {target} day={day_iso}"))
+            return {"ok": True, "skipped": True, "reason": "already_sent", "day": day_iso}
+
     rows = _rows_for_all_users()
     rows = strip_rows_to_delegations_only_if_pankaj_target(rows, target_email=target)
 
@@ -497,7 +558,6 @@ def send_admin_all_pending_digest(
         logger.info(_safe_console_text("[ADMIN DIGEST] Guard filtered recipient list; no email sent"))
         return {"ok": True, "skipped": True, "reason": "filtered_by_guard"}
 
-    day_iso = today.isoformat()
     subject = f"All Employees – Pending Tasks – {day_iso}"
     title = f"All Employees – Pending Tasks ({day_iso})"
 

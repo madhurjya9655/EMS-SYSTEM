@@ -1,3 +1,4 @@
+<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\email\daily_pending_tasks_summary.html -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -174,8 +175,15 @@
                   <tr>
                     <td>{{ row.task_id }}</td>
                     <td>{{ row.task_title }}</td>
-                    <td>{{ row.assigned_to }}</td>
-                    <td>{{ row.assigned_by }}</td>
+
+                    <!-- ✅ FIX: supports either a User object OR a pre-rendered string -->
+                    <td>
+                      {{ row.assigned_to.get_full_name|default:row.assigned_to.username|default:row.assigned_to.email|default:row.assigned_to|default:"-" }}
+                    </td>
+                    <td>
+                      {{ row.assigned_by.get_full_name|default:row.assigned_by.username|default:row.assigned_by.email|default:row.assigned_by|default:"-" }}
+                    </td>
+
                     <td>{{ row.due_date }}</td>
                     <td>{{ row.task_type }}</td>
                     <td>{{ row.status }}</td>
