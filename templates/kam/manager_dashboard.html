@@ -8,6 +8,7 @@
   <div class="d-flex gap-2">
     <a class="btn btn-outline-secondary" href="{% url 'kam:targets' %}">Targets</a>
     <a class="btn btn-outline-secondary" href="{% url 'kam:targets_lines' %}">Target Lines</a>
+    <a class="btn btn-outline-secondary" href="{% url 'kam:dashboard' %}?period=week">Back to Dashboard</a>
     <form method="post" action="{% url 'kam:sync_step' %}">
       {% csrf_token %}
       <button class="btn btn-primary" type="submit">
@@ -38,8 +39,9 @@
   </div>
 </div>
 
-<div class="mt-3">
+<div class="mt-3 d-flex flex-wrap gap-2">
   <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:export_kpi_csv' %}?period=week">Export KPI (This Week)</a>
   <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:export_kpi_csv' %}?period=month">Export KPI (This Month)</a>
+  <a class="btn btn-sm btn-outline-primary" href="{% url 'kam:reports' %}?period=week">Deep Analysis</a>
 </div>
 {% endblock %}

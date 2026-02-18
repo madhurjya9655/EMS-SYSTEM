@@ -8,63 +8,54 @@
 
   <form class="d-flex align-items-end gap-2 flex-wrap" method="get">
     <div>
-      <label class="form-label mb-1 small">Period</label>
-      <select name="period" class="form-select form-select-sm">
-        <option value="week"  {% if period_type == 'WEEK' %}selected{% endif %}>This Week</option>
-        <option value="month" {% if period_type == 'MONTH' %}selected{% endif %}>This Month</option>
-        <option value="quarter" {% if period_type == 'QUARTER' %}selected{% endif %}>This Quarter</option>
-        <option value="year" {% if period_type == 'YEAR' %}selected{% endif %}>This Year</option>
-        <option value="all"   {% if period_type == 'ALL' %}selected{% endif %}>All Time</option>
-        <option value="custom" {% if period_type == 'CUSTOM' %}selected{% endif %}>Custom Range</option>
-      </select>
+      <label class="form-label mb-1 small">From Date</label>
+      <input type="date" name="from" value="{{ request.GET.from }}" class="form-control form-control-sm" />
     </div>
 
     <div>
-      <label class="form-label mb-1 small">As of (anchor)</label>
-      <input type="text" name="asof" value="{{ request.GET.asof }}" placeholder="YYYY or YYYY-MM or YYYY-MM-DD" class="form-control form-control-sm" />
-      <div class="form-text small">Anchors week/month/quarter/year.</div>
+      <label class="form-label mb-1 small">To Date</label>
+      <input type="date" name="to" value="{{ request.GET.to }}" class="form-control form-control-sm" />
     </div>
 
-    <div>
-      <label class="form-label mb-1 small">From</label>
-      <input type="text" name="from" value="{{ request.GET.from }}" placeholder="YYYY / YYYY-MM / YYYY-MM-DD" class="form-control form-control-sm" />
-    </div>
-    <div>
-      <label class="form-label mb-1 small">To</label>
-      <input type="text" name="to" value="{{ request.GET.to }}" placeholder="YYYY / YYYY-MM / YYYY-MM-DD" class="form-control form-control-sm" />
-      <div class="form-text small">From–To overrides Period.</div>
-    </div>
-
-    {% if kam_options %}
+    {# Strict role-based KAM filter #}
+    {% if can_choose_kam %}
       <div>
         <label class="form-label mb-1 small">KAM</label>
         <select name="user" class="form-select form-select-sm">
-          <option value="">ALL</option>
+          <option value="" {% if not request.GET.user %}selected{% endif %}>ALL</option>
           {% for uname in kam_options %}
             <option value="{{ uname }}" {% if request.GET.user == uname %}selected{% endif %}>{{ uname }}</option>
           {% endfor %}
         </select>
       </div>
+    {% else %}
+      <div>
+        <label class="form-label mb-1 small">KAM</label>
+        <input type="text" class="form-control form-control-sm" value="{{ scope_label }}" readonly />
+        <input type="hidden" name="user" value="{{ scope_label }}" />
+      </div>
     {% endif %}
 
     <div class="d-flex align-items-center gap-2">
       <button class="btn btn-sm btn-primary" type="submit">Apply</button>
-      <a class="btn btn-sm btn-outline-secondary" href="?period=week">Reset</a>
+      <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:dashboard' %}">Reset</a>
     </div>
   </form>
 </div>
 
-<div class="mb-2 text-muted">
-  <small>
-    Period: <strong>{{ period_id }}</strong>
-    {% if scope_label %} • KAM: <strong>{{ scope_label }}</strong>{% endif %}
-  </small>
-</div>
+{# ✅ Removed the Range/KAM/Overdue Snapshot info line completely #}
 
 <div class="row g-3">
   <div class="col-md-4">
     <div class="card p-3 h-100">
-      <div class="fw-bold mb-1">Sales (MT)</div>
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <div class="fw-bold">Sales (MT)</div>
+        <a class="btn btn-sm btn-outline-primary"
+           href="{% url 'kam:reports' %}?metric=sales&from={{ request.GET.from }}&to={{ request.GET.to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+          Deep Analysis
+        </a>
+      </div>
+
       <div class="d-flex align-items-end justify-content-between">
         <div class="fs-3">{{ kpi.sales_mt|floatformat:3 }}</div>
         <div class="text-end">
@@ -79,7 +70,14 @@
 
   <div class="col-md-4">
     <div class="card p-3 h-100">
-      <div class="fw-bold mb-1">Visits</div>
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <div class="fw-bold">Visits</div>
+        <a class="btn btn-sm btn-outline-primary"
+           href="{% url 'kam:reports' %}?metric=visits&from={{ request.GET.from }}&to={{ request.GET.to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+          Deep Analysis
+        </a>
+      </div>
+
       <div class="d-flex align-items-end justify-content-between">
         <div>
           <div>Planned: <strong>{{ kpi.visits_planned }}</strong></div>
@@ -100,7 +98,14 @@
 
   <div class="col-md-4">
     <div class="card p-3 h-100">
-      <div class="fw-bold mb-1">Calls</div>
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <div class="fw-bold">Calls</div>
+        <a class="btn btn-sm btn-outline-primary"
+           href="{% url 'kam:reports' %}?metric=calls&from={{ request.GET.from }}&to={{ request.GET.to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+          Deep Analysis
+        </a>
+      </div>
+
       <div class="d-flex align-items-end justify-content-between">
         <div class="fs-3">{{ kpi.calls }}</div>
         <div class="text-end">
@@ -143,8 +148,14 @@
           {% endif %}
         </div>
       </div>
+
       {% if kpi.prev_overdue_sum %}
-        <div class="small text-muted mt-2">Prev Overdue: ₹ {{ kpi.prev_overdue_sum|floatformat:2|intcomma }}</div>
+        <div class="small text-muted mt-2">
+          Prev Overdue: ₹ {{ kpi.prev_overdue_sum|floatformat:2|intcomma }}
+          {% if kpi.prev_overdue_snapshot_date %}
+            <span class="text-muted">({{ kpi.prev_overdue_snapshot_date }})</span>
+          {% endif %}
+        </div>
       {% endif %}
     </div>
   </div>
@@ -152,16 +163,32 @@
   <div class="col-md-4">
     <div class="card p-3 h-100">
       <div class="fw-bold mb-1">Overdues &amp; Risk</div>
-      <div class="mb-1">Overdue: <strong>₹ {{ kpi.overdue_sum|floatformat:2|intcomma }}</strong></div>
+      <div class="mb-1">
+        Overdue: <strong>₹ {{ kpi.overdue_sum|floatformat:2|intcomma }}</strong>
+        {% if kpi.overdue_snapshot_date %}
+          <span class="text-muted small">({{ kpi.overdue_snapshot_date }})</span>
+        {% endif %}
+      </div>
       <div class="mb-1">Exposure: ₹ {{ kpi.exposure_sum|floatformat:2|intcomma }}</div>
       <div class="mb-1">Credit Limit: ₹ {{ kpi.credit_limit_sum|floatformat:2|intcomma }}</div>
       <div class="mt-2">
         <div class="small">
-          {% if kpi.overdue_reduction_pct is not None %}Overdue Reduction: {{ kpi.overdue_reduction_pct|floatformat:1 }}%{% else %}Overdue Reduction: <span class="text-muted">—</span>{% endif %}
+          {% if kpi.overdue_reduction_pct is not None %}
+            Overdue Reduction: {{ kpi.overdue_reduction_pct|floatformat:1 }}%
+          {% else %}
+            Overdue Reduction: <span class="text-muted">—</span>
+          {% endif %}
         </div>
         <div class="small">
-          {% if kpi.overdue_risk_ratio %}Risk Ratio: {{ kpi.overdue_risk_ratio|floatformat:2 }}{% else %}Risk Ratio: <span class="text-muted">—</span>{% endif %}
+          {% if kpi.overdue_risk_ratio %}
+            Risk Ratio: {{ kpi.overdue_risk_ratio|floatformat:2 }}
+          {% else %}
+            Risk Ratio: <span class="text-muted">—</span>
+          {% endif %}
         </div>
+      </div>
+      <div class="form-text small">
+        Note: Overdues are shown only for the selected KAM scope (no cross-KAM leakage).
       </div>
     </div>
   </div>
@@ -205,7 +232,9 @@
 </div>
 
 <div class="card p-3 mt-3">
-  <h6 class="fw-bold mb-2">4-week Trend</h6>
+  <h6 class="fw-bold mb-1">4-week Trend</h6>
+  <div class="small text-muted mb-2">Last 4 <strong>completed</strong> weeks (Mon–Sat). Sunday excluded.</div>
+
   {% if trend_rows %}
   <div class="table-responsive">
     <table class="table table-sm align-middle">
@@ -244,9 +273,9 @@
   <div class="col-auto"><a href="{% url 'kam:call_new' %}" class="btn btn-outline-secondary">Log Call</a></div>
   <div class="col-auto"><a href="{% url 'kam:collection_new' %}" class="btn btn-outline-secondary">Add Collection</a></div>
   <div class="col-auto"><a href="{% url 'kam:customers' %}" class="btn btn-outline-secondary">Customer 360</a></div>
-  {% if kam_options %}
-  <div class="col-auto"><a href="{% url 'kam:manager_kpis' %}?period=week" class="btn btn-primary">Manager KPIs</a></div>
-  <div class="col-auto"><a href="{% url 'kam:collections_plan' %}?period=month" class="btn btn-outline-primary">Collections Plan</a></div>
+  {% if can_choose_kam %}
+    <div class="col-auto"><a href="{% url 'kam:manager_kpis' %}" class="btn btn-primary">Manager KPIs</a></div>
+    <div class="col-auto"><a href="{% url 'kam:collections_plan' %}" class="btn btn-outline-primary">Collections Plan</a></div>
   {% endif %}
 </div>
 {% endblock %}

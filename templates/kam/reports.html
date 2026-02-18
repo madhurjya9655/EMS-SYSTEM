@@ -1,9 +1,179 @@
 {% extends "base.html" %}
+{% load humanize %}
 {% block title %}KAM Reports{% endblock %}
 
 {% block content %}
-<div class="page-header"><h1 class="page-title">KAM Reports</h1></div>
+<div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+  <h1 class="page-title m-0">KAM Reports</h1>
+
+  <form class="d-flex align-items-end gap-2 flex-wrap" method="get">
+    <input type="hidden" name="metric" value="{{ metric }}" />
+
+    <div>
+      <label class="form-label mb-1 small">From Date</label>
+      <input type="date" name="from" value="{{ request.GET.from }}" class="form-control form-control-sm" />
+    </div>
+
+    <div>
+      <label class="form-label mb-1 small">To Date</label>
+      <input type="date" name="to" value="{{ request.GET.to }}" class="form-control form-control-sm" />
+    </div>
+
+    {% if can_choose_kam %}
+      <div>
+        <label class="form-label mb-1 small">KAM</label>
+        <select name="user" class="form-select form-select-sm">
+          <option value="" {% if not request.GET.user %}selected{% endif %}>ALL</option>
+          {% for uname in kam_options %}
+            <option value="{{ uname }}" {% if request.GET.user == uname %}selected{% endif %}>{{ uname }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    {% else %}
+      <div>
+        <label class="form-label mb-1 small">KAM</label>
+        <input type="text" class="form-control form-control-sm" value="{{ scope_label }}" readonly />
+      </div>
+    {% endif %}
+
+    <div class="d-flex align-items-center gap-2">
+      <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+      <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:reports' %}?metric={{ metric }}">Reset</a>
+      <a class="btn btn-sm btn-outline-secondary"
+         href="{% url 'kam:dashboard' %}?from={{ request.GET.from }}&to={{ request.GET.to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+        Back
+      </a>
+    </div>
+  </form>
+</div>
+
+<div class="mb-3">
+  <div class="btn-group" role="group">
+    <a class="btn btn-sm {% if metric == 'sales' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+       href="{% url 'kam:reports' %}?metric=sales&from={{ request.GET.from }}&to={{ request.GET.to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+      Sales
+    </a>
+
+    <a class="btn btn-sm {% if metric == 'calls' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+       href="{% url 'kam:reports' %}?metric=calls&from={{ request.GET.from }}&to={{ request.GET.to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+      Calls
+    </a>
+
+    <a class="btn btn-sm {% if metric == 'visits' %}btn-primary{% else %}btn-outline-primary{% endif %}"
+       href="{% url 'kam:reports' %}?metric=visits&from={{ request.GET.from }}&to={{ request.GET.to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+      Visits
+    </a>
+  </div>
+
+  {# ✅ Range/KAM line removed completely #}
+</div>
+
 <div class="card p-3">
-  <p class="m-0">Reports placeholder. Add your charts/tables here. (Read-only; export to CSV only if needed.)</p>
+  {% if metric == 'sales' %}
+    <h6 class="fw-bold mb-2">Sales Breakdown</h6>
+    <div class="table-responsive">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Customer</th>
+            <th>KAM</th>
+            <th class="text-end">MT</th>
+            <th class="text-end">Revenue (₹)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+            <tr>
+              <td>{{ r.customer__name|default:r.customer.name|default:"—" }}</td>
+              <td>{{ r.kam__username|default:r.kam.username|default:"—" }}</td>
+              <td class="text-end">{{ r.mt|default:r.qty_mt|default:"0"|floatformat:3 }}</td>
+              <td class="text-end">
+                {% if r.revenue %}
+                  ₹ {{ r.revenue|floatformat:2|intcomma }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="4" class="text-muted">No sales rows.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+  {% elif metric == 'calls' %}
+    <h6 class="fw-bold mb-2">Calls Breakdown</h6>
+    <div class="table-responsive">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Date/Time</th>
+            <th>Customer</th>
+            <th>KAM</th>
+            <th class="text-end">Duration</th>
+            <th>Outcome</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in rows %}
+            <tr>
+              <td>{{ c.call_datetime }}</td>
+              <td>{{ c.customer.name|default:c.customer__name|default:"—" }}</td>
+              <td>{{ c.kam.username|default:c.kam__username|default:"—" }}</td>
+              <td class="text-end">
+                {{ c.duration_minutes|default:"—" }}
+              </td>
+              <td>{{ c.outcome|default:"—" }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="5" class="text-muted">No call logs.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+  {% elif metric == 'visits' %}
+    <h6 class="fw-bold mb-2">Visits Breakdown</h6>
+    <div class="table-responsive">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Customer / Counterparty</th>
+            <th>KAM</th>
+            <th>Successful</th>
+            <th class="text-end">Actual Sales (MT)</th>
+            <th class="text-end">Actual Collection (₹)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for v in rows %}
+            <tr>
+              <td>{{ v.plan.visit_date|default:v.plan__visit_date|default:"—" }}</td>
+
+              <td>
+                {{ v.plan.customer.name
+                    |default:v.plan.counterparty_name
+                    |default:v.plan__customer__name
+                    |default:v.plan__counterparty_name
+                    |default:"—" }}
+              </td>
+
+              <td>{{ v.plan.kam.username|default:v.plan__kam__username|default:"—" }}</td>
+
+              <td>{% if v.successful %}Yes{% else %}No{% endif %}</td>
+
+              <td class="text-end">{{ v.actual_sales_mt|default:"0"|floatformat:3 }}</td>
+
+              <td class="text-end">₹ {{ v.actual_collection|default:"0"|floatformat:2|intcomma }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6" class="text-muted">No visit actuals.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
 </div>
 {% endblock %}

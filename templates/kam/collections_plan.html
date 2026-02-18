@@ -11,7 +11,6 @@
       <option value="month" {% if period_type == 'MONTH' %}selected{% endif %}>Month</option>
       <option value="quarter" {% if period_type == 'QUARTER' %}selected{% endif %}>Quarter</option>
       <option value="year" {% if period_type == 'YEAR' %}selected{% endif %}>Year</option>
-      <option value="custom" {% if period_type == 'CUSTOM' %}selected{% endif %}>Custom</option>
       <option value="all" {% if period_type == 'ALL' %}selected{% endif %}>All</option>
     </select>
     <input name="asof" placeholder="YYYY[-MM[-DD]]" value="{{ request.GET.asof }}" class="form-control form-control-sm"/>

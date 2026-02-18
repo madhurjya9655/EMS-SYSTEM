@@ -5,10 +5,75 @@
 {% block content %}
 <div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
   <h1 class="page-title m-0">Customer 360</h1>
-  {% if customer %}
-    <span class="text-muted">Viewing: <strong>{{ customer.name }}</strong></span>
-  {% endif %}
+
+  <form method="get" class="d-flex align-items-end gap-2 flex-wrap">
+    <div>
+      <label class="form-label mb-1 small">Customer</label>
+      <select class="form-select form-select-sm" name="id">
+        {% if customer %}
+          <option value="{{ customer.id }}" selected>{{ customer.name }}</option>
+        {% else %}
+          <option value="" selected>—</option>
+        {% endif %}
+        {% if customer_list %}
+          {% for c in customer_list %}
+            {% if not customer or c.id != customer.id %}
+              <option value="{{ c.id }}">{{ c.name }}</option>
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+      </select>
+    </div>
+
+    <div>
+      <label class="form-label mb-1 small">Period</label>
+      <select name="period" class="form-select form-select-sm">
+        <option value="week"  {% if period_type == 'WEEK' %}selected{% endif %}>This Week</option>
+        <option value="month" {% if period_type == 'MONTH' %}selected{% endif %}>This Month</option>
+        <option value="quarter" {% if period_type == 'QUARTER' %}selected{% endif %}>This Quarter</option>
+        <option value="year" {% if period_type == 'YEAR' %}selected{% endif %}>This Year</option>
+        <option value="all"   {% if period_type == 'ALL' %}selected{% endif %}>All Time</option>
+      </select>
+    </div>
+
+    <div>
+      <label class="form-label mb-1 small">As of</label>
+      <input type="text" name="asof" value="{{ request.GET.asof }}" placeholder="YYYY-MM-DD" class="form-control form-control-sm" />
+    </div>
+
+    <div>
+      <label class="form-label mb-1 small">From</label>
+      <input type="text" name="from" value="{{ request.GET.from }}" placeholder="YYYY-MM-DD" class="form-control form-control-sm" />
+    </div>
+    <div>
+      <label class="form-label mb-1 small">To</label>
+      <input type="text" name="to" value="{{ request.GET.to }}" placeholder="YYYY-MM-DD" class="form-control form-control-sm" />
+    </div>
+
+    {% if kam_options %}
+      <div>
+        <label class="form-label mb-1 small">KAM</label>
+        <select name="user" class="form-select form-select-sm">
+          <option value="">ALL</option>
+          {% for uname in kam_options %}
+            <option value="{{ uname }}" {% if request.GET.user == uname %}selected{% endif %}>{{ uname }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    {% endif %}
+
+    <div class="d-flex align-items-center gap-2">
+      <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+      <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:customers' %}">Reset</a>
+    </div>
+  </form>
 </div>
+
+{% if customer %}
+  <div class="mb-2 text-muted">
+    <small>Viewing: <strong>{{ customer.name }}</strong></small>
+  </div>
+{% endif %}
 
 <div class="row g-3">
   <div class="col-lg-4">
@@ -22,6 +87,7 @@
           Risk Ratio:
           {% if risk_ratio %}{{ risk_ratio|floatformat:2 }}{% else %}<span class="text-muted">—</span>{% endif %}
         </div>
+        <div class="form-text small">Scoped to allowed KAM visibility.</div>
       {% else %}
         <p class="text-muted m-0">No customer in scope.</p>
       {% endif %}
@@ -32,11 +98,13 @@
     <div class="card p-3 h-100">
       <h6 class="fw-bold mb-3">Key Facts</h6>
       {% if customer %}
-        <div class="mb-1"><strong>Code:</strong> {{ customer.code|default:"—" }}</div>
+        <div class="mb-1"><strong>GST:</strong> {{ customer.gst_number|default:"—" }}</div>
+        <div class="mb-1"><strong>Contact:</strong> {{ customer.contact_person|default:"—" }}</div>
         <div class="mb-1"><strong>Address:</strong> {{ customer.address|default:"—" }}</div>
         <div class="mb-1"><strong>KAM:</strong> {{ customer.primary_kam.username|default:"—" }}</div>
-        <div class="mb-1"><strong>Phone:</strong> {{ customer.phone|default:"—" }}</div>
+        <div class="mb-1"><strong>Mobile:</strong> {{ customer.mobile|default:"—" }}</div>
         <div class="mb-1"><strong>Email:</strong> {{ customer.email|default:"—" }}</div>
+        <div class="mb-1"><strong>Pincode:</strong> {{ customer.pincode|default:"—" }}</div>
       {% else %}
         <p class="text-muted m-0">—</p>
       {% endif %}

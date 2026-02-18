@@ -5,17 +5,20 @@
 {% block content %}
 <div class="d-flex align-items-center justify-content-between">
   <h1 class="page-title m-0">Manager KPIs</h1>
-  <form class="d-flex gap-2" method="get">
-    <select name="period" class="form-select form-select-sm">
-      <option value="week">This Week</option>
-      <option value="month">This Month</option>
-      <option value="quarter">This Quarter</option>
-      <option value="year">This Year</option>
-      <option value="all">All</option>
-    </select>
-    <input name="asof" placeholder="YYYY[-MM[-DD]]" value="{{ request.GET.asof }}" class="form-control form-control-sm"/>
-    <button class="btn btn-sm btn-primary">Apply</button>
-  </form>
+  <div class="d-flex gap-2">
+    <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:manager' %}">Back</a>
+    <form class="d-flex gap-2" method="get">
+      <select name="period" class="form-select form-select-sm">
+        <option value="week" {% if period_type == 'WEEK' %}selected{% endif %}>This Week</option>
+        <option value="month" {% if period_type == 'MONTH' %}selected{% endif %}>This Month</option>
+        <option value="quarter" {% if period_type == 'QUARTER' %}selected{% endif %}>This Quarter</option>
+        <option value="year" {% if period_type == 'YEAR' %}selected{% endif %}>This Year</option>
+        <option value="all" {% if period_type == 'ALL' %}selected{% endif %}>All</option>
+      </select>
+      <input name="asof" placeholder="YYYY[-MM[-DD]]" value="{{ request.GET.asof }}" class="form-control form-control-sm"/>
+      <button class="btn btn-sm btn-primary">Apply</button>
+    </form>
+  </div>
 </div>
 
 <p class="text-muted mb-2">Period: <strong>{{ period_id }}</strong></p>

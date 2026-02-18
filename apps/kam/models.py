@@ -1,7 +1,8 @@
+# File: E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\kam\models.py
 from django.db import models
 from django.contrib.auth import get_user_model
-from django.utils import timezone
 from django.core.validators import MinValueValidator
+from django.utils import timezone
 
 User = get_user_model()
 
@@ -15,61 +16,79 @@ class TimeStamped(models.Model):
 
 
 class Customer(TimeStamped):
-    # Google Sheet → EMS (SoT: Sheet)
+    # Optional customer code from sheet / ERP.
+    # (Template uses customer.code; adding field avoids empty output everywhere.)
+    code = models.CharField(max_length=64, blank=True, null=True, db_index=True)
+
     name = models.CharField(max_length=255)
     gst_number = models.CharField(max_length=32, blank=True, null=True, db_index=True)
-    contact_person = models.CharField(max_length=128, blank=True, null=True)  # NEW
+
+    contact_person = models.CharField(max_length=128, blank=True, null=True)
     address = models.TextField(blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
+
+    # source column is "mobile" in your model; templates often refer to "phone"
     mobile = models.CharField(max_length=32, blank=True, null=True)
+
     pincode = models.CharField(max_length=12, blank=True, null=True)
     type = models.CharField(max_length=64, blank=True, null=True)
-    is_nbd = models.BooleanField(default=False)  # NEW: NBD marker from sheet
+
+    is_nbd = models.BooleanField(default=False)
+
     credit_limit = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     agreed_credit_period_days = models.IntegerField(default=0)
-    # cached primary KAM for speed
+
     primary_kam = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="primary_customers"
     )
+
+    @property
+    def phone(self) -> str:
+        # Template compatibility: customer.phone -> mobile
+        return self.mobile or ""
 
     def __str__(self):
         return self.name
 
     class Meta:
-        # Defines the explicit gate used by views and the admin toggle
+        # NOTE (Backward compatible / optional):
+        # This permission used to be required by middleware to hard-gate /kam/*.
+        # If you've removed that hard-gate, this permission is no longer required
+        # for access, but keeping it does not harm existing deployments.
         permissions = [
             ("access_kam_module", "Can access KAM module"),
         ]
 
 
 class KAMAssignment(TimeStamped):
-    # history of KAM↔Customer mapping
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE)
     kam = models.ForeignKey(User, on_delete=models.CASCADE)
     active_from = models.DateField()
-    active_to = models.DateField(null=True, blank=True)  # null = active
+    active_to = models.DateField(null=True, blank=True)
 
     class Meta:
         indexes = [models.Index(fields=["customer", "kam", "active_from"])]
 
 
 class InvoiceFact(TimeStamped):
-    # Google Sheet row → idempotency by row_uuid
     row_uuid = models.CharField(max_length=64, unique=True, db_index=True)
     invoice_date = models.DateField()
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT)
     kam = models.ForeignKey(User, on_delete=models.PROTECT)
-    grade = models.CharField(max_length=64, blank=True, null=True)  # NEW
-    size = models.CharField(max_length=64, blank=True, null=True)   # NEW
+
+    grade = models.CharField(max_length=64, blank=True, null=True)
+    size = models.CharField(max_length=64, blank=True, null=True)
+
     qty_mt = models.DecimalField(max_digits=12, decimal_places=3, validators=[MinValueValidator(0)])
     revenue_gst = models.DecimalField(max_digits=14, decimal_places=2, validators=[MinValueValidator(0)])
 
 
 class LeadFact(TimeStamped):
     row_uuid = models.CharField(max_length=64, unique=True, db_index=True)
-    doe = models.DateField()  # date of enquiry
+    doe = models.DateField()
     kam = models.ForeignKey(User, on_delete=models.PROTECT)
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT, null=True, blank=True)
+
     qty_mt = models.DecimalField(max_digits=12, decimal_places=3, validators=[MinValueValidator(0)])
     status = models.CharField(
         max_length=32,
@@ -83,8 +102,10 @@ class LeadFact(TimeStamped):
 class OverdueSnapshot(TimeStamped):
     snapshot_date = models.DateField(db_index=True)
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT)
+
     exposure = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     overdue = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
     ageing_0_30 = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     ageing_31_60 = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     ageing_61_90 = models.DecimalField(max_digits=14, decimal_places=2, default=0)
@@ -109,7 +130,7 @@ class TargetHeader(TimeStamped):
             (PERIOD_YEAR, "Year"),
         ],
     )
-    period_id = models.CharField(max_length=10)  # e.g. 2026-W05 or 2026-01 or 2026-Q1 or 2026
+    period_id = models.CharField(max_length=10)
     manager = models.ForeignKey(User, on_delete=models.PROTECT, related_name="target_headers")
     locked_at = models.DateTimeField(null=True, blank=True)
 
@@ -118,17 +139,15 @@ class TargetHeader(TimeStamped):
 
 
 class TargetLine(TimeStamped):
-    """
-    Per-KAM effective targets for a period.
-    """
     header = models.ForeignKey(TargetHeader, on_delete=models.CASCADE, related_name="lines")
     kam = models.ForeignKey(User, on_delete=models.PROTECT, related_name="kam_targets")
+
     sales_target_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0)
-    visits_target = models.IntegerField(default=6)      # typical weekly default
-    calls_target = models.IntegerField(default=24)      # typical weekly default
+    visits_target = models.IntegerField(default=6)
+    calls_target = models.IntegerField(default=24)
     leads_target_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     nbd_target_monthly = models.IntegerField(default=0)
-    # Collections plan amount for the period (₹).
+
     collections_plan_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
 
     class Meta:
@@ -136,16 +155,11 @@ class TargetLine(TimeStamped):
 
 
 class CollectionPlan(TimeStamped):
-    """
-    Manager-entered, customer-level planned collection for a chosen period
-    OR a free date-range (dual mode; validated at form/view layer).
-    """
     PERIOD_WEEK = TargetHeader.PERIOD_WEEK
     PERIOD_MONTH = TargetHeader.PERIOD_MONTH
     PERIOD_QUARTER = TargetHeader.PERIOD_QUARTER
     PERIOD_YEAR = TargetHeader.PERIOD_YEAR
 
-    # Existing period-mode fields (kept for backward compatibility)
     period_type = models.CharField(
         max_length=8,
         choices=[
@@ -157,18 +171,19 @@ class CollectionPlan(TimeStamped):
         blank=True,
         null=True,
     )
-    period_id = models.CharField(max_length=10, blank=True, null=True)  # e.g. 2026-W05 / 2026-01 / 2026-Q1 / 2026
+    period_id = models.CharField(max_length=10, blank=True, null=True)
 
-    # NEW: optional free date-range mode
     from_date = models.DateField(blank=True, null=True)
     to_date = models.DateField(blank=True, null=True)
 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT)
-    kam = models.ForeignKey(User, on_delete=models.PROTECT)  # denormalized for scoping
-    planned_amount = models.DecimalField(max_digits=14, decimal_places=2, validators=[MinValueValidator(0)], default=0)
+    kam = models.ForeignKey(User, on_delete=models.PROTECT)
+
+    planned_amount = models.DecimalField(
+        max_digits=14, decimal_places=2, validators=[MinValueValidator(0)], default=0
+    )
 
     class Meta:
-        # Keep legacy uniqueness for period-mode; range-mode handled in application logic
         unique_together = ("period_type", "period_id", "customer")
         indexes = [
             models.Index(fields=["from_date", "to_date", "customer"]),
@@ -176,24 +191,19 @@ class CollectionPlan(TimeStamped):
         ]
 
 
-# ----------------------------
-# NEW: Visit Batch (Header)
-# ----------------------------
 class VisitBatch(TimeStamped):
-    """
-    Header for multi-customer, multi-date-range visit submissions.
-    Approval is non-blocking and is primarily for reporting/audit.
-    """
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
 
-    # Category is common intent of the batch; lines can override if needed (we'll default from header).
+    CAT_VENDOR = "VENDOR"
     CAT_CUSTOMER = "CUSTOMER"
     CAT_SUPPLIER = "SUPPLIER"
     CAT_WAREHOUSE = "WAREHOUSE"
 
+    # B2: Vendor Visit added; ensure appears first in dropdown ordering
     VISIT_CATEGORY_CHOICES = [
+        (CAT_VENDOR, "Vendor Visit"),
         (CAT_CUSTOMER, "Customer Visit"),
         (CAT_SUPPLIER, "Supplier Visit"),
         (CAT_WAREHOUSE, "Warehouse Visit"),
@@ -206,9 +216,13 @@ class VisitBatch(TimeStamped):
     purpose = models.CharField(max_length=128, blank=True, null=True)
 
     approval_status = models.CharField(
-        max_length=12, default=PENDING, choices=[(PENDING, "Pending"), (APPROVED, "Approved"), (REJECTED, "Rejected")]
+        max_length=12,
+        default=PENDING,
+        choices=[(PENDING, "Pending"), (APPROVED, "Approved"), (REJECTED, "Rejected")],
     )
-    approved_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="approved_batches")
+    approved_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="approved_batches"
+    )
     approved_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -222,37 +236,36 @@ class VisitBatch(TimeStamped):
 
 
 class VisitPlan(TimeStamped):
-    # Operational type (KEEP AS-IS): planned vs unplanned (used by weekly cap, legacy filters)
+    # Operational type (legacy)
     PLANNED = "PLANNED"
     UNPLANNED = "UNPLANNED"
 
-    # Line-level approval (kept for backward compat with single-plan flow)
+    # Approval
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
 
-    # NEW: business category (distinct from planned/unplanned)
+    # Business category
+    CAT_VENDOR = VisitBatch.CAT_VENDOR
     CAT_CUSTOMER = VisitBatch.CAT_CUSTOMER
     CAT_SUPPLIER = VisitBatch.CAT_SUPPLIER
     CAT_WAREHOUSE = VisitBatch.CAT_WAREHOUSE
 
-    # Optional parent header for multi-customer submissions
     batch = models.ForeignKey(VisitBatch, null=True, blank=True, on_delete=models.CASCADE, related_name="lines")
 
-    # Customer can be null for Supplier/Warehouse category
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT, null=True, blank=True)
     kam = models.ForeignKey(User, on_delete=models.PROTECT)
 
     visit_date = models.DateField()
-    visit_date_to = models.DateField(null=True, blank=True)  # retained: optional range end (legacy)
+    visit_date_to = models.DateField(null=True, blank=True)
 
-    # KEEP legacy operational field
     visit_type = models.CharField(max_length=12, choices=[(PLANNED, "Planned"), (UNPLANNED, "Unplanned")])
 
-    # NEW: visit business category
+    # B2: Vendor Visit included and ordered first
     visit_category = models.CharField(
         max_length=16,
         choices=[
+            (CAT_VENDOR, "Vendor Visit"),
             (CAT_CUSTOMER, "Customer Visit"),
             (CAT_SUPPLIER, "Supplier Visit"),
             (CAT_WAREHOUSE, "Warehouse Visit"),
@@ -260,23 +273,22 @@ class VisitPlan(TimeStamped):
         default=CAT_CUSTOMER,
     )
 
-    # For non-customer visits (supplier/warehouse), capture a free-text counterparty
     counterparty_name = models.CharField(max_length=255, blank=True, null=True)
-
     purpose = models.CharField(max_length=128, blank=True, null=True)
 
-    # Expecteds are part of the plan (kept)
     expected_sales_mt = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
     expected_collection = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
 
-    # Location (mandatory at form level; model stays nullable to avoid breaking existing rows)
     location = models.CharField(max_length=255, blank=True, null=True)
 
-    # Line-level approval (kept for existing flows)
     approval_status = models.CharField(
-        max_length=12, default=PENDING, choices=[(PENDING, "Pending"), (APPROVED, "Approved"), (REJECTED, "Rejected")]
+        max_length=12,
+        default=PENDING,
+        choices=[(PENDING, "Pending"), (APPROVED, "Approved"), (REJECTED, "Rejected")],
     )
-    approved_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="approved_visits")
+    approved_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="approved_visits"
+    )
     approved_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -294,8 +306,10 @@ class VisitPlan(TimeStamped):
 
 class VisitActual(TimeStamped):
     plan = models.OneToOneField(VisitPlan, on_delete=models.CASCADE, related_name="actual")
+
     summary = models.TextField(blank=True, null=True)
     successful = models.BooleanField(default=False)
+
     not_success_reason = models.CharField(
         max_length=32,
         blank=True,
@@ -308,12 +322,12 @@ class VisitActual(TimeStamped):
             ("OTHER", "Other"),
         ],
     )
-    # NEW: post-visit confirmed location (mandatory at form layer)
+
     confirmed_location = models.CharField(max_length=255, blank=True, null=True)
 
-    # Actuals captured after the visit
     actual_sales_mt = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
     actual_collection = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+
     next_action = models.CharField(max_length=255, blank=True, null=True)
     next_action_date = models.DateField(null=True, blank=True)
     reminder_cc_manager = models.BooleanField(default=True)
@@ -322,8 +336,10 @@ class VisitActual(TimeStamped):
 class CallLog(TimeStamped):
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT)
     kam = models.ForeignKey(User, on_delete=models.PROTECT)
+
     call_datetime = models.DateTimeField(default=timezone.now)
     duration_minutes = models.IntegerField(default=0)
+
     summary = models.TextField(blank=True, null=True)
     outcome = models.CharField(max_length=64, blank=True, null=True)
 
@@ -334,8 +350,10 @@ class CallLog(TimeStamped):
 class CollectionTxn(TimeStamped):
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT)
     kam = models.ForeignKey(User, on_delete=models.PROTECT)
+
     txn_datetime = models.DateTimeField(default=timezone.now)
     amount = models.DecimalField(max_digits=14, decimal_places=2, validators=[MinValueValidator(0)])
+
     mode = models.CharField(max_length=32, blank=True, null=True)
     reference = models.CharField(max_length=64, blank=True, null=True)
 
@@ -346,14 +364,19 @@ class CollectionTxn(TimeStamped):
 class KpiSnapshotDaily(TimeStamped):
     snapshot_date = models.DateField(db_index=True)
     kam = models.ForeignKey(User, on_delete=models.PROTECT)
+
     sales_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     collection_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
     visits_planned = models.IntegerField(default=0)
     visits_actual = models.IntegerField(default=0)
     calls = models.IntegerField(default=0)
+
     leads_total_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     leads_won_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+
     nbd_won_count = models.IntegerField(default=0)
+
     overdue = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     exposure = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     credit_limit = models.DecimalField(max_digits=14, decimal_places=2, default=0)
@@ -366,13 +389,16 @@ class VisitApprovalAudit(TimeStamped):
     ACTION_APPROVE = "APPROVE"
     ACTION_REJECT = "REJECT"
 
-    # Plan-level audit (kept)
-    plan = models.ForeignKey(VisitPlan, on_delete=models.CASCADE, related_name="approval_audits", null=True, blank=True)
-    # NEW: optional batch-level audit
-    batch = models.ForeignKey(VisitBatch, on_delete=models.CASCADE, related_name="approval_audits", null=True, blank=True)
+    plan = models.ForeignKey(
+        VisitPlan, on_delete=models.CASCADE, related_name="approval_audits", null=True, blank=True
+    )
+    batch = models.ForeignKey(
+        VisitBatch, on_delete=models.CASCADE, related_name="approval_audits", null=True, blank=True
+    )
 
     actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="visit_approval_actions")
     action = models.CharField(max_length=16, choices=[(ACTION_APPROVE, "Approve"), (ACTION_REJECT, "Reject")])
+
     note = models.CharField(max_length=255, blank=True, null=True)
     actor_ip = models.GenericIPAddressField(blank=True, null=True)
 
@@ -385,15 +411,22 @@ class SyncIntent(TimeStamped):
     STATUS_RUNNING = "RUNNING"
     STATUS_SUCCESS = "SUCCESS"
     STATUS_ERROR = "ERROR"
+
     SCOPE_SELF = "SELF"
     SCOPE_TEAM = "TEAM"
 
     token = models.CharField(max_length=64, unique=True, db_index=True)
     created_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="kam_sync_intents")
+
     scope = models.CharField(max_length=8, choices=[(SCOPE_SELF, "Self"), (SCOPE_TEAM, "Team")], default=SCOPE_SELF)
     status = models.CharField(
         max_length=10,
-        choices=[(STATUS_PENDING, "Pending"), (STATUS_RUNNING, "Running"), (STATUS_SUCCESS, "Success"), (STATUS_ERROR, "Error")],
+        choices=[
+            (STATUS_PENDING, "Pending"),
+            (STATUS_RUNNING, "Running"),
+            (STATUS_SUCCESS, "Success"),
+            (STATUS_ERROR, "Error"),
+        ],
         default=STATUS_PENDING,
     )
 

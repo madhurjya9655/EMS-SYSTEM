@@ -1,3 +1,4 @@
+# File: E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\kam\forms.py
 from __future__ import annotations
 
 from decimal import Decimal
@@ -11,11 +12,11 @@ from .models import (
     CallLog,
     CollectionPlan,
     CollectionTxn,
+    Customer,
     TargetLine,
     VisitActual,
     VisitBatch,
     VisitPlan,
-    Customer,
 )
 
 User = get_user_model()
@@ -26,50 +27,47 @@ User = get_user_model()
 # ---------------------------
 class VisitPlanForm(forms.ModelForm):
     """
-    Legacy single-visit form, upgraded to support:
-      - visit_category (Customer/Supplier/Warehouse)
-      - location (required at form layer)
+    Single-visit form supporting:
+      - visit_category (Vendor/Customer/Supplier/Warehouse)
       - customer nullable when category != CUSTOMER
       - counterparty_name required when category != CUSTOMER
       - visit_date_to optional but must be >= visit_date if present
+      - location required at form layer
     """
+
     class Meta:
         model = VisitPlan
+        # B2: visit_category must appear at top
         fields = [
-            # Relationship / category
-            "customer",
             "visit_category",
+            "customer",
             "counterparty_name",
-            # Dates
             "visit_date",
             "visit_date_to",
-            # Operational type (keep legacy semantics)
             "visit_type",
-            # Plan info
             "purpose",
             "expected_sales_mt",
             "expected_collection",
-            # Location (mandatory at form level)
             "location",
         ]
         widgets = {
             "visit_date": forms.DateInput(attrs={"type": "date"}),
             "visit_date_to": forms.DateInput(attrs={"type": "date"}),
             "purpose": forms.TextInput(attrs={"placeholder": "Purpose of visit"}),
-            "expected_sales_mt": forms.NumberInput(attrs={"step": "0.001"}),
-            "expected_collection": forms.NumberInput(attrs={"step": "0.01"}),
-            "location": forms.TextInput(attrs={"placeholder": "Auto-fills from customer address if blank"}),
-            "counterparty_name": forms.TextInput(attrs={"placeholder": "Supplier / Warehouse name (if applicable)"}),
+            "expected_sales_mt": forms.NumberInput(attrs={"step": "0.001", "min": "0"}),
+            "expected_collection": forms.NumberInput(attrs={"step": "0.01", "min": "0"}),
+            "location": forms.TextInput(attrs={"placeholder": "Enter location (required)"}),
+            "counterparty_name": forms.TextInput(attrs={"placeholder": "Vendor / Supplier / Warehouse name (if applicable)"}),
         }
 
     def clean(self):
         data = super().clean()
+
         d1 = data.get("visit_date")
         d2 = data.get("visit_date_to")
         if d1 and d2 and d2 < d1:
             self.add_error("visit_date_to", "End date cannot be earlier than start date.")
 
-        # Category-driven validation
         category = data.get("visit_category")
         customer = data.get("customer")
         counterparty = (data.get("counterparty_name") or "").strip()
@@ -78,14 +76,12 @@ class VisitPlanForm(forms.ModelForm):
             if not customer:
                 self.add_error("customer", "Customer is required for Customer Visit.")
         else:
-            # supplier / warehouse
+            # Vendor / Supplier / Warehouse visits
             if customer:
-                # Prevent accidental linkage for non-customer categories
-                self.add_error("customer", "Customer must be empty for Supplier/Warehouse visit.")
+                self.add_error("customer", "Customer must be empty for Vendor/Supplier/Warehouse visit.")
             if not counterparty:
-                self.add_error("counterparty_name", "Counterparty name is required for Supplier/Warehouse visit.")
+                self.add_error("counterparty_name", "Counterparty name is required for Vendor/Supplier/Warehouse visit.")
 
-        # Location is mandatory at form layer (model keeps null for legacy rows)
         if not (data.get("location") or "").strip():
             self.add_error("location", "Location is required.")
 
@@ -97,9 +93,17 @@ class VisitPlanForm(forms.ModelForm):
 # --------------------------------------
 class VisitBatchForm(forms.ModelForm):
     """
-    Header for multi-customer submission. Lines are created in the view/service.
+    Header for batch submission.
+
+    Template sends:
+      - visit_category, from_date, to_date, purpose
+      - customers (multi-select) when category=CUSTOMER
+      - counterparty_name[], counterparty_location[], counterparty_purpose[] when not customer
+
+    Note: In Section B4, `purpose` is used as mandatory remarks for Proceed-to-Manager
+    to avoid schema changes/migrations in live production.
     """
-    # Multi-customer selector (scoped in view by logged-in KAM if needed)
+
     customers = forms.ModelMultipleChoiceField(
         queryset=Customer.objects.all().order_by("name"),
         required=False,
@@ -108,20 +112,16 @@ class VisitBatchForm(forms.ModelForm):
 
     class Meta:
         model = VisitBatch
-        fields = [
-            "from_date",
-            "to_date",
-            "visit_category",
-            "purpose",
-        ]
+        fields = ["from_date", "to_date", "visit_category", "purpose"]
         widgets = {
             "from_date": forms.DateInput(attrs={"type": "date"}),
             "to_date": forms.DateInput(attrs={"type": "date"}),
-            "purpose": forms.TextInput(attrs={"placeholder": "Common purpose (optional)"}),
+            "purpose": forms.TextInput(attrs={"placeholder": "Purpose / Remarks (required for Proceed to Manager)"}),
         }
 
     def clean(self):
         data = super().clean()
+
         d1 = data.get("from_date")
         d2 = data.get("to_date")
         if d1 and d2 and d2 < d1:
@@ -129,33 +129,46 @@ class VisitBatchForm(forms.ModelForm):
 
         category = data.get("visit_category")
         customers = self.cleaned_data.get("customers")
+
         if category == VisitPlan.CAT_CUSTOMER:
             if not customers or customers.count() == 0:
                 self.add_error("customers", "Select at least one customer for Customer Visit.")
         else:
-            # For Supplier/Warehouse batch, customers list must be empty; individual counterparty lines will be text-based.
             if customers and customers.count() > 0:
-                self.add_error("customers", "Do not select customers for Supplier/Warehouse batch.")
+                self.add_error("customers", "Do not select customers for Vendor/Supplier/Warehouse batch.")
 
         return data
 
 
 class MultiVisitPlanLineForm(forms.Form):
     """
-    Optional helper for adding non-customer lines inside a batch (supplier/warehouse).
-    Used by views when category != CUSTOMER.
+    For Vendor/Supplier/Warehouse lines inside batch submission.
+
+    IMPORTANT:
+    The template uses list-input names:
+      - counterparty_name[]
+      - counterparty_location[]
+      - counterparty_purpose[]
+
+    Views should read them using request.POST.getlist("counterparty_name[]"), etc.
+    This form is mainly a validation helper per-line (views can instantiate per row).
     """
+
     counterparty_name = forms.CharField(
         required=True,
-        widget=forms.TextInput(attrs={"placeholder": "Supplier / Warehouse name"}),
         max_length=255,
+        widget=forms.TextInput(attrs={"placeholder": "Name (Vendor/Supplier/Warehouse)"}),
     )
-    location = forms.CharField(
+    counterparty_location = forms.CharField(
         required=True,
-        widget=forms.TextInput(attrs={"placeholder": "Location / Address"}),
         max_length=255,
+        widget=forms.TextInput(attrs={"placeholder": "Location"}),
     )
-    purpose = forms.CharField(required=False, max_length=128)
+    counterparty_purpose = forms.CharField(
+        required=False,
+        max_length=128,
+        widget=forms.TextInput(attrs={"placeholder": "Purpose (optional)"}),
+    )
 
 
 # ---------------------------
@@ -163,12 +176,13 @@ class MultiVisitPlanLineForm(forms.Form):
 # ---------------------------
 class VisitActualForm(forms.ModelForm):
     """
-    After-visit mandatory capture:
-      - actual_sales_mt (MT)  [required]
-      - actual_collection (₹) [required]
-      - summary (remarks)     [required]
-      - confirmed_location    [required]
+    After-visit mandatory capture (enforced at form layer):
+      - actual_sales_mt
+      - actual_collection
+      - summary
+      - confirmed_location
     """
+
     class Meta:
         model = VisitActual
         fields = [
@@ -193,25 +207,22 @@ class VisitActualForm(forms.ModelForm):
     def clean(self):
         data = super().clean()
 
-        # Enforce reason when not successful (keep existing behavior)
         successful = data.get("successful")
         reason = (data.get("not_success_reason") or "").strip()
         if (successful is False) and not reason:
             self.add_error("not_success_reason", "Please select a reason when the visit was not successful.")
 
-        # Mandatory fields after visit
-        def _must_positive_decimal(val: Optional[Decimal], field: str, label: str):
+        def _must_number(val: Optional[Decimal], field: str, label: str):
             if val is None:
                 self.add_error(field, f"{label} is required.")
-            else:
-                try:
-                    # Accept zero as a valid numeric input; only ensure it's a number
-                    Decimal(val)
-                except Exception:
-                    self.add_error(field, f"{label} must be a number.")
+                return
+            try:
+                Decimal(val)
+            except Exception:
+                self.add_error(field, f"{label} must be a number.")
 
-        _must_positive_decimal(data.get("actual_sales_mt"), "actual_sales_mt", "Actual Sales (MT)")
-        _must_positive_decimal(data.get("actual_collection"), "actual_collection", "Actual Collection (₹)")
+        _must_number(data.get("actual_sales_mt"), "actual_sales_mt", "Actual Sales (MT)")
+        _must_number(data.get("actual_collection"), "actual_collection", "Actual Collection (₹)")
 
         summary = (data.get("summary") or "").strip()
         if not summary:
@@ -287,6 +298,7 @@ class CollectionPlanForm(forms.ModelForm):
       - Period mode: (period_type, period_id) present; from/to blank
       - Range mode : (from_date, to_date) present; period_* blank
     """
+
     class Meta:
         model = CollectionPlan
         fields = ["period_type", "period_id", "from_date", "to_date", "customer", "planned_amount"]
@@ -298,8 +310,9 @@ class CollectionPlanForm(forms.ModelForm):
 
     def clean(self):
         data = super().clean()
-        period_type = (data.get("period_type") or "").strip() if data.get("period_type") else ""
-        period_id = (data.get("period_id") or "").strip() if data.get("period_id") else ""
+
+        period_type = (data.get("period_type") or "").strip()
+        period_id = (data.get("period_id") or "").strip()
         f = data.get("from_date")
         t = data.get("to_date")
 
