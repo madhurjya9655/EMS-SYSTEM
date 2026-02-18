@@ -16,6 +16,7 @@ from django.shortcuts import render
 from django.core.cache import cache
 from django.conf import settings
 from django.db.models import Sum  # 🔧 correct aggregate import
+from django.db.utils import OperationalError, ProgrammingError  # ✅ FIX: harden DB/table issues
 
 # IMPORTANT: Only import TASKS-side models at module import time.
 # Do NOT import anything from apps.leave.* at the top of the file.
@@ -57,10 +58,15 @@ def _safe_console_text(s: object) -> str:
 # ----------------------------- small helpers ------------------------------
 def is_working_day(dt_: date) -> bool:
     """Working days: Mon–Sat, excluding configured holidays."""
+    if dt_.weekday() == 6:
+        return False
     try:
-        return dt_.weekday() != 6 and not Holiday.objects.filter(date=dt_).exists()
+        return not Holiday.objects.filter(date=dt_).exists()
+    except (OperationalError, ProgrammingError):
+        # ✅ FIX: table/schema not ready (or transient DB issue) — treat as working day except Sunday
+        return True
     except Exception:
-        return dt_.weekday() != 6
+        return True
 
 
 def next_working_day(dt_: date) -> date:
@@ -206,6 +212,56 @@ def _normalize_task_type(val) -> str | None:
     return None
 
 
+def _approved_status_values(LeaveStatus) -> list:
+    """
+    ✅ FIX: Different deployments store status as:
+      - 'Approved' / 'APPROVED' / 'approved'
+      - Enum .value
+      - Enum itself
+      - int code
+    We build a safe __in list.
+    """
+    vals = set()
+
+    raw = getattr(LeaveStatus, "APPROVED", None)
+    candidates = [raw]
+
+    # enum support
+    try:
+        if raw is not None and hasattr(raw, "value"):
+            candidates.append(raw.value)
+    except Exception:
+        pass
+    try:
+        if raw is not None and hasattr(raw, "label"):
+            candidates.append(raw.label)
+    except Exception:
+        pass
+
+    for c in candidates:
+        if c is None:
+            continue
+        vals.add(c)
+        try:
+            vals.add(str(c))
+        except Exception:
+            pass
+
+    # common string forms
+    vals.update({"Approved", "APPROVED", "approved"})
+
+    # add int forms when possible
+    more = set()
+    for v in list(vals):
+        try:
+            more.add(int(v))
+        except Exception:
+            continue
+    vals |= more
+
+    return list(vals)
+
+
 def _get_handover_tasks_for_user(user, today_date: date):
     """
     Returns dict: {'checklist': [ids], 'delegation': [ids], 'help_ticket': [ids]}
@@ -214,6 +270,8 @@ def _get_handover_tasks_for_user(user, today_date: date):
     try:
         from apps.leave.models import LeaveHandover, LeaveStatus  # type: ignore
 
+        approved_vals = _approved_status_values(LeaveStatus)
+
         active = (
             LeaveHandover.objects
             .filter(
@@ -221,7 +279,7 @@ def _get_handover_tasks_for_user(user, today_date: date):
                 is_active=True,
                 effective_start_date__lte=today_date,
                 effective_end_date__gte=today_date,
-                leave_request__status=LeaveStatus.APPROVED,
+                leave_request__status__in=approved_vals,  # ✅ FIX
             )
             .only("task_type", "original_task_id")
         )
@@ -237,6 +295,9 @@ def _get_handover_tasks_for_user(user, today_date: date):
             f"CL={len(out['checklist'])}, DL={len(out['delegation'])}, HT={len(out['help_ticket'])}"
         ))
         return out
+    except (OperationalError, ProgrammingError) as e:
+        logger.warning(_safe_console_text(f"handover lookup skipped (leave tables/schema not ready): {e}"))
+        return {'checklist': [], 'delegation': [], 'help_ticket': []}
     except Exception as e:
         logger.error(_safe_console_text(f"handover lookup failed: {e}"))
         return {'checklist': [], 'delegation': [], 'help_ticket': []}
@@ -250,6 +311,8 @@ def _get_outgoing_handover_ids_for_user(user, today_date: date):
     try:
         from apps.leave.models import LeaveHandover, LeaveStatus  # type: ignore
 
+        approved_vals = _approved_status_values(LeaveStatus)
+
         active = (
             LeaveHandover.objects
             .filter(
@@ -257,7 +320,7 @@ def _get_outgoing_handover_ids_for_user(user, today_date: date):
                 is_active=True,
                 effective_start_date__lte=today_date,
                 effective_end_date__gte=today_date,
-                leave_request__status=LeaveStatus.APPROVED,
+                leave_request__status__in=approved_vals,  # ✅ FIX
             )
             .only("task_type", "original_task_id")
         )
@@ -267,6 +330,9 @@ def _get_outgoing_handover_ids_for_user(user, today_date: date):
             if key and key in out:
                 out[key].append(h.original_task_id)
         return out
+    except (OperationalError, ProgrammingError) as e:
+        logger.warning(_safe_console_text(f"outgoing handover lookup skipped (leave tables/schema not ready): {e}"))
+        return {'checklist': [], 'delegation': [], 'help_ticket': []}
     except Exception as e:
         logger.error(_safe_console_text(f"outgoing handover lookup failed: {e}"))
         return {'checklist': [], 'delegation': [], 'help_ticket': []}
@@ -429,8 +495,11 @@ def dashboard_home(request):
     # ---- NON-WORKING MODE: short-circuit completely (Sunday OR Holiday) ----
     try:
         is_holiday_today = Holiday.objects.filter(date=today_ist).exists()
+    except (OperationalError, ProgrammingError):
+        is_holiday_today = False
     except Exception:
         is_holiday_today = False
+
     is_sunday_today = today_ist.weekday() == 6
 
     if is_sunday_today or is_holiday_today:
@@ -790,6 +859,8 @@ def dashboard_home(request):
     try:
         from apps.leave.models import LeaveHandover, LeaveStatus
 
+        approved_vals = _approved_status_values(LeaveStatus)  # ✅ FIX
+
         active_handover = (
             LeaveHandover.objects
             .filter(
@@ -797,7 +868,7 @@ def dashboard_home(request):
                 is_active=True,
                 effective_start_date__lte=today_ist,
                 effective_end_date__gte=today_ist,
-                leave_request__status=LeaveStatus.APPROVED,
+                leave_request__status__in=approved_vals,  # ✅ FIX
             )
             .select_related("leave_request", "original_assignee")
             .order_by("id")
@@ -886,6 +957,8 @@ def dashboard_home(request):
                     completed_by_delegate['help_ticket'].append(_row(t, ho, "tickets"))
         except Exception as e:
             logger.error(_safe_console_text(f"Error building completed_by_delegate block: {e}"))
+    except (OperationalError, ProgrammingError) as e:
+        logger.warning(_safe_console_text(f"Leave tables/schema not ready; skipping handed_over section: {e}"))
     except Exception as e:
         logger.error(_safe_console_text(f"Error building handed_over section: {e}"))
 
