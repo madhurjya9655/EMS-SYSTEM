@@ -1,0 +1,97 @@
+{# FILE: templates/kam/visit_batch_detail.html #}
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div>
+      <h3 class="mb-1">Batch #{{ batch.id }}</h3>
+      <div class="text-muted small">
+        {{ batch.kam.username }} • {{ batch.get_visit_category_display }} • {{ batch.from_date }} → {{ batch.to_date }}
+      </div>
+      <div class="small mt-1"><span class="fw-semibold">Remarks:</span> {{ batch.purpose|default:"-" }}</div>
+    </div>
+    <div class="d-flex gap-2">
+      <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:visit_batches' %}">Back</a>
+
+      {% if can_delete %}
+        <form method="post" action="{% url 'kam:visit_batch_delete' batch.id %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete draft batch #{{ batch.id }}?');">
+            Delete Draft
+          </button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="mb-3">
+    <span class="fw-semibold">Status:</span>
+    {% if batch.approval_status == "APPROVED" %}
+      <span class="badge bg-success">APPROVED</span>
+    {% elif batch.approval_status == "REJECTED" %}
+      <span class="badge bg-danger">REJECTED</span>
+    {% elif batch.approval_status == "DRAFT" %}
+      <span class="badge bg-secondary">DRAFT</span>
+    {% else %}
+      <span class="badge bg-warning text-dark">{{ batch.approval_status }}</span>
+    {% endif %}
+
+    {% if batch.approved_by %}
+      <span class="text-muted small ms-2">by {{ batch.approved_by.username }} at {{ batch.approved_at }}</span>
+    {% endif %}
+  </div>
+
+  {% if can_approve and batch.approval_status != "APPROVED" and batch.approval_status != "REJECTED" and batch.approval_status != "DRAFT" %}
+    <div class="d-flex gap-2 mb-3">
+      <form method="post" action="{% url 'kam:visit_batch_approve' batch.id %}">
+        {% csrf_token %}
+        <button class="btn btn-success" type="submit">Approve Batch</button>
+      </form>
+      <form method="post" action="{% url 'kam:visit_batch_reject' batch.id %}">
+        {% csrf_token %}
+        <input class="form-control form-control-sm d-inline-block" style="width:320px" name="reason" placeholder="Reject reason (optional)" />
+        <button class="btn btn-outline-danger" type="submit">Reject Batch</button>
+      </form>
+    </div>
+  {% endif %}
+
+  <div class="table-responsive">
+    <table class="table table-sm table-striped align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>Customer / Counterparty</th>
+          <th style="width:180px;">Date</th>
+          <th>Purpose</th>
+          <th style="width:220px;">Location</th>
+          <th style="width:160px;">Expected Sales (MT)</th>
+          <th style="width:170px;">Expected Collection (₹)</th>
+          <th style="width:150px;">Line Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in lines %}
+          <tr>
+            <td>
+              {% if p.customer %}
+                <div class="fw-semibold">{{ p.customer.name }}</div>
+                <div class="text-muted small">{{ p.customer.code|default:"" }}</div>
+              {% else %}
+                <div class="fw-semibold">{{ p.counterparty_name }}</div>
+              {% endif %}
+            </td>
+            <td>{{ p.visit_date }}{% if p.visit_date_to %} → {{ p.visit_date_to }}{% endif %}</td>
+            <td>{{ p.purpose|default:"-" }}</td>
+            <td>{{ p.location|default:"-" }}</td>
+            <td>{{ p.expected_sales_mt|default:"-" }}</td>
+            <td>{{ p.expected_collection|default:"-" }}</td>
+            <td>{{ p.approval_status }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="7" class="text-muted">No lines found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

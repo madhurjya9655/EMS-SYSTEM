@@ -15,13 +15,11 @@
         {% else %}
           <option value="" selected>—</option>
         {% endif %}
-        {% if customer_list %}
-          {% for c in customer_list %}
-            {% if not customer or c.id != customer.id %}
-              <option value="{{ c.id }}">{{ c.name }}</option>
-            {% endif %}
-          {% endfor %}
-        {% endif %}
+        {% for c in customer_list %}
+          {% if not customer or c.id != customer.id %}
+            <option value="{{ c.id }}">{{ c.name }}</option>
+          {% endif %}
+        {% endfor %}
       </select>
     </div>
 
@@ -37,17 +35,12 @@
     </div>
 
     <div>
-      <label class="form-label mb-1 small">As of</label>
-      <input type="text" name="asof" value="{{ request.GET.asof }}" placeholder="YYYY-MM-DD" class="form-control form-control-sm" />
-    </div>
-
-    <div>
       <label class="form-label mb-1 small">From</label>
-      <input type="text" name="from" value="{{ request.GET.from }}" placeholder="YYYY-MM-DD" class="form-control form-control-sm" />
+      <input type="date" name="from" value="{{ request.GET.from }}" class="form-control form-control-sm" />
     </div>
     <div>
       <label class="form-label mb-1 small">To</label>
-      <input type="text" name="to" value="{{ request.GET.to }}" placeholder="YYYY-MM-DD" class="form-control form-control-sm" />
+      <input type="date" name="to" value="{{ request.GET.to }}" class="form-control form-control-sm" />
     </div>
 
     {% if kam_options %}
@@ -66,12 +59,16 @@
       <button class="btn btn-sm btn-primary" type="submit">Apply</button>
       <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:customers' %}">Reset</a>
     </div>
+
+    <div class="form-text small w-100">
+      Rule: If From+To are provided, they override Period. No “As of” mode exists.
+    </div>
   </form>
 </div>
 
 {% if customer %}
   <div class="mb-2 text-muted">
-    <small>Viewing: <strong>{{ customer.name }}</strong></small>
+    <small>Scope: <strong>{{ scope_label }}</strong> | Window: <strong>{{ period_id }}</strong></small>
   </div>
 {% endif %}
 
@@ -87,7 +84,6 @@
           Risk Ratio:
           {% if risk_ratio %}{{ risk_ratio|floatformat:2 }}{% else %}<span class="text-muted">—</span>{% endif %}
         </div>
-        <div class="form-text small">Scoped to allowed KAM visibility.</div>
       {% else %}
         <p class="text-muted m-0">No customer in scope.</p>
       {% endif %}
@@ -120,6 +116,7 @@
         <a class="btn btn-outline-secondary" href="{% url 'kam:call_new' %}">Log Call</a>
         <a class="btn btn-outline-secondary" href="{% url 'kam:collection_new' %}">Add Collection</a>
       </div>
+      <div class="form-text small mt-2">Actions may be blocked by permissions if your role doesn’t allow them.</div>
     </div>
   </div>
 </div>
@@ -130,14 +127,13 @@
       <h6 class="fw-bold mb-3">Sales (selected window)</h6>
       {% if sales_last12 %}
         <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead><tr><th>Year</th><th>Month</th><th>MT</th></tr></thead>
+          <table class="table table-sm align-middle mb-0">
+            <thead><tr><th>Period</th><th class="text-end">MT</th></tr></thead>
             <tbody>
               {% for r in sales_last12 %}
               <tr>
-                <td>{{ r.year }}</td>
-                <td>{{ r.month|stringformat:"02d" }}</td>
-                <td>{{ r.mt|floatformat:3 }}</td>
+                <td>{{ r.year }}-{{ r.month|stringformat:"02d" }}</td>
+                <td class="text-end">{{ r.mt|floatformat:3 }}</td>
               </tr>
               {% endfor %}
             </tbody>
@@ -154,14 +150,13 @@
       <h6 class="fw-bold mb-3">Collections (selected window)</h6>
       {% if collections_last12 %}
         <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead><tr><th>Year</th><th>Month</th><th>Amount (₹)</th></tr></thead>
+          <table class="table table-sm align-middle mb-0">
+            <thead><tr><th>Period</th><th class="text-end">Amount (₹)</th></tr></thead>
             <tbody>
               {% for r in collections_last12 %}
               <tr>
-                <td>{{ r.year }}</td>
-                <td>{{ r.month|stringformat:"02d" }}</td>
-                <td>₹ {{ r.amount|floatformat:2|intcomma }}</td>
+                <td>{{ r.year }}-{{ r.month|stringformat:"02d" }}</td>
+                <td class="text-end">₹ {{ r.amount|floatformat:2|intcomma }}</td>
               </tr>
               {% endfor %}
             </tbody>
@@ -177,53 +172,30 @@
 <div class="row g-3 mt-1">
   <div class="col-lg-6">
     <div class="card p-3">
-      <h6 class="fw-bold mb-3">Visit &amp; Call History</h6>
-      <div class="row">
-        <div class="col-md-6">
-          <h6 class="small text-muted">Recent Visits</h6>
-          {% if recent_visits %}
-          <ul class="list-unstyled mb-0">
-            {% for v in recent_visits %}
-            <li class="mb-1">
-              {{ v.visit_date }} • {{ v.visit_type }} • {{ v.approval_status }}
-            </li>
-            {% endfor %}
-          </ul>
-          {% else %}
-            <p class="text-muted m-0">No visits logged.</p>
-          {% endif %}
-        </div>
-        <div class="col-md-6">
-          <h6 class="small text-muted">Recent Calls</h6>
-          {% if recent_calls %}
-          <ul class="list-unstyled mb-0">
-            {% for c in recent_calls %}
-            <li class="mb-1">
-              {{ c.call_datetime|date:"Y-m-d H:i" }} • {{ c.duration_minutes }} min • {{ c.outcome|default:"—" }}
-            </li>
-            {% endfor %}
-          </ul>
-          {% else %}
-            <p class="text-muted m-0">No calls logged.</p>
-          {% endif %}
-        </div>
-      </div>
+      <h6 class="fw-bold mb-3">Recent Visits</h6>
+      {% if recent_visits %}
+        <ul class="list-unstyled mb-0">
+          {% for v in recent_visits %}
+            <li class="mb-1">{{ v.visit_date }} • {{ v.visit_type }} • {{ v.approval_status }}</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="text-muted m-0">No visits logged.</p>
+      {% endif %}
     </div>
   </div>
 
   <div class="col-lg-6">
     <div class="card p-3">
-      <h6 class="fw-bold mb-3">Pending Follow-ups</h6>
+      <h6 class="fw-bold mb-3">Upcoming Follow-ups</h6>
       {% if followups %}
-      <ul class="list-unstyled mb-0">
-        {% for f in followups %}
-        <li class="mb-1">
-          {{ f.next_action }} • <strong>{{ f.next_action_date }}</strong>
-        </li>
-        {% endfor %}
-      </ul>
+        <ul class="list-unstyled mb-0">
+          {% for f in followups %}
+            <li class="mb-1">{{ f.next_action }} • <strong>{{ f.next_action_date }}</strong></li>
+          {% endfor %}
+        </ul>
       {% else %}
-        <p class="text-muted m-0">No pending follow-ups.</p>
+        <p class="text-muted m-0">No follow-ups.</p>
       {% endif %}
     </div>
   </div>

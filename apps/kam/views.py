@@ -1,4 +1,4 @@
-# File: E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\kam\views.py
+# FILE: apps/kam/views.py
 from __future__ import annotations
 
 from decimal import Decimal
@@ -10,9 +10,9 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import redirect_to_login
 from django.core.mail import EmailMessage
+from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
 from django.db import transaction
-from django.db.models import Sum, Q, Max, Value, DateTimeField
-from django.db.models.functions import Cast, Coalesce, Greatest
+from django.db.models import Sum, Q
 from django.http import (
     HttpRequest,
     HttpResponse,
@@ -21,6 +21,7 @@ from django.http import (
     JsonResponse,
 )
 from django.shortcuts import render, redirect, get_object_or_404
+from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
 
@@ -31,18 +32,21 @@ from .forms import (
     VisitActualForm,
     CallForm,
     CollectionForm,
-    TargetLineInlineForm,
+    TargetLineInlineForm,  # legacy, kept for compatibility only
+    TargetSettingForm,  # SECTION F (kept; not used by redesigned manager targets)
     CollectionPlanForm,
     VisitBatchForm,
     MultiVisitPlanLineForm,
+    ManagerTargetForm,  # NEW: manager targets UI/form (bulk + fixed 3 months)
 )
 from .models import (
     Customer,
     InvoiceFact,
     LeadFact,
     OverdueSnapshot,
-    TargetHeader,
-    TargetLine,
+    TargetHeader,  # legacy, kept for historical
+    TargetLine,  # legacy, kept for historical
+    TargetSetting,  # SECTION F
     VisitPlan,
     VisitActual,
     CallLog,
@@ -51,28 +55,38 @@ from .models import (
     SyncIntent,
     CollectionPlan,
     VisitBatch,
+    KamManagerMapping,
 )
 from . import sheets_adapter  # adapter with step_sync() and run_sync_now()
 
+
 User = get_user_model()
 
-# -----------------------------------------------------------------------------
-# Constants for approvals / mail routing
-# -----------------------------------------------------------------------------
-APPROVAL_PRIMARY_MANAGER_USERNAME = "chandan"
-APPROVAL_CC_USERNAMES = ["ganesh", "vilas", "amreen", "smriti"]
-APPROVAL_BLOCKED_USERNAMES = {"amreen", "smriti"}  # cannot approve
+# ---------------------------------------------------------------------
+# Status constants (must align with models.py choices)
+# ---------------------------------------------------------------------
+STATUS_DRAFT = VisitBatch.DRAFT
+STATUS_PENDING_APPROVAL = VisitBatch.PENDING_APPROVAL
+STATUS_PENDING_LEGACY = VisitBatch.PENDING
+STATUS_APPROVED = VisitBatch.APPROVED
+STATUS_REJECTED = VisitBatch.REJECTED
 
-# -----------------------------------------------------------------------------
-# Form prefixes (IMPORTANT: prevents duplicate HTML ids between single & batch)
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Form prefixes (IMPORTANT: prevents duplicate HTML ids)
+# ---------------------------------------------------------------------
 SINGLE_PREFIX = "single"
 BATCH_PREFIX = "batch"
 
+# ---------------------------------------------------------------------
+# Secure token signer for email approval links
+# ---------------------------------------------------------------------
+_BATCH_SIGNER = TimestampSigner(salt="kam.visitbatch.approval.v1")
+BATCH_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 days
 
-# -----------------------------------------------------------------------------
-# Access helpers (use app-level permission codes like other modules)
-# -----------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------
+# Group/role helpers (DO NOT rely on templates only)
+# ---------------------------------------------------------------------
 def _in_group(user, names: Tuple[str, ...]) -> bool:
     if not getattr(user, "is_authenticated", False):
         return False
@@ -84,14 +98,18 @@ def _in_group(user, names: Tuple[str, ...]) -> bool:
         return False
 
 
+def _is_admin(user) -> bool:
+    return bool(getattr(user, "is_superuser", False) or _in_group(user, ("Admin",)))
+
+
 def _is_manager(user) -> bool:
-    # Keep your original group logic intact
-    return _in_group(user, ("Manager", "Admin", "Finance"))
+    # Keep your original group logic intact while tightening data scope via mapping
+    return bool(_in_group(user, ("Manager", "Admin", "Finance")))
 
 
-def _cannot_approve(user) -> bool:
-    uname = (getattr(user, "username", "") or "").strip().lower()
-    return uname in APPROVAL_BLOCKED_USERNAMES and not getattr(user, "is_superuser", False)
+def _is_kam(user) -> bool:
+    # If they can access the KAM module but not manager group, treat as KAM
+    return bool(getattr(user, "is_authenticated", False) and not _is_manager(user))
 
 
 def require_kam_code(code: str):
@@ -108,7 +126,6 @@ def require_kam_code(code: str):
             if not getattr(user, "is_authenticated", False):
                 return redirect_to_login(request.get_full_path())
 
-            # Superuser bypass
             if getattr(user, "is_superuser", False):
                 return view_func(request, *args, **kwargs)
 
@@ -127,9 +144,54 @@ def require_kam_code(code: str):
     return _decorator
 
 
-# -----------------------------------------------------------------------------
-# Mail helper (best-effort; non-blocking on failures)
-# -----------------------------------------------------------------------------
+def require_any_kam_code(*codes: str):
+    """
+    Decorator: require ANY of the given KAM app-level permission codes.
+    Superusers bypass. Anonymous users redirected to login.
+    """
+    required = {((c or "").strip().lower()) for c in codes if (c or "").strip()}
+
+    def _decorator(view_func):
+        @wraps(view_func)
+        def _wrapped(request: HttpRequest, *args, **kwargs):
+            user = getattr(request, "user", None)
+            if not getattr(user, "is_authenticated", False):
+                return redirect_to_login(request.get_full_path())
+
+            if getattr(user, "is_superuser", False):
+                return view_func(request, *args, **kwargs)
+
+            try:
+                user_codes = _user_permission_codes(user)
+            except Exception:
+                user_codes = set()
+
+            if {"*", "all"} & user_codes:
+                return view_func(request, *args, **kwargs)
+
+            if required and (user_codes & required):
+                return view_func(request, *args, **kwargs)
+
+            return HttpResponseForbidden("403 Forbidden: KAM permission required.")
+
+        return _wrapped
+
+    return _decorator
+
+
+# ---------------------------------------------------------------------
+# IP helper
+# ---------------------------------------------------------------------
+def _get_ip(request: HttpRequest) -> Optional[str]:
+    xff = request.META.get("HTTP_X_FORWARDED_FOR")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR")
+
+
+# ---------------------------------------------------------------------
+# Mail helper (best-effort; non-blocking)
+# ---------------------------------------------------------------------
 def _send_safe_mail(subject: str, body: str, to_users: List[User], cc_users: List[User] | None = None):
     try:
         to_emails = [u.email for u in to_users if getattr(u, "email", None)]
@@ -137,27 +199,113 @@ def _send_safe_mail(subject: str, body: str, to_users: List[User], cc_users: Lis
         if not to_emails and not cc_emails:
             return
         email = EmailMessage(subject=subject, body=body, to=to_emails, cc=cc_emails)
+        email.content_subtype = "html" if "<html" in (body or "").lower() else "plain"
         email.send(fail_silently=True)
     except Exception:
         pass
 
 
-# -----------------------------------------------------------------------------
-# Scope helpers (IMPORTANT: prevent cross-KAM leakage in dropdowns)
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Mapping helpers (CRITICAL: manager routing and manager RBAC)
+# ---------------------------------------------------------------------
+def _active_manager_for_kam(kam_user: User) -> Optional[User]:
+    if not kam_user or not getattr(kam_user, "id", None):
+        return None
+    m = (
+        KamManagerMapping.objects.select_related("manager")
+        .filter(kam=kam_user, active=True)
+        .order_by("-assigned_at", "-created_at")
+        .first()
+    )
+    return m.manager if m else None
+
+
+def _kams_managed_by_manager(manager_user: User) -> List[int]:
+    if not manager_user or not getattr(manager_user, "id", None):
+        return []
+    if _is_admin(manager_user):
+        # Admin can see all KAMs
+        return list(User.objects.filter(is_active=True).values_list("id", flat=True))
+    return list(
+        KamManagerMapping.objects.filter(manager=manager_user, active=True).values_list("kam_id", flat=True).distinct()
+    )
+
+
+# ---------------------------------------------------------------------
+# Queryset scope helpers (STRICT at queryset level)
+# ---------------------------------------------------------------------
 def _customer_qs_for_user(user: User):
     """
-    Non-manager users must only see their own customers in any dropdown.
-    Managers can see all customers.
+    KAM: only their customers (ownership by kam or primary_kam).
+    Manager: only customers of KAMs assigned to them.
+    Admin: all customers.
     """
+    qs = Customer.objects.all()
+
+    if _is_admin(user):
+        return qs
+
     if _is_manager(user):
-        return Customer.objects.all()
-    return Customer.objects.filter(primary_kam=user)
+        kam_ids = _kams_managed_by_manager(user)
+        return qs.filter(Q(kam_id__in=kam_ids) | Q(primary_kam_id__in=kam_ids))
+
+    # KAM scope
+    return qs.filter(Q(kam=user) | Q(primary_kam=user))
 
 
-# -----------------------------------------------------------------------------
-# Period helpers (kept for other pages, dashboard will use strict From-To)
-# -----------------------------------------------------------------------------
+def _visitbatch_qs_for_user(user: User):
+    qs = VisitBatch.objects.select_related("kam")
+    if _is_admin(user):
+        return qs
+    if _is_manager(user):
+        kam_ids = _kams_managed_by_manager(user)
+        return qs.filter(kam_id__in=kam_ids)
+    return qs.filter(kam=user)
+
+
+def _visitplan_qs_for_user(user: User):
+    qs = VisitPlan.objects.select_related("customer", "kam", "batch")
+    if _is_admin(user):
+        return qs
+    if _is_manager(user):
+        kam_ids = _kams_managed_by_manager(user)
+        return qs.filter(kam_id__in=kam_ids)
+    return qs.filter(kam=user)
+
+
+# ---------------------------------------------------------------------
+# Date parsing helpers
+# ---------------------------------------------------------------------
+def _parse_iso_date(s: str) -> Optional[timezone.datetime.date]:
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        return timezone.datetime.fromisoformat(s).date()
+    except Exception:
+        return None
+
+
+def _safe_decimal(val) -> Decimal:
+    try:
+        return Decimal(val or 0)
+    except Exception:
+        return Decimal(0)
+
+
+def _parse_decimal_or_none(s: str) -> Optional[Decimal]:
+    s = (s or "").strip()
+    if s == "":
+        return None
+    try:
+        return Decimal(s)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------
+# Period helpers (existing)
+# ---------------------------------------------------------------------
 def _iso_week_bounds(dt: timezone.datetime) -> Tuple[timezone.datetime, timezone.datetime, str]:
     local = timezone.localtime(dt)
     start = local - timezone.timedelta(days=local.weekday())
@@ -169,10 +317,6 @@ def _iso_week_bounds(dt: timezone.datetime) -> Tuple[timezone.datetime, timezone
 
 
 def _ms_week_bounds(dt: timezone.datetime) -> Tuple[timezone.datetime, timezone.datetime, str]:
-    """
-    Week definition for 4-week trend: Monday to Saturday.
-    Represented as [Mon 00:00, Sun 00:00) (end-exclusive) so Sunday is excluded.
-    """
     local = timezone.localtime(dt)
     start = local - timezone.timedelta(days=local.weekday())  # Monday
     start = start.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -183,15 +327,9 @@ def _ms_week_bounds(dt: timezone.datetime) -> Tuple[timezone.datetime, timezone.
 
 
 def _last_completed_ms_week_end(dt: timezone.datetime) -> timezone.datetime:
-    """
-    Returns the end (exclusive) timestamp of the most recent COMPLETED Mon–Sat week.
-    - If now is Mon..Sat (before Sun 00:00): last completed is previous week => returns previous Sunday 00:00
-    - If now is Sun or later: current week completed => returns this Sunday 00:00
-    """
     start, end, _ = _ms_week_bounds(dt)
     now_local = timezone.localtime(dt)
     if now_local < end:
-        # previous week's end is previous Sunday 00:00, i.e., start - 1 day
         return start - timezone.timedelta(days=1)
     return end
 
@@ -248,28 +386,14 @@ def _parse_ymd_part(s: str) -> Optional[timezone.datetime]:
         return None
 
 
-def _parse_iso_date(s: str) -> Optional[timezone.datetime.date]:
-    s = (s or "").strip()
-    if not s:
-        return None
-    try:
-        return timezone.datetime.fromisoformat(s).date()
-    except Exception:
-        return None
-
-
 def _get_period(request: HttpRequest) -> Tuple[str, timezone.datetime, timezone.datetime, str]:
-    """
-    Kept for backward compatibility with other screens.
-    Dashboard will NOT rely on period/asof anymore, but From-To still works here too.
-    """
     from_q = request.GET.get("from")
     to_q = request.GET.get("to")
     if from_q and to_q:
         s = _parse_ymd_part(from_q)
         e = _parse_ymd_part(to_q)
         if s and e and s <= e:
-            e = e + timezone.timedelta(days=1)  # make end exclusive
+            e = e + timezone.timedelta(days=1)
             return "CUSTOM", s, e, f"{s.date()}..{(e - timezone.timedelta(days=1)).date()}"
 
     p = (request.GET.get("period") or "").lower()
@@ -289,16 +413,7 @@ def _get_period(request: HttpRequest) -> Tuple[str, timezone.datetime, timezone.
     return ("WEEK", *_iso_week_bounds(ref))
 
 
-# -----------------------------------------------------------------------------
-# STRICT dashboard date-range helper (calendar From/To)
-# -----------------------------------------------------------------------------
 def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timezone.datetime, str]:
-    """
-    Dashboard date filter:
-      - If from & to are present and valid => use inclusive range, end-exclusive (+1 day)
-      - Else default to current ISO week
-    Inputs accept YYYY-MM-DD (from HTML <input type="date">).
-    """
     from_s = (request.GET.get("from") or "").strip()
     to_s = (request.GET.get("to") or "").strip()
 
@@ -306,11 +421,13 @@ def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timez
     to_d = _parse_iso_date(to_s)
     if from_d and to_d and from_d <= to_d:
         start = timezone.make_aware(timezone.datetime(from_d.year, from_d.month, from_d.day, 0, 0, 0))
-        end = timezone.make_aware(timezone.datetime(to_d.year, to_d.month, to_d.day, 0, 0, 0)) + timezone.timedelta(days=1)
+        end = (
+            timezone.make_aware(timezone.datetime(to_d.year, to_d.month, to_d.day, 0, 0, 0))
+            + timezone.timedelta(days=1)
+        )
         label = f"{from_d} → {to_d}"
         return start, end, label
 
-    # Default = this week
     ws, we, _ = _iso_week_bounds(timezone.now())
     label = f"{ws.date()} → {(we - timezone.timedelta(days=1)).date()}"
     return ws, we, label
@@ -319,175 +436,210 @@ def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timez
 def _resolve_scope(request: HttpRequest, actor: User) -> Tuple[Optional[int], str]:
     """
     Scope rules:
-      - Non-manager: always self (FORCE LOCK, ignore ?user)
-      - Manager: may choose ?user=username else ALL
+      - KAM: always self (ignore ?user)
+      - Manager: only KAMs assigned to them (optional ?user=username)
+      - Admin: may choose any user
     """
     if not _is_manager(actor):
         return actor.id, actor.username
 
     uname = (request.GET.get("user") or "").strip()
     if uname:
-        try:
-            u = User.objects.get(username=uname)
+        u = User.objects.filter(username=uname, is_active=True).first()
+        if not u:
+            return None, "ALL"
+
+        if _is_admin(actor):
             return u.id, u.username
-        except User.DoesNotExist:
-            pass
+
+        allowed = set(_kams_managed_by_manager(actor))
+        if u.id in allowed:
+            return u.id, u.username
+        return None, "ALL"
+
     return None, "ALL"
 
 
-def _safe_decimal(val) -> Decimal:
-    return Decimal(val or 0)
-
-
-def _parse_decimal_or_none(s: str) -> Optional[Decimal]:
-    s = (s or "").strip()
-    if s == "":
-        return None
-    try:
-        return Decimal(s)
-    except Exception:
-        return None
-
-
-# -----------------------------------------------------------------------------
-# KAM dropdown: recent activity first (Manager/Admin only)
-# -----------------------------------------------------------------------------
-def _manager_kam_options_recent_first() -> List[str]:
-    """
-    Show recently active KAMs first, then others.
-    Activity based on max of:
-      - calllog.call_datetime
-      - collectiontxn.txn_datetime
-      - invoicefact.invoice_date (cast to datetime)
-      - visitplan.visit_date (cast to datetime)
-      - leadfact.doe (cast to datetime)
-    """
-    baseline = timezone.make_aware(timezone.datetime(2000, 1, 1, 0, 0, 0))
-
-    qs = (
-        User.objects.filter(is_active=True)
-        .annotate(
-            last_call=Max("calllog__call_datetime"),
-            last_coll=Max("collectiontxn__txn_datetime"),
-            last_inv=Cast(Max("invoicefact__invoice_date"), output_field=DateTimeField()),
-            last_visit=Cast(Max("visitplan__visit_date"), output_field=DateTimeField()),
-            last_lead=Cast(Max("leadfact__doe"), output_field=DateTimeField()),
-        )
-        .annotate(
-            last_activity=Greatest(
-                Coalesce("last_call", Value(baseline)),
-                Coalesce("last_coll", Value(baseline)),
-                Coalesce("last_inv", Value(baseline)),
-                Coalesce("last_visit", Value(baseline)),
-                Coalesce("last_lead", Value(baseline)),
-            )
-        )
-        .order_by("-last_activity", "username")
-        .values_list("username", flat=True)
-    )
-    return list(qs)
-
-
-# -----------------------------------------------------------------------------
-# Overdue helpers (range-aware snapshots)
-# -----------------------------------------------------------------------------
-def _latest_snapshot_date_for_customers_upto(customer_ids: List[int], upto_date) -> Optional[timezone.datetime.date]:
-    """
-    Latest snapshot_date <= upto_date
-    """
-    if not customer_ids:
+# ---------------------------------------------------------------------
+# Target setting helper (existing)
+# ---------------------------------------------------------------------
+def _target_setting_for_kam_window(kam_id: int, start_date, end_date_inclusive) -> Optional[TargetSetting]:
+    if not kam_id:
         return None
     return (
-        OverdueSnapshot.objects.filter(customer_id__in=customer_ids, snapshot_date__lte=upto_date)
-        .order_by("-snapshot_date")
-        .values_list("snapshot_date", flat=True)
+        TargetSetting.objects.filter(kam_id=kam_id, from_date__lte=start_date, to_date__gte=end_date_inclusive)
+        .order_by("-created_at", "from_date")
         .first()
     )
 
 
-def _latest_snapshot_date_for_customers_before(customer_ids: List[int], before_date) -> Optional[timezone.datetime.date]:
-    """
-    Latest snapshot_date < before_date
-    """
-    if not customer_ids:
-        return None
-    return (
-        OverdueSnapshot.objects.filter(customer_id__in=customer_ids, snapshot_date__lt=before_date)
-        .order_by("-snapshot_date")
-        .values_list("snapshot_date", flat=True)
-        .first()
-    )
+# ---------------------------------------------------------------------
+# Customer 360 strict filter (existing)
+# ---------------------------------------------------------------------
+def _get_customer360_range(request: HttpRequest) -> Tuple[str, timezone.datetime.date, timezone.datetime.date, str]:
+    from_s = (request.GET.get("from") or "").strip()
+    to_s = (request.GET.get("to") or "").strip()
+    from_d = _parse_iso_date(from_s)
+    to_d = _parse_iso_date(to_s)
+
+    if from_d and to_d and from_d <= to_d:
+        return "CUSTOM", from_d, to_d, f"{from_d}..{to_d}"
+
+    p = (request.GET.get("period") or "week").strip().lower()
+    now = timezone.now()
+
+    if p == "month":
+        sdt, edt, pid = _month_bounds(now)
+        return "MONTH", sdt.date(), (edt - timezone.timedelta(days=1)).date(), pid
+    if p == "quarter":
+        sdt, edt, pid = _quarter_bounds(now)
+        return "QUARTER", sdt.date(), (edt - timezone.timedelta(days=1)).date(), pid
+    if p == "year":
+        sdt, edt, pid = _year_bounds(now)
+        return "YEAR", sdt.date(), (edt - timezone.timedelta(days=1)).date(), pid
+    if p == "all":
+        return "ALL", timezone.datetime(2000, 1, 1).date(), timezone.datetime(2100, 1, 1).date(), "ALL"
+
+    sdt, edt, pid = _iso_week_bounds(now)
+    return "WEEK", sdt.date(), (edt - timezone.timedelta(days=1)).date(), pid
 
 
-def _rollup_overdue_for_customers(customer_ids: List[int], snapshot_date: timezone.datetime.date) -> Tuple[Decimal, Decimal]:
-    """
-    Returns (exposure_sum, overdue_sum) for the given snapshot date.
-    Exposure fallback: if exposure sum is 0 but ageing buckets exist, use ageing sum; else fallback to overdue.
-    """
-    if not customer_ids or not snapshot_date:
-        return Decimal(0), Decimal(0)
-
-    agg = (
-        OverdueSnapshot.objects.filter(customer_id__in=customer_ids, snapshot_date=snapshot_date)
-        .aggregate(
-            total_exposure=Sum("exposure"),
-            total_overdue=Sum("overdue"),
-            a0=Sum("ageing_0_30"),
-            a1=Sum("ageing_31_60"),
-            a2=Sum("ageing_61_90"),
-            a3=Sum("ageing_90_plus"),
-        )
-    )
-    exposure = _safe_decimal(agg.get("total_exposure"))
-    overdue = _safe_decimal(agg.get("total_overdue"))
-
-    if not exposure:
-        ageing_sum = (
-            _safe_decimal(agg.get("a0"))
-            + _safe_decimal(agg.get("a1"))
-            + _safe_decimal(agg.get("a2"))
-            + _safe_decimal(agg.get("a3"))
-        )
-        if ageing_sum:
-            exposure = ageing_sum
-
-    if not exposure and overdue:
-        exposure = overdue
-
-    return exposure, overdue
+def _add_months(d: timezone.datetime.date, months: int) -> timezone.datetime.date:
+    y = d.year + (d.month - 1 + months) // 12
+    m = (d.month - 1 + months) % 12 + 1
+    if m == 12:
+        next_month_first = timezone.datetime(y + 1, 1, 1).date()
+    else:
+        next_month_first = timezone.datetime(y, m + 1, 1).date()
+    last_day = next_month_first - timezone.timedelta(days=1)
+    day = min(d.day, last_day.day)
+    return timezone.datetime(y, m, day).date()
 
 
-# -----------------------------------------------------------------------------
-# Dashboard
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Approval token helpers
+# ---------------------------------------------------------------------
+def _make_batch_token(batch_id: int, action: str) -> str:
+    raw = f"{batch_id}:{(action or '').strip().upper()}"
+    return _BATCH_SIGNER.sign(raw)
+
+
+def _parse_batch_token(token: str) -> Tuple[int, str]:
+    value = _BATCH_SIGNER.unsign(token, max_age=BATCH_TOKEN_MAX_AGE_SECONDS)
+    parts = (value or "").split(":", 1)
+    if len(parts) != 2:
+        raise BadSignature("invalid token payload")
+    bid = int(parts[0])
+    action = (parts[1] or "").strip().upper()
+    if action not in {"APPROVE", "REJECT"}:
+        raise BadSignature("invalid token action")
+    return bid, action
+
+
+# ---------------------------------------------------------------------
+# Admin UI: KAM → Manager Mapping (Admin Only)
+# ---------------------------------------------------------------------
+@login_required
+@require_any_kam_code("kam_manager", "kam_dashboard", "kam_plan")
+def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
+    if not _is_admin(request.user):
+        return HttpResponseForbidden("403 Forbidden: Admin access required.")
+
+    if request.method == "POST":
+        action = (request.POST.get("action") or "").strip().lower()
+
+        if action in {"assign", "update"}:
+            kam_id = (request.POST.get("kam_id") or "").strip()
+            manager_id = (request.POST.get("manager_id") or "").strip()
+            if not (kam_id.isdigit() and manager_id.isdigit()):
+                messages.error(request, "Invalid KAM/Manager selection.")
+                return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+            if kam_id == manager_id:
+                messages.error(request, "KAM and Manager cannot be the same user.")
+                return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+            kam_user = User.objects.filter(id=int(kam_id), is_active=True).first()
+            mgr_user = User.objects.filter(id=int(manager_id), is_active=True).first()
+            if not kam_user or not mgr_user:
+                messages.error(request, "Invalid KAM/Manager user.")
+                return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+            with transaction.atomic():
+                KamManagerMapping.objects.filter(kam=kam_user, active=True).update(active=False, updated_at=timezone.now())
+                KamManagerMapping.objects.create(
+                    kam=kam_user,
+                    manager=mgr_user,
+                    assigned_by=request.user,
+                    active=True,
+                )
+            messages.success(request, f"Assigned manager for {kam_user.username} → {mgr_user.username}.")
+            return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+        if action in {"remove", "deactivate"}:
+            map_id = (request.POST.get("mapping_id") or "").strip()
+            if not map_id.isdigit():
+                messages.error(request, "Invalid mapping id.")
+                return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+            with transaction.atomic():
+                m = KamManagerMapping.objects.select_for_update().filter(id=int(map_id)).first()
+                if not m:
+                    messages.error(request, "Mapping not found.")
+                    return redirect(reverse("kam:admin_kam_manager_mapping"))
+                m.active = False
+                m.save(update_fields=["active", "updated_at"])
+            messages.success(request, "Mapping deactivated.")
+            return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+        messages.error(request, "Unknown action.")
+        return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+    active_only = (request.GET.get("active") or "1").strip() != "0"
+
+    mappings = KamManagerMapping.objects.select_related("kam", "manager", "assigned_by").order_by("-active", "-assigned_at")
+    if active_only:
+        mappings = mappings.filter(active=True)
+
+    all_users = User.objects.filter(is_active=True).order_by("username")
+    kam_users = [u for u in all_users if not _is_manager(u)]
+    manager_users = [u for u in all_users if _is_manager(u)]
+
+    ctx = {
+        "page_title": "KAM → Manager Mapping",
+        "rows": list(mappings[:500]),
+        "kam_users": kam_users,
+        "manager_users": manager_users,
+        "active_only": active_only,
+    }
+    return render(request, "kam/admin_kam_manager_mapping.html", ctx)
+
+
+# ---------------------------------------------------------------------
+# Dashboard (existing, only tightened scope to mapping for managers)
+# ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_dashboard")
 def dashboard(request: HttpRequest) -> HttpResponse:
-    # STRICT range for dashboard
     start_dt, end_dt, range_label = _get_dashboard_range(request)
-
-    # STRICT scope lock
     scope_kam_id, scope_label = _resolve_scope(request, request.user)
 
-    # Targets remain available only when period header exists.
-    # For custom date ranges, we do not attempt to guess targets; keep defaults.
-    # For default week view, targets work as earlier.
-    period_type, p_start, p_end, period_id = _get_period(request)
-    is_default_week = (request.GET.get("from") or "").strip() == "" and (request.GET.get("to") or "").strip() == ""
+    sales_target_mt = Decimal(0)
+    calls_target = 0
+    leads_target_mt = Decimal(0)
+    collections_plan_amount = Decimal(0)
+    visits_target = 6
 
-    tline = None
-    if scope_kam_id and is_default_week:
-        header = TargetHeader.objects.filter(period_type=period_type, period_id=period_id).order_by("-id").first()
-        if header:
-            tline = TargetLine.objects.filter(header=header, kam_id=scope_kam_id).first()
+    if scope_kam_id:
+        start_date = start_dt.date()
+        end_date_inclusive = (end_dt - timezone.timedelta(days=1)).date()
+        ts = _target_setting_for_kam_window(scope_kam_id, start_date, end_date_inclusive)
+        if ts:
+            sales_target_mt = _safe_decimal(ts.sales_target_mt)
+            calls_target = int(ts.calls_target or 0)
+            leads_target_mt = _safe_decimal(ts.leads_target_mt)
+            collections_plan_amount = _safe_decimal(ts.collections_target_amount)
 
-    sales_target_mt = _safe_decimal(getattr(tline, "sales_target_mt", None)) if tline else Decimal(0)
-    visits_target = getattr(tline, "visits_target", 6) if tline else 6
-    calls_target = getattr(tline, "calls_target", 24) if tline else 24
-    leads_target_mt = _safe_decimal(getattr(tline, "leads_target_mt", None)) if tline else Decimal(0)
-    collections_plan_amount = _safe_decimal(getattr(tline, "collections_plan_amount", None)) if tline else Decimal(0)
-
-    # STRICT date-range querysets
     inv_qs = InvoiceFact.objects.filter(invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date())
     visit_plan_qs = VisitPlan.objects.filter(visit_date__gte=start_dt.date(), visit_date__lt=end_dt.date())
     visit_act_qs = VisitActual.objects.filter(plan__visit_date__gte=start_dt.date(), plan__visit_date__lt=end_dt.date())
@@ -495,7 +647,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     lead_qs = LeadFact.objects.filter(doe__gte=start_dt.date(), doe__lt=end_dt.date())
     coll_qs = CollectionTxn.objects.filter(txn_datetime__gte=start_dt, txn_datetime__lt=end_dt)
 
-    # STRICT scoping (NO leakage)
     if scope_kam_id is not None:
         inv_qs = inv_qs.filter(kam_id=scope_kam_id)
         visit_plan_qs = visit_plan_qs.filter(kam_id=scope_kam_id)
@@ -516,9 +667,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 
     collections_actual = _safe_decimal(coll_qs.aggregate(total_amt=Sum("amount")).get("total_amt"))
 
-    # -----------------------------
-    # Overdues / exposure / credit limits
-    # -----------------------------
     overdue_snapshot_date = None
     prev_overdue_snapshot_date = None
     credit_limit_sum = Decimal(0)
@@ -527,10 +675,11 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     prev_overdue_sum = Decimal(0)
 
     if scope_kam_id is not None:
-        customer_ids = list(Customer.objects.filter(primary_kam_id=scope_kam_id).values_list("id", flat=True))
+        customer_ids = list(
+            Customer.objects.filter(Q(kam_id=scope_kam_id) | Q(primary_kam_id=scope_kam_id)).values_list("id", flat=True)
+        )
     else:
-        # Manager/Admin ALL
-        customer_ids = list(Customer.objects.exclude(primary_kam__isnull=True).values_list("id", flat=True))
+        customer_ids = list(_customer_qs_for_user(request.user).values_list("id", flat=True))
 
     if customer_ids:
         credit_limit_sum = _safe_decimal(
@@ -540,13 +689,45 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         end_date_inclusive = (end_dt - timezone.timedelta(days=1)).date()
         start_date_inclusive = start_dt.date()
 
-        overdue_snapshot_date = _latest_snapshot_date_for_customers_upto(customer_ids, end_date_inclusive)
+        overdue_snapshot_date = (
+            OverdueSnapshot.objects.filter(customer_id__in=customer_ids, snapshot_date__lte=end_date_inclusive)
+            .order_by("-snapshot_date")
+            .values_list("snapshot_date", flat=True)
+            .first()
+        )
         if overdue_snapshot_date:
-            exposure_sum, overdue_sum = _rollup_overdue_for_customers(customer_ids, overdue_snapshot_date)
+            agg = (
+                OverdueSnapshot.objects.filter(customer_id__in=customer_ids, snapshot_date=overdue_snapshot_date).aggregate(
+                    total_exposure=Sum("exposure"),
+                    total_overdue=Sum("overdue"),
+                    a0=Sum("ageing_0_30"),
+                    a1=Sum("ageing_31_60"),
+                    a2=Sum("ageing_61_90"),
+                    a3=Sum("ageing_90_plus"),
+                )
+            )
+            exposure_sum = _safe_decimal(agg.get("total_exposure"))
+            overdue_sum = _safe_decimal(agg.get("total_overdue"))
+            if not exposure_sum:
+                ageing_sum = _safe_decimal(agg.get("a0")) + _safe_decimal(agg.get("a1")) + _safe_decimal(agg.get("a2")) + _safe_decimal(agg.get("a3"))
+                if ageing_sum:
+                    exposure_sum = ageing_sum
+            if not exposure_sum and overdue_sum:
+                exposure_sum = overdue_sum
 
-        prev_overdue_snapshot_date = _latest_snapshot_date_for_customers_before(customer_ids, start_date_inclusive)
+        prev_overdue_snapshot_date = (
+            OverdueSnapshot.objects.filter(customer_id__in=customer_ids, snapshot_date__lt=start_date_inclusive)
+            .order_by("-snapshot_date")
+            .values_list("snapshot_date", flat=True)
+            .first()
+        )
         if prev_overdue_snapshot_date:
-            _ex_prev, prev_overdue_sum = _rollup_overdue_for_customers(customer_ids, prev_overdue_snapshot_date)
+            agg2 = (
+                OverdueSnapshot.objects.filter(customer_id__in=customer_ids, snapshot_date=prev_overdue_snapshot_date).aggregate(
+                    total_overdue=Sum("overdue")
+                )
+            )
+            prev_overdue_sum = _safe_decimal(agg2.get("total_overdue"))
 
     def _pct(n: Decimal, d: Decimal) -> Optional[Decimal]:
         if d and d != 0:
@@ -565,9 +746,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     prod_by_grade = list(inv_qs.values("grade").annotate(mt=Sum("qty_mt")).order_by("-mt"))
     prod_by_size = list(inv_qs.values("size").annotate(mt=Sum("qty_mt")).order_by("-mt"))
 
-    # ---------------------------------------------------------------------
-    # 4 WEEK TREND (Mon–Sat), last 4 COMPLETED weeks only (from current date)
-    # ---------------------------------------------------------------------
     trend_rows: List[Dict] = []
     anchor_end = _last_completed_ms_week_end(timezone.now())
 
@@ -598,49 +776,45 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             }
         )
 
-    kam_options = _manager_kam_options_recent_first() if _is_manager(request.user) else []
+    kam_options: List[str] = []
+    if _is_manager(request.user):
+        if _is_admin(request.user):
+            kam_options = list(User.objects.filter(is_active=True).order_by("username").values_list("username", flat=True))
+        else:
+            allowed_ids = _kams_managed_by_manager(request.user)
+            kam_options = list(
+                User.objects.filter(is_active=True, id__in=allowed_ids).order_by("username").values_list("username", flat=True)
+            )
 
     ctx = {
         "page_title": "KAM Dashboard",
         "range_label": range_label,
         "can_choose_kam": _is_manager(request.user),
-
-        "period_type": period_type,
-        "period_id": period_id,
-
         "scope_label": scope_label,
         "kam_options": kam_options,
-
         "kpi": {
             "sales_mt": sales_mt,
             "sales_target_mt": sales_target_mt,
             "sales_ach_pct": sales_ach_pct,
-
             "visits_planned": visits_planned,
             "visits_actual": visits_actual,
             "visits_target": visits_target,
             "visit_ach_pct": visit_ach_pct,
             "visit_success_pct": visit_success_pct,
-
             "calls": calls,
             "calls_target": calls_target,
             "call_ach_pct": call_ach_pct,
-
             "leads_total_mt": leads_total_mt,
             "leads_won_mt": leads_won_mt,
             "lead_conv_pct": lead_conv_pct,
-
             "collections_actual": collections_actual,
             "collections_eff_pct": coll_eff_pct,
-
             "overdue_sum": overdue_sum,
             "prev_overdue_sum": prev_overdue_sum,
             "overdue_reduction_pct": overdue_reduction_pct,
-
             "credit_limit_sum": credit_limit_sum,
             "exposure_sum": exposure_sum,
             "overdue_risk_ratio": overdue_risk_ratio,
-
             "overdue_snapshot_date": overdue_snapshot_date,
             "prev_overdue_snapshot_date": prev_overdue_snapshot_date,
         },
@@ -651,9 +825,9 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     return render(request, "kam/kam_dashboard.html", ctx)
 
 
-# -----------------------------------------------------------------------------
-# Manager summary
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Manager summary (existing)
+# ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_manager")
 def manager_dashboard(request: HttpRequest) -> HttpResponse:
@@ -662,9 +836,7 @@ def manager_dashboard(request: HttpRequest) -> HttpResponse:
     today_start = timezone.localtime(timezone.now()).replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow = today_start + timezone.timedelta(days=1)
     calls_today = CallLog.objects.filter(call_datetime__gte=today_start, call_datetime__lt=tomorrow).count()
-    visits_today = VisitActual.objects.filter(
-        plan__visit_date__gte=today_start.date(), plan__visit_date__lt=tomorrow.date()
-    ).count()
+    visits_today = VisitActual.objects.filter(plan__visit_date__gte=today_start.date(), plan__visit_date__lt=tomorrow.date()).count()
     collections_today = _safe_decimal(
         CollectionTxn.objects.filter(txn_datetime__gte=today_start, txn_datetime__lt=tomorrow).aggregate(a=Sum("amount"))["a"]
     )
@@ -682,26 +854,16 @@ def manager_dashboard(request: HttpRequest) -> HttpResponse:
 @login_required
 @require_kam_code("kam_manager_kpis")
 def manager_kpis(request: HttpRequest) -> HttpResponse:
-    """
-    Manager KPIs page:
-      - KAM-wise KPIs for selected period
-      - Top risky customers (latest overdue snapshot), max 50
-    """
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
 
     period_type, start_dt, end_dt, period_id = _get_period(request)
 
-    kam_ids = set(
-        Customer.objects.exclude(primary_kam__isnull=True).values_list("primary_kam_id", flat=True).distinct()
-    )
-    kam_ids |= set(
-        InvoiceFact.objects.filter(invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date())
-        .values_list("kam_id", flat=True)
-        .distinct()
-    )
-
-    kams = User.objects.filter(is_active=True, id__in=list(kam_ids)).order_by("username")
+    if _is_admin(request.user):
+        kams = User.objects.filter(is_active=True).order_by("username")
+    else:
+        allowed_ids = _kams_managed_by_manager(request.user)
+        kams = User.objects.filter(is_active=True, id__in=allowed_ids).order_by("username")
 
     def _pct(n: Decimal, d: Decimal) -> Optional[Decimal]:
         if d and d != 0:
@@ -712,14 +874,10 @@ def manager_kpis(request: HttpRequest) -> HttpResponse:
 
     rows: List[Dict] = []
     for kam in kams:
-        inv_qs = InvoiceFact.objects.filter(
-            kam=kam, invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date()
-        )
+        inv_qs = InvoiceFact.objects.filter(kam=kam, invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date())
         sales_mt = _safe_decimal(inv_qs.aggregate(mt=Sum("qty_mt")).get("mt"))
 
-        visits_qs = VisitActual.objects.filter(
-            plan__kam=kam, plan__visit_date__gte=start_dt.date(), plan__visit_date__lt=end_dt.date()
-        )
+        visits_qs = VisitActual.objects.filter(plan__kam=kam, plan__visit_date__gte=start_dt.date(), plan__visit_date__lt=end_dt.date())
         visits_actual = visits_qs.count()
         visits_successful = visits_qs.filter(successful=True).count()
         visit_success_pct = _pct(Decimal(visits_successful), Decimal(visits_actual)) if visits_actual else None
@@ -727,26 +885,21 @@ def manager_kpis(request: HttpRequest) -> HttpResponse:
         calls = CallLog.objects.filter(kam=kam, call_datetime__gte=start_dt, call_datetime__lt=end_dt).count()
 
         collections_actual = _safe_decimal(
-            CollectionTxn.objects.filter(kam=kam, txn_datetime__gte=start_dt, txn_datetime__lt=end_dt)
-            .aggregate(a=Sum("amount"))
-            .get("a")
+            CollectionTxn.objects.filter(kam=kam, txn_datetime__gte=start_dt, txn_datetime__lt=end_dt).aggregate(a=Sum("amount")).get("a")
         )
 
         leads_agg = LeadFact.objects.filter(kam=kam, doe__gte=start_dt.date(), doe__lt=end_dt.date()).aggregate(
-            total_mt=Sum("qty_mt"),
-            won_mt=Sum("qty_mt", filter=Q(status="WON")),
+            total_mt=Sum("qty_mt"), won_mt=Sum("qty_mt", filter=Q(status="WON"))
         )
         leads_total_mt = _safe_decimal(leads_agg.get("total_mt"))
         leads_won_mt = _safe_decimal(leads_agg.get("won_mt"))
         lead_conv_pct = _pct(leads_won_mt, leads_total_mt) if leads_total_mt else None
 
-        credit_limit_sum = _safe_decimal(
-            Customer.objects.filter(primary_kam=kam).aggregate(s=Sum("credit_limit")).get("s")
-        )
+        credit_limit_sum = _safe_decimal(Customer.objects.filter(Q(kam=kam) | Q(primary_kam=kam)).aggregate(s=Sum("credit_limit")).get("s"))
         exposure_sum = overdue_sum = Decimal(0)
 
         if latest_snap_date:
-            cust_ids = list(Customer.objects.filter(primary_kam=kam).values_list("id", flat=True))
+            cust_ids = list(Customer.objects.filter(Q(kam=kam) | Q(primary_kam=kam)).values_list("id", flat=True))
             if cust_ids:
                 agg = OverdueSnapshot.objects.filter(customer_id__in=cust_ids, snapshot_date=latest_snap_date).aggregate(
                     exposure=Sum("exposure"),
@@ -759,10 +912,7 @@ def manager_kpis(request: HttpRequest) -> HttpResponse:
                 exposure_sum = _safe_decimal(agg.get("exposure"))
                 overdue_sum = _safe_decimal(agg.get("overdue"))
                 if not exposure_sum:
-                    ageing_sum = (
-                        _safe_decimal(agg.get("a0")) + _safe_decimal(agg.get("a31")) +
-                        _safe_decimal(agg.get("a61")) + _safe_decimal(agg.get("a90"))
-                    )
+                    ageing_sum = _safe_decimal(agg.get("a0")) + _safe_decimal(agg.get("a31")) + _safe_decimal(agg.get("a61")) + _safe_decimal(agg.get("a90"))
                     if ageing_sum:
                         exposure_sum = ageing_sum
                 if not exposure_sum and overdue_sum:
@@ -783,447 +933,560 @@ def manager_kpis(request: HttpRequest) -> HttpResponse:
             }
         )
 
-    # -----------------------------
-    # FIXED: Risky customers (avoid materializing Customer model; no select_related)
-    # This prevents SQLite from selecting missing kam_customer.code column.
-    # -----------------------------
-    risky: List[Dict] = []
-    if latest_snap_date:
-        snaps = (
-            OverdueSnapshot.objects
-            .filter(snapshot_date=latest_snap_date)
-            .values(
-                "customer_id",
-                "customer__name",
-                "customer__credit_limit",
-                "exposure",
-                "overdue",
-                "ageing_0_30",
-                "ageing_31_60",
-                "ageing_61_90",
-                "ageing_90_plus",
-            )
-        )
-
-        tmp = []
-        for s in snaps:
-            credit_limit = _safe_decimal(s.get("customer__credit_limit"))
-            if not credit_limit:
-                continue
-
-            exposure = _safe_decimal(s.get("exposure"))
-            overdue = _safe_decimal(s.get("overdue"))
-
-            if not exposure:
-                ageing_sum = (
-                    _safe_decimal(s.get("ageing_0_30"))
-                    + _safe_decimal(s.get("ageing_31_60"))
-                    + _safe_decimal(s.get("ageing_61_90"))
-                    + _safe_decimal(s.get("ageing_90_plus"))
-                )
-                if ageing_sum:
-                    exposure = ageing_sum
-            if not exposure and overdue:
-                exposure = overdue
-
-            rr = (exposure / credit_limit) if credit_limit else None
-            if rr is None:
-                continue
-
-            tmp.append(
-                {
-                    "name": s.get("customer__name") or "-",
-                    "credit_limit": credit_limit,
-                    "exposure": exposure,
-                    "overdue": overdue,
-                    "risk_ratio": rr,
-                }
-            )
-
-        tmp.sort(key=lambda x: x["risk_ratio"], reverse=True)
-        risky = tmp[:50]
-
     ctx = {
         "page_title": "Manager KPIs",
         "period_type": period_type,
         "period_id": period_id,
         "rows": rows,
-        "risky": risky,
+        "risky": [],
     }
     return render(request, "kam/manager_kpis.html", ctx)
 
 
-# -----------------------------------------------------------------------------
-# Visit planning & posting
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Plan Visit: redesigned page (Single Draft + Batch primary)
+# ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_plan")
 def weekly_plan(request: HttpRequest) -> HttpResponse:
-    """
-    Plan Visit:
-      - Single-visit (legacy) supported
-      - Batch submission supported
-      - NEW (Section B4): Proceed-to-Manager consolidated batch for multiple customers with per-customer details
-
-    IMPORTANT:
-      - Uses prefixes (single/batch) to prevent duplicate HTML ids and ensure correct POST binding.
-      - Templates must render: {{ form }} with prefix SINGLE_PREFIX and {{ batch_form }} with prefix BATCH_PREFIX.
-    """
     user = request.user
-
-    # B1: strict scoped customers for KAM; manager/admin can see all
     customer_qs = _customer_qs_for_user(user).order_by("name")
-    customers = customer_qs
 
-    # Default (GET) forms with prefixes
-    form = VisitPlanForm(prefix=SINGLE_PREFIX)
+    single_form = VisitPlanForm(prefix=SINGLE_PREFIX)
     batch_form = VisitBatchForm(prefix=BATCH_PREFIX)
 
-    if "customer" in form.fields:
-        form.fields["customer"].queryset = customer_qs
+    if "customer" in single_form.fields:
+        single_form.fields["customer"].queryset = customer_qs
     if "customers" in batch_form.fields:
         batch_form.fields["customers"].queryset = customer_qs
 
+    # -------------------------
+    # POST: Single (Draft only)
+    # -------------------------
+    if request.method == "POST" and (request.POST.get("mode") or "").strip().lower() == "single":
+        single_form = VisitPlanForm(request.POST, prefix=SINGLE_PREFIX)
+        if "customer" in single_form.fields:
+            single_form.fields["customer"].queryset = customer_qs
+
+        if single_form.is_valid():
+            plan: VisitPlan = single_form.save(commit=False)
+            plan.kam = user
+
+            if plan.visit_category == VisitPlan.CAT_CUSTOMER:
+                if plan.customer_id and not customer_qs.filter(id=plan.customer_id).exists():
+                    messages.error(request, "Invalid customer selection (out of your scope).")
+                    return redirect(reverse("kam:plan"))
+            else:
+                # keep customer empty for non-customer categories
+                plan.customer = None
+
+            if not (plan.location or "").strip():
+                if plan.visit_category == VisitPlan.CAT_CUSTOMER and plan.customer and plan.customer.address:
+                    plan.location = plan.customer.address
+
+            plan.approval_status = STATUS_DRAFT
+            plan.save()
+
+            messages.success(request, "Single visit saved as Draft.")
+            return redirect(reverse("kam:plan"))
+
+        messages.error(request, "Single visit has errors. Please correct and save again.")
+
+    # -------------------------
+    # POST: Batch (Primary)
+    # -------------------------
     if request.method == "POST" and (request.POST.get("mode") or "").strip().lower() == "batch":
-        # -----------------------------
-        # BATCH POST
-        # -----------------------------
         batch_form = VisitBatchForm(request.POST, prefix=BATCH_PREFIX)
         if "customers" in batch_form.fields:
             batch_form.fields["customers"].queryset = customer_qs
 
         action = (request.POST.get("action") or request.POST.get("submit_action") or "").strip().lower()
-        proceed_flag = action in {"proceed", "proceed_to_manager", "proceed-manager", "manager"} or (
-            (request.POST.get("proceed_to_manager") or "").strip() == "1"
-        )
-
-        # Non-customer (Supplier/Warehouse/Vendor) line validation helper
-        non_customer_lines: List[MultiVisitPlanLineForm] = []
-        raw_category = (request.POST.get(f"{BATCH_PREFIX}-visit_category") or request.POST.get("visit_category") or "").strip()
-
-        if raw_category in (VisitPlan.CAT_SUPPLIER, VisitPlan.CAT_WAREHOUSE, VisitPlan.CAT_VENDOR):
-            names = request.POST.getlist("counterparty_name[]")
-            locs = request.POST.getlist("counterparty_location[]")
-            purs = request.POST.getlist("counterparty_purpose[]")
-            max_n = max(len(names), len(locs), len(purs))
-            for i in range(max_n):
-                f = MultiVisitPlanLineForm(
-                    {
-                        "counterparty_name": (names[i] if i < len(names) else "").strip(),
-                        "counterparty_location": (locs[i] if i < len(locs) else "").strip(),
-                        "counterparty_purpose": (purs[i] if i < len(purs) else "").strip(),
-                    }
-                )
-                if f.is_valid() and (f.cleaned_data.get("counterparty_name") or "").strip():
-                    non_customer_lines.append(f)
+        proceed_flag = action in {"proceed", "proceed_to_manager", "proceed-manager", "manager", "proceed_to_manager_btn"}
 
         if not batch_form.is_valid():
             messages.error(request, "Batch submission has errors. Please correct and re-submit.")
         else:
-            # --------------------------------------------
-            # B4: Proceed-to-Manager (Customer multi-select)
-            # --------------------------------------------
+            visit_category = batch_form.cleaned_data.get("visit_category")
+            from_date = batch_form.cleaned_data.get("from_date")
+            to_date = batch_form.cleaned_data.get("to_date")
+            remarks = (batch_form.cleaned_data.get("purpose") or "").strip()
+
+            # UI provides customers_selected[] else fallback to legacy multi-select
+            selected_ids: List[int] = []
+            if request.POST.getlist("customers_selected[]"):
+                for s in request.POST.getlist("customers_selected[]"):
+                    try:
+                        selected_ids.append(int(s))
+                    except Exception:
+                        continue
+            else:
+                customers_selected = batch_form.cleaned_data.get("customers") or []
+                selected_ids = [c.id for c in customers_selected]
+
+            # Non-customer multi-lines
+            non_customer_lines: List[MultiVisitPlanLineForm] = []
+            if visit_category in (VisitPlan.CAT_SUPPLIER, VisitPlan.CAT_WAREHOUSE, VisitPlan.CAT_VENDOR):
+                names = request.POST.getlist("counterparty_name[]")
+                locs = request.POST.getlist("counterparty_location[]")
+                purs = request.POST.getlist("counterparty_purpose[]")
+                max_n = max(len(names), len(locs), len(purs))
+                for i in range(max_n):
+                    f = MultiVisitPlanLineForm(
+                        {
+                            "counterparty_name": (names[i] if i < len(names) else "").strip(),
+                            "counterparty_location": (locs[i] if i < len(locs) else "").strip(),
+                            "counterparty_purpose": (purs[i] if i < len(purs) else "").strip(),
+                        }
+                    )
+                    if f.is_valid() and (f.cleaned_data.get("counterparty_name") or "").strip():
+                        non_customer_lines.append(f)
+
+            # -------------------------
+            # Proceed to Manager (Customer-only)
+            # -------------------------
             if proceed_flag:
-                visit_category = batch_form.cleaned_data.get("visit_category")
                 if visit_category != VisitPlan.CAT_CUSTOMER:
                     messages.error(request, "Proceed to Manager is allowed only for Customer Visit batches.")
-                else:
-                    # Remarks mandatory (using existing purpose field to avoid schema changes/migrations)
-                    remarks = (batch_form.cleaned_data.get("purpose") or "").strip()
-                    if not remarks:
-                        messages.error(request, "Remarks are required to proceed to Manager.")
+                    return redirect(reverse("kam:plan"))
+
+                if not (from_date and to_date):
+                    messages.error(request, "From/To dates are required.")
+                    return redirect(reverse("kam:plan"))
+
+                if not selected_ids:
+                    messages.error(request, "Select at least one customer to proceed.")
+                    return redirect(reverse("kam:plan"))
+
+                if not remarks:
+                    messages.error(request, "Remarks are required to proceed to Manager.")
+                    return redirect(reverse("kam:plan"))
+
+                mgr_user = _active_manager_for_kam(user)
+                if not mgr_user or not getattr(mgr_user, "email", None):
+                    messages.error(request, "No manager is assigned for you. Contact admin to set KAM → Manager mapping.")
+                    return redirect(reverse("kam:plan"))
+
+                allowed_ids = set(customer_qs.values_list("id", flat=True))
+                if not set(selected_ids).issubset(allowed_ids):
+                    messages.error(request, "Invalid customer selection (out of your scope).")
+                    return redirect(reverse("kam:plan"))
+
+                customers_selected = list(Customer.objects.filter(id__in=selected_ids).order_by("name"))
+
+                line_rows: List[Dict] = []
+                parse_errors = False
+
+                for cust in customers_selected:
+                    vd = _parse_iso_date(request.POST.get(f"visit_date_{cust.id}") or "") or from_date
+                    vdt = _parse_iso_date(request.POST.get(f"visit_date_to_{cust.id}") or "") or to_date
+                    if vd and vdt and vdt < vd:
+                        messages.error(request, f"To date cannot be earlier than From date for customer: {cust.name}")
+                        parse_errors = True
+
+                    lp = (request.POST.get(f"purpose_{cust.id}") or "").strip()
+                    loc = (request.POST.get(f"location_{cust.id}") or "").strip() or (cust.address or "").strip()
+
+                    es_raw = request.POST.get(f"expected_sales_mt_{cust.id}") or ""
+                    ec_raw = request.POST.get(f"expected_collection_{cust.id}") or ""
+
+                    expected_sales = _parse_decimal_or_none(es_raw)
+                    expected_coll = _parse_decimal_or_none(ec_raw)
+
+                    if es_raw.strip() != "" and expected_sales is None:
+                        messages.error(request, f"Expected Sales (MT) is invalid for customer: {cust.name}")
+                        parse_errors = True
+                    if ec_raw.strip() != "" and expected_coll is None:
+                        messages.error(request, f"Expected Collection (₹) is invalid for customer: {cust.name}")
+                        parse_errors = True
+
+                    line_rows.append(
+                        {
+                            "customer": cust,
+                            "visit_date": vd,
+                            "visit_date_to": vdt,
+                            "purpose": lp or None,
+                            "location": loc or "",
+                            "expected_sales_mt": expected_sales,
+                            "expected_collection": expected_coll,
+                        }
+                    )
+
+                if parse_errors:
+                    return redirect(reverse("kam:plan"))
+
+                with transaction.atomic():
+                    # Duplicate prevention (same KAM + window + remarks + same customer set)
+                    existing_qs = (
+                        VisitBatch.objects.select_for_update()
+                        .filter(
+                            kam=user,
+                            visit_category=VisitPlan.CAT_CUSTOMER,
+                            from_date=from_date,
+                            to_date=to_date,
+                            purpose=remarks,
+                            approval_status__in=[STATUS_PENDING_APPROVAL, STATUS_PENDING_LEGACY],
+                        )
+                        .order_by("-created_at")
+                    )
+                    for b in existing_qs[:10]:
+                        existing_ids = list(
+                            VisitPlan.objects.filter(batch=b, customer_id__isnull=False).values_list("customer_id", flat=True)
+                        )
+                        if sorted(existing_ids) == sorted(selected_ids):
+                            messages.error(
+                                request,
+                                f"Duplicate submission blocked: Batch #{b.id} is already pending approval with same customers.",
+                            )
+                            return redirect(reverse("kam:plan"))
+
+                    # Create consolidated batch + N plans
+                    batch: VisitBatch = batch_form.save(commit=False)
+                    batch.kam = user
+                    batch.visit_category = VisitPlan.CAT_CUSTOMER
+                    batch.from_date = from_date
+                    batch.to_date = to_date
+                    batch.purpose = remarks
+                    batch.approval_status = STATUS_PENDING_APPROVAL
+                    batch.save()
+
+                    for r in line_rows:
+                        VisitPlan.objects.create(
+                            batch=batch,
+                            customer=r["customer"],
+                            kam=user,
+                            visit_date=r["visit_date"],
+                            visit_date_to=r["visit_date_to"],
+                            visit_type=VisitPlan.PLANNED,
+                            visit_category=VisitPlan.CAT_CUSTOMER,
+                            purpose=r["purpose"],
+                            expected_sales_mt=r["expected_sales_mt"],
+                            expected_collection=r["expected_collection"],
+                            location=r["location"],
+                            approval_status=STATUS_PENDING_APPROVAL,
+                        )
+
+                    approve_token = _make_batch_token(batch.id, "APPROVE")
+                    reject_token = _make_batch_token(batch.id, "REJECT")
+
+                    approve_url = request.build_absolute_uri(reverse("kam:visit_batch_approve_link", args=[approve_token]))
+                    reject_url = request.build_absolute_uri(reverse("kam:visit_batch_reject_link", args=[reject_token]))
+
+                    html_body = ""
+                    try:
+                        html_body = render_to_string(
+                            "kam/emails/visit_batch_approval.html",
+                            {
+                                "batch": batch,
+                                "kam_user": user,
+                                "visit_category_label": "Customer Visit",
+                                "date_range": f"{batch.from_date} → {batch.to_date}",
+                                "remarks": remarks,
+                                "customers": [r["customer"] for r in line_rows],
+                                "approve_url": approve_url,
+                                "reject_url": reject_url,
+                            },
+                        )
+                    except Exception:
+                        html_body = ""
+
+                    subject = f"[KAM] Approval Required: Batch #{batch.id} ({batch.from_date}..{batch.to_date}) - {user.username}"
+
+                    if html_body:
+                        body = html_body
                     else:
-                        customers_selected = batch_form.cleaned_data.get("customers") or []
-                        if not customers_selected or len(customers_selected) == 0:
-                            messages.error(request, "Select at least one customer to proceed.")
-                        else:
-                            # Server-side safety: ensure all customers are within scoped queryset (no POST tampering)
-                            allowed_ids = set(customer_qs.values_list("id", flat=True))
-                            selected_ids = {c.id for c in customers_selected}
-                            if not selected_ids.issubset(allowed_ids):
-                                messages.error(request, "Invalid customer selection (out of your scope).")
-                                return redirect(reverse("kam:plan"))
+                        lines_txt = [f"{i}. {r['customer'].name}" for i, r in enumerate(line_rows, start=1)]
+                        body = (
+                            f"Batch ID: {batch.id}\n"
+                            f"KAM: {user.get_full_name() or user.username}\n"
+                            f"Category: Customer Visit\n"
+                            f"Date Range: {batch.from_date} to {batch.to_date}\n"
+                            f"Remarks:\n{remarks}\n\n"
+                            f"Customers:\n" + "\n".join(lines_txt) + "\n\n"
+                            f"Approve: {approve_url}\n"
+                            f"Reject:  {reject_url}\n"
+                        )
 
-                            line_rows: List[Dict] = []
-                            parse_errors = False
+                    _send_safe_mail(subject, body, [mgr_user], [])
 
-                            for cust in customers_selected:
-                                # Accept per-customer fields by stable naming: visit_date_<id>, visit_date_to_<id>, etc.
-                                vd = _parse_iso_date(request.POST.get(f"visit_date_{cust.id}") or "")
-                                vdt = _parse_iso_date(request.POST.get(f"visit_date_to_{cust.id}") or "")
-                                lp = (request.POST.get(f"purpose_{cust.id}") or "").strip()
-                                loc = (request.POST.get(f"location_{cust.id}") or "").strip()
-                                es_raw = request.POST.get(f"expected_sales_mt_{cust.id}") or ""
-                                ec_raw = request.POST.get(f"expected_collection_{cust.id}") or ""
+                messages.success(request, f"Submitted for manager approval: {len(line_rows)} customers (Batch #{batch.id}).")
+                return redirect(reverse("kam:plan"))
 
-                                expected_sales = _parse_decimal_or_none(es_raw)
-                                expected_coll = _parse_decimal_or_none(ec_raw)
-
-                                if es_raw.strip() != "" and expected_sales is None:
-                                    messages.error(request, f"Expected Sales (MT) is invalid for customer: {cust.name}")
-                                    parse_errors = True
-                                if ec_raw.strip() != "" and expected_coll is None:
-                                    messages.error(request, f"Expected Collection (₹) is invalid for customer: {cust.name}")
-                                    parse_errors = True
-
-                                # If per-customer dates not provided, fall back to batch window
-                                if not vd:
-                                    vd = batch_form.cleaned_data.get("from_date")
-                                if not vdt:
-                                    vdt = batch_form.cleaned_data.get("to_date")
-
-                                # Minimal sanity: end date >= start date
-                                if vd and vdt and vdt < vd:
-                                    messages.error(request, f"To date cannot be earlier than From date for customer: {cust.name}")
-                                    parse_errors = True
-
-                                if not loc:
-                                    loc = (cust.address or "").strip()
-
-                                line_rows.append(
-                                    {
-                                        "customer": cust,
-                                        "visit_date": vd,
-                                        "visit_date_to": vdt,
-                                        "purpose": lp,
-                                        "location": loc,
-                                        "expected_sales_mt": expected_sales,
-                                        "expected_collection": expected_coll,
-                                    }
-                                )
-
-                            if not parse_errors:
-                                with transaction.atomic():
-                                    batch: VisitBatch = batch_form.save(commit=False)
-                                    batch.kam = user
-                                    batch.approval_status = VisitBatch.PENDING
-                                    batch.save()
-
-                                    created_lines = 0
-                                    for r in line_rows:
-                                        VisitPlan.objects.create(
-                                            batch=batch,
-                                            customer=r["customer"],
-                                            kam=user,
-                                            visit_date=r["visit_date"],
-                                            visit_date_to=r["visit_date_to"],
-                                            visit_type=VisitPlan.PLANNED,
-                                            visit_category=VisitPlan.CAT_CUSTOMER,
-                                            purpose=r["purpose"] or None,
-                                            expected_sales_mt=r["expected_sales_mt"],
-                                            expected_collection=r["expected_collection"],
-                                            location=r["location"] or "",
-                                            approval_status=VisitPlan.PENDING,
-                                        )
-                                        created_lines += 1
-
-                                    mgr = list(User.objects.filter(username__iexact=APPROVAL_PRIMARY_MANAGER_USERNAME)) or []
-                                    cc = list(User.objects.filter(username__in=APPROVAL_CC_USERNAMES))
-
-                                    subject = f"[KAM] Proceed to Manager: Visit batch by {user.username} ({batch.from_date}..{batch.to_date})"
-
-                                    # Consolidated body (one mail only)
-                                    lines_txt = []
-                                    for i, r in enumerate(line_rows, start=1):
-                                        c = r["customer"]
-                                        es = r["expected_sales_mt"]
-                                        ec = r["expected_collection"]
-                                        lines_txt.append(
-                                            "\n".join(
-                                                [
-                                                    f"{i}. {c.name}",
-                                                    f"   Window: {r['visit_date']} to {r['visit_date_to']}",
-                                                    f"   Purpose: {r['purpose'] or '-'}",
-                                                    f"   Location: {r['location'] or '-'}",
-                                                    f"   Expected Sales (MT): {es if es is not None else '-'}",
-                                                    f"   Expected Collection (₹): {ec if ec is not None else '-'}",
-                                                ]
-                                            )
-                                        )
-
-                                    body = (
-                                        f"KAM: {user.get_full_name() or user.username}\n"
-                                        f"Category: Customer Visit\n"
-                                        f"Batch Window: {batch.from_date} to {batch.to_date}\n"
-                                        f"Batch Id: {batch.id}\n"
-                                        f"Remarks (mandatory):\n{remarks}\n\n"
-                                        f"Customers & Details:\n"
-                                        + "\n\n".join(lines_txt)
-                                        + "\n\nApproval is informational and does not block execution."
-                                    )
-
-                                    _send_safe_mail(subject, body, mgr, cc)
-
-                                messages.success(
-                                    request,
-                                    f"Proceed to Manager successful: {len(line_rows)} customers submitted (Batch #{batch.id}).",
-                                )
-                                return redirect(reverse("kam:plan"))
-
-            # --------------------------------------------
-            # Legacy batch submission (kept for compatibility)
-            # --------------------------------------------
+            # -------------------------
+            # Save Draft batch (DRAFT)
+            # -------------------------
             with transaction.atomic():
                 batch: VisitBatch = batch_form.save(commit=False)
                 batch.kam = user
-                batch.approval_status = VisitBatch.PENDING
+                batch.approval_status = STATUS_DRAFT
                 batch.save()
 
                 created_lines = 0
+                if visit_category == VisitPlan.CAT_CUSTOMER:
+                    if not selected_ids:
+                        messages.error(request, "Select at least one customer to save a customer batch draft.")
+                        transaction.set_rollback(True)
+                        return redirect(reverse("kam:plan"))
 
-                if batch.visit_category == VisitPlan.CAT_CUSTOMER:
-                    customers_selected = batch_form.cleaned_data.get("customers")
-                    # Safety: customers_selected already validated against scoped queryset
+                    allowed_ids = set(customer_qs.values_list("id", flat=True))
+                    if not set(selected_ids).issubset(allowed_ids):
+                        messages.error(request, "Invalid customer selection (out of your scope).")
+                        transaction.set_rollback(True)
+                        return redirect(reverse("kam:plan"))
+
+                    customers_selected = list(Customer.objects.filter(id__in=selected_ids).order_by("name"))
                     for cust in customers_selected:
                         VisitPlan.objects.create(
                             batch=batch,
                             customer=cust,
                             kam=user,
-                            visit_date=batch.from_date,
-                            visit_date_to=batch.to_date,
+                            visit_date=from_date,
+                            visit_date_to=to_date,
                             visit_type=VisitPlan.PLANNED,
                             visit_category=VisitPlan.CAT_CUSTOMER,
-                            purpose=batch.purpose,
-                            location=cust.address or "",
-                            approval_status=VisitPlan.PENDING,
+                            purpose=remarks or None,
+                            location=(cust.address or "").strip(),
+                            approval_status=STATUS_DRAFT,
                         )
                         created_lines += 1
                 else:
+                    if not non_customer_lines:
+                        messages.error(request, "Add at least one line to save a non-customer batch draft.")
+                        transaction.set_rollback(True)
+                        return redirect(reverse("kam:plan"))
+
                     for f in non_customer_lines:
                         VisitPlan.objects.create(
                             batch=batch,
                             customer=None,
                             counterparty_name=f.cleaned_data["counterparty_name"],
                             kam=user,
-                            visit_date=batch.from_date,
-                            visit_date_to=batch.to_date,
+                            visit_date=from_date,
+                            visit_date_to=to_date,
                             visit_type=VisitPlan.PLANNED,
-                            visit_category=batch.visit_category,
-                            purpose=(f.cleaned_data.get("counterparty_purpose") or batch.purpose),
-                            location=(f.cleaned_data.get("counterparty_location") or ""),
-                            approval_status=VisitPlan.PENDING,
+                            visit_category=visit_category,
+                            purpose=(f.cleaned_data.get("counterparty_purpose") or remarks or None),
+                            location=(f.cleaned_data.get("counterparty_location") or "").strip(),
+                            approval_status=STATUS_DRAFT,
                         )
                         created_lines += 1
 
-                mgr = list(User.objects.filter(username__iexact=APPROVAL_PRIMARY_MANAGER_USERNAME)) or []
-                cc = list(User.objects.filter(username__in=APPROVAL_CC_USERNAMES))
-                subject = f"[KAM] Visit batch submitted by {user.username} ({batch.from_date}..{batch.to_date})"
-                body = (
-                    f"KAM: {user.get_full_name() or user.username}\n"
-                    f"Category: {batch.get_visit_category_display()}\n"
-                    f"Window: {batch.from_date} to {batch.to_date}\n"
-                    f"Lines: {created_lines}\n"
-                    f"Purpose: {batch.purpose or '-'}\n"
-                    f"Batch Id: {batch.id}\n"
-                    f"Approval is informational and does not block execution."
-                )
-                _send_safe_mail(subject, body, mgr, cc)
-
-                messages.success(request, f"Visit batch saved: {created_lines} lines created (Batch #{batch.id}).")
+                messages.success(request, f"Batch saved as Draft: {created_lines} lines (Batch #{batch.id}).")
                 return redirect(reverse("kam:plan"))
 
-    elif request.method == "POST":
-        # -----------------------------
-        # SINGLE POST
-        # -----------------------------
-        form = VisitPlanForm(request.POST, prefix=SINGLE_PREFIX)
-        if "customer" in form.fields:
-            form.fields["customer"].queryset = customer_qs
-
-        if form.is_valid():
-            plan: VisitPlan = form.save(commit=False)
-            plan.kam = user
-
-            # B1: enforce posted customer is within scope (extra guard)
-            if plan.visit_category == VisitPlan.CAT_CUSTOMER:
-                if plan.customer_id:
-                    if not customer_qs.filter(id=plan.customer_id).exists():
-                        messages.error(request, "Invalid customer selection (out of your scope).")
-                        return redirect(reverse("kam:plan"))
-
-            if not plan.location:
-                if plan.visit_category == VisitPlan.CAT_CUSTOMER and plan.customer and plan.customer.address:
-                    plan.location = plan.customer.address
-
-            if plan.visit_type == VisitPlan.PLANNED and plan.visit_category == VisitPlan.CAT_CUSTOMER:
-                dt_anchor = timezone.make_aware(
-                    timezone.datetime.combine(plan.visit_date, timezone.datetime.min.time())
-                )
-                week_start, week_end, _ = _iso_week_bounds(dt_anchor)
-                planned_count = (
-                    VisitPlan.objects.filter(
-                        kam=user,
-                        visit_date__gte=week_start.date(),
-                        visit_date__lt=week_end.date(),
-                        visit_type=VisitPlan.PLANNED,
-                        visit_category=VisitPlan.CAT_CUSTOMER,
-                    ).count()
-                )
-                if planned_count >= 6:
-                    messages.error(request, "Weekly planned visit limit (6) reached.")
-                    return redirect(reverse("kam:plan"))
-
-            plan.approval_status = VisitPlan.PENDING
-            plan.save()
-
-            try:
-                if plan.visit_type == VisitPlan.PLANNED:
-                    mgr = list(User.objects.filter(username__iexact=APPROVAL_PRIMARY_MANAGER_USERNAME)) or []
-                    cc = list(User.objects.filter(username__in=APPROVAL_CC_USERNAMES))
-                    base = plan.customer.name if plan.customer_id else (plan.counterparty_name or "-")
-                    subject = f"[KAM] Visit planned by {user.username} on {plan.visit_date}"
-                    body = (
-                        f"Plan Id: {plan.id}\n"
-                        f"KAM: {user.get_full_name() or user.username}\n"
-                        f"Entity: {base}\n"
-                        f"Category: {plan.get_visit_category_display()}\n"
-                        f"Date: {plan.visit_date}\n"
-                        f"Purpose: {plan.purpose or '-'}\n"
-                        f"Approval is informational and does not block execution."
-                    )
-                    _send_safe_mail(subject, body, mgr, cc)
-            except Exception:
-                pass
-
-            messages.success(request, "Visit plan saved.")
-            return redirect(reverse("kam:plan"))
-
+    # This-week plans (scoped)
     week_start, week_end, _ = _iso_week_bounds(timezone.now())
     my_plans = (
-        VisitPlan.objects.select_related("customer")
-        .filter(kam=user, visit_date__gte=week_start.date(), visit_date__lt=week_end.date())
+        _visitplan_qs_for_user(user)
+        .filter(visit_date__gte=week_start.date(), visit_date__lt=week_end.date())
         .order_by("visit_date", "customer__name")
     )
 
     ctx = {
         "page_title": "Plan Visit",
-        "form": form,
-        "plans": my_plans,
-        "customers": customers,
+        "form": single_form,  # legacy key
+        "single_form": single_form,
         "batch_form": batch_form,
-        "non_customer_template_line": MultiVisitPlanLineForm(),
+        "plans": my_plans,
+        "customers": list(customer_qs),
         "SINGLE_PREFIX": SINGLE_PREFIX,
         "BATCH_PREFIX": BATCH_PREFIX,
+        "status_constants": {
+            "DRAFT": STATUS_DRAFT,
+            "PENDING_APPROVAL": STATUS_PENDING_APPROVAL,
+            "APPROVED": STATUS_APPROVED,
+            "REJECTED": STATUS_REJECTED,
+        },
     }
-    return render(request, "kam/visit_plan.html", ctx)
+    return render(request, "kam/plan_visit.html", ctx)
+
+
+# ---------------------------------------------------------------------
+# Customer list API for redesigned checkbox table
+# ---------------------------------------------------------------------
+@login_required
+@require_kam_code("kam_plan")
+def customers_api(request: HttpRequest) -> JsonResponse:
+    user = request.user
+    qs = _customer_qs_for_user(user).order_by("name")
+
+    # Optional filtering (manager/admin only): ?kam=username
+    if _is_manager(user):
+        kam_u = (request.GET.get("kam") or "").strip()
+        if kam_u:
+            u = User.objects.filter(username=kam_u, is_active=True).first()
+            if u:
+                if _is_admin(user) or u.id in set(_kams_managed_by_manager(user)):
+                    qs = qs.filter(Q(kam=u) | Q(primary_kam=u))
+                else:
+                    qs = qs.none()
+            else:
+                qs = qs.none()
+
+    q = (request.GET.get("q") or "").strip()
+    if q:
+        qs = qs.filter(Q(name__icontains=q) | Q(code__icontains=q) | Q(mobile__icontains=q))
+
+    source = (request.GET.get("source") or "").strip().upper()
+    if source:
+        qs = qs.filter(source=source)
+
+    rows = []
+    for c in qs[:500]:
+        rows.append(
+            {
+                "id": c.id,
+                "name": c.name,
+                "code": getattr(c, "code", "") or "",
+                "mobile": getattr(c, "mobile", "") or "",
+                "address": getattr(c, "address", "") or "",
+                "source": (getattr(c, "source", "") or "").upper(),
+            }
+        )
+    return JsonResponse({"ok": True, "count": len(rows), "customers": rows})
+
+
+# ---------------------------------------------------------------------
+# Manual customer CRUD for Plan Visit
+# ---------------------------------------------------------------------
+@login_required
+@require_kam_code("kam_plan")
+def customer_create_manual(request: HttpRequest) -> JsonResponse:
+    if request.method != "POST":
+        return JsonResponse({"ok": False, "error": "POST required"}, status=405)
+
+    actor = request.user
+
+    target_kam = actor
+    if _is_admin(actor) and (request.POST.get("primary_kam") or "").strip():
+        uname = (request.POST.get("primary_kam") or "").strip()
+        u = User.objects.filter(username=uname, is_active=True).first()
+        if not u:
+            return JsonResponse({"ok": False, "error": "Invalid primary_kam"}, status=400)
+        target_kam = u
+
+    name = (request.POST.get("name") or "").strip()
+    if not name:
+        return JsonResponse({"ok": False, "error": "name required"}, status=400)
+
+    addr = (request.POST.get("address") or "").strip() or None
+    mobile = (request.POST.get("mobile") or "").strip() or None
+    email = (request.POST.get("email") or "").strip() or None
+    gst = (request.POST.get("gst_number") or "").strip() or None
+    pincode = (request.POST.get("pincode") or "").strip() or None
+
+    dup_qs = Customer.objects.filter(Q(kam=target_kam) | Q(primary_kam=target_kam)).filter(name__iexact=name)
+    if dup_qs.exists():
+        return JsonResponse({"ok": False, "error": "Customer already exists in your scope"}, status=409)
+
+    with transaction.atomic():
+        c = Customer.objects.create(
+            name=name,
+            address=addr,
+            mobile=mobile,
+            email=email,
+            gst_number=gst,
+            pincode=pincode,
+            kam=target_kam,
+            primary_kam=target_kam,
+            source=Customer.SOURCE_MANUAL,
+            created_by=actor,
+            synced_identifier=None,
+        )
+
+    return JsonResponse({"ok": True, "customer": {"id": c.id, "name": c.name}})
 
 
 @login_required
-@require_kam_code("kam_manager")
+@require_kam_code("kam_plan")
+def customer_update_manual(request: HttpRequest, customer_id: int) -> JsonResponse:
+    if request.method != "POST":
+        return JsonResponse({"ok": False, "error": "POST required"}, status=405)
+
+    user = request.user
+    qs = _customer_qs_for_user(user)
+    c = get_object_or_404(qs, id=customer_id)
+
+    if not _is_admin(user):
+        if (getattr(c, "source", "") or "").upper() != Customer.SOURCE_MANUAL:
+            return JsonResponse({"ok": False, "error": "Sheet customer is read-only"}, status=403)
+
+    for field in ["name", "address", "mobile", "email", "gst_number", "pincode"]:
+        if field in request.POST:
+            val = (request.POST.get(field) or "").strip()
+            setattr(c, field, val or None)
+
+    c.save()
+    return JsonResponse({"ok": True})
+
+
+@login_required
+@require_kam_code("kam_plan")
+def customer_delete_manual(request: HttpRequest, customer_id: int) -> JsonResponse:
+    if request.method != "POST":
+        return JsonResponse({"ok": False, "error": "POST required"}, status=405)
+
+    user = request.user
+    qs = _customer_qs_for_user(user)
+    c = get_object_or_404(qs, id=customer_id)
+
+    if not _is_admin(user):
+        if (getattr(c, "source", "") or "").upper() != Customer.SOURCE_MANUAL:
+            return JsonResponse({"ok": False, "error": "Sheet customer cannot be deleted"}, status=403)
+
+    blocking = VisitPlan.objects.filter(customer=c).exclude(approval_status__in=[STATUS_DRAFT, STATUS_REJECTED]).exists()
+    if blocking:
+        return JsonResponse({"ok": False, "error": "Customer is used in submitted/approved plans"}, status=409)
+
+    c.delete()
+    return JsonResponse({"ok": True})
+
+
+# ---------------------------------------------------------------------
+# Visit batches: HTML page + API
+# ---------------------------------------------------------------------
+def _wants_json(request: HttpRequest) -> bool:
+    fmt = (request.GET.get("format") or "").strip().lower()
+    if fmt in {"json", "api"}:
+        return True
+    accept = (request.headers.get("Accept") or "").lower()
+    if "application/json" in accept:
+        return True
+    return False
+
+
+@login_required
+@require_any_kam_code("kam_plan", "kam_manager")
 def visit_batches(request: HttpRequest) -> HttpResponse:
-    """
-    B4: Manager/Admin can view all VisitBatches.
-    Until template is delivered, returns JSON by default.
-    """
-    if not _is_manager(request.user):
-        return HttpResponseForbidden("403 Forbidden: Manager access required.")
+    if _wants_json(request):
+        return visit_batches_api(request)
+    return visit_batches_page(request)
 
-    qs = (
-        VisitBatch.objects.select_related("kam")
-        .order_by("-created_at")
-    )
 
-    # Lightweight JSON response (no template dependency)
+@login_required
+@require_any_kam_code("kam_plan", "kam_manager")
+def visit_batches_page(request: HttpRequest) -> HttpResponse:
+    user = request.user
+    qs = _visitbatch_qs_for_user(user).order_by("-created_at")
+
+    status = (request.GET.get("status") or "").strip().upper()
+    if status:
+        qs = qs.filter(approval_status=status)
+
+    batches = list(qs[:300])
+    ctx = {
+        "page_title": "Visit Batches",
+        "rows": batches,
+        "can_view_all": _is_manager(user),
+    }
+    return render(request, "kam/visit_batches.html", ctx)
+
+
+@login_required
+@require_any_kam_code("kam_plan", "kam_manager")
+def visit_batches_api(request: HttpRequest) -> JsonResponse:
+    user = request.user
+    qs = _visitbatch_qs_for_user(user).order_by("-created_at")
+
     rows = []
     for b in qs[:300]:
         rows.append(
@@ -1235,22 +1498,312 @@ def visit_batches(request: HttpRequest) -> HttpResponse:
                 "visit_category": b.visit_category,
                 "visit_category_label": b.get_visit_category_display(),
                 "approval_status": b.approval_status,
-                "purpose": b.purpose or "",
+                "remarks": b.purpose or "",
                 "created_at": timezone.localtime(b.created_at).isoformat() if b.created_at else None,
             }
         )
     return JsonResponse({"ok": True, "count": len(rows), "batches": rows})
 
 
+# ---------------------------------------------------------------------
+# Batch detail page (used by UI "View Details" if you add it)
+# ---------------------------------------------------------------------
+@login_required
+@require_any_kam_code("kam_manager", "kam_plan")
+def visit_batch_detail(request: HttpRequest, batch_id: int) -> HttpResponse:
+    b = get_object_or_404(_visitbatch_qs_for_user(request.user), id=batch_id)
+    lines = list(VisitPlan.objects.select_related("customer").filter(batch=b).order_by("customer__name"))
+    can_approve = _is_manager(request.user)
+    ctx = {
+        "page_title": f"Batch #{b.id}",
+        "batch": b,
+        "lines": lines,
+        "can_approve": can_approve,
+        "can_edit": (not _is_manager(request.user)) and (b.approval_status in {STATUS_DRAFT, STATUS_REJECTED}),
+        "can_delete": (not _is_manager(request.user)) and (b.approval_status in {STATUS_DRAFT}),
+    }
+    return render(request, "kam/visit_batch_detail.html", ctx)
+
+
+# ---------------------------------------------------------------------
+# Batch delete (KAM only; strict)
+# ---------------------------------------------------------------------
+@login_required
+@require_kam_code("kam_plan")
+def visit_batch_delete(request: HttpRequest, batch_id: int) -> HttpResponse:
+    if request.method != "POST":
+        return HttpResponseForbidden("403 Forbidden: POST required.")
+
+    user = request.user
+    batch = get_object_or_404(VisitBatch, id=batch_id, kam=user)
+
+    if batch.approval_status != STATUS_DRAFT:
+        messages.error(request, "Only DRAFT batches can be deleted.")
+        return redirect(reverse("kam:visit_batches"))
+
+    with transaction.atomic():
+        batch = VisitBatch.objects.select_for_update().get(id=batch_id)
+        if batch.approval_status != STATUS_DRAFT:
+            messages.error(request, "Only DRAFT batches can be deleted.")
+            return redirect(reverse("kam:visit_batches"))
+
+        VisitPlan.objects.filter(batch=batch).delete()
+        VisitApprovalAudit.objects.create(
+            batch=batch,
+            actor=user,
+            action=VisitApprovalAudit.ACTION_DELETE,
+            note="Deleted draft batch",
+            actor_ip=_get_ip(request),
+        )
+        batch.delete()
+
+    messages.success(request, f"Batch #{batch_id} deleted.")
+    return redirect(reverse("kam:visit_batches"))
+
+
+# ---------------------------------------------------------------------
+# Batch approve/reject (manager dashboard buttons -> POST)
+# ---------------------------------------------------------------------
+@login_required
+@require_kam_code("kam_manager")
+def visit_batch_approve(request: HttpRequest, batch_id: int) -> HttpResponse:
+    if request.method != "POST":
+        return HttpResponseForbidden("403 Forbidden: POST required.")
+    if not _is_manager(request.user):
+        return HttpResponseForbidden("403 Forbidden: Manager access required.")
+
+    qs = _visitbatch_qs_for_user(request.user)
+    batch = get_object_or_404(qs, id=batch_id)
+
+    with transaction.atomic():
+        batch = VisitBatch.objects.select_for_update().get(id=batch_id)
+
+        if not _is_admin(request.user):
+            allowed = set(_kams_managed_by_manager(request.user))
+            if batch.kam_id not in allowed:
+                return HttpResponseForbidden("403 Forbidden: Not in your approval scope.")
+
+        if batch.approval_status == STATUS_APPROVED:
+            messages.info(request, f"Batch #{batch.id} is already approved.")
+            return redirect(reverse("kam:visit_batches"))
+
+        if batch.approval_status not in {STATUS_PENDING_APPROVAL, STATUS_PENDING_LEGACY}:
+            messages.error(request, f"Batch #{batch.id} is not pending approval.")
+            return redirect(reverse("kam:visit_batches"))
+
+        now_ts = timezone.now()
+        batch.approval_status = STATUS_APPROVED
+        batch.approved_by = request.user
+        batch.approved_at = now_ts
+        batch.save(update_fields=["approval_status", "approved_by", "approved_at", "updated_at"])
+
+        VisitPlan.objects.filter(batch=batch).update(
+            approval_status=STATUS_APPROVED,
+            approved_by=request.user,
+            approved_at=now_ts,
+            updated_at=now_ts,
+        )
+
+        VisitApprovalAudit.objects.create(
+            batch=batch,
+            actor=request.user,
+            action=VisitApprovalAudit.ACTION_APPROVE,
+            note="Approved batch",
+            actor_ip=_get_ip(request),
+        )
+
+    messages.success(request, f"Batch #{batch.id} approved.")
+    return redirect(reverse("kam:visit_batches"))
+
+
+@login_required
+@require_kam_code("kam_manager")
+def visit_batch_reject(request: HttpRequest, batch_id: int) -> HttpResponse:
+    if request.method != "POST":
+        return HttpResponseForbidden("403 Forbidden: POST required.")
+    if not _is_manager(request.user):
+        return HttpResponseForbidden("403 Forbidden: Manager access required.")
+
+    qs = _visitbatch_qs_for_user(request.user)
+    batch = get_object_or_404(qs, id=batch_id)
+
+    reason = (request.POST.get("reason") or "").strip() or "Rejected"
+
+    with transaction.atomic():
+        batch = VisitBatch.objects.select_for_update().get(id=batch_id)
+
+        if not _is_admin(request.user):
+            allowed = set(_kams_managed_by_manager(request.user))
+            if batch.kam_id not in allowed:
+                return HttpResponseForbidden("403 Forbidden: Not in your approval scope.")
+
+        if batch.approval_status == STATUS_REJECTED:
+            messages.info(request, f"Batch #{batch.id} is already rejected.")
+            return redirect(reverse("kam:visit_batches"))
+
+        if batch.approval_status not in {STATUS_PENDING_APPROVAL, STATUS_PENDING_LEGACY}:
+            messages.error(request, f"Batch #{batch.id} is not pending approval.")
+            return redirect(reverse("kam:visit_batches"))
+
+        now_ts = timezone.now()
+        batch.approval_status = STATUS_REJECTED
+        batch.approved_by = request.user
+        batch.approved_at = now_ts
+        batch.save(update_fields=["approval_status", "approved_by", "approved_at", "updated_at"])
+
+        VisitPlan.objects.filter(batch=batch).update(
+            approval_status=STATUS_REJECTED,
+            approved_by=request.user,
+            approved_at=now_ts,
+            updated_at=now_ts,
+        )
+
+        VisitApprovalAudit.objects.create(
+            batch=batch,
+            actor=request.user,
+            action=VisitApprovalAudit.ACTION_REJECT,
+            note=reason[:255],
+            actor_ip=_get_ip(request),
+        )
+
+    messages.info(request, f"Batch #{batch.id} rejected.")
+    return redirect(reverse("kam:visit_batches"))
+
+
+# ---------------------------------------------------------------------
+# Secure email links (GET -> login -> execute action)
+# NOTE: We do NOT mutate request.method (unsafe/undefined). We call the
+# approval logic inline with the same validations.
+# ---------------------------------------------------------------------
+@login_required
+@require_kam_code("kam_manager")
+def visit_batch_approve_link(request: HttpRequest, token: str) -> HttpResponse:
+    if not _is_manager(request.user):
+        return HttpResponseForbidden("403 Forbidden: Manager access required.")
+
+    try:
+        batch_id, action = _parse_batch_token(token)
+    except SignatureExpired:
+        messages.error(request, "Approval link expired.")
+        return redirect(reverse("kam:visit_batches"))
+    except BadSignature:
+        messages.error(request, "Invalid approval link.")
+        return redirect(reverse("kam:visit_batches"))
+
+    if action != "APPROVE":
+        messages.error(request, "Invalid action for this link.")
+        return redirect(reverse("kam:visit_batches"))
+
+    # Perform approve
+    with transaction.atomic():
+        batch = get_object_or_404(VisitBatch.objects.select_for_update(), id=batch_id)
+
+        if not _is_admin(request.user):
+            allowed = set(_kams_managed_by_manager(request.user))
+            if batch.kam_id not in allowed:
+                return HttpResponseForbidden("403 Forbidden: Not in your approval scope.")
+
+        if batch.approval_status == STATUS_APPROVED:
+            messages.info(request, f"Batch #{batch.id} is already approved.")
+            return redirect(reverse("kam:visit_batches"))
+
+        if batch.approval_status not in {STATUS_PENDING_APPROVAL, STATUS_PENDING_LEGACY}:
+            messages.error(request, f"Batch #{batch.id} is not pending approval.")
+            return redirect(reverse("kam:visit_batches"))
+
+        now_ts = timezone.now()
+        batch.approval_status = STATUS_APPROVED
+        batch.approved_by = request.user
+        batch.approved_at = now_ts
+        batch.save(update_fields=["approval_status", "approved_by", "approved_at", "updated_at"])
+
+        VisitPlan.objects.filter(batch=batch).update(
+            approval_status=STATUS_APPROVED,
+            approved_by=request.user,
+            approved_at=now_ts,
+            updated_at=now_ts,
+        )
+
+        VisitApprovalAudit.objects.create(
+            batch=batch,
+            actor=request.user,
+            action=VisitApprovalAudit.ACTION_APPROVE,
+            note="Approved via email link",
+            actor_ip=_get_ip(request),
+        )
+
+    messages.success(request, f"Batch #{batch_id} approved.")
+    return redirect(reverse("kam:visit_batches"))
+
+
+@login_required
+@require_kam_code("kam_manager")
+def visit_batch_reject_link(request: HttpRequest, token: str) -> HttpResponse:
+    if not _is_manager(request.user):
+        return HttpResponseForbidden("403 Forbidden: Manager access required.")
+
+    try:
+        batch_id, action = _parse_batch_token(token)
+    except SignatureExpired:
+        messages.error(request, "Reject link expired.")
+        return redirect(reverse("kam:visit_batches"))
+    except BadSignature:
+        messages.error(request, "Invalid reject link.")
+        return redirect(reverse("kam:visit_batches"))
+
+    if action != "REJECT":
+        messages.error(request, "Invalid action for this link.")
+        return redirect(reverse("kam:visit_batches"))
+
+    reason = "Rejected via email link"
+
+    with transaction.atomic():
+        batch = get_object_or_404(VisitBatch.objects.select_for_update(), id=batch_id)
+
+        if not _is_admin(request.user):
+            allowed = set(_kams_managed_by_manager(request.user))
+            if batch.kam_id not in allowed:
+                return HttpResponseForbidden("403 Forbidden: Not in your approval scope.")
+
+        if batch.approval_status == STATUS_REJECTED:
+            messages.info(request, f"Batch #{batch.id} is already rejected.")
+            return redirect(reverse("kam:visit_batches"))
+
+        if batch.approval_status not in {STATUS_PENDING_APPROVAL, STATUS_PENDING_LEGACY}:
+            messages.error(request, f"Batch #{batch.id} is not pending approval.")
+            return redirect(reverse("kam:visit_batches"))
+
+        now_ts = timezone.now()
+        batch.approval_status = STATUS_REJECTED
+        batch.approved_by = request.user
+        batch.approved_at = now_ts
+        batch.save(update_fields=["approval_status", "approved_by", "approved_at", "updated_at"])
+
+        VisitPlan.objects.filter(batch=batch).update(
+            approval_status=STATUS_REJECTED,
+            approved_by=request.user,
+            approved_at=now_ts,
+            updated_at=now_ts,
+        )
+
+        VisitApprovalAudit.objects.create(
+            batch=batch,
+            actor=request.user,
+            action=VisitApprovalAudit.ACTION_REJECT,
+            note=reason[:255],
+            actor_ip=_get_ip(request),
+        )
+
+    messages.info(request, f"Batch #{batch_id} rejected.")
+    return redirect(reverse("kam:visit_batches"))
+
+
+# ---------------------------------------------------------------------
+# Visits & Calls (aligned to updated VisitActualForm + models)
+# ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_visits")
 def visits(request: HttpRequest) -> HttpResponse:
-    """
-    Post-visit update:
-      - Mandatory: expected_sales_mt & expected_collection (written back to plan),
-                   remarks (summary), confirmed location.
-      - Allows capturing actual_sales_mt and actual_collection.
-    """
     user = request.user
     plan_id = request.GET.get("plan_id")
     error_expected = False
@@ -1339,6 +1892,9 @@ def visits(request: HttpRequest) -> HttpResponse:
     return render(request, "kam/visit_actual.html", ctx)
 
 
+# ---------------------------------------------------------------------
+# Legacy single-plan approve/reject (kept)
+# ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_visit_approve")
 def visit_approve(request: HttpRequest, plan_id: int) -> HttpResponse:
@@ -1346,11 +1902,14 @@ def visit_approve(request: HttpRequest, plan_id: int) -> HttpResponse:
         return HttpResponseForbidden("403 Forbidden: POST required.")
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
-    if _cannot_approve(request.user):
-        return HttpResponseForbidden("403 Forbidden: You are not allowed to approve visits.")
 
     plan = get_object_or_404(VisitPlan, id=plan_id)
-    plan.approval_status = VisitPlan.APPROVED
+    if not _is_admin(request.user):
+        allowed = set(_kams_managed_by_manager(request.user))
+        if plan.kam_id not in allowed:
+            return HttpResponseForbidden("403 Forbidden: Not in your approval scope.")
+
+    plan.approval_status = STATUS_APPROVED
     plan.approved_by = request.user
     plan.approved_at = timezone.now()
     plan.save(update_fields=["approval_status", "approved_by", "approved_at"])
@@ -1372,11 +1931,14 @@ def visit_reject(request: HttpRequest, plan_id: int) -> HttpResponse:
         return HttpResponseForbidden("403 Forbidden: POST required.")
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
-    if _cannot_approve(request.user):
-        return HttpResponseForbidden("403 Forbidden: You are not allowed to reject visits.")
 
     plan = get_object_or_404(VisitPlan, id=plan_id)
-    plan.approval_status = VisitPlan.REJECTED
+    if not _is_admin(request.user):
+        allowed = set(_kams_managed_by_manager(request.user))
+        if plan.kam_id not in allowed:
+            return HttpResponseForbidden("403 Forbidden: Not in your approval scope.")
+
+    plan.approval_status = STATUS_REJECTED
     plan.approved_by = request.user
     plan.approved_at = timezone.now()
     plan.save(update_fields=["approval_status", "approved_by", "approved_at"])
@@ -1391,16 +1953,9 @@ def visit_reject(request: HttpRequest, plan_id: int) -> HttpResponse:
     return redirect(reverse("kam:manager_kpis"))
 
 
-def _get_ip(request: HttpRequest) -> Optional[str]:
-    xff = request.META.get("HTTP_X_FORWARDED_FOR")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR")
-
-
-# -----------------------------------------------------------------------------
-# Quick entry: Call / Collection
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Quick entry: Call / Collection (customer qs is scoped)
+# ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_call_new")
 def call_new(request: HttpRequest) -> HttpResponse:
@@ -1447,34 +2002,41 @@ def collection_new(request: HttpRequest) -> HttpResponse:
     return render(request, "kam/collection_new.html", {"page_title": "Collection Entry", "form": form})
 
 
-# -----------------------------------------------------------------------------
-# Customer 360 (unchanged)
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Customer 360 (existing; tighten base_qs using mapping)
+# ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_customers")
 def customers(request: HttpRequest) -> HttpResponse:
     scope_kam_id, scope_label = _resolve_scope(request, request.user)
     customer_id = request.GET.get("id")
 
-    if _is_manager(request.user):
+    if _is_admin(request.user):
         base_qs = Customer.objects.all()
         if scope_kam_id is not None:
-            base_qs = base_qs.filter(primary_kam_id=scope_kam_id)
+            base_qs = base_qs.filter(Q(kam_id=scope_kam_id) | Q(primary_kam_id=scope_kam_id))
+    elif _is_manager(request.user):
+        allowed = set(_kams_managed_by_manager(request.user))
+        base_qs = Customer.objects.filter(Q(kam_id__in=allowed) | Q(primary_kam_id__in=allowed))
+        if scope_kam_id is not None:
+            base_qs = base_qs.filter(Q(kam_id=scope_kam_id) | Q(primary_kam_id=scope_kam_id))
     else:
-        base_qs = Customer.objects.filter(primary_kam=request.user)
+        base_qs = Customer.objects.filter(Q(kam=request.user) | Q(primary_kam=request.user))
 
     customer_list = list(base_qs.order_by("name")[:300])
     customer = get_object_or_404(base_qs, id=customer_id) if customer_id else (customer_list[0] if customer_list else None)
 
-    period_type, start_dt, end_dt, period_id = _get_period(request)
-    start_date = start_dt.date()
-    end_date = (end_dt - timezone.timedelta(days=1)).date()
+    period_type, start_date, end_date, period_id = _get_customer360_range(request)
 
     exposure = overdue = credit_limit = Decimal(0)
     ageing = {"a0_30": Decimal(0), "a31_60": Decimal(0), "a61_90": Decimal(0), "a90_plus": Decimal(0)}
     sales_last12 = []
     collections_last12 = []
     risk_ratio = None
+
+    recent_visits = []
+    recent_calls = []
+    followups = []
 
     if customer:
         latest_dt = (
@@ -1515,25 +2077,47 @@ def customers(request: HttpRequest) -> HttpResponse:
             .annotate(mt=Sum("qty_mt"))
             .order_by("invoice_date__year", "invoice_date__month")
         )
-        sales_last12 = [
-            {"year": r["invoice_date__year"], "month": r["invoice_date__month"], "mt": _safe_decimal(r["mt"])}
-            for r in sales
-        ]
+        sales_last12 = [{"year": r["invoice_date__year"], "month": r["invoice_date__month"], "mt": _safe_decimal(r["mt"])} for r in sales]
 
         colls = (
-            CollectionTxn.objects.filter(
-                customer=customer, txn_datetime__date__gte=start_date, txn_datetime__date__lte=end_date
-            )
+            CollectionTxn.objects.filter(customer=customer, txn_datetime__date__gte=start_date, txn_datetime__date__lte=end_date)
             .values("txn_datetime__year", "txn_datetime__month")
             .annotate(amount=Sum("amount"))
             .order_by("txn_datetime__year", "txn_datetime__month")
         )
-        collections_last12 = [
-            {"year": r["txn_datetime__year"], "month": r["txn_datetime__month"], "amount": _safe_decimal(r["amount"])}
-            for r in colls
-        ]
+        collections_last12 = [{"year": r["txn_datetime__year"], "month": r["txn_datetime__month"], "amount": _safe_decimal(r["amount"])} for r in colls]
 
-    kam_options = _manager_kam_options_recent_first() if _is_manager(request.user) else []
+        recent_visits = list(
+            VisitPlan.objects.filter(customer=customer, visit_date__gte=start_date, visit_date__lte=end_date)
+            .order_by("-visit_date")[:10]
+        )
+
+        recent_calls = list(
+            CallLog.objects.filter(customer=customer, call_datetime__date__gte=start_date, call_datetime__date__lte=end_date)
+            .order_by("-call_datetime")[:10]
+        )
+
+        today = timezone.localdate()
+        followups = list(
+            VisitActual.objects.filter(
+                plan__customer=customer,
+                next_action__isnull=False,
+                next_action__gt="",
+                next_action_date__isnull=False,
+                next_action_date__gte=today,
+            )
+            .order_by("next_action_date")[:10]
+        )
+
+    kam_options: List[str] = []
+    if _is_manager(request.user):
+        if _is_admin(request.user):
+            kam_options = list(User.objects.filter(is_active=True).order_by("username").values_list("username", flat=True))
+        else:
+            allowed_ids = _kams_managed_by_manager(request.user)
+            kam_options = list(
+                User.objects.filter(is_active=True, id__in=allowed_ids).order_by("username").values_list("username", flat=True)
+            )
 
     ctx = {
         "page_title": "Customer 360",
@@ -1550,162 +2134,220 @@ def customers(request: HttpRequest) -> HttpResponse:
         "ageing": ageing,
         "sales_last12": sales_last12,
         "collections_last12": collections_last12,
-        "recent_visits": list(
-            VisitPlan.objects.filter(customer=customer).order_by("-visit_date")[:10]
-        ) if customer else [],
-        "recent_calls": list(
-            CallLog.objects.filter(customer=customer).order_by("-call_datetime")[:10]
-        ) if customer else [],
-        "followups": list(
-            VisitActual.objects.filter(plan__customer=customer, next_action__isnull=False, next_action__gt="")
-            .order_by("next_action_date")[:10]
-        ) if customer else [],
+        "recent_visits": recent_visits,
+        "recent_calls": recent_calls,
+        "followups": followups,
     }
     return render(request, "kam/customer_360.html", ctx)
 
 
-# -----------------------------------------------------------------------------
-# Targets (unchanged)
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# SECTION F: Targets (manager UI using ManagerTargetForm, persisted into TargetSetting)
+# ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_targets")
 def targets(request: HttpRequest) -> HttpResponse:
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
-    if request.method == "POST":
-        period_type = request.POST.get("period_type") or TargetHeader.PERIOD_WEEK
-        period_id = request.POST.get("period_id") or ""
-        if not period_id:
-            messages.error(request, "Period Id is required (e.g., 2026-W05 / 2026-01 / 2026-Q1 / 2026).")
-            return redirect(reverse("kam:targets"))
-        header, _created = TargetHeader.objects.get_or_create(
-            period_type=period_type, period_id=period_id, defaults={"manager": request.user}
-        )
-        if request.POST.get("lock") == "1":
-            if header.locked_at:
-                messages.info(request, "Target already locked.")
-            else:
-                header.locked_at = timezone.now()
-                header.save(update_fields=["locked_at"])
-                messages.success(request, "Targets locked & published.")
-        else:
-            if not header.manager_id:
-                header.manager = request.user
-                header.save(update_fields=["manager"])
-            messages.success(request, "Target header saved.")
-        return redirect(reverse("kam:targets"))
 
-    headers = TargetHeader.objects.select_related("manager").order_by("-created_at")[:20]
-    ctx = {"page_title": "Targets", "headers": headers}
+    if _is_admin(request.user):
+        kam_options = list(User.objects.filter(is_active=True).order_by("username").values_list("username", flat=True))
+    else:
+        allowed_ids = _kams_managed_by_manager(request.user)
+        kam_options = list(User.objects.filter(is_active=True, id__in=allowed_ids).order_by("username").values_list("username", flat=True))
+
+    uname = (request.GET.get("user") or "").strip()
+    f = _parse_iso_date(request.GET.get("from") or "")
+    t = _parse_iso_date(request.GET.get("to") or "")
+
+    selected_kam = User.objects.filter(username=uname, is_active=True).first() if uname else None
+    if selected_kam and (not _is_admin(request.user)):
+        if selected_kam.id not in set(_kams_managed_by_manager(request.user)):
+            selected_kam = None
+
+    edit_id = (request.GET.get("id") or "").strip()
+    edit_obj = TargetSetting.objects.filter(id=edit_id).first() if edit_id.isdigit() else None
+
+    overdue_sum = Decimal(0)
+    suggested_collections = Decimal(0)
+
+    if request.method == "POST":
+        form = ManagerTargetForm(request.POST, kam_options=kam_options)
+        if not form.is_valid():
+            messages.error(request, "Please correct the errors and save again.")
+        else:
+            cd = form.cleaned_data
+
+            from_date = cd["from_date"]
+            to_date = cd.get("to_date")
+            fixed_3m = bool(cd.get("fixed_for_next_3_months"))
+
+            if not to_date:
+                if fixed_3m:
+                    to_date = _add_months(from_date, 3) - timezone.timedelta(days=1)
+                else:
+                    to_date = from_date + timezone.timedelta(days=6)
+
+            bulk_all = bool(cd.get("bulk_all_kams"))
+            kam_username = (cd.get("kam_username") or "").strip()
+
+            if bulk_all or not kam_username:
+                kam_users = list(User.objects.filter(is_active=True, username__in=kam_options).order_by("username"))
+                if not kam_users:
+                    messages.error(request, "No KAM users found for bulk apply.")
+                    return redirect(reverse("kam:targets"))
+            else:
+                kam_u = User.objects.filter(is_active=True, username=kam_username).first()
+                if not kam_u:
+                    messages.error(request, "Selected KAM is invalid.")
+                    return redirect(reverse("kam:targets"))
+                kam_users = [kam_u]
+
+            sales_target_mt = _safe_decimal(cd.get("sales_target_mt"))
+            leads_target_mt = _safe_decimal(cd.get("leads_target_mt"))
+            calls_target = int(cd.get("calls_target") or 0)
+
+            coll_input = cd.get("collections_target_amount")
+            auto_coll = bool(cd.get("auto_collections_30pct_overdue"))
+
+            created = 0
+            updated = 0
+
+            with transaction.atomic():
+                for kuser in kam_users:
+                    collections_target_amount = coll_input
+                    if auto_coll or collections_target_amount is None:
+                        collections_target_amount = Decimal("0.00")
+
+                    overlap_qs = TargetSetting.objects.filter(kam=kuser, from_date__lte=to_date, to_date__gte=from_date)
+
+                    post_id = (request.POST.get("id") or "").strip()
+                    inst = None
+                    if (not bulk_all) and post_id.isdigit():
+                        inst = TargetSetting.objects.filter(id=int(post_id)).first()
+                        if inst:
+                            overlap_qs = overlap_qs.exclude(id=inst.id)
+
+                    if overlap_qs.exists():
+                        messages.error(
+                            request,
+                            f"Overlapping target window exists for KAM: {kuser.username} ({from_date} → {to_date}).",
+                        )
+                        raise transaction.TransactionManagementError("Overlap detected")
+
+                    if inst and (len(kam_users) == 1):
+                        obj = inst
+                        obj.kam = kuser
+                        updated += 1
+                    else:
+                        obj = TargetSetting(kam=kuser)
+                        created += 1
+
+                    obj.from_date = from_date
+                    obj.to_date = to_date
+                    obj.manager = request.user
+
+                    obj.sales_target_mt = sales_target_mt
+                    obj.leads_target_mt = leads_target_mt
+                    obj.calls_target = calls_target
+                    obj.collections_target_amount = _safe_decimal(collections_target_amount)
+
+                    if fixed_3m:
+                        obj.fixed_sales_mt = sales_target_mt
+                        obj.fixed_leads_mt = leads_target_mt
+                        obj.fixed_calls = calls_target
+                        obj.fixed_collections_amount = _safe_decimal(collections_target_amount)
+
+                    obj.save()
+
+            if bulk_all or len(kam_users) > 1:
+                messages.success(request, f"Targets saved in bulk. Created: {created}, Updated: {updated}.")
+                return redirect(reverse("kam:targets"))
+
+            return redirect(f"{reverse('kam:targets')}?from={from_date}&to={to_date}&user={kam_users[0].username}")
+    else:
+        initial = {}
+        if edit_obj:
+            initial = {
+                "id": str(edit_obj.id),
+                "from_date": edit_obj.from_date,
+                "to_date": edit_obj.to_date,
+                "kam_username": edit_obj.kam.username if edit_obj.kam_id else "",
+                "sales_target_mt": edit_obj.sales_target_mt,
+                "leads_target_mt": edit_obj.leads_target_mt,
+                "calls_target": edit_obj.calls_target,
+                "collections_target_amount": edit_obj.collections_target_amount,
+            }
+        else:
+            if f:
+                initial["from_date"] = f
+            if t:
+                initial["to_date"] = t
+            if selected_kam:
+                initial["kam_username"] = selected_kam.username
+            initial["auto_collections_30pct_overdue"] = True
+
+        form = ManagerTargetForm(initial=initial, kam_options=kam_options)
+
+    qs = TargetSetting.objects.select_related("kam", "manager").order_by("-created_at")
+    if selected_kam:
+        qs = qs.filter(kam=selected_kam)
+    if f and t and f <= t:
+        qs = qs.filter(from_date__lte=t, to_date__gte=f)
+    rows = list(qs[:200])
+
+    ctx = {
+        "page_title": "Manager Target Setting",
+        "kam_options": kam_options,
+        "selected_user": uname,
+        "filter_from": f,
+        "filter_to": t,
+        "rows": rows,
+        "form": form,
+        "edit_obj": edit_obj,
+        "overdue_sum": overdue_sum,
+        "suggested_collections": suggested_collections,
+    }
     return render(request, "kam/targets.html", ctx)
 
 
 @login_required
 @require_kam_code("kam_targets_lines")
 def targets_lines(request: HttpRequest) -> HttpResponse:
-    if not _is_manager(request.user):
-        return HttpResponseForbidden("403 Forbidden: Manager access required.")
-
-    header_id = request.GET.get("header_id")
-    header = get_object_or_404(TargetHeader, id=header_id) if header_id else None
-
-    if request.method == "POST":
-        if not header:
-            messages.error(request, "Select a target header first.")
-            return redirect(reverse("kam:targets_lines"))
-        if header.locked_at:
-            messages.error(request, "Header is locked; cannot edit lines.")
-            return redirect(f"{reverse('kam:targets_lines')}?header_id={header.id}")
-
-        form = TargetLineInlineForm(request.POST)
-        if form.is_valid():
-            tl: TargetLine = form.save(commit=False)
-            tl.header = header
-
-            existing = TargetLine.objects.filter(header=header, kam=tl.kam).first()
-            if existing:
-                existing.sales_target_mt = tl.sales_target_mt
-                existing.visits_target = tl.visits_target
-                existing.calls_target = tl.calls_target
-                existing.leads_target_mt = tl.leads_target_mt
-                existing.nbd_target_monthly = tl.nbd_target_monthly
-                existing.collections_plan_amount = tl.collections_plan_amount
-                existing.save()
-                messages.success(request, "Target updated for KAM.")
-            else:
-                tl.save()
-                messages.success(request, "Target created for KAM.")
-            return redirect(f"{reverse('kam:targets_lines')}?header_id={header.id}")
-    else:
-        form = TargetLineInlineForm()
-
-    headers = TargetHeader.objects.select_related("manager").order_by("-created_at")[:20]
-    lines = TargetLine.objects.select_related("kam").filter(header=header).order_by("kam__username") if header else []
-    ctx = {"page_title": "Target Lines", "headers": headers, "selected_header": header, "form": form, "lines": lines}
-    return render(request, "kam/targets_lines.html", ctx)
+    return redirect(reverse("kam:targets"))
 
 
-# -----------------------------------------------------------------------------
-# Reports (Deep Analysis)
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Reports (scope tightened by mapping via _resolve_scope)
+# ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_reports")
 def reports(request: HttpRequest) -> HttpResponse:
-    """
-    Deep Analysis support:
-      - ?metric=sales|calls|visits
-      - Uses same strict scope rules as dashboard
-      - Uses From/To date range like dashboard (defaults to current week)
-    """
     start_dt, end_dt, range_label = _get_dashboard_range(request)
     scope_kam_id, scope_label = _resolve_scope(request, request.user)
 
     metric = (request.GET.get("metric") or "").strip().lower() or "sales"
-
     rows = []
 
     if metric == "sales":
         qs = InvoiceFact.objects.filter(invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date())
         if scope_kam_id is not None:
             qs = qs.filter(kam_id=scope_kam_id)
-        rows = list(
-            qs.values("customer__name", "kam__username")
-            .annotate(mt=Sum("qty_mt"))
-            .order_by("-mt")[:300]
-        )
+        rows = list(qs.values("customer__name", "kam__username").annotate(mt=Sum("qty_mt")).order_by("-mt")[:300])
 
     elif metric == "calls":
-        # FIXED: do NOT select_related(customer) because Customer table is missing column 'code' in DB.
         qs = CallLog.objects.filter(call_datetime__gte=start_dt, call_datetime__lt=end_dt)
         if scope_kam_id is not None:
             qs = qs.filter(kam_id=scope_kam_id)
-
-        rows = list(
-            qs.values(
-                "id",
-                "call_datetime",
-                "kam__username",
-                "customer_id",
-                "customer__name",
-            ).order_by("-call_datetime")[:500]
-        )
+        rows = list(qs.values("id", "call_datetime", "kam__username", "customer_id", "customer__name").order_by("-call_datetime")[:500])
 
     elif metric == "visits":
-        # FIXED: avoid select_related(plan__customer) for the same reason.
-        qs = VisitActual.objects.filter(
-            plan__visit_date__gte=start_dt.date(), plan__visit_date__lt=end_dt.date()
-        )
+        qs = VisitActual.objects.filter(plan__visit_date__gte=start_dt.date(), plan__visit_date__lt=end_dt.date())
         if scope_kam_id is not None:
             qs = qs.filter(plan__kam_id=scope_kam_id)
-
         rows = list(
             qs.values(
-                "id",
-                "successful",
-                "plan__visit_date",
-                "plan__kam__username",
-                "plan__customer_id",
-                "plan__customer__name",
+                "id", "successful", "plan__visit_date", "plan__kam__username", "plan__customer_id", "plan__customer__name"
             ).order_by("-plan__visit_date")[:500]
         )
 
@@ -1714,13 +2356,15 @@ def reports(request: HttpRequest) -> HttpResponse:
         qs = InvoiceFact.objects.filter(invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date())
         if scope_kam_id is not None:
             qs = qs.filter(kam_id=scope_kam_id)
-        rows = list(
-            qs.values("customer__name", "kam__username")
-            .annotate(mt=Sum("qty_mt"))
-            .order_by("-mt")[:300]
-        )
+        rows = list(qs.values("customer__name", "kam__username").annotate(mt=Sum("qty_mt")).order_by("-mt")[:300])
 
-    kam_options = _manager_kam_options_recent_first() if _is_manager(request.user) else []
+    kam_options: List[str] = []
+    if _is_manager(request.user):
+        if _is_admin(request.user):
+            kam_options = list(User.objects.filter(is_active=True).order_by("username").values_list("username", flat=True))
+        else:
+            allowed_ids = _kams_managed_by_manager(request.user)
+            kam_options = list(User.objects.filter(is_active=True, id__in=allowed_ids).order_by("username").values_list("username", flat=True))
 
     ctx = {
         "page_title": "KAM Reports",
@@ -1734,51 +2378,53 @@ def reports(request: HttpRequest) -> HttpResponse:
     return render(request, "kam/reports.html", ctx)
 
 
-# -----------------------------------------------------------------------------
-# CSV export
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# CSV export (scope tightened)
+# ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_export_kpi_csv")
 def export_kpi_csv(request: HttpRequest) -> StreamingHttpResponse:
     period_type, start_dt, end_dt, period_id = _get_period(request)
+
     if _is_manager(request.user):
         user_q = (request.GET.get("user") or "").strip()
         if user_q:
-            try:
-                kam_user_ids = [User.objects.get(username=user_q).id]
-            except User.DoesNotExist:
+            u = User.objects.filter(username=user_q, is_active=True).first()
+            if not u:
                 kam_user_ids = []
+            else:
+                if _is_admin(request.user) or u.id in set(_kams_managed_by_manager(request.user)):
+                    kam_user_ids = [u.id]
+                else:
+                    kam_user_ids = []
         else:
-            kam_user_ids = (
-                InvoiceFact.objects.filter(invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date())
-                .values_list("kam_id", flat=True)
-                .distinct()
-            )
+            if _is_admin(request.user):
+                kam_user_ids = list(
+                    InvoiceFact.objects.filter(invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date())
+                    .values_list("kam_id", flat=True)
+                    .distinct()
+                )
+            else:
+                kam_user_ids = _kams_managed_by_manager(request.user)
     else:
         kam_user_ids = [request.user.id]
 
     rows = [["period_type", "period_id", "kam_id", "sales_mt", "calls", "visits_actual", "collections_amount"]]
     for kam_id in kam_user_ids:
         sales_mt = _safe_decimal(
-            InvoiceFact.objects.filter(
-                kam_id=kam_id, invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date()
-            ).aggregate(mt=Sum("qty_mt"))["mt"]
+            InvoiceFact.objects.filter(kam_id=kam_id, invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date()).aggregate(mt=Sum("qty_mt"))["mt"]
         )
         calls = CallLog.objects.filter(kam_id=kam_id, call_datetime__gte=start_dt, call_datetime__lt=end_dt).count()
-        visits_actual = VisitActual.objects.filter(
-            plan__kam_id=kam_id, plan__visit_date__gte=start_dt.date(), plan__visit_date__lt=end_dt.date()
-        ).count()
+        visits_actual = VisitActual.objects.filter(plan__kam_id=kam_id, plan__visit_date__gte=start_dt.date(), plan__visit_date__lt=end_dt.date()).count()
         collections_amount = _safe_decimal(
-            CollectionTxn.objects.filter(kam_id=kam_id, txn_datetime__gte=start_dt, txn_datetime__lt=end_dt).aggregate(
-                a=Sum("amount")
-            )["a"]
+            CollectionTxn.objects.filter(kam_id=kam_id, txn_datetime__gte=start_dt, txn_datetime__lt=end_dt).aggregate(a=Sum("amount"))["a"]
         )
-        rows.append(
-            [period_type, period_id, kam_id, f"{sales_mt}", f"{calls}", f"{visits_actual}", f"{collections_amount}"]
-        )
+        rows.append([period_type, period_id, kam_id, f"{sales_mt}", f"{calls}", f"{visits_actual}", f"{collections_amount}"])
 
     def _iter_csv() -> Iterable[bytes]:
-        import io, csv
+        import io
+        import csv
+
         buf = io.StringIO()
         writer = csv.writer(buf)
         for r in rows:
@@ -1792,9 +2438,9 @@ def export_kpi_csv(request: HttpRequest) -> StreamingHttpResponse:
     return resp
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Collections Plan (unchanged)
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_collections_plan")
 def collections_plan(request: HttpRequest) -> HttpResponse:
@@ -1804,21 +2450,18 @@ def collections_plan(request: HttpRequest) -> HttpResponse:
         form = CollectionPlanForm(request.POST)
         if form.is_valid():
             cp: CollectionPlan = form.save(commit=False)
-            cp.kam = cp.customer.primary_kam or request.user
+            # primary owner fallback; keep safe
+            cp.kam = cp.customer.kam or cp.customer.primary_kam or request.user
             cp.save()
             messages.success(request, "Collection plan saved.")
-            return redirect(
-                f"{reverse('kam:collections_plan')}?period={request.GET.get('period','month')}&asof={request.GET.get('asof','')}"
-            )
+            return redirect(f"{reverse('kam:collections_plan')}?period={request.GET.get('period','month')}&asof={request.GET.get('asof','')}")
     else:
         form = CollectionPlanForm(initial={"period_type": period_type, "period_id": period_id})
 
     plan_qs = CollectionPlan.objects.select_related("customer", "kam")
 
     period_rows = plan_qs.filter(period_type=period_type, period_id=period_id)
-    range_rows = plan_qs.filter(
-        from_date__isnull=False, to_date__isnull=False, from_date__lte=end_dt.date(), to_date__gte=start_dt.date()
-    )
+    range_rows = plan_qs.filter(from_date__isnull=False, to_date__isnull=False, from_date__lte=end_dt.date(), to_date__gte=start_dt.date())
     plan_qs = (period_rows | range_rows).distinct()
 
     plan_customer_ids = list(plan_qs.values_list("customer_id", flat=True))
@@ -1826,27 +2469,15 @@ def collections_plan(request: HttpRequest) -> HttpResponse:
     overdue_map: Dict[int, Decimal] = {}
     if plan_customer_ids:
         for cust_id in plan_customer_ids:
-            latest = (
-                OverdueSnapshot.objects.filter(customer_id=cust_id)
-                .order_by("-snapshot_date")
-                .values_list("snapshot_date", flat=True)
-                .first()
-            )
+            latest = OverdueSnapshot.objects.filter(customer_id=cust_id).order_by("-snapshot_date").values_list("snapshot_date", flat=True).first()
             if latest:
-                val = (
-                    OverdueSnapshot.objects.filter(customer_id=cust_id, snapshot_date=latest)
-                    .values_list("overdue", flat=True)
-                    .first()
-                    or 0
-                )
+                val = OverdueSnapshot.objects.filter(customer_id=cust_id, snapshot_date=latest).values_list("overdue", flat=True).first() or 0
                 overdue_map[cust_id] = _safe_decimal(val)
 
     actual_map: Dict[int, Decimal] = {}
     if plan_customer_ids:
         coll_qs = (
-            CollectionTxn.objects.filter(
-                txn_datetime__gte=start_dt, txn_datetime__lt=end_dt, customer_id__in=plan_customer_ids
-            )
+            CollectionTxn.objects.filter(txn_datetime__gte=start_dt, txn_datetime__lt=end_dt, customer_id__in=plan_customer_ids)
             .values("customer_id")
             .annotate(actual=Sum("amount"))
         )
@@ -1878,13 +2509,12 @@ def collections_plan(request: HttpRequest) -> HttpResponse:
     return render(request, "kam/collections_plan.html", ctx)
 
 
-# -----------------------------------------------------------------------------
-# Sync endpoints (unchanged)
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Sync endpoints (UNCHANGED; DO NOT MODIFY IMPORTER LOGIC)
+# ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_sync_now")
 def sync_now(request: HttpRequest) -> HttpResponse:
-    """Run a single full import from the Google Sheet immediately (one-off)."""
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
     try:
@@ -1898,26 +2528,17 @@ def sync_now(request: HttpRequest) -> HttpResponse:
 @login_required
 @require_kam_code("kam_sync_trigger")
 def sync_trigger(request: HttpRequest) -> HttpResponse:
-    """Create (or reuse) a pending SyncIntent token."""
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
     token = timezone.now().strftime("%Y%m%d%H%M%S") + f"_{request.user.id}"
     intent = SyncIntent.objects.create(token=token, created_by=request.user, scope=SyncIntent.SCOPE_TEAM)
-    messages.success(
-        request,
-        f"Sync triggered (token={intent.token}). Now run /kam/sync/step/?token=TOKEN repeatedly until done.",
-    )
+    messages.success(request, f"Sync triggered (token={intent.token}). Now run /kam/sync/step/?token=TOKEN repeatedly until done.")
     return redirect(reverse("kam:dashboard"))
 
 
 @login_required
 @require_kam_code("kam_sync_step")
 def sync_step(request: HttpRequest) -> HttpResponse:
-    """
-    Advance one sync step (JSON).
-    IMPORTANT: If called via HTML form POST without token, run full sync and redirect
-    (so Manager "Sync now" button doesn't land on a JSON page).
-    """
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
 

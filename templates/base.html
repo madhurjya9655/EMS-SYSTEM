@@ -1,6 +1,6 @@
-<!--
-FILE: E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\base.html
--->
+<!-- FILE: templates/base.html -->
+<!-- PURPOSE: Restored Settings Section in Sidebar Navigation -->
+<!-- UPDATED: 2026-02-XX -->
 {% load static user_filters %}
 <!DOCTYPE html>
 <html lang="en" data-theme="light">
@@ -687,8 +687,11 @@ FILE: E:\CLIENT PROJECT\employee management system bos\employee_management_syste
           </a>
           {% endif %}
 
-          {% if user|has_permission:"kam_manager" or user.is_superuser %}
-          <a href="{% url 'kam:visit_batches' %}" class="nav-item">
+          {# Visit Batches must be visible to KAM (to see their own batches) and Managers #}
+          {% if user|has_any_permission:"kam_plan,kam_manager" or user.is_superuser %}
+          <a href="{% url 'kam:visit_batches' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'visit_batches' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'visit_batches' %}aria-current="page"{% endif %}>
             <i class="fas fa-layer-group" aria-hidden="true"></i> Visit Batches
           </a>
           {% endif %}
@@ -744,6 +747,14 @@ FILE: E:\CLIENT PROJECT\employee management system bos\employee_management_syste
           {% if user|has_any_permission:"kam_sync_now,kam_sync_trigger,kam_sync_step" %}
           <a href="{% url 'kam:sync_now' %}" class="nav-item">
             <i class="fas fa-rotate" aria-hidden="true"></i> Sync now
+          </a>
+          {% endif %}
+
+          {% if user.is_superuser %}
+          <a href="{% url 'kam:admin_kam_manager_mapping' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'admin_kam_manager_mapping' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'admin_kam_manager_mapping' %}aria-current="page"{% endif %}>
+            <i class="fas fa-user-shield" aria-hidden="true"></i> KAM → Manager Mapping
           </a>
           {% endif %}
         </div>
@@ -924,6 +935,31 @@ FILE: E:\CLIENT PROJECT\employee management system bos\employee_management_syste
            {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'debug_permissions' %}aria-current="page"{% endif %}>
           <i class="fas fa-bug" aria-hidden="true"></i> Debug Permissions
         </a>
+        {% endif %}
+
+        {% if user.is_superuser %}
+        <button type="button" class="nav-item" aria-expanded="false" aria-controls="settingsSubmenu" data-submenu-toggle data-submenu-key="settings">
+          <i class="fas fa-gear" aria-hidden="true"></i> Settings <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+        </button>
+        <div class="submenu" id="settingsSubmenu" role="group" aria-label="Settings">
+          <a href="{% url 'settings:authorized_list' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}aria-current="page"{% endif %}>
+            <i class="fas fa-phone" aria-hidden="true"></i> Authorized Numbers
+          </a>
+
+          <a href="{% url 'settings:holiday_list' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}aria-current="page"{% endif %}>
+            <i class="fas fa-calendar-days" aria-hidden="true"></i> Holiday List
+          </a>
+
+          <a href="{% url 'settings:system_settings' %}"
+             class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}active{% endif %}"
+             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}aria-current="page"{% endif %}>
+            <i class="fas fa-sliders" aria-hidden="true"></i> System Settings
+          </a>
+        </div>
         {% endif %}
       </div>
       {% block sidebar_extra %}{% endblock %}

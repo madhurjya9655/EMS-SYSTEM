@@ -3,15 +3,20 @@
 {% block title %}Manager Dashboard{% endblock %}
 
 {% block content %}
-<div class="page-header d-flex align-items-center justify-content-between">
+<div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
   <h1 class="page-title m-0">Manager Dashboard</h1>
-  <div class="d-flex gap-2">
-    <a class="btn btn-outline-secondary" href="{% url 'kam:targets' %}">Targets</a>
-    <a class="btn btn-outline-secondary" href="{% url 'kam:targets_lines' %}">Target Lines</a>
-    <a class="btn btn-outline-secondary" href="{% url 'kam:dashboard' %}?period=week">Back to Dashboard</a>
-    <form method="post" action="{% url 'kam:sync_step' %}">
+
+  <div class="d-flex gap-2 flex-wrap align-items-center">
+    <a class="btn btn-outline-secondary btn-sm" href="{% url 'kam:targets' %}">Targets</a>
+
+    {# targets_lines route exists in your URL mappings #}
+    <a class="btn btn-outline-secondary btn-sm" href="{% url 'kam:targets_lines' %}">Target Lines</a>
+
+    <a class="btn btn-outline-secondary btn-sm" href="{% url 'kam:dashboard' %}?period=week">Back to Dashboard</a>
+
+    <form method="post" action="{% url 'kam:sync_step' %}" class="d-inline">
       {% csrf_token %}
-      <button class="btn btn-primary" type="submit">
+      <button class="btn btn-primary btn-sm" type="submit" title="Trigger sync step">
         <i class="fas fa-rotate"></i> Sync now
       </button>
     </form>
@@ -20,21 +25,29 @@
 
 <div class="row g-3">
   <div class="col-md-4">
-    <div class="card p-3">
+    <div class="card p-3 h-100">
       <div class="fw-bold">Calls today</div>
-      <div class="fs-3">{{ kpi.calls_today }}</div>
+      <div class="fs-3">
+        {% if kpi and kpi.calls_today is not None %}{{ kpi.calls_today }}{% else %}0{% endif %}
+      </div>
     </div>
   </div>
+
   <div class="col-md-4">
-    <div class="card p-3">
+    <div class="card p-3 h-100">
       <div class="fw-bold">Visits today</div>
-      <div class="fs-3">{{ kpi.visits_today }}</div>
+      <div class="fs-3">
+        {% if kpi and kpi.visits_today is not None %}{{ kpi.visits_today }}{% else %}0{% endif %}
+      </div>
     </div>
   </div>
+
   <div class="col-md-4">
-    <div class="card p-3">
+    <div class="card p-3 h-100">
       <div class="fw-bold">Collections today</div>
-      <div class="fs-3">₹ {{ kpi.collections_today|floatformat:2|intcomma }}</div>
+      <div class="fs-3">
+        ₹ {% if kpi and kpi.collections_today is not None %}{{ kpi.collections_today|floatformat:2|intcomma }}{% else %}0.00{% endif %}
+      </div>
     </div>
   </div>
 </div>

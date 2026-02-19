@@ -1,0 +1,96 @@
+{# FILE: templates/kam/visit_batches.html #}
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h3 class="mb-0">{{ page_title|default:"Visit Batches" }}</h3>
+    <div class="d-flex gap-2">
+      <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:plan' %}">Back to Plan</a>
+    </div>
+  </div>
+
+  <form class="row g-2 mb-3" method="get">
+    <div class="col-auto">
+      <select class="form-select form-select-sm" name="status">
+        <option value="">All Status</option>
+        <option value="DRAFT" {% if request.GET.status == "DRAFT" %}selected{% endif %}>DRAFT</option>
+        <option value="PENDING_APPROVAL" {% if request.GET.status == "PENDING_APPROVAL" %}selected{% endif %}>PENDING_APPROVAL</option>
+        <option value="PENDING" {% if request.GET.status == "PENDING" %}selected{% endif %}>PENDING (legacy)</option>
+        <option value="APPROVED" {% if request.GET.status == "APPROVED" %}selected{% endif %}>APPROVED</option>
+        <option value="REJECTED" {% if request.GET.status == "REJECTED" %}selected{% endif %}>REJECTED</option>
+      </select>
+    </div>
+    <div class="col-auto">
+      <button class="btn btn-sm btn-outline-primary" type="submit">Filter</button>
+    </div>
+  </form>
+
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+      <thead class="table-light">
+        <tr>
+          <th style="width:90px;">Batch</th>
+          <th style="width:140px;">KAM</th>
+          <th style="width:160px;">Category</th>
+          <th style="width:180px;">Date Range</th>
+          <th>Remarks</th>
+          <th style="width:150px;">Status</th>
+          <th style="width:260px;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in rows %}
+          <tr>
+            <td class="fw-semibold">#{{ b.id }}</td>
+            <td>{{ b.kam.username }}</td>
+            <td>{{ b.get_visit_category_display }}</td>
+            <td>{{ b.from_date }} → {{ b.to_date }}</td>
+            <td class="text-truncate" style="max-width: 460px;">{{ b.purpose|default:"-" }}</td>
+            <td>
+              {% if b.approval_status == "APPROVED" %}
+                <span class="badge bg-success">APPROVED</span>
+              {% elif b.approval_status == "REJECTED" %}
+                <span class="badge bg-danger">REJECTED</span>
+              {% elif b.approval_status == "DRAFT" %}
+                <span class="badge bg-secondary">DRAFT</span>
+              {% else %}
+                <span class="badge bg-warning text-dark">{{ b.approval_status }}</span>
+              {% endif %}
+            </td>
+            <td>
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'kam:visit_batch_detail' b.id %}">Details</a>
+
+              {# KAM: delete draft #}
+              {% if not can_view_all and b.approval_status == "DRAFT" %}
+                <form method="post" action="{% url 'kam:visit_batch_delete' b.id %}" class="d-inline">
+                  {% csrf_token %}
+                  <button class="btn btn-sm btn-outline-danger" type="submit" onclick="return confirm('Delete draft batch #{{ b.id }}?');">
+                    Delete
+                  </button>
+                </form>
+              {% endif %}
+
+              {# Manager: approve/reject if pending #}
+              {% if can_view_all and b.approval_status != "APPROVED" and b.approval_status != "REJECTED" and b.approval_status != "DRAFT" %}
+                <form method="post" action="{% url 'kam:visit_batch_approve' b.id %}" class="d-inline">
+                  {% csrf_token %}
+                  <button class="btn btn-sm btn-success" type="submit">Approve</button>
+                </form>
+
+                <form method="post" action="{% url 'kam:visit_batch_reject' b.id %}" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="reason" value="Rejected from batch list" />
+                  <button class="btn btn-sm btn-outline-danger" type="submit">Reject</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="7" class="text-muted">No batches found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

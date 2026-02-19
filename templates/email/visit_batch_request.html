@@ -1,0 +1,80 @@
+{# FILE: employee_management_system/templates/email/visit_batch_request.html #}
+{% extends "email/base.html" %}
+
+{% block subject %}Approval Required: Visit Plan Batch{% endblock %}
+
+{% block body %}
+  <h1 class="title">Approval required: Visit plan batch</h1>
+
+  <p class="muted">
+    Hello {{ manager_name|default:"Manager" }},
+    a visit plan batch has been submitted for your approval by
+    <strong>{{ kam_name|default:"KAM" }}</strong>.
+  </p>
+
+  <table class="table">
+    <tr>
+      <th style="width:210px;">Batch</th>
+      <td>{{ batch_code|default:"-" }}</td>
+    </tr>
+    <tr>
+      <th>Date range</th>
+      <td>{{ from_date|default:"-" }}{% if to_date %} → {{ to_date }}{% endif %}</td>
+    </tr>
+    <tr>
+      <th>Category</th>
+      <td>{{ category|default:"Customer" }}</td>
+    </tr>
+    <tr>
+      <th>Status</th>
+      <td>
+        <span class="badge badge-pending">PENDING</span>
+      </td>
+    </tr>
+    <tr>
+      <th>Remarks</th>
+      <td>{{ remarks|default:"-" }}</td>
+    </tr>
+  </table>
+
+  <h2 style="font-size:15px;margin:18px 0 8px;">Selected customers</h2>
+
+  <table class="table">
+    <thead>
+      <tr>
+        <th style="width:44px;">#</th>
+        <th>Customer</th>
+        <th style="width:120px;">From</th>
+        <th style="width:120px;">To</th>
+        <th>Location</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if rows %}
+        {% for r in rows %}
+          <tr>
+            <td>{{ forloop.counter }}</td>
+            <td>{{ r.customer_name|default:"-" }}</td>
+            <td>{{ r.from_date|default:"-" }}</td>
+            <td>{{ r.to_date|default:"-" }}</td>
+            <td>{{ r.location|default:"-" }}</td>
+          </tr>
+        {% endfor %}
+      {% else %}
+        <tr>
+          <td colspan="5" class="muted">No rows data provided.</td>
+        </tr>
+      {% endif %}
+    </tbody>
+  </table>
+
+  {% if action_url %}
+    <p style="margin-top:16px;">
+      <a class="btn" href="{{ action_url }}">Open approval page</a>
+    </p>
+    <p class="muted" style="margin-top:10px;">
+      If the button doesn’t work, copy and paste this link:<br>
+      <span class="mono">{{ action_url }}</span>
+    </p>
+  {% endif %}
+{% endblock %}

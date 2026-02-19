@@ -1,0 +1,57 @@
+{# FILE: employee_management_system/templates/email/visit_batch_status.html #}
+{% extends "email/base.html" %}
+
+{% block subject %}Visit Plan Batch {{ status|default:"Updated" }}{% endblock %}
+
+{% block body %}
+  <h1 class="title">Visit plan batch {{ status|default:"updated" }}</h1>
+
+  <p class="muted">
+    Hello {{ kam_name|default:"KAM" }},
+    your submitted visit plan batch has been
+    {% if status == "APPROVED" %}
+      <strong>APPROVED</strong>.
+    {% elif status == "REJECTED" %}
+      <strong>REJECTED</strong>.
+    {% else %}
+      <strong>UPDATED</strong>.
+    {% endif %}
+  </p>
+
+  <table class="table">
+    <tr>
+      <th style="width:210px;">Batch</th>
+      <td>{{ batch_code|default:"-" }}</td>
+    </tr>
+    <tr>
+      <th>Date range</th>
+      <td>{{ from_date|default:"-" }}{% if to_date %} → {{ to_date }}{% endif %}</td>
+    </tr>
+    <tr>
+      <th>Category</th>
+      <td>{{ category|default:"Customer" }}</td>
+    </tr>
+    <tr>
+      <th>Status</th>
+      <td>
+        {% if status == "APPROVED" %}
+          <span class="badge badge-approved">APPROVED</span>
+        {% elif status == "REJECTED" %}
+          <span class="badge badge-rejected">REJECTED</span>
+        {% else %}
+          <span class="badge badge-pending">PENDING</span>
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>Manager remark</th>
+      <td>{{ manager_remark|default:"-" }}</td>
+    </tr>
+  </table>
+
+  {% if action_url %}
+    <p style="margin-top:16px;">
+      <a class="btn btn-secondary" href="{{ action_url }}">Open batch</a>
+    </p>
+  {% endif %}
+{% endblock %}

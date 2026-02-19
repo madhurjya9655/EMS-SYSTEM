@@ -3,9 +3,10 @@
 {% block title %}Collections Plan{% endblock %}
 
 {% block content %}
-<div class="d-flex align-items-center justify-content-between">
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
   <h1 class="page-title m-0">Collections Plan</h1>
-  <form class="d-flex gap-2" method="get">
+
+  <form class="d-flex gap-2 flex-wrap" method="get">
     <select name="period" class="form-select form-select-sm">
       <option value="week" {% if period_type == 'WEEK' %}selected{% endif %}>Week</option>
       <option value="month" {% if period_type == 'MONTH' %}selected{% endif %}>Month</option>
@@ -13,16 +14,17 @@
       <option value="year" {% if period_type == 'YEAR' %}selected{% endif %}>Year</option>
       <option value="all" {% if period_type == 'ALL' %}selected{% endif %}>All</option>
     </select>
+
     <input name="asof" placeholder="YYYY[-MM[-DD]]" value="{{ request.GET.asof }}" class="form-control form-control-sm"/>
-    <input name="from" placeholder="YYYY[-MM[-DD]] (From)" value="{{ request.GET.from }}" class="form-control form-control-sm"/>
-    <input name="to" placeholder="YYYY[-MM[-DD]] (To)" value="{{ request.GET.to }}" class="form-control form-control-sm"/>
+    <input type="date" name="from" value="{{ request.GET.from }}" class="form-control form-control-sm"/>
+    <input type="date" name="to" value="{{ request.GET.to }}" class="form-control form-control-sm"/>
+
     <button class="btn btn-sm btn-primary">Apply</button>
   </form>
 </div>
 
 <div class="card p-3 my-3">
   <h6 class="fw-bold mb-2">Add / Update Plan</h6>
-  <!-- Supports either Period Type + Period Id OR From–To range -->
   <form method="post" class="row g-2" novalidate>
     {% csrf_token %}
     <div class="col-md-2">{{ form.period_type.label_tag }} {{ form.period_type }}</div>
@@ -31,10 +33,11 @@
     <div class="col-md-2">{{ form.to_date.label_tag }} {{ form.to_date }}</div>
     <div class="col-md-2">{{ form.customer.label_tag }} {{ form.customer }}</div>
     <div class="col-md-2">{{ form.planned_amount.label_tag }} {{ form.planned_amount }}</div>
+
     <div class="col-12 small text-muted">
-      Use either <em>Period Type + Period Id</em> (e.g., MONTH + 2026-02) or a <em>From–To</em> date range.
-      If both are provided, the range is stored and used for comparisons in the selected window.
+      Provide either <em>Period Type/Id</em> or <em>From/To</em> range (not both).
     </div>
+
     <div class="col-12 d-grid"><button class="btn btn-primary">Save</button></div>
   </form>
 </div>

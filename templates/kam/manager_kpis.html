@@ -3,11 +3,13 @@
 {% block title %}Manager KPIs{% endblock %}
 
 {% block content %}
-<div class="d-flex align-items-center justify-content-between">
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
   <h1 class="page-title m-0">Manager KPIs</h1>
-  <div class="d-flex gap-2">
+
+  <div class="d-flex gap-2 flex-wrap">
     <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:manager' %}">Back</a>
-    <form class="d-flex gap-2" method="get">
+
+    <form class="d-flex gap-2 flex-wrap" method="get">
       <select name="period" class="form-select form-select-sm">
         <option value="week" {% if period_type == 'WEEK' %}selected{% endif %}>This Week</option>
         <option value="month" {% if period_type == 'MONTH' %}selected{% endif %}>This Month</option>
@@ -15,6 +17,7 @@
         <option value="year" {% if period_type == 'YEAR' %}selected{% endif %}>This Year</option>
         <option value="all" {% if period_type == 'ALL' %}selected{% endif %}>All</option>
       </select>
+
       <input name="asof" placeholder="YYYY[-MM[-DD]]" value="{{ request.GET.asof }}" class="form-control form-control-sm"/>
       <button class="btn btn-sm btn-primary">Apply</button>
     </form>

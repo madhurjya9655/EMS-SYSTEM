@@ -1,0 +1,106 @@
+{# FILE: templates/kam/admin_kam_manager_mapping.html #}
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h3 class="mb-0">{{ page_title|default:"KAM → Manager Mapping" }}</h3>
+    <div class="d-flex gap-2">
+      <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:dashboard' %}">Dashboard</a>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header fw-semibold">Assign / Update Mapping</div>
+    <div class="card-body">
+      <form method="post" class="row g-3">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="assign" />
+
+        <div class="col-md-4">
+          <label class="form-label">KAM</label>
+          <select class="form-select" name="kam_id" required>
+            <option value="">-- Select KAM --</option>
+            {% for u in kam_users %}
+              <option value="{{ u.id }}">{{ u.username }}{% if u.get_full_name %} ({{ u.get_full_name }}){% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Manager</label>
+          <select class="form-select" name="manager_id" required>
+            <option value="">-- Select Manager --</option>
+            {% for u in manager_users %}
+              <option value="{{ u.id }}">{{ u.username }}{% if u.get_full_name %} ({{ u.get_full_name }}){% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-4 d-flex align-items-end">
+          <button class="btn btn-primary" type="submit">Save Mapping</button>
+        </div>
+      </form>
+      <div class="small text-muted mt-2">
+        Saving a new mapping automatically deactivates previous active mappings for that KAM.
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex align-items-center justify-content-between mb-2">
+    <div class="fw-semibold">Mappings</div>
+    <div class="small">
+      <a href="?active=1" class="me-2 {% if active_only %}fw-semibold{% endif %}">Active</a>
+      <a href="?active=0" class="{% if not active_only %}fw-semibold{% endif %}">All</a>
+    </div>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+      <thead class="table-light">
+        <tr>
+          <th style="width:80px;">ID</th>
+          <th>KAM</th>
+          <th>Manager</th>
+          <th style="width:160px;">Assigned At</th>
+          <th style="width:120px;">Active</th>
+          <th style="width:180px;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in rows %}
+          <tr>
+            <td>#{{ m.id }}</td>
+            <td>{{ m.kam.username }}</td>
+            <td>{{ m.manager.username }}</td>
+            <td>{{ m.assigned_at|default:m.created_at }}</td>
+            <td>
+              {% if m.active %}
+                <span class="badge bg-success">YES</span>
+              {% else %}
+                <span class="badge bg-secondary">NO</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if m.active %}
+                <form method="post" class="d-inline">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="deactivate" />
+                  <input type="hidden" name="mapping_id" value="{{ m.id }}" />
+                  <button class="btn btn-sm btn-outline-danger" type="submit" onclick="return confirm('Deactivate mapping #{{ m.id }}?');">
+                    Deactivate
+                  </button>
+                </form>
+              {% else %}
+                <span class="text-muted small">—</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="6" class="text-muted">No mappings found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

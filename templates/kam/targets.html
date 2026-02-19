@@ -1,82 +1,143 @@
+{# FILE: templates/kam/targets.html #}
 {% extends "base.html" %}
 
-{% block title %}Targets (Manager){% endblock %}
-
 {% block content %}
-<div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
-  <h1 class="page-title m-0">Target Setting (Manager)</h1>
-  <a class="btn btn-outline-secondary btn-sm" href="{% url 'kam:targets_lines' %}">Go to Target Lines</a>
-</div>
+<div class="container-fluid">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h3 class="mb-0">{{ page_title|default:"Manager Target Setting" }}</h3>
+  </div>
 
-<div class="card p-3 mb-3">
-  <form method="post" class="row g-3 align-items-end" novalidate>
-    {% csrf_token %}
+  <div class="card mb-4">
+    <div class="card-header fw-semibold">Create / Update Targets</div>
+    <div class="card-body">
+      <form method="post" class="row g-3">
+        {% csrf_token %}
+        {% if form.id %}{{ form.id }}{% endif %}
 
-    <div class="col-12 col-md-3">
-      <label class="form-label mb-1 small">Period Type</label>
-      <select name="period_type" class="form-select form-select-sm">
-        <option value="WEEK">WEEK</option>
-        <option value="MONTH">MONTH</option>
+        <div class="col-md-3">
+          <label class="form-label">From Date</label>
+          {{ form.from_date }}
+          {% if form.from_date.errors %}<div class="text-danger small">{{ form.from_date.errors }}</div>{% endif %}
+        </div>
+
+        <div class="col-md-3">
+          <label class="form-label">To Date (optional)</label>
+          {{ form.to_date }}
+          {% if form.to_date.errors %}<div class="text-danger small">{{ form.to_date.errors }}</div>{% endif %}
+          <div class="form-text">If blank, it will default (week) or fixed 3 months.</div>
+        </div>
+
+        <div class="col-md-3 d-flex align-items-end">
+          <div class="form-check">
+            {{ form.fixed_for_next_3_months }}
+            <label class="form-check-label" for="{{ form.fixed_for_next_3_months.id_for_label }}">
+              Fixed for next 3 months
+            </label>
+          </div>
+        </div>
+
+        <div class="col-md-3 d-flex align-items-end">
+          <div class="form-check">
+            {{ form.bulk_all_kams }}
+            <label class="form-check-label" for="{{ form.bulk_all_kams.id_for_label }}">
+              Apply to all my KAMs
+            </label>
+          </div>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">KAM</label>
+          {{ form.kam_username }}
+          {% if form.kam_username.errors %}<div class="text-danger small">{{ form.kam_username.errors }}</div>{% endif %}
+          <div class="form-text">Ignored if bulk apply is enabled.</div>
+        </div>
+
+        <div class="col-md-2">
+          <label class="form-label">Sales Target (MT)</label>
+          {{ form.sales_target_mt }}
+          {% if form.sales_target_mt.errors %}<div class="text-danger small">{{ form.sales_target_mt.errors }}</div>{% endif %}
+        </div>
+
+        <div class="col-md-2">
+          <label class="form-label">Leads Target (MT)</label>
+          {{ form.leads_target_mt }}
+          {% if form.leads_target_mt.errors %}<div class="text-danger small">{{ form.leads_target_mt.errors }}</div>{% endif %}
+        </div>
+
+        <div class="col-md-2">
+          <label class="form-label">Calls Target</label>
+          {{ form.calls_target }}
+          {% if form.calls_target.errors %}<div class="text-danger small">{{ form.calls_target.errors }}</div>{% endif %}
+        </div>
+
+        <div class="col-md-2">
+          <label class="form-label">Collections Target (₹)</label>
+          {{ form.collections_target_amount }}
+          {% if form.collections_target_amount.errors %}<div class="text-danger small">{{ form.collections_target_amount.errors }}</div>{% endif %}
+        </div>
+
+        <div class="col-md-4 d-flex align-items-end">
+          <div class="form-check">
+            {{ form.auto_collections_30pct_overdue }}
+            <label class="form-check-label" for="{{ form.auto_collections_30pct_overdue.id_for_label }}">
+              Auto collections (system decides)
+            </label>
+          </div>
+        </div>
+
+        <div class="col-12">
+          <button class="btn btn-primary" type="submit">Save Targets</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="d-flex align-items-center justify-content-between mb-2">
+    <div class="fw-semibold">Existing Targets</div>
+    <form method="get" class="d-flex gap-2">
+      <input class="form-control form-control-sm" type="date" name="from" value="{{ filter_from|default:'' }}">
+      <input class="form-control form-control-sm" type="date" name="to" value="{{ filter_to|default:'' }}">
+      <select class="form-select form-select-sm" name="user">
+        <option value="">All KAMs</option>
+        {% for u in kam_options %}
+          <option value="{{ u }}" {% if selected_user == u %}selected{% endif %}>{{ u }}</option>
+        {% endfor %}
       </select>
-    </div>
+      <button class="btn btn-sm btn-outline-primary" type="submit">Filter</button>
+    </form>
+  </div>
 
-    <div class="col-12 col-md-4">
-      <label class="form-label mb-1 small">Period Id</label>
-      <input
-        class="form-control form-control-sm"
-        name="period_id"
-        placeholder="e.g. 2026-W05 or 2026-02"
-      />
-    </div>
-
-    <div class="col-12 col-md-5 d-flex gap-2">
-      <button type="submit" class="btn btn-primary btn-sm">Save</button>
-      <button name="lock" value="1" class="btn btn-outline-danger btn-sm">Lock &amp; Publish</button>
-    </div>
-
-    <div class="col-12">
-      <p class="small text-muted m-0">
-        (Inline KAM lines are separate: use <strong>Target Lines</strong>. This step only creates/locks the period header.)
-      </p>
-    </div>
-  </form>
-</div>
-
-<div class="card p-3">
-  <h5 class="mb-3">Recent Target Periods</h5>
-  {% if headers %}
-    <div class="table-responsive">
-      <table class="table table-sm align-middle">
-        <thead>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+      <thead class="table-light">
+        <tr>
+          <th style="width:90px;">ID</th>
+          <th style="width:140px;">KAM</th>
+          <th style="width:220px;">Window</th>
+          <th style="width:140px;">Sales (MT)</th>
+          <th style="width:140px;">Leads (MT)</th>
+          <th style="width:120px;">Calls</th>
+          <th style="width:170px;">Collections (₹)</th>
+          <th style="width:180px;">Manager</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
           <tr>
-            <th>Created</th>
-            <th>Period Type</th>
-            <th>Period Id</th>
-            <th>Manager</th>
-            <th>Status</th>
+            <td>#{{ r.id }}</td>
+            <td>{{ r.kam.username }}</td>
+            <td>{{ r.from_date }} → {{ r.to_date }}</td>
+            <td>{{ r.sales_target_mt }}</td>
+            <td>{{ r.leads_target_mt }}</td>
+            <td>{{ r.calls_target }}</td>
+            <td>{{ r.collections_target_amount }}</td>
+            <td>{{ r.manager.username|default:"-" }}</td>
           </tr>
-        </thead>
-        <tbody>
-          {% for h in headers %}
-          <tr>
-            <td>{{ h.created_at }}</td>
-            <td>{{ h.get_period_type_display }}</td>
-            <td><strong>{{ h.period_id }}</strong></td>
-            <td>{% if h.manager %}{{ h.manager.get_full_name|default:h.manager.username }}{% else %}—{% endif %}</td>
-            <td>
-              {% if h.locked_at %}
-                <span class="badge bg-danger">Locked</span>
-              {% else %}
-                <span class="badge bg-secondary">Draft</span>
-              {% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% else %}
-    <p class="text-muted m-0">No target periods yet.</p>
-  {% endif %}
+        {% empty %}
+          <tr><td colspan="8" class="text-muted">No target settings found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 {% endblock %}

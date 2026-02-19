@@ -1,0 +1,54 @@
+{# FILE: employee_management_system/templates/email/base.html #}
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block subject %}Notification{% endblock %}</title>
+  <style>
+    body{margin:0;padding:0;background:#f6f7fb;font-family:Arial,Helvetica,sans-serif;color:#111827;}
+    .wrap{max-width:720px;margin:0 auto;padding:24px;}
+    .card{background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;}
+    .header{background:#2563eb;color:#fff;padding:16px 20px;}
+    .brand{font-size:16px;font-weight:700;letter-spacing:.2px;}
+    .content{padding:20px;}
+    .title{font-size:18px;font-weight:700;margin:0 0 12px;}
+    .muted{color:#6b7280;font-size:13px;line-height:1.5;}
+    .btn{display:inline-block;background:#16a34a;color:#fff;text-decoration:none;padding:10px 14px;border-radius:10px;font-weight:700;font-size:14px;}
+    .btn-secondary{background:#111827;}
+    .table{width:100%;border-collapse:collapse;margin:14px 0;}
+    .table th,.table td{border:1px solid #e5e7eb;padding:10px 12px;text-align:left;font-size:13px;vertical-align:top;}
+    .table th{background:#f9fafb;font-weight:700;}
+    .badge{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;}
+    .badge-pending{background:#fef3c7;color:#92400e;}
+    .badge-approved{background:#dcfce7;color:#166534;}
+    .badge-rejected{background:#fee2e2;color:#991b1b;}
+    .footer{padding:14px 20px;background:#f9fafb;border-top:1px solid #e5e7eb;}
+    .small{font-size:12px;color:#6b7280;line-height:1.5;margin:0;}
+    .mono{font-family:Consolas,Monaco,monospace;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="header">
+        <div class="brand">{{ app_name|default:"BOS Lakshya" }}</div>
+      </div>
+
+      <div class="content">
+        {% block body %}{% endblock %}
+      </div>
+
+      <div class="footer">
+        <p class="small">
+          This is an automated email from {{ app_name|default:"BOS Lakshya" }}.
+          If you received this by mistake, you can ignore it.
+        </p>
+        <p class="small mono" style="margin-top:8px;">
+          Ref: {{ ref_code|default:"-" }}
+        </p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
