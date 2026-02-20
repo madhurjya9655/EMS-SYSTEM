@@ -1,6 +1,7 @@
 # FILE: apps/kam/views.py
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from functools import wraps
 from typing import Iterable, List, Dict, Optional, Tuple
@@ -57,7 +58,9 @@ from .models import (
     VisitBatch,
     KamManagerMapping,
 )
-from . import sheets_adapter  # adapter with step_sync() and run_sync_now()
+
+# IMPORTANT: we now use .sheets (the fixed importer module), not sheets_adapter
+from . import sheets
 
 
 User = get_user_model()
@@ -276,7 +279,7 @@ def _visitplan_qs_for_user(user: User):
 # ---------------------------------------------------------------------
 # Date parsing helpers
 # ---------------------------------------------------------------------
-def _parse_iso_date(s: str) -> Optional[timezone.datetime.date]:
+def _parse_iso_date(s: str) -> Optional[date]:
     s = (s or "").strip()
     if not s:
         return None
@@ -317,21 +320,25 @@ def _iso_week_bounds(dt: timezone.datetime) -> Tuple[timezone.datetime, timezone
 
 
 def _ms_week_bounds(dt: timezone.datetime) -> Tuple[timezone.datetime, timezone.datetime, str]:
+    """
+    Returns Monday 00:00 as start, and next Monday 00:00 as end (end-exclusive).
+    """
     local = timezone.localtime(dt)
     start = local - timezone.timedelta(days=local.weekday())  # Monday
     start = start.replace(hour=0, minute=0, second=0, microsecond=0)
-    end = start + timezone.timedelta(days=6)  # Sunday 00:00 (end-exclusive)
+    end = start + timezone.timedelta(days=7)  # next Monday 00:00 (end-exclusive)
     iso_year, iso_week, _ = start.isocalendar()
     period_id = f"{iso_year}-W{iso_week:02d}"
     return start, end, period_id
 
 
 def _last_completed_ms_week_end(dt: timezone.datetime) -> timezone.datetime:
-    start, end, _ = _ms_week_bounds(dt)
-    now_local = timezone.localtime(dt)
-    if now_local < end:
-        return start - timezone.timedelta(days=1)
-    return end
+    """
+    End-exclusive boundary for the last *completed* MS-week.
+    Practically: start (Monday 00:00) of the current MS-week.
+    """
+    start, _end, _ = _ms_week_bounds(dt)
+    return start
 
 
 def _month_bounds(dt: timezone.datetime) -> Tuple[timezone.datetime, timezone.datetime, str]:
@@ -504,7 +511,7 @@ def _get_customer360_range(request: HttpRequest) -> Tuple[str, timezone.datetime
     return "WEEK", sdt.date(), (edt - timezone.timedelta(days=1)).date(), pid
 
 
-def _add_months(d: timezone.datetime.date, months: int) -> timezone.datetime.date:
+def _add_months(d: date, months: int) -> date:
     y = d.year + (d.month - 1 + months) // 12
     m = (d.month - 1 + months) % 12 + 1
     if m == 12:
@@ -566,7 +573,9 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
                 return redirect(reverse("kam:admin_kam_manager_mapping"))
 
             with transaction.atomic():
-                KamManagerMapping.objects.filter(kam=kam_user, active=True).update(active=False, updated_at=timezone.now())
+                KamManagerMapping.objects.filter(kam=kam_user, active=True).update(
+                    active=False, updated_at=timezone.now()
+                )
                 KamManagerMapping.objects.create(
                     kam=kam_user,
                     manager=mgr_user,
@@ -597,7 +606,9 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
 
     active_only = (request.GET.get("active") or "1").strip() != "0"
 
-    mappings = KamManagerMapping.objects.select_related("kam", "manager", "assigned_by").order_by("-active", "-assigned_at")
+    mappings = KamManagerMapping.objects.select_related("kam", "manager", "assigned_by").order_by(
+        "-active", "-assigned_at"
+    )
     if active_only:
         mappings = mappings.filter(active=True)
 
@@ -676,7 +687,9 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 
     if scope_kam_id is not None:
         customer_ids = list(
-            Customer.objects.filter(Q(kam_id=scope_kam_id) | Q(primary_kam_id=scope_kam_id)).values_list("id", flat=True)
+            Customer.objects.filter(Q(kam_id=scope_kam_id) | Q(primary_kam_id=scope_kam_id)).values_list(
+                "id", flat=True
+            )
         )
     else:
         customer_ids = list(_customer_qs_for_user(request.user).values_list("id", flat=True))
@@ -696,20 +709,23 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             .first()
         )
         if overdue_snapshot_date:
-            agg = (
-                OverdueSnapshot.objects.filter(customer_id__in=customer_ids, snapshot_date=overdue_snapshot_date).aggregate(
-                    total_exposure=Sum("exposure"),
-                    total_overdue=Sum("overdue"),
-                    a0=Sum("ageing_0_30"),
-                    a1=Sum("ageing_31_60"),
-                    a2=Sum("ageing_61_90"),
-                    a3=Sum("ageing_90_plus"),
-                )
+            agg = OverdueSnapshot.objects.filter(customer_id__in=customer_ids, snapshot_date=overdue_snapshot_date).aggregate(
+                total_exposure=Sum("exposure"),
+                total_overdue=Sum("overdue"),
+                a0=Sum("ageing_0_30"),
+                a1=Sum("ageing_31_60"),
+                a2=Sum("ageing_61_90"),
+                a3=Sum("ageing_90_plus"),
             )
             exposure_sum = _safe_decimal(agg.get("total_exposure"))
             overdue_sum = _safe_decimal(agg.get("total_overdue"))
             if not exposure_sum:
-                ageing_sum = _safe_decimal(agg.get("a0")) + _safe_decimal(agg.get("a1")) + _safe_decimal(agg.get("a2")) + _safe_decimal(agg.get("a3"))
+                ageing_sum = (
+                    _safe_decimal(agg.get("a0"))
+                    + _safe_decimal(agg.get("a1"))
+                    + _safe_decimal(agg.get("a2"))
+                    + _safe_decimal(agg.get("a3"))
+                )
                 if ageing_sum:
                     exposure_sum = ageing_sum
             if not exposure_sum and overdue_sum:
@@ -722,10 +738,8 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             .first()
         )
         if prev_overdue_snapshot_date:
-            agg2 = (
-                OverdueSnapshot.objects.filter(customer_id__in=customer_ids, snapshot_date=prev_overdue_snapshot_date).aggregate(
-                    total_overdue=Sum("overdue")
-                )
+            agg2 = OverdueSnapshot.objects.filter(customer_id__in=customer_ids, snapshot_date=prev_overdue_snapshot_date).aggregate(
+                total_overdue=Sum("overdue")
             )
             prev_overdue_sum = _safe_decimal(agg2.get("total_overdue"))
 
@@ -751,7 +765,7 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 
     for k in (3, 2, 1, 0):
         end_i = anchor_end - timezone.timedelta(days=7 * k)
-        start_i = end_i - timezone.timedelta(days=6)
+        start_i = end_i - timezone.timedelta(days=7)
 
         _, __, pid_i = _ms_week_bounds(start_i)
 
@@ -836,7 +850,9 @@ def manager_dashboard(request: HttpRequest) -> HttpResponse:
     today_start = timezone.localtime(timezone.now()).replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow = today_start + timezone.timedelta(days=1)
     calls_today = CallLog.objects.filter(call_datetime__gte=today_start, call_datetime__lt=tomorrow).count()
-    visits_today = VisitActual.objects.filter(plan__visit_date__gte=today_start.date(), plan__visit_date__lt=tomorrow.date()).count()
+    visits_today = VisitActual.objects.filter(
+        plan__visit_date__gte=today_start.date(), plan__visit_date__lt=tomorrow.date()
+    ).count()
     collections_today = _safe_decimal(
         CollectionTxn.objects.filter(txn_datetime__gte=today_start, txn_datetime__lt=tomorrow).aggregate(a=Sum("amount"))["a"]
     )
@@ -895,7 +911,9 @@ def manager_kpis(request: HttpRequest) -> HttpResponse:
         leads_won_mt = _safe_decimal(leads_agg.get("won_mt"))
         lead_conv_pct = _pct(leads_won_mt, leads_total_mt) if leads_total_mt else None
 
-        credit_limit_sum = _safe_decimal(Customer.objects.filter(Q(kam=kam) | Q(primary_kam=kam)).aggregate(s=Sum("credit_limit")).get("s"))
+        credit_limit_sum = _safe_decimal(
+            Customer.objects.filter(Q(kam=kam) | Q(primary_kam=kam)).aggregate(s=Sum("credit_limit")).get("s")
+        )
         exposure_sum = overdue_sum = Decimal(0)
 
         if latest_snap_date:
@@ -912,7 +930,12 @@ def manager_kpis(request: HttpRequest) -> HttpResponse:
                 exposure_sum = _safe_decimal(agg.get("exposure"))
                 overdue_sum = _safe_decimal(agg.get("overdue"))
                 if not exposure_sum:
-                    ageing_sum = _safe_decimal(agg.get("a0")) + _safe_decimal(agg.get("a31")) + _safe_decimal(agg.get("a61")) + _safe_decimal(agg.get("a90"))
+                    ageing_sum = (
+                        _safe_decimal(agg.get("a0"))
+                        + _safe_decimal(agg.get("a31"))
+                        + _safe_decimal(agg.get("a61"))
+                        + _safe_decimal(agg.get("a90"))
+                    )
                     if ageing_sum:
                         exposure_sum = ageing_sum
                 if not exposure_sum and overdue_sum:
@@ -1506,7 +1529,7 @@ def visit_batches_api(request: HttpRequest) -> JsonResponse:
 
 
 # ---------------------------------------------------------------------
-# Batch detail page (used by UI "View Details" if you add it)
+# Batch detail page
 # ---------------------------------------------------------------------
 @login_required
 @require_any_kam_code("kam_manager", "kam_plan")
@@ -1672,8 +1695,6 @@ def visit_batch_reject(request: HttpRequest, batch_id: int) -> HttpResponse:
 
 # ---------------------------------------------------------------------
 # Secure email links (GET -> login -> execute action)
-# NOTE: We do NOT mutate request.method (unsafe/undefined). We call the
-# approval logic inline with the same validations.
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_manager")
@@ -1694,7 +1715,6 @@ def visit_batch_approve_link(request: HttpRequest, token: str) -> HttpResponse:
         messages.error(request, "Invalid action for this link.")
         return redirect(reverse("kam:visit_batches"))
 
-    # Perform approve
     with transaction.atomic():
         batch = get_object_or_404(VisitBatch.objects.select_for_update(), id=batch_id)
 
@@ -2077,7 +2097,9 @@ def customers(request: HttpRequest) -> HttpResponse:
             .annotate(mt=Sum("qty_mt"))
             .order_by("invoice_date__year", "invoice_date__month")
         )
-        sales_last12 = [{"year": r["invoice_date__year"], "month": r["invoice_date__month"], "mt": _safe_decimal(r["mt"])} for r in sales]
+        sales_last12 = [
+            {"year": r["invoice_date__year"], "month": r["invoice_date__month"], "mt": _safe_decimal(r["mt"])} for r in sales
+        ]
 
         colls = (
             CollectionTxn.objects.filter(customer=customer, txn_datetime__date__gte=start_date, txn_datetime__date__lte=end_date)
@@ -2085,7 +2107,10 @@ def customers(request: HttpRequest) -> HttpResponse:
             .annotate(amount=Sum("amount"))
             .order_by("txn_datetime__year", "txn_datetime__month")
         )
-        collections_last12 = [{"year": r["txn_datetime__year"], "month": r["txn_datetime__month"], "amount": _safe_decimal(r["amount"])} for r in colls]
+        collections_last12 = [
+            {"year": r["txn_datetime__year"], "month": r["txn_datetime__month"], "amount": _safe_decimal(r["amount"])}
+            for r in colls
+        ]
 
         recent_visits = list(
             VisitPlan.objects.filter(customer=customer, visit_date__gte=start_date, visit_date__lte=end_date)
@@ -2339,7 +2364,9 @@ def reports(request: HttpRequest) -> HttpResponse:
         qs = CallLog.objects.filter(call_datetime__gte=start_dt, call_datetime__lt=end_dt)
         if scope_kam_id is not None:
             qs = qs.filter(kam_id=scope_kam_id)
-        rows = list(qs.values("id", "call_datetime", "kam__username", "customer_id", "customer__name").order_by("-call_datetime")[:500])
+        rows = list(
+            qs.values("id", "call_datetime", "kam__username", "customer_id", "customer__name").order_by("-call_datetime")[:500]
+        )
 
     elif metric == "visits":
         qs = VisitActual.objects.filter(plan__visit_date__gte=start_dt.date(), plan__visit_date__lt=end_dt.date())
@@ -2454,14 +2481,21 @@ def collections_plan(request: HttpRequest) -> HttpResponse:
             cp.kam = cp.customer.kam or cp.customer.primary_kam or request.user
             cp.save()
             messages.success(request, "Collection plan saved.")
-            return redirect(f"{reverse('kam:collections_plan')}?period={request.GET.get('period','month')}&asof={request.GET.get('asof','')}")
+            return redirect(
+                f"{reverse('kam:collections_plan')}?period={request.GET.get('period','month')}&asof={request.GET.get('asof','')}"
+            )
     else:
         form = CollectionPlanForm(initial={"period_type": period_type, "period_id": period_id})
 
     plan_qs = CollectionPlan.objects.select_related("customer", "kam")
 
     period_rows = plan_qs.filter(period_type=period_type, period_id=period_id)
-    range_rows = plan_qs.filter(from_date__isnull=False, to_date__isnull=False, from_date__lte=end_dt.date(), to_date__gte=start_dt.date())
+    range_rows = plan_qs.filter(
+        from_date__isnull=False,
+        to_date__isnull=False,
+        from_date__lte=end_dt.date(),
+        to_date__gte=start_dt.date(),
+    )
     plan_qs = (period_rows | range_rows).distinct()
 
     plan_customer_ids = list(plan_qs.values_list("customer_id", flat=True))
@@ -2469,15 +2503,27 @@ def collections_plan(request: HttpRequest) -> HttpResponse:
     overdue_map: Dict[int, Decimal] = {}
     if plan_customer_ids:
         for cust_id in plan_customer_ids:
-            latest = OverdueSnapshot.objects.filter(customer_id=cust_id).order_by("-snapshot_date").values_list("snapshot_date", flat=True).first()
+            latest = (
+                OverdueSnapshot.objects.filter(customer_id=cust_id)
+                .order_by("-snapshot_date")
+                .values_list("snapshot_date", flat=True)
+                .first()
+            )
             if latest:
-                val = OverdueSnapshot.objects.filter(customer_id=cust_id, snapshot_date=latest).values_list("overdue", flat=True).first() or 0
+                val = (
+                    OverdueSnapshot.objects.filter(customer_id=cust_id, snapshot_date=latest)
+                    .values_list("overdue", flat=True)
+                    .first()
+                    or 0
+                )
                 overdue_map[cust_id] = _safe_decimal(val)
 
     actual_map: Dict[int, Decimal] = {}
     if plan_customer_ids:
         coll_qs = (
-            CollectionTxn.objects.filter(txn_datetime__gte=start_dt, txn_datetime__lt=end_dt, customer_id__in=plan_customer_ids)
+            CollectionTxn.objects.filter(
+                txn_datetime__gte=start_dt, txn_datetime__lt=end_dt, customer_id__in=plan_customer_ids
+            )
             .values("customer_id")
             .annotate(actual=Sum("amount"))
         )
@@ -2510,7 +2556,7 @@ def collections_plan(request: HttpRequest) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------
-# Sync endpoints (UNCHANGED; DO NOT MODIFY IMPORTER LOGIC)
+# Sync endpoints (UPDATED to match SyncIntent cursor fields + flexible step_sync signature)
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_sync_now")
@@ -2518,8 +2564,11 @@ def sync_now(request: HttpRequest) -> HttpResponse:
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
     try:
-        stats = sheets_adapter.run_sync_now()
-        messages.success(request, f"Sync complete. {stats.as_message()}")
+        stats = sheets.run_sync_now()
+        messages.success(
+            request,
+            f"Sync complete. Seen={stats.get('records_seen')} Created={stats.get('created')} Updated={stats.get('updated')}",
+        )
     except Exception as e:
         messages.error(request, f"Sync failed: {e}")
     return redirect(reverse("kam:dashboard"))
@@ -2530,41 +2579,144 @@ def sync_now(request: HttpRequest) -> HttpResponse:
 def sync_trigger(request: HttpRequest) -> HttpResponse:
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
+
     token = timezone.now().strftime("%Y%m%d%H%M%S") + f"_{request.user.id}"
     intent = SyncIntent.objects.create(token=token, created_by=request.user, scope=SyncIntent.SCOPE_TEAM)
-    messages.success(request, f"Sync triggered (token={intent.token}). Now run /kam/sync/step/?token=TOKEN repeatedly until done.")
+
+    messages.success(
+        request,
+        f"Sync triggered (token={intent.token}). Now run /kam/sync/step/?token=TOKEN repeatedly until done.",
+    )
     return redirect(reverse("kam:dashboard"))
 
 
 @login_required
 @require_kam_code("kam_sync_step")
 def sync_step(request: HttpRequest) -> HttpResponse:
+    """
+    Modes:
+      - POST with no token: run full sync immediately
+      - GET/POST with token: chunked sync using SyncIntent cursor fields
+
+    Cursor fields (from models.py):
+      - last_customer_cursor
+      - last_invoice_cursor
+      - last_lead_cursor
+      - last_overdue_cursor
+
+    This implementation is resilient to different sheets.step_sync signatures:
+      1) step_sync(intent=SyncIntent, max_rows=...)
+      2) step_sync(max_rows=..., last_customer_cursor=..., last_invoice_cursor=..., ...)
+      3) step_sync(max_rows=..., offset=...)   (fallback, using step_count)
+    """
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
 
     token = (request.GET.get("token") or request.POST.get("token") or "").strip()
 
+    # Full-sync shortcut
     if request.method == "POST" and not token:
         try:
-            stats = sheets_adapter.run_sync_now()
-            messages.success(request, f"Sync complete. {stats.as_message()}")
+            stats = sheets.run_sync_now()
+            messages.success(
+                request,
+                f"Sync complete. Seen={stats.get('records_seen')} Created={stats.get('created')} Updated={stats.get('updated')}",
+            )
         except Exception as e:
             messages.error(request, f"Sync failed: {e}")
-        return redirect(reverse("kam:manager"))
+        return redirect(reverse("kam:dashboard"))
 
     if not token:
         return JsonResponse({"ok": False, "error": "token missing"}, status=400)
 
     intent = get_object_or_404(SyncIntent, token=token)
+    max_rows = 200
+
+    import inspect
+
+    def _call_step_sync():
+        """
+        Try calling sheets.step_sync in the most compatible way.
+        Must return a dict that may include:
+          - done: bool
+          - next_*_cursor keys OR direct cursor keys
+          - counters/stats
+        """
+        fn = getattr(sheets, "step_sync", None)
+        if not callable(fn):
+            raise RuntimeError("sheets.step_sync is not callable")
+
+        sig = inspect.signature(fn)
+        params = set(sig.parameters.keys())
+
+        cursor_payload = {
+            "last_customer_cursor": intent.last_customer_cursor,
+            "last_invoice_cursor": intent.last_invoice_cursor,
+            "last_lead_cursor": intent.last_lead_cursor,
+            "last_overdue_cursor": intent.last_overdue_cursor,
+        }
+
+        # Preferred: step_sync(intent=..., max_rows=?)
+        if "intent" in params:
+            kwargs = {}
+            if "max_rows" in params:
+                kwargs["max_rows"] = max_rows
+            return fn(intent=intent, **kwargs)
+
+        # Next: step_sync(max_rows=?, last_customer_cursor=?, ...)
+        if any(k in params for k in cursor_payload.keys()):
+            kwargs = {}
+            if "max_rows" in params:
+                kwargs["max_rows"] = max_rows
+            for k, v in cursor_payload.items():
+                if k in params:
+                    kwargs[k] = v
+            return fn(**kwargs)
+
+        # Fallback: offset-based stepper (only if sheets.py still expects this)
+        if "max_rows" in params and "offset" in params:
+            offset = int((intent.step_count or 0) * max_rows)
+            return fn(max_rows=max_rows, offset=offset)
+
+        # Last resort
+        return fn()
+
     try:
+        # mark running + increment step counter
         intent.status = SyncIntent.STATUS_RUNNING
-        intent.step_count += 1
+        intent.step_count = int(intent.step_count or 0) + 1
         intent.save(update_fields=["status", "step_count", "updated_at"])
 
-        result = sheets_adapter.step_sync(intent)
+        result = _call_step_sync()
+        if not isinstance(result, dict):
+            raise RuntimeError("sheets.step_sync must return a dict")
 
-        intent.status = SyncIntent.STATUS_SUCCESS if result.get("done") else SyncIntent.STATUS_PENDING
-        intent.save(update_fields=["status", "updated_at"])
+        # Accept either next_*_cursor keys OR direct cursor keys.
+        next_customer = result.get("next_customer_cursor", result.get("last_customer_cursor"))
+        next_invoice = result.get("next_invoice_cursor", result.get("last_invoice_cursor"))
+        next_lead = result.get("next_lead_cursor", result.get("last_lead_cursor"))
+        next_overdue = result.get("next_overdue_cursor", result.get("last_overdue_cursor"))
+
+        updated_fields = []
+
+        if next_customer is not None and next_customer != intent.last_customer_cursor:
+            intent.last_customer_cursor = next_customer
+            updated_fields.append("last_customer_cursor")
+        if next_invoice is not None and next_invoice != intent.last_invoice_cursor:
+            intent.last_invoice_cursor = next_invoice
+            updated_fields.append("last_invoice_cursor")
+        if next_lead is not None and next_lead != intent.last_lead_cursor:
+            intent.last_lead_cursor = next_lead
+            updated_fields.append("last_lead_cursor")
+        if next_overdue is not None and next_overdue != intent.last_overdue_cursor:
+            intent.last_overdue_cursor = next_overdue
+            updated_fields.append("last_overdue_cursor")
+
+        done = bool(result.get("done"))
+        intent.status = SyncIntent.STATUS_SUCCESS if done else SyncIntent.STATUS_PENDING
+        updated_fields += ["status", "updated_at"]
+
+        intent.save(update_fields=sorted(set(updated_fields)))
 
         return JsonResponse({"ok": True, "result": result})
     except Exception as e:
