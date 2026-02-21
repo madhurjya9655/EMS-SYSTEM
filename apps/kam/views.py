@@ -9,10 +9,11 @@ from typing import Iterable, List, Dict, Optional, Tuple
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.models import Group
 from django.contrib.auth.views import redirect_to_login
 from django.core.mail import EmailMessage
 from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
-from django.db import transaction
+from django.db import transaction, models
 from django.db.models import Sum, Q
 from django.http import (
     HttpRequest,
@@ -232,6 +233,39 @@ def _kams_managed_by_manager(manager_user: User) -> List[int]:
     return list(
         KamManagerMapping.objects.filter(manager=manager_user, active=True).values_list("kam_id", flat=True).distinct()
     )
+
+
+# ---------------------------------------------------------------------
+# Robust user classification helpers (fix empty dropdown issues)
+# ---------------------------------------------------------------------
+def _safe_user_codes(u: User) -> set[str]:
+    try:
+        return set(_user_permission_codes(u) or set())
+    except Exception:
+        return set()
+
+
+def _is_manager_candidate(u: User, codes: Optional[set[str]] = None) -> bool:
+    if not u or not getattr(u, "is_active", False):
+        return False
+    if getattr(u, "is_superuser", False):
+        return True
+    codes = codes if codes is not None else _safe_user_codes(u)
+    if _in_group(u, ("Manager", "Admin", "Finance")):
+        return True
+    if "kam_manager" in codes:
+        return True
+    return False
+
+
+def _is_kam_candidate(u: User, codes: Optional[set[str]] = None) -> bool:
+    if not u or not getattr(u, "is_active", False):
+        return False
+    if getattr(u, "is_superuser", False):
+        return False
+    codes = codes if codes is not None else _safe_user_codes(u)
+    has_kam_any = any((c or "").startswith("kam_") for c in codes) or ("access_kam_module" in codes)
+    return has_kam_any and (not _is_manager_candidate(u, codes=codes))
 
 
 # ---------------------------------------------------------------------
@@ -544,17 +578,155 @@ def _parse_batch_token(token: str) -> Tuple[int, str]:
 
 
 # ---------------------------------------------------------------------
-# Admin UI: KAM → Manager Mapping (Admin Only)
+# Admin UI: KAM → Manager Mapping (Admin Only) + Manager CRUD
 # ---------------------------------------------------------------------
+def _split_full_name(full_name: str) -> Tuple[str, str]:
+    full_name = (full_name or "").strip()
+    if not full_name:
+        return "", ""
+    parts = [p for p in full_name.split() if p]
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], " ".join(parts[1:])
+
+
 @login_required
 @require_any_kam_code("kam_manager", "kam_dashboard", "kam_plan")
 def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
     if not _is_admin(request.user):
         return HttpResponseForbidden("403 Forbidden: Admin access required.")
 
+    manager_group = Group.objects.filter(name="Manager").first()
+
     if request.method == "POST":
         action = (request.POST.get("action") or "").strip().lower()
 
+        # ---------------------------------------------------------
+        # Manager CRUD (Role = Manager; Soft delete via is_active)
+        # ---------------------------------------------------------
+        if action == "manager_create":
+            username = (request.POST.get("username") or "").strip()
+            full_name = (request.POST.get("full_name") or "").strip()
+            email = (request.POST.get("email") or "").strip()
+            password = (request.POST.get("password") or "").strip()
+
+            if not username:
+                messages.error(request, "Manager username is required.")
+                return redirect(reverse("kam:admin_kam_manager_mapping"))
+            if not full_name:
+                messages.error(request, "Manager full name is required.")
+                return redirect(reverse("kam:admin_kam_manager_mapping"))
+            if not email:
+                messages.error(request, "Manager email is required.")
+                return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+            if User.objects.filter(username__iexact=username).exists():
+                messages.error(request, "Username already exists.")
+                return redirect(reverse("kam:admin_kam_manager_mapping"))
+            if User.objects.filter(email__iexact=email).exists():
+                messages.error(request, "Email already exists.")
+                return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+            first_name, last_name = _split_full_name(full_name)
+
+            with transaction.atomic():
+                u = User(username=username, email=email, is_active=True)
+                if hasattr(u, "first_name"):
+                    u.first_name = first_name
+                if hasattr(u, "last_name"):
+                    u.last_name = last_name
+
+                if password:
+                    u.set_password(password)
+                else:
+                    u.set_password(User.objects.make_random_password())
+
+                u.save()
+
+                if manager_group:
+                    u.groups.add(manager_group)
+
+            messages.success(request, f"Manager created: {u.username}.")
+            return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+        if action == "manager_update":
+            manager_id = (request.POST.get("manager_id") or "").strip()
+            full_name = (request.POST.get("full_name") or "").strip()
+            email = (request.POST.get("email") or "").strip()
+            password = (request.POST.get("password") or "").strip()
+            is_active_flag = (request.POST.get("is_active") or "").strip().lower()
+
+            if not manager_id.isdigit():
+                messages.error(request, "Invalid manager id.")
+                return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+            u = User.objects.filter(id=int(manager_id)).first()
+            if not u:
+                messages.error(request, "Manager not found.")
+                return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+            if full_name:
+                first_name, last_name = _split_full_name(full_name)
+                if hasattr(u, "first_name"):
+                    u.first_name = first_name
+                if hasattr(u, "last_name"):
+                    u.last_name = last_name
+
+            if email:
+                other = User.objects.filter(email__iexact=email).exclude(id=u.id)
+                if other.exists():
+                    messages.error(request, "Email already used by another user.")
+                    return redirect(reverse("kam:admin_kam_manager_mapping"))
+                u.email = email
+
+            if is_active_flag in {"0", "false", "no", "off"}:
+                u.is_active = False
+            elif is_active_flag in {"1", "true", "yes", "on"}:
+                u.is_active = True
+
+            if password:
+                u.set_password(password)
+
+            with transaction.atomic():
+                u.save()
+
+                if manager_group and not u.groups.filter(id=manager_group.id).exists():
+                    u.groups.add(manager_group)
+
+                if not u.is_active:
+                    KamManagerMapping.objects.filter(manager=u, active=True).update(
+                        active=False, updated_at=timezone.now()
+                    )
+
+            messages.success(request, f"Manager updated: {u.username}.")
+            return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+        if action == "manager_delete":
+            manager_id = (request.POST.get("manager_id") or "").strip()
+            if not manager_id.isdigit():
+                messages.error(request, "Invalid manager id.")
+                return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+            u = User.objects.filter(id=int(manager_id)).first()
+            if not u:
+                messages.error(request, "Manager not found.")
+                return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+            with transaction.atomic():
+                u.is_active = False
+                u.save(update_fields=["is_active"])
+                KamManagerMapping.objects.filter(manager=u, active=True).update(
+                    active=False, updated_at=timezone.now()
+                )
+
+            messages.success(request, f"Manager deactivated: {u.username}.")
+            return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+        # ---------------------------------------------------------
+        # Mapping create/update
+        # ---------------------------------------------------------
         if action in {"assign", "update"}:
             kam_id = (request.POST.get("kam_id") or "").strip()
             manager_id = (request.POST.get("manager_id") or "").strip()
@@ -585,6 +757,55 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
             messages.success(request, f"Assigned manager for {kam_user.username} → {mgr_user.username}.")
             return redirect(reverse("kam:admin_kam_manager_mapping"))
 
+        # ---------------------------------------------------------
+        # Mapping inline edit: deactivate previous + create new
+        # ---------------------------------------------------------
+        if action in {"edit_mapping", "mapping_edit"}:
+            mapping_id = (request.POST.get("mapping_id") or "").strip()
+            manager_id = (request.POST.get("manager_id") or "").strip()
+
+            if not (mapping_id.isdigit() and manager_id.isdigit()):
+                messages.error(request, "Invalid mapping/manager selection.")
+                return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+            with transaction.atomic():
+                old = (
+                    KamManagerMapping.objects.select_for_update()
+                    .select_related("kam")
+                    .filter(id=int(mapping_id))
+                    .first()
+                )
+                if not old:
+                    messages.error(request, "Mapping not found.")
+                    return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+                kam_user = User.objects.filter(id=old.kam_id, is_active=True).first()
+                mgr_user = User.objects.filter(id=int(manager_id), is_active=True).first()
+                if not kam_user or not mgr_user:
+                    messages.error(request, "Invalid KAM/Manager user.")
+                    return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+                if kam_user.id == mgr_user.id:
+                    messages.error(request, "KAM and Manager cannot be the same user.")
+                    return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+                KamManagerMapping.objects.filter(kam=kam_user, active=True).update(
+                    active=False, updated_at=timezone.now()
+                )
+
+                KamManagerMapping.objects.create(
+                    kam=kam_user,
+                    manager=mgr_user,
+                    assigned_by=request.user,
+                    active=True,
+                )
+
+            messages.success(request, f"Updated mapping for {kam_user.username} → {mgr_user.username}.")
+            return redirect(reverse("kam:admin_kam_manager_mapping"))
+
+        # ---------------------------------------------------------
+        # Mapping deactivate
+        # ---------------------------------------------------------
         if action in {"remove", "deactivate"}:
             map_id = (request.POST.get("mapping_id") or "").strip()
             if not map_id.isdigit():
@@ -612,9 +833,18 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
     if active_only:
         mappings = mappings.filter(active=True)
 
-    all_users = User.objects.filter(is_active=True).order_by("username")
-    kam_users = [u for u in all_users if not _is_manager(u)]
-    manager_users = [u for u in all_users if _is_manager(u)]
+    all_users = list(User.objects.filter(is_active=True).order_by("username"))
+    codes_map = {u.id: _safe_user_codes(u) for u in all_users}
+
+    manager_users = [u for u in all_users if _is_manager_candidate(u, codes=codes_map.get(u.id, set()))]
+    kam_users = [u for u in all_users if _is_kam_candidate(u, codes=codes_map.get(u.id, set()))]
+    if not kam_users:
+        kam_users = [u for u in all_users if (u not in manager_users) and (not getattr(u, "is_superuser", False))]
+
+    manager_group_users_qs = User.objects.all().order_by("username")
+    if manager_group:
+        manager_group_users_qs = manager_group_users_qs.filter(groups__name=manager_group.name)
+    manager_group_users = list(manager_group_users_qs)
 
     ctx = {
         "page_title": "KAM → Manager Mapping",
@@ -622,6 +852,7 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
         "kam_users": kam_users,
         "manager_users": manager_users,
         "active_only": active_only,
+        "manager_group_users": manager_group_users,
     }
     return render(request, "kam/admin_kam_manager_mapping.html", ctx)
 
@@ -1000,7 +1231,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     messages.error(request, "Invalid customer selection (out of your scope).")
                     return redirect(reverse("kam:plan"))
             else:
-                # keep customer empty for non-customer categories
                 plan.customer = None
 
             if not (plan.location or "").strip():
@@ -1034,7 +1264,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             to_date = batch_form.cleaned_data.get("to_date")
             remarks = (batch_form.cleaned_data.get("purpose") or "").strip()
 
-            # UI provides customers_selected[] else fallback to legacy multi-select
             selected_ids: List[int] = []
             if request.POST.getlist("customers_selected[]"):
                 for s in request.POST.getlist("customers_selected[]"):
@@ -1046,7 +1275,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                 customers_selected = batch_form.cleaned_data.get("customers") or []
                 selected_ids = [c.id for c in customers_selected]
 
-            # Non-customer multi-lines
             non_customer_lines: List[MultiVisitPlanLineForm] = []
             if visit_category in (VisitPlan.CAT_SUPPLIER, VisitPlan.CAT_WAREHOUSE, VisitPlan.CAT_VENDOR):
                 names = request.POST.getlist("counterparty_name[]")
@@ -1064,9 +1292,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     if f.is_valid() and (f.cleaned_data.get("counterparty_name") or "").strip():
                         non_customer_lines.append(f)
 
-            # -------------------------
-            # Proceed to Manager (Customer-only)
-            # -------------------------
             if proceed_flag:
                 if visit_category != VisitPlan.CAT_CUSTOMER:
                     messages.error(request, "Proceed to Manager is allowed only for Customer Visit batches.")
@@ -1138,7 +1363,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     return redirect(reverse("kam:plan"))
 
                 with transaction.atomic():
-                    # Duplicate prevention (same KAM + window + remarks + same customer set)
                     existing_qs = (
                         VisitBatch.objects.select_for_update()
                         .filter(
@@ -1162,7 +1386,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                             )
                             return redirect(reverse("kam:plan"))
 
-                    # Create consolidated batch + N plans
                     batch: VisitBatch = batch_form.save(commit=False)
                     batch.kam = user
                     batch.visit_category = VisitPlan.CAT_CUSTOMER
@@ -1234,9 +1457,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                 messages.success(request, f"Submitted for manager approval: {len(line_rows)} customers (Batch #{batch.id}).")
                 return redirect(reverse("kam:plan"))
 
-            # -------------------------
-            # Save Draft batch (DRAFT)
-            # -------------------------
             with transaction.atomic():
                 batch: VisitBatch = batch_form.save(commit=False)
                 batch.kam = user
@@ -1296,7 +1516,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                 messages.success(request, f"Batch saved as Draft: {created_lines} lines (Batch #{batch.id}).")
                 return redirect(reverse("kam:plan"))
 
-    # This-week plans (scoped)
     week_start, week_end, _ = _iso_week_bounds(timezone.now())
     my_plans = (
         _visitplan_qs_for_user(user)
@@ -1306,7 +1525,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
     ctx = {
         "page_title": "Plan Visit",
-        "form": single_form,  # legacy key
+        "form": single_form,
         "single_form": single_form,
         "batch_form": batch_form,
         "plans": my_plans,
@@ -1332,7 +1551,6 @@ def customers_api(request: HttpRequest) -> JsonResponse:
     user = request.user
     qs = _customer_qs_for_user(user).order_by("name")
 
-    # Optional filtering (manager/admin only): ?kam=username
     if _is_manager(user):
         kam_u = (request.GET.get("kam") or "").strip()
         if kam_u:
@@ -2466,28 +2684,84 @@ def export_kpi_csv(request: HttpRequest) -> StreamingHttpResponse:
 
 
 # ---------------------------------------------------------------------
-# Collections Plan (unchanged)
+# Collections Plan (UPDATED)
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_collections_plan")
 def collections_plan(request: HttpRequest) -> HttpResponse:
     period_type, start_dt, end_dt, period_id = _get_period(request)
 
+    customer_qs = _customer_qs_for_user(request.user).order_by("name")
+
     if request.method == "POST":
         form = CollectionPlanForm(request.POST)
+        if "customer" in form.fields:
+            form.fields["customer"].queryset = customer_qs
+
         if form.is_valid():
-            cp: CollectionPlan = form.save(commit=False)
-            # primary owner fallback; keep safe
-            cp.kam = cp.customer.kam or cp.customer.primary_kam or request.user
-            cp.save()
-            messages.success(request, "Collection plan saved.")
-            return redirect(
-                f"{reverse('kam:collections_plan')}?period={request.GET.get('period','month')}&asof={request.GET.get('asof','')}"
-            )
+            cd = form.cleaned_data
+            cust = cd["customer"]
+            planned = cd["planned_amount"]
+
+            ptype = cd.get("period_type")
+            pid = (cd.get("period_id") or "").strip() if cd.get("period_id") else None
+            fd = cd.get("from_date")
+            td = cd.get("to_date")
+
+            has_period = bool(ptype and pid)
+            has_range = bool(fd and td)
+
+            if has_period and has_range:
+                messages.error(request, "Choose either Period Type/Id OR From/To date range (not both).")
+            elif (not has_period) and (not has_range):
+                messages.error(request, "Provide either Period Type/Id OR From/To date range.")
+            else:
+                if not customer_qs.filter(id=cust.id).exists():
+                    return HttpResponseForbidden("403 Forbidden: Customer out of your scope.")
+
+                if _is_manager(request.user):
+                    owner = cust.kam or cust.primary_kam or request.user
+                else:
+                    owner = request.user
+
+                with transaction.atomic():
+                    if has_period:
+                        CollectionPlan.objects.update_or_create(
+                            customer=cust,
+                            period_type=ptype,
+                            period_id=pid,
+                            defaults={
+                                "planned_amount": planned,
+                                "from_date": None,
+                                "to_date": None,
+                                "kam": owner,
+                            },
+                        )
+                    else:
+                        CollectionPlan.objects.update_or_create(
+                            customer=cust,
+                            from_date=fd,
+                            to_date=td,
+                            period_type=None,
+                            period_id=None,
+                            defaults={
+                                "planned_amount": planned,
+                                "kam": owner,
+                            },
+                        )
+
+                messages.success(request, "Collection plan saved.")
+                return redirect(
+                    f"{reverse('kam:collections_plan')}?period={request.GET.get('period','month')}&asof={request.GET.get('asof','')}"
+                )
+        else:
+            messages.error(request, "Please correct the errors and save again.")
     else:
         form = CollectionPlanForm(initial={"period_type": period_type, "period_id": period_id})
+        if "customer" in form.fields:
+            form.fields["customer"].queryset = customer_qs
 
-    plan_qs = CollectionPlan.objects.select_related("customer", "kam")
+    plan_qs = CollectionPlan.objects.select_related("customer", "kam").filter(customer__in=customer_qs)
 
     period_rows = plan_qs.filter(period_type=period_type, period_id=period_id)
     range_rows = plan_qs.filter(
@@ -2502,21 +2776,23 @@ def collections_plan(request: HttpRequest) -> HttpResponse:
 
     overdue_map: Dict[int, Decimal] = {}
     if plan_customer_ids:
-        for cust_id in plan_customer_ids:
-            latest = (
-                OverdueSnapshot.objects.filter(customer_id=cust_id)
-                .order_by("-snapshot_date")
-                .values_list("snapshot_date", flat=True)
-                .first()
-            )
-            if latest:
-                val = (
-                    OverdueSnapshot.objects.filter(customer_id=cust_id, snapshot_date=latest)
-                    .values_list("overdue", flat=True)
-                    .first()
-                    or 0
-                )
-                overdue_map[cust_id] = _safe_decimal(val)
+        latest_by_customer = (
+            OverdueSnapshot.objects.filter(customer_id__in=plan_customer_ids)
+            .values("customer_id")
+            .annotate(latest=models.Max("snapshot_date"))
+        )
+        latest_map = {r["customer_id"]: r["latest"] for r in latest_by_customer if r.get("latest")}
+
+        if latest_map:
+            snaps = OverdueSnapshot.objects.filter(
+                customer_id__in=list(latest_map.keys()),
+                snapshot_date__in=list(set(latest_map.values())),
+            ).values("customer_id", "snapshot_date", "overdue")
+
+            for s in snaps:
+                cid = s["customer_id"]
+                if latest_map.get(cid) == s["snapshot_date"]:
+                    overdue_map[cid] = _safe_decimal(s["overdue"])
 
     actual_map: Dict[int, Decimal] = {}
     if plan_customer_ids:
@@ -2593,28 +2869,11 @@ def sync_trigger(request: HttpRequest) -> HttpResponse:
 @login_required
 @require_kam_code("kam_sync_step")
 def sync_step(request: HttpRequest) -> HttpResponse:
-    """
-    Modes:
-      - POST with no token: run full sync immediately
-      - GET/POST with token: chunked sync using SyncIntent cursor fields
-
-    Cursor fields (from models.py):
-      - last_customer_cursor
-      - last_invoice_cursor
-      - last_lead_cursor
-      - last_overdue_cursor
-
-    This implementation is resilient to different sheets.step_sync signatures:
-      1) step_sync(intent=SyncIntent, max_rows=...)
-      2) step_sync(max_rows=..., last_customer_cursor=..., last_invoice_cursor=..., ...)
-      3) step_sync(max_rows=..., offset=...)   (fallback, using step_count)
-    """
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
 
     token = (request.GET.get("token") or request.POST.get("token") or "").strip()
 
-    # Full-sync shortcut
     if request.method == "POST" and not token:
         try:
             stats = sheets.run_sync_now()
@@ -2635,13 +2894,6 @@ def sync_step(request: HttpRequest) -> HttpResponse:
     import inspect
 
     def _call_step_sync():
-        """
-        Try calling sheets.step_sync in the most compatible way.
-        Must return a dict that may include:
-          - done: bool
-          - next_*_cursor keys OR direct cursor keys
-          - counters/stats
-        """
         fn = getattr(sheets, "step_sync", None)
         if not callable(fn):
             raise RuntimeError("sheets.step_sync is not callable")
@@ -2656,14 +2908,12 @@ def sync_step(request: HttpRequest) -> HttpResponse:
             "last_overdue_cursor": intent.last_overdue_cursor,
         }
 
-        # Preferred: step_sync(intent=..., max_rows=?)
         if "intent" in params:
             kwargs = {}
             if "max_rows" in params:
                 kwargs["max_rows"] = max_rows
             return fn(intent=intent, **kwargs)
 
-        # Next: step_sync(max_rows=?, last_customer_cursor=?, ...)
         if any(k in params for k in cursor_payload.keys()):
             kwargs = {}
             if "max_rows" in params:
@@ -2673,16 +2923,13 @@ def sync_step(request: HttpRequest) -> HttpResponse:
                     kwargs[k] = v
             return fn(**kwargs)
 
-        # Fallback: offset-based stepper (only if sheets.py still expects this)
         if "max_rows" in params and "offset" in params:
             offset = int((intent.step_count or 0) * max_rows)
             return fn(max_rows=max_rows, offset=offset)
 
-        # Last resort
         return fn()
 
     try:
-        # mark running + increment step counter
         intent.status = SyncIntent.STATUS_RUNNING
         intent.step_count = int(intent.step_count or 0) + 1
         intent.save(update_fields=["status", "step_count", "updated_at"])
@@ -2691,7 +2938,6 @@ def sync_step(request: HttpRequest) -> HttpResponse:
         if not isinstance(result, dict):
             raise RuntimeError("sheets.step_sync must return a dict")
 
-        # Accept either next_*_cursor keys OR direct cursor keys.
         next_customer = result.get("next_customer_cursor", result.get("last_customer_cursor"))
         next_invoice = result.get("next_invoice_cursor", result.get("last_invoice_cursor"))
         next_lead = result.get("next_lead_cursor", result.get("last_lead_cursor"))
