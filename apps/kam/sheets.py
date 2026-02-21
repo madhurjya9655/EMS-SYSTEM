@@ -33,14 +33,15 @@ def _get_gspread_client():
     try:
         import gspread  # type: ignore
     except ModuleNotFoundError as e:
-        raise RuntimeError("gspread is not installed. Add `gspread` + `google-auth` to requirements.") from e
+        raise RuntimeError("gspread is not installed. Add `gspread` and `google-auth` to requirements.") from e
 
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets.readonly",
-        "https://www.googleapis.com/auth/drive.readonly",
-    ]
-    creds = get_google_credentials(scopes=scopes)
-    return gspread.authorize(creds)
+    bundle = get_google_credentials(
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/drive.readonly",
+        ]
+    )
+    return gspread.authorize(bundle.credentials)
 
 
 def _open_worksheet(sheet_id: str, worksheet_name: str):
@@ -50,18 +51,17 @@ def _open_worksheet(sheet_id: str, worksheet_name: str):
 
 
 def _norm_str(v: Any) -> str:
-    if v is None:
-        return ""
-    return str(v).strip()
+    return "" if v is None else str(v).strip()
 
 
 def _parse_decimal(v: Any) -> Optional[Decimal]:
     s = _norm_str(v)
     if not s:
         return None
-    s = s.replace(",", "").strip()
+    s = s.replace(",", "")
     for ch in ["₹", "$", "€", "£"]:
         s = s.replace(ch, "")
+    s = s.strip()
     try:
         return Decimal(s)
     except (InvalidOperation, ValueError):
@@ -116,7 +116,7 @@ class SheetRow:
 
 def _fetch_sheet_records(sheet_id: str, worksheet_name: str) -> List[Dict[str, Any]]:
     ws = _open_worksheet(sheet_id, worksheet_name)
-    return ws.get_all_records()  # type: ignore[no-any-return]
+    return ws.get_all_records()  # type: ignore
 
 
 def _map_row(rec: Dict[str, Any]) -> Optional[SheetRow]:
@@ -127,12 +127,21 @@ def _map_row(rec: Dict[str, Any]) -> Optional[SheetRow]:
 
     if not inv_no and not cust and amt is None and dt is None:
         return None
+
     if not cust:
-        logger.warning("Skipping row because customer is blank. Record=%s", rec)
+        logger.warning("Skipping row: customer blank. Record=%s", rec)
         return None
 
     row_uuid = _safe_row_uuid(inv_no, cust, amt, dt)
-    return SheetRow(row_uuid=row_uuid, invoice_no=inv_no, invoice_date=dt, customer_name=cust, amount=amt, raw=rec)
+
+    return SheetRow(
+        row_uuid=row_uuid,
+        invoice_no=inv_no,
+        invoice_date=dt,
+        customer_name=cust,
+        amount=amt,
+        raw=rec,
+    )
 
 
 @transaction.atomic
@@ -152,16 +161,16 @@ def import_sales_records(records: Sequence[Dict[str, Any]]) -> Tuple[int, int]:
         if hasattr(InvoiceFact, "invoice_no"):
             defaults["invoice_no"] = row.invoice_no
         if hasattr(InvoiceFact, "invoice_date"):
-            defaults["invoice_date"] = row.invoice_date.date() if row.invoice_date else None  # models.py uses DateField
+            defaults["invoice_date"] = row.invoice_date.date() if row.invoice_date else None
         if hasattr(InvoiceFact, "amount"):
             defaults["amount"] = row.amount
 
-        obj, was_created = InvoiceFact.objects.update_or_create(row_uuid=row.row_uuid, defaults=defaults)
-
-        if was_created:
-            created += 1
-        else:
-            updated += 1
+        obj, was_created = InvoiceFact.objects.update_or_create(
+            row_uuid=row.row_uuid,
+            defaults=defaults,
+        )
+        created += 1 if was_created else 0
+        updated += 0 if was_created else 1
 
     return created, updated
 
@@ -173,11 +182,11 @@ def run_sync_now(*, worksheet_name: Optional[str] = None) -> Dict[str, Any]:
     try:
         records = _fetch_sheet_records(sheet_id, ws_name)
     except GoogleCredentialError as e:
-        raise RuntimeError(str(e)) from e
+        raise GoogleCredentialError(str(e)) from e
 
     created, updated = import_sales_records(records)
 
-    return {
+    result = {
         "worksheet": ws_name,
         "sheet_id": sheet_id,
         "records_seen": len(records),
@@ -185,3 +194,37 @@ def run_sync_now(*, worksheet_name: Optional[str] = None) -> Dict[str, Any]:
         "updated": updated,
         "timestamp": timezone.now().isoformat(),
     }
+    logger.info("KAM sheet sync complete: %s", result)
+    return result
+
+
+def step_sync(*, worksheet_name: Optional[str] = None, max_rows: int = 200, offset: int = 0) -> Dict[str, Any]:
+    sheet_id = _require_env(SHEET_ID_ENV)
+    ws_name = worksheet_name or DEFAULT_WORKSHEET_NAME
+
+    try:
+        records = _fetch_sheet_records(sheet_id, ws_name)
+    except GoogleCredentialError as e:
+        raise GoogleCredentialError(str(e)) from e
+
+    total = len(records)
+    batch = records[offset : offset + max_rows]
+    created, updated = import_sales_records(batch)
+
+    next_offset = offset + len(batch)
+    done = next_offset >= total
+
+    result = {
+        "worksheet": ws_name,
+        "sheet_id": sheet_id,
+        "records_seen": total,
+        "processed": len(batch),
+        "offset": offset,
+        "next_offset": None if done else next_offset,
+        "done": done,
+        "created": created,
+        "updated": updated,
+        "timestamp": timezone.now().isoformat(),
+    }
+    logger.info("KAM sheet step sync: %s", result)
+    return result

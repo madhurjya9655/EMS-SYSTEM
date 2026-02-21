@@ -350,7 +350,6 @@ class CollectionPlan(TimeStamped):
 
     planned_amount = models.DecimalField(max_digits=14, decimal_places=2, validators=[MinValueValidator(0)], default=0)
 
-    # Optional (kept, even if form doesn’t expose it)
     notes = models.TextField(blank=True, null=True)
 
     class Meta:
@@ -393,7 +392,7 @@ class VisitBatch(TimeStamped):
     to_date = models.DateField()
     visit_category = models.CharField(max_length=16, choices=VISIT_CATEGORY_CHOICES)
 
-    # ✅ Changed to TextField (matches form + views expecting longer remarks)
+    # Changed to TextField (matches form + views expecting longer remarks)
     purpose = models.TextField(blank=True, null=True)
 
     approval_status = models.CharField(
@@ -446,7 +445,7 @@ class VisitPlan(TimeStamped):
     visit_date = models.DateField()
     visit_date_to = models.DateField(null=True, blank=True)
 
-    # ✅ Default added so single-save doesn’t break if field missing
+    # Default added so single-save doesn’t break if field missing
     visit_type = models.CharField(
         max_length=12,
         choices=[(PLANNED, "Planned"), (UNPLANNED, "Unplanned")],
@@ -466,13 +465,13 @@ class VisitPlan(TimeStamped):
 
     counterparty_name = models.CharField(max_length=255, blank=True, null=True)
 
-    # ✅ Changed to TextField to support real remarks length
+    # Changed to TextField to support real remarks length
     purpose = models.TextField(blank=True, null=True)
 
     expected_sales_mt = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
     expected_collection = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
 
-    # ✅ Changed to TextField (addresses often exceed 255)
+    # Changed to TextField (addresses often exceed 255)
     location = models.TextField(blank=True, null=True)
 
     approval_status = models.CharField(
@@ -548,7 +547,6 @@ class CallLog(TimeStamped):
     call_datetime = models.DateTimeField(default=timezone.now)
     duration_minutes = models.IntegerField(default=0)
 
-    # Optional new/compat fields (safe to keep even if unused)
     call_type = models.CharField(max_length=32, blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
 
@@ -578,7 +576,6 @@ class CollectionTxn(TimeStamped):
     mode = models.CharField(max_length=32, blank=True, null=True)
     reference = models.CharField(max_length=64, blank=True, null=True)
 
-    # Optional compat fields
     reference_no = models.CharField(max_length=64, blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
 

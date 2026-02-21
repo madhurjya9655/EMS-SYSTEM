@@ -1,9 +1,9 @@
+# FILE: apps/kam/sheets_adapter.py
 from __future__ import annotations
 
 import json
 import os
 import re
-import tempfile
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -15,46 +15,48 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 
-from .models import (
-    Customer,
-    InvoiceFact,
-    LeadFact,
-    OverdueSnapshot,
-    SyncIntent,
-)
+from apps.common.google_auth import GoogleCredentialError, get_google_credentials
+from .models import Customer, InvoiceFact, LeadFact, OverdueSnapshot, SyncIntent
 
 User = get_user_model()
 
-# ---------------------------
-# Utilities
-# ---------------------------
 
 def _getenv(key: str, default: Optional[str] = None) -> Optional[str]:
     v = os.getenv(key, default)
     return v.strip() if isinstance(v, str) else v
 
-def _load_sa_dict() -> dict:
-    raw = _getenv("KAM_SA_JSON")
-    if raw:
-        if raw.startswith("@"):
-            path = raw[1:]
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            raise RuntimeError("KAM_SA_JSON must be valid JSON or @path to json file")
-    path2 = _getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
-    if path2 and os.path.exists(path2):
-        with open(path2, "r", encoding="utf-8") as f:
-            return json.load(f)
-    raise RuntimeError("Missing Google service account credentials (KAM_SA_JSON or GOOGLE_SERVICE_ACCOUNT_FILE).")
+
+def _open_sheet():
+    try:
+        # Keep existing scopes behavior if you set GOOGLE_SHEET_SCOPES
+        scopes_raw = (_getenv("GOOGLE_SHEET_SCOPES") or "").strip()
+        scopes = [s.strip() for s in scopes_raw.split(",") if s.strip()] if scopes_raw else None
+
+        creds = get_google_credentials(scopes=scopes or ["https://www.googleapis.com/auth/spreadsheets.readonly"])
+    except GoogleCredentialError as e:
+        raise RuntimeError(str(e)) from e
+
+    gc = gspread.authorize(creds)
+    sheet_id = _getenv("KAM_SALES_SHEET_ID")
+    if not sheet_id:
+        raise RuntimeError("KAM_SALES_SHEET_ID missing")
+    return gc.open_by_key(sheet_id)
+
+
+def _norm_header(s: str) -> str:
+    s = (s or "").strip()
+    s = re.sub(r"\s+", " ", s)
+    s = s.replace("’", "'")
+    return s
+
 
 def _datefmt() -> str:
     return _getenv("KAM_DATE_FMT", "%d-%m-%Y")
 
+
 def _dry_run() -> bool:
     return _getenv("KAM_IMPORT_DRY_RUN", "0") in ("1", "true", "True", "YES", "yes")
+
 
 def _usermap() -> Dict[str, str]:
     raw = _getenv("KAM_USERMAP_JSON", "{}")
@@ -63,12 +65,6 @@ def _usermap() -> Dict[str, str]:
     except Exception:
         return {}
 
-def _norm_header(s: str) -> str:
-    s = s or ""
-    s = s.strip()
-    s = re.sub(r"\s+", " ", s)
-    s = s.replace("’", "'")
-    return s
 
 def _parse_date(s: str) -> Optional[date]:
     if not s:
@@ -82,6 +78,7 @@ def _parse_date(s: str) -> Optional[date]:
         except Exception:
             pass
     return None
+
 
 def _to_decimal(s) -> Decimal:
     if s is None:
@@ -98,15 +95,18 @@ def _to_decimal(s) -> Decimal:
     except Exception:
         return Decimal(0)
 
+
 def _to_int(s) -> int:
     try:
         return int(Decimal(str(s)))
     except Exception:
         return 0
 
+
 def _hash_row(*parts: str) -> str:
     base = "||".join([p if p is not None else "" for p in parts])
     return md5(base.encode("utf-8")).hexdigest()
+
 
 def _find_user_by_map(display_name: str, usermap: Dict[str, str]) -> Optional[User]:
     if not display_name:
@@ -122,13 +122,6 @@ def _find_user_by_map(display_name: str, usermap: Dict[str, str]) -> Optional[Us
     except User.DoesNotExist:
         return None
 
-def _open_sheet():
-    creds = _load_sa_dict()
-    gc = gspread.service_account_from_dict(creds)
-    sheet_id = _getenv("KAM_SALES_SHEET_ID")
-    if not sheet_id:
-        raise RuntimeError("KAM_SALES_SHEET_ID missing")
-    return gc.open_by_key(sheet_id)
 
 def _read_tab(ws_name: str) -> Tuple[List[str], List[List[str]]]:
     sh = _open_sheet()
@@ -143,8 +136,10 @@ def _read_tab(ws_name: str) -> Tuple[List[str], List[List[str]]]:
     rows = values[1:]
     return headers, rows
 
+
 def _index(headers: List[str]) -> Dict[str, int]:
     return {h: i for i, h in enumerate(headers)}
+
 
 def _col(idx: Dict[str, int], *names: str) -> Optional[int]:
     norm = [_norm_header(n) for n in names if n]
@@ -153,10 +148,6 @@ def _col(idx: Dict[str, int], *names: str) -> Optional[int]:
             return idx[n]
     return None
 
-
-# ---------------------------
-# Stats
-# ---------------------------
 
 @dataclass
 class ImportStats:
@@ -187,9 +178,7 @@ class ImportStats:
         return " | ".join(parts)
 
 
-# ---------------------------
-# Importers
-# ---------------------------
+# ---- importers below unchanged (uses _open_sheet) ----
 
 def import_customers(stats: ImportStats):
     tab = _getenv("KAM_TAB_CUSTOMERS", "Customer Details")
@@ -214,7 +203,8 @@ def import_customers(stats: ImportStats):
     for r in rows:
         name = (r[c_customer] if c_customer is not None and c_customer < len(r) else "").strip()
         if not name:
-            stats.skipped += 1; continue
+            stats.skipped += 1
+            continue
         kam_disp = r[c_kam] if c_kam is not None and c_kam < len(r) else ""
         kam = _find_user_by_map(kam_disp, usermap)
         if not kam and kam_disp:
@@ -227,24 +217,31 @@ def import_customers(stats: ImportStats):
         credit_limit = _to_decimal(r[c_credit_limit]) if c_credit_limit is not None and c_credit_limit < len(r) else Decimal(0)
         credit_days = _to_int(r[c_credit_days]) if c_credit_days is not None and c_credit_days < len(r) else 0
 
-        if addr: defaults["address"] = addr
-        if email: defaults["email"] = email
-        if mobile: defaults["mobile"] = mobile
+        if addr:
+            defaults["address"] = addr
+        if email:
+            defaults["email"] = email
+        if mobile:
+            defaults["mobile"] = mobile
         defaults["credit_limit"] = credit_limit
         defaults["agreed_credit_period_days"] = credit_days
 
         if dry:
-            stats.customers_upserted += 1; continue
+            stats.customers_upserted += 1
+            continue
 
         with transaction.atomic():
             cust, _ = Customer.objects.get_or_create(name=name, defaults=defaults)
             changed = False
             for k, v in defaults.items():
                 if getattr(cust, k) != v:
-                    setattr(cust, k, v); changed = True
+                    setattr(cust, k, v)
+                    changed = True
             if kam and cust.primary_kam_id != kam.id:
-                cust.primary_kam = kam; changed = True
-            if changed: cust.save()
+                cust.primary_kam = kam
+                changed = True
+            if changed:
+                cust.save()
             stats.customers_upserted += 1
 
 
@@ -256,7 +253,6 @@ def import_sales(stats: ImportStats):
         return
     idx = _index(headers)
     c_kam = _col(idx, "KAM Name", "KAM", "kam_username")
-    # Accept "Consignee Name" as alias for customer column
     c_customer = _col(idx, "Customer Name", "Consignee Name", "Buyer's Name", "Buyer’s Name", "Buyer\'s Name", "customer_name")
     c_date = _col(idx, "Invoice Date", "Date of Invoice", "invoice_date", "Date")
     c_qty = _col(idx, "QTY", "Qty(MT)", "Quantity", "qty_mt")
@@ -272,23 +268,26 @@ def import_sales(stats: ImportStats):
         kam_disp = r[c_kam] if c_kam < len(r) else ""
         kam = _find_user_by_map(kam_disp, usermap)
         if not kam:
-            stats.add_unknown(kam_disp); stats.skipped += 1; continue
+            stats.add_unknown(kam_disp)
+            stats.skipped += 1
+            continue
         inv_date = _parse_date(r[c_date] if c_date < len(r) else "")
         if not inv_date:
-            stats.skipped += 1; continue
+            stats.skipped += 1
+            continue
         cust_name = (r[c_customer] if c_customer is not None and c_customer < len(r) else "").strip()
         if not cust_name:
-            stats.skipped += 1; continue
+            stats.skipped += 1
+            continue
         qty_mt = _to_decimal(r[c_qty]) if c_qty is not None and c_qty < len(r) else Decimal(0)
         value_gst = _to_decimal(r[c_val] if c_val < len(r) else "0")
         inv_no = (r[c_invno] if c_invno is not None and c_invno < len(r) else "").strip()
         row_uuid = inv_no or _hash_row("sales", tab, cust_name, kam.username, str(inv_date), str(qty_mt), str(value_gst))
         if dry:
-            stats.sales_upserted += 1; continue
+            stats.sales_upserted += 1
+            continue
         with transaction.atomic():
-            cust = None
-            if cust_name:
-                cust, _ = Customer.objects.get_or_create(name=cust_name)
+            cust, _ = Customer.objects.get_or_create(name=cust_name)
             inv, created = InvoiceFact.objects.get_or_create(
                 row_uuid=row_uuid,
                 defaults=dict(
@@ -302,16 +301,22 @@ def import_sales(stats: ImportStats):
             if not created:
                 changed = False
                 if inv.invoice_date != inv_date:
-                    inv.invoice_date = inv_date; changed = True
-                if (inv.customer_id if inv.customer_id else None) != (cust.id if cust else None):
-                    inv.customer = cust; changed = True
+                    inv.invoice_date = inv_date
+                    changed = True
+                if inv.customer_id != cust.id:
+                    inv.customer = cust
+                    changed = True
                 if inv.kam_id != kam.id:
-                    inv.kam = kam; changed = True
+                    inv.kam = kam
+                    changed = True
                 if inv.qty_mt != qty_mt:
-                    inv.qty_mt = qty_mt; changed = True
+                    inv.qty_mt = qty_mt
+                    changed = True
                 if inv.revenue_gst != value_gst:
-                    inv.revenue_gst = value_gst; changed = True
-                if changed: inv.save()
+                    inv.revenue_gst = value_gst
+                    changed = True
+                if changed:
+                    inv.save()
             stats.sales_upserted += 1
 
 
@@ -340,10 +345,13 @@ def import_leads(stats: ImportStats):
         kam_disp = r[c_kam] if c_kam < len(r) else ""
         kam = _find_user_by_map(kam_disp, usermap)
         if not kam:
-            stats.add_unknown(kam_disp); stats.skipped += 1; continue
+            stats.add_unknown(kam_disp)
+            stats.skipped += 1
+            continue
         doe = _parse_date(r[c_ts] if c_ts < len(r) else "")
         if not doe:
-            stats.skipped += 1; continue
+            stats.skipped += 1
+            continue
         qty_mt = _to_decimal(r[c_qty] if c_qty < len(r) else "0")
         status = (r[c_status] if c_status < len(r) else "").strip().upper()
         if status not in {"OPEN", "NEGOTIATION", "WON", "LOST"}:
@@ -354,30 +362,25 @@ def import_leads(stats: ImportStats):
         remarks = (r[c_remarks] if c_remarks is not None and c_remarks < len(r) else None) or None
         row_uuid = _hash_row("lead", tab, kam.username, str(doe), cust_name, str(qty_mt), status, str(grade), str(size))
         if dry:
-            stats.leads_upserted += 1; continue
+            stats.leads_upserted += 1
+            continue
         with transaction.atomic():
             cust = None
             if cust_name:
                 cust, _ = Customer.objects.get_or_create(name=cust_name)
-            obj, created = LeadFact.objects.get_or_create(
+            LeadFact.objects.update_or_create(
                 row_uuid=row_uuid,
                 defaults=dict(
-                    doe=doe, kam=kam, customer=cust, qty_mt=qty_mt,
-                    status=status, grade=grade, size=size, remarks=remarks,
+                    doe=doe,
+                    kam=kam,
+                    customer=cust,
+                    qty_mt=qty_mt,
+                    status=status,
+                    grade=grade,
+                    size=size,
+                    remarks=remarks,
                 ),
             )
-            if not created:
-                changed = False
-                if obj.doe != doe: obj.doe = doe; changed = True
-                if (obj.customer_id if obj.customer_id else None) != (cust.id if cust else None):
-                    obj.customer = cust; changed = True
-                if obj.kam_id != kam.id: obj.kam = kam; changed = True
-                if obj.qty_mt != qty_mt: obj.qty_mt = qty_mt; changed = True
-                if obj.status != status: obj.status = status; changed = True
-                if obj.grade != grade: obj.grade = grade; changed = True
-                if obj.size != size: obj.size = size; changed = True
-                if obj.remarks != remarks: obj.remarks = remarks; changed = True
-                if changed: obj.save()
             stats.leads_upserted += 1
 
 
@@ -406,7 +409,9 @@ def import_overdues(stats: ImportStats):
         cust_name = (r[c_customer] if c_customer < len(r) else "").strip()
         if not cust_name:
             continue
-        cur = totals.setdefault(cust_name, {"overdue": Decimal(0), "exposure": Decimal(0), "a0": Decimal(0), "a31": Decimal(0), "a61": Decimal(0), "a90": Decimal(0)})
+        cur = totals.setdefault(
+            cust_name, {"overdue": Decimal(0), "exposure": Decimal(0), "a0": Decimal(0), "a31": Decimal(0), "a61": Decimal(0), "a90": Decimal(0)}
+        )
         cur["overdue"] += _to_decimal(r[c_overdue] if c_overdue < len(r) else "0")
         cur["exposure"] += _to_decimal(r[c_exposure] if c_exposure is not None and c_exposure < len(r) else "0")
         cur["a0"] += _to_decimal(r[a0] if a0 is not None and a0 < len(r) else "0")
@@ -416,10 +421,11 @@ def import_overdues(stats: ImportStats):
 
     for cust_name, vals in totals.items():
         if dry:
-            stats.overdues_upserted += 1; continue
+            stats.overdues_upserted += 1
+            continue
         with transaction.atomic():
             cust, _ = Customer.objects.get_or_create(name=cust_name)
-            _snap, _ = OverdueSnapshot.objects.update_or_create(
+            OverdueSnapshot.objects.update_or_create(
                 snapshot_date=snap_date,
                 customer=cust,
                 defaults=dict(
@@ -434,12 +440,7 @@ def import_overdues(stats: ImportStats):
             stats.overdues_upserted += 1
 
 
-# ---------------------------
-# Orchestrators
-# ---------------------------
-
 def run_sync_now() -> ImportStats:
-    """Full single-pass import (customers → sales → leads → overdues)."""
     stats = ImportStats()
     import_customers(stats)
     import_sales(stats)
@@ -448,27 +449,30 @@ def run_sync_now() -> ImportStats:
     return stats
 
 
-# Paged sync used by sync_step() – processes one page per call across entities.
 BATCH_SIZE = 50
 
 def _cursor(current: Optional[str], total_rows: int) -> Tuple[int, Optional[str]]:
-    start = int(current) if current else 2  # 1-based header, so data starts at row 2
+    start = int(current) if current else 2
     end = min(start + BATCH_SIZE - 1, total_rows)
     new_cur = str(end + 1) if end < total_rows else None
     return start, new_cur
+
 
 def _headers(values: List[List[str]]) -> List[str]:
     if not values:
         return []
     return [_norm_header(h) for h in values[0]]
 
+
 def _idx(headers: List[str]) -> Dict[str, int]:
     return {h: i for i, h in enumerate(headers)}
+
 
 def _val(row: List[str], i: Optional[int]) -> str:
     if i is None or i >= len(row):
         return ""
     return (row[i] or "").strip()
+
 
 def _pick(idm: Dict[str, int], *names: str) -> Optional[int]:
     for n in names:
@@ -480,12 +484,14 @@ def _pick(idm: Dict[str, int], *names: str) -> Optional[int]:
                 return idm[k]
     return None
 
+
 def _ws_by_name(tab: str):
     sh = _open_sheet()
     try:
         return sh.worksheet(tab)
     except gspread.WorksheetNotFound:
         raise RuntimeError(f"Worksheet not found: {tab}")
+
 
 def _process_page(tab: str, cursor: Optional[str], handler) -> Tuple[int, Optional[str]]:
     ws = _ws_by_name(tab)
@@ -498,6 +504,7 @@ def _process_page(tab: str, cursor: Optional[str], handler) -> Tuple[int, Option
     page_values = [headers] + values[start - 1 : min(start - 1 + BATCH_SIZE, total_rows)]
     processed = handler(page_values)
     return processed, new_cur
+
 
 def _customers_handler(values: List[List[str]]) -> int:
     headers = _headers(values)
@@ -538,6 +545,7 @@ def _customers_handler(values: List[List[str]]) -> int:
             processed += 1
     return processed
 
+
 def _invoices_handler(values: List[List[str]]) -> int:
     headers = _headers(values)
     idm = _idx(headers)
@@ -575,6 +583,7 @@ def _invoices_handler(values: List[List[str]]) -> int:
             )
             processed += 1
     return processed
+
 
 def _leads_handler(values: List[List[str]]) -> int:
     headers = _headers(values)
@@ -621,6 +630,7 @@ def _leads_handler(values: List[List[str]]) -> int:
             processed += 1
     return processed
 
+
 def _overdues_handler(values: List[List[str]]) -> int:
     headers = _headers(values)
     idm = _idx(headers)
@@ -637,7 +647,9 @@ def _overdues_handler(values: List[List[str]]) -> int:
         cust_name = _val(r, cust)
         if not cust_name:
             continue
-        cur = totals.setdefault(cust_name, {"overdue": Decimal(0), "exposure": Decimal(0), "a0": Decimal(0), "a31": Decimal(0), "a61": Decimal(0), "a90": Decimal(0)})
+        cur = totals.setdefault(
+            cust_name, {"overdue": Decimal(0), "exposure": Decimal(0), "a0": Decimal(0), "a31": Decimal(0), "a61": Decimal(0), "a90": Decimal(0)}
+        )
         cur["overdue"] += _to_decimal(_val(r, overdue_i))
         cur["exposure"] += _to_decimal(_val(r, exposure_i))
         cur["a0"] += _to_decimal(_val(r, a0))
@@ -648,7 +660,7 @@ def _overdues_handler(values: List[List[str]]) -> int:
     with transaction.atomic():
         for cust_name, vals in totals.items():
             cust, _ = Customer.objects.get_or_create(name=cust_name)
-            _snap, _ = OverdueSnapshot.objects.update_or_create(
+            OverdueSnapshot.objects.update_or_create(
                 snapshot_date=snap_date,
                 customer=cust,
                 defaults=dict(
@@ -665,10 +677,6 @@ def _overdues_handler(values: List[List[str]]) -> int:
 
 
 def step_sync(intent: SyncIntent) -> Dict:
-    """
-    One call advances through entities in order; processes at most one page where pending.
-    If an entity finishes (no more pages), it continues to the next one in the same call.
-    """
     sheet_id = _getenv("KAM_SALES_SHEET_ID")
     if not sheet_id:
         return {"last_customer_cursor": None, "last_invoice_cursor": None, "last_lead_cursor": None, "last_overdue_cursor": None, "done": True}
@@ -680,17 +688,16 @@ def step_sync(intent: SyncIntent) -> Dict:
         "overdues": _getenv("KAM_TAB_OVERDUES", "Overdues"),
     }
 
-    # (attr, tab, handler)
     order = [
         ("last_customer_cursor", tabs["customers"], _customers_handler),
-        ("last_invoice_cursor",  tabs["invoices"],  _invoices_handler),
-        ("last_lead_cursor",     tabs["leads"],     _leads_handler),
-        ("last_overdue_cursor",  tabs["overdues"],  _overdues_handler),
+        ("last_invoice_cursor", tabs["invoices"], _invoices_handler),
+        ("last_lead_cursor", tabs["leads"], _leads_handler),
+        ("last_overdue_cursor", tabs["overdues"], _overdues_handler),
     ]
 
     for attr, tab, handler in order:
         cur = getattr(intent, attr)
-        processed, new_cur = _process_page(tab, cur, handler)
+        _processed, new_cur = _process_page(tab, cur, handler)
         setattr(intent, attr, new_cur)
         intent.save(update_fields=[attr, "updated_at"])
         if new_cur is not None:

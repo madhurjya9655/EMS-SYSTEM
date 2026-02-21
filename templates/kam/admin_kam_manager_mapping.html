@@ -10,9 +10,33 @@
     </div>
   </div>
 
+  {# Messages (in case base.html doesn't show them) #}
+  {% if messages %}
+    <div class="mb-3">
+      {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
+          {{ message }}
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
   <div class="card mb-4">
     <div class="card-header fw-semibold">Assign / Update Mapping</div>
     <div class="card-body">
+      {% if not kam_users %}
+        <div class="alert alert-warning">
+          No KAM users found to map. This usually means your KAM users are being detected as “Manager/Finance/Admin”.
+          Fix is in <code>apps/kam/views.py</code> (updated in my response).
+        </div>
+      {% endif %}
+
+      {% if not manager_users %}
+        <div class="alert alert-warning">
+          No Manager users found. Ensure at least one user is in Manager/Admin/Finance group or has <code>kam_manager</code> code.
+        </div>
+      {% endif %}
+
       <form method="post" class="row g-3">
         {% csrf_token %}
         <input type="hidden" name="action" value="assign" />
@@ -41,6 +65,7 @@
           <button class="btn btn-primary" type="submit">Save Mapping</button>
         </div>
       </form>
+
       <div class="small text-muted mt-2">
         Saving a new mapping automatically deactivates previous active mappings for that KAM.
       </div>
@@ -87,7 +112,8 @@
                   {% csrf_token %}
                   <input type="hidden" name="action" value="deactivate" />
                   <input type="hidden" name="mapping_id" value="{{ m.id }}" />
-                  <button class="btn btn-sm btn-outline-danger" type="submit" onclick="return confirm('Deactivate mapping #{{ m.id }}?');">
+                  <button class="btn btn-sm btn-outline-danger" type="submit"
+                          onclick="return confirm('Deactivate mapping #{{ m.id }}?');">
                     Deactivate
                   </button>
                 </form>

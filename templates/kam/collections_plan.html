@@ -1,5 +1,7 @@
+{# FILE: templates/kam/collections_plan.html #}
 {% extends "base.html" %}
 {% load humanize crispy_forms_tags %}
+
 {% block title %}Collections Plan{% endblock %}
 
 {% block content %}
@@ -23,8 +25,37 @@
   </form>
 </div>
 
+{# Messages #}
+{% if messages %}
+  <div class="my-3">
+    {% for message in messages %}
+      <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
+        {{ message }}
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+
 <div class="card p-3 my-3">
   <h6 class="fw-bold mb-2">Add / Update Plan</h6>
+
+  {# FORM ERRORS (critical; otherwise user thinks "nothing happens") #}
+  {% if form.errors %}
+    <div class="alert alert-danger">
+      <div class="fw-semibold mb-1">Please fix the errors below:</div>
+      {% if form.non_field_errors %}
+        <div class="mb-2">{{ form.non_field_errors }}</div>
+      {% endif %}
+      <ul class="mb-0">
+        {% for field in form %}
+          {% for err in field.errors %}
+            <li><strong>{{ field.label }}:</strong> {{ err }}</li>
+          {% endfor %}
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
   <form method="post" class="row g-2" novalidate>
     {% csrf_token %}
     <div class="col-md-2">{{ form.period_type.label_tag }} {{ form.period_type }}</div>
@@ -35,10 +66,12 @@
     <div class="col-md-2">{{ form.planned_amount.label_tag }} {{ form.planned_amount }}</div>
 
     <div class="col-12 small text-muted">
-      Provide either <em>Period Type/Id</em> or <em>From/To</em> range (not both).
+      Provide either <em>Period Type/Id</em> OR <em>From/To</em> range (not both).
     </div>
 
-    <div class="col-12 d-grid"><button class="btn btn-primary">Save</button></div>
+    <div class="col-12 d-grid">
+      <button class="btn btn-primary">Save</button>
+    </div>
   </form>
 </div>
 
