@@ -21,27 +21,158 @@ from .models import Customer, InvoiceFact, LeadFact, OverdueSnapshot, SyncIntent
 User = get_user_model()
 
 
+# ----------------------------
+# Env helpers / flexibility
+# ----------------------------
+
 def _getenv(key: str, default: Optional[str] = None) -> Optional[str]:
     v = os.getenv(key, default)
     return v.strip() if isinstance(v, str) else v
 
 
+def _truthy(v: Optional[str]) -> bool:
+    return (v or "").strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def _csv(v: Optional[str]) -> List[str]:
+    if not v:
+        return []
+    return [x.strip() for x in v.split(",") if x.strip()]
+
+
+def resolve_sections() -> List[str]:
+    """
+    Which sections to import in run_sync_now.
+
+    ENV:
+      - KAM_SYNC_SECTIONS=customers,sales,leads,overdues   (default: all)
+    """
+    raw = _getenv("KAM_SYNC_SECTIONS")
+    if not raw:
+        return ["customers", "sales", "leads", "overdues"]
+    allowed = {"customers", "sales", "leads", "overdues"}
+    out = [s.strip().lower() for s in raw.split(",") if s.strip()]
+    out = [s for s in out if s in allowed]
+    return out or ["customers", "sales", "leads", "overdues"]
+
+
+def _tab_env(
+    canonical: str,
+    *,
+    default: str,
+    aliases: List[str],
+    fallbacks: List[str],
+) -> str:
+    """
+    Resolve a worksheet/tab name with:
+      - canonical env var
+      - alias env vars
+      - AUTO mode -> choose first non-empty from fallbacks
+      - final fallback to default
+    """
+    # 1) pick first defined env among canonical + aliases
+    candidates = [canonical] + aliases
+    val = None
+    for k in candidates:
+        v = _getenv(k)
+        if v:
+            val = v
+            break
+
+    # 2) if explicit value and not AUTO -> return it
+    if val and val.strip().upper() not in ("AUTO", "*"):
+        return val.strip()
+
+    # 3) AUTO mode: try fallbacks in order, pick first non-empty
+    for name in fallbacks:
+        name = name.strip()
+        if not name:
+            continue
+        try:
+            if _worksheet_has_data(name):
+                return name
+        except Exception:
+            # if tab missing or unreadable, keep trying
+            continue
+
+    # 4) default
+    return default
+
+
+def resolve_tabs_for_logging() -> Dict[str, str]:
+    """
+    Returns the tab names that will be used given current env config.
+    """
+    return {
+        "customers": _resolve_customers_tab(),
+        "sales": _resolve_sales_tab(),
+        "leads": _resolve_leads_tab(),
+        "overdues": _resolve_overdues_tab(),
+    }
+
+
+# ----------------------------
+# Google Sheet open helpers
+# ----------------------------
+
 def _open_sheet():
     try:
-        # Keep existing scopes behavior if you set GOOGLE_SHEET_SCOPES
         scopes_raw = (_getenv("GOOGLE_SHEET_SCOPES") or "").strip()
         scopes = [s.strip() for s in scopes_raw.split(",") if s.strip()] if scopes_raw else None
 
-        creds = get_google_credentials(scopes=scopes or ["https://www.googleapis.com/auth/spreadsheets.readonly"])
+        creds_bundle = get_google_credentials(
+            scopes=scopes or [
+                "https://www.googleapis.com/auth/spreadsheets.readonly",
+                "https://www.googleapis.com/auth/drive.readonly",
+            ]
+        )
     except GoogleCredentialError as e:
         raise RuntimeError(str(e)) from e
 
-    gc = gspread.authorize(creds)
+    gc = gspread.authorize(creds_bundle.credentials)
     sheet_id = _getenv("KAM_SALES_SHEET_ID")
     if not sheet_id:
         raise RuntimeError("KAM_SALES_SHEET_ID missing")
     return gc.open_by_key(sheet_id)
 
+
+def _ws_by_name(tab: str):
+    sh = _open_sheet()
+    try:
+        return sh.worksheet(tab)
+    except gspread.WorksheetNotFound:
+        raise RuntimeError(f"Worksheet not found: {tab}")
+
+
+def _worksheet_has_data(tab: str) -> bool:
+    """
+    'Has data' means: at least header row + one non-empty data row.
+    This intentionally avoids false positives where only headers exist.
+    """
+    ws = _ws_by_name(tab)
+    values = ws.get_all_values()
+    if not values or len(values) < 2:
+        return False
+    # any non-empty cell in any row after header
+    for r in values[1:]:
+        if any((c or "").strip() for c in r):
+            return True
+    return False
+
+
+def _read_tab(ws_name: str) -> Tuple[List[str], List[List[str]]]:
+    ws = _ws_by_name(ws_name)
+    values = ws.get_all_values()
+    if not values:
+        return [], []
+    headers = [_norm_header(h) for h in values[0]]
+    rows = values[1:]
+    return headers, rows
+
+
+# ----------------------------
+# Header normalization / parsing
+# ----------------------------
 
 def _norm_header(s: str) -> str:
     s = (s or "").strip()
@@ -55,7 +186,7 @@ def _datefmt() -> str:
 
 
 def _dry_run() -> bool:
-    return _getenv("KAM_IMPORT_DRY_RUN", "0") in ("1", "true", "True", "YES", "yes")
+    return _truthy(_getenv("KAM_IMPORT_DRY_RUN", "0"))
 
 
 def _usermap() -> Dict[str, str]:
@@ -89,7 +220,7 @@ def _to_decimal(s) -> Decimal:
     if not s:
         return Decimal(0)
     s = s.replace(",", "").replace(" ", "")
-    s = re.sub(r"[₹$]", "", s)
+    s = re.sub(r"[₹$€£]", "", s)
     try:
         return Decimal(s)
     except Exception:
@@ -123,20 +254,6 @@ def _find_user_by_map(display_name: str, usermap: Dict[str, str]) -> Optional[Us
         return None
 
 
-def _read_tab(ws_name: str) -> Tuple[List[str], List[List[str]]]:
-    sh = _open_sheet()
-    try:
-        ws = sh.worksheet(ws_name)
-    except gspread.WorksheetNotFound:
-        raise RuntimeError(f"Worksheet not found: {ws_name}")
-    values = ws.get_all_values()
-    if not values:
-        return [], []
-    headers = [_norm_header(h) for h in values[0]]
-    rows = values[1:]
-    return headers, rows
-
-
 def _index(headers: List[str]) -> Dict[str, int]:
     return {h: i for i, h in enumerate(headers)}
 
@@ -148,6 +265,51 @@ def _col(idx: Dict[str, int], *names: str) -> Optional[int]:
             return idx[n]
     return None
 
+
+# ----------------------------
+# Tab resolution (flexible)
+# ----------------------------
+
+def _resolve_customers_tab() -> str:
+    return _tab_env(
+        "KAM_TAB_CUSTOMERS",
+        default="Customer Details",
+        aliases=["KAM_CUSTOMERS_TAB"],
+        fallbacks=_csv(_getenv("KAM_TAB_CUSTOMERS_FALLBACKS", "Customer Details")),
+    )
+
+
+def _resolve_sales_tab() -> str:
+    # Prefer Sales (F) first, then Sheet1, then Front End
+    return _tab_env(
+        "KAM_TAB_SALES",
+        default="Sales (F)",
+        aliases=["KAM_SALES_TAB", "KAM_TAB_INVOICES", "KAM_INVOICES_TAB"],
+        fallbacks=_csv(_getenv("KAM_TAB_SALES_FALLBACKS", "Sales (F),Sheet1,Front End")),
+    )
+
+
+def _resolve_leads_tab() -> str:
+    return _tab_env(
+        "KAM_TAB_LEADS",
+        default="Enquiry (F)",
+        aliases=["KAM_LEADS_TAB"],
+        fallbacks=_csv(_getenv("KAM_TAB_LEADS_FALLBACKS", "Enquiry (F),Enquiry")),
+    )
+
+
+def _resolve_overdues_tab() -> str:
+    return _tab_env(
+        "KAM_TAB_OVERDUES",
+        default="Overdues",
+        aliases=["KAM_OVERDUES_TAB"],
+        fallbacks=_csv(_getenv("KAM_TAB_OVERDUES_FALLBACKS", "Overdues")),
+    )
+
+
+# ----------------------------
+# ImportStats + importers
+# ----------------------------
 
 @dataclass
 class ImportStats:
@@ -172,40 +334,43 @@ class ImportStats:
             f"Skipped: {self.skipped}",
         ]
         if self.unknown_kam:
-            parts.append("Unknown KAM(s): " + ", ".join(self.unknown_kam[:6]) + ("…" if len(self.unknown_kam) > 6 else ""))
+            parts.append(
+                "Unknown KAM(s): " + ", ".join(self.unknown_kam[:6]) + ("…" if len(self.unknown_kam) > 6 else "")
+            )
         if self.notes:
             parts.append("Notes: " + " | ".join(self.notes[:4]) + ("…" if len(self.notes) > 4 else ""))
         return " | ".join(parts)
 
 
-# ---- importers below unchanged (uses _open_sheet) ----
-
 def import_customers(stats: ImportStats):
-    tab = _getenv("KAM_TAB_CUSTOMERS", "Customer Details")
+    tab = _resolve_customers_tab()
     headers, rows = _read_tab(tab)
-    if not headers:
-        stats.notes.append("Customers: empty sheet")
+    if not headers or not rows:
+        stats.notes.append(f"Customers: empty sheet ({tab})")
         return
     idx = _index(headers)
     c_customer = _col(idx, "Customer Name", "Customer", "name")
     c_kam = _col(idx, "KAM Name", "KAM", "primary_kam_username")
     if c_customer is None or c_kam is None:
-        stats.notes.append("Customers: required columns missing (Customer Name / KAM Name)")
+        stats.notes.append(f"Customers: required columns missing in ({tab})")
         return
+
     c_addr = _col(idx, "Address", "address")
     c_email = _col(idx, "Email", "email")
     c_mobile = _col(idx, "Mobile No", "Mobile", "mobile")
     c_credit_limit = _col(idx, "Credit Limit", "credit_limit")
     c_credit_days = _col(idx, "Agreed Credit Period", "agreed_credit_period_days", "Agreed Credit Period ")
+
     usermap = _usermap()
     dry = _dry_run()
 
     for r in rows:
-        name = (r[c_customer] if c_customer is not None and c_customer < len(r) else "").strip()
+        name = (r[c_customer] if c_customer < len(r) else "").strip()
         if not name:
             stats.skipped += 1
             continue
-        kam_disp = r[c_kam] if c_kam is not None and c_kam < len(r) else ""
+
+        kam_disp = r[c_kam] if c_kam < len(r) else ""
         kam = _find_user_by_map(kam_disp, usermap)
         if not kam and kam_disp:
             stats.add_unknown(kam_disp)
@@ -246,11 +411,12 @@ def import_customers(stats: ImportStats):
 
 
 def import_sales(stats: ImportStats):
-    tab = _getenv("KAM_SALES_TAB", "Sheet1")
+    tab = _resolve_sales_tab()
     headers, rows = _read_tab(tab)
-    if not headers:
-        stats.notes.append("Sales: empty sheet")
+    if not headers or not rows:
+        stats.notes.append(f"Sales: empty sheet ({tab})")
         return
+
     idx = _index(headers)
     c_kam = _col(idx, "KAM Name", "KAM", "kam_username")
     c_customer = _col(idx, "Customer Name", "Consignee Name", "Buyer's Name", "Buyer’s Name", "Buyer\'s Name", "customer_name")
@@ -258,9 +424,11 @@ def import_sales(stats: ImportStats):
     c_qty = _col(idx, "QTY", "Qty(MT)", "Quantity", "qty_mt")
     c_val = _col(idx, "Invoice Value With GST", "Invoice Value with GST", "Invoice Value", "revenue_gst")
     c_invno = _col(idx, "Invoice Number", "Invoice No", "invoice_number")
+
     if None in (c_kam, c_date, c_val):
-        stats.notes.append("Sales: required columns missing (KAM Name / Invoice Date / Invoice Value With GST)")
+        stats.notes.append(f"Sales: required columns missing in ({tab})")
         return
+
     usermap = _usermap()
     dry = _dry_run()
 
@@ -271,21 +439,27 @@ def import_sales(stats: ImportStats):
             stats.add_unknown(kam_disp)
             stats.skipped += 1
             continue
+
         inv_date = _parse_date(r[c_date] if c_date < len(r) else "")
         if not inv_date:
             stats.skipped += 1
             continue
+
         cust_name = (r[c_customer] if c_customer is not None and c_customer < len(r) else "").strip()
         if not cust_name:
             stats.skipped += 1
             continue
+
         qty_mt = _to_decimal(r[c_qty]) if c_qty is not None and c_qty < len(r) else Decimal(0)
         value_gst = _to_decimal(r[c_val] if c_val < len(r) else "0")
         inv_no = (r[c_invno] if c_invno is not None and c_invno < len(r) else "").strip()
+
         row_uuid = inv_no or _hash_row("sales", tab, cust_name, kam.username, str(inv_date), str(qty_mt), str(value_gst))
+
         if dry:
             stats.sales_upserted += 1
             continue
+
         with transaction.atomic():
             cust, _ = Customer.objects.get_or_create(name=cust_name)
             inv, created = InvoiceFact.objects.get_or_create(
@@ -317,15 +491,17 @@ def import_sales(stats: ImportStats):
                     changed = True
                 if changed:
                     inv.save()
+
             stats.sales_upserted += 1
 
 
 def import_leads(stats: ImportStats):
-    tab = _getenv("KAM_TAB_LEADS", "Enquiry (F)")
+    tab = _resolve_leads_tab()
     headers, rows = _read_tab(tab)
-    if not headers:
-        stats.notes.append("Leads: empty sheet")
+    if not headers or not rows:
+        stats.notes.append(f"Leads: empty sheet ({tab})")
         return
+
     idx = _index(headers)
     c_ts = _col(idx, "Timestamp", "Date of Enquiry", "doe")
     c_kam = _col(idx, "KAM Name", "KAM", "kam_username")
@@ -335,9 +511,11 @@ def import_leads(stats: ImportStats):
     c_remarks = _col(idx, "Remarks", "remarks")
     c_grade = _col(idx, "Grade", "grade")
     c_size = _col(idx, "Size", "Size(MM)", "size")
+
     if None in (c_ts, c_kam, c_qty, c_status):
-        stats.notes.append("Leads: required columns missing (Timestamp/KAM Name/Qty (MT)/Status)")
+        stats.notes.append(f"Leads: required columns missing in ({tab})")
         return
+
     usermap = _usermap()
     dry = _dry_run()
 
@@ -348,22 +526,28 @@ def import_leads(stats: ImportStats):
             stats.add_unknown(kam_disp)
             stats.skipped += 1
             continue
+
         doe = _parse_date(r[c_ts] if c_ts < len(r) else "")
         if not doe:
             stats.skipped += 1
             continue
+
         qty_mt = _to_decimal(r[c_qty] if c_qty < len(r) else "0")
         status = (r[c_status] if c_status < len(r) else "").strip().upper()
         if status not in {"OPEN", "NEGOTIATION", "WON", "LOST"}:
             status = "OPEN"
+
         cust_name = (r[c_customer] if c_customer is not None and c_customer < len(r) else "").strip()
         grade = (r[c_grade] if c_grade is not None and c_grade < len(r) else None) or None
         size = (r[c_size] if c_size is not None and c_size < len(r) else None) or None
         remarks = (r[c_remarks] if c_remarks is not None and c_remarks < len(r) else None) or None
+
         row_uuid = _hash_row("lead", tab, kam.username, str(doe), cust_name, str(qty_mt), status, str(grade), str(size))
+
         if dry:
             stats.leads_upserted += 1
             continue
+
         with transaction.atomic():
             cust = None
             if cust_name:
@@ -385,11 +569,12 @@ def import_leads(stats: ImportStats):
 
 
 def import_overdues(stats: ImportStats):
-    tab = _getenv("KAM_TAB_OVERDUES", "Overdues")
+    tab = _resolve_overdues_tab()
     headers, rows = _read_tab(tab)
-    if not headers:
-        stats.notes.append("Overdues: empty sheet")
+    if not headers or not rows:
+        stats.notes.append(f"Overdues: empty sheet ({tab})")
         return
+
     idx = _index(headers)
     c_customer = _col(idx, "Customer Name", "Customer", "customer_name")
     c_overdue = _col(idx, "Overdues (Rs)", "Overdue", "overdue")
@@ -398,9 +583,11 @@ def import_overdues(stats: ImportStats):
     a31 = _col(idx, "31-60", "ageing_31_60")
     a61 = _col(idx, "61-90", "ageing_61_90")
     a90 = _col(idx, "90+", "ageing_90_plus")
+
     if c_customer is None or c_overdue is None:
-        stats.notes.append("Overdues: required columns missing (Customer Name/Overdues (Rs))")
+        stats.notes.append(f"Overdues: required columns missing in ({tab})")
         return
+
     dry = _dry_run()
     snap_date = timezone.localdate()
     totals: Dict[str, Dict[str, Decimal]] = {}
@@ -441,15 +628,30 @@ def import_overdues(stats: ImportStats):
 
 
 def run_sync_now() -> ImportStats:
+    """
+    Runs a full sync (controlled by env).
+    """
     stats = ImportStats()
-    import_customers(stats)
-    import_sales(stats)
-    import_leads(stats)
-    import_overdues(stats)
+    sections = resolve_sections()
+
+    if "customers" in sections:
+        import_customers(stats)
+    if "sales" in sections:
+        import_sales(stats)
+    if "leads" in sections:
+        import_leads(stats)
+    if "overdues" in sections:
+        import_overdues(stats)
+
     return stats
 
 
+# ----------------------------
+# Step sync (paged) - keep existing behavior
+# ----------------------------
+
 BATCH_SIZE = 50
+
 
 def _cursor(current: Optional[str], total_rows: int) -> Tuple[int, Optional[str]]:
     start = int(current) if current else 2
@@ -483,14 +685,6 @@ def _pick(idm: Dict[str, int], *names: str) -> Optional[int]:
             if re.fullmatch(n, k, re.IGNORECASE):
                 return idm[k]
     return None
-
-
-def _ws_by_name(tab: str):
-    sh = _open_sheet()
-    try:
-        return sh.worksheet(tab)
-    except gspread.WorksheetNotFound:
-        raise RuntimeError(f"Worksheet not found: {tab}")
 
 
 def _process_page(tab: str, cursor: Optional[str], handler) -> Tuple[int, Optional[str]]:
@@ -682,10 +876,10 @@ def step_sync(intent: SyncIntent) -> Dict:
         return {"last_customer_cursor": None, "last_invoice_cursor": None, "last_lead_cursor": None, "last_overdue_cursor": None, "done": True}
 
     tabs = {
-        "customers": _getenv("KAM_TAB_CUSTOMERS", "Customer Details"),
-        "invoices": _getenv("KAM_SALES_TAB", "Sheet1"),
-        "leads": _getenv("KAM_TAB_LEADS", "Enquiry (F)"),
-        "overdues": _getenv("KAM_TAB_OVERDUES", "Overdues"),
+        "customers": _resolve_customers_tab(),
+        "invoices": _resolve_sales_tab(),
+        "leads": _resolve_leads_tab(),
+        "overdues": _resolve_overdues_tab(),
     }
 
     order = [

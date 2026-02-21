@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
-from dataclasses import dataclass
-from datetime import datetime
-from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional
 
-from django.db import transaction
 from django.utils import timezone
 
-from apps.common.google_auth import GoogleCredentialError, get_google_credentials
-from .models import Customer, InvoiceFact
+# IMPORTANT:
+# This module is a stable entrypoint for the rest of the app (views/urls/etc.)
+# while delegating the real work to sheets_adapter, which supports multiple tabs
+# and flexible schemas.
+
+from apps.common.google_auth import GoogleCredentialError
+from . import sheets_adapter
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_WORKSHEET_NAME = os.getenv("KAM_SALES_WORKSHEET", "Sales")
 SHEET_ID_ENV = "KAM_SALES_SHEET_ID"
 
 
@@ -29,202 +28,57 @@ def _require_env(name: str) -> str:
     return val
 
 
-def _get_gspread_client():
-    try:
-        import gspread  # type: ignore
-    except ModuleNotFoundError as e:
-        raise RuntimeError("gspread is not installed. Add `gspread` and `google-auth` to requirements.") from e
-
-    bundle = get_google_credentials(
-        scopes=[
-            "https://www.googleapis.com/auth/spreadsheets.readonly",
-            "https://www.googleapis.com/auth/drive.readonly",
-        ]
-    )
-    return gspread.authorize(bundle.credentials)
-
-
-def _open_worksheet(sheet_id: str, worksheet_name: str):
-    gc = _get_gspread_client()
-    sh = gc.open_by_key(sheet_id)
-    return sh.worksheet(worksheet_name)
-
-
-def _norm_str(v: Any) -> str:
-    return "" if v is None else str(v).strip()
-
-
-def _parse_decimal(v: Any) -> Optional[Decimal]:
-    s = _norm_str(v)
-    if not s:
-        return None
-    s = s.replace(",", "")
-    for ch in ["₹", "$", "€", "£"]:
-        s = s.replace(ch, "")
-    s = s.strip()
-    try:
-        return Decimal(s)
-    except (InvalidOperation, ValueError):
-        return None
-
-
-def _parse_date(v: Any) -> Optional[datetime]:
-    if isinstance(v, datetime):
-        return v if timezone.is_aware(v) else timezone.make_aware(v)
-
-    s = _norm_str(v)
-    if not s:
-        return None
-
-    try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        return dt if timezone.is_aware(dt) else timezone.make_aware(dt)
-    except ValueError:
-        pass
-
-    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y"):
-        try:
-            dt = datetime.strptime(s, fmt)
-            return timezone.make_aware(dt)
-        except ValueError:
-            continue
-
-    return None
-
-
-def _stable_hash(parts: Sequence[Any]) -> str:
-    material = "||".join(_norm_str(p) for p in parts)
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
-
-
-def _safe_row_uuid(inv_no: str, *fallback_parts: Any) -> str:
-    inv_no = _norm_str(inv_no)
-    if inv_no:
-        return hashlib.sha256(inv_no.encode("utf-8")).hexdigest()
-    return _stable_hash(fallback_parts)
-
-
-@dataclass(frozen=True)
-class SheetRow:
-    row_uuid: str
-    invoice_no: str
-    invoice_date: Optional[datetime]
-    customer_name: str
-    amount: Optional[Decimal]
-    raw: Dict[str, Any]
-
-
-def _fetch_sheet_records(sheet_id: str, worksheet_name: str) -> List[Dict[str, Any]]:
-    ws = _open_worksheet(sheet_id, worksheet_name)
-    return ws.get_all_records()  # type: ignore
-
-
-def _map_row(rec: Dict[str, Any]) -> Optional[SheetRow]:
-    inv_no = _norm_str(rec.get("Invoice No") or rec.get("Invoice") or rec.get("Inv No") or rec.get("inv_no"))
-    cust = _norm_str(rec.get("Customer") or rec.get("Customer Name") or rec.get("Party") or rec.get("customer"))
-    amt = _parse_decimal(rec.get("Amount") or rec.get("Total") or rec.get("Net") or rec.get("amount"))
-    dt = _parse_date(rec.get("Date") or rec.get("Invoice Date") or rec.get("invoice_date"))
-
-    if not inv_no and not cust and amt is None and dt is None:
-        return None
-
-    if not cust:
-        logger.warning("Skipping row: customer blank. Record=%s", rec)
-        return None
-
-    row_uuid = _safe_row_uuid(inv_no, cust, amt, dt)
-
-    return SheetRow(
-        row_uuid=row_uuid,
-        invoice_no=inv_no,
-        invoice_date=dt,
-        customer_name=cust,
-        amount=amt,
-        raw=rec,
-    )
-
-
-@transaction.atomic
-def import_sales_records(records: Sequence[Dict[str, Any]]) -> Tuple[int, int]:
-    created = 0
-    updated = 0
-
-    for rec in records:
-        row = _map_row(rec)
-        if row is None:
-            continue
-
-        customer, _ = Customer.objects.get_or_create(name=row.customer_name)
-
-        defaults: Dict[str, Any] = {"customer": customer}
-
-        if hasattr(InvoiceFact, "invoice_no"):
-            defaults["invoice_no"] = row.invoice_no
-        if hasattr(InvoiceFact, "invoice_date"):
-            defaults["invoice_date"] = row.invoice_date.date() if row.invoice_date else None
-        if hasattr(InvoiceFact, "amount"):
-            defaults["amount"] = row.amount
-
-        obj, was_created = InvoiceFact.objects.update_or_create(
-            row_uuid=row.row_uuid,
-            defaults=defaults,
-        )
-        created += 1 if was_created else 0
-        updated += 0 if was_created else 1
-
-    return created, updated
-
-
 def run_sync_now(*, worksheet_name: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Backwards-compatible sync entrypoint.
+
+    - If worksheet_name is provided, it's treated as an override for SALES tab only.
+      (We set env vars for compatibility with existing code paths.)
+    - Otherwise, tabs are resolved from env (supports AUTO mode + fallbacks).
+    - Returns a dict suitable for UI banners/logging.
+    """
     sheet_id = _require_env(SHEET_ID_ENV)
-    ws_name = worksheet_name or DEFAULT_WORKSHEET_NAME
+
+    # NOTE: This is process-global. Kept only for backwards compatibility.
+    # If you expect high concurrency and want to avoid this, prefer configuring env vars
+    # (KAM_TAB_SALES / KAM_TAB_SALES_FALLBACKS) instead of passing worksheet_name.
+    if worksheet_name:
+        os.environ["KAM_TAB_SALES"] = worksheet_name  # new canonical key
+        os.environ["KAM_SALES_TAB"] = worksheet_name  # old key still recognized
 
     try:
-        records = _fetch_sheet_records(sheet_id, ws_name)
+        stats = sheets_adapter.run_sync_now()
     except GoogleCredentialError as e:
+        # keep the same error type for callers that expect it
         raise GoogleCredentialError(str(e)) from e
 
-    created, updated = import_sales_records(records)
-
-    result = {
-        "worksheet": ws_name,
+    result: Dict[str, Any] = {
         "sheet_id": sheet_id,
-        "records_seen": len(records),
-        "created": created,
-        "updated": updated,
+        "tabs_used": sheets_adapter.resolve_tabs_for_logging(),
+        "sections_enabled": sheets_adapter.resolve_sections(),
         "timestamp": timezone.now().isoformat(),
+        "summary": stats.as_message(),
+        # detailed counts (useful for UI/debug)
+        "customers_upserted": stats.customers_upserted,
+        "sales_upserted": stats.sales_upserted,
+        "leads_upserted": stats.leads_upserted,
+        "overdues_upserted": stats.overdues_upserted,
+        "skipped": stats.skipped,
+        "unknown_kam": stats.unknown_kam,
+        "notes": stats.notes,
     }
-    logger.info("KAM sheet sync complete: %s", result)
+    logger.info("KAM sync complete: %s", result)
     return result
 
 
-def step_sync(*, worksheet_name: Optional[str] = None, max_rows: int = 200, offset: int = 0) -> Dict[str, Any]:
-    sheet_id = _require_env(SHEET_ID_ENV)
-    ws_name = worksheet_name or DEFAULT_WORKSHEET_NAME
+def step_sync(intent, *args, **kwargs) -> Dict[str, Any]:
+    """
+    Backwards-compatible step sync entrypoint.
 
-    try:
-        records = _fetch_sheet_records(sheet_id, ws_name)
-    except GoogleCredentialError as e:
-        raise GoogleCredentialError(str(e)) from e
+    Your views expect sheets.step_sync(...) to exist.
+    Delegate to sheets_adapter.step_sync(intent) which manages paging cursors
+    stored on the SyncIntent model.
 
-    total = len(records)
-    batch = records[offset : offset + max_rows]
-    created, updated = import_sales_records(batch)
-
-    next_offset = offset + len(batch)
-    done = next_offset >= total
-
-    result = {
-        "worksheet": ws_name,
-        "sheet_id": sheet_id,
-        "records_seen": total,
-        "processed": len(batch),
-        "offset": offset,
-        "next_offset": None if done else next_offset,
-        "done": done,
-        "created": created,
-        "updated": updated,
-        "timestamp": timezone.now().isoformat(),
-    }
-    logger.info("KAM sheet step sync: %s", result)
-    return result
+    Signature kept permissive (*args/**kwargs) so older callers won't break.
+    """
+    return sheets_adapter.step_sync(intent)

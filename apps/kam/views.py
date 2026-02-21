@@ -2832,7 +2832,9 @@ def collections_plan(request: HttpRequest) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------
-# Sync endpoints (UPDATED to match SyncIntent cursor fields + flexible step_sync signature)
+# Sync endpoints (FIXED to match new sheets.py behavior)
+#   - run_sync_now(): now returns dict with "summary" and per-section counters
+#   - step_sync(intent): should be called with SyncIntent; it updates cursor fields itself
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_sync_now")
@@ -2840,11 +2842,18 @@ def sync_now(request: HttpRequest) -> HttpResponse:
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
     try:
-        stats = sheets.run_sync_now()
-        messages.success(
-            request,
-            f"Sync complete. Seen={stats.get('records_seen')} Created={stats.get('created')} Updated={stats.get('updated')}",
-        )
+        stats = sheets.run_sync_now() or {}
+        # Prefer new format: summary; fall back to legacy keys if present
+        summary = stats.get("summary")
+        if not summary:
+            seen = stats.get("records_seen")
+            created = stats.get("created")
+            updated = stats.get("updated")
+            if any(v is not None for v in (seen, created, updated)):
+                summary = f"Seen={seen} Created={created} Updated={updated}"
+            else:
+                summary = "Sync complete."
+        messages.success(request, f"Sync complete. {summary}")
     except Exception as e:
         messages.error(request, f"Sync failed: {e}")
     return redirect(reverse("kam:dashboard"))
@@ -2874,13 +2883,20 @@ def sync_step(request: HttpRequest) -> HttpResponse:
 
     token = (request.GET.get("token") or request.POST.get("token") or "").strip()
 
+    # Convenience: legacy POST without token runs a full sync
     if request.method == "POST" and not token:
         try:
-            stats = sheets.run_sync_now()
-            messages.success(
-                request,
-                f"Sync complete. Seen={stats.get('records_seen')} Created={stats.get('created')} Updated={stats.get('updated')}",
-            )
+            stats = sheets.run_sync_now() or {}
+            summary = stats.get("summary")
+            if not summary:
+                seen = stats.get("records_seen")
+                created = stats.get("created")
+                updated = stats.get("updated")
+                if any(v is not None for v in (seen, created, updated)):
+                    summary = f"Seen={seen} Created={created} Updated={updated}"
+                else:
+                    summary = "Sync complete."
+            messages.success(request, f"Sync complete. {summary}")
         except Exception as e:
             messages.error(request, f"Sync failed: {e}")
         return redirect(reverse("kam:dashboard"))
@@ -2889,80 +2905,26 @@ def sync_step(request: HttpRequest) -> HttpResponse:
         return JsonResponse({"ok": False, "error": "token missing"}, status=400)
 
     intent = get_object_or_404(SyncIntent, token=token)
-    max_rows = 200
-
-    import inspect
-
-    def _call_step_sync():
-        fn = getattr(sheets, "step_sync", None)
-        if not callable(fn):
-            raise RuntimeError("sheets.step_sync is not callable")
-
-        sig = inspect.signature(fn)
-        params = set(sig.parameters.keys())
-
-        cursor_payload = {
-            "last_customer_cursor": intent.last_customer_cursor,
-            "last_invoice_cursor": intent.last_invoice_cursor,
-            "last_lead_cursor": intent.last_lead_cursor,
-            "last_overdue_cursor": intent.last_overdue_cursor,
-        }
-
-        if "intent" in params:
-            kwargs = {}
-            if "max_rows" in params:
-                kwargs["max_rows"] = max_rows
-            return fn(intent=intent, **kwargs)
-
-        if any(k in params for k in cursor_payload.keys()):
-            kwargs = {}
-            if "max_rows" in params:
-                kwargs["max_rows"] = max_rows
-            for k, v in cursor_payload.items():
-                if k in params:
-                    kwargs[k] = v
-            return fn(**kwargs)
-
-        if "max_rows" in params and "offset" in params:
-            offset = int((intent.step_count or 0) * max_rows)
-            return fn(max_rows=max_rows, offset=offset)
-
-        return fn()
 
     try:
         intent.status = SyncIntent.STATUS_RUNNING
         intent.step_count = int(intent.step_count or 0) + 1
-        intent.save(update_fields=["status", "step_count", "updated_at"])
+        intent.last_error = ""
+        intent.save(update_fields=["status", "step_count", "last_error", "updated_at"])
 
-        result = _call_step_sync()
+        # NEW: call with SyncIntent; sheets/adapter manages cursors inside intent
+        try:
+            result = sheets.step_sync(intent)
+        except TypeError:
+            # If your sheets.step_sync expects a kwarg
+            result = sheets.step_sync(intent=intent)
+
         if not isinstance(result, dict):
             raise RuntimeError("sheets.step_sync must return a dict")
 
-        next_customer = result.get("next_customer_cursor", result.get("last_customer_cursor"))
-        next_invoice = result.get("next_invoice_cursor", result.get("last_invoice_cursor"))
-        next_lead = result.get("next_lead_cursor", result.get("last_lead_cursor"))
-        next_overdue = result.get("next_overdue_cursor", result.get("last_overdue_cursor"))
-
-        updated_fields = []
-
-        if next_customer is not None and next_customer != intent.last_customer_cursor:
-            intent.last_customer_cursor = next_customer
-            updated_fields.append("last_customer_cursor")
-        if next_invoice is not None and next_invoice != intent.last_invoice_cursor:
-            intent.last_invoice_cursor = next_invoice
-            updated_fields.append("last_invoice_cursor")
-        if next_lead is not None and next_lead != intent.last_lead_cursor:
-            intent.last_lead_cursor = next_lead
-            updated_fields.append("last_lead_cursor")
-        if next_overdue is not None and next_overdue != intent.last_overdue_cursor:
-            intent.last_overdue_cursor = next_overdue
-            updated_fields.append("last_overdue_cursor")
-
         done = bool(result.get("done"))
         intent.status = SyncIntent.STATUS_SUCCESS if done else SyncIntent.STATUS_PENDING
-        updated_fields += ["status", "updated_at"]
-
-        intent.save(update_fields=sorted(set(updated_fields)))
+        intent.save(update_fields=["status", "updated_at"])
 
         return JsonResponse({"ok": True, "result": result})
     except Exception as e:
