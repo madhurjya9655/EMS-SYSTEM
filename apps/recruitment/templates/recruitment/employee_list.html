@@ -1,130 +1,404 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Employees{% endblock %}
+{% block title %}Employees (Achievers) — BOS Lakshya{% endblock %}
+{% block breadcrumb %}Employees{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h1 class="mb-0">Employees</h1>
+<style>
+  /* ── PAGE HEADER ── */
+  .page-hd {
+    display: flex; align-items: flex-start;
+    justify-content: space-between; gap: 1rem;
+    flex-wrap: wrap; margin-bottom: 20px;
+  }
+  .page-hd-left h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.45rem; font-weight: 800;
+    color: #0f172a; margin: 0 0 3px;
+    letter-spacing: -.3px;
+  }
+  .page-hd-left p { font-size: .85rem; color: #6b7280; margin: 0; }
+  .page-hd-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
+  /* ── TABLE CARD ── */
+  .emp-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,.07), 0 1px 2px rgba(0,0,0,.05);
+  }
+
+  /* ── TABLE TOOLBAR ── */
+  .emp-toolbar {
+    display: flex; align-items: center;
+    justify-content: space-between; gap: 10px;
+    padding: 14px 18px;
+    border-bottom: 1px solid #f3f4f6;
+    flex-wrap: wrap;
+  }
+  .emp-toolbar-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .emp-toolbar-title {
+    font-weight: 700; font-size: 13.5px; color: #111827;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .emp-count-badge {
+    background: #eff6ff; color: #1d4ed8;
+    border: 1px solid #bfdbfe;
+    border-radius: 999px; padding: 2px 9px;
+    font-size: 11.5px; font-weight: 700;
+  }
+
+  /* Search input */
+  .emp-search {
+    display: flex; align-items: center; gap: 7px;
+    background: #f9fafb; border: 1px solid #e5e7eb;
+    border-radius: 8px; padding: 6px 11px;
+    transition: border-color .18s, box-shadow .18s;
+  }
+  .emp-search:focus-within { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
+  .emp-search i { color: #9ca3af; font-size: 12px; }
+  .emp-search input {
+    border: none; background: none; outline: none;
+    font-size: 13px; color: #0f172a; width: 180px;
+    font-family: 'DM Sans', sans-serif;
+  }
+  .emp-search input::placeholder { color: #9ca3af; }
+
+  /* ── TABLE ── */
+  .emp-table-wrap { overflow-x: auto; }
+  .emp-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .emp-table thead th {
+    background: #f8f9fc;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 10px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: #6b7280;
+    white-space: nowrap;
+    position: sticky; top: 0; z-index: 1;
+  }
+  .emp-table thead th:first-child { border-radius: 0; }
+  .emp-table tbody tr {
+    border-bottom: 1px solid #f3f4f6;
+    transition: background .15s;
+  }
+  .emp-table tbody tr:last-child { border-bottom: none; }
+  .emp-table tbody tr:hover { background: #f8faff; }
+  .emp-table td {
+    padding: 11px 14px;
+    vertical-align: middle;
+    color: #374151;
+    font-size: 13px;
+  }
+  .emp-table td.email-col { color: #1d4ed8; font-weight: 500; }
+  .emp-table td.name-col { font-weight: 600; color: #111827; }
+
+  /* Avatar + name cell */
+  .emp-name-cell { display: flex; align-items: center; gap: 9px; }
+  .emp-avatar {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: #eff6ff; border: 1.5px solid #bfdbfe;
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 700; color: #2563eb;
+    flex-shrink: 0; overflow: hidden;
+    text-transform: uppercase;
+  }
+
+  /* CC status */
+  .cc-dot {
+    display: inline-block;
+    width: 7px; height: 7px; border-radius: 50%;
+    margin-right: 5px; vertical-align: middle;
+  }
+  .cc-dot.active { background: #10b981; }
+  .cc-dot.inactive { background: #ef4444; }
+  .cc-status { display: flex; align-items: center; gap: 0; font-size: 12.5px; }
+  .cc-status.active { color: #065f46; }
+  .cc-status.inactive { color: #991b1b; }
+
+  /* Muted dash */
+  .dash { color: #d1d5db; }
+
+  /* Action buttons */
+  .action-group { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+  .btn-edit {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 10px; border-radius: 7px;
+    background: #f8f9fc; border: 1px solid #e5e7eb;
+    color: #374151; font-size: 12px; font-weight: 600;
+    cursor: pointer; text-decoration: none;
+    transition: background .15s, border-color .15s;
+    font-family: 'DM Sans', sans-serif;
+  }
+  .btn-edit:hover { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+  .btn-del {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; border-radius: 7px;
+    background: #fff; border: 1px solid #e5e7eb;
+    color: #9ca3af; font-size: 12px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+    font-family: 'DM Sans', sans-serif;
+  }
+  .btn-del:hover { background: #fef2f2; border-color: #fecaca; color: #ef4444; }
+
+  /* Empty state */
+  .emp-empty {
+    text-align: center; padding: 56px 24px; color: #9ca3af;
+  }
+  .emp-empty i { font-size: 2.5rem; margin-bottom: 12px; display: block; color: #e5e7eb; }
+  .emp-empty p { font-size: 13.5px; margin: 0; }
+
+  /* ── BUTTONS ── */
+  .btn-neo-primary {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 8px 16px; border-radius: 9px;
+    background: #3b82f6; border: none; color: #fff;
+    font-size: 13px; font-weight: 700;
+    font-family: 'DM Sans', sans-serif; cursor: pointer;
+    transition: background .18s, box-shadow .18s, transform .12s;
+    box-shadow: 0 2px 8px rgba(59,130,246,.3);
+    text-decoration: none;
+  }
+  .btn-neo-primary:hover { background: #2563eb; color: #fff; box-shadow: 0 4px 14px rgba(37,99,235,.35); transform: translateY(-1px); }
+  .btn-neo-primary:active { transform: translateY(0); }
+
+  .btn-neo-outline {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 8px 14px; border-radius: 9px;
+    background: #fff; border: 1.5px solid #e5e7eb; color: #374151;
+    font-size: 13px; font-weight: 600;
+    font-family: 'DM Sans', sans-serif; cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+    text-decoration: none;
+  }
+  .btn-neo-outline:hover { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+
+  /* ── INFO CARD ── */
+  .info-card {
+    background: #eff6ff; border: 1px solid #bfdbfe;
+    border-radius: 12px; padding: 14px 18px;
+    margin-top: 16px; font-size: 13px; color: #1e40af;
+  }
+  .info-card h6 { font-weight: 700; font-size: 13px; margin-bottom: 8px; color: #1e40af; }
+  .info-card ul { margin: 0; padding-left: 18px; }
+  .info-card li { margin-bottom: 3px; line-height: 1.6; }
+
+  /* ── MODAL ── */
+  .neo-modal .modal-content {
+    border: 1px solid #e5e7eb; border-radius: 16px;
+    box-shadow: 0 24px 64px rgba(15,23,42,.14);
+  }
+  .neo-modal .modal-header {
+    border-bottom: 1px solid #f3f4f6; padding: 18px 22px;
+  }
+  .neo-modal .modal-title {
+    font-family: 'Syne', sans-serif; font-weight: 800;
+    font-size: 1.05rem; color: #0f172a;
+  }
+  .neo-modal .modal-body { padding: 22px; }
+  .neo-modal .modal-footer {
+    border-top: 1px solid #f3f4f6; padding: 14px 22px;
+  }
+  .neo-modal .form-label { font-weight: 600; font-size: 12.5px; color: #374151; margin-bottom: 5px; }
+  .neo-modal .form-control, .neo-modal .form-select {
+    border: 1.5px solid #e5e7eb; border-radius: 9px;
+    font-size: 13.5px; padding: 8px 12px;
+    font-family: 'DM Sans', sans-serif;
+    transition: border-color .18s, box-shadow .18s;
+  }
+  .neo-modal .form-control:focus, .neo-modal .form-select:focus {
+    border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.12); outline: none;
+  }
+  .neo-modal .form-text { font-size: 11.5px; color: #6b7280; margin-top: 4px; }
+
+  @media (max-width: 768px) {
+    .emp-search input { width: 120px; }
+    .page-hd { flex-direction: column; gap: .75rem; }
+    .page-hd-actions { width: 100%; }
+    .btn-neo-outline span { display: none; }
+  }
+</style>
+
+<!-- PAGE HEADER -->
+<div class="page-hd">
+  <div class="page-hd-left">
+    <h1>Employees <span style="color:#3b82f6">·</span> Achievers</h1>
+    <p>Manage team members, reporting officers and CC mappings</p>
+  </div>
   {% if request.user.is_superuser %}
-    <div class="btn-group">
-      <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addEmployeeModal">
-        <i class="fa fa-plus me-1"></i> Add Employee
-      </button>
-
-      <a href="{% url 'leave:cc_config' %}" class="btn btn-outline-primary">
-        <i class="fa fa-sliders-h me-1"></i> Manage CC Options
-      </a>
-
-      <a href="{% url 'leave:cc_assign' %}" class="btn btn-outline-primary">
-        <i class="fa fa-user-cog me-1"></i> Assign CC per Employee
-      </a>
-    </div>
+  <div class="page-hd-actions">
+    <a href="{% url 'leave:cc_config' %}" class="btn-neo-outline">
+      <i class="fas fa-sliders-h"></i>
+      <span>CC Options</span>
+    </a>
+    <a href="{% url 'leave:cc_assign' %}" class="btn-neo-outline">
+      <i class="fas fa-user-cog"></i>
+      <span>Assign CC</span>
+    </a>
+    <button class="btn-neo-primary" data-bs-toggle="modal" data-bs-target="#addEmployeeModal" type="button">
+      <i class="fas fa-plus"></i> Add Employee
+    </button>
+  </div>
   {% endif %}
 </div>
 
-<style>
-  .emp-table-wrap { overflow-x: auto; }
-  .emp-table th, .emp-table td { vertical-align: middle !important; white-space: nowrap; }
-  .emp-table td.col-wide { white-space: normal; }
-  .emp-table .btn-sm { font-weight: 600; }
-  .cc-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-left: 8px; }
-  .cc-active { background-color: #10b981; }
-  .cc-inactive { background-color: #ef4444; }
-  .cc-label { font-size: .875rem; }
-  .badge-role { background: #eef2ff; color: #3730a3; }
-</style>
-
-<div class="card">
-  <div class="card-body">
-    <div class="emp-table-wrap">
-      <table class="table table-striped table-hover emp-table mb-0">
-        <thead>
-          <tr>
-            <th>E-mail</th>
-            <th>Employee Name</th>
-            <th>Mobile Number</th>
-            <th>MD Name</th>
-            <th class="col-wide">To Reporting officer</th>
-            <th class="col-wide">Default CC (Mapping)</th>
-            <th>In CC Options?</th>
-            <th>Employee Designation</th>
-            <th class="text-end">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-        {% for r in rows %}
-          <tr>
-            <td>{{ r.email }}</td>
-            <td>{{ r.name }}</td>
-            <td>{{ r.mobile|default:"—" }}</td>
-            <td>{{ r.md_name|default:"—" }}</td>
-            <td class="col-wide">{{ r.reporting_officer|default:"—" }}</td>
-
-            {# Default CC is the single cc_person from ApproverMapping (optional) #}
-            <td class="col-wide">
-              {% if r.cc_label %}
-                <span class="cc-label">{{ r.cc_label }}</span>
-              {% else %}
-                <span class="text-muted">—</span>
-              {% endif %}
-            </td>
-
-            {# Whether THIS employee is available as a CC option for others #}
-            <td>
-              {% if r.cc_config_active %}
-                <span class="cc-indicator cc-active" title="Available in multi-CC selection"></span>
-                Active
-              {% else %}
-                <span class="cc-indicator cc-inactive" title="Not available in multi-CC selection"></span>
-                Inactive
-              {% endif %}
-            </td>
-
-            <td>{{ r.designation|default:"—" }}</td>
-
-            <td class="text-end">
-              {% if request.user.is_superuser %}
-                <a class="btn btn-sm btn-light border"
-                   href="{% url 'leave:approver_mapping_edit' r.user_id %}?next={{ request.get_full_path|urlencode }}">
-                  Edit Mapping
-                </a>
-
-                <form method="post"
-                      action="{% url 'recruitment:employee_delete' r.user_id %}"
-                      class="d-inline"
-                      onsubmit="return confirm('Delete {{ r.name|escapejs }} ({{ r.email|escapejs }})? This cannot be undone.');">
-                  {% csrf_token %}
-                  <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                  <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete employee">
-                    <i class="fa fa-trash"></i>
-                  </button>
-                </form>
-              {% else %}
-                <span class="text-muted">—</span>
-              {% endif %}
-            </td>
-          </tr>
-        {% empty %}
-          <tr><td colspan="9" class="text-muted">No employees.</td></tr>
-        {% endfor %}
-        </tbody>
-      </table>
+<!-- MAIN TABLE CARD -->
+<div class="emp-card">
+  <!-- Toolbar -->
+  <div class="emp-toolbar">
+    <div class="emp-toolbar-left">
+      <div class="emp-toolbar-title">
+        <i class="fas fa-users" style="color:#3b82f6;font-size:14px"></i>
+        All Employees
+        <span class="emp-count-badge">{{ rows|length }}</span>
+      </div>
     </div>
+    <div class="emp-search">
+      <i class="fas fa-magnifying-glass"></i>
+      <input type="text" id="empSearch" placeholder="Search employees…" autocomplete="off">
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="emp-table-wrap">
+    <table class="emp-table" id="empTable">
+      <thead>
+        <tr>
+          <th style="width:22%">Employee Name</th>
+          <th style="width:20%">E-mail</th>
+          <th style="width:10%">Mobile</th>
+          <th style="width:10%">MD Name</th>
+          <th style="width:15%">Reporting Officer</th>
+          <th style="width:13%">Default CC</th>
+          <th style="width:6%">CC Status</th>
+          <th style="width:10%">Designation</th>
+          {% if request.user.is_superuser %}<th style="width:1%;text-align:right">Actions</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <!-- Name + avatar -->
+          <td class="name-col">
+            <div class="emp-name-cell">
+              <div class="emp-avatar">{{ r.name|slice:":2" }}</div>
+              <span>{{ r.name }}</span>
+            </div>
+          </td>
+
+          <td class="email-col">{{ r.email }}</td>
+
+          <td>
+            {% if r.mobile %}<span>{{ r.mobile }}</span>
+            {% else %}<span class="dash">—</span>{% endif %}
+          </td>
+
+          <td>
+            {% if r.md_name %}{{ r.md_name }}
+            {% else %}<span class="dash">—</span>{% endif %}
+          </td>
+
+          <td>
+            {% if r.reporting_officer %}
+              <span style="word-break:break-word;white-space:normal">{{ r.reporting_officer }}</span>
+            {% else %}<span class="dash">—</span>{% endif %}
+          </td>
+
+          <td>
+            {% if r.cc_label %}
+              <span style="word-break:break-word;white-space:normal;font-size:12.5px">{{ r.cc_label }}</span>
+            {% else %}<span class="dash">—</span>{% endif %}
+          </td>
+
+          <td>
+            {% if r.cc_config_active %}
+              <span class="cc-status active">
+                <span class="cc-dot active"></span>Active
+              </span>
+            {% else %}
+              <span class="cc-status inactive">
+                <span class="cc-dot inactive"></span>Inactive
+              </span>
+            {% endif %}
+          </td>
+
+          <td>
+            {% if r.designation %}{{ r.designation }}
+            {% else %}<span class="dash">—</span>{% endif %}
+          </td>
+
+          {% if request.user.is_superuser %}
+          <td>
+            <div class="action-group">
+              <a class="btn-edit"
+                 href="{% url 'leave:approver_mapping_edit' r.user_id %}?next={{ request.get_full_path|urlencode }}">
+                <i class="fas fa-pen-to-square"></i> Edit
+              </a>
+              <form method="post"
+                    action="{% url 'recruitment:employee_delete' r.user_id %}"
+                    class="d-inline"
+                    onsubmit="return confirm('Delete {{ r.name|escapejs }} ({{ r.email|escapejs }})? This cannot be undone.');">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <button type="submit" class="btn-del" title="Delete employee">
+                  <i class="fas fa-trash-can"></i>
+                </button>
+              </form>
+            </div>
+          </td>
+          {% endif %}
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="{% if request.user.is_superuser %}9{% else %}8{% endif %}" style="padding:0;border:none">
+            <div class="emp-empty">
+              <i class="fas fa-users-slash"></i>
+              <p>No employees found.</p>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
 
+<!-- CC info banner (superuser only) -->
 {% if request.user.is_superuser %}
-<!-- Add Employee Modal -->
-<div class="modal fade" id="addEmployeeModal" tabindex="-1" aria-labelledby="addEmployeeLabel" aria-hidden="true">
+<div class="info-card">
+  <h6><i class="fas fa-circle-info me-1"></i> CC Configuration Guide</h6>
+  <ul>
+    <li><strong>Default CC (Mapping)</strong> — optional single person tied to the employee's approver mapping.</li>
+    <li><strong>CC Options</strong> — global pool employees can pick <em>multiple</em> CCs from per leave request.</li>
+    <li>Use <strong>CC Options</strong> to control who appears in the global pool.</li>
+    <li>Use <strong>Assign CC</strong> to set a default CC person per employee.</li>
+  </ul>
+</div>
+{% endif %}
+
+
+<!-- ── ADD EMPLOYEE MODAL ── -->
+{% if request.user.is_superuser %}
+<div class="modal fade neo-modal" id="addEmployeeModal" tabindex="-1" aria-labelledby="addEmployeeLabel" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
       <form method="post" action="{% url 'recruitment:employee_add' %}">
         {% csrf_token %}
         <input type="hidden" name="next" value="{{ request.get_full_path }}">
+
         <div class="modal-header">
-          <h5 class="modal-title" id="addEmployeeLabel">Add Employee</h5>
+          <h5 class="modal-title" id="addEmployeeLabel">
+            <i class="fas fa-user-plus me-2" style="color:#3b82f6"></i>Add Employee
+          </h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
 
@@ -132,55 +406,51 @@
           <div class="row g-3">
             <div class="col-md-6">
               <label class="form-label">E-mail <span class="text-danger">*</span></label>
-              <input type="email" class="form-control" name="email" required>
+              <input type="email" class="form-control" name="email" required placeholder="employee@company.com">
             </div>
             <div class="col-md-6">
               <label class="form-label">Employee Name <span class="text-danger">*</span></label>
-              <input type="text" class="form-control" name="name" required>
+              <input type="text" class="form-control" name="name" required placeholder="Full name">
             </div>
-
             <div class="col-md-6">
               <label class="form-label">Mobile Number</label>
-              <input type="text" class="form-control" name="mobile" placeholder="+91…">
+              <input type="text" class="form-control" name="mobile" placeholder="+91 XXXXX XXXXX">
             </div>
             <div class="col-md-6">
               <label class="form-label">MD Name</label>
-              <input type="text" class="form-control" name="md_name">
+              <input type="text" class="form-control" name="md_name" placeholder="Managing Director name">
             </div>
-
             <div class="col-md-6">
-              <label class="form-label">To Reporting officer</label>
+              <label class="form-label">Reporting Officer</label>
               <input type="text" class="form-control" name="reporting_officer" placeholder="Full name or email">
             </div>
             <div class="col-md-6">
-              <label class="form-label">Default CC (optional)</label>
-              <input type="email" class="form-control" name="cc_email" placeholder="single default CC (mapping)">
-              <div class="form-text">Employees can still add multiple CCs from the CC Options pool per request.</div>
+              <label class="form-label">Default CC <span class="text-muted fw-normal">(optional)</span></label>
+              <input type="email" class="form-control" name="cc_email" placeholder="single default CC email">
+              <div class="form-text">Employees can still add multiple CCs from the CC pool per request.</div>
             </div>
-
             <div class="col-md-6">
               <label class="form-label">Employee Designation</label>
-              <input type="text" class="form-control" name="designation">
+              <input type="text" class="form-control" name="designation" placeholder="e.g. Senior Manager">
             </div>
-
-            <div class="col-md-6">
-              <div class="form-check mt-4">
+            <div class="col-md-6 d-flex align-items-end">
+              <div class="form-check">
                 <input class="form-check-input" type="checkbox" name="add_to_cc_config" id="addToCcConfig" checked>
-                <label class="form-check-label" for="addToCcConfig">Make available in CC Options</label>
-                <small class="form-text text-muted">Adds this user to the global CC pool employees can select from.</small>
+                <label class="form-check-label fw-600" for="addToCcConfig" style="font-size:13px;font-weight:600">
+                  Make available in CC Options
+                </label>
+                <div class="form-text">Adds this user to the global CC pool.</div>
               </div>
             </div>
-          </div>
-
-          <div class="form-text mt-3">
-            After saving, you can set the approver mapping via <em>Edit Mapping</em> and manage the global CC pool via <em>Manage CC Options</em>.
           </div>
         </div>
 
         <div class="modal-footer">
-          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-          <button type="submit" class="btn btn-primary">
-            <i class="fa fa-save me-1"></i> Save
+          <button type="button" class="btn-neo-outline" data-bs-dismiss="modal">
+            <i class="fas fa-xmark"></i> Cancel
+          </button>
+          <button type="submit" class="btn-neo-primary">
+            <i class="fas fa-floppy-disk"></i> Save Employee
           </button>
         </div>
       </form>
@@ -189,15 +459,21 @@
 </div>
 {% endif %}
 
-{% if request.user.is_superuser %}
-<div class="alert alert-info mt-3">
-  <h6>CC Configuration Notes:</h6>
-  <ul class="mb-0">
-    <li><strong>Default CC (Mapping)</strong> is optional and remains a single person tied to the employee’s mapping.</li>
-    <li><strong>CC Options</strong> is the global pool from which employees can choose <em>multiple</em> CCs per leave request.</li>
-    <li>Use <strong>Manage CC Options</strong> to control who appears in that global pool.</li>
-    <li>Use <strong>Assign CC per Employee</strong> to set a default CC person if needed.</li>
-  </ul>
-</div>
-{% endif %}
+<!-- Live search JS -->
+<script>
+(function(){
+  var inp = document.getElementById('empSearch');
+  var tbody = document.querySelector('#empTable tbody');
+  if (!inp || !tbody) return;
+  inp.addEventListener('input', function(){
+    var q = inp.value.toLowerCase().trim();
+    var rows = tbody.querySelectorAll('tr');
+    rows.forEach(function(row){
+      if (row.querySelector('.emp-empty')) return;
+      var text = row.textContent.toLowerCase();
+      row.style.display = (!q || text.includes(q)) ? '' : 'none';
+    });
+  });
+})();
+</script>
 {% endblock %}

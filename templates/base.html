@@ -1,632 +1,855 @@
 <!-- FILE: templates/base.html -->
-<!-- PURPOSE: Restored Settings Section in Sidebar Navigation -->
+<!-- PURPOSE: Neo-Style Dashboard Layout Redesign -->
 <!-- UPDATED: 2026-02-XX -->
 {% load static user_filters %}
 <!DOCTYPE html>
 <html lang="en" data-theme="light">
 <head>
-  <!-- Base Meta -->
   <meta charset="utf-8">
   <meta http-equiv="x-ua-compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-
-  <!-- Force light mode for consistent UI across browsers/accounts -->
   <meta name="color-scheme" content="light">
-  <meta name="theme-color" content="#3b82f6">
-
   <title>{% block title %}BOS Lakshya{% endblock %}</title>
 
-  <!-- Ensure data-theme=light is present before CSS parses -->
-  <script>
-    (function(){ try{ document.documentElement.setAttribute('data-theme','light'); }catch(_e){} })();
-  </script>
+  <script>(function(){ try{ document.documentElement.setAttribute('data-theme','light'); }catch(_e){} })();</script>
 
-  <!-- Favicons -->
   <link rel="icon" href="{% static 'favicon.ico' %}" type="image/x-icon">
 
-  <!-- Fonts -->
+  <!-- Fonts: Syne (display) + DM Sans (body) -->
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-  <!-- Vendor CSS -->
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet" referrerpolicy="no-referrer">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
-        rel="stylesheet"
-        integrity="sha384-9ndCyUaIbzAi2FUVXJi0CjmCapSmO7SnpJef0486qhLnuZ2cdeRhO02iuK6FUUVM"
-        crossorigin="anonymous">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-9ndCyUaIbzAi2FUVXJi0CjmCapSmO7SnpJef0486qhLnuZ2cdeRhO02iuK6FUUVM" crossorigin="anonymous">
 
-  <!-- App CSS -->
   <link href="{% static 'css/custom.css' %}" rel="stylesheet">
-
   {% block head_extra %}{% endblock %}
 
   <style>
-    /* =========================
-       THEME TOKENS (brand kept same)
-       ========================= */
-    :root{
-      --primary:#3b82f6;
+    /* =============================================
+       DESIGN TOKENS
+    ============================================= */
+    :root {
+      --primary: #3b82f6;
+      --primary-light: #60a5fa;
+      --primary-dark: #2563eb;
+      --primary-soft: #eff6ff;
+      --primary-border: #bfdbfe;
 
-      --bg:#f6f8fb;
-      --surface:#ffffff;
-      --surface-alt:#f9fafb;
+      --accent: #06b6d4;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
 
-      --text:#0f172a;
-      --muted:#64748b;
-      --border:#e5e7eb;
+      --bg: #f4f6fb;
+      --surface: #ffffff;
+      --surface-alt: #f8f9fc;
+      --surface-raised: #ffffff;
 
-      --radius:12px;
-      --radius-sm:8px;
+      --text: #111827;
+      --text-secondary: #374151;
+      --muted: #6b7280;
+      --subtle: #9ca3af;
+      --border: #e5e7eb;
+      --border-light: #f3f4f6;
 
-      --header-h:72px;
-      --sidebar-w:280px;
+      --sidebar-w: 256px;
+      --sidebar-collapsed-w: 64px;
+      --topbar-h: 64px;
 
-      --shadow-1:0 1px 3px rgba(15,23,42,.08);
-      --shadow-2:0 8px 24px rgba(15,23,42,.14);
+      --radius: 12px;
+      --radius-sm: 8px;
+      --radius-xs: 6px;
+      --radius-xl: 16px;
 
-      --focus-ring: 2px solid rgba(59,130,246,.9);
+      --shadow-xs: 0 1px 2px rgba(0,0,0,.05);
+      --shadow-sm: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+      --shadow-md: 0 4px 6px -1px rgba(0,0,0,.07), 0 2px 4px -1px rgba(0,0,0,.05);
+      --shadow-lg: 0 10px 24px -3px rgba(0,0,0,.10), 0 4px 8px -2px rgba(0,0,0,.06);
 
-      /* Festive accents */
-      --gold:#d4af37;
-      --hero-grad: linear-gradient(135deg, rgba(59,130,246,1) 0%, rgba(59,130,246,.85) 50%, rgba(59,130,246,.75) 100%);
-      --hero-grad-dark: linear-gradient(135deg, rgba(37,99,235,1) 0%, rgba(37,99,235,.8) 50%, rgba(17,24,39,.85) 100%);
+      --font-display: 'Syne', sans-serif;
+      --font-body: 'DM Sans', sans-serif;
+
+      --transition: 0.2s ease;
+      --transition-slow: 0.35s ease;
     }
 
-    /* IMPORTANT: dark theme tokens apply ONLY when explicitly enabled.
-       You force light via data-theme="light". */
-    :root[data-theme="dark"]{
-      --bg:#0b1220;
-      --surface:#0b1220;
-      --surface-alt:#0b1220;
-
-      --text:#e5e7eb;
-      --muted:#9ca3af;
-      --border:#1f2937;
-
-      --shadow-1:0 1px 3px rgba(0,0,0,.7);
-      --shadow-2:0 10px 30px rgba(0,0,0,.8);
+    /* =============================================
+       GLOBAL RESET
+    ============================================= */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: var(--font-body);
+      font-size: 14px;
+      background: var(--bg);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
     }
+    a { color: inherit; text-decoration: none; }
 
-    *{box-sizing:border-box}
-    html,body{height:100%}
-    body{
-      margin:0;
-      background:var(--bg);
-      color:var(--text);
-      font-family:"Plus Jakarta Sans",system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-      -webkit-font-smoothing:antialiased;
-      -moz-osx-font-smoothing:grayscale;
-      overflow-x:hidden;
-      text-rendering:optimizeLegibility;
-    }
-    a{color:inherit;text-decoration:none}
-    a:hover{text-decoration:none}
-
-    .visually-hidden{
-      position:absolute !important;
-      width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;
+    :focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+      border-radius: var(--radius-xs);
     }
 
-    :focus-visible{
-      outline:var(--focus-ring);
-      outline-offset:2px;
-      border-radius:6px;
+    /* =============================================
+       APP SHELL
+    ============================================= */
+    .app-shell {
+      display: flex;
+      min-height: 100vh;
     }
 
-    .header{
-      position:fixed; inset:0 0 auto 0; height:var(--header-h);
-      background:var(--primary); color:#fff; z-index:1000;
-      display:flex; align-items:center; justify-content:space-between;
-      padding:0 .9rem 0 1rem; border-bottom:1px solid rgba(255,255,255,.18);
-      box-shadow:var(--shadow-2);
-    }
-    .logo{display:flex;align-items:center;gap:.75rem}
-    .logo-icon{
-      width:40px;height:40px;border-radius:10px;display:grid;place-items:center;background:rgba(255,255,255,.15);
-    }
-    .logo-icon img{max-width:28px;max-height:28px;border-radius:6px}
-    .logo-text{font-weight:700;font-size:1.05rem;letter-spacing:.2px}
-
-    .header-actions{
-      display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;justify-content:flex-end;min-width:0;
-    }
-    .branch-select{
-      background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.35); color:#fff;
-      padding:.45rem .8rem; border-radius:10px; font-size:.86rem; min-width:150px;
-    }
-    .branch-select option{background:#111827;color:#fff}
-
-    .user-menu{display:flex;align-items:center;gap:.6rem;font-size:.9rem;min-width:0}
-    .user-avatar{
-      width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.18);flex:0 0 auto;
+    /* =============================================
+       SIDEBAR
+    ============================================= */
+    .neo-sidebar {
+      position: fixed;
+      top: 0; left: 0; bottom: 0;
+      width: var(--sidebar-w);
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      z-index: 950;
+      transition: width var(--transition-slow), transform var(--transition-slow);
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
     }
 
-    .logout-btn{
-      background:#fff;border:1px solid #fff;color:var(--primary);
-      font-weight:600;padding:.45rem .9rem;border-radius:10px;font-size:.86rem;box-shadow:var(--shadow-1);white-space:nowrap;
-    }
-    .logout-btn:hover{background:#f8fafc}
-
-    .mobile-toggle{
-      display:none;background:none;border:none;color:#fff;font-size:1.15rem;cursor:pointer;
+    .neo-sidebar.collapsed {
+      width: var(--sidebar-collapsed-w);
     }
 
-    .notif-bell{
-      position:relative;
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      width:38px;height:38px;
-      border-radius:10px;
-      background:rgba(255,255,255,.14);
-      border:1px solid rgba(255,255,255,.35);
-      color:#fff;
-    }
-    .notif-bell:hover{background:rgba(255,255,255,.22)}
-    .badge-count{
-      position:absolute; top:-6px; right:-6px;
-      background:#ef4444; color:#fff; font-weight:700; font-size:.7rem; line-height:1;
-      padding:.26rem .38rem; border-radius:999px; border:2px solid var(--primary);
-      min-width:20px; text-align:center;
-    }
-    .badge-dot{
-      display:inline-block; width:8px; height:8px; border-radius:999px; background:#ef4444; vertical-align:middle; margin-left:.35rem;
-      box-shadow:0 0 0 2px #fff;
+    /* Sidebar logo area */
+    .sidebar-logo {
+      height: var(--topbar-h);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--border-light);
+      flex-shrink: 0;
+      overflow: hidden;
+      white-space: nowrap;
     }
 
-    .hero-wrap{
-      position:fixed;
-      top:var(--header-h);
-      left:0; right:0;
-      z-index:930;
-      background:var(--hero-grad);
-      border-bottom:1px solid rgba(255,255,255,.25);
-      box-shadow: 0 18px 40px rgba(2,6,23,.16);
+    .sidebar-logo-icon {
+      width: 34px; height: 34px;
+      border-radius: 10px;
+      background: var(--primary);
+      display: grid; place-items: center;
+      flex-shrink: 0;
+      box-shadow: 0 4px 12px rgba(59,130,246,.35);
+    }
+    .sidebar-logo-icon img {
+      width: 20px; height: 20px; border-radius: 5px; object-fit: contain;
+    }
+    .sidebar-logo-text {
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 1rem;
+      color: var(--text);
+      letter-spacing: -0.3px;
+      transition: opacity var(--transition);
+    }
+    .neo-sidebar.collapsed .sidebar-logo-text { opacity: 0; pointer-events: none; }
+
+    /* Sidebar scroll area */
+    .sidebar-nav {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 16px 0 24px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    .sidebar-nav::-webkit-scrollbar { width: 4px; }
+    .sidebar-nav::-webkit-scrollbar-track { background: transparent; }
+    .sidebar-nav::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    /* Section headers */
+    .nav-section-label {
+      display: block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--subtle);
+      padding: 16px 20px 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      transition: opacity var(--transition);
+    }
+    .neo-sidebar.collapsed .nav-section-label { opacity: 0; }
+
+    /* Nav items */
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 16px 9px 18px;
+      margin: 2px 10px;
+      border-radius: var(--radius-sm);
+      color: var(--muted);
+      font-weight: 500;
+      font-size: 13.5px;
+      cursor: pointer;
+      border: none;
+      background: none;
+      width: calc(100% - 20px);
+      text-align: left;
+      transition: background var(--transition), color var(--transition);
+      white-space: nowrap;
+      overflow: hidden;
+      position: relative;
+    }
+    .nav-item .nav-icon {
+      width: 18px; height: 18px;
+      display: grid; place-items: center;
+      flex-shrink: 0;
+      font-size: 14px;
+      transition: color var(--transition);
+    }
+    .nav-item .nav-label {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: opacity var(--transition);
+    }
+    .nav-item .nav-chevron {
+      font-size: 10px;
+      flex-shrink: 0;
+      transition: transform var(--transition), opacity var(--transition);
+      color: var(--subtle);
+    }
+    .neo-sidebar.collapsed .nav-label,
+    .neo-sidebar.collapsed .nav-chevron { opacity: 0; }
+    .neo-sidebar.collapsed .nav-item { justify-content: center; padding: 10px; }
+
+    .nav-item:hover {
+      background: var(--primary-soft);
+      color: var(--primary);
+    }
+    .nav-item:hover .nav-icon { color: var(--primary); }
+
+    .nav-item.active,
+    .nav-item[aria-current="page"] {
+      background: var(--primary-soft);
+      color: var(--primary);
+      font-weight: 600;
+    }
+    .nav-item.active .nav-icon { color: var(--primary); }
+    .nav-item.active::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 20%; bottom: 20%;
+      width: 3px;
+      background: var(--primary);
+      border-radius: 0 3px 3px 0;
+    }
+    .neo-sidebar.collapsed .nav-item.active::before { display: none; }
+
+    /* Submenu */
+    .submenu {
+      display: none;
+      padding: 2px 0 4px 28px;
+    }
+    .submenu .nav-item {
+      font-size: 13px;
+      padding: 7px 14px;
+      margin: 1px 10px;
+      color: var(--muted);
+    }
+    .submenu .nav-item:hover { color: var(--primary); }
+    .submenu .nav-item.active { color: var(--primary); background: var(--primary-soft); }
+
+    /* Sidebar footer / profile */
+    .sidebar-footer {
+      padding: 12px 14px;
+      border-top: 1px solid var(--border-light);
+      flex-shrink: 0;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    .sidebar-user {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      border-radius: var(--radius-sm);
+      transition: background var(--transition);
+      cursor: pointer;
+    }
+    .sidebar-user:hover { background: var(--surface-alt); }
+    .sidebar-user-avatar {
+      width: 34px; height: 34px; border-radius: 50%;
+      background: var(--primary-soft);
+      border: 2px solid var(--primary-border);
+      display: grid; place-items: center;
+      color: var(--primary);
+      font-size: 13px;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .sidebar-user-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .sidebar-user-info { overflow: hidden; transition: opacity var(--transition); }
+    .sidebar-user-name { font-weight: 600; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+    .sidebar-user-role { font-size: 11px; color: var(--subtle); }
+    .neo-sidebar.collapsed .sidebar-user-info { opacity: 0; }
+
+    /* =============================================
+       TOPBAR
+    ============================================= */
+    .neo-topbar {
+      position: fixed;
+      top: 0;
+      left: var(--sidebar-w);
+      right: 0;
+      height: var(--topbar-h);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      z-index: 900;
+      transition: left var(--transition-slow);
+      box-shadow: var(--shadow-xs);
+    }
+    .neo-topbar.sidebar-collapsed { left: var(--sidebar-collapsed-w); }
+
+    .topbar-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .topbar-toggle {
+      width: 36px; height: 36px;
+      display: grid; place-items: center;
+      border: none; background: none;
+      color: var(--muted);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background var(--transition), color var(--transition);
+      font-size: 15px;
+    }
+    .topbar-toggle:hover { background: var(--surface-alt); color: var(--text); }
+
+    .topbar-breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .topbar-breadcrumb strong { color: var(--text); font-weight: 600; }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    /* Search bar */
+    .topbar-search {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 7px 14px;
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+    .topbar-search:focus-within {
+      border-color: var(--primary-border);
+      box-shadow: 0 0 0 3px rgba(59,130,246,.08);
+    }
+    .topbar-search i { color: var(--subtle); font-size: 12px; }
+    .topbar-search input {
+      border: none; background: none; outline: none;
+      font-size: 13px; color: var(--text); font-family: var(--font-body);
+      width: 160px;
+    }
+    .topbar-search input::placeholder { color: var(--subtle); }
+
+    /* Icon buttons in topbar */
+    .topbar-icon-btn {
+      position: relative;
+      width: 36px; height: 36px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      border-radius: var(--radius-sm);
+      display: grid; place-items: center;
+      color: var(--muted);
+      cursor: pointer;
+      transition: background var(--transition), color var(--transition), border-color var(--transition);
+      font-size: 14px;
+    }
+    .topbar-icon-btn:hover { background: var(--surface-alt); color: var(--text); border-color: var(--border); }
+    .topbar-icon-btn .badge-dot {
+      position: absolute; top: 6px; right: 6px;
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--danger);
+      border: 2px solid var(--surface);
+    }
+
+    /* Profile dropdown */
+    .profile-dropdown-wrap { position: relative; }
+    .profile-btn {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 5px 10px 5px 5px;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      background: var(--surface);
+      cursor: pointer;
+      transition: background var(--transition), border-color var(--transition);
+    }
+    .profile-btn:hover { background: var(--surface-alt); border-color: var(--primary-border); }
+    .profile-avatar {
+      width: 30px; height: 30px; border-radius: 50%;
+      background: var(--primary-soft);
+      border: 2px solid var(--primary-border);
+      display: grid; place-items: center;
+      color: var(--primary);
+      font-size: 12px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .profile-btn-name { font-size: 13px; font-weight: 600; color: var(--text); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .profile-btn-chevron { color: var(--subtle); font-size: 10px; }
+
+    .profile-dropdown {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      min-width: 200px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-lg);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-6px);
+      transition: opacity var(--transition), transform var(--transition);
+      z-index: 1100;
+      overflow: hidden;
+    }
+    .profile-dropdown.open {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+    .dropdown-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border-light);
+    }
+    .dropdown-header-name { font-weight: 700; font-size: 13.5px; color: var(--text); }
+    .dropdown-header-email { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+    .dropdown-item-link {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 16px;
+      font-size: 13.5px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: background var(--transition);
+    }
+    .dropdown-item-link:hover { background: var(--surface-alt); }
+    .dropdown-item-link i { width: 16px; text-align: center; color: var(--muted); font-size: 13px; }
+    .dropdown-divider { height: 1px; background: var(--border-light); margin: 4px 0; }
+    .dropdown-item-link.danger { color: var(--danger); }
+    .dropdown-item-link.danger i { color: var(--danger); }
+
+    /* Notification badge */
+    .topbar-notif-badge {
+      position: absolute; top: -5px; right: -5px;
+      background: var(--danger); color: #fff;
+      font-size: 10px; font-weight: 700; line-height: 1;
+      padding: 2px 5px; border-radius: 999px;
+      border: 2px solid var(--surface);
+      min-width: 18px; text-align: center;
+    }
+
+    /* =============================================
+       MAIN CONTENT
+    ============================================= */
+    .app-main {
+      margin-left: var(--sidebar-w);
+      margin-top: var(--topbar-h);
+      flex: 1;
+      min-height: calc(100vh - var(--topbar-h));
+      transition: margin-left var(--transition-slow);
+    }
+    .app-main.sidebar-collapsed { margin-left: var(--sidebar-collapsed-w); }
+
+    .content-area {
+      padding: 24px;
+      min-height: calc(100vh - var(--topbar-h) - 56px);
+    }
+
+    /* =============================================
+       PAGE HEADER INSIDE CONTENT
+    ============================================= */
+    .page-header {
+      margin-bottom: 20px;
+    }
+    .page-header h1, .page-header .page-title {
+      font-family: var(--font-display);
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: var(--text);
+      margin: 0;
+    }
+    .page-header p { color: var(--muted); font-size: 13.5px; margin-top: 4px; }
+
+    /* =============================================
+       CARDS
+    ============================================= */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-sm);
+    }
+    .card-header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border-light);
+      padding: 14px 18px;
+      font-weight: 600;
+      font-size: 13.5px;
+      border-radius: var(--radius) var(--radius) 0 0;
+    }
+    .card-body { padding: 18px; }
+
+    /* =============================================
+       FORMS
+    ============================================= */
+    .form-label { font-weight: 500; font-size: 13px; color: var(--text-secondary); margin-bottom: 5px; }
+    .form-control, .form-select {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-size: 13.5px;
+      font-family: var(--font-body);
+      color: var(--text);
+      padding: 8px 12px;
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+    .form-control:focus, .form-select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(59,130,246,.1);
+      outline: none;
+    }
+    .form-control::placeholder { color: var(--subtle); }
+    .form-text { color: var(--muted); font-size: 11.5px; }
+
+    /* =============================================
+       BUTTONS
+    ============================================= */
+    .btn { border-radius: var(--radius-sm); font-weight: 600; font-size: 13.5px; font-family: var(--font-body); }
+    .btn-primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      box-shadow: 0 2px 8px rgba(59,130,246,.25);
+    }
+    .btn-primary:hover {
+      background: var(--primary-dark);
+      border-color: var(--primary-dark);
+      box-shadow: 0 4px 12px rgba(59,130,246,.35);
+    }
+    .btn-outline-secondary { border-radius: var(--radius-sm); font-size: 13.5px; }
+
+    /* =============================================
+       TABLE
+    ============================================= */
+    .table { font-size: 13.5px; }
+    .table thead th {
+      background: var(--surface-alt);
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      padding: 10px 14px;
+    }
+    .table tbody td { padding: 12px 14px; vertical-align: middle; border-color: var(--border-light); }
+    .table tbody tr:hover td { background: var(--surface-alt); }
+
+    /* =============================================
+       ALERTS / MESSAGES
+    ============================================= */
+    .alert { border-radius: var(--radius-sm); font-size: 13.5px; border: 1px solid; }
+    .alert-info { background: #eef4ff; color: #1e40af; border-color: #bfdbfe; }
+    .alert-success { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
+    .alert-warning { background: #fffbeb; color: #92400e; border-color: #fde68a; }
+    .alert-danger { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+
+    /* =============================================
+       FOOTER
+    ============================================= */
+    .app-footer {
+      text-align: center;
+      padding: 14px 24px;
+      background: var(--surface);
+      border-top: 1px solid var(--border-light);
+      font-size: 12px;
+      color: var(--subtle);
+    }
+
+    /* =============================================
+       SIDEBAR OVERLAY (mobile)
+    ============================================= */
+    .sidebar-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.35);
+      z-index: 940;
       backdrop-filter: blur(2px);
     }
-    .hero{
-      position:relative;
-      border-bottom:3px solid var(--gold);
+    .sidebar-overlay.show { display: block; }
+
+    /* =============================================
+       HERO BANNER (festive, dismissible)
+    ============================================= */
+    .hero-banner-wrap {
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 50%, var(--accent) 100%);
+      color: #fff;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero-banner-content {
+      padding: 18px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .hero-banner-text h2 { font-family: var(--font-display); font-size: 1.2rem; font-weight: 700; margin: 0; }
+    .hero-banner-text p { font-size: 13px; opacity: .85; margin: 4px 0 0; }
+    .hero-banner-dismiss {
+      background: rgba(255,255,255,.2);
+      border: 1px solid rgba(255,255,255,.4);
+      color: #fff;
+      border-radius: var(--radius-sm);
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background var(--transition);
+      flex-shrink: 0;
+    }
+    .hero-banner-dismiss:hover { background: rgba(255,255,255,.3); }
+
+    /* =============================================
+       LOADING OVERLAY
+    ============================================= */
+    .page-overlay {
+      position: fixed; inset: 0; background: rgba(255,255,255,.6);
+      backdrop-filter: blur(3px);
+      display: none; place-items: center; z-index: 1200;
+    }
+    .page-overlay.show { display: grid; }
+    .spinner {
+      width: 42px; height: 42px; border-radius: 50%;
+      border: 3px solid var(--primary-border);
+      border-top-color: var(--primary);
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* =============================================
+       SKIP LINK
+    ============================================= */
+    .skip-link { position: absolute; left: -9999px; top: -9999px; }
+    .skip-link:focus {
+      left: 1rem; top: 1rem; background: var(--primary); color: #fff;
+      padding: .5rem .75rem; border-radius: var(--radius-sm); z-index: 1100;
     }
 
-    .hero-dismiss{
-      position:absolute; top:.6rem; right:.75rem;
-      background:rgba(255,255,255,.14);
-      color:#fff; border:1px solid rgba(255,255,255,.35);
-      border-radius:12px; padding:.3rem .6rem; z-index:25; font-weight:700;
-      backdrop-filter:saturate(140%);
-    }
-    .hero-dismiss:hover{background:rgba(255,255,255,.24)}
-
-    .carousel-inner{border-bottom-left-radius:0;border-bottom-right-radius:0}
-    .hero-slide{
-      min-height:240px;
-      display:flex; align-items:center; justify-content:center;
-      padding:1.25rem .75rem 1.5rem;
-      color:#fff; position:relative; overflow:hidden;
+    /* =============================================
+       RESPONSIVE
+    ============================================= */
+    @media (max-width: 1024px) {
+      :root { --sidebar-w: 230px; }
     }
 
-    .fx-canvas{
-      position:absolute; inset:0; z-index:0; pointer-events:none;
+    @media (max-width: 768px) {
+      .neo-sidebar {
+        transform: translateX(-100%);
+        width: var(--sidebar-w) !important;
+      }
+      .neo-sidebar.mobile-open { transform: translateX(0); }
+      .neo-topbar { left: 0 !important; }
+      .app-main { margin-left: 0 !important; }
+      .content-area { padding: 16px; }
+      .topbar-search { display: none; }
+      .profile-btn-name { display: none; }
     }
 
-    .hero-head{
-      position:relative; z-index:2;
-      margin:0; text-align:center; font-weight:900;
-      font-size: clamp(1.6rem, 2.7vw + 1rem, 2.6rem);
-      letter-spacing:.3px;
-      background:linear-gradient(90deg, #fff, #ffe9a9, #fff);
-      -webkit-background-clip:text; background-clip:text; color:transparent;
-      background-size:200% auto;
-      animation: shine 6s linear infinite;
-      filter: drop-shadow(0 2px 10px rgba(0,0,0,.15));
-    }
-    @keyframes shine{
-      0%{background-position:0% 50%}
-      50%{background-position:100% 50%}
-      100%{background-position:0% 50%}
-    }
-    .hero-sub{
-      position:relative; z-index:2;
-      margin:.5rem 0 0; text-align:center; font-weight:600; opacity:.95;
-      animation: rise .8s ease forwards;
-      text-wrap: balance;
-    }
-    @keyframes rise{ from{transform:translateY(8px); opacity:0} to{transform:translateY(0); opacity:1} }
-
-    .spark{
-      position:absolute; width:6px; height:6px; border-radius:50%;
-      background:var(--gold); box-shadow:0 0 12px rgba(212,175,55,.85);
-      animation: floatUp 7s linear infinite;
-      opacity:.85; z-index:1;
-    }
-    @keyframes floatUp{
-      0%{ transform: translateY(40px) scale(.9); opacity:0 }
-      15%{ opacity:.95 }
-      100%{ transform: translateY(-260px) scale(1.25); opacity:0 }
+    @media (min-width: 769px) {
+      .mobile-only { display: none; }
     }
 
-    .sidebar{
-      position:fixed;
-      top:var(--header-h);
-      left:0;
-      width:var(--sidebar-w);
-      height:calc(100vh - var(--header-h));
-      background:var(--surface);
-      border-right:1px solid var(--border);
-      box-shadow:var(--shadow-1);
-      overflow-y:auto;
-      z-index:900;
-      transition:transform .25s ease;
-      will-change:transform;
-    }
-    .sidebar.collapsed{transform:translateX(-100%)}
-
-    .nav-section{padding:1rem 0}
-    .nav-item{
-      display:block;border:none;background:none;width:100%;text-align:left;
-      padding:.75rem 1rem;margin:.15rem .75rem;border-radius:10px;color:var(--muted);
-      font-weight:600;font-size:.93rem;transition:background .2s ease, color .2s ease, transform .15s ease; cursor:pointer;
-    }
-    .nav-item i{width:18px;margin-right:.6rem}
-    .nav-item:hover{background:#eef2ff;color:#3b82f6;transform:translateX(2px)}
-    .nav-item.active,
-    .nav-item[aria-current="page"]{
-      background:#e7efff;color:#3b82f6;border-left:3px solid #3b82f6;padding-left:calc(1rem - 3px);
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition: none !important; animation: none !important; }
     }
 
-    .submenu{display:none;margin:.2rem .6rem .6rem 1.1rem;border-left:2px solid var(--border);padding:.2rem 0}
-    .submenu .nav-item{margin:.1rem .25rem;padding:.6rem 1rem;font-weight:500;font-size:.9rem}
-
-    .main-content{
-      margin-left:var(--sidebar-w);
-      margin-top:var(--header-h);
-      padding:1.5rem;
-      min-height:calc(100vh - var(--header-h));
-      transition:margin-left .25s ease, margin-top .25s ease;
-    }
-    .main-content.expanded{margin-left:0}
-
-    .has-hero .main-content{ margin-top:calc(var(--header-h) + 260px); }
-    .has-hero .sidebar{ top:calc(var(--header-h) + 260px); height:calc(100vh - var(--header-h) - 260px); }
-
-    .page-header{
-      background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
-      padding:1.25rem 1.25rem; box-shadow:var(--shadow-1); margin-bottom:1rem;
-    }
-    .page-title{margin:0;font-size:1.5rem;font-weight:700;color:var(--text)}
-
-    .card{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-1)}
-    .card-header{background:var(--surface-alt); border-bottom:1px solid var(--border)}
-
-    .alert{border-radius:10px;border:1px solid var(--border)}
-    .alert-info{background:#eef4ff}
-
-    footer{
-      background:var(--surface);
-      border-top:1px solid var(--border);
-      text-align:center;
-      padding:1rem;
-      color:var(--muted);
-      font-size:.92rem;
-      margin-top:1.25rem;
+    @media print {
+      .neo-sidebar, .neo-topbar, .sidebar-overlay, .app-footer { display: none !important; }
+      .app-main { margin: 0 !important; }
     }
 
-    .sidebar-overlay{
-      display:none; position:fixed; top:var(--header-h); left:0; width:100vw; height:100vh;
-      background:rgba(0,0,0,.25); z-index:899;
+    /* =============================================
+       NAV TAB OVERRIDES
+    ============================================= */
+    .nav-tabs { border-bottom: 1px solid var(--border); gap: .25rem; }
+    .nav-tabs .nav-link {
+      color: var(--muted); font-weight: 500; font-size: 13.5px;
+      border: none; border-bottom: 2px solid transparent;
+      border-radius: 0; padding: .5rem .85rem;
     }
-    .sidebar.show ~ .sidebar-overlay,
-    .sidebar-overlay.show{display:block}
+    .nav-tabs .nav-link.active { color: var(--primary); border-bottom-color: var(--primary); background: none; }
+    .nav-tabs .nav-link:hover { color: var(--text); background: var(--surface-alt); border-radius: var(--radius-xs) var(--radius-xs) 0 0; }
 
-    .skip-link{position:absolute;left:-9999px;top:-9999px}
-    .skip-link:focus{
-      left:1rem; top:1rem; background:#111827; color:#fff; padding:.5rem .75rem;
-      border-radius:.5rem; z-index:1100;
-    }
+    /* Badge chips */
+    .badge { font-family: var(--font-body); font-weight: 600; border-radius: 999px; letter-spacing: 0; }
 
-    .form-label{font-weight:500;color:var(--text)}
-    .form-text{color:var(--muted);font-size:.8rem}
-
-    .form-control,.form-select{
-      background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:var(--radius-sm); font-size:.9rem;
-    }
-    .form-control:focus,.form-select:focus{
-      border-color:var(--primary); box-shadow:0 0 0 1px rgba(59,130,246,.35);
-    }
-    .form-control::placeholder{color:var(--muted);opacity:.75}
-
-    .btn-primary{
-      background:var(--primary); border-color:var(--primary); border-radius:10px; font-weight:600; font-size:.9rem;
-      padding:.45rem 1.1rem; box-shadow:var(--shadow-1);
-    }
-    .btn-primary:hover{background:#2563eb;border-color:#2563eb}
-    .btn-outline-secondary{border-radius:10px;font-size:.9rem}
-
-    .nav-tabs{border-bottom:1px solid var(--border);flex-wrap:nowrap;overflow-x:auto;gap:.25rem}
-    .nav-tabs .nav-link{white-space:nowrap}
-
-    /* Overlay loader */
-    .page-overlay{
-      position:fixed; inset:var(--header-h) 0 0 0; background:rgba(255,255,255,.55);
-      backdrop-filter:saturate(120%) blur(2px); display:none; place-items:center; z-index:1200;
-    }
-    .page-overlay.show{display:grid}
-    .spinner{width:44px;height:44px;border-radius:50%;border:4px solid #c7d2fe;border-top-color:#3b82f6;animation:spin .9s linear infinite}
-    @keyframes spin{to{transform:rotate(360deg)}}
-
-    @media (max-width:576px){
-      .nav-tabs{flex-wrap:wrap;overflow-x:hidden}
-      .nav-tabs .nav-link{flex:1 1 100%;text-align:center}
-      .btn-toolbar,.btn-group{flex-wrap:wrap;width:100%}
-      .btn-group>.btn{flex:1 1 100%;margin-bottom:.4rem}
-      .table-responsive{overflow-x:auto}
-      .hero-slide{min-height:220px}
-      .has-hero .main-content{ margin-top:calc(var(--header-h) + 240px); }
-      .has-hero .sidebar{ top:calc(var(--header-h) + 240px); height:calc(100vh - var(--header-h) - 240px); }
-    }
-
-    @media (max-width:1024px){
-      :root{ --sidebar-w:260px }
-      .header{padding:0 .75rem}
-    }
-
-    @media (max-width:768px){
-      .mobile-toggle{display:block}
-      .branch-select{display:none}
-      .user-menu span:first-child{display:none}
-      .sidebar{transform:translateX(-100%)}
-      .sidebar.show{transform:translateX(0)}
-      .main-content{margin-left:0;padding:1rem}
-      .page-header{padding:1rem}
-    }
-
-    @media (prefers-reduced-motion: reduce){
-      *{scroll-behavior:auto !important}
-      .nav-item:hover{transform:none}
-      .sidebar,.main-content{transition:none}
-      .hero-head{animation:none}
-      .hero-sub{animation:none}
-    }
-
-    @media print{
-      .sidebar,.header,.sidebar-overlay,footer,.hero-wrap{display:none !important}
-      .main-content{margin:0;padding:0}
-    }
-
-    :root[data-theme="light"]{
-      --bg:#f6f8fb;
-      --surface:#ffffff;
-      --surface-alt:#f9fafb;
-
-      --text:#0f172a;
-      --muted:#64748b;
-      --border:#e5e7eb;
-
-      --shadow-1:0 1px 3px rgba(15,23,42,.08);
-      --shadow-2:0 8px 24px rgba(15,23,42,.14);
-    }
-
-    .nav-item:hover{background:#eef2ff;color:#3b82f6}
-    .nav-item.active,
-    .nav-item[aria-current="page"]{background:#e7efff;color:#3b82f6;border-left-color:#3b82f6}
-    .alert-info{background:#eef4ff;color:var(--text)}
-    .hero-wrap{ background:var(--hero-grad); }
+    /* Toast host */
+    #toastHost { z-index: 1400; }
   </style>
 </head>
 <body>
   {% block body_start %}{% endblock %}
   <a href="#mainContent" class="skip-link">Skip to content</a>
 
-  {% url 'dashboard:home' as dashboard_home_url %}
   {% if user.is_authenticated %}
-    <div class="header" role="banner">
-      <div class="logo">
-        <button class="mobile-toggle" type="button" aria-label="Toggle sidebar" aria-controls="sidebar" aria-expanded="false" data-sidebar-toggle>
-          <i class="fas fa-bars" aria-hidden="true"></i>
-        </button>
-        <div class="logo-icon">
-          <img src="{% static 'images/bos_logo.png' %}" alt="BOS Lakshya logo" loading="lazy" decoding="async">
+
+  <div class="app-shell">
+
+    <!-- ==================== SIDEBAR ==================== -->
+    <aside class="neo-sidebar" id="neoSidebar" role="navigation" aria-label="Primary navigation">
+
+      <!-- Logo -->
+      <div class="sidebar-logo">
+        <div class="sidebar-logo-icon">
+          <img src="{% static 'images/bos_logo.png' %}" alt="BOS Lakshya" loading="lazy">
         </div>
-        <span class="logo-text">BOS Lakshya</span>
+        <span class="sidebar-logo-text">BOS Lakshya</span>
       </div>
 
-      <div class="header-actions">
-        {% if user|has_permission:"reimbursement_finance_review" or user.is_superuser %}
-          {% if FINANCE_REJECTED_RESUB_COUNT|default:0|add:0 > 0 %}
-            <a class="notif-bell" href="{% url 'reimbursement:finance_rejected_bills_queue' %}" title="Resubmitted rejected bills awaiting review" aria-label="Resubmitted rejected bills">
-              <i class="fa-regular fa-bell" aria-hidden="true"></i>
-              <span class="badge-count" aria-hidden="true">{{ FINANCE_REJECTED_RESUB_COUNT }}</span>
-            </a>
-          {% endif %}
-        {% endif %}
+      <!-- Nav -->
+      <nav class="sidebar-nav" id="sidebarNav">
 
-        <label class="visually-hidden" for="branchSelect">Branch</label>
-        <select class="branch-select" id="branchSelect" aria-label="Select branch" disabled>
-          <option>All Branches</option>
-          <option>Branch 1</option>
-          <option>Branch 2</option>
-        </select>
+        <!-- MAIN -->
+        <span class="nav-section-label">Main</span>
 
-        <div class="user-menu" role="group" aria-label="User menu">
-          <span class="text-truncate" style="max-width:14rem">{{ user.get_full_name|default:user.username }}</span>
-          <div class="user-avatar" aria-hidden="true"><i class="fas fa-user"></i></div>
-        </div>
-
-        <form method="post" action="{% url 'logout' %}" style="margin:0;" aria-label="Logout">
-          {% csrf_token %}
-          <button class="logout-btn" type="submit" aria-label="Logout from BOS Lakshya">
-            <i class="fas fa-sign-out-alt" aria-hidden="true"></i> Logout
-          </button>
-        </form>
-      </div>
-    </div>
-
-    <!-- 🎆 FESTIVE / NEW YEAR HERO CAROUSEL (dismissible) -->
-    <div class="hero-wrap" id="heroWrap" hidden>
-      <div class="hero">
-        <button class="hero-dismiss" id="heroDismiss" type="button" aria-label="Dismiss greeting">
-          <i class="fa-solid fa-xmark"></i>
-        </button>
-
-        <div id="heroCarousel" class="carousel slide carousel-fade" data-bs-ride="carousel" data-bs-interval="5200" aria-label="Highlights">
-          <div class="carousel-indicators">
-            <button type="button" data-bs-target="#heroCarousel" data-bs-slide-to="0" class="active" aria-current="true" aria-label="Slide 1"></button>
-            <button type="button" data-bs-target="#heroCarousel" data-bs-slide-to="1" aria-label="Slide 2"></button>
-            <button type="button" data-bs-target="#heroCarousel" data-bs-slide-to="2" aria-label="Slide 3"></button>
-            <button type="button" data-bs-target="#heroCarousel" data-bs-slide-to="3" aria-label="Slide 4"></button>
-          </div>
-
-          <div class="carousel-inner">
-            <div class="carousel-item active">
-              <div class="hero-slide">
-                <canvas class="fx-canvas" id="fwCanvas" aria-hidden="true"></canvas>
-                <h1 class="hero-head">Happy New Year 2026 🎉</h1>
-                <p class="hero-sub">Wishing you growth, success, and wellbeing all year long.</p>
-                <span class="spark" style="left:10%; animation-delay:.0s"></span>
-                <span class="spark" style="left:26%; animation-delay:.5s"></span>
-                <span class="spark" style="left:44%; animation-delay:1.0s"></span>
-                <span class="spark" style="left:62%; animation-delay:.2s"></span>
-                <span class="spark" style="left:78%; animation-delay:.8s"></span>
-                <span class="spark" style="left:90%; animation-delay:1.2s"></span>
-              </div>
-            </div>
-
-            <div class="carousel-item">
-              <div class="hero-slide">
-                <canvas class="fx-canvas" id="confettiCanvas" aria-hidden="true"></canvas>
-                <h2 class="hero-head">Small Wins → Big Results</h2>
-                <p class="hero-sub">Celebrate progress daily. Keep moving forward 🚀</p>
-                <span class="spark" style="left:18%; animation-delay:.3s"></span>
-                <span class="spark" style="left:33%; animation-delay:1.1s"></span>
-                <span class="spark" style="left:55%; animation-delay:.6s"></span>
-                <span class="spark" style="left:72%; animation-delay:1.4s"></span>
-                <span class="spark" style="left:88%; animation-delay:.9s"></span>
-              </div>
-            </div>
-
-            <div class="carousel-item">
-              <div class="hero-slide">
-                <h2 class="hero-head">Thank You, Team!</h2>
-                <p class="hero-sub">Together we go farther. Let’s make 2026 remarkable.</p>
-                <span class="spark" style="left:14%; animation-delay:.2s"></span>
-                <span class="spark" style="left:31%; animation-delay:1.1s"></span>
-                <span class="spark" style="left:49%; animation-delay:.1s"></span>
-                <span class="spark" style="left:66%; animation-delay:.8s"></span>
-                <span class="spark" style="left:84%; animation-delay:1.3s"></span>
-              </div>
-            </div>
-
-            <div class="carousel-item">
-              <div class="hero-slide">
-                <h2 class="hero-head">Focus • Learn • Grow</h2>
-                <p class="hero-sub">Set clear weekly goals and track them in BOS Lakshya.</p>
-                <span class="spark" style="left:12%; animation-delay:.1s"></span>
-                <span class="spark" style="left:28%; animation-delay:.7s"></span>
-                <span class="spark" style="left:47%; animation-delay:1.0s"></span>
-                <span class="spark" style="left:69%; animation-delay:.4s"></span>
-                <span class="spark" style="left:86%; animation-delay:1.2s"></span>
-              </div>
-            </div>
-          </div>
-
-          <button class="carousel-control-prev" type="button" data-bs-target="#heroCarousel" data-bs-slide="prev" aria-label="Previous">
-            <span class="carousel-control-prev-icon" aria-hidden="true"></span>
-          </button>
-          <button class="carousel-control-next" type="button" data-bs-target="#heroCarousel" data-bs-slide="next" aria-label="Next">
-            <span class="carousel-control-next-icon" aria-hidden="true"></span>
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <nav class="sidebar" id="sidebar" role="navigation" aria-label="Primary">
-      <div class="nav-section">
         <a href="{% url 'dashboard:home' %}"
            class="nav-item {% if request.resolver_match.app_name == 'dashboard' and request.resolver_match.url_name == 'home' %}active{% endif %}"
            {% if request.resolver_match.app_name == 'dashboard' and request.resolver_match.url_name == 'home' %}aria-current="page"{% endif %}>
-          <i class="fas fa-tachometer-alt" aria-hidden="true"></i> Dashboard
+          <span class="nav-icon"><i class="fas fa-house" aria-hidden="true"></i></span>
+          <span class="nav-label">Dashboard</span>
         </a>
 
+        <!-- HR -->
         {% if user|has_permission:"list_users" or user|has_group:"HR" or user.is_superuser %}
+        <span class="nav-section-label">HR</span>
         <a href="{% url 'recruitment:employee_list' %}"
            class="nav-item {% if request.resolver_match.app_name == 'recruitment' and request.resolver_match.url_name == 'employee_list' %}active{% endif %}"
            {% if request.resolver_match.app_name == 'recruitment' and request.resolver_match.url_name == 'employee_list' %}aria-current="page"{% endif %}>
-          <i class="fas fa-users" aria-hidden="true"></i> BOS Employees (Achievers)
+          <span class="nav-icon"><i class="fas fa-users" aria-hidden="true"></i></span>
+          <span class="nav-label">Employees (Achievers)</span>
         </a>
         {% endif %}
 
         {% if user|has_any_permission:"leave_list,leave_apply,leave_pending_manager" or user|has_group:"Manager" or user|has_group:"HR" or user.is_superuser %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="leaveSubmenu" data-submenu-toggle data-submenu-key="leave">
-          <i class="fas fa-calendar-day" aria-hidden="true"></i> Leave Application (Vishram Register) <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <span class="nav-icon"><i class="fas fa-calendar-day" aria-hidden="true"></i></span>
+          <span class="nav-label">Leave (Vishram Register)</span>
+          <i class="fas fa-chevron-down nav-chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="leaveSubmenu" role="group" aria-label="Leave Application">
+        <div class="submenu" id="leaveSubmenu" role="group">
           {% if user|has_any_permission:"leave_list,leave_apply" %}
-          <a href="{% url 'leave:dashboard' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'dashboard' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'dashboard' %}aria-current="page"{% endif %}>
-            <i class="fas fa-gauge" aria-hidden="true"></i> My Leave Dashboard
+          <a href="{% url 'leave:dashboard' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'dashboard' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-gauge" aria-hidden="true"></i></span>
+            <span class="nav-label">My Leave Dashboard</span>
           </a>
-          <a href="{% url 'leave:apply_leave' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'apply_leave' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'apply_leave' %}aria-current="page"{% endif %}>
-            <i class="fas fa-plus-circle" aria-hidden="true"></i> Apply Leave
+          <a href="{% url 'leave:apply_leave' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'apply_leave' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-plus-circle" aria-hidden="true"></i></span>
+            <span class="nav-label">Apply Leave</span>
           </a>
           {% endif %}
           {% if user|has_permission:"leave_pending_manager" or user.is_superuser %}
-          <a href="{% url 'leave:manager_pending' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'manager_pending' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'manager_pending' %}aria-current="page"{% endif %}>
-            <i class="fas fa-check-circle" aria-hidden="true"></i> Manager Approvals
+          <a href="{% url 'leave:manager_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'manager_pending' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-check-circle" aria-hidden="true"></i></span>
+            <span class="nav-label">Manager Approvals</span>
           </a>
           {% endif %}
         </div>
         {% endif %}
 
+        <!-- OPERATIONS -->
+        {% if user|has_any_permission:"add_checklist,list_checklist" or user|has_any_permission:"add_delegation,list_delegation" or user|has_any_permission:"add_ticket,list_all_tickets,assigned_to_me,assigned_by_me" or user|has_permission:"mt_bulk_upload" %}
+        <span class="nav-section-label">Operations</span>
+        {% endif %}
+
         {% if user|has_any_permission:"add_checklist,list_checklist" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="checklistSubmenu" data-submenu-toggle data-submenu-key="checklist">
-          <i class="fas fa-clipboard-list" aria-hidden="true"></i> Checklist (Lakshya Suchi) <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <span class="nav-icon"><i class="fas fa-clipboard-list" aria-hidden="true"></i></span>
+          <span class="nav-label">Checklist (Lakshya Suchi)</span>
+          <i class="fas fa-chevron-down nav-chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="checklistSubmenu" role="group" aria-label="Checklist">
+        <div class="submenu" id="checklistSubmenu" role="group">
           {% if user|has_permission:"add_checklist" %}
-          <a href="{% url 'tasks:add_checklist' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_checklist' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_checklist' %}aria-current="page"{% endif %}>
-            <i class="fas fa-clipboard-plus" aria-hidden="true"></i> Add Checklist (Lakshya Suchi)
+          <a href="{% url 'tasks:add_checklist' %}" class="nav-item {% if request.resolver_match.url_name == 'add_checklist' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-clipboard-plus" aria-hidden="true"></i></span>
+            <span class="nav-label">Add Checklist</span>
           </a>
           {% endif %}
           {% if user|has_permission:"list_checklist" %}
-          <a href="{% url 'tasks:list_checklist' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_checklist' %}aria-current="page"{% endif %}>
-            <i class="fas fa-clipboard-list" aria-hidden="true"></i> List Checklist (Lakshya Suchi)
+          <a href="{% url 'tasks:list_checklist' %}" class="nav-item {% if request.resolver_match.url_name == 'list_checklist' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-clipboard-list" aria-hidden="true"></i></span>
+            <span class="nav-label">List Checklist</span>
           </a>
           {% endif %}
         </div>
         {% endif %}
 
         {% if user|has_permission:"mt_bulk_upload" %}
-        <a href="{% url 'tasks:bulk_upload' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'bulk_upload' %}active{% endif %}"
-           {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'bulk_upload' %}aria-current="page"{% endif %}>
-          <i class="fas fa-upload" aria-hidden="true"></i> Bulk Upload
+        <a href="{% url 'tasks:bulk_upload' %}" class="nav-item {% if request.resolver_match.url_name == 'bulk_upload' %}active{% endif %}">
+          <span class="nav-icon"><i class="fas fa-upload" aria-hidden="true"></i></span>
+          <span class="nav-label">Bulk Upload</span>
         </a>
         {% endif %}
 
         {% if user|has_any_permission:"add_delegation,list_delegation" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="delegationSubmenu" data-submenu-toggle data-submenu-key="delegation">
-          <i class="fas fa-users-cog" aria-hidden="true"></i> Delegation (Responsibility) <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <span class="nav-icon"><i class="fas fa-users-cog" aria-hidden="true"></i></span>
+          <span class="nav-label">Delegation (Responsibility)</span>
+          <i class="fas fa-chevron-down nav-chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="delegationSubmenu" role="group" aria-label="Delegation">
+        <div class="submenu" id="delegationSubmenu" role="group">
           {% if user|has_permission:"add_delegation" %}
-          <a href="{% url 'tasks:add_delegation' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_delegation' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_delegation' %}aria-current="page"{% endif %}>
-            <i class="fas fa-user-plus" aria-hidden="true"></i> Add Delegation (Responsibility)
+          <a href="{% url 'tasks:add_delegation' %}" class="nav-item {% if request.resolver_match.url_name == 'add_delegation' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-user-plus" aria-hidden="true"></i></span>
+            <span class="nav-label">Add Delegation</span>
           </a>
           {% endif %}
           {% if user|has_permission:"list_delegation" %}
-          <a href="{% url 'tasks:list_delegation' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_delegation' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_delegation' %}aria-current="page"{% endif %}>
-            <i class="fas fa-user-clock" aria-hidden="true"></i> List Delegation (Responsibility)
+          <a href="{% url 'tasks:list_delegation' %}" class="nav-item {% if request.resolver_match.url_name == 'list_delegation' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-user-clock" aria-hidden="true"></i></span>
+            <span class="nav-label">List Delegation</span>
           </a>
           {% endif %}
         </div>
@@ -634,159 +857,150 @@
 
         {% if user|has_any_permission:"add_ticket,list_all_tickets,assigned_to_me,assigned_by_me" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="ticketsSubmenu" data-submenu-toggle data-submenu-key="tickets">
-          <i class="fas fa-ticket-alt" aria-hidden="true"></i> Help Ticket (Sahayata Desk) <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <span class="nav-icon"><i class="fas fa-ticket-alt" aria-hidden="true"></i></span>
+          <span class="nav-label">Help Ticket (Sahayata Desk)</span>
+          <i class="fas fa-chevron-down nav-chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="ticketsSubmenu" role="group" aria-label="Help Tickets">
+        <div class="submenu" id="ticketsSubmenu" role="group">
           {% if user|has_permission:"add_ticket" %}
-          <a href="{% url 'tasks:add_help_ticket' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_help_ticket' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'add_help_ticket' %}aria-current="page"{% endif %}>
-            <i class="fas fa-plus-circle" aria-hidden="true"></i> Add Help Ticket
+          <a href="{% url 'tasks:add_help_ticket' %}" class="nav-item {% if request.resolver_match.url_name == 'add_help_ticket' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-plus-circle" aria-hidden="true"></i></span>
+            <span class="nav-label">Add Help Ticket</span>
           </a>
           {% endif %}
           {% if user|has_permission:"list_all_tickets" %}
-          <a href="{% url 'tasks:list_help_ticket' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_help_ticket' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'list_help_ticket' %}aria-current="page"{% endif %}>
-            <i class="fas fa-list" aria-hidden="true"></i> List All Help Tickets (Sahayata Desk)
+          <a href="{% url 'tasks:list_help_ticket' %}" class="nav-item {% if request.resolver_match.url_name == 'list_help_ticket' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-list" aria-hidden="true"></i></span>
+            <span class="nav-label">All Help Tickets</span>
           </a>
           {% endif %}
           {% if user|has_permission:"assigned_to_me" %}
-          <a href="{% url 'tasks:assigned_to_me' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_to_me' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_to_me' %}aria-current="page"{% endif %}>
-            <i class="fas fa-user-clock" aria-hidden="true"></i> Assigned to Me
+          <a href="{% url 'tasks:assigned_to_me' %}" class="nav-item {% if request.resolver_match.url_name == 'assigned_to_me' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-user-clock" aria-hidden="true"></i></span>
+            <span class="nav-label">Assigned to Me</span>
           </a>
           {% endif %}
           {% if user|has_permission:"assigned_by_me" %}
-          <a href="{% url 'tasks:assigned_by_me' %}" class="nav-item {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_by_me' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'tasks' and request.resolver_match.url_name == 'assigned_by_me' %}aria-current="page"{% endif %}>
-            <i class="fas fa-user-plus" aria-hidden="true"></i> Assigned by Me
+          <a href="{% url 'tasks:assigned_by_me' %}" class="nav-item {% if request.resolver_match.url_name == 'assigned_by_me' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-user-plus" aria-hidden="true"></i></span>
+            <span class="nav-label">Assigned by Me</span>
           </a>
           {% endif %}
         </div>
         {% endif %}
 
-        <!-- 🌟 KAM (Key Account Management) – gated ONLY by app-level permission codes -->
+        <!-- SALES / KAM -->
         {% if user|has_any_permission:"kam_dashboard,kam_plan,kam_visits,kam_customers,kam_reports,kam_manager,kam_manager_kpis,kam_call_new,kam_collection_new,kam_targets,kam_targets_lines,kam_collections_plan,kam_sync_now,kam_sync_trigger,kam_sync_step,kam_export_kpi_csv,kam_visit_approve,kam_visit_reject" or user.is_superuser %}
+        <span class="nav-section-label">Sales</span>
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="kamSubmenu" data-submenu-toggle data-submenu-key="kam">
-          <i class="fas fa-id-badge" aria-hidden="true"></i> KAM (Key Accounts)
-          <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <span class="nav-icon"><i class="fas fa-id-badge" aria-hidden="true"></i></span>
+          <span class="nav-label">KAM (Key Accounts)</span>
+          <i class="fas fa-chevron-down nav-chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="kamSubmenu" role="group" aria-label="KAM">
+        <div class="submenu" id="kamSubmenu" role="group">
           {% if user|has_permission:"kam_dashboard" %}
-          <a href="{% url 'kam:dashboard' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'dashboard' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'dashboard' %}aria-current="page"{% endif %}>
-            <i class="fas fa-gauge" aria-hidden="true"></i> KAM Dashboard
+          <a href="{% url 'kam:dashboard' %}" class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'dashboard' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-gauge" aria-hidden="true"></i></span>
+            <span class="nav-label">KAM Dashboard</span>
           </a>
           {% endif %}
-
           {% if user|has_permission:"kam_plan" %}
-          <a href="{% url 'kam:plan' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'plan' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'plan' %}aria-current="page"{% endif %}>
-            <i class="fas fa-calendar-check" aria-hidden="true"></i> Plan Visit
+          <a href="{% url 'kam:plan' %}" class="nav-item {% if request.resolver_match.url_name == 'plan' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-calendar-check" aria-hidden="true"></i></span>
+            <span class="nav-label">Plan Visit</span>
           </a>
           {% endif %}
-
-          {# Visit Batches must be visible to KAM (to see their own batches) and Managers #}
           {% if user|has_any_permission:"kam_plan,kam_manager" or user.is_superuser %}
-          <a href="{% url 'kam:visit_batches' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'visit_batches' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'visit_batches' %}aria-current="page"{% endif %}>
-            <i class="fas fa-layer-group" aria-hidden="true"></i> Visit Batches
+          <a href="{% url 'kam:visit_batches' %}" class="nav-item {% if request.resolver_match.url_name == 'visit_batches' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-layer-group" aria-hidden="true"></i></span>
+            <span class="nav-label">Visit Batches</span>
           </a>
           {% endif %}
-
           {% if user|has_any_permission:"kam_visits,kam_call_new,kam_collection_new" %}
-          <a href="{% url 'kam:visits' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'visits' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'visits' %}aria-current="page"{% endif %}>
-            <i class="fas fa-phone-volume" aria-hidden="true"></i> Visits &amp; Calls
+          <a href="{% url 'kam:visits' %}" class="nav-item {% if request.resolver_match.url_name == 'visits' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-phone-volume" aria-hidden="true"></i></span>
+            <span class="nav-label">Visits &amp; Calls</span>
           </a>
           {% endif %}
-
           {% if user|has_permission:"kam_customers" %}
-          <a href="{% url 'kam:customers' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'customers' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'customers' %}aria-current="page"{% endif %}>
-            <i class="fas fa-address-book" aria-hidden="true"></i> Customers
+          <a href="{% url 'kam:customers' %}" class="nav-item {% if request.resolver_match.url_name == 'customers' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-address-book" aria-hidden="true"></i></span>
+            <span class="nav-label">Customers</span>
           </a>
           {% endif %}
-
           {% if user|has_any_permission:"kam_targets,kam_targets_lines" %}
-          <a href="{% url 'kam:targets' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'targets' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'targets' %}aria-current="page"{% endif %}>
-            <i class="fas fa-bullseye" aria-hidden="true"></i> Targets
+          <a href="{% url 'kam:targets' %}" class="nav-item {% if request.resolver_match.url_name == 'targets' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-bullseye" aria-hidden="true"></i></span>
+            <span class="nav-label">Targets</span>
           </a>
           {% endif %}
-
           {% if user|has_any_permission:"kam_manager,kam_manager_kpis,kam_reports" %}
-          <a href="{% url 'kam:manager' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'manager' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'manager' %}aria-current="page"{% endif %}>
-            <i class="fas fa-briefcase" aria-hidden="true"></i> Manager Console
+          <a href="{% url 'kam:manager' %}" class="nav-item {% if request.resolver_match.url_name == 'manager' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-briefcase" aria-hidden="true"></i></span>
+            <span class="nav-label">Manager Console</span>
           </a>
           {% endif %}
-
           {% if user|has_permission:"kam_reports" %}
-          <a href="{% url 'kam:reports' %}?metric=sales"
-             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'reports' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'reports' %}aria-current="page"{% endif %}>
-            <i class="fas fa-chart-line" aria-hidden="true"></i> KAM Reports
+          <a href="{% url 'kam:reports' %}?metric=sales" class="nav-item {% if request.resolver_match.url_name == 'reports' and request.resolver_match.app_name == 'kam' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-chart-line" aria-hidden="true"></i></span>
+            <span class="nav-label">KAM Reports</span>
           </a>
           {% endif %}
-
           {% if user|has_any_permission:"kam_collections_plan" %}
-          <a href="{% url 'kam:collections_plan' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'collections_plan' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'collections_plan' %}aria-current="page"{% endif %}>
-            <i class="fas fa-money-bill-wave" aria-hidden="true"></i> Collections Plan
+          <a href="{% url 'kam:collections_plan' %}" class="nav-item {% if request.resolver_match.url_name == 'collections_plan' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-money-bill-wave" aria-hidden="true"></i></span>
+            <span class="nav-label">Collections Plan</span>
           </a>
           {% endif %}
-
           {% if user|has_any_permission:"kam_sync_now,kam_sync_trigger,kam_sync_step" %}
           <a href="{% url 'kam:sync_now' %}" class="nav-item">
-            <i class="fas fa-rotate" aria-hidden="true"></i> Sync now
+            <span class="nav-icon"><i class="fas fa-rotate" aria-hidden="true"></i></span>
+            <span class="nav-label">Sync Now</span>
           </a>
           {% endif %}
-
           {% if user.is_superuser %}
-          <a href="{% url 'kam:admin_kam_manager_mapping' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'admin_kam_manager_mapping' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'admin_kam_manager_mapping' %}aria-current="page"{% endif %}>
-            <i class="fas fa-user-shield" aria-hidden="true"></i> KAM → Manager Mapping
+          <a href="{% url 'kam:admin_kam_manager_mapping' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_kam_manager_mapping' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-user-shield" aria-hidden="true"></i></span>
+            <span class="nav-label">KAM → Manager Mapping</span>
           </a>
           {% endif %}
         </div>
+        {% endif %}
+
+        <!-- FINANCE -->
+        {% if user|has_any_permission:"petty_cash_list,petty_cash_apply" or user|has_group:"Manager" or user|has_group:"Finance" or user|has_any_permission:"reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin,reimbursement_analytics" %}
+        <span class="nav-section-label">Finance</span>
         {% endif %}
 
         {% if user|has_any_permission:"petty_cash_list,petty_cash_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="pettyCashSubmenu" data-submenu-toggle data-submenu-key="pettycash">
-          <i class="fas fa-wallet" aria-hidden="true"></i> BOS Petty Cash Ledger <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <span class="nav-icon"><i class="fas fa-wallet" aria-hidden="true"></i></span>
+          <span class="nav-label">Petty Cash Ledger</span>
+          <i class="fas fa-chevron-down nav-chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="pettyCashSubmenu" role="group" aria-label="Petty Cash">
+        <div class="submenu" id="pettyCashSubmenu" role="group">
           {% if user|has_permission:"petty_cash_list" %}
-          <a href="{% url 'petty_cash:list_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'list_requests' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'list_requests' %}aria-current="page"{% endif %}>
-            <i class="fas fa-file-invoice-dollar" aria-hidden="true"></i> My Requests
+          <a href="{% url 'petty_cash:list_requests' %}" class="nav-item {% if request.resolver_match.url_name == 'list_requests' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-file-invoice-dollar" aria-hidden="true"></i></span>
+            <span class="nav-label">My Requests</span>
           </a>
           {% endif %}
           {% if user|has_permission:"petty_cash_apply" or user|has_group:"EA" %}
-          <a href="{% url 'petty_cash:apply_request' %}" class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'apply_request' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'apply_request' %}aria-current="page"{% endif %}>
-            <i class="fas fa-plus-circle" aria-hidden="true"></i> New Request
+          <a href="{% url 'petty_cash:apply_request' %}" class="nav-item {% if request.resolver_match.url_name == 'apply_request' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-plus-circle" aria-hidden="true"></i></span>
+            <span class="nav-label">New Request</span>
           </a>
           {% endif %}
           {% if user|has_group:"Manager" %}
-          <a href="{% url 'petty_cash:manager_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'manager_requests' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'manager_requests' %}aria-current="page"{% endif %}>
-            <i class="fas fa-check" aria-hidden="true"></i> Manager Approvals
+          <a href="{% url 'petty_cash:manager_requests' %}" class="nav-item {% if request.resolver_match.url_name == 'manager_requests' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-check" aria-hidden="true"></i></span>
+            <span class="nav-label">Manager Approvals</span>
           </a>
           {% endif %}
           {% if user|has_group:"Finance" %}
-          <a href="{% url 'petty_cash:finance_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'finance_requests' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'finance_requests' %}aria-current="page"{% endif %}>
-            <i class="fas fa-coins" aria-hidden="true"></i> Finance Approvals
+          <a href="{% url 'petty_cash:finance_requests' %}" class="nav-item {% if request.resolver_match.url_name == 'finance_requests' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-coins" aria-hidden="true"></i></span>
+            <span class="nav-label">Finance Approvals</span>
           </a>
           {% endif %}
         </div>
@@ -794,201 +1008,342 @@
 
         {% if user|has_any_permission:"reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin,reimbursement_analytics" %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="reimbursementSubmenu" data-submenu-toggle data-submenu-key="reimburse">
-          <i class="fas fa-receipt" aria-hidden="true"></i> BOS Reimburse Log <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <span class="nav-icon"><i class="fas fa-receipt" aria-hidden="true"></i></span>
+          <span class="nav-label">BOS Reimburse Log</span>
+          {% if FINANCE_REJECTED_RESUB_COUNT|default:0|add:0 > 0 %}
+            <span class="badge bg-danger ms-auto me-1" style="font-size:10px">{{ FINANCE_REJECTED_RESUB_COUNT }}</span>
+          {% endif %}
+          <i class="fas fa-chevron-down nav-chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="reimbursementSubmenu" role="group" aria-label="Reimbursement">
+        <div class="submenu" id="reimbursementSubmenu" role="group">
           {% if user|has_permission:"reimbursement_apply" %}
-          <a href="{% url 'reimbursement:expense_inbox' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'expense_inbox' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'expense_inbox' %}aria-current="page"{% endif %}>
-            <i class="fas fa-receipt" aria-hidden="true"></i> Upload Expenses
+          <a href="{% url 'reimbursement:expense_inbox' %}" class="nav-item {% if request.resolver_match.url_name == 'expense_inbox' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-receipt" aria-hidden="true"></i></span>
+            <span class="nav-label">Upload Expenses</span>
           </a>
           {% endif %}
-
           {% if user|has_any_permission:"reimbursement_apply,reimbursement_list" %}
-          <a href="{% url 'reimbursement:my_reimbursements' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'my_reimbursements' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'my_reimbursements' %}aria-current="page"{% endif %}>
-            <i class="fas fa-file-medical" aria-hidden="true"></i> My Requests
+          <a href="{% url 'reimbursement:my_reimbursements' %}" class="nav-item {% if request.resolver_match.url_name == 'my_reimbursements' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-file-medical" aria-hidden="true"></i></span>
+            <span class="nav-label">My Requests</span>
           </a>
           {% endif %}
-
           {% if user|has_permission:"reimbursement_manager_pending" %}
-          <a href="{% url 'reimbursement:manager_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'manager_pending' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'manager_pending' %}aria-current="page"{% endif %}>
-            <i class="fas fa-check-square" aria-hidden="true"></i> Manager Approvals
+          <a href="{% url 'reimbursement:manager_pending' %}" class="nav-item {% if request.resolver_match.url_name == 'manager_pending' and request.resolver_match.app_name == 'reimbursement' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-check-square" aria-hidden="true"></i></span>
+            <span class="nav-label">Manager Approvals</span>
           </a>
           {% endif %}
-
           {% if user|has_permission:"reimbursement_finance_pending" %}
-          <a href="{% url 'reimbursement:finance_pending' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}aria-current="page"{% endif %}>
-            <i class="fas fa-wallet" aria-hidden="true"></i> Finance Approvals
-            {% if FINANCE_REJECTED_RESUB_COUNT|default:0|add:0 > 0 %}
-              <span class="badge-dot" title="{{ FINANCE_REJECTED_RESUB_COUNT }} resubmitted rejected bill(s) pending"></span>
-            {% endif %}
+          <a href="{% url 'reimbursement:finance_pending' %}" class="nav-item {% if request.resolver_match.url_name == 'finance_pending' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-wallet" aria-hidden="true"></i></span>
+            <span class="nav-label">Finance Approvals
+              {% if FINANCE_REJECTED_RESUB_COUNT|default:0|add:0 > 0 %}
+                <span class="badge-dot ms-1" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#ef4444;"></span>
+              {% endif %}
+            </span>
           </a>
           {% endif %}
-
           {% if user|has_any_permission:"reimbursement_finance_review,reimbursement_review_finance" or user.is_superuser %}
-          <a href="{% url 'reimbursement:finance_settlement' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_settlement' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_settlement' %}aria-current="page"{% endif %}>
-            <i class="fas fa-hand-holding-usd" aria-hidden="true"></i> Settlement (Ready to Pay)
+          <a href="{% url 'reimbursement:finance_settlement' %}" class="nav-item {% if request.resolver_match.url_name == 'finance_settlement' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-hand-holding-usd" aria-hidden="true"></i></span>
+            <span class="nav-label">Settlement (Ready to Pay)</span>
           </a>
           {% endif %}
-
           {% if user|has_permission:"reimbursement_finance_review" or user.is_superuser %}
-          <a href="{% url 'reimbursement:finance_rejected_bills_queue' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_rejected_bills_queue' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_rejected_bills_queue' %}aria-current="page"{% endif %}>
-            <i class="fas fa-undo-alt" aria-hidden="true"></i> Rejected Bills (Resubmitted)
-            {% if FINANCE_REJECTED_RESUB_COUNT|default:0|add:0 > 0 %}
-              <span class="badge bg-danger ms-2">{{ FINANCE_REJECTED_RESUB_COUNT }}</span>
-            {% endif %}
+          <a href="{% url 'reimbursement:finance_rejected_bills_queue' %}" class="nav-item {% if request.resolver_match.url_name == 'finance_rejected_bills_queue' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-undo-alt" aria-hidden="true"></i></span>
+            <span class="nav-label">Rejected Bills (Resubmitted)
+              {% if FINANCE_REJECTED_RESUB_COUNT|default:0|add:0 > 0 %}
+                <span class="badge bg-danger ms-1" style="font-size:9px">{{ FINANCE_REJECTED_RESUB_COUNT }}</span>
+              {% endif %}
+            </span>
           </a>
           {% endif %}
-
           {% if user|has_permission:"reimbursement_admin" %}
-          <a href="{% url 'reimbursement:admin_requests' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'admin_requests' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'admin_requests' %}aria-current="page"{% endif %}>
-            <i class="fas fa-list-alt" aria-hidden="true"></i> Admin – All Requests
+          <a href="{% url 'reimbursement:admin_requests' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_requests' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-list-alt" aria-hidden="true"></i></span>
+            <span class="nav-label">Admin – All Requests</span>
           </a>
-          <a href="{% url 'reimbursement:admin_bills_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_bills_summary' %}active{% endif %}"
-             {% if request.resolver_match.url_name == 'admin_bills_summary' %}aria-current="page"{% endif %}>
-            <i class="fas fa-table" aria-hidden="true"></i> Admin – Bills Summary
+          <a href="{% url 'reimbursement:admin_bills_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_bills_summary' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-table" aria-hidden="true"></i></span>
+            <span class="nav-label">Admin – Bills Summary</span>
           </a>
-          <a href="{% url 'reimbursement:admin_status_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_status_summary' %}active{% endif %}"
-             {% if request.resolver_match.url_name == 'admin_status_summary' %}aria-current="page"{% endif %}>
-            <i class="fas fa-signal" aria-hidden="true"></i> Admin – Status Summary
+          <a href="{% url 'reimbursement:admin_status_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_status_summary' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-signal" aria-hidden="true"></i></span>
+            <span class="nav-label">Admin – Status Summary</span>
           </a>
-          <a href="{% url 'reimbursement:admin_employee_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_employee_summary' %}active{% endif %}"
-             {% if request.resolver_match.url_name == 'admin_employee_summary' %}aria-current="page"{% endif %}>
-            <i class="fas fa-user-tie" aria-hidden="true"></i> Admin – Employee Summary
+          <a href="{% url 'reimbursement:admin_employee_summary' %}" class="nav-item {% if request.resolver_match.url_name == 'admin_employee_summary' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-user-tie" aria-hidden="true"></i></span>
+            <span class="nav-label">Admin – Employee Summary</span>
           </a>
-          <a href="{% url 'reimbursement:approver_mapping_admin' %}" class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'approver_mapping_admin' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'approver_mapping_admin' %}aria-current="page"{% endif %}>
-            <i class="fas fa-user-shield" aria-hidden="true"></i> Approver Mapping
+          <a href="{% url 'reimbursement:approver_mapping_admin' %}" class="nav-item {% if request.resolver_match.url_name == 'approver_mapping_admin' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-user-shield" aria-hidden="true"></i></span>
+            <span class="nav-label">Approver Mapping</span>
           </a>
           <a href="{% url 'reimbursement:admin_export_csv' %}" class="nav-item">
-            <i class="fas fa-file-csv" aria-hidden="true"></i> Export CSV
+            <span class="nav-icon"><i class="fas fa-file-csv" aria-hidden="true"></i></span>
+            <span class="nav-label">Export CSV</span>
           </a>
           {% endif %}
-
           {% if user|has_permission:"reimbursement_analytics" or user.is_superuser %}
-          <a href="{% url 'reimbursement:analytics_dashboard' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'analytics_dashboard' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'analytics_dashboard' %}aria-current="page"{% endif %}>
-            <i class="fas fa-chart-line" aria-hidden="true"></i> Reimbursement Analytics
+          <a href="{% url 'reimbursement:analytics_dashboard' %}" class="nav-item {% if request.resolver_match.url_name == 'analytics_dashboard' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-chart-line" aria-hidden="true"></i></span>
+            <span class="nav-label">Reimbursement Analytics</span>
           </a>
           {% endif %}
         </div>
         {% endif %}
 
+        <!-- REPORTS -->
         {% if user|has_any_permission:"doer_tasks,weekly_mis_score,performance_score" %}
+        <span class="nav-section-label">Reports</span>
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="reportsSubmenu" data-submenu-toggle data-submenu-key="reports">
-          <i class="fas fa-chart-pie" aria-hidden="true"></i> Reports <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <span class="nav-icon"><i class="fas fa-chart-pie" aria-hidden="true"></i></span>
+          <span class="nav-label">Reports</span>
+          <i class="fas fa-chevron-down nav-chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="reportsSubmenu" role="group" aria-label="Reports">
+        <div class="submenu" id="reportsSubmenu" role="group">
           {% if user|has_permission:"doer_tasks" %}
-          <a href="{% url 'reports:doer_tasks' %}" class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'doer_tasks' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'doer_tasks' %}aria-current="page"{% endif %}>
-            <i class="fas fa-tasks-alt" aria-hidden="true"></i> Doer Tasks
+          <a href="{% url 'reports:doer_tasks' %}" class="nav-item {% if request.resolver_match.url_name == 'doer_tasks' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-tasks" aria-hidden="true"></i></span>
+            <span class="nav-label">Doer Tasks</span>
           </a>
           {% endif %}
           {% if user|has_permission:"weekly_mis_score" %}
-          <a href="{% url 'reports:weekly_mis_score' %}" class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'weekly_mis_score' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'weekly_mis_score' %}aria-current="page"{% endif %}>
-            <i class="fas fa-calendar-week" aria-hidden="true"></i> BOS Weekly Pulse - Tracking
+          <a href="{% url 'reports:weekly_mis_score' %}" class="nav-item {% if request.resolver_match.url_name == 'weekly_mis_score' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-calendar-week" aria-hidden="true"></i></span>
+            <span class="nav-label">BOS Weekly Pulse</span>
           </a>
           {% endif %}
           {% if user|has_permission:"performance_score" %}
-          <a href="{% url 'reports:performance_score' %}" class="nav-item {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'performance_score' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'performance_score' %}aria-current="page"{% endif %}>
-            <i class="fas fa-percent" aria-hidden="true"></i> Performance Score
+          <a href="{% url 'reports:performance_score' %}" class="nav-item {% if request.resolver_match.url_name == 'performance_score' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-percent" aria-hidden="true"></i></span>
+            <span class="nav-label">Performance Score</span>
           </a>
           {% endif %}
         </div>
         {% endif %}
 
+        <!-- ADMIN -->
+        {% if user|has_any_permission:"list_users,add_user" or user.is_superuser %}
+        <span class="nav-section-label">Admin</span>
+
         {% if user|has_any_permission:"list_users,add_user" or user.is_superuser %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="usersSubmenu" data-submenu-toggle data-submenu-key="users">
-          <i class="fas fa-user-friends" aria-hidden="true"></i> Users <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <span class="nav-icon"><i class="fas fa-user-friends" aria-hidden="true"></i></span>
+          <span class="nav-label">Users</span>
+          <i class="fas fa-chevron-down nav-chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="usersSubmenu" role="group" aria-label="Users">
+        <div class="submenu" id="usersSubmenu" role="group">
           {% if user|has_permission:"list_users" or user.is_superuser %}
-          <a href="{% url 'users:list_users' %}" class="nav-item {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'list_users' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'list_users' %}aria-current="page"{% endif %}>
-            <i class="fas fa-list" aria-hidden="true"></i> List Users
+          <a href="{% url 'users:list_users' %}" class="nav-item {% if request.resolver_match.url_name == 'list_users' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-list" aria-hidden="true"></i></span>
+            <span class="nav-label">List Users</span>
           </a>
           {% endif %}
           {% if user|has_permission:"add_user" or user.is_superuser %}
-          <a href="{% url 'users:add_user' %}" class="nav-item {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'add_user' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'add_user' %}aria-current="page"{% endif %}>
-            <i class="fas fa-user-plus" aria-hidden="true"></i> Add User
+          <a href="{% url 'users:add_user' %}" class="nav-item {% if request.resolver_match.url_name == 'add_user' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-user-plus" aria-hidden="true"></i></span>
+            <span class="nav-label">Add User</span>
           </a>
           {% endif %}
         </div>
         {% endif %}
 
         {% if user.is_superuser %}
-        <a href="{% url 'users:debug_permissions' %}" class="nav-item {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'debug_permissions' %}active{% endif %}"
-           {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'debug_permissions' %}aria-current="page"{% endif %}>
-          <i class="fas fa-bug" aria-hidden="true"></i> Debug Permissions
+        <a href="{% url 'users:debug_permissions' %}" class="nav-item {% if request.resolver_match.url_name == 'debug_permissions' %}active{% endif %}">
+          <span class="nav-icon"><i class="fas fa-bug" aria-hidden="true"></i></span>
+          <span class="nav-label">Debug Permissions</span>
         </a>
         {% endif %}
 
         {% if user.is_superuser %}
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="settingsSubmenu" data-submenu-toggle data-submenu-key="settings">
-          <i class="fas fa-gear" aria-hidden="true"></i> Settings <i class="fas fa-chevron-down chevron" aria-hidden="true"></i>
+          <span class="nav-icon"><i class="fas fa-gear" aria-hidden="true"></i></span>
+          <span class="nav-label">Settings</span>
+          <i class="fas fa-chevron-down nav-chevron" aria-hidden="true"></i>
         </button>
-        <div class="submenu" id="settingsSubmenu" role="group" aria-label="Settings">
-          <a href="{% url 'settings:authorized_list' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'authorized_list' %}aria-current="page"{% endif %}>
-            <i class="fas fa-phone" aria-hidden="true"></i> Authorized Numbers
+        <div class="submenu" id="settingsSubmenu" role="group">
+          <a href="{% url 'settings:authorized_list' %}" class="nav-item {% if request.resolver_match.url_name == 'authorized_list' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-phone" aria-hidden="true"></i></span>
+            <span class="nav-label">Authorized Numbers</span>
           </a>
-
-          <a href="{% url 'settings:holiday_list' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'holiday_list' %}aria-current="page"{% endif %}>
-            <i class="fas fa-calendar-days" aria-hidden="true"></i> Holiday List
+          <a href="{% url 'settings:holiday_list' %}" class="nav-item {% if request.resolver_match.url_name == 'holiday_list' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-calendar-days" aria-hidden="true"></i></span>
+            <span class="nav-label">Holiday List</span>
           </a>
-
-          <a href="{% url 'settings:system_settings' %}"
-             class="nav-item {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}active{% endif %}"
-             {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}aria-current="page"{% endif %}>
-            <i class="fas fa-sliders" aria-hidden="true"></i> System Settings
+          <a href="{% url 'settings:system_settings' %}" class="nav-item {% if request.resolver_match.url_name == 'system_settings' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-sliders" aria-hidden="true"></i></span>
+            <span class="nav-label">System Settings</span>
           </a>
         </div>
         {% endif %}
-      </div>
-      {% block sidebar_extra %}{% endblock %}
-    </nav>
 
-    <div class="sidebar-overlay" data-sidebar-overlay aria-hidden="true"></div>
-  {% endif %}
+        {% endif %}
 
-  <main class="{% if user.is_authenticated %}main-content{% else %}container mt-5{% endif %}" id="mainContent" role="main" tabindex="-1">
-    {% if messages %}
-      <div class="container mb-3" aria-live="polite" aria-atomic="true">
-        {% for message in messages %}
-          <div class="alert {% if message.tags %}alert-{{ message.tags }}{% else %}alert-info{% endif %} shadow-sm" role="alert">
-            {{ message|safe }}
+        {% block sidebar_extra %}{% endblock %}
+      </nav>
+
+      <!-- Sidebar footer user -->
+      <div class="sidebar-footer">
+        <div class="sidebar-user">
+          <div class="sidebar-user-avatar">
+            {% if user.profile.image %}
+              <img src="{{ user.profile.image.url }}" alt="{{ user.get_full_name }}">
+            {% elif user.avatar %}
+              <img src="{{ user.avatar.url }}" alt="{{ user.get_full_name }}">
+            {% elif user.image %}
+              <img src="{{ user.image.url }}" alt="{{ user.get_full_name }}">
+            {% else %}
+              <i class="fas fa-user" aria-hidden="true"></i>
+            {% endif %}
           </div>
-        {% endfor %}
+          <div class="sidebar-user-info">
+            <div class="sidebar-user-name">{{ user.get_full_name|default:user.username }}</div>
+            <div class="sidebar-user-role">{{ user.email|truncatechars:22 }}</div>
+          </div>
+        </div>
       </div>
-    {% endif %}
-    {% block content %}{% endblock %}
-  </main>
+    </aside>
 
-  {% if user.is_authenticated %}
-    <footer role="contentinfo">
-      <small>© {% now "Y" %} Developed by Madhurjya Bora</small>
-    </footer>
+    <!-- ==================== MAIN WRAPPER ==================== -->
+    <div class="app-main" id="appMain">
+
+      <!-- ==================== TOPBAR ==================== -->
+      <header class="neo-topbar" id="neoTopbar" role="banner">
+        <div class="topbar-left">
+          <button class="topbar-toggle" id="sidebarToggle" type="button" aria-label="Toggle sidebar" aria-controls="neoSidebar" aria-expanded="true">
+            <i class="fas fa-bars" aria-hidden="true"></i>
+          </button>
+          <div class="topbar-breadcrumb">
+            <i class="fas fa-house" style="font-size:11px"></i>
+            <span>/</span>
+            <strong>{% block breadcrumb %}BOS Lakshya{% endblock %}</strong>
+          </div>
+        </div>
+
+        <div class="topbar-right">
+          <!-- Search -->
+          <div class="topbar-search">
+            <i class="fas fa-magnifying-glass"></i>
+            <input type="text" placeholder="Search…" aria-label="Search">
+          </div>
+
+          <!-- Notification bell -->
+          {% if user|has_permission:"reimbursement_finance_review" or user.is_superuser %}
+            {% if FINANCE_REJECTED_RESUB_COUNT|default:0|add:0 > 0 %}
+            <a class="topbar-icon-btn" href="{% url 'reimbursement:finance_rejected_bills_queue' %}" title="Resubmitted rejected bills" aria-label="{{ FINANCE_REJECTED_RESUB_COUNT }} resubmitted bills">
+              <i class="fa-regular fa-bell" aria-hidden="true"></i>
+              <span class="topbar-notif-badge">{{ FINANCE_REJECTED_RESUB_COUNT }}</span>
+            </a>
+            {% else %}
+            <button class="topbar-icon-btn" aria-label="Notifications">
+              <i class="fa-regular fa-bell" aria-hidden="true"></i>
+            </button>
+            {% endif %}
+          {% else %}
+          <button class="topbar-icon-btn" aria-label="Notifications">
+            <i class="fa-regular fa-bell" aria-hidden="true"></i>
+          </button>
+          {% endif %}
+
+          <!-- Profile dropdown -->
+          <div class="profile-dropdown-wrap">
+            <button class="profile-btn" id="profileBtn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="profileDropdown">
+              <div class="profile-avatar">
+                {% if user.profile.image %}
+                  <img src="{{ user.profile.image.url }}" alt="{{ user.get_full_name }}">
+                {% elif user.avatar %}
+                  <img src="{{ user.avatar.url }}" alt="{{ user.get_full_name }}">
+                {% elif user.image %}
+                  <img src="{{ user.image.url }}" alt="{{ user.get_full_name }}">
+                {% else %}
+                  <i class="fas fa-user" aria-hidden="true"></i>
+                {% endif %}
+              </div>
+              <span class="profile-btn-name">{{ user.get_full_name|default:user.username }}</span>
+              <i class="fas fa-chevron-down profile-btn-chevron" aria-hidden="true"></i>
+            </button>
+
+            <div class="profile-dropdown" id="profileDropdown" role="menu">
+              <div class="dropdown-header">
+                <div class="dropdown-header-name">{{ user.get_full_name|default:user.username }}</div>
+                <div class="dropdown-header-email">{{ user.email }}</div>
+              </div>
+              {% if user.is_superuser %}
+              <a href="{% url 'settings:system_settings' %}" class="dropdown-item-link" role="menuitem">
+                <i class="fas fa-gear"></i> System Settings
+              </a>
+              {% endif %}
+              <a href="{% url 'users:debug_permissions' %}" class="dropdown-item-link" role="menuitem">
+                <i class="fas fa-shield-halved"></i> Permissions
+              </a>
+              <div class="dropdown-divider"></div>
+              <form method="post" action="{% url 'logout' %}" style="margin:0">
+                {% csrf_token %}
+                <button type="submit" class="dropdown-item-link danger" style="width:100%;border:none;background:none;cursor:pointer;font-family:inherit" role="menuitem">
+                  <i class="fas fa-right-from-bracket"></i> Logout
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- ==================== CONTENT ==================== -->
+      <main id="mainContent" role="main" tabindex="-1">
+
+        <!-- Festive Hero Banner -->
+        <div id="heroBanner" hidden>
+          <div class="hero-banner-wrap">
+            <div class="hero-banner-content">
+              <div class="hero-banner-text">
+                <h2>🎉 Happy New Year 2026! Wishing you growth, success &amp; wellbeing all year long.</h2>
+                <p>Let's make 2026 remarkable together — Focus • Learn • Grow</p>
+              </div>
+              <button class="hero-banner-dismiss" id="heroBannerDismiss" type="button">Dismiss</button>
+            </div>
+          </div>
+        </div>
+
+        {% if messages %}
+          <div style="padding: 16px 24px 0;" aria-live="polite" aria-atomic="true">
+            {% for message in messages %}
+              <div class="alert {% if message.tags %}alert-{{ message.tags }}{% else %}alert-info{% endif %}" role="alert">
+                {{ message|safe }}
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+
+        <div class="content-area">
+          {% block content %}{% endblock %}
+        </div>
+      </main>
+
+      <footer class="app-footer" role="contentinfo">
+        <small>© {% now "Y" %} Developed by Madhurjya Bora &middot; BOS Lakshya</small>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Mobile overlay -->
+  <div class="sidebar-overlay" id="sidebarOverlay" aria-hidden="true"></div>
+
+  {% else %}
+  <!-- Unauthenticated layout (login/register pages) -->
+  <main class="container mt-5" id="mainContent" role="main" tabindex="-1">
+    {% if messages %}
+      {% for message in messages %}
+        <div class="alert {% if message.tags %}alert-{{ message.tags }}{% else %}alert-info{% endif %}" role="alert">{{ message|safe }}</div>
+      {% endfor %}
+    {% endif %}
+  </main>
   {% endif %}
 
-  <!-- GLOBAL PORTALS -->
-  <div id="modalHost"><!-- bootstrap modals can be appended here --></div>
+  <!-- Global portals -->
+  <div id="modalHost"></div>
   <div id="toastHost" class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 1400;"></div>
   <div id="pageOverlay" class="page-overlay"><div class="spinner" role="status" aria-label="Loading"></div></div>
 
@@ -996,373 +1351,278 @@
           integrity="sha384-geWF76RCwLtnZ8qwWowPQNguL3RmwHVBC9FhGdlKrxdiJJigb/j/68SIy3Te4Bkz"
           crossorigin="anonymous"></script>
 
-  <!-- App boot JS -->
   <script>
+  (function(){
+    const CSRF_NAME = 'csrftoken';
+    const SIDEBAR_KEY = 'bos:sidebar:collapsed';
+    const HERO_KEY = 'bos:hero:2026';
+
+    function getCookie(name){
+      const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+      return m ? decodeURIComponent(m.pop()) : null;
+    }
+
+    /* --- CSRF patching for fetch & XHR --- */
     (function(){
-      function getCookie(name){
-        const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
-        return m ? decodeURIComponent(m.pop()) : null;
-      }
-      const CSRF_COOKIE = 'csrftoken';
-      const SIDEBAR_KEY = 'ems:sidebar-collapsed';
-      const HERO_KEY = 'ems:hero:dismissed:2026';
-
-      document.addEventListener('DOMContentLoaded', () => {
-        // CSRF hardening for any stray POST forms
-        document.querySelectorAll('form[method="post"]').forEach(form => {
-          const hasToken = form.querySelector('input[name="csrfmiddlewaretoken"]');
-          if (!hasToken) {
-            const token = getCookie(CSRF_COOKIE);
-            if (token) {
-              const input = document.createElement('input');
-              input.type = 'hidden';
-              input.name = 'csrfmiddlewaretoken';
-              input.value = token;
-              form.prepend(input);
-            }
-          }
-        });
-
-        // Festive hero — strictly client-side, dismissible, no server coupling
+      const _fetch = window.fetch;
+      window.fetch = function(input, init){
         try{
-          const heroWrap = document.getElementById('heroWrap');
-          const bodyEl = document.body;
-
-          if (heroWrap){
-            const dismissed = localStorage.getItem(HERO_KEY) === '1';
-            if (!dismissed){
-              heroWrap.hidden = false;
-              bodyEl.classList.add('has-hero');
-
-              // ensure canvas fits AFTER hero is visible
-              setTimeout(() => {
-                fitCanvas('fwCanvas');
-                fitCanvas('confettiCanvas');
-                startFireworks('fwCanvas');
-                startConfetti('confettiCanvas');
-              }, 0);
-            }
-
-            const close = document.getElementById('heroDismiss');
-            if (close){
-              close.addEventListener('click', ()=>{
-                localStorage.setItem(HERO_KEY, '1');
-                heroWrap.hidden = true;
-                bodyEl.classList.remove('has-hero');
-                stopCanvas('fwCanvas');
-                stopCanvas('confettiCanvas');
-              });
+          const url = typeof input === 'string' ? input : input.url;
+          const sameOrigin = !/^https?:\/\//i.test(url) || url.startsWith(window.location.origin);
+          const method = (init && init.method) || 'GET';
+          if(sameOrigin && !/^(GET|HEAD|OPTIONS|TRACE)$/i.test(method)){
+            init = init || {};
+            init.headers = new Headers(init.headers || {});
+            if(!init.headers.has('X-CSRFToken')){
+              const t = getCookie(CSRF_NAME);
+              if(t) init.headers.set('X-CSRFToken', t);
             }
           }
-        }catch(_e){/* no-op */ }
-      });
+        }catch(_){}
+        return _fetch(input, init);
+      };
+    })();
 
-      // Fetch CSRF patch
-      (function patchFetch(){
-        const _fetch = window.fetch;
-        window.fetch = function(input, init){
-          try{
-            const url = (typeof input === 'string') ? input : input.url;
-            const sameOrigin = !/^https?:\/\//i.test(url) || url.startsWith(window.location.origin);
-            const method = (init && (init.method || (init.headers && init.headers['X-HTTP-Method-Override']))) || 'GET';
-            const safe = /^(GET|HEAD|OPTIONS|TRACE)$/i.test(method);
-            if (sameOrigin && !safe){
-              init = init || {};
-              init.headers = new Headers(init.headers || {});
-              if (!init.headers.has('X-CSRFToken')) {
-                const token = getCookie(CSRF_COOKIE);
-                if (token) init.headers.set('X-CSRFToken', token);
-              }
-            }
-          }catch(_e){}
-          return _fetch(input, init);
-        };
-      })();
-
-      // XHR CSRF patch
-      (function patchXHR(){
-        const origOpen = XMLHttpRequest.prototype.open;
-        const origSend = XMLHttpRequest.prototype.send;
-        XMLHttpRequest.prototype.open = function(method, url){
-          this._isSameOrigin = !/^https?:\/\//i.test(url) || url.startsWith(window.location.origin);
-          this._method = method || 'GET';
-          return origOpen.apply(this, arguments);
-        };
-        XMLHttpRequest.prototype.send = function(body){
-          try{
-            const safe = /^(GET|HEAD|OPTIONS|TRACE)$/i.test(this._method || 'GET');
-            if (this._isSameOrigin && !safe) {
-              const token = getCookie(CSRF_COOKIE);
-              if (token) this.setRequestHeader('X-CSRFToken', token);
-            }
-          }catch(_e){}
-          return origSend.apply(this, arguments);
-        };
-      })();
-
-      // Sidebar / submenu toggles
-      function toggleSidebar(){
-        const sidebar=document.getElementById('sidebar');
-        const overlay=document.querySelector('[data-sidebar-overlay]');
-        const main=document.getElementById('mainContent');
-        if(!sidebar || !main) return;
-        const isMobile = window.innerWidth<=768;
-
-        if(isMobile){
-          const willShow = !sidebar.classList.contains('show');
-          sidebar.classList.toggle('show');
-          overlay && overlay.classList.toggle('show');
-          document.querySelectorAll('[data-sidebar-toggle]').forEach(btn=>{
-            btn.setAttribute('aria-expanded', String(willShow));
-          });
-          if(willShow){
-            const first = sidebar.querySelector('.nav-item, a');
-            setTimeout(()=> { if(first) first.focus(); }, 0);
-          }else{
-            setTimeout(()=> {
-              const mc = document.getElementById('mainContent');
-              if(mc) mc.focus();
-            }, 0);
+    (function(){
+      const origOpen = XMLHttpRequest.prototype.open;
+      const origSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function(m, url){
+        this._same = !/^https?:\/\//i.test(url) || url.startsWith(window.location.origin);
+        this._m = m;
+        return origOpen.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.send = function(b){
+        try{
+          if(this._same && !/^(GET|HEAD|OPTIONS|TRACE)$/i.test(this._m || '')){
+            const t = getCookie(CSRF_NAME);
+            if(t) this.setRequestHeader('X-CSRFToken', t);
           }
+        }catch(_){}
+        return origSend.apply(this, arguments);
+      };
+    })();
+
+    /* --- Submenu helpers --- */
+    function setSubmenuState(key, open){ try{ localStorage.setItem('bos:sub:'+key, open?'1':'0'); }catch(_){} }
+    function getSubmenuState(key){ try{ return localStorage.getItem('bos:sub:'+key)==='1'; }catch(_){ return false; } }
+
+    function openSubmenu(btn, submenu){
+      submenu.style.display = 'block';
+      btn.setAttribute('aria-expanded','true');
+      const chev = btn.querySelector('.nav-chevron');
+      if(chev) chev.style.transform = 'rotate(180deg)';
+    }
+    function closeSubmenu(btn, submenu){
+      submenu.style.display = 'none';
+      btn.setAttribute('aria-expanded','false');
+      const chev = btn.querySelector('.nav-chevron');
+      if(chev) chev.style.transform = '';
+    }
+
+    function toggleSubmenu(btn){
+      const id = btn.getAttribute('aria-controls');
+      const submenu = id && document.getElementById(id);
+      const key = btn.getAttribute('data-submenu-key') || id;
+      if(!submenu) return;
+      const isOpen = submenu.style.display === 'block';
+      if(isOpen){ closeSubmenu(btn, submenu); setSubmenuState(key, false); }
+      else { openSubmenu(btn, submenu); setSubmenuState(key, true); }
+    }
+
+    /* --- Sidebar collapse --- */
+    let sidebarCollapsed = false;
+    let mobileSidebarOpen = false;
+    const isMobile = () => window.innerWidth <= 768;
+
+    function applySidebarState(){
+      const sidebar = document.getElementById('neoSidebar');
+      const topbar = document.getElementById('neoTopbar');
+      const main = document.getElementById('appMain');
+      const overlay = document.getElementById('sidebarOverlay');
+      if(!sidebar) return;
+
+      if(isMobile()){
+        sidebar.classList.remove('collapsed');
+        if(mobileSidebarOpen){
+          sidebar.classList.add('mobile-open');
+          overlay && overlay.classList.add('show');
+          topbar && topbar.classList.remove('sidebar-collapsed');
+          main && main.classList.remove('sidebar-collapsed');
         }else{
-          sidebar.classList.toggle('collapsed');
-          const collapsed = sidebar.classList.contains('collapsed');
-          main.classList.toggle('expanded', collapsed);
-          try{ localStorage.setItem(SIDEBAR_KEY, collapsed ? '1':'0'); }catch(_e){}
+          sidebar.classList.remove('mobile-open');
+          overlay && overlay.classList.remove('show');
+        }
+      }else{
+        sidebar.classList.remove('mobile-open');
+        overlay && overlay.classList.remove('show');
+        if(sidebarCollapsed){
+          sidebar.classList.add('collapsed');
+          topbar && topbar.classList.add('sidebar-collapsed');
+          main && main.classList.add('sidebar-collapsed');
+        }else{
+          sidebar.classList.remove('collapsed');
+          topbar && topbar.classList.remove('sidebar-collapsed');
+          main && main.classList.remove('sidebar-collapsed');
         }
       }
+    }
 
-      function setSubmenuState(key, isOpen){
-        try{ localStorage.setItem('ems:submenu:'+key, isOpen ? '1' : '0'); }catch(_e){}
-      }
-      function getSubmenuState(key){
-        try{ return localStorage.getItem('ems:submenu:'+key) === '1'; }catch(_e){ return false; }
+    /* --- Profile dropdown --- */
+    function initProfileDropdown(){
+      const btn = document.getElementById('profileBtn');
+      const menu = document.getElementById('profileDropdown');
+      if(!btn || !menu) return;
+
+      btn.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        const open = menu.classList.toggle('open');
+        btn.setAttribute('aria-expanded', String(open));
+      });
+      document.addEventListener('click', ()=>{
+        menu.classList.remove('open');
+        btn.setAttribute('aria-expanded','false');
+      });
+      document.addEventListener('keydown', (e)=>{
+        if(e.key==='Escape'){
+          menu.classList.remove('open');
+          btn.setAttribute('aria-expanded','false');
+        }
+      });
+    }
+
+    /* --- Hero banner --- */
+    function initHero(){
+      const banner = document.getElementById('heroBanner');
+      if(!banner) return;
+      try{
+        if(localStorage.getItem(HERO_KEY) !== '1'){
+          banner.hidden = false;
+        }
+        const dismiss = document.getElementById('heroBannerDismiss');
+        if(dismiss){
+          dismiss.addEventListener('click', ()=>{
+            banner.hidden = true;
+            try{ localStorage.setItem(HERO_KEY,'1'); }catch(_){}
+          });
+        }
+      }catch(_){}
+    }
+
+    document.addEventListener('DOMContentLoaded', ()=>{
+
+      /* Sidebar toggle */
+      const toggleBtn = document.getElementById('sidebarToggle');
+      const overlay = document.getElementById('sidebarOverlay');
+
+      if(toggleBtn){
+        toggleBtn.addEventListener('click', ()=>{
+          if(isMobile()){
+            mobileSidebarOpen = !mobileSidebarOpen;
+          }else{
+            sidebarCollapsed = !sidebarCollapsed;
+            try{ localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed?'1':'0'); }catch(_){}
+          }
+          applySidebarState();
+        });
       }
 
-      function toggleSubmenu(btn, desired){
+      if(overlay){
+        overlay.addEventListener('click', ()=>{
+          mobileSidebarOpen = false;
+          applySidebarState();
+        });
+      }
+
+      document.addEventListener('keydown', (e)=>{
+        if(e.key==='Escape' && mobileSidebarOpen){
+          mobileSidebarOpen = false;
+          applySidebarState();
+        }
+      });
+
+      /* Restore sidebar state */
+      try{
+        if(!isMobile() && localStorage.getItem(SIDEBAR_KEY)==='1'){
+          sidebarCollapsed = true;
+        }
+      }catch(_){}
+      applySidebarState();
+
+      /* Submenus */
+      document.querySelectorAll('[data-submenu-toggle]').forEach(btn=>{
+        btn.addEventListener('click', ()=> toggleSubmenu(btn));
+      });
+
+      /* Restore submenu state */
+      document.querySelectorAll('[data-submenu-toggle]').forEach(btn=>{
         const id = btn.getAttribute('aria-controls');
         const submenu = id && document.getElementById(id);
-        const chev = btn.querySelector('.chevron');
         const key = btn.getAttribute('data-submenu-key') || id;
-        if(!submenu) return;
-
-        const isOpen = submenu.style.display === 'block';
-        const willOpen = (typeof desired === 'boolean') ? desired : !isOpen;
-
-        submenu.style.display = willOpen ? 'block' : 'none';
-        if(chev) chev.style.transform = willOpen ? 'rotate(180deg)' : 'rotate(0deg)';
-        btn.setAttribute('aria-expanded', String(willOpen));
-        setSubmenuState(key, willOpen);
-      }
-
-      document.addEventListener('DOMContentLoaded', () => {
-        document.querySelectorAll('[data-sidebar-toggle]').forEach(el=> el.addEventListener('click', toggleSidebar));
-        document.querySelectorAll('[data-sidebar-overlay]').forEach(el=> el.addEventListener('click', toggleSidebar));
-
-        document.addEventListener('keydown', (e)=>{
-          if (e.key === 'Escape'){
-            const sidebar=document.getElementById('sidebar');
-            if (sidebar && sidebar.classList.contains('show')) toggleSidebar();
-          }
-        });
-
-        document.querySelectorAll('[data-submenu-toggle]').forEach(btn=>{
-          btn.addEventListener('click', () => toggleSubmenu(btn));
-        });
-
-        (function initSubmenus(){
-          document.querySelectorAll('[data-submenu-toggle]').forEach(btn=>{
-            const id = btn.getAttribute('aria-controls');
-            const submenu = id && document.getElementById(id);
-            const key = btn.getAttribute('data-submenu-key') || id;
-            const savedOpen = getSubmenuState(key);
-            if (savedOpen && submenu) {
-              submenu.style.display='block';
-              btn.setAttribute('aria-expanded','true');
-              const chev=btn.querySelector('.chevron');
-              if(chev) chev.style.transform='rotate(180deg)';
-            }
-          });
-          const active = document.querySelector('.nav-item.active');
-          if (active) {
-            const submenu = active.closest('.submenu');
-            if (submenu) {
-              submenu.style.display='block';
-              const parentBtn=submenu.previousElementSibling;
-              if(parentBtn){
-                const chev=parentBtn.querySelector('.chevron');
-                if(chev) chev.style.transform='rotate(180deg)';
-                parentBtn.setAttribute('aria-expanded','true');
-                const key = parentBtn.getAttribute('data-submenu-key') || parentBtn.getAttribute('aria-controls');
-                setSubmenuState(key, true);
-              }
-            }
-          }
-        })();
-
-        try{
-          const sidebar = document.getElementById('sidebar');
-          const main = document.getElementById('mainContent');
-          if (window.innerWidth>768 && localStorage.getItem(SIDEBAR_KEY)==='1') {
-            sidebar?.classList.add('collapsed');
-            main?.classList.add('expanded');
-          }
-        }catch(_e){}
-
-        window.addEventListener('resize',()=>{
-          const sidebar=document.getElementById('sidebar');
-          const overlay=document.querySelector('[data-sidebar-overlay]');
-          const main=document.getElementById('mainContent');
-          if(!sidebar || !main) return;
-
-          if(window.innerWidth>768){
-            sidebar.classList.remove('show');
-            overlay && overlay.classList.remove('show');
-            main.classList.toggle('expanded', sidebar.classList.contains('collapsed'));
-          }else{
-            sidebar.classList.remove('collapsed');
-            main.classList.remove('expanded');
-          }
-
-          fitCanvas('fwCanvas');
-          fitCanvas('confettiCanvas');
-        });
+        if(submenu && getSubmenuState(key)) openSubmenu(btn, submenu);
       });
 
-      // Service worker (optional)
-      if ('serviceWorker' in navigator){
-        try{ navigator.serviceWorker.register('{% static "sw.js" %}').catch(()=>{}); }catch(_e){}
-      }
-
-      // Simple canvas anims (pure cosmetic)
-      let fwRAF=null, fwCtx=null, fwParticles=[];
-      function startFireworks(id){
-        const canvas = document.getElementById(id);
-        if(!canvas) return;
-        fwCtx = canvas.getContext('2d');
-        fitCanvas(id);
-
-        function burst(){
-          const w = canvas.clientWidth, h = canvas.clientHeight;
-          const cx = w * (0.2 + Math.random()*0.6);
-          const cy = h * (0.38 + Math.random()*0.22);
-          const hue = 45 + Math.random()*60;
-          const N = 34;
-          for(let i=0;i<N;i++){
-            const a = (i/N)*Math.PI*2;
-            const s = 1.6 + Math.random()*1.6;
-            fwParticles.push({
-              x: cx, y: cy, vx: Math.cos(a)*s, vy: Math.sin(a)*s,
-              life: 60 + Math.random()*25,
-              color: `hsl(${hue}, 85%, ${58 + Math.random()*22}%)`
-            });
+      /* Auto-open active submenu */
+      const active = document.querySelector('.submenu .nav-item.active');
+      if(active){
+        const submenu = active.closest('.submenu');
+        if(submenu){
+          submenu.style.display = 'block';
+          const parentBtn = submenu.previousElementSibling;
+          if(parentBtn && parentBtn.hasAttribute('data-submenu-toggle')){
+            openSubmenu(parentBtn, submenu);
+            const key = parentBtn.getAttribute('data-submenu-key') || parentBtn.getAttribute('aria-controls');
+            setSubmenuState(key, true);
           }
         }
+      }
 
-        let t=0;
-        (function loop(){
-          fwRAF = requestAnimationFrame(loop);
-          if(!fwCtx) return;
-          const W = canvas.width, H = canvas.height;
+      /* Responsive resize */
+      window.addEventListener('resize', ()=>{
+        if(!isMobile()){ mobileSidebarOpen = false; }
+        applySidebarState();
+      });
 
-          fwCtx.fillStyle = 'rgba(0,0,0,0.12)';
-          fwCtx.fillRect(0,0,W,H);
-
-          if (t % 70 === 0) burst();
-          t++;
-
-          fwParticles = fwParticles.filter(p=>p.life>0);
-          for(const p of fwParticles){
-            p.x += p.vx; p.y += p.vy; p.vy += 0.02; p.life -= 1;
-            fwCtx.beginPath();
-            fwCtx.arc(p.x*devicePixelRatio, p.y*devicePixelRatio, 2*devicePixelRatio, 0, Math.PI*2);
-            fwCtx.fillStyle = p.color;
-            fwCtx.fill();
+      /* CSRF on forms */
+      document.querySelectorAll('form[method="post"]').forEach(form=>{
+        if(!form.querySelector('input[name="csrfmiddlewaretoken"]')){
+          const t = getCookie(CSRF_NAME);
+          if(t){
+            const inp = document.createElement('input');
+            inp.type='hidden'; inp.name='csrfmiddlewaretoken'; inp.value=t;
+            form.prepend(inp);
           }
-        })();
-      }
+        }
+      });
 
-      let cfRAF=null, cfCtx=null, confetti=[];
-      function startConfetti(id){
-        const canvas = document.getElementById(id);
-        if(!canvas) return;
-        cfCtx = canvas.getContext('2d');
-        fitCanvas(id);
+      initProfileDropdown();
+      initHero();
+    });
 
-        const Wc = canvas.clientWidth, Hc = canvas.clientHeight;
-        confetti = Array.from({length: 80}, () => ({
-          x: Math.random()*Wc,
-          y: Math.random()*(-Hc),
-          s: 4 + Math.random()*4,
-          a: Math.random()*Math.PI*2,
-          v: 1 + Math.random()*1.2,
-          col: Math.random()<0.6 ? '#ffd769' : '#ffffff'
-        }));
+    /* Service worker */
+    if('serviceWorker' in navigator){
+      try{ navigator.serviceWorker.register('{% static "sw.js" %}').catch(()=>{}); }catch(_){}
+    }
 
-        (function loop(){
-          cfRAF = requestAnimationFrame(loop);
-          if(!cfCtx) return;
-          const W = canvas.width, H = canvas.height;
-          cfCtx.clearRect(0,0,W,H);
-
-          confetti.forEach(c=>{
-            c.y += c.v;
-            c.x += Math.sin(c.a)*0.8;
-            c.a += 0.02;
-            if (c.y > (H/devicePixelRatio) + 10){
-              c.y = -10;
-              c.x = Math.random()*(W/devicePixelRatio);
-            }
-            cfCtx.save();
-            cfCtx.translate(c.x*devicePixelRatio, c.y*devicePixelRatio);
-            cfCtx.rotate(c.a);
-            cfCtx.fillStyle = c.col;
-            cfCtx.fillRect(-c.s/2*devicePixelRatio, -c.s/2*devicePixelRatio, c.s*devicePixelRatio, c.s*0.6*devicePixelRatio);
-            cfCtx.restore();
-          });
-        })();
-      }
-
-      function fitCanvas(id){
-        const cvs = document.getElementById(id);
-        if(!cvs) return;
-        const rect = cvs.getBoundingClientRect();
-        if (!rect.width || !rect.height) return;
-        cvs.width = Math.max(1, Math.floor(rect.width * devicePixelRatio));
-        cvs.height = Math.max(1, Math.floor(rect.height * devicePixelRatio));
-      }
-
-      function stopCanvas(id){
-        const cvs = document.getElementById(id);
-        if(!cvs) return;
-        cvs.width = 0; cvs.height = 0;
-        if (id === 'fwCanvas' && fwRAF){ cancelAnimationFrame(fwRAF); fwRAF=null; fwCtx=null; fwParticles=[]; }
-        if (id === 'confettiCanvas' && cfRAF){ cancelAnimationFrame(cfRAF); cfRAF=null; cfCtx=null; confetti=[]; }
-      }
-
-      // Toast helper & overlay API
-      window.BOS = window.BOS || {};
-      BOS.toast = function(msg, type){
-        try{
-          const host = document.getElementById('toastHost');
-          const el = document.createElement('div');
-          el.className = 'toast align-items-center text-bg-' + (type || 'primary') + ' border-0';
-          el.role = 'status'; el.ariaLive = 'polite'; el.ariaAtomic = 'true';
-          el.innerHTML = '<div class="d-flex"><div class="toast-body">'+ msg +'</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button></div>';
-          host.appendChild(el);
-          const t = new bootstrap.Toast(el, { delay: 3200 });
-          t.show();
-          el.addEventListener('hidden.bs.toast', () => el.remove());
-        }catch(_e){}
-      };
-      BOS.overlay = {
-        show(){ const o=document.getElementById('pageOverlay'); if(o) o.classList.add('show'); },
-        hide(){ const o=document.getElementById('pageOverlay'); if(o) o.classList.remove('show'); }
-      };
-
-      window.fitCanvas = fitCanvas;
-      window.stopCanvas = stopCanvas;
-    })();
+    /* Global APIs */
+    window.BOS = window.BOS || {};
+    BOS.toast = function(msg, type){
+      try{
+        const host = document.getElementById('toastHost');
+        const el = document.createElement('div');
+        el.className = 'toast align-items-center text-bg-' + (type||'primary') + ' border-0';
+        el.setAttribute('role','status');
+        el.innerHTML = '<div class="d-flex"><div class="toast-body">'+msg+'</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button></div>';
+        host.appendChild(el);
+        const t = new bootstrap.Toast(el,{delay:3200});
+        t.show();
+        el.addEventListener('hidden.bs.toast', ()=> el.remove());
+      }catch(_){}
+    };
+    BOS.overlay = {
+      show(){ const o=document.getElementById('pageOverlay'); if(o) o.classList.add('show'); },
+      hide(){ const o=document.getElementById('pageOverlay'); if(o) o.classList.remove('show'); }
+    };
+  })();
   </script>
 
   {% block extra_js %}{% endblock %}

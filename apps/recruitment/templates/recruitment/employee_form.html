@@ -1,26 +1,175 @@
 {% extends "base.html" %}
-{% block title %}Add Employee{% endblock %}
+{% load static %}
+
+{% block title %}Add Employee — BOS Lakshya{% endblock %}
+{% block breadcrumb %}Add Employee{% endblock %}
+
 {% block content %}
-<h1>Add Employee</h1>
-<form method="post" novalidate>
-  {% csrf_token %}
-  <div class="row g-3">
-    <div class="col-md-6">
-      {{ form.first_name.label_tag }} {{ form.first_name }} {{ form.first_name.errors }}
-    </div>
-    <div class="col-md-6">
-      {{ form.last_name.label_tag }} {{ form.last_name }} {{ form.last_name.errors }}
-    </div>
-    <div class="col-md-6">
-      {{ form.email.label_tag }} {{ form.email }} {{ form.email.errors }}
-    </div>
-    <div class="col-md-6">
-      {{ form.department.label_tag }} {{ form.department }} {{ form.department.errors }}
-    </div>
-    <div class="col-12 form-check">
-      {{ form.is_active }} {{ form.is_active.label_tag }} {{ form.is_active.errors }}
-    </div>
+<style>
+  .form-page-hd { margin-bottom: 20px; }
+  .form-page-hd h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.45rem; font-weight: 800;
+    color: #0f172a; margin: 0 0 3px;
+  }
+  .form-page-hd p { font-size: .85rem; color: #6b7280; margin: 0; }
+
+  .form-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,.07);
+    max-width: 760px;
+  }
+  .form-card-header {
+    padding: 15px 22px;
+    border-bottom: 1px solid #f3f4f6;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .form-card-header span {
+    font-weight: 700; font-size: 13.5px; color: #111827;
+  }
+  .form-card-header i { color: #3b82f6; font-size: 14px; }
+  .form-card-body { padding: 22px; }
+
+  .neo-label {
+    display: block; font-weight: 600;
+    font-size: 12.5px; color: #374151;
+    margin-bottom: 5px;
+  }
+  .neo-input, .neo-select {
+    width: 100%; padding: 9px 12px;
+    border: 1.5px solid #e5e7eb; border-radius: 9px;
+    font-size: 13.5px; font-family: 'DM Sans', sans-serif;
+    color: #0f172a; background: #fff; outline: none;
+    transition: border-color .18s, box-shadow .18s;
+  }
+  .neo-input:focus, .neo-select:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59,130,246,.12);
+  }
+  .neo-input.is-invalid { border-color: #ef4444; }
+  .errorlist { list-style: none; padding: 0; margin: 4px 0 0; }
+  .errorlist li { font-size: .78rem; color: #ef4444; }
+  .errorlist li::before { content: '⚠ '; }
+
+  .form-card-footer {
+    padding: 14px 22px;
+    border-top: 1px solid #f3f4f6;
+    display: flex; align-items: center; gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .btn-neo-primary {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 9px 20px; border-radius: 9px;
+    background: #3b82f6; border: none; color: #fff;
+    font-size: 13.5px; font-weight: 700;
+    font-family: 'DM Sans', sans-serif; cursor: pointer;
+    transition: background .18s, box-shadow .18s, transform .12s;
+    box-shadow: 0 2px 8px rgba(59,130,246,.3);
+  }
+  .btn-neo-primary:hover { background: #2563eb; transform: translateY(-1px); box-shadow: 0 4px 14px rgba(37,99,235,.35); }
+  .btn-neo-primary:active { transform: translateY(0); }
+
+  .btn-neo-outline {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 9px 16px; border-radius: 9px;
+    background: #fff; border: 1.5px solid #e5e7eb; color: #374151;
+    font-size: 13.5px; font-weight: 600;
+    font-family: 'DM Sans', sans-serif; cursor: pointer;
+    transition: background .15s, border-color .15s;
+    text-decoration: none;
+  }
+  .btn-neo-outline:hover { background: #f8f9fc; border-color: #d1d5db; }
+</style>
+
+<div class="form-page-hd">
+  <h1>Add Employee</h1>
+  <p>Create a new employee profile in BOS Lakshya</p>
+</div>
+
+<div class="form-card">
+  <div class="form-card-header">
+    <i class="fas fa-user-plus"></i>
+    <span>Employee Information</span>
   </div>
-  <button type="submit" class="btn btn-primary mt-3">Save</button>
-</form>
+
+  <div class="form-card-body">
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="row g-3">
+
+        <div class="col-md-6">
+          <label class="neo-label" for="{{ form.first_name.id_for_label }}">
+            First Name <span class="text-danger">*</span>
+          </label>
+          <input type="text"
+            id="{{ form.first_name.id_for_label }}"
+            name="{{ form.first_name.html_name }}"
+            value="{{ form.first_name.value|default:'' }}"
+            class="neo-input {% if form.first_name.errors %}is-invalid{% endif %}"
+            placeholder="First name">
+          {% if form.first_name.errors %}<ul class="errorlist">{% for e in form.first_name.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+        </div>
+
+        <div class="col-md-6">
+          <label class="neo-label" for="{{ form.last_name.id_for_label }}">
+            Last Name <span class="text-danger">*</span>
+          </label>
+          <input type="text"
+            id="{{ form.last_name.id_for_label }}"
+            name="{{ form.last_name.html_name }}"
+            value="{{ form.last_name.value|default:'' }}"
+            class="neo-input {% if form.last_name.errors %}is-invalid{% endif %}"
+            placeholder="Last name">
+          {% if form.last_name.errors %}<ul class="errorlist">{% for e in form.last_name.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+        </div>
+
+        <div class="col-md-6">
+          <label class="neo-label" for="{{ form.email.id_for_label }}">
+            Email Address <span class="text-danger">*</span>
+          </label>
+          <input type="email"
+            id="{{ form.email.id_for_label }}"
+            name="{{ form.email.html_name }}"
+            value="{{ form.email.value|default:'' }}"
+            class="neo-input {% if form.email.errors %}is-invalid{% endif %}"
+            placeholder="employee@company.com">
+          {% if form.email.errors %}<ul class="errorlist">{% for e in form.email.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+        </div>
+
+        <div class="col-md-6">
+          <label class="neo-label" for="{{ form.department.id_for_label }}">Department</label>
+          {{ form.department }}
+          {% if form.department.errors %}<ul class="errorlist">{% for e in form.department.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+        </div>
+
+        <div class="col-12">
+          <div class="form-check" style="margin-top:4px">
+            <input class="form-check-input" type="checkbox"
+              id="{{ form.is_active.id_for_label }}"
+              name="{{ form.is_active.html_name }}"
+              {% if form.is_active.value %}checked{% endif %}>
+            <label class="form-check-label" for="{{ form.is_active.id_for_label }}" style="font-size:13px;font-weight:600;color:#374151">
+              Active Employee
+            </label>
+          </div>
+          {% if form.is_active.errors %}<ul class="errorlist">{% for e in form.is_active.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+        </div>
+
+      </div>
+  </div>
+
+  <div class="form-card-footer">
+    <a href="{% url 'recruitment:employee_list' %}" class="btn-neo-outline">
+      <i class="fas fa-arrow-left"></i> Cancel
+    </a>
+    <button type="submit" class="btn-neo-primary">
+      <i class="fas fa-floppy-disk"></i> Save Employee
+    </button>
+  </div>
+  </form>
+</div>
 {% endblock %}

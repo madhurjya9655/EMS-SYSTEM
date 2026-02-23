@@ -1,11 +1,133 @@
 {% extends "base.html" %}
-{% block title %}Confirm Delete{% endblock %}
+{% load static %}
+
+{% block title %}Confirm Delete — BOS Lakshya{% endblock %}
+{% block breadcrumb %}Confirm Delete{% endblock %}
+
 {% block content %}
-<h1>Confirm Delete</h1>
-<p>Are you sure you want to delete {{ object.first_name }} {{ object.last_name }}?</p>
-<form method="post">
-  {% csrf_token %}
-  <button type="submit" class="btn btn-danger">Delete</button>
-  <a href="{% url 'employee_list' %}" class="btn btn-secondary">Cancel</a>
-</form>
+<style>
+  .confirm-wrap {
+    display: flex; align-items: flex-start;
+    justify-content: center; padding-top: 20px;
+  }
+  .confirm-card {
+    background: #fff; border: 1px solid #e5e7eb;
+    border-radius: 16px; overflow: hidden;
+    box-shadow: 0 4px 16px rgba(15,23,42,.08);
+    max-width: 480px; width: 100%;
+  }
+  .confirm-top {
+    background: #fef2f2; border-bottom: 1px solid #fecaca;
+    padding: 22px; text-align: center;
+  }
+  .confirm-icon {
+    width: 52px; height: 52px; border-radius: 50%;
+    background: #fee2e2; border: 2px solid #fca5a5;
+    display: grid; place-items: center;
+    margin: 0 auto 12px; color: #ef4444; font-size: 1.3rem;
+  }
+  .confirm-top h2 {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.1rem; font-weight: 800;
+    color: #991b1b; margin: 0 0 4px;
+  }
+  .confirm-top p { font-size: .84rem; color: #b91c1c; margin: 0; }
+
+  .confirm-body { padding: 22px; }
+  .confirm-info {
+    background: #f9fafb; border: 1px solid #e5e7eb;
+    border-radius: 10px; padding: 14px 16px;
+    margin-bottom: 16px;
+  }
+  .confirm-info-row { display: flex; gap: 10px; margin-bottom: 7px; font-size: 13px; }
+  .confirm-info-row:last-child { margin-bottom: 0; }
+  .confirm-info-label { min-width: 80px; color: #6b7280; font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; padding-top: 1px; }
+  .confirm-info-value { color: #111827; font-weight: 500; }
+
+  .confirm-warning {
+    display: flex; align-items: flex-start; gap: 9px;
+    background: #fffbeb; border: 1px solid #fde68a;
+    border-radius: 9px; padding: 11px 14px;
+    font-size: 12.5px; color: #92400e; margin-bottom: 20px;
+  }
+  .confirm-warning i { flex-shrink: 0; margin-top: 1px; color: #f59e0b; }
+
+  .confirm-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+  .btn-cancel {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 9px 18px; border-radius: 9px;
+    background: #fff; border: 1.5px solid #e5e7eb; color: #374151;
+    font-size: 13px; font-weight: 600;
+    font-family: 'DM Sans', sans-serif; cursor: pointer;
+    transition: background .15s, border-color .15s;
+    text-decoration: none;
+  }
+  .btn-cancel:hover { background: #f8f9fc; border-color: #d1d5db; }
+
+  .btn-delete {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 9px 18px; border-radius: 9px;
+    background: #ef4444; border: none; color: #fff;
+    font-size: 13px; font-weight: 700;
+    font-family: 'DM Sans', sans-serif; cursor: pointer;
+    transition: background .18s, box-shadow .18s, transform .12s;
+    box-shadow: 0 2px 8px rgba(239,68,68,.3);
+  }
+  .btn-delete:hover { background: #dc2626; box-shadow: 0 4px 14px rgba(220,38,38,.35); transform: translateY(-1px); }
+  .btn-delete:active { transform: translateY(0); }
+</style>
+
+<div class="confirm-wrap">
+  <div class="confirm-card">
+    <!-- Top danger band -->
+    <div class="confirm-top">
+      <div class="confirm-icon">
+        <i class="fas fa-trash-can"></i>
+      </div>
+      <h2>Delete Employee</h2>
+      <p>This action is permanent and cannot be reversed.</p>
+    </div>
+
+    <!-- Body -->
+    <div class="confirm-body">
+      <!-- Employee info summary -->
+      <div class="confirm-info">
+        <div class="confirm-info-row">
+          <div class="confirm-info-label">Name</div>
+          <div class="confirm-info-value">{{ object.first_name }} {{ object.last_name }}</div>
+        </div>
+        <div class="confirm-info-row">
+          <div class="confirm-info-label">Email</div>
+          <div class="confirm-info-value" style="color:#1d4ed8">{{ object.email }}</div>
+        </div>
+        {% if object.department %}
+        <div class="confirm-info-row">
+          <div class="confirm-info-label">Dept</div>
+          <div class="confirm-info-value">{{ object.department }}</div>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Warning note -->
+      <div class="confirm-warning">
+        <i class="fas fa-triangle-exclamation"></i>
+        <span>Deleting this employee will remove all their associated data including approver mappings and CC configurations. This <strong>cannot be undone</strong>.</span>
+      </div>
+
+      <!-- Actions -->
+      <div class="confirm-actions">
+        <a href="{% url 'recruitment:employee_list' %}" class="btn-cancel">
+          <i class="fas fa-xmark"></i> Cancel
+        </a>
+        <form method="post" style="margin:0;display:inline">
+          {% csrf_token %}
+          <button type="submit" class="btn-delete">
+            <i class="fas fa-trash-can"></i> Yes, Delete
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}

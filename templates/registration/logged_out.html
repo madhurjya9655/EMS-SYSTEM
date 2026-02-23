@@ -1,49 +1,221 @@
-{% extends "base.html" %}
 {% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Signed Out — BOS Lakshya</title>
+  <link rel="icon" href="{% static 'favicon.ico' %}" type="image/x-icon">
+  <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet" referrerpolicy="no-referrer">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 14px;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+    :focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; border-radius: 6px; }
 
-{% block title %}Signed Out — BOS Lakshya{% endblock %}
+    /* PAGE */
+    .logout-page {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+      background: #eff6ff;
+      background-image:
+        radial-gradient(ellipse 70% 50% at 15%   0%, rgba(59,130,246,.14) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 50% at 85% 100%, rgba(37,99,235,.09) 0%, transparent 60%);
+    }
 
-{% block content %}
-<style>
-  :root{ --primary:#3b82f6; }
-  .logout-wrap{
-    min-height: calc(100vh - var(--header-h, 0px));
-    display:flex;align-items:center;justify-content:center;background:#f6f8fb;padding:2rem 1rem;
-  }
-  .logout-card{
-    width:100%;max-width:560px;background:#fff;border:1px solid #e5e7eb;border-radius:16px;
-    box-shadow:0 12px 40px rgba(2,6,23,.08);overflow:hidden;text-align:center;position:relative;
-  }
-  .logout-head{
-    background: linear-gradient(135deg, var(--primary) 0%, #60a5fa 100%);
-    color:#fff;padding:1.25rem 1rem;position:relative;overflow:hidden;
-  }
-  .logout-body{padding:2rem 2rem 1.5rem}
-  .logout-logo{height:60px;margin-bottom:.75rem;border-radius:10px;box-shadow:0 6px 16px rgba(0,0,0,.18)}
-  .btn-primary{background:var(--primary);border-color:var(--primary);font-weight:700;border-radius:10px;padding:.65rem 1rem}
-  .btn-primary:hover{filter:brightness(.95)}
+    /* CARD */
+    .logout-card {
+      width: 100%;
+      max-width: 440px;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 24px 64px rgba(15,23,42,.13), 0 4px 16px rgba(15,23,42,.06);
+    }
 
-  /* subtle glow ring */
-  .ring{
-    position:absolute; inset:-60% -20% auto -20%; height:220px;
-    background: radial-gradient(closest-side, rgba(255,255,255,.25), transparent 70%);
-    filter: blur(10px);
-  }
-</style>
+    /* TOP BAND */
+    .logout-top {
+      background: linear-gradient(148deg, #1d4ed8 0%, #3b82f6 50%, #60a5fa 100%);
+      padding: 2.5rem 2rem 2rem;
+      position: relative;
+      overflow: hidden;
+      text-align: center;
+    }
+    .logout-top::before {
+      content: '';
+      position: absolute;
+      width: 280px; height: 280px;
+      border-radius: 50%;
+      background: rgba(255,255,255,.07);
+      top: -80px; right: -70px;
+      pointer-events: none;
+    }
+    .logout-top::after {
+      content: '';
+      position: absolute;
+      width: 180px; height: 180px;
+      border-radius: 50%;
+      background: rgba(255,255,255,.05);
+      bottom: -60px; left: -40px;
+      pointer-events: none;
+    }
 
-<div class="logout-wrap">
+    .logout-logo-box {
+      position: relative; z-index: 1;
+      width: 72px; height: 72px;
+      border-radius: 18px;
+      background: rgba(255,255,255,.18);
+      border: 1.5px solid rgba(255,255,255,.35);
+      display: grid; place-items: center;
+      margin: 0 auto .9rem;
+      box-shadow: 0 10px 28px rgba(0,0,0,.20);
+    }
+    .logout-logo-box img {
+      width: 44px; height: 44px;
+      border-radius: 10px; object-fit: contain;
+    }
+
+    .logout-top h1 {
+      position: relative; z-index: 1;
+      font-family: 'Syne', sans-serif;
+      font-size: 1.25rem; font-weight: 800;
+      color: #fff; margin: 0 0 .25rem;
+      letter-spacing: -.2px;
+    }
+    .logout-top p {
+      position: relative; z-index: 1;
+      font-size: .84rem;
+      color: rgba(255,255,255,.76);
+      margin: 0 0 1.1rem;
+    }
+
+    /* Checkmark badge */
+    .logout-check {
+      position: relative; z-index: 1;
+      width: 44px; height: 44px;
+      border-radius: 50%;
+      background: rgba(255,255,255,.20);
+      border: 2px solid rgba(255,255,255,.48);
+      display: grid; place-items: center;
+      margin: 0 auto;
+      color: #fff; font-size: 1.05rem;
+    }
+
+    /* BODY */
+    .logout-body {
+      padding: 1.75rem 2rem;
+      text-align: center;
+    }
+
+    .logout-success {
+      display: flex; align-items: center;
+      justify-content: center; gap: .55rem;
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 10px;
+      padding: .75rem 1rem;
+      color: #166534; font-size: .87rem; font-weight: 600;
+      margin-bottom: 1.15rem;
+    }
+    .logout-success i { flex-shrink: 0; }
+
+    .logout-msg {
+      font-size: .87rem;
+      color: #6b7280;
+      line-height: 1.65;
+      margin-bottom: 1.5rem;
+    }
+    .logout-msg strong { color: #374151; }
+
+    /* Sign in button */
+    .signin-btn {
+      display: flex; align-items: center;
+      justify-content: center; gap: .5rem;
+      width: 100%; padding: .82rem 1rem;
+      background: #3b82f6; border: none;
+      border-radius: 10px; color: #fff;
+      font-size: .93rem; font-weight: 700;
+      font-family: 'DM Sans', sans-serif;
+      cursor: pointer; text-decoration: none;
+      transition: background .18s, box-shadow .18s, transform .12s;
+      box-shadow: 0 4px 14px rgba(59,130,246,.35);
+    }
+    .signin-btn:hover {
+      background: #2563eb; color: #fff;
+      box-shadow: 0 6px 20px rgba(37,99,235,.4);
+      transform: translateY(-1px);
+    }
+    .signin-btn:active { transform: translateY(0); box-shadow: 0 2px 8px rgba(37,99,235,.2); }
+
+    /* FOOTER */
+    .logout-foot {
+      padding: 0 2rem 1.35rem;
+      text-align: center;
+      font-size: .73rem;
+      color: #9ca3af;
+    }
+
+    @media (max-width: 480px) {
+      .logout-page { align-items: flex-start; padding: 1.5rem .75rem; }
+      .logout-card { border-radius: 16px; }
+      .logout-body { padding: 1.5rem 1.25rem; }
+      .logout-foot { padding: 0 1.25rem 1.25rem; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="logout-page">
   <div class="logout-card">
-    <div class="logout-head">
-      <div class="ring"></div>
-      <img src="{% static 'images/bos_logo.png' %}" alt="BOS Lakshya Logo" class="logout-logo">
-      <h5 class="m-0 fw-bold">You are logged out</h5>
-    </div>
-    <div class="logout-body">
-      <div class="alert alert-success shadow-sm mb-3">
-        <strong>Success!</strong> You have been logged out safely.
+
+    <!-- TOP BAND -->
+    <div class="logout-top">
+      <div class="logout-logo-box">
+        <img src="{% static 'images/bos_logo.png' %}" alt="BOS Lakshya logo">
       </div>
-      <a href="{% url 'login' %}" class="btn btn-primary w-100">Sign in again</a>
+      <h1>BOS Lakshya</h1>
+      <p>Employee Management &amp; Operations Platform</p>
+      <div class="logout-check" aria-hidden="true">
+        <i class="fas fa-check"></i>
+      </div>
     </div>
+
+    <!-- BODY -->
+    <div class="logout-body">
+      <div class="logout-success" role="status">
+        <i class="fas fa-circle-check"></i>
+        You have been signed out successfully.
+      </div>
+
+      <p class="logout-msg">
+        Your session has ended safely.<br>
+        Sign in again to access <strong>BOS Lakshya</strong>.
+      </p>
+
+      <a href="{% url 'login' %}" class="signin-btn">
+        <i class="fas fa-right-to-bracket" aria-hidden="true"></i>
+        Sign In Again
+      </a>
+    </div>
+
+    <div class="logout-foot">
+      © {% now "Y" %} BOS Lakshya &nbsp;·&nbsp; Developed by Madhurjya Bora
+    </div>
+
   </div>
 </div>
-{% endblock %}
+
+</body>
+</html>
