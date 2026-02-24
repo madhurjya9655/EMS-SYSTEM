@@ -1,8 +1,7 @@
-# apps/reimbursement/services.py
+# FILE: apps/reimbursement/services.py
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from django.db import transaction
 from django.db.models import Q, Count, Exists, OuterRef, F
@@ -23,8 +22,11 @@ class ServiceResult:
 
 def _all_included_lines_finance_approved(req_id: int) -> bool:
     """
-    Helper used by some admin workflows/tests. Kept here, but **do not**
-    derive parent status with this; always call the model method for that.
+    Helper used by some admin workflows/tests.
+
+    NOTE:
+    - This function is *only* a helper.
+    - Authoritative request status is derived by ReimbursementRequest.apply_derived_status_from_bills().
     """
     agg = (
         ReimbursementRequest.objects
@@ -60,7 +62,6 @@ def apply_derived_status_from_bills(
         .select_for_update()
         .get(id=request_id)
     )
-    # Delegates all rules + monotonic guard to the model
     req.apply_derived_status_from_bills(
         actor=actor, reason=reason or "services.apply_derived_status_from_bills"
     )
@@ -74,18 +75,19 @@ def transition_request_status(
     """
     Safe transition wrapper for legacy callers.
 
-    - Defers validation to the model (which blocks illegal moves like changing PAID, etc.).
+    - Defers validation to the model (blocks illegal moves like changing PAID, etc.).
     - Uses `admin_force_move` for explicit admin/ops transitions (except PAID).
     - Immediately re-derives from bills afterward to keep the parent status honest.
+
+    IMPORTANT:
+    In bill-split workflow, explicit transitions should be rare; prefer bill actions.
     """
     req = ReimbursementRequest.objects.select_for_update().get(id=request_id)
 
-    # Use the model's admin method (it internally validates targets and forbids setting PAID here)
     req.admin_force_move(
         target_status, actor=actor, reason=reason or "services.transition_request_status"
     )
 
-    # After any explicit move, re-derive so that request matches bill truth
     req.apply_derived_status_from_bills(
         actor=actor, reason="services.post-transition derive"
     )
@@ -94,15 +96,18 @@ def transition_request_status(
 
 
 # ---------------------------------------------------------------------------
-# Canonical queue helpers (align UIs to the written workflow spec)
+# Canonical queue helpers (align UIs to the bill-level split workflow)
 # ---------------------------------------------------------------------------
 
 def qs_finance_verification_queue():
     """
     Finance — Verification Queue
 
-    Requests that contain at least one INCLUDED bill in SUBMITTED or
-    EMPLOYEE_RESUBMITTED. Excludes final (paid/rejected) requests.
+    Requests where Finance needs to verify bills:
+      - At least one INCLUDED bill is SUBMITTED or EMPLOYEE_RESUBMITTED
+      - Request is not final (PAID / REJECTED)
+
+    This is the "work to do" queue for Finance.
     """
     L = ReimbursementLine
     R = ReimbursementRequest
@@ -124,49 +129,44 @@ def qs_finance_verification_queue():
 
 def qs_finance_rejected_bills_queue():
     """
-    Finance — Rejected Bills Queue
+    Finance — Rejected Bills (still with employee)
 
-    Bills that are FINANCE_REJECTED (still with employee). These should *not*
-    be in the active finance verification queue until the employee resubmits.
+    Bills that are FINANCE_REJECTED are *not* actionable by Finance until the employee resubmits.
+    This queryset is useful for reporting/visibility (optional UI).
+
+    NOTE:
+    We DO NOT require request.status filters here because in split workflow the request can be
+    "mixed" (some lines approved and moving forward, some rejected and returned).
     """
     L = ReimbursementLine
-
     return (
         L.objects
-        .select_related("request", "expense_item")
+        .select_related("request", "expense_item", "request__created_by")
         .filter(
             status=L.Status.INCLUDED,
             bill_status=L.BillStatus.FINANCE_REJECTED,
-            request__status__in=[
-                ReimbursementRequest.Status.PENDING_FINANCE_VERIFY,
-                ReimbursementRequest.Status.PENDING_MANAGER,  # request may be mixed
-            ],
         )
-        .order_by("id")
+        .order_by("-updated_at", "id")
     )
 
 
 def qs_finance_resubmitted_bills_queue():
     """
-    Optional: "Rejected & Resubmitted" view
+    Finance — Resubmitted Bills Queue
 
-    Bills that were previously rejected and are now EMPLOYEE_RESUBMITTED,
-    i.e., back to finance verification.
+    Bills corrected by employee and resubmitted to Finance:
+      - bill_status == EMPLOYEE_RESUBMITTED
+      - INCLUDED
     """
     L = ReimbursementLine
-
     return (
         L.objects
-        .select_related("request", "expense_item")
+        .select_related("request", "expense_item", "request__created_by")
         .filter(
             status=L.Status.INCLUDED,
             bill_status=L.BillStatus.EMPLOYEE_RESUBMITTED,
-            request__status__in=[
-                ReimbursementRequest.Status.PENDING_FINANCE_VERIFY,
-                ReimbursementRequest.Status.PENDING_MANAGER,  # request may be mixed
-            ],
         )
-        .order_by("id")
+        .order_by("-updated_at", "id")
     )
 
 
@@ -175,11 +175,12 @@ def qs_finance_settlement_queue():
     Finance — Settlement Queue
 
     Requests eligible for settlement:
-      - All INCLUDED bills are FINANCE_APPROVED
-      - Approvals satisfied:
+      - All INCLUDED bills are FINANCE_APPROVED (no pending, no rejected, no resubmitted)
+      - Approval chain satisfied:
           * If require_management_approval=True: management approved
           * Else: manager approved
       - Not paid yet
+      - Request not rejected
     """
     L = ReimbursementLine
     R = ReimbursementRequest
@@ -201,7 +202,7 @@ def qs_finance_settlement_queue():
             _total_included__gt=0,
             _total_included=F("_approved_included"),
         )
-        .exclude(status=R.Status.PAID)
+        .exclude(status__in=[R.Status.PAID, R.Status.REJECTED])
     )
 
     if require_mgmt:

@@ -1,3 +1,6 @@
+{# FILE: templates/reimbursement/manager_queue.html #}
+{# PURPOSE: Manager queue listing (only pending_manager requests should appear) #}
+{# UPDATED: 2026-02-24 #}
 {% extends "base.html" %}
 {% load i18n %}
 
@@ -66,6 +69,12 @@
         </tbody>
       </table>
     </div>
+
+    <div class="small text-muted mt-2">
+      Only requests in <strong>Pending Manager</strong> appear here.
+      Requests with Finance-Rejected bills should not reach this queue.
+    </div>
+
   </div>
 </div>
 {% endblock %}

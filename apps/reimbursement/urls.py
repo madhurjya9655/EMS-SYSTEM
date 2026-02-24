@@ -1,17 +1,21 @@
+# FILE: apps/reimbursement/urls.py
+# UPDATED: 2026-02-24
 from __future__ import annotations
 
 from django.urls import path
 
 from . import views
 from . import views_analytics
-from . import views_attach  # << NEW
+from . import views_attach  # NEW
 
 app_name = "reimbursement"
+
 
 # Lazy loader to avoid import-time issues for the admin view
 def approver_mapping_admin_view(*args, **kwargs):
     from .views import ApproverMappingAdminView
     return ApproverMappingAdminView.as_view()(*args, **kwargs)
+
 
 urlpatterns = [
     # ------------------------------
@@ -29,22 +33,24 @@ urlpatterns = [
     path("create/", views.ReimbursementCreateView.as_view(), name="create_request"),
     path("my/", views.MyReimbursementsView.as_view(), name="my_reimbursements"),
     path("bulk-delete/", views.ReimbursementBulkDeleteView.as_view(), name="bulk_delete"),
+
     path("request/<int:pk>/edit/", views.ReimbursementRequestUpdateView.as_view(), name="request_edit"),
     path("request/<int:pk>/delete/", views.ReimbursementRequestDeleteView.as_view(), name="request_delete"),
     path("request/<int:pk>/resubmit/", views.ReimbursementResubmitView.as_view(), name="request_resubmit"),
 
-    # Canonical request detail
+    # Canonical request detail (ONE canonical route)
     path("request/<int:pk>/", views.ReimbursementDetailView.as_view(), name="request_detail"),
-    # ✅ NEW: per-line & bulk delete on request page
-    path("line/<int:pk>/delete/", views.RequestLineDeleteView.as_view(), name="line_delete"),
+
+    # ✅ FIXED: per-line delete MUST be under request/<pk>/..., because the view expects request pk
+    path("request/<int:pk>/line/delete/", views.RequestLineDeleteView.as_view(), name="request_line_delete"),
+
+    # ✅ Bulk delete remains
     path("request/<int:pk>/lines/delete/", views.RequestLinesBulkDeleteView.as_view(), name="request_lines_bulk_delete"),
 
-    # ✅ BACKWARD COMPATIBILITY (ADMIN / OLD TEMPLATES) – kept intentionally
-    path(
-        "request/<int:pk>/",
-        views.ReimbursementDetailView.as_view(),
-        name="reimbursement_detail",
-    ),
+    # ✅ BACKWARD COMPATIBILITY (ADMIN / OLD TEMPLATES)
+    # Do NOT duplicate the same URL pattern; Django will only match the first one.
+    # Provide an alias route instead.
+    path("request/<int:pk>/detail/", views.ReimbursementDetailView.as_view(), name="reimbursement_detail"),
 
     # ------------------------------
     # Manager / Management (REQUEST-LEVEL ONLY)
@@ -60,14 +66,15 @@ urlpatterns = [
     path("finance/", views.FinanceQueueView.as_view(), name="finance_pending"),
     path("finance/<int:pk>/verify/", views.FinanceVerifyView.as_view(), name="finance_verify"),
     path("finance/<int:pk>/review/", views.FinanceReviewView.as_view(), name="finance_review"),
-    # ✅ NEW: Finance settlement queue (manager/management approved → ready to pay)
+
+    # ✅ Finance settlement queue
     path("finance/settlement/", views.FinanceSettlementQueueView.as_view(), name="finance_settlement"),
     path("finance/<int:pk>/delete/", views.FinanceDeleteRequestView.as_view(), name="finance_delete"),
 
-    # ✅ NEW: attach missing receipt to a bill line
+    # ✅ attach missing receipt to a bill line
     path("finance/line/<int:pk>/attach/", views_attach.FinanceAttachReceiptView.as_view(), name="finance_attach_receipt"),
 
-    # ✅ NEW: Rejected Bills Queue (resubmitted bills only)
+    # ✅ Rejected Bills Queue (resubmitted bills only)
     path("finance/rejected-bills/", views.FinanceRejectedBillsQueueView.as_view(), name="finance_rejected_bills_queue"),
 
     # ------------------------------
@@ -79,9 +86,9 @@ urlpatterns = [
     path("admin/status-summary/", views.AdminStatusSummaryView.as_view(), name="admin_status_summary"),
     path("admin/approver-mapping/", approver_mapping_admin_view, name="approver_mapping_admin"),
 
-    # Export
-    path("admin/export.csv", views.ReimbursementExportCSVView.as_view(), name="admin_export"),
+    # ✅ Export (ONE canonical route) + optional alias
     path("admin/export.csv", views.ReimbursementExportCSVView.as_view(), name="admin_export_csv"),
+    path("admin/export/", views.ReimbursementExportCSVView.as_view(), name="admin_export"),  # optional alias
 
     # ------------------------------
     # Analytics (Dashboard + APIs)

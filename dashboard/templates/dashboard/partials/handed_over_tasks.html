@@ -3,13 +3,21 @@
 
 {% comment %}
 Two modes:
-
 A) Summary (default)
-B) Detailed (`?handover=1`) — shows the actual handed-over items with in-place actions.
-Links preserve the currently selected task_type & today_only flags.
+B) Detailed (`?handover=1`) — shows handed-over items with actions.
+
+This template is hardened:
+- safe defaults when context keys are missing
+- safe query building (no ?&)
 {% endcomment %}
 
-{% if request.GET.handover == '1' %}
+{# ---- safe fallbacks ---- #}
+{% with sel=selected|default:request.GET.task_type %}
+{% with ho_mode=request.GET.handover|default:"0" %}
+{% with ho=handed_over|default:{} %}
+{% with cl=ho.checklist|default:list dl=ho.delegation|default:list ht=ho.help_ticket|default:list %}
+
+{% if ho_mode == '1' %}
   {# -------------------- DETAILED MODE -------------------- #}
   <div class="card mt-4">
     <div class="card-header d-flex justify-content-between align-items-center">
@@ -18,7 +26,7 @@ Links preserve the currently selected task_type & today_only flags.
       </div>
       <div class="d-flex gap-2">
         <a class="btn btn-sm btn-outline-secondary"
-           href="?{% if selected %}task_type={{ selected }}&{% endif %}{% if today_only %}today_only=1{% endif %}">
+           href="?{% if sel %}task_type={{ sel }}&{% endif %}{% if today_only %}today_only=1&{% endif %}">
           Back to summary
         </a>
       </div>
@@ -40,9 +48,9 @@ Links preserve the currently selected task_type & today_only flags.
             </tr>
           </thead>
           <tbody>
-            {% if handed_over.checklist %}
-              {% for row in handed_over.checklist %}
-                {% with t=row.task ho=row.handover %}
+            {% if cl %}
+              {% for row in cl %}
+                {% with t=row.task %}
                   <tr>
                     <td>{{ t.id }}</td>
                     <td>
@@ -73,7 +81,7 @@ Links preserve the currently selected task_type & today_only flags.
                       {% endif %}
                       <a class="btn btn-outline-primary btn-sm"
                          href="{% url 'tasks:checklist_detail' t.id %}"
-                         target="_blank">Open</a>
+                         target="_blank" rel="noopener">Open</a>
                     </td>
                   </tr>
                 {% endwith %}
@@ -100,9 +108,9 @@ Links preserve the currently selected task_type & today_only flags.
             </tr>
           </thead>
           <tbody>
-            {% if handed_over.delegation %}
-              {% for row in handed_over.delegation %}
-                {% with t=row.task ho=row.handover %}
+            {% if dl %}
+              {% for row in dl %}
+                {% with t=row.task %}
                   <tr>
                     <td>{{ t.id }}</td>
                     <td>
@@ -133,7 +141,7 @@ Links preserve the currently selected task_type & today_only flags.
                       {% endif %}
                       <a class="btn btn-outline-primary btn-sm"
                          href="{% url 'tasks:delegation_detail' t.id %}"
-                         target="_blank">Open</a>
+                         target="_blank" rel="noopener">Open</a>
                     </td>
                   </tr>
                 {% endwith %}
@@ -160,9 +168,9 @@ Links preserve the currently selected task_type & today_only flags.
             </tr>
           </thead>
           <tbody>
-            {% if handed_over.help_ticket %}
-              {% for row in handed_over.help_ticket %}
-                {% with t=row.task ho=row.handover %}
+            {% if ht %}
+              {% for row in ht %}
+                {% with t=row.task %}
                   <tr>
                     <td>{{ t.id }}</td>
                     <td>
@@ -197,7 +205,7 @@ Links preserve the currently selected task_type & today_only flags.
                       {% endif %}
                       <a class="btn btn-outline-primary btn-sm"
                          href="{% url 'tasks:help_ticket_detail' t.id %}"
-                         target="_blank">Open</a>
+                         target="_blank" rel="noopener">Open</a>
                     </td>
                   </tr>
                 {% endwith %}
@@ -229,35 +237,38 @@ Links preserve the currently selected task_type & today_only flags.
             </tr>
           </thead>
           <tbody>
-            {% with cl=handed_over.checklist dl=handed_over.delegation ht=handed_over.help_ticket %}
-              <tr>
-                <td>Checklist <span class="badge bg-dark ms-1">Handover</span></td>
-                <td class="text-center">{{ cl|length|default:"0" }}</td>
-                <td class="text-center">
-                  <a class="btn btn-sm btn-outline-primary"
-                     href="?task_type=checklist{% if today_only %}&today_only=1{% endif %}&handover=1">View</a>
-                </td>
-              </tr>
-              <tr>
-                <td>Delegation <span class="badge bg-dark ms-1">Handover</span></td>
-                <td class="text-center">{{ dl|length|default:"0" }}</td>
-                <td class="text-center">
-                  <a class="btn btn-sm btn-outline-primary"
-                     href="?task_type=delegation{% if today_only %}&today_only=1{% endif %}&handover=1">View</a>
-                </td>
-              </tr>
-              <tr>
-                <td>Help Ticket <span class="badge bg-dark ms-1">Handover</span></td>
-                <td class="text-center">{{ ht|length|default:"0" }}</td>
-                <td class="text-center">
-                  <a class="btn btn-sm btn-outline-primary"
-                     href="?task_type=help_ticket{% if today_only %}&today_only=1{% endif %}&handover=1">View</a>
-                </td>
-              </tr>
-            {% endwith %}
+            <tr>
+              <td>Checklist <span class="badge bg-dark ms-1">Handover</span></td>
+              <td class="text-center">{{ cl|length|default:"0" }}</td>
+              <td class="text-center">
+                <a class="btn btn-sm btn-outline-primary"
+                   href="?task_type=checklist{% if today_only %}&today_only=1{% endif %}&handover=1">View</a>
+              </td>
+            </tr>
+            <tr>
+              <td>Delegation <span class="badge bg-dark ms-1">Handover</span></td>
+              <td class="text-center">{{ dl|length|default:"0" }}</td>
+              <td class="text-center">
+                <a class="btn btn-sm btn-outline-primary"
+                   href="?task_type=delegation{% if today_only %}&today_only=1{% endif %}&handover=1">View</a>
+              </td>
+            </tr>
+            <tr>
+              <td>Help Ticket <span class="badge bg-dark ms-1">Handover</span></td>
+              <td class="text-center">{{ ht|length|default:"0" }}</td>
+              <td class="text-center">
+                <a class="btn btn-sm btn-outline-primary"
+                   href="?task_type=help_ticket{% if today_only %}&today_only=1{% endif %}&handover=1">View</a>
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
     </div>
   </div>
 {% endif %}
+
+{% endwith %}
+{% endwith %}
+{% endwith %}
+{% endwith %}

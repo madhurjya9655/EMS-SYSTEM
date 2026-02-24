@@ -1,3 +1,6 @@
+{# FILE: templates/reimbursement/management_review.html #}
+{# PURPOSE: Management should review ONLY Finance-Approved bills (same visibility rule as Manager) #}
+{# UPDATED: 2026-02-24 #}
 {% extends "base.html" %}
 {% load i18n %}
 
@@ -20,6 +23,57 @@
 <div class="row">
   <div class="col-md-8">
     {% include "reimbursement/_request_summary_block.html" with request_obj=object only %}
+
+    <div class="alert alert-info">
+      <strong>Note:</strong>
+      Management reviews only <strong>Finance-Approved</strong> bills.
+      Finance-Rejected bills are returned to the employee (edit + resubmit) and are not shown here.
+    </div>
+
+    <div class="card">
+      <div class="card-header">Bills (Finance-Approved Only)</div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th style="width:50px;">#</th>
+                <th style="width:140px;">Category</th>
+                <th style="width:120px;">Date</th>
+                <th>Description</th>
+                <th class="text-end" style="width:140px;">Amount</th>
+                <th style="width:80px;">Bill</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for line in approved_lines %}
+              <tr>
+                <td>{{ forloop.counter }}</td>
+                <td>{{ line.expense_item.get_category_display|default:line.expense_item.category }}</td>
+                <td>{{ line.expense_item.date|date:"d M Y" }}</td>
+                <td style="white-space:pre-line;">{{ line.description|default:line.expense_item.description|default:"-" }}</td>
+                <td class="text-end">₹{{ line.amount|floatformat:2 }}</td>
+                <td>
+                  {% if line.receipt_file or line.expense_item.receipt_file %}
+                    <a href="{% url 'reimbursement:receipt_line' line.id %}" target="_blank" rel="noopener">View</a>
+                  {% else %}
+                    <span class="text-muted">No file</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% empty %}
+              <tr>
+                <td colspan="6" class="text-center text-muted py-3">
+                  No Finance-Approved bills are available for Management review yet.
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <div class="col-md-4">

@@ -1,3 +1,4 @@
+# FILE: apps/reimbursement/models.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -38,6 +39,7 @@ GST_TYPE_CHOICES = [
 # ---------------------------------------------------------------------------
 # File upload helpers + validation
 # ---------------------------------------------------------------------------
+
 
 def receipt_upload_path(instance: models.Model, filename: str) -> str:
     today = timezone.now()
@@ -91,9 +93,11 @@ def validate_receipt_file(value) -> None:
             params={"max_mb": max_mb},
         )
 
+
 # ---------------------------------------------------------------------------
 # Admin-configurable reimbursement settings
 # ---------------------------------------------------------------------------
+
 
 class ReimbursementSettings(models.Model):
     admin_emails = models.TextField(blank=True, default="")
@@ -158,9 +162,11 @@ class ReimbursementSettings(models.Model):
     def approver_bcc_list(self) -> list[str]:
         return _parse_email_list(self.approver_bcc_emails)
 
+
 # ---------------------------------------------------------------------------
 # Per-employee approver mapping
 # ---------------------------------------------------------------------------
+
 
 class ReimbursementApproverMapping(models.Model):
     employee = models.OneToOneField(
@@ -199,9 +205,11 @@ class ReimbursementApproverMapping(models.Model):
         except cls.DoesNotExist:
             return None
 
+
 # ---------------------------------------------------------------------------
 # ExpenseItem
 # ---------------------------------------------------------------------------
+
 
 class ExpenseItem(models.Model):
     class Status(models.TextChoices):
@@ -277,9 +285,11 @@ class ExpenseItem(models.Model):
 
         return count
 
+
 # ---------------------------------------------------------------------------
 # ReimbursementRequest + lines
 # ---------------------------------------------------------------------------
+
 
 class ReimbursementRequest(models.Model):
     class Status(models.TextChoices):
@@ -381,21 +391,20 @@ class ReimbursementRequest(models.Model):
 
     def derive_status_from_bills(self) -> str:
         """
-        STRICT BUSINESS RULE HOTFIX (2026-02-24):
-          - If ANY INCLUDED bill is FINANCE_REJECTED, the workflow must stop permanently
-            and the request must NOT move to Manager. We enforce this by making the
-            request final: Status.REJECTED.
+        PARTIAL FLOW (Restored):
+          - Bills move independently.
+          - If at least one bill is still pending finance (SUBMITTED / EMPLOYEE_RESUBMITTED),
+            the request stays in Finance Verification.
+          - If there are NO pending bills and at least one bill is FINANCE_APPROVED,
+            the request can move forward to Manager (even if some other bills are FINANCE_REJECTED).
+          - If ALL included bills are FINANCE_REJECTED (and none approved/pending),
+            the request becomes REJECTED.
 
-        Remaining derivation (legacy behavior retained where safe):
-          Let:
-            PENDING = {SUBMITTED, EMPLOYEE_RESUBMITTED}
-            APPROVED = {FINANCE_APPROVED}
-            REJECTED = {FINANCE_REJECTED}
-
+        Rule summary:
           - No INCLUDED lines -> DRAFT
-          - If any REJECTED -> REJECTED (FINAL)   <-- critical rule
-          - Else if any PENDING -> PENDING_FINANCE_VERIFY
-          - Else if any APPROVED -> PENDING_MANAGER
+          - Any pending -> PENDING_FINANCE_VERIFY
+          - Else if any approved -> PENDING_MANAGER
+          - Else if any rejected -> REJECTED
           - Else -> PENDING_FINANCE_VERIFY
         """
         L = ReimbursementLine
@@ -405,16 +414,18 @@ class ReimbursementRequest(models.Model):
         if not statuses:
             return self.Status.DRAFT
 
-        # CRITICAL RULE: finance rejection hard-stops workflow
-        if L.BillStatus.FINANCE_REJECTED in statuses:
-            return self.Status.REJECTED
-
         pending_set = {L.BillStatus.SUBMITTED, L.BillStatus.EMPLOYEE_RESUBMITTED}
         if statuses & pending_set:
             return self.Status.PENDING_FINANCE_VERIFY
 
+        # No pending bills remaining:
         if L.BillStatus.FINANCE_APPROVED in statuses:
+            # Allow forward movement even if some bills are finance_rejected.
             return self.Status.PENDING_MANAGER
+
+        if L.BillStatus.FINANCE_REJECTED in statuses:
+            # This implies: no pending, no approved => all are rejected (or rejected-only mix).
+            return self.Status.REJECTED
 
         return self.Status.PENDING_FINANCE_VERIFY
 
@@ -810,6 +821,7 @@ class ReimbursementRequest(models.Model):
             extra={"type": "admin_force_move"},
         )
 
+
 class ReimbursementLine(models.Model):
     class Status(models.TextChoices):
         INCLUDED = "included", _("Included")
@@ -1120,9 +1132,11 @@ class ReimbursementLine(models.Model):
             extra={"line_id": self.pk, "type": "bill_paid"},
         )
 
+
 # ---------------------------------------------------------------------------
 # Audit logging
 # ---------------------------------------------------------------------------
+
 
 class ReimbursementLog(models.Model):
     class Action(models.TextChoices):
@@ -1187,9 +1201,11 @@ class ReimbursementLog(models.Model):
         )
         return obj
 
+
 # ---------------------------------------------------------------------------
 # LEGACY SIMPLE MODEL (kept for backwards compatibility)
 # ---------------------------------------------------------------------------
+
 
 class Reimbursement(models.Model):
     STATUS_CHOICES = [
@@ -1213,7 +1229,7 @@ class Reimbursement(models.Model):
     class Meta:
         ordering = ["-submitted_at"]
         verbose_name = "Legacy Reimbursement"
-        verbose_name_plural = "Legacy Reimbursements"
+        verbose_name_plural = "Legacy Legacy Reimbursements"
 
     def __str__(self) -> str:  # pragma: no cover
         return f"Legacy Reimbursement #{self.pk} – {self.employee} – {self.amount}"
