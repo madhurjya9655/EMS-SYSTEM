@@ -43,6 +43,7 @@ def receipt_upload_path(instance: models.Model, filename: str) -> str:
     today = timezone.now()
     return f"reimbursement/receipts/{today:%Y/%m/%d}/{filename}"
 
+
 def _parse_email_list(raw: str) -> list[str]:
     if not raw:
         return []
@@ -63,6 +64,7 @@ def _parse_email_list(raw: str) -> list[str]:
         seen.add(low)
         out.append(low)
     return out
+
 
 def validate_receipt_file(value) -> None:
     """
@@ -315,8 +317,7 @@ class ReimbursementRequest(models.Model):
     manager_comment = models.TextField(blank=True, default="")
     manager_decided_at = models.DateTimeField(null=True, blank=True)
 
-    management_decision = models.CharField(max_length=16, blank=True, default=""
-    )
+    management_decision = models.CharField(max_length=16, blank=True, default="")
     management_comment = models.TextField(blank=True, default="")
     management_decided_at = models.DateTimeField(null=True, blank=True)
 
@@ -380,17 +381,22 @@ class ReimbursementRequest(models.Model):
 
     def derive_status_from_bills(self) -> str:
         """
-        Spec-aligned derivation (no request-level partial holds):
+        STRICT BUSINESS RULE HOTFIX (2026-02-24):
+          - If ANY INCLUDED bill is FINANCE_REJECTED, the workflow must stop permanently
+            and the request must NOT move to Manager. We enforce this by making the
+            request final: Status.REJECTED.
+
+        Remaining derivation (legacy behavior retained where safe):
           Let:
             PENDING = {SUBMITTED, EMPLOYEE_RESUBMITTED}
             APPROVED = {FINANCE_APPROVED}
             REJECTED = {FINANCE_REJECTED}
 
           - No INCLUDED lines -> DRAFT
-          - If any PENDING -> PENDING_FINANCE_VERIFY
-          - Else (no pending):
-              * if any APPROVED -> PENDING_MANAGER   (even if some are REJECTED)
-              * else (all rejected) -> PENDING_FINANCE_VERIFY  (nothing to send forward)
+          - If any REJECTED -> REJECTED (FINAL)   <-- critical rule
+          - Else if any PENDING -> PENDING_FINANCE_VERIFY
+          - Else if any APPROVED -> PENDING_MANAGER
+          - Else -> PENDING_FINANCE_VERIFY
         """
         L = ReimbursementLine
         qs = self.lines.filter(status=L.Status.INCLUDED).values_list("bill_status", flat=True)
@@ -399,6 +405,10 @@ class ReimbursementRequest(models.Model):
         if not statuses:
             return self.Status.DRAFT
 
+        # CRITICAL RULE: finance rejection hard-stops workflow
+        if L.BillStatus.FINANCE_REJECTED in statuses:
+            return self.Status.REJECTED
+
         pending_set = {L.BillStatus.SUBMITTED, L.BillStatus.EMPLOYEE_RESUBMITTED}
         if statuses & pending_set:
             return self.Status.PENDING_FINANCE_VERIFY
@@ -406,7 +416,6 @@ class ReimbursementRequest(models.Model):
         if L.BillStatus.FINANCE_APPROVED in statuses:
             return self.Status.PENDING_MANAGER
 
-        # All included bills are rejected -> stays with finance/employee
         return self.Status.PENDING_FINANCE_VERIFY
 
     # ---- Monotonic status order (prevents regressions) ----------------------
@@ -590,23 +599,15 @@ class ReimbursementRequest(models.Model):
         )
 
     def mark_paid(self, reference: str, *, actor: Optional[models.Model] = None, note: str = "") -> None:
-        """
-        Settlement:
-          - Allowed from pending_finance / approved (idempotent if already paid)
-          - Ensures all INCLUDED lines are finance_approved
-          - Marks INCLUDED lines as paid (per-bill), then request as paid
-        """
         ok, msg = self.can_mark_paid(reference)
         if not ok:
             raise DjangoCoreValidationError(msg)
 
         if self.status == self.Status.PAID:
-            # Idempotent
             return
 
         from_status = self.status
 
-        # Mark lines as paid
         L = self.lines.model
         inc = self.lines.filter(status=L.Status.INCLUDED)
         now = timezone.now()
@@ -618,7 +619,6 @@ class ReimbursementRequest(models.Model):
                 ln.paid_at = now
             ln.save(update_fields=[f for f in ["bill_status", "payment_reference", "paid_at", "updated_at"] if hasattr(ln, f)])
 
-        # Mark request as paid
         self.status = self.Status.PAID
         self.finance_payment_reference = (reference or "").strip()
         self.paid_at = now
@@ -806,7 +806,7 @@ class ReimbursementRequest(models.Model):
             actor=actor,
             message=f"Admin force-moved. {('Reason: ' + reason) if reason else ''}".strip(),
             from_status=from_status,
-            to_status=self.status,
+            to_status=target_status,
             extra={"type": "admin_force_move"},
         )
 
@@ -821,7 +821,6 @@ class ReimbursementLine(models.Model):
         FINANCE_APPROVED = "finance_approved", _("Finance Approved")
         FINANCE_REJECTED = "finance_rejected", _("Finance Rejected")
         EMPLOYEE_RESUBMITTED = "employee_resubmitted", _("Employee Resubmitted")
-        # Legacy-only (kept for compatibility; not used in new flow)
         MANAGER_PENDING = "manager_pending", _("Pending Manager Approval")
         MANAGER_REJECTED = "manager_rejected", _("Manager Rejected")
         MANAGER_APPROVED = "manager_approved", _("Manager Approved")
@@ -832,7 +831,6 @@ class ReimbursementLine(models.Model):
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.TextField(blank=True, default="")
     receipt_file = models.FileField(upload_to=receipt_upload_path, validators=[validate_receipt_file], blank=True, null=True)
-    # FIX: use Django's correct kwarg name 'max_length'
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.INCLUDED, db_index=True)
 
     bill_status = models.CharField(
@@ -866,7 +864,6 @@ class ReimbursementLine(models.Model):
 
     def clean(self) -> None:
         super().clean()
-        # Prevent same expense item in another open request
         if self.expense_item_id:
             qs = ReimbursementLine.objects.filter(
                 expense_item_id=self.expense_item_id,
@@ -888,7 +885,6 @@ class ReimbursementLine(models.Model):
                     {"expense_item": _("This expense is already used in another open reimbursement request.")}
                 )
 
-        # Bill description is mandatory for INCLUDED lines — must exist either on the line or via expense fallback
         if self.status == self.Status.INCLUDED:
             desc = (self.description or "").strip()
             exp_desc = (self.expense_item.description or "").strip() if self.expense_item_id else ""
@@ -907,17 +903,14 @@ class ReimbursementLine(models.Model):
             except type(self).DoesNotExist:
                 creating = True
 
-        # Copy defaults BEFORE validation so new or legacy lines inherit from expense_item seamlessly.
         if self.expense_item_id:
             if not self.amount:
                 self.amount = self.expense_item.amount
             if not (self.description or "").strip():
-                # fallback to expense description if line description empty
                 self.description = self.expense_item.description
             if not self.receipt_file:
                 self.receipt_file = self.expense_item.receipt_file
 
-        # Ensure validation (including required description) runs after defaults are set
         self.full_clean()
 
         super().save(*args, **kwargs)
@@ -980,7 +973,6 @@ class ReimbursementLine(models.Model):
         exp.status = ExpenseItem.Status.SAVED
         exp.save(update_fields=["status", "updated_at"])
 
-        # Prefer the new notifications service; fall back to legacy templates safely.
         try:
             try:
                 from .services import notifications as _notif
@@ -1006,10 +998,6 @@ class ReimbursementLine(models.Model):
 
     # ---- Employee actions ----
     def employee_resubmit_bill(self, *, actor: Optional[models.Model]) -> None:
-        """
-        On resubmission, move to EMPLOYEE_RESUBMITTED *and* sync the latest
-        receipt from the linked ExpenseItem so Finance sees the new attachment.
-        """
         if self.bill_status not in (self.BillStatus.FINANCE_REJECTED, self.BillStatus.MANAGER_REJECTED):
             raise DjangoCoreValidationError(_("Only rejected bills can be resubmitted by employee."))
         prev = self.bill_status
@@ -1031,7 +1019,6 @@ class ReimbursementLine(models.Model):
         except Exception:
             pass
 
-        # Prefer the new notifications service; fall back to legacy templates safely.
         try:
             try:
                 from .services import notifications as _notif
@@ -1055,7 +1042,6 @@ class ReimbursementLine(models.Model):
             extra={"line_id": self.pk, "type": "bill_employee_resubmitted"},
         )
 
-    # ---- Legacy manager actions (kept for compatibility; not used in new flow) ----
     def manager_approve(self, *, actor: Optional[models.Model]) -> None:
         if self.bill_status != self.BillStatus.MANAGER_PENDING:
             raise DjangoCoreValidationError(_("Only Manager-Pending bills can be approved by Manager."))
@@ -1105,14 +1091,7 @@ class ReimbursementLine(models.Model):
             extra={"line_id": self.pk, "type": "bill_manager_rejected"},
         )
 
-    # ---- Per-bill Finance payment (updated to accept FINANCE_APPROVED) ----
     def mark_paid(self, reference: str, *, actor: Optional[models.Model] = None) -> None:
-        """
-        Allow Finance to mark an individual bill Paid after approvals.
-        Accepted bill statuses for payment:
-          - FINANCE_APPROVED (new flow)
-          - MANAGER_APPROVED (legacy compatibility)
-        """
         if self.bill_status not in (self.BillStatus.FINANCE_APPROVED, self.BillStatus.MANAGER_APPROVED):
             raise DjangoCoreValidationError(_("Only Finance-Approved bills can be marked Paid."))
         if not (reference or "").strip():
@@ -1223,7 +1202,7 @@ class Reimbursement(models.Model):
 
     employee = models.ForeignKey(UserModel, on_delete=models.CASCADE)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES)  # fixed: use category choices
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES)
     bill = models.FileField(upload_to="bills/")
     submitted_at = models.DateTimeField(default=timezone.now)
     status = models.CharField(max_length=2, choices=STATUS_CHOICES, default="PM")

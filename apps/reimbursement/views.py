@@ -1,3 +1,6 @@
+# FILE: apps/reimbursement/views.py
+# PURPOSE: Prevent Rejected Bills from Appearing in Manager Workflow
+# UPDATED: 2026-02-24
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -881,13 +884,15 @@ class ManagerQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
     context_object_name = "requests"
 
     def get_queryset(self):
+        """
+        STRICT MANAGER QUEUE:
+        Show ONLY requests that are awaiting Manager action.
+        Critical rule: rejected-by-finance requests must never appear here.
+        """
         user = self.request.user
         return (
             ReimbursementRequest.objects.filter(
-                status__in=[
-                    ReimbursementRequest.Status.PENDING_MANAGER,
-                    ReimbursementRequest.Status.CLARIFICATION_REQUIRED,
-                ]
+                status=ReimbursementRequest.Status.PENDING_MANAGER
             )
             .filter(Q(manager=user) | Q(created_by__reimbursement_approver_mapping__manager=user))
             .select_related("created_by", "manager", "management")
@@ -902,13 +907,14 @@ class ManagerReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
     success_url = reverse_lazy("reimbursement:manager_pending")
 
     def get_queryset(self):
+        """
+        STRICT MANAGER REVIEW:
+        Only allow reviewing items that are actually pending manager approval.
+        """
         user = self.request.user
         return (
             ReimbursementRequest.objects.filter(
-                status__in=[
-                    ReimbursementRequest.Status.PENDING_MANAGER,
-                    ReimbursementRequest.Status.CLARIFICATION_REQUIRED,
-                ]
+                status=ReimbursementRequest.Status.PENDING_MANAGER
             )
             .filter(Q(manager=user) | Q(created_by__reimbursement_approver_mapping__manager=user))
             .select_related("created_by", "manager", "management")
@@ -1753,7 +1759,6 @@ class ReimbursementExportCSVView(LoginRequiredMixin, PermissionRequiredMixin, Te
     def get(self, request, *args, **kwargs):
         qs = ReimbursementLine.objects.select_related("request", "expense_item", "request__created_by").order_by("request_id", "id")
         response = HttpResponse(content_type="text/csv")
-        # FIX: corrected unterminated string (properly closed quotes)
         response["Content-Disposition"] = 'attachment; filename="reimbursements_export.csv"'
         writer = csv.writer(response)
         writer.writerow([
