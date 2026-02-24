@@ -5,16 +5,18 @@
 Two modes:
 A) Summary (default)
 B) Detailed (`?handover=1`) — shows handed-over items with actions.
-This fragment avoids invalid default filters and works even if handed_over keys are missing.
+
+IMPORTANT:
+- DO NOT access request.GET.task_type in templates (can crash when QueryDict is empty).
+- Use "selected" from the view.
 {% endcomment %}
 
-{# safe fallbacks #}
-{% with sel=selected|default:request.GET.task_type %}
+{# -------------------- SAFE FALLBACKS -------------------- #}
+{% with sel=selected|default:"" %}
 {% with ho_mode=request.GET.handover|default:"0" %}
-{% with ho=handed_over|default:"" %}
-{% with cl=ho.checklist|default:"" dl=ho.delegation|default:"" ht=ho.help_ticket|default:"" %}
+{% with ho=handed_over|default_if_none:None %}
 
-{% if ho_mode == '1' %}
+{% if ho_mode == "1" %}
   {# -------------------- DETAILED MODE -------------------- #}
   <div class="card mt-4">
     <div class="card-header d-flex justify-content-between align-items-center">
@@ -45,8 +47,8 @@ This fragment avoids invalid default filters and works even if handed_over keys 
             </tr>
           </thead>
           <tbody>
-            {% if cl %}
-              {% for row in cl %}
+            {% if ho and ho.checklist %}
+              {% for row in ho.checklist %}
                 {% with t=row.task %}
                   <tr>
                     <td>{{ t.id }}</td>
@@ -63,16 +65,16 @@ This fragment avoids invalid default filters and works even if handed_over keys 
                       {% if t.planned_date %}{{ t.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}
                     </td>
                     <td>
-                      {% if t.status == 'Pending' %}
+                      {% if t.status == "Pending" %}
                         <span class="badge bg-warning text-dark">Pending</span>
-                      {% elif t.status == 'Completed' %}
+                      {% elif t.status == "Completed" %}
                         <span class="badge bg-success">Completed</span>
                       {% else %}
                         <span class="badge bg-secondary">{{ t.status|default:"—" }}</span>
                       {% endif %}
                     </td>
                     <td class="text-end pe-3">
-                      {% if t.status == 'Pending' %}
+                      {% if t.status == "Pending" %}
                         <a class="btn btn-success btn-sm"
                            href="{% url 'tasks:complete_checklist' t.id %}?next={{ request.get_full_path|urlencode }}">✔ Complete</a>
                       {% endif %}
@@ -105,8 +107,8 @@ This fragment avoids invalid default filters and works even if handed_over keys 
             </tr>
           </thead>
           <tbody>
-            {% if dl %}
-              {% for row in dl %}
+            {% if ho and ho.delegation %}
+              {% for row in ho.delegation %}
                 {% with t=row.task %}
                   <tr>
                     <td>{{ t.id }}</td>
@@ -123,16 +125,16 @@ This fragment avoids invalid default filters and works even if handed_over keys 
                       {% if t.planned_date %}{{ t.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}
                     </td>
                     <td>
-                      {% if t.status == 'Pending' %}
+                      {% if t.status == "Pending" %}
                         <span class="badge bg-warning text-dark">Pending</span>
-                      {% elif t.status == 'Completed' %}
+                      {% elif t.status == "Completed" %}
                         <span class="badge bg-success">Completed</span>
                       {% else %}
                         <span class="badge bg-secondary">{{ t.status|default:"—" }}</span>
                       {% endif %}
                     </td>
                     <td class="text-end pe-3">
-                      {% if t.status == 'Pending' %}
+                      {% if t.status == "Pending" %}
                         <a class="btn btn-success btn-sm"
                            href="{% url 'tasks:complete_delegation' t.id %}?next={{ request.get_full_path|urlencode }}">✔ Complete</a>
                       {% endif %}
@@ -165,8 +167,8 @@ This fragment avoids invalid default filters and works even if handed_over keys 
             </tr>
           </thead>
           <tbody>
-            {% if ht %}
-              {% for row in ht %}
+            {% if ho and ho.help_ticket %}
+              {% for row in ho.help_ticket %}
                 {% with t=row.task %}
                   <tr>
                     <td>{{ t.id }}</td>
@@ -183,18 +185,18 @@ This fragment avoids invalid default filters and works even if handed_over keys 
                       {% if t.planned_date %}{{ t.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}
                     </td>
                     <td>
-                      {% if t.status == 'Open' %}
+                      {% if t.status == "Open" %}
                         <span class="badge bg-primary">Open</span>
-                      {% elif t.status == 'In Progress' %}
+                      {% elif t.status == "In Progress" %}
                         <span class="badge bg-warning text-dark">In&nbsp;Progress</span>
-                      {% elif t.status == 'Closed' %}
+                      {% elif t.status == "Closed" %}
                         <span class="badge bg-success">Closed</span>
                       {% else %}
                         <span class="badge bg-secondary">{{ t.status|default:"—" }}</span>
                       {% endif %}
                     </td>
                     <td class="text-end pe-3">
-                      {% if t.status != 'Closed' %}
+                      {% if t.status != "Closed" %}
                         <a class="btn btn-primary btn-sm"
                            href="{% url 'tasks:note_help_ticket' t.id %}?next={{ request.get_full_path|urlencode }}">Note</a>
                         <a class="btn btn-success btn-sm"
@@ -236,7 +238,7 @@ This fragment avoids invalid default filters and works even if handed_over keys 
           <tbody>
             <tr>
               <td>Checklist <span class="badge bg-dark ms-1">Handover</span></td>
-              <td class="text-center">{{ cl|length|default:"0" }}</td>
+              <td class="text-center">{% if ho and ho.checklist %}{{ ho.checklist|length }}{% else %}0{% endif %}</td>
               <td class="text-center">
                 <a class="btn btn-sm btn-outline-primary"
                    href="?task_type=checklist{% if today_only %}&today_only=1{% endif %}&handover=1">View</a>
@@ -244,7 +246,7 @@ This fragment avoids invalid default filters and works even if handed_over keys 
             </tr>
             <tr>
               <td>Delegation <span class="badge bg-dark ms-1">Handover</span></td>
-              <td class="text-center">{{ dl|length|default:"0" }}</td>
+              <td class="text-center">{% if ho and ho.delegation %}{{ ho.delegation|length }}{% else %}0{% endif %}</td>
               <td class="text-center">
                 <a class="btn btn-sm btn-outline-primary"
                    href="?task_type=delegation{% if today_only %}&today_only=1{% endif %}&handover=1">View</a>
@@ -252,7 +254,7 @@ This fragment avoids invalid default filters and works even if handed_over keys 
             </tr>
             <tr>
               <td>Help Ticket <span class="badge bg-dark ms-1">Handover</span></td>
-              <td class="text-center">{{ ht|length|default:"0" }}</td>
+              <td class="text-center">{% if ho and ho.help_ticket %}{{ ho.help_ticket|length }}{% else %}0{% endif %}</td>
               <td class="text-center">
                 <a class="btn btn-sm btn-outline-primary"
                    href="?task_type=help_ticket{% if today_only %}&today_only=1{% endif %}&handover=1">View</a>
@@ -265,7 +267,6 @@ This fragment avoids invalid default filters and works even if handed_over keys 
   </div>
 {% endif %}
 
-{% endwith %}
 {% endwith %}
 {% endwith %}
 {% endwith %}
