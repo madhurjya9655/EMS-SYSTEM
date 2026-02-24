@@ -5,17 +5,14 @@
 Two modes:
 A) Summary (default)
 B) Detailed (`?handover=1`) — shows handed-over items with actions.
-
-This template is hardened:
-- safe defaults when context keys are missing
-- safe query building (no ?&)
+This fragment avoids invalid default filters and works even if handed_over keys are missing.
 {% endcomment %}
 
-{# ---- safe fallbacks ---- #}
+{# safe fallbacks #}
 {% with sel=selected|default:request.GET.task_type %}
 {% with ho_mode=request.GET.handover|default:"0" %}
-{% with ho=handed_over|default:{} %}
-{% with cl=ho.checklist|default:list dl=ho.delegation|default:list ht=ho.help_ticket|default:list %}
+{% with ho=handed_over|default:"" %}
+{% with cl=ho.checklist|default:"" dl=ho.delegation|default:"" ht=ho.help_ticket|default:"" %}
 
 {% if ho_mode == '1' %}
   {# -------------------- DETAILED MODE -------------------- #}
@@ -26,7 +23,7 @@ This template is hardened:
       </div>
       <div class="d-flex gap-2">
         <a class="btn btn-sm btn-outline-secondary"
-           href="?{% if sel %}task_type={{ sel }}&{% endif %}{% if today_only %}today_only=1&{% endif %}">
+           href="?{% if sel %}task_type={{ sel }}&{% endif %}{% if today_only %}today_only=1{% endif %}">
           Back to summary
         </a>
       </div>
