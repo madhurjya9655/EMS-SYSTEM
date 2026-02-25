@@ -52,9 +52,10 @@ SERVE_MEDIA = env_bool("SERVE_MEDIA", True if ON_RENDER else False)
 
 ADMIN_URL = os.getenv("ADMIN_URL", "super-secret-admin/")
 
+# ✅ UPDATED: include "testserver" so Django test Client() doesn't return HTTP 400
 ALLOWED_HOSTS = env_list(
     "ALLOWED_HOSTS",
-    "ems-system-d26q.onrender.com,.onrender.com,localhost,127.0.0.1,0.0.0.0",
+    "ems-system-d26q.onrender.com,.onrender.com,localhost,127.0.0.1,0.0.0.0,testserver",
 )
 
 CSRF_TRUSTED_ORIGINS = env_list(
