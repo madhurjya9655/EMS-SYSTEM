@@ -54,9 +54,17 @@
             {% endif %}
           </td>
 
-          <td>{{ u.profile.phone|default:"—" }}</td>
-          <td>{{ u.profile.role|default:"—" }}</td>
-          <td>{{ u.profile.department|default:"—" }}</td>
+          {% if u.profile_id %}
+            {% with p=u.profile %}
+              <td>{{ p.phone|default:"—" }}</td>
+              <td>{{ p.role|default:"—" }}</td>
+              <td>{{ p.department|default:"—" }}</td>
+            {% endwith %}
+          {% else %}
+            <td><span class="text-muted">—</span></td>
+            <td><span class="text-muted">—</span></td>
+            <td><span class="text-muted">—</span></td>
+          {% endif %}
 
           <td class="text-center">
             {% if u.is_active %}

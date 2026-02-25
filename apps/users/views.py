@@ -1,4 +1,4 @@
-# apps/users/views.py
+#FILE: apps/users/views.py
 from __future__ import annotations
 
 import logging
@@ -100,7 +100,7 @@ class CustomLoginView(LoginView):
 @login_required
 @user_passes_test(admin_only)
 def list_users(request: HttpRequest) -> HttpResponse:
-    users = User.objects.order_by("first_name", "last_name", "username")
+    users = User.objects.filter(is_active=True).order_by("first_name", "last_name", "username")
     return render(request, "users/list_user.html", {"users": users})
 
 
@@ -211,6 +211,10 @@ def delete_user(request: HttpRequest, pk: int) -> HttpResponse:
 
         if getattr(user, "is_superuser", False) and not getattr(request.user, "is_superuser", False):
             return HttpResponseForbidden("Only a superuser can delete another superuser.")
+
+        if not getattr(user, "is_active", True):
+            messages.info(request, "User is already inactive.")
+            return redirect("users:list_users")
 
         try:
             username = user.username
