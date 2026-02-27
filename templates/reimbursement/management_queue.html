@@ -1,3 +1,6 @@
+{# FILE: templates/reimbursement/management_queue.html #}
+{# PURPOSE: Management queue listing (only pending_management requests should appear) #}
+{# UPDATED: 2026-02-24 #}
 {% extends "base.html" %}
 {% load i18n %}
 
@@ -34,10 +37,18 @@
             <td><span class="badge bg-primary">{{ req.get_status_display }}</span></td>
             <td>₹{{ req.total_amount|floatformat:2 }}</td>
             <td>
-              {% if req.manager %}{{ req.manager.get_full_name|default:req.manager.username }}{% else %}<span class="text-muted small">Not set</span>{% endif %}
+              {% if req.manager %}
+                {{ req.manager.get_full_name|default:req.manager.username }}
+              {% else %}
+                <span class="text-muted small">Not set</span>
+              {% endif %}
             </td>
             <td>
-              {% if req.management %}{{ req.management.get_full_name|default:req.management.username }}{% else %}<span class="text-muted small">Not set</span>{% endif %}
+              {% if req.management %}
+                {{ req.management.get_full_name|default:req.management.username }}
+              {% else %}
+                <span class="text-muted small">Not set</span>
+              {% endif %}
             </td>
             <td class="d-flex flex-wrap gap-2">
               <a href="{% url 'reimbursement:request_detail' req.id %}" target="_blank" rel="noopener"

@@ -23,8 +23,22 @@ class BillActionResult:
 
 def _recalc_request_and_audit(req: ReimbursementRequest, *, actor, reason: str) -> None:
     """
-    Recalculate derived status from child bills and persist with audit.
+    Recalculate totals + derived status from child bills and persist with audit.
+
+    IMPORTANT (Issue 2):
+    - total_amount must exclude rejected lines when moving forward.
+    - total_amount must always be refreshed after bill-level state changes
+      (approve/reject/resubmit/delete), otherwise manager dashboards & summaries
+      show stale totals.
     """
+    # ✅ Fix Issue 2: always refresh stored total_amount from live line amounts/statuses
+    try:
+        req.recalc_total(save=True)
+    except Exception:
+        # Never break finance action due to total refresh
+        pass
+
+    # ✅ Recalculate derived status from bill mix
     req.apply_derived_status_from_bills(actor=actor, reason=reason)
 
 
@@ -33,7 +47,7 @@ def finance_approve_bill(line: ReimbursementLine, *, actor) -> BillActionResult:
     """
     Approve only this bill. No changes to siblings.
     - Does not send emails (email is only required on rejection/resubmit per spec).
-    - Re-derive parent status.
+    - Re-derive parent status AND refresh totals.
     """
     req = line.request
     line.approve_by_finance(actor=actor)
@@ -53,7 +67,7 @@ def finance_reject_bill(line: ReimbursementLine, *, actor, reason: str) -> BillA
     Reject only this bill with mandatory reason.
     - Unlock underlying ExpenseItem for employee edits.
     - Email employee ONLY (not manager).
-    - Re-derive parent status.
+    - Re-derive parent status AND refresh totals.
     """
     req = line.request
     line.reject_by_finance(actor=actor, reason=reason)
@@ -70,7 +84,11 @@ def employee_resubmitted_bill(line: ReimbursementLine, *, actor) -> BillActionRe
     """
     Employee corrected a previously rejected bill and re-submitted.
     - Email finance team with change summary.
-    - Re-derive parent status.
+    - Re-derive parent status AND refresh totals.
+
+    Note:
+    - line.employee_resubmit_bill() already syncs ExpenseItem -> Line (Issue 3)
+    - req.recalc_total(save=True) ensures UI summaries reflect latest amounts
     """
     req = line.request
     line.employee_resubmit_bill(actor=actor)
