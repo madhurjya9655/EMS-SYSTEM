@@ -1,5 +1,4 @@
-# apps/reimbursement/signals.py
-# -*- coding: utf-8 -*-
+# FILE: apps/reimbursement/signals.py
 from __future__ import annotations
 
 import logging
@@ -58,16 +57,27 @@ def _sync_req_on_save(sender, instance: ReimbursementRequest, created, **kwargs)
 def _recalc_parent_on_line_change(sender, instance: ReimbursementLine, created, **kwargs):
     """
     Keep the parent request's derived status in sync with bill-level changes.
+
+    IMPORTANT:
+    - Parent totals must always be computed dynamically from eligible lines.
+      The authoritative logic lives in ReimbursementRequest.recalc_total(), which
+      excludes rejected lines from forward totals.
     """
     def _do():
         try:
             req = ReimbursementRequest.objects.get(pk=instance.request_id)
             prev_status = req.status
+
+            # Recompute totals from current DB state (uses business-rule exclusion)
             try:
                 req.recalc_total(save=True)
             except Exception:
-                logger.debug("Unable to recalc total for request %s after line %s save.", req.pk, instance.pk)
+                logger.debug(
+                    "Unable to recalc total for request %s after line %s save.",
+                    req.pk, instance.pk
+                )
 
+            # Re-derive request status based on bill workflow states
             req.apply_derived_status_from_bills(
                 actor=getattr(instance, "last_modified_by", None),
                 reason=f"Bill line #{instance.pk} updated; re-deriving parent status.",
@@ -82,7 +92,6 @@ def _recalc_parent_on_line_change(sender, instance: ReimbursementLine, created, 
             # Soft-sync parent (debounced). We only sync the request object, not each line.
             if _should_sync_req(req.pk):
                 from .integrations.sheets import sync_request  # lazy import
-                # Load the full request with lines for a single export
                 full = (
                     ReimbursementRequest.objects.select_related(
                         "created_by", "manager", "management", "verified_by"
@@ -103,7 +112,12 @@ def _recalc_parent_on_line_change(sender, instance: ReimbursementLine, created, 
 @receiver(post_delete, sender=ReimbursementLine)
 def _recalc_parent_on_line_delete(sender, instance: ReimbursementLine, **kwargs):
     """
-    When a bill line is deleted, make sure the parent total and holding status are updated.
+    When a bill line is deleted, make sure the parent total and derived status are updated.
+
+    IMPORTANT:
+    - Parent totals must always be computed dynamically from eligible lines.
+      The authoritative logic lives in ReimbursementRequest.recalc_total(), which
+      excludes rejected lines from forward totals.
     """
     def _do():
         try:
@@ -111,11 +125,16 @@ def _recalc_parent_on_line_delete(sender, instance: ReimbursementLine, **kwargs)
         except ReimbursementRequest.DoesNotExist:
             return
 
+        # Recompute totals from current DB state (uses business-rule exclusion)
         try:
             req.recalc_total(save=True)
         except Exception:
-            logger.debug("Unable to recalc total for request %s after line %s delete.", req.pk, instance.pk)
+            logger.debug(
+                "Unable to recalc total for request %s after line %s delete.",
+                req.pk, instance.pk
+            )
 
+        # Re-derive status based on remaining bill workflow states
         try:
             req.apply_derived_status_from_bills(
                 actor=None,
