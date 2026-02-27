@@ -14,7 +14,7 @@ from .models import (
     VisitActual,
     CallLog,
     CollectionTxn,
-    TargetSetting,     # SECTION F
+    TargetSetting,  # SECTION F
     CollectionPlan,
     VisitBatch,
     KamManagerMapping,
@@ -63,7 +63,7 @@ class VisitPlanForm(forms.ModelForm):
         model = VisitPlan
         fields = [
             "visit_category",
-            "visit_type",           # ✅ REQUIRED (template + model)
+            "visit_type",  # ✅ REQUIRED (template + model)
             "customer",
             "counterparty_name",
             "visit_date",
@@ -139,7 +139,7 @@ class VisitActualForm(forms.ModelForm):
             "confirmed_location",
             "successful",
             "not_success_reason",
-            "meeting_notes",        # ✅ model field
+            "meeting_notes",  # ✅ model field
             "actual_sales_mt",
             "actual_collection",
             "next_action",
@@ -335,7 +335,12 @@ class ManagerTargetForm(forms.Form):
 
     fixed_for_next_3_months = forms.BooleanField(required=False, initial=False)
 
-    kam_username = forms.CharField(required=False)
+    # ✅ FIX: use ChoiceField so template rendering is a real dropdown with role-filtered options
+    kam_username = forms.ChoiceField(
+        required=False,
+        choices=[],
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
     bulk_all_kams = forms.BooleanField(required=False, initial=False)
 
     sales_target_mt = forms.DecimalField(required=True, max_digits=12, decimal_places=2)
@@ -348,6 +353,11 @@ class ManagerTargetForm(forms.Form):
     def __init__(self, *args, **kwargs):
         self.kam_options = kwargs.pop("kam_options", []) or []
         super().__init__(*args, **kwargs)
+
+        # Build dropdown choices from allowed usernames (role-based filtering is done in the view)
+        choices = [("", "— Select KAM —")]
+        choices += [(u, u) for u in self.kam_options]
+        self.fields["kam_username"].choices = choices
 
     def clean_kam_username(self):
         u = (self.cleaned_data.get("kam_username") or "").strip()

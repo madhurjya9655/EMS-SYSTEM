@@ -1,3 +1,6 @@
+{# FILE: templates/kam/reports.html #}
+{# PURPOSE: Fix KAM dropdown selection persistence and “ALL” selection consistency (template-only). #}
+{# UPDATED: 2026-02-27 #}
 {% extends "base.html" %}
 {% load humanize %}
 {% block title %}KAM Reports{% endblock %}
@@ -64,8 +67,6 @@
       Visits
     </a>
   </div>
-
-  {# ✅ Range/KAM line removed completely #}
 </div>
 
 <div class="card p-3">
@@ -121,9 +122,7 @@
               <td>{{ c.call_datetime }}</td>
               <td>{{ c.customer.name|default:c.customer__name|default:"—" }}</td>
               <td>{{ c.kam.username|default:c.kam__username|default:"—" }}</td>
-              <td class="text-end">
-                {{ c.duration_minutes|default:"—" }}
-              </td>
+              <td class="text-end">{{ c.duration_minutes|default:"—" }}</td>
               <td>{{ c.outcome|default:"—" }}</td>
             </tr>
           {% empty %}
@@ -151,7 +150,6 @@
           {% for v in rows %}
             <tr>
               <td>{{ v.plan.visit_date|default:v.plan__visit_date|default:"—" }}</td>
-
               <td>
                 {{ v.plan.customer.name
                     |default:v.plan.counterparty_name
@@ -159,13 +157,9 @@
                     |default:v.plan__counterparty_name
                     |default:"—" }}
               </td>
-
               <td>{{ v.plan.kam.username|default:v.plan__kam__username|default:"—" }}</td>
-
               <td>{% if v.successful %}Yes{% else %}No{% endif %}</td>
-
               <td class="text-end">{{ v.actual_sales_mt|default:"0"|floatformat:3 }}</td>
-
               <td class="text-end">₹ {{ v.actual_collection|default:"0"|floatformat:2|intcomma }}</td>
             </tr>
           {% empty %}

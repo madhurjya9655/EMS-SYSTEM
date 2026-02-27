@@ -1,3 +1,6 @@
+{# FILE: templates/kam/kam_dashboard.html #}
+{# PURPOSE: Ensure KAM dropdown binding + selection persistence + role-based display consistency. #}
+{# UPDATED: 2026-02-27 #}
 {% extends "base.html" %}
 {% load humanize %}
 {% block title %}KAM Dashboard{% endblock %}
@@ -42,8 +45,6 @@
     </div>
   </form>
 </div>
-
-{# ✅ Removed the Range/KAM/Overdue Snapshot info line completely #}
 
 <div class="row g-3">
   <div class="col-md-4">

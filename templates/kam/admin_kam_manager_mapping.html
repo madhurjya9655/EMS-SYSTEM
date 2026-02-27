@@ -21,6 +21,213 @@
     </div>
   {% endif %}
 
+  {# ---------------------------- #}
+  {# Manager CRUD (Admin only UI) #}
+  {# ---------------------------- #}
+  <div class="card mb-4">
+    <div class="card-header fw-semibold">Managers (Create / Update / Deactivate)</div>
+    <div class="card-body">
+
+      <div class="alert alert-info">
+        <div class="fw-semibold mb-1">Notes</div>
+        <ul class="mb-0">
+          <li>Creating a manager adds the user to the <code>Manager</code> group.</li>
+          <li>Deactivating a manager will also deactivate all active mappings for that manager.</li>
+          <li>Inactive managers are removed from dropdown lists automatically.</li>
+        </ul>
+      </div>
+
+      <form method="post" class="row g-3 align-items-end mb-3">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="manager_create" />
+
+        <div class="col-md-3">
+          <label class="form-label">Username</label>
+          <input class="form-control" name="username" placeholder="e.g. manager1" required />
+        </div>
+
+        <div class="col-md-3">
+          <label class="form-label">Full Name</label>
+          <input class="form-control" name="full_name" placeholder="e.g. John Doe" required />
+        </div>
+
+        <div class="col-md-3">
+          <label class="form-label">Email</label>
+          <input class="form-control" name="email" type="email" placeholder="e.g. john@company.com" required />
+        </div>
+
+        <div class="col-md-2">
+          <label class="form-label">Password (optional)</label>
+          <input class="form-control" name="password" type="password" placeholder="leave blank = auto" />
+        </div>
+
+        <div class="col-md-1 d-grid">
+          <button class="btn btn-primary" type="submit">Add</button>
+        </div>
+      </form>
+
+      <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle">
+          <thead class="table-light">
+            <tr>
+              <th style="width:80px;">ID</th>
+              <th style="width:220px;">Username</th>
+              <th>Full Name</th>
+              <th>Email</th>
+              <th style="width:110px;">Active</th>
+              <th style="width:260px;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for u in manager_group_users %}
+              <tr>
+                <td>#{{ u.id }}</td>
+                <td>{{ u.username }}</td>
+                <td>{{ u.get_full_name|default:"—" }}</td>
+                <td>{{ u.email|default:"—" }}</td>
+                <td>
+                  {% if u.is_active %}
+                    <span class="badge bg-success">YES</span>
+                  {% else %}
+                    <span class="badge bg-secondary">NO</span>
+                  {% endif %}
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline-primary"
+                    data-bs-toggle="modal"
+                    data-bs-target="#managerEditModal"
+                    data-manager-id="{{ u.id }}"
+                    data-manager-username="{{ u.username }}"
+                    data-manager-fullname="{{ u.get_full_name|default:'' }}"
+                    data-manager-email="{{ u.email|default:'' }}"
+                    data-manager-active="{% if u.is_active %}1{% else %}0{% endif %}">
+                    Edit
+                  </button>
+
+                  {% if u.is_active %}
+                    <form method="post" class="d-inline">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="manager_delete" />
+                      <input type="hidden" name="manager_id" value="{{ u.id }}" />
+                      <button class="btn btn-sm btn-outline-danger" type="submit"
+                              onclick="return confirm('Deactivate manager {{ u.username }}? This will also deactivate their active mappings.');">
+                        Deactivate
+                      </button>
+                    </form>
+                  {% else %}
+                    <form method="post" class="d-inline">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="manager_update" />
+                      <input type="hidden" name="manager_id" value="{{ u.id }}" />
+                      <input type="hidden" name="is_active" value="1" />
+                      <button class="btn btn-sm btn-outline-success" type="submit"
+                              onclick="return confirm('Re-activate manager {{ u.username }}?');">
+                        Re-activate
+                      </button>
+                    </form>
+                  {% endif %}
+                </td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="6" class="text-muted">No managers found in Manager group.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="modal fade" id="managerEditModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+          <div class="modal-content">
+            <form method="post">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="manager_update" />
+              <input type="hidden" name="manager_id" id="mgr_edit_id" value="" />
+
+              <div class="modal-header">
+                <h5 class="modal-title">Edit Manager</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+
+              <div class="modal-body">
+                <div class="mb-2">
+                  <label class="form-label">Username</label>
+                  <input class="form-control" id="mgr_edit_username" value="" readonly />
+                  <div class="form-text">Username cannot be changed here.</div>
+                </div>
+
+                <div class="mb-2">
+                  <label class="form-label">Full Name</label>
+                  <input class="form-control" name="full_name" id="mgr_edit_fullname" value="" />
+                </div>
+
+                <div class="mb-2">
+                  <label class="form-label">Email</label>
+                  <input class="form-control" name="email" id="mgr_edit_email" value="" />
+                </div>
+
+                <div class="mb-2">
+                  <label class="form-label">New Password (optional)</label>
+                  <input class="form-control" name="password" id="mgr_edit_password" type="password" placeholder="leave blank to keep unchanged" />
+                </div>
+
+                <div class="form-check mt-2">
+                  <input class="form-check-input" type="checkbox" id="mgr_edit_active_chk" />
+                  <label class="form-check-label" for="mgr_edit_active_chk">Active</label>
+                  <input type="hidden" name="is_active" id="mgr_edit_active_val" value="1" />
+                </div>
+              </div>
+
+              <div class="modal-footer">
+                <button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary" type="submit">Save</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <script>
+        (function () {
+          var modal = document.getElementById('managerEditModal');
+          if (!modal) return;
+
+          modal.addEventListener('show.bs.modal', function (event) {
+            var btn = event.relatedTarget;
+            if (!btn) return;
+
+            var id = btn.getAttribute('data-manager-id') || '';
+            var uname = btn.getAttribute('data-manager-username') || '';
+            var full = btn.getAttribute('data-manager-fullname') || '';
+            var email = btn.getAttribute('data-manager-email') || '';
+            var active = btn.getAttribute('data-manager-active') || '1';
+
+            document.getElementById('mgr_edit_id').value = id;
+            document.getElementById('mgr_edit_username').value = uname;
+            document.getElementById('mgr_edit_fullname').value = full;
+            document.getElementById('mgr_edit_email').value = email;
+
+            var chk = document.getElementById('mgr_edit_active_chk');
+            var hid = document.getElementById('mgr_edit_active_val');
+            chk.checked = (active === '1');
+            hid.value = chk.checked ? '1' : '0';
+
+            chk.onchange = function () {
+              hid.value = chk.checked ? '1' : '0';
+            };
+
+            var pw = document.getElementById('mgr_edit_password');
+            if (pw) pw.value = '';
+          });
+        })();
+      </script>
+    </div>
+  </div>
+
+  {# ------------------------------ #}
+  {# Mapping create/update (Admin)  #}
+  {# ------------------------------ #}
   <div class="card mb-4">
     <div class="card-header fw-semibold">Assign / Update Mapping</div>
     <div class="card-body">
@@ -89,7 +296,7 @@
           <th>Manager</th>
           <th style="width:160px;">Assigned At</th>
           <th style="width:120px;">Active</th>
-          <th style="width:180px;">Actions</th>
+          <th style="width:260px;">Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -108,13 +315,25 @@
             </td>
             <td>
               {% if m.active %}
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-primary"
+                  data-bs-toggle="modal"
+                  data-bs-target="#mappingEditModal"
+                  data-mapping-id="{{ m.id }}"
+                  data-kam-id="{{ m.kam.id }}"
+                  data-kam-label="{{ m.kam.username }}"
+                  data-manager-id="{{ m.manager.id }}">
+                  Edit
+                </button>
+
                 <form method="post" class="d-inline">
                   {% csrf_token %}
                   <input type="hidden" name="action" value="deactivate" />
                   <input type="hidden" name="mapping_id" value="{{ m.id }}" />
                   <button class="btn btn-sm btn-outline-danger" type="submit"
                           onclick="return confirm('Deactivate mapping #{{ m.id }}?');">
-                    Deactivate
+                    Delete
                   </button>
                 </form>
               {% else %}
@@ -128,5 +347,73 @@
       </tbody>
     </table>
   </div>
+
+  {# Mapping Edit Modal (Admin only) #}
+  <div class="modal fade" id="mappingEditModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="edit_mapping" />
+          <input type="hidden" name="mapping_id" id="map_edit_id" value="" />
+          <input type="hidden" name="kam_id" id="map_edit_kam_id" value="" />
+
+          <div class="modal-header">
+            <h5 class="modal-title">Edit Mapping</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+
+          <div class="modal-body">
+            <div class="mb-2">
+              <label class="form-label">KAM</label>
+              <input class="form-control" id="map_edit_kam_label" value="" readonly />
+              <div class="form-text">KAM cannot be changed for an existing mapping. Create a new mapping instead.</div>
+            </div>
+
+            <div class="mb-2">
+              <label class="form-label">Manager</label>
+              <select class="form-select" name="manager_id" id="map_edit_manager_id" required>
+                <option value="">-- Select Manager --</option>
+                {% for u in manager_users %}
+                  <option value="{{ u.id }}">{{ u.username }}{% if u.get_full_name %} ({{ u.get_full_name }}){% endif %}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Cancel</button>
+            <button class="btn btn-primary" type="submit">Save Changes</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var modal = document.getElementById('mappingEditModal');
+      if (!modal) return;
+
+      modal.addEventListener('show.bs.modal', function (event) {
+        var btn = event.relatedTarget;
+        if (!btn) return;
+
+        var mapId = btn.getAttribute('data-mapping-id') || '';
+        var kamId = btn.getAttribute('data-kam-id') || '';
+        var kamLabel = btn.getAttribute('data-kam-label') || '';
+        var mgrId = btn.getAttribute('data-manager-id') || '';
+
+        document.getElementById('map_edit_id').value = mapId;
+        document.getElementById('map_edit_kam_id').value = kamId;
+        document.getElementById('map_edit_kam_label').value = kamLabel;
+
+        var sel = document.getElementById('map_edit_manager_id');
+        if (sel) {
+          sel.value = mgrId;
+        }
+      });
+    })();
+  </script>
 </div>
 {% endblock %}

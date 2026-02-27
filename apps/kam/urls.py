@@ -1,5 +1,4 @@
 # FILE: apps/kam/urls.py
-
 from django.urls import path
 from . import views
 
@@ -49,7 +48,7 @@ urlpatterns = [
     path("api/customers/manual/<int:customer_id>/delete/", views.customer_delete_manual, name="customer_delete_manual"),
 
     # ---------------------------------------------------------------------
-    # Admin-only: KAM → Manager Mapping (routing for approval emails)
+    # Admin-only: KAM → Manager Mapping (UI + CRUD are handled in views.admin_kam_manager_mapping)
     # ---------------------------------------------------------------------
     path("admin/kam-manager-mapping/", views.admin_kam_manager_mapping, name="admin_kam_manager_mapping"),
 

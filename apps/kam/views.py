@@ -1,4 +1,6 @@
 # FILE: apps/kam/views.py
+# PURPOSE: Fix KAM Dashboard Sales & Leads showing 0 by correctly parsing dashboard date inputs (MM/DD/YYYY etc.) used for filtering.
+# UPDATED: 2026-02-27
 from __future__ import annotations
 
 from datetime import date
@@ -314,11 +316,58 @@ def _visitplan_qs_for_user(user: User):
 # Date parsing helpers
 # ---------------------------------------------------------------------
 def _parse_iso_date(s: str) -> Optional[date]:
+    """
+    Dashboard date inputs are often MM/DD/YYYY (per the UI screenshot),
+    while older links/APIs may send YYYY-MM-DD.
+    This parser accepts:
+      - YYYY-MM-DD (ISO)
+      - MM/DD/YYYY, DD/MM/YYYY
+      - MM-DD-YYYY, DD-MM-YYYY
+
+    It is intentionally conservative and returns None on ambiguity/failure.
+    """
     s = (s or "").strip()
     if not s:
         return None
+
+    # 1) ISO first (existing behavior)
     try:
         return timezone.datetime.fromisoformat(s).date()
+    except Exception:
+        pass
+
+    # 2) Slash/hyphen based formats
+    sep = "/" if "/" in s else ("-" if "-" in s else None)
+    if not sep:
+        return None
+
+    parts = s.split(sep)
+    if len(parts) != 3:
+        return None
+
+    p0, p1, p2 = [p.strip() for p in parts]
+    if not (p0.isdigit() and p1.isdigit() and p2.isdigit()):
+        return None
+
+    try:
+        a = int(p0)
+        b = int(p1)
+        y = int(p2)
+        if y < 100:
+            y = 2000 + y
+
+        # Resolve day/month ordering:
+        # - If first part > 12 => DD/MM/YYYY
+        # - Else if second part > 12 => MM/DD/YYYY
+        # - Else default to MM/DD/YYYY (matches current dashboard picker)
+        if a > 12 and 1 <= b <= 12:
+            d, m = a, b
+        elif b > 12 and 1 <= a <= 12:
+            m, d = a, b
+        else:
+            m, d = a, b
+
+        return date(y, m, d)
     except Exception:
         return None
 
@@ -462,9 +511,8 @@ def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timez
     to_d = _parse_iso_date(to_s)
     if from_d and to_d and from_d <= to_d:
         start = timezone.make_aware(timezone.datetime(from_d.year, from_d.month, from_d.day, 0, 0, 0))
-        end = (
-            timezone.make_aware(timezone.datetime(to_d.year, to_d.month, to_d.day, 0, 0, 0))
-            + timezone.timedelta(days=1)
+        end = timezone.make_aware(timezone.datetime(to_d.year, to_d.month, to_d.day, 0, 0, 0)) + timezone.timedelta(
+            days=1
         )
         label = f"{from_d} → {to_d}"
         return start, end, label

@@ -1,4 +1,6 @@
 {# FILE: templates/kam/targets.html #}
+{# PURPOSE: Fix KAM dropdown rendering + role-based option listing + selection persistence (template-only). #}
+{# UPDATED: 2026-02-27 #}
 {% extends "base.html" %}
 
 {% block content %}
@@ -45,9 +47,34 @@
           </div>
         </div>
 
+        {# -----------------------------
+           KAM dropdown (template-owned)
+           - Uses role-filtered kam_options passed from view
+           - Persists selection using form value / initial / selected_user
+           - Disabled when "Apply to all my KAMs" is checked (but still submits via hidden input)
+           ----------------------------- #}
         <div class="col-md-4">
           <label class="form-label">KAM</label>
-          {{ form.kam_username }}
+
+          {% with current_kam=form.kam_username.value|default:form.kam_username.initial|default:selected_user|default:"" %}
+            <select
+              class="form-select"
+              name="kam_username"
+              id="{{ form.kam_username.id_for_label|default:'id_kam_username' }}"
+              {% if form.bulk_all_kams.value %}disabled{% endif %}
+            >
+              <option value="">— Select KAM —</option>
+              {% for u in kam_options %}
+                <option value="{{ u }}" {% if current_kam == u %}selected{% endif %}>{{ u }}</option>
+              {% endfor %}
+            </select>
+
+            {# If dropdown is disabled, ensure value still posts #}
+            {% if form.bulk_all_kams.value and current_kam %}
+              <input type="hidden" name="kam_username" value="{{ current_kam }}">
+            {% endif %}
+          {% endwith %}
+
           {% if form.kam_username.errors %}<div class="text-danger small">{{ form.kam_username.errors }}</div>{% endif %}
           <div class="form-text">Ignored if bulk apply is enabled.</div>
         </div>
@@ -94,15 +121,29 @@
 
   <div class="d-flex align-items-center justify-content-between mb-2">
     <div class="fw-semibold">Existing Targets</div>
+
+    {# Filter form: ensure selected user persists and date values are proper YYYY-MM-DD #}
     <form method="get" class="d-flex gap-2">
-      <input class="form-control form-control-sm" type="date" name="from" value="{{ filter_from|default:'' }}">
-      <input class="form-control form-control-sm" type="date" name="to" value="{{ filter_to|default:'' }}">
+      <input
+        class="form-control form-control-sm"
+        type="date"
+        name="from"
+        value="{% if filter_from %}{{ filter_from|date:'Y-m-d' }}{% endif %}"
+      >
+      <input
+        class="form-control form-control-sm"
+        type="date"
+        name="to"
+        value="{% if filter_to %}{{ filter_to|date:'Y-m-d' }}{% endif %}"
+      >
+
       <select class="form-select form-select-sm" name="user">
-        <option value="">All KAMs</option>
+        <option value="" {% if not selected_user %}selected{% endif %}>All KAMs</option>
         {% for u in kam_options %}
           <option value="{{ u }}" {% if selected_user == u %}selected{% endif %}>{{ u }}</option>
         {% endfor %}
       </select>
+
       <button class="btn btn-sm btn-outline-primary" type="submit">Filter</button>
     </form>
   </div>
@@ -140,4 +181,19 @@
     </table>
   </div>
 </div>
+
+<script>
+  // Template-only UX: disable/enable KAM dropdown when "Apply to all my KAMs" toggles.
+  (function () {
+    var bulk = document.getElementById("{{ form.bulk_all_kams.id_for_label|default:'id_bulk_all_kams' }}");
+    var kamSel = document.getElementById("{{ form.kam_username.id_for_label|default:'id_kam_username' }}");
+    if (!bulk || !kamSel) return;
+
+    function sync() {
+      kamSel.disabled = !!bulk.checked;
+    }
+    bulk.addEventListener("change", sync);
+    sync();
+  })();
+</script>
 {% endblock %}

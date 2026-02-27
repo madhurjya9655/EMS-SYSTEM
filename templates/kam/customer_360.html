@@ -1,3 +1,6 @@
+{# FILE: templates/kam/customer_360.html #}
+{# PURPOSE: Fix KAM dropdown selection persistence and “ALL” selection consistency (template-only). #}
+{# UPDATED: 2026-02-27 #}
 {% extends "base.html" %}
 {% load humanize %}
 {% block title %}Customer 360{% endblock %}
@@ -47,7 +50,7 @@
       <div>
         <label class="form-label mb-1 small">KAM</label>
         <select name="user" class="form-select form-select-sm">
-          <option value="">ALL</option>
+          <option value="" {% if not request.GET.user %}selected{% endif %}>ALL</option>
           {% for uname in kam_options %}
             <option value="{{ uname }}" {% if request.GET.user == uname %}selected{% endif %}>{{ uname }}</option>
           {% endfor %}
