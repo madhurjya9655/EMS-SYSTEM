@@ -1,6 +1,4 @@
 {# FILE: templates/kam/targets.html #}
-{# PURPOSE: Fix KAM dropdown rendering + role-based option listing + selection persistence (template-only). #}
-{# UPDATED: 2026-02-27 #}
 {% extends "base.html" %}
 
 {% block content %}
@@ -47,12 +45,6 @@
           </div>
         </div>
 
-        {# -----------------------------
-           KAM dropdown (template-owned)
-           - Uses role-filtered kam_options passed from view
-           - Persists selection using form value / initial / selected_user
-           - Disabled when "Apply to all my KAMs" is checked (but still submits via hidden input)
-           ----------------------------- #}
         <div class="col-md-4">
           <label class="form-label">KAM</label>
 
@@ -69,7 +61,6 @@
               {% endfor %}
             </select>
 
-            {# If dropdown is disabled, ensure value still posts #}
             {% if form.bulk_all_kams.value and current_kam %}
               <input type="hidden" name="kam_username" value="{{ current_kam }}">
             {% endif %}
@@ -122,7 +113,6 @@
   <div class="d-flex align-items-center justify-content-between mb-2">
     <div class="fw-semibold">Existing Targets</div>
 
-    {# Filter form: ensure selected user persists and date values are proper YYYY-MM-DD #}
     <form method="get" class="d-flex gap-2">
       <input
         class="form-control form-control-sm"
@@ -183,7 +173,6 @@
 </div>
 
 <script>
-  // Template-only UX: disable/enable KAM dropdown when "Apply to all my KAMs" toggles.
   (function () {
     var bulk = document.getElementById("{{ form.bulk_all_kams.id_for_label|default:'id_bulk_all_kams' }}");
     var kamSel = document.getElementById("{{ form.kam_username.id_for_label|default:'id_kam_username' }}");
