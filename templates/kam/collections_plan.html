@@ -1,14 +1,78 @@
 {# FILE: templates/kam/collections_plan.html #}
+{# PURPOSE: Clean Collections Plan UI, remove duplicate message, remove unused placeholders, keep business rules intact #}
+{# UPDATED: 2026-02-28 #}
 {% extends "base.html" %}
 {% load humanize crispy_forms_tags %}
 
 {% block title %}Collections Plan{% endblock %}
 
 {% block content %}
-<div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
-  <h1 class="page-title m-0">Collections Plan</h1>
+<style>
+  .kam-card {
+    border: 1px solid rgba(0,0,0,.08);
+    border-radius: 10px;
+    background: #fff;
+  }
 
-  <form class="d-flex gap-2 flex-wrap" method="get">
+  .kam-card .card-body {
+    padding: 1rem;
+  }
+
+  .kam-filter-bar .form-control,
+  .kam-filter-bar .form-select,
+  .kam-plan-form .form-control,
+  .kam-plan-form .form-select {
+    min-height: 38px;
+  }
+
+  .kam-soft-note {
+    font-size: .875rem;
+    color: #6c757d;
+  }
+
+  .kam-form-section-title {
+    font-size: .95rem;
+    font-weight: 600;
+    color: #212529;
+    margin-bottom: .5rem;
+  }
+
+  .kam-divider-text {
+    font-size: .78rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+    color: #6c757d;
+    text-transform: uppercase;
+  }
+
+  .kam-inline-help {
+    background: #f8f9fa;
+    border: 1px solid rgba(0,0,0,.07);
+    border-radius: 8px;
+    padding: .7rem .85rem;
+    color: #495057;
+  }
+
+  .kam-table-wrap {
+    overflow-x: auto;
+  }
+
+  .kam-table-wrap table {
+    margin-bottom: 0;
+  }
+
+  .kam-empty-cell {
+    color: #6c757d;
+  }
+</style>
+
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+  <div>
+    <h1 class="page-title m-0">Collections Plan</h1>
+    <div class="kam-soft-note mt-1">Plan collections by period or by custom date range.</div>
+  </div>
+
+  <form class="d-flex gap-2 flex-wrap kam-filter-bar" method="get">
     <select name="period" class="form-select form-select-sm">
       <option value="week" {% if period_type == 'WEEK' %}selected{% endif %}>Week</option>
       <option value="month" {% if period_type == 'MONTH' %}selected{% endif %}>Month</option>
@@ -17,17 +81,16 @@
       <option value="all" {% if period_type == 'ALL' %}selected{% endif %}>All</option>
     </select>
 
-    <input name="asof" placeholder="YYYY[-MM[-DD]]" value="{{ request.GET.asof }}" class="form-control form-control-sm"/>
-    <input type="date" name="from" value="{{ request.GET.from }}" class="form-control form-control-sm"/>
-    <input type="date" name="to" value="{{ request.GET.to }}" class="form-control form-control-sm"/>
+    <input name="asof" value="{{ request.GET.asof }}" class="form-control form-control-sm" placeholder="As of: YYYY or YYYY-MM or YYYY-MM-DD" />
+    <input type="date" name="from" value="{{ request.GET.from }}" class="form-control form-control-sm" />
+    <input type="date" name="to" value="{{ request.GET.to }}" class="form-control form-control-sm" />
 
     <button class="btn btn-sm btn-primary">Apply</button>
   </form>
 </div>
 
-{# Messages #}
 {% if messages %}
-  <div class="my-3">
+  <div class="mb-3">
     {% for message in messages %}
       <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
         {{ message }}
@@ -36,80 +99,133 @@
   </div>
 {% endif %}
 
-<div class="card p-3 my-3">
-  <h6 class="fw-bold mb-2">Add / Update Plan</h6>
+<div class="kam-card mb-3">
+  <div class="card-body">
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+      <div>
+        <h6 class="fw-bold mb-0">Add / Update Plan</h6>
+        <div class="kam-soft-note mt-1">Choose exactly one input mode: period-based or date-range based.</div>
+      </div>
+    </div>
 
-  {# FORM ERRORS (critical; otherwise user thinks "nothing happens") #}
-  {% if form.errors %}
-    <div class="alert alert-danger">
-      <div class="fw-semibold mb-1">Please fix the errors below:</div>
-      {% if form.non_field_errors %}
-        <div class="mb-2">{{ form.non_field_errors }}</div>
-      {% endif %}
-      <ul class="mb-0">
-        {% for field in form %}
-          {% for err in field.errors %}
-            <li><strong>{{ field.label }}:</strong> {{ err }}</li>
+    {% if form.errors %}
+      <div class="alert alert-danger">
+        <div class="fw-semibold mb-1">Please fix the errors below:</div>
+        {% if form.non_field_errors %}
+          <div class="mb-2">{{ form.non_field_errors }}</div>
+        {% endif %}
+        <ul class="mb-0">
+          {% for field in form %}
+            {% for err in field.errors %}
+              <li><strong>{{ field.label }}:</strong> {{ err }}</li>
+            {% endfor %}
           {% endfor %}
-        {% endfor %}
-      </ul>
-    </div>
-  {% endif %}
+        </ul>
+      </div>
+    {% endif %}
 
-  <form method="post" class="row g-2" novalidate>
-    {% csrf_token %}
-    <div class="col-md-2">{{ form.period_type.label_tag }} {{ form.period_type }}</div>
-    <div class="col-md-2">{{ form.period_id.label_tag }} {{ form.period_id }}</div>
-    <div class="col-md-2">{{ form.from_date.label_tag }} {{ form.from_date }}</div>
-    <div class="col-md-2">{{ form.to_date.label_tag }} {{ form.to_date }}</div>
-    <div class="col-md-2">{{ form.customer.label_tag }} {{ form.customer }}</div>
-    <div class="col-md-2">{{ form.planned_amount.label_tag }} {{ form.planned_amount }}</div>
-
-    <div class="col-12 small text-muted">
-      Provide either <em>Period Type/Id</em> OR <em>From/To</em> range (not both).
+    <div class="kam-inline-help mb-3">
+      Use <strong>either</strong> <em>Period Type + Period ID</em> <strong>or</strong> <em>From Date + To Date</em>.
     </div>
 
-    <div class="col-12 d-grid">
-      <button class="btn btn-primary">Save</button>
-    </div>
-  </form>
+    <form method="post" class="kam-plan-form" novalidate>
+      {% csrf_token %}
+
+      <div class="row g-3 align-items-end">
+        <div class="col-12 col-lg-6">
+          <div class="kam-form-section-title">Common Details</div>
+          <div class="row g-3">
+            <div class="col-12 col-md-7">
+              <label class="form-label mb-1" for="{{ form.customer.id_for_label }}">{{ form.customer.label }}</label>
+              {{ form.customer }}
+            </div>
+            <div class="col-12 col-md-5">
+              <label class="form-label mb-1" for="{{ form.planned_amount.id_for_label }}">{{ form.planned_amount.label }}</label>
+              {{ form.planned_amount }}
+            </div>
+          </div>
+        </div>
+
+        <div class="col-12 col-lg-6">
+          <div class="kam-form-section-title">Input Window</div>
+          <div class="row g-3">
+            <div class="col-12 col-md-6">
+              <label class="form-label mb-1" for="{{ form.period_type.id_for_label }}">{{ form.period_type.label }}</label>
+              {{ form.period_type }}
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label mb-1" for="{{ form.period_id.id_for_label }}">{{ form.period_id.label }}</label>
+              {{ form.period_id }}
+            </div>
+            <div class="col-12">
+              <div class="kam-divider-text">or</div>
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label mb-1" for="{{ form.from_date.id_for_label }}">{{ form.from_date.label }}</label>
+              {{ form.from_date }}
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label mb-1" for="{{ form.to_date.id_for_label }}">{{ form.to_date.label }}</label>
+              {{ form.to_date }}
+            </div>
+          </div>
+        </div>
+
+        <div class="col-12 d-flex justify-content-end">
+          <button class="btn btn-primary px-4">Save</button>
+        </div>
+      </div>
+    </form>
+  </div>
 </div>
 
-<div class="card p-3">
-  <h6 class="fw-bold mb-2">Planned vs Actual (₹)</h6>
-  <div class="table-responsive">
-    <table class="table table-sm align-middle">
-      <thead>
-        <tr>
-          <th>Customer</th>
-          <th>KAM</th>
-          <th class="text-end">Overdues (latest)</th>
-          <th class="text-end">Planned</th>
-          <th class="text-end">Actual</th>
-          <th class="text-center">Plan Window</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in rows %}
-        <tr>
-          <td>{{ r.customer.name }}</td>
-          <td>{{ r.kam.username }}</td>
-          <td class="text-end">₹ {{ r.overdue|floatformat:2|intcomma }}</td>
-          <td class="text-end">₹ {{ r.planned|floatformat:2|intcomma }}</td>
-          <td class="text-end">₹ {{ r.actual|floatformat:2|intcomma }}</td>
-          <td class="text-center">
-            {% if r.from_date and r.to_date %}
-              {{ r.from_date }} → {{ r.to_date }}
-            {% elif r.period_type and r.period_id %}
-              {{ r.period_type }} • {{ r.period_id }}
-            {% else %}—{% endif %}
-          </td>
-        </tr>
-        {% empty %}
-        <tr><td colspan="6" class="text-muted">No plans for this window.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+<div class="kam-card">
+  <div class="card-body">
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+      <div>
+        <h6 class="fw-bold mb-0">Planned vs Actual (₹)</h6>
+        <div class="kam-soft-note mt-1">Showing plans matching the current filter window.</div>
+      </div>
+    </div>
+
+    <div class="kam-table-wrap">
+      <table class="table table-sm align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>Customer</th>
+            <th>KAM</th>
+            <th class="text-end">Overdues (latest)</th>
+            <th class="text-end">Planned</th>
+            <th class="text-end">Actual</th>
+            <th class="text-center">Plan Window</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>{{ r.customer.name }}</td>
+            <td>{% if r.kam %}{{ r.kam.username }}{% else %}<span class="kam-empty-cell">—</span>{% endif %}</td>
+            <td class="text-end">₹ {{ r.overdue|floatformat:2|intcomma }}</td>
+            <td class="text-end">₹ {{ r.planned|floatformat:2|intcomma }}</td>
+            <td class="text-end">₹ {{ r.actual|floatformat:2|intcomma }}</td>
+            <td class="text-center">
+              {% if r.from_date and r.to_date %}
+                {{ r.from_date }} → {{ r.to_date }}
+              {% elif r.period_type and r.period_id %}
+                {{ r.period_type }} • {{ r.period_id }}
+              {% else %}
+                <span class="kam-empty-cell">—</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="6" class="text-muted text-center py-3">No plans for this window.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 {% endblock %}

@@ -1,3 +1,6 @@
+{# FILE: templates/kam/plan_visit.html #}
+{# PURPOSE: Remove per-customer From/To inputs from batch customer rows and keep standard aligned UI #}
+{# UPDATED: 2026-02-28 #}
 {% extends "base.html" %}
 {% load static %}
 
@@ -5,7 +8,6 @@
 <style>
   .kam-form .form-label { font-weight: 600; }
 
-  /* Make textarea align with inputs in the same row */
   .kam-remarks-compact {
     resize: vertical;
     min-height: 38px;
@@ -14,22 +16,26 @@
     padding-bottom: 6px;
   }
 
-  /* Scroll container + sticky header for customer table */
   .kam-scroll-table {
     max-height: 520px;
     overflow: auto;
     border: 1px solid rgba(0,0,0,.08);
     border-radius: 8px;
+    background: #fff;
   }
+
   .kam-scroll-table table { margin-bottom: 0; }
+
   .kam-scroll-table thead th {
     position: sticky;
     top: 0;
     z-index: 5;
     background: #f8f9fa;
+    vertical-align: middle;
+    white-space: nowrap;
   }
 
-  .table-sm > :not(caption) > * > * { padding: .35rem .5rem; }
+  .table-sm > :not(caption) > * > * { padding: .45rem .55rem; }
 
   .kam-hint {
     background: #f8f9fa;
@@ -38,18 +44,65 @@
     padding: 16px;
     color: rgba(0,0,0,.65);
   }
+
+  .kam-section-card {
+    border: 1px solid rgba(0,0,0,.08);
+    border-radius: 10px;
+    background: #fff;
+  }
+
+  .kam-section-card .card-body {
+    padding: 1rem;
+  }
+
+  .kam-global-window {
+    border: 1px solid rgba(13,110,253,.18);
+    background: rgba(13,110,253,.04);
+    border-radius: 8px;
+    padding: .75rem .9rem;
+  }
+
+  .kam-global-window .kam-window-label {
+    font-size: .875rem;
+    color: #495057;
+  }
+
+  .kam-global-window .kam-window-value {
+    font-weight: 600;
+    color: #212529;
+  }
+
+  .kam-table-input {
+    min-width: 140px;
+  }
+
+  .kam-table-input-wide {
+    min-width: 220px;
+  }
+
+  .kam-table-input-num {
+    min-width: 160px;
+    text-align: right;
+  }
+
+  .kam-muted-note {
+    font-size: .875rem;
+    color: #6c757d;
+  }
 </style>
 
 <div class="container-fluid kam-form">
-  <div class="d-flex align-items-center justify-content-between mb-3">
-    <h3 class="mb-0">{{ page_title|default:"Plan Visit" }}</h3>
+  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+    <div>
+      <h3 class="mb-0">{{ page_title|default:"Plan Visit" }}</h3>
+      <div class="kam-muted-note mt-1">Use one global date range for the full customer batch.</div>
+    </div>
     <div class="d-flex align-items-center gap-2">
       <span class="small text-muted d-none d-md-inline">Single Draft + Batch Submission</span>
       <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:visit_batches' %}">View Batches</a>
     </div>
   </div>
 
-  <!-- Tabs (Bootstrap 4 + 5 compatible) -->
   <ul class="nav nav-tabs" id="planTabs" role="tablist">
     <li class="nav-item" role="presentation">
       <a class="nav-link active"
@@ -77,14 +130,13 @@
 
   <div class="tab-content border border-top-0 p-3 bg-white" id="planTabsContent">
 
-    <!-- ===================== BATCH TAB ===================== -->
     <div class="tab-pane fade show active" id="batch" role="tabpanel" aria-labelledby="batch-tab">
       <form method="post" id="batchForm" novalidate>
         {% csrf_token %}
         <input type="hidden" name="mode" value="batch" />
 
         <div class="row g-3 align-items-end">
-          <div class="col-12 col-md-3">
+          <div class="col-12 col-lg-3">
             <label class="form-label mb-1">Visit Category</label>
             {{ batch_form.visit_category }}
             {% if batch_form.visit_category.errors %}
@@ -92,7 +144,7 @@
             {% endif %}
           </div>
 
-          <div class="col-12 col-md-3">
+          <div class="col-12 col-md-6 col-lg-3">
             <label class="form-label mb-1">From Date</label>
             {{ batch_form.from_date }}
             {% if batch_form.from_date.errors %}
@@ -100,7 +152,7 @@
             {% endif %}
           </div>
 
-          <div class="col-12 col-md-3">
+          <div class="col-12 col-md-6 col-lg-3">
             <label class="form-label mb-1">To Date</label>
             {{ batch_form.to_date }}
             {% if batch_form.to_date.errors %}
@@ -108,12 +160,19 @@
             {% endif %}
           </div>
 
-          <div class="col-12 col-md-3">
+          <div class="col-12 col-lg-3">
             <label class="form-label mb-1">Remarks (required for Proceed)</label>
             {{ batch_form.purpose }}
             {% if batch_form.purpose.errors %}
               <div class="text-danger small mt-1">{{ batch_form.purpose.errors }}</div>
             {% endif %}
+          </div>
+        </div>
+
+        <div class="kam-global-window mt-3" id="globalDateInfo">
+          <div class="d-flex flex-wrap align-items-center gap-2">
+            <span class="kam-window-label">Batch date window:</span>
+            <span class="kam-window-value" id="globalDateInfoText">Select From Date and To Date above.</span>
           </div>
         </div>
 
@@ -123,98 +182,105 @@
           Select a <b>Visit Category</b> to continue.
         </div>
 
-        <!-- CUSTOMER TABLE -->
         <div id="customerBatchSection" style="display:none;">
-          <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
-            <div class="d-flex gap-2 flex-wrap">
-              <input class="form-control form-control-sm" style="width:260px" id="custSearch" placeholder="Search customers (name/code/mobile)" />
-              <select class="form-select form-select-sm" style="width:180px" id="custSource">
-                <option value="">All Sources</option>
-                <option value="SHEET">SHEET</option>
-                <option value="MANUAL">MANUAL</option>
-              </select>
-              <button type="button" class="btn btn-sm btn-outline-primary" id="btnRefreshCustomers">Refresh</button>
+          <div class="kam-section-card">
+            <div class="card-body">
+              <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+                <div class="d-flex gap-2 flex-wrap">
+                  <input class="form-control form-control-sm" style="width:260px" id="custSearch" placeholder="Search customers (name/code/mobile)" />
+                  <select class="form-select form-select-sm" style="width:180px" id="custSource">
+                    <option value="">All Sources</option>
+                    <option value="SHEET">SHEET</option>
+                    <option value="MANUAL">MANUAL</option>
+                  </select>
+                  <button type="button" class="btn btn-sm btn-outline-primary" id="btnRefreshCustomers">Refresh</button>
+                </div>
+
+                <div class="d-flex gap-2 align-items-center flex-wrap">
+                  <button type="button" class="btn btn-sm btn-outline-success"
+                          data-toggle="modal" data-bs-toggle="modal"
+                          data-target="#manualCustomerModal" data-bs-target="#manualCustomerModal">
+                    + Manual Customer
+                  </button>
+                  <span class="badge bg-secondary" id="selCount">0 selected</span>
+                </div>
+              </div>
+
+              <div class="small text-muted mb-2">
+                All selected customers will use the global <strong>From Date</strong> and <strong>To Date</strong> shown above.
+              </div>
+
+              <div class="kam-scroll-table">
+                <table class="table table-sm table-hover align-middle">
+                  <thead>
+                    <tr>
+                      <th style="width:44px;"><input type="checkbox" id="selectAllCust" /></th>
+                      <th>Customer</th>
+                      <th style="width:240px;">Purpose (optional)</th>
+                      <th style="width:260px;">Location</th>
+                      <th style="width:170px;">Expected Sales (MT)</th>
+                      <th style="width:190px;">Expected Collection (₹)</th>
+                      <th style="width:90px;">Source</th>
+                    </tr>
+                  </thead>
+                  <tbody id="custTbody">
+                    <tr><td colspan="7" class="text-muted">Select category to load customers…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div id="selectedHiddenInputs"></div>
+
+              <div class="d-flex gap-2 mt-3 flex-wrap">
+                <button type="submit" name="action" value="save_draft" class="btn btn-outline-secondary">
+                  Save Draft Batch
+                </button>
+                <button type="submit" name="action" value="proceed" class="btn btn-primary">
+                  Proceed to Manager
+                </button>
+              </div>
+              <div class="small text-muted mt-2">
+                Proceed to Manager is allowed only for Customer Visit batches and requires Remarks + at least one customer.
+              </div>
             </div>
-
-            <div class="d-flex gap-2 align-items-center">
-              <button type="button" class="btn btn-sm btn-outline-success"
-                      data-toggle="modal" data-bs-toggle="modal"
-                      data-target="#manualCustomerModal" data-bs-target="#manualCustomerModal">
-                + Manual Customer
-              </button>
-              <span class="badge bg-secondary" id="selCount">0 selected</span>
-            </div>
-          </div>
-
-          <div class="kam-scroll-table">
-            <table class="table table-sm table-hover align-middle">
-              <thead>
-                <tr>
-                  <th style="width:44px;"><input type="checkbox" id="selectAllCust" /></th>
-                  <th>Customer</th>
-                  <th style="width:130px;">From</th>
-                  <th style="width:130px;">To</th>
-                  <th style="width:240px;">Purpose (optional)</th>
-                  <th style="width:240px;">Location</th>
-                  <th style="width:170px;">Expected Sales (MT)</th>
-                  <th style="width:190px;">Expected Collection (₹)</th>
-                  <th style="width:90px;">Source</th>
-                </tr>
-              </thead>
-              <tbody id="custTbody">
-                <tr><td colspan="9" class="text-muted">Select category to load customers…</td></tr>
-              </tbody>
-            </table>
-          </div>
-
-          <div id="selectedHiddenInputs"></div>
-
-          <div class="d-flex gap-2 mt-3 flex-wrap">
-            <button type="submit" name="action" value="save_draft" class="btn btn-outline-secondary">
-              Save Draft Batch
-            </button>
-            <button type="submit" name="action" value="proceed" class="btn btn-primary">
-              Proceed to Manager
-            </button>
-          </div>
-          <div class="small text-muted mt-2">
-            Proceed to Manager is allowed only for Customer Visit batches and requires Remarks + at least one customer.
           </div>
         </div>
 
-        <!-- NON-CUSTOMER -->
         <div id="nonCustomerSection" style="display:none;">
-          <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
-            <div class="text-muted small">
-              Add one or more lines (supplier/warehouse/vendor). These will be saved as a DRAFT batch.
+          <div class="kam-section-card">
+            <div class="card-body">
+              <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
+                <div class="text-muted small">
+                  Add one or more lines (supplier/warehouse/vendor). These will be saved as a DRAFT batch.
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-primary" id="addNonCustomerLine">+ Add line</button>
+              </div>
+
+              <div class="table-responsive">
+                <table class="table table-sm align-middle">
+                  <thead class="table-light">
+                    <tr>
+                      <th style="width:260px;">Name</th>
+                      <th style="width:260px;">Location</th>
+                      <th>Purpose</th>
+                      <th style="width:110px;"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="nonCustomerTbody"></tbody>
+                </table>
+              </div>
+
+              <div class="d-flex gap-2 mt-3">
+                <button type="submit" name="action" value="save_draft" class="btn btn-outline-secondary">
+                  Save Draft Batch
+                </button>
+              </div>
             </div>
-            <button type="button" class="btn btn-sm btn-outline-primary" id="addNonCustomerLine">+ Add line</button>
-          </div>
-
-          <div class="table-responsive">
-            <table class="table table-sm align-middle">
-              <thead class="table-light">
-                <tr>
-                  <th style="width:260px;">Name</th>
-                  <th style="width:260px;">Location</th>
-                  <th>Purpose</th>
-                  <th style="width:110px;"></th>
-                </tr>
-              </thead>
-              <tbody id="nonCustomerTbody"></tbody>
-            </table>
-          </div>
-
-          <div class="d-flex gap-2 mt-3">
-            <button type="submit" name="action" value="save_draft" class="btn btn-outline-secondary">
-              Save Draft Batch
-            </button>
           </div>
         </div>
       </form>
     </div>
 
-    <!-- ===================== SINGLE TAB ===================== -->
     <div class="tab-pane fade" id="single" role="tabpanel" aria-labelledby="single-tab">
       <form method="post" id="singleForm" novalidate>
         {% csrf_token %}
@@ -315,7 +381,6 @@
   </div>
 </div>
 
-<!-- Manual Customer Modal -->
 <div class="modal fade" id="manualCustomerModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
@@ -367,7 +432,6 @@
 
 <script>
 (function() {
-  // Apply bootstrap classes to Django-rendered widgets (NO template kwargs needed)
   function applyBootstrap() {
     document.querySelectorAll("#batchForm select, #singleForm select").forEach(el => {
       el.classList.add("form-select", "form-select-sm");
@@ -380,7 +444,6 @@
       el.classList.add("form-control", "form-control-sm");
     });
 
-    // compact remarks textarea (batch purpose)
     const purpose = document.querySelector('#batchForm textarea[name$="purpose"]');
     if (purpose) purpose.classList.add("kam-remarks-compact");
   }
@@ -417,6 +480,7 @@
 
   const nonCustomerTbody = document.getElementById("nonCustomerTbody");
   const addNonCustomerLine = document.getElementById("addNonCustomerLine");
+  const globalDateInfoText = document.getElementById("globalDateInfoText");
 
   const apiUrl = "{% url 'kam:customers_api' %}";
 
@@ -441,8 +505,25 @@
   function isCustomerCategoryValue(v) {
     return (String(v || "").toUpperCase() === "CUSTOMER");
   }
+
   function hasCategorySelected(v) {
     return String(v || "").trim() !== "";
+  }
+
+  function updateGlobalDateInfo() {
+    if (!globalDateInfoText) return;
+    const fromVal = batchFromEl ? (batchFromEl.value || "") : "";
+    const toVal = batchToEl ? (batchToEl.value || "") : "";
+
+    if (fromVal && toVal) {
+      globalDateInfoText.textContent = fromVal + " → " + toVal;
+    } else if (fromVal) {
+      globalDateInfoText.textContent = fromVal + " → Select To Date";
+    } else if (toVal) {
+      globalDateInfoText.textContent = "Select From Date → " + toVal;
+    } else {
+      globalDateInfoText.textContent = "Select From Date and To Date above.";
+    }
   }
 
   let selectedSet = new Set();
@@ -478,7 +559,7 @@
       if (categoryHint) categoryHint.style.display = "";
       if (customerSection) customerSection.style.display = "none";
       if (nonCustomerSection) nonCustomerSection.style.display = "none";
-      if (custTbody) custTbody.innerHTML = `<tr><td colspan="9" class="text-muted">Select category to load customers…</td></tr>`;
+      if (custTbody) custTbody.innerHTML = `<tr><td colspan="7" class="text-muted">Select category to load customers…</td></tr>`;
       return;
     }
 
@@ -508,8 +589,8 @@
     if (!custTbody) return;
 
     getCheckedIds().forEach(id => selectedSet.add(id));
+    custTbody.innerHTML = `<tr><td colspan="7" class="text-muted">Loading…</td></tr>`;
 
-    custTbody.innerHTML = `<tr><td colspan="9" class="text-muted">Loading…</td></tr>`;
     const q = encodeURIComponent((custSearch && custSearch.value) ? custSearch.value : "");
     const src = encodeURIComponent((custSource && custSource.value) ? custSource.value : "");
     const url = apiUrl + `?q=${q}&source=${src}`;
@@ -522,7 +603,7 @@
         renderCustomers();
       })
       .catch(err => {
-        custTbody.innerHTML = `<tr><td colspan="9" class="text-danger">Error loading customers: ${esc(err.message)}</td></tr>`;
+        custTbody.innerHTML = `<tr><td colspan="7" class="text-danger">Error loading customers: ${esc(err.message)}</td></tr>`;
       });
   }
 
@@ -530,13 +611,10 @@
     if (!custTbody) return;
 
     if (!customerCache.length) {
-      custTbody.innerHTML = `<tr><td colspan="9" class="text-muted">No customers found.</td></tr>`;
+      custTbody.innerHTML = `<tr><td colspan="7" class="text-muted">No customers found.</td></tr>`;
       updateSelectedCount();
       return;
     }
-
-    const fromDefault = batchFromEl ? (batchFromEl.value || "") : "";
-    const toDefault = batchToEl ? (batchToEl.value || "") : "";
 
     const rows = customerCache.map(c => {
       const cid = String(c.id);
@@ -550,12 +628,10 @@
             <div class="fw-semibold">${esc(c.name)}</div>
             <div class="small text-muted">${esc(c.code || "")}${c.mobile ? " • " + esc(c.mobile) : ""}</div>
           </td>
-          <td><input class="form-control form-control-sm" type="date" name="visit_date_${esc(cid)}" value="${esc(fromDefault)}"></td>
-          <td><input class="form-control form-control-sm" type="date" name="visit_date_to_${esc(cid)}" value="${esc(toDefault)}"></td>
-          <td><input class="form-control form-control-sm" type="text" name="purpose_${esc(cid)}" placeholder="Optional"></td>
-          <td><input class="form-control form-control-sm" type="text" name="location_${esc(cid)}" value="${esc(addr)}"></td>
-          <td><input class="form-control form-control-sm" type="text" name="expected_sales_mt_${esc(cid)}" placeholder="e.g. 12.5"></td>
-          <td><input class="form-control form-control-sm" type="text" name="expected_collection_${esc(cid)}" placeholder="e.g. 250000"></td>
+          <td><input class="form-control form-control-sm kam-table-input-wide" type="text" name="purpose_${esc(cid)}" placeholder="Optional"></td>
+          <td><input class="form-control form-control-sm kam-table-input-wide" type="text" name="location_${esc(cid)}" value="${esc(addr)}"></td>
+          <td><input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_sales_mt_${esc(cid)}" placeholder="e.g. 12.5"></td>
+          <td><input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_collection_${esc(cid)}" placeholder="e.g. 250000"></td>
           <td><span class="badge bg-light text-dark">${esc((c.source || "").toUpperCase())}</span></td>
         </tr>
       `;
@@ -592,7 +668,10 @@
 
   if (custSearch) {
     custSearch.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); loadCustomers(); }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        loadCustomers();
+      }
     });
   }
 
@@ -634,8 +713,9 @@
 
   if (batchCategoryEl) batchCategoryEl.addEventListener("change", toggleSections);
   if (singleCategoryEl) singleCategoryEl.addEventListener("change", toggleSingleFields);
+  if (batchFromEl) batchFromEl.addEventListener("change", updateGlobalDateInfo);
+  if (batchToEl) batchToEl.addEventListener("change", updateGlobalDateInfo);
 
-  // Manual customer create
   const mcSave = document.getElementById("mc_save");
   const mcErr = document.getElementById("mc_err");
   const mcOk = document.getElementById("mc_ok");
@@ -646,6 +726,7 @@
     mcErr.style.display = "";
     mcErr.textContent = msg;
   }
+
   function showOk(msg) {
     if (!mcErr || !mcOk) return;
     mcErr.style.display = "none";
@@ -678,8 +759,8 @@
     });
   }
 
-  // INIT
   applyBootstrap();
+  updateGlobalDateInfo();
   toggleSections();
   toggleSingleFields();
 })();

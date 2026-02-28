@@ -1,4 +1,6 @@
 # FILE: apps/kam/models.py
+# PURPOSE: Preserve existing KAM data model while supporting dashboard aggregation fixes without schema changes
+# UPDATED: 2026-02-28
 from __future__ import annotations
 
 from django.db import models

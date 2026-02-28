@@ -1,4 +1,6 @@
 # FILE: apps/kam/sheets.py
+# PURPOSE: Stable Google Sheet sync entrypoint; aligned with KAM dashboard data flow without changing sync behavior
+# UPDATED: 2026-02-28
 
 from __future__ import annotations
 

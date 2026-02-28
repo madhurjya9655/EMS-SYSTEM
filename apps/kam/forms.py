@@ -1,4 +1,6 @@
 # FILE: apps/kam/forms.py
+# PURPOSE: Fix Plan Visit batch date handling and Collections Plan input validation/UI support without touching unrelated business rules
+# UPDATED: 2026-02-28
 from __future__ import annotations
 
 from decimal import Decimal
@@ -63,7 +65,7 @@ class VisitPlanForm(forms.ModelForm):
         model = VisitPlan
         fields = [
             "visit_category",
-            "visit_type",  # ✅ REQUIRED (template + model)
+            "visit_type",
             "customer",
             "counterparty_name",
             "visit_date",
@@ -95,7 +97,6 @@ class VisitPlanForm(forms.ModelForm):
         if vd and vdt and vdt < vd:
             self.add_error("visit_date_to", "To Date cannot be earlier than Visit Date.")
 
-        # Customer vs non-customer enforcement
         if cat == VisitPlan.CAT_CUSTOMER:
             if not cust:
                 self.add_error("customer", "Customer is required for Customer Visit.")
@@ -139,7 +140,7 @@ class VisitActualForm(forms.ModelForm):
             "confirmed_location",
             "successful",
             "not_success_reason",
-            "meeting_notes",  # ✅ model field
+            "meeting_notes",
             "actual_sales_mt",
             "actual_collection",
             "next_action",
@@ -156,7 +157,6 @@ class VisitActualForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # If editing and meeting_notes is empty but legacy summary exists, surface it
         if self.instance and getattr(self.instance, "pk", None):
             if not (self.instance.meeting_notes or "").strip() and (self.instance.summary or "").strip():
                 self.fields["meeting_notes"].initial = self.instance.summary or ""
@@ -187,7 +187,6 @@ class VisitActualForm(forms.ModelForm):
     def save(self, commit=True):
         inst = super().save(commit=False)
 
-        # Keep legacy summary synced
         notes = (inst.meeting_notes or "").strip()
         inst.meeting_notes = notes or None
         inst.summary = inst.meeting_notes
@@ -217,7 +216,6 @@ class CallForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # View sets queryset strictly
 
 
 class CollectionForm(forms.ModelForm):
@@ -280,7 +278,6 @@ class VisitBatchForm(forms.ModelForm):
         if fd and td and td < fd:
             self.add_error("to_date", "To date cannot be earlier than From date.")
 
-        # Model uses TextField in updated models.py so 1000 is OK
         if len(pur) > 1000:
             self.add_error("purpose", "Remarks too long (max 1000 chars).")
 
@@ -335,7 +332,6 @@ class ManagerTargetForm(forms.Form):
 
     fixed_for_next_3_months = forms.BooleanField(required=False, initial=False)
 
-    # ✅ FIX: use ChoiceField so template rendering is a real dropdown with role-filtered options
     kam_username = forms.ChoiceField(
         required=False,
         choices=[],
@@ -354,7 +350,6 @@ class ManagerTargetForm(forms.Form):
         self.kam_options = kwargs.pop("kam_options", []) or []
         super().__init__(*args, **kwargs)
 
-        # Build dropdown choices from allowed usernames (role-based filtering is done in the view)
         choices = [("", "— Select KAM —")]
         choices += [(u, u) for u in self.kam_options]
         self.fields["kam_username"].choices = choices
@@ -403,6 +398,13 @@ class ManagerTargetForm(forms.Form):
 # Collections plan
 # ---------------------------------------------------------------------
 class CollectionPlanForm(forms.ModelForm):
+    """
+    Keep business rules intact:
+    - allow either (period_type + period_id) OR (from_date + to_date)
+    - do not allow both modes together
+    - do not allow partial date range or partial period input
+    """
+
     class Meta:
         model = CollectionPlan
         fields = [
@@ -416,6 +418,11 @@ class CollectionPlanForm(forms.ModelForm):
         widgets = {
             "from_date": forms.DateInput(attrs={"type": "date"}),
             "to_date": forms.DateInput(attrs={"type": "date"}),
+            "period_id": forms.TextInput(
+                attrs={
+                    "placeholder": "e.g. 2026-W09 / 2026-02 / 2026-Q1 / 2026",
+                }
+            ),
         }
 
     def clean_planned_amount(self):
@@ -427,10 +434,40 @@ class CollectionPlanForm(forms.ModelForm):
 
     def clean(self):
         data = super().clean()
+
         fd = data.get("from_date")
         td = data.get("to_date")
+        ptype = data.get("period_type")
+        pid = (data.get("period_id") or "").strip()
+
+        has_period_type = bool(ptype)
+        has_period_id = bool(pid)
+        has_period = has_period_type or has_period_id
+
+        has_from = bool(fd)
+        has_to = bool(td)
+        has_range = has_from or has_to
+
         if fd and td and td < fd:
             self.add_error("to_date", "To date cannot be earlier than From date.")
+
+        if has_period and has_range:
+            raise ValidationError("Choose either Period Type/Id OR From/To date range (not both).")
+
+        if has_period_type and not has_period_id:
+            self.add_error("period_id", "Period ID is required when Period Type is selected.")
+        if has_period_id and not has_period_type:
+            self.add_error("period_type", "Period Type is required when Period ID is provided.")
+
+        if has_from and not has_to:
+            self.add_error("to_date", "To date is required when From date is provided.")
+        if has_to and not has_from:
+            self.add_error("from_date", "From date is required when To date is provided.")
+
+        if not ((has_period_type and has_period_id) or (has_from and has_to)):
+            raise ValidationError("Provide either Period Type/Id OR From/To date range.")
+
+        data["period_id"] = pid or None
         return data
 
 

@@ -1,6 +1,6 @@
 # FILE: apps/kam/views.py
-# PURPOSE: Fix KAM Dashboard Sales & Leads showing 0 by correctly parsing dashboard date inputs (MM/DD/YYYY etc.) used for filtering.
-# UPDATED: 2026-02-27
+# PURPOSE: Fix KAM Dashboard sales/leads/date-scope aggregation while preserving RBAC and existing business rules
+# UPDATED: 2026-02-28
 from __future__ import annotations
 
 from datetime import date
@@ -29,28 +29,28 @@ from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.users.permissions import _user_permission_codes  # app-level codes
+from apps.users.permissions import _user_permission_codes
 
 from .forms import (
     VisitPlanForm,
     VisitActualForm,
     CallForm,
     CollectionForm,
-    TargetLineInlineForm,  # legacy, kept for compatibility only
-    TargetSettingForm,  # SECTION F (kept; not used by redesigned manager targets)
+    TargetLineInlineForm,
+    TargetSettingForm,
     CollectionPlanForm,
     VisitBatchForm,
     MultiVisitPlanLineForm,
-    ManagerTargetForm,  # NEW: manager targets UI/form (bulk + fixed 3 months)
+    ManagerTargetForm,
 )
 from .models import (
     Customer,
     InvoiceFact,
     LeadFact,
     OverdueSnapshot,
-    TargetHeader,  # legacy, kept for historical
-    TargetLine,  # legacy, kept for historical
-    TargetSetting,  # SECTION F
+    TargetHeader,
+    TargetLine,
+    TargetSetting,
     VisitPlan,
     VisitActual,
     CallLog,
@@ -62,7 +62,6 @@ from .models import (
     KamManagerMapping,
 )
 
-# IMPORTANT: we now use .sheets (the fixed importer module), not sheets_adapter
 from . import sheets
 
 
@@ -109,20 +108,14 @@ def _is_admin(user) -> bool:
 
 
 def _is_manager(user) -> bool:
-    # Keep your original group logic intact while tightening data scope via mapping
     return bool(_in_group(user, ("Manager", "Admin", "Finance")))
 
 
 def _is_kam(user) -> bool:
-    # If they can access the KAM module but not manager group, treat as KAM
     return bool(getattr(user, "is_authenticated", False) and not _is_manager(user))
 
 
 def require_kam_code(code: str):
-    """
-    Decorator: require a specific KAM app-level permission code.
-    Superusers bypass. Anonymous users are redirected to login.
-    """
     required = (code or "").strip().lower()
 
     def _decorator(view_func):
@@ -151,10 +144,6 @@ def require_kam_code(code: str):
 
 
 def require_any_kam_code(*codes: str):
-    """
-    Decorator: require ANY of the given KAM app-level permission codes.
-    Superusers bypass. Anonymous users redirected to login.
-    """
     required = {((c or "").strip().lower()) for c in codes if (c or "").strip()}
 
     def _decorator(view_func):
@@ -230,7 +219,6 @@ def _kams_managed_by_manager(manager_user: User) -> List[int]:
     if not manager_user or not getattr(manager_user, "id", None):
         return []
     if _is_admin(manager_user):
-        # Admin can see all KAMs
         return list(User.objects.filter(is_active=True).values_list("id", flat=True))
     return list(
         KamManagerMapping.objects.filter(manager=manager_user, active=True).values_list("kam_id", flat=True).distinct()
@@ -274,11 +262,6 @@ def _is_kam_candidate(u: User, codes: Optional[set[str]] = None) -> bool:
 # Queryset scope helpers (STRICT at queryset level)
 # ---------------------------------------------------------------------
 def _customer_qs_for_user(user: User):
-    """
-    KAM: only their customers (ownership by kam or primary_kam).
-    Manager: only customers of KAMs assigned to them.
-    Admin: all customers.
-    """
     qs = Customer.objects.all()
 
     if _is_admin(user):
@@ -288,7 +271,6 @@ def _customer_qs_for_user(user: User):
         kam_ids = _kams_managed_by_manager(user)
         return qs.filter(Q(kam_id__in=kam_ids) | Q(primary_kam_id__in=kam_ids))
 
-    # KAM scope
     return qs.filter(Q(kam=user) | Q(primary_kam=user))
 
 
@@ -312,31 +294,46 @@ def _visitplan_qs_for_user(user: User):
     return qs.filter(kam=user)
 
 
+def _first_query_value(request: HttpRequest, *names: str) -> str:
+    for name in names:
+        val = (request.GET.get(name) or "").strip()
+        if val:
+            return val
+    return ""
+
+
+def _scoped_kam_ids(actor: User, scope_kam_id: Optional[int]) -> Optional[List[int]]:
+    if scope_kam_id is not None:
+        return [scope_kam_id]
+    if _is_admin(actor):
+        return None
+    if _is_manager(actor):
+        return _kams_managed_by_manager(actor)
+    return [actor.id]
+
+
+def _filter_qs_by_kam_scope(qs, actor: User, scope_kam_id: Optional[int], field_name: str):
+    kam_ids = _scoped_kam_ids(actor, scope_kam_id)
+    if kam_ids is None:
+        return qs
+    if not kam_ids:
+        return qs.none()
+    return qs.filter(**{f"{field_name}__in": kam_ids})
+
+
 # ---------------------------------------------------------------------
 # Date parsing helpers
 # ---------------------------------------------------------------------
 def _parse_iso_date(s: str) -> Optional[date]:
-    """
-    Dashboard date inputs are often MM/DD/YYYY (per the UI screenshot),
-    while older links/APIs may send YYYY-MM-DD.
-    This parser accepts:
-      - YYYY-MM-DD (ISO)
-      - MM/DD/YYYY, DD/MM/YYYY
-      - MM-DD-YYYY, DD-MM-YYYY
-
-    It is intentionally conservative and returns None on ambiguity/failure.
-    """
     s = (s or "").strip()
     if not s:
         return None
 
-    # 1) ISO first (existing behavior)
     try:
         return timezone.datetime.fromisoformat(s).date()
     except Exception:
         pass
 
-    # 2) Slash/hyphen based formats
     sep = "/" if "/" in s else ("-" if "-" in s else None)
     if not sep:
         return None
@@ -356,10 +353,6 @@ def _parse_iso_date(s: str) -> Optional[date]:
         if y < 100:
             y = 2000 + y
 
-        # Resolve day/month ordering:
-        # - If first part > 12 => DD/MM/YYYY
-        # - Else if second part > 12 => MM/DD/YYYY
-        # - Else default to MM/DD/YYYY (matches current dashboard picker)
         if a > 12 and 1 <= b <= 12:
             d, m = a, b
         elif b > 12 and 1 <= a <= 12:
@@ -390,7 +383,7 @@ def _parse_decimal_or_none(s: str) -> Optional[Decimal]:
 
 
 # ---------------------------------------------------------------------
-# Period helpers (existing)
+# Period helpers
 # ---------------------------------------------------------------------
 def _iso_week_bounds(dt: timezone.datetime) -> Tuple[timezone.datetime, timezone.datetime, str]:
     local = timezone.localtime(dt)
@@ -403,23 +396,16 @@ def _iso_week_bounds(dt: timezone.datetime) -> Tuple[timezone.datetime, timezone
 
 
 def _ms_week_bounds(dt: timezone.datetime) -> Tuple[timezone.datetime, timezone.datetime, str]:
-    """
-    Returns Monday 00:00 as start, and next Monday 00:00 as end (end-exclusive).
-    """
     local = timezone.localtime(dt)
-    start = local - timezone.timedelta(days=local.weekday())  # Monday
+    start = local - timezone.timedelta(days=local.weekday())
     start = start.replace(hour=0, minute=0, second=0, microsecond=0)
-    end = start + timezone.timedelta(days=7)  # next Monday 00:00 (end-exclusive)
+    end = start + timezone.timedelta(days=7)
     iso_year, iso_week, _ = start.isocalendar()
     period_id = f"{iso_year}-W{iso_week:02d}"
     return start, end, period_id
 
 
 def _last_completed_ms_week_end(dt: timezone.datetime) -> timezone.datetime:
-    """
-    End-exclusive boundary for the last *completed* MS-week.
-    Practically: start (Monday 00:00) of the current MS-week.
-    """
     start, _end, _ = _ms_week_bounds(dt)
     return start
 
@@ -504,8 +490,8 @@ def _get_period(request: HttpRequest) -> Tuple[str, timezone.datetime, timezone.
 
 
 def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timezone.datetime, str]:
-    from_s = (request.GET.get("from") or "").strip()
-    to_s = (request.GET.get("to") or "").strip()
+    from_s = _first_query_value(request, "from", "from_date", "start_date", "date_from")
+    to_s = _first_query_value(request, "to", "to_date", "end_date", "date_to")
 
     from_d = _parse_iso_date(from_s)
     to_d = _parse_iso_date(to_s)
@@ -523,34 +509,33 @@ def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timez
 
 
 def _resolve_scope(request: HttpRequest, actor: User) -> Tuple[Optional[int], str]:
-    """
-    Scope rules:
-      - KAM: always self (ignore ?user)
-      - Manager: only KAMs assigned to them (optional ?user=username)
-      - Admin: may choose any user
-    """
     if not _is_manager(actor):
         return actor.id, actor.username
 
-    uname = (request.GET.get("user") or "").strip()
-    if uname:
-        u = User.objects.filter(username=uname, is_active=True).first()
-        if not u:
-            return None, "ALL"
+    raw_scope = _first_query_value(request, "user", "kam", "username")
+    raw_scope_id = _first_query_value(request, "kam_id", "user_id")
 
-        if _is_admin(actor):
-            return u.id, u.username
+    u = None
+    if raw_scope_id.isdigit():
+        u = User.objects.filter(id=int(raw_scope_id), is_active=True).first()
+    elif raw_scope:
+        if raw_scope.upper() not in {"ALL", "*"}:
+            u = User.objects.filter(username=raw_scope, is_active=True).first()
 
-        allowed = set(_kams_managed_by_manager(actor))
-        if u.id in allowed:
-            return u.id, u.username
+    if not u:
         return None, "ALL"
 
+    if _is_admin(actor):
+        return u.id, u.username
+
+    allowed = set(_kams_managed_by_manager(actor))
+    if u.id in allowed:
+        return u.id, u.username
     return None, "ALL"
 
 
 # ---------------------------------------------------------------------
-# Target setting helper (existing)
+# Target setting helper
 # ---------------------------------------------------------------------
 def _target_setting_for_kam_window(kam_id: int, start_date, end_date_inclusive) -> Optional[TargetSetting]:
     if not kam_id:
@@ -563,7 +548,7 @@ def _target_setting_for_kam_window(kam_id: int, start_date, end_date_inclusive) 
 
 
 # ---------------------------------------------------------------------
-# Customer 360 strict filter (existing)
+# Customer 360 strict filter
 # ---------------------------------------------------------------------
 def _get_customer360_range(request: HttpRequest) -> Tuple[str, timezone.datetime.date, timezone.datetime.date, str]:
     from_s = (request.GET.get("from") or "").strip()
@@ -651,9 +636,6 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         action = (request.POST.get("action") or "").strip().lower()
 
-        # ---------------------------------------------------------
-        # Manager CRUD (Role = Manager; Soft delete via is_active)
-        # ---------------------------------------------------------
         if action == "manager_create":
             username = (request.POST.get("username") or "").strip()
             full_name = (request.POST.get("full_name") or "").strip()
@@ -772,9 +754,6 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
             messages.success(request, f"Manager deactivated: {u.username}.")
             return redirect(reverse("kam:admin_kam_manager_mapping"))
 
-        # ---------------------------------------------------------
-        # Mapping create/update
-        # ---------------------------------------------------------
         if action in {"assign", "update"}:
             kam_id = (request.POST.get("kam_id") or "").strip()
             manager_id = (request.POST.get("manager_id") or "").strip()
@@ -805,9 +784,6 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
             messages.success(request, f"Assigned manager for {kam_user.username} → {mgr_user.username}.")
             return redirect(reverse("kam:admin_kam_manager_mapping"))
 
-        # ---------------------------------------------------------
-        # Mapping inline edit: deactivate previous + create new
-        # ---------------------------------------------------------
         if action in {"edit_mapping", "mapping_edit"}:
             mapping_id = (request.POST.get("mapping_id") or "").strip()
             manager_id = (request.POST.get("manager_id") or "").strip()
@@ -851,9 +827,6 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
             messages.success(request, f"Updated mapping for {kam_user.username} → {mgr_user.username}.")
             return redirect(reverse("kam:admin_kam_manager_mapping"))
 
-        # ---------------------------------------------------------
-        # Mapping deactivate
-        # ---------------------------------------------------------
         if action in {"remove", "deactivate"}:
             map_id = (request.POST.get("mapping_id") or "").strip()
             if not map_id.isdigit():
@@ -906,7 +879,7 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------
-# Dashboard (existing, only tightened scope to mapping for managers)
+# Dashboard
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_dashboard")
@@ -937,13 +910,12 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     lead_qs = LeadFact.objects.filter(doe__gte=start_dt.date(), doe__lt=end_dt.date())
     coll_qs = CollectionTxn.objects.filter(txn_datetime__gte=start_dt, txn_datetime__lt=end_dt)
 
-    if scope_kam_id is not None:
-        inv_qs = inv_qs.filter(kam_id=scope_kam_id)
-        visit_plan_qs = visit_plan_qs.filter(kam_id=scope_kam_id)
-        visit_act_qs = visit_act_qs.filter(plan__kam_id=scope_kam_id)
-        call_qs = call_qs.filter(kam_id=scope_kam_id)
-        lead_qs = lead_qs.filter(kam_id=scope_kam_id)
-        coll_qs = coll_qs.filter(kam_id=scope_kam_id)
+    inv_qs = _filter_qs_by_kam_scope(inv_qs, request.user, scope_kam_id, "kam_id")
+    visit_plan_qs = _filter_qs_by_kam_scope(visit_plan_qs, request.user, scope_kam_id, "kam_id")
+    visit_act_qs = _filter_qs_by_kam_scope(visit_act_qs, request.user, scope_kam_id, "plan__kam_id")
+    call_qs = _filter_qs_by_kam_scope(call_qs, request.user, scope_kam_id, "kam_id")
+    lead_qs = _filter_qs_by_kam_scope(lead_qs, request.user, scope_kam_id, "kam_id")
+    coll_qs = _filter_qs_by_kam_scope(coll_qs, request.user, scope_kam_id, "kam_id")
 
     sales_mt = _safe_decimal(inv_qs.aggregate(mt=Sum("qty_mt")).get("mt"))
     visits_planned = visit_plan_qs.count()
@@ -1053,11 +1025,10 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         calls_i = CallLog.objects.filter(call_datetime__gte=start_i, call_datetime__lt=end_i)
         coll_i = CollectionTxn.objects.filter(txn_datetime__gte=start_i, txn_datetime__lt=end_i)
 
-        if scope_kam_id is not None:
-            inv_i = inv_i.filter(kam_id=scope_kam_id)
-            vis_i = vis_i.filter(plan__kam_id=scope_kam_id)
-            calls_i = calls_i.filter(kam_id=scope_kam_id)
-            coll_i = coll_i.filter(kam_id=scope_kam_id)
+        inv_i = _filter_qs_by_kam_scope(inv_i, request.user, scope_kam_id, "kam_id")
+        vis_i = _filter_qs_by_kam_scope(vis_i, request.user, scope_kam_id, "plan__kam_id")
+        calls_i = _filter_qs_by_kam_scope(calls_i, request.user, scope_kam_id, "kam_id")
+        coll_i = _filter_qs_by_kam_scope(coll_i, request.user, scope_kam_id, "kam_id")
 
         trend_rows.append(
             {
@@ -1119,7 +1090,7 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------
-# Manager summary (existing)
+# Manager summary
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_manager")
@@ -1262,9 +1233,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
     if "customers" in batch_form.fields:
         batch_form.fields["customers"].queryset = customer_qs
 
-    # -------------------------
-    # POST: Single (Draft only)
-    # -------------------------
     if request.method == "POST" and (request.POST.get("mode") or "").strip().lower() == "single":
         single_form = VisitPlanForm(request.POST, prefix=SINGLE_PREFIX)
         if "customer" in single_form.fields:
@@ -1293,9 +1261,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
         messages.error(request, "Single visit has errors. Please correct and save again.")
 
-    # -------------------------
-    # POST: Batch (Primary)
-    # -------------------------
     if request.method == "POST" and (request.POST.get("mode") or "").strip().lower() == "batch":
         batch_form = VisitBatchForm(request.POST, prefix=BATCH_PREFIX)
         if "customers" in batch_form.fields:
@@ -1373,12 +1338,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                 parse_errors = False
 
                 for cust in customers_selected:
-                    vd = _parse_iso_date(request.POST.get(f"visit_date_{cust.id}") or "") or from_date
-                    vdt = _parse_iso_date(request.POST.get(f"visit_date_to_{cust.id}") or "") or to_date
-                    if vd and vdt and vdt < vd:
-                        messages.error(request, f"To date cannot be earlier than From date for customer: {cust.name}")
-                        parse_errors = True
-
                     lp = (request.POST.get(f"purpose_{cust.id}") or "").strip()
                     loc = (request.POST.get(f"location_{cust.id}") or "").strip() or (cust.address or "").strip()
 
@@ -1398,8 +1357,8 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     line_rows.append(
                         {
                             "customer": cust,
-                            "visit_date": vd,
-                            "visit_date_to": vdt,
+                            "visit_date": from_date,
+                            "visit_date_to": to_date,
                             "purpose": lp or None,
                             "location": loc or "",
                             "expected_sales_mt": expected_sales,
@@ -1526,6 +1485,23 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
                     customers_selected = list(Customer.objects.filter(id__in=selected_ids).order_by("name"))
                     for cust in customers_selected:
+                        loc = (request.POST.get(f"location_{cust.id}") or "").strip() or (cust.address or "").strip()
+                        lp = (request.POST.get(f"purpose_{cust.id}") or "").strip()
+                        es_raw = request.POST.get(f"expected_sales_mt_{cust.id}") or ""
+                        ec_raw = request.POST.get(f"expected_collection_{cust.id}") or ""
+
+                        expected_sales = _parse_decimal_or_none(es_raw)
+                        expected_coll = _parse_decimal_or_none(ec_raw)
+
+                        if es_raw.strip() != "" and expected_sales is None:
+                            messages.error(request, f"Expected Sales (MT) is invalid for customer: {cust.name}")
+                            transaction.set_rollback(True)
+                            return redirect(reverse("kam:plan"))
+                        if ec_raw.strip() != "" and expected_coll is None:
+                            messages.error(request, f"Expected Collection (₹) is invalid for customer: {cust.name}")
+                            transaction.set_rollback(True)
+                            return redirect(reverse("kam:plan"))
+
                         VisitPlan.objects.create(
                             batch=batch,
                             customer=cust,
@@ -1534,8 +1510,10 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                             visit_date_to=to_date,
                             visit_type=VisitPlan.PLANNED,
                             visit_category=VisitPlan.CAT_CUSTOMER,
-                            purpose=remarks or None,
-                            location=(cust.address or "").strip(),
+                            purpose=lp or (remarks or None),
+                            expected_sales_mt=expected_sales,
+                            expected_collection=expected_coll,
+                            location=loc,
                             approval_status=STATUS_DRAFT,
                         )
                         created_lines += 1
@@ -2085,7 +2063,7 @@ def visit_batch_reject_link(request: HttpRequest, token: str) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------
-# Visits & Calls (aligned to updated VisitActualForm + models)
+# Visits & Calls
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_visits")
@@ -2289,7 +2267,7 @@ def collection_new(request: HttpRequest) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------
-# Customer 360 (existing; tighten base_qs using mapping)
+# Customer 360
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_customers")
@@ -2433,7 +2411,7 @@ def customers(request: HttpRequest) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------
-# SECTION F: Targets (manager UI using ManagerTargetForm, persisted into TargetSetting)
+# SECTION F: Targets
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_targets")
@@ -2609,7 +2587,7 @@ def targets_lines(request: HttpRequest) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------
-# Reports (scope tightened by mapping via _resolve_scope)
+# Reports
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_reports")
@@ -2672,7 +2650,7 @@ def reports(request: HttpRequest) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------
-# CSV export (scope tightened)
+# CSV export
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_export_kpi_csv")
@@ -2732,7 +2710,7 @@ def export_kpi_csv(request: HttpRequest) -> StreamingHttpResponse:
 
 
 # ---------------------------------------------------------------------
-# Collections Plan (UPDATED)
+# Collections Plan
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_collections_plan")
@@ -2759,49 +2737,44 @@ def collections_plan(request: HttpRequest) -> HttpResponse:
             has_period = bool(ptype and pid)
             has_range = bool(fd and td)
 
-            if has_period and has_range:
-                messages.error(request, "Choose either Period Type/Id OR From/To date range (not both).")
-            elif (not has_period) and (not has_range):
-                messages.error(request, "Provide either Period Type/Id OR From/To date range.")
+            if not customer_qs.filter(id=cust.id).exists():
+                return HttpResponseForbidden("403 Forbidden: Customer out of your scope.")
+
+            if _is_manager(request.user):
+                owner = cust.kam or cust.primary_kam or request.user
             else:
-                if not customer_qs.filter(id=cust.id).exists():
-                    return HttpResponseForbidden("403 Forbidden: Customer out of your scope.")
+                owner = request.user
 
-                if _is_manager(request.user):
-                    owner = cust.kam or cust.primary_kam or request.user
+            with transaction.atomic():
+                if has_period:
+                    CollectionPlan.objects.update_or_create(
+                        customer=cust,
+                        period_type=ptype,
+                        period_id=pid,
+                        defaults={
+                            "planned_amount": planned,
+                            "from_date": None,
+                            "to_date": None,
+                            "kam": owner,
+                        },
+                    )
                 else:
-                    owner = request.user
+                    CollectionPlan.objects.update_or_create(
+                        customer=cust,
+                        from_date=fd,
+                        to_date=td,
+                        period_type=None,
+                        period_id=None,
+                        defaults={
+                            "planned_amount": planned,
+                            "kam": owner,
+                        },
+                    )
 
-                with transaction.atomic():
-                    if has_period:
-                        CollectionPlan.objects.update_or_create(
-                            customer=cust,
-                            period_type=ptype,
-                            period_id=pid,
-                            defaults={
-                                "planned_amount": planned,
-                                "from_date": None,
-                                "to_date": None,
-                                "kam": owner,
-                            },
-                        )
-                    else:
-                        CollectionPlan.objects.update_or_create(
-                            customer=cust,
-                            from_date=fd,
-                            to_date=td,
-                            period_type=None,
-                            period_id=None,
-                            defaults={
-                                "planned_amount": planned,
-                                "kam": owner,
-                            },
-                        )
-
-                messages.success(request, "Collection plan saved.")
-                return redirect(
-                    f"{reverse('kam:collections_plan')}?period={request.GET.get('period','month')}&asof={request.GET.get('asof','')}"
-                )
+            messages.success(request, "Collection plan saved.")
+            return redirect(
+                f"{reverse('kam:collections_plan')}?period={request.GET.get('period','month')}&asof={request.GET.get('asof','')}"
+            )
         else:
             messages.error(request, "Please correct the errors and save again.")
     else:
@@ -2880,9 +2853,7 @@ def collections_plan(request: HttpRequest) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------
-# Sync endpoints (FIXED to match new sheets.py behavior)
-#   - run_sync_now(): now returns dict with "summary" and per-section counters
-#   - step_sync(intent): should be called with SyncIntent; it updates cursor fields itself
+# Sync endpoints
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_sync_now")
@@ -2891,7 +2862,6 @@ def sync_now(request: HttpRequest) -> HttpResponse:
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
     try:
         stats = sheets.run_sync_now() or {}
-        # Prefer new format: summary; fall back to legacy keys if present
         summary = stats.get("summary")
         if not summary:
             seen = stats.get("records_seen")
@@ -2931,7 +2901,6 @@ def sync_step(request: HttpRequest) -> HttpResponse:
 
     token = (request.GET.get("token") or request.POST.get("token") or "").strip()
 
-    # Convenience: legacy POST without token runs a full sync
     if request.method == "POST" and not token:
         try:
             stats = sheets.run_sync_now() or {}
@@ -2960,11 +2929,9 @@ def sync_step(request: HttpRequest) -> HttpResponse:
         intent.last_error = ""
         intent.save(update_fields=["status", "step_count", "last_error", "updated_at"])
 
-        # NEW: call with SyncIntent; sheets/adapter manages cursors inside intent
         try:
             result = sheets.step_sync(intent)
         except TypeError:
-            # If your sheets.step_sync expects a kwarg
             result = sheets.step_sync(intent=intent)
 
         if not isinstance(result, dict):
