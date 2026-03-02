@@ -1,5 +1,5 @@
 # FILE: apps/kam/views.py
-# PURPOSE: Fix Date Range Filtering (dynamic, no hardcode) & Leads Not Showing in Production (kam_id scope fix)
+# PURPOSE: Fix Date Filtering + Visits & Calls (calls added, role scoping fixed) + Remove Location from Plan Visit Batch
 # UPDATED: 2026-03-02
 # NON-NEGOTIABLE BUSINESS RULES
 # - KAM sees only own data
@@ -356,7 +356,6 @@ def _parse_iso_date(s: str) -> Optional[date]:
         pass
 
     # Try explicit common formats
-    import re as _re
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%m-%d-%Y",
                 "%d/%m/%y", "%d-%m-%y", "%Y/%m/%d"):
         try:
@@ -523,20 +522,10 @@ def _get_period(request: HttpRequest) -> Tuple[str, timezone.datetime, timezone.
 
 # ---------------------------------------------------------------------
 # FIX: _get_dashboard_range — dynamic date parsing, no hardcoded years
-# Supports all common param name aliases from any frontend implementation.
-# Falls back to current week only when NO date params are present at all.
 # ---------------------------------------------------------------------
 def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timezone.datetime, str]:
     """
     FIXED: Dynamically resolves date range from request params.
-
-    Supports these param name aliases (first non-empty wins):
-      from_date: from, from_date, start_date, date_from, fromDate, startDate, dateFrom
-      to_date:   to, to_date, end_date, date_to, toDate, endDate, dateTo
-
-    Also supports shortcut 'range' param:
-      last7, last30, last90, thismonth, thisquarter, thisyear, all
-
     No hardcoded year logic. Any valid date range is accepted.
     Falls back to current ISO week only when no date params are provided.
     """
@@ -614,7 +603,6 @@ def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timez
     to_d = _parse_iso_date(to_s)
 
     if from_d and to_d and from_d <= to_d:
-        # FIX: Use timezone-aware datetimes. Include full end day (midnight of next day).
         start = timezone.make_aware(
             timezone.datetime(from_d.year, from_d.month, from_d.day, 0, 0, 0)
         )
@@ -625,7 +613,6 @@ def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timez
         return start, end, label
 
     if from_d and not to_d:
-        # Only start date given — use end of that day
         start = timezone.make_aware(
             timezone.datetime(from_d.year, from_d.month, from_d.day, 0, 0, 0)
         )
@@ -640,14 +627,6 @@ def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timez
 
 
 def _resolve_scope(request: HttpRequest, actor: User) -> Tuple[Optional[int], str]:
-    """
-    Manager/admin may scope to a KAM using either:
-      - user_id / kam_id numeric
-      - username/email
-      - full name (first last)
-      - "ALL" / "*" (admin sees all, manager sees mapped team)
-    KAM users are always scoped to self.
-    """
     if not _is_manager(actor):
         return actor.id, actor.username
 
@@ -1034,7 +1013,6 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
 @login_required
 @require_kam_code("kam_dashboard")
 def dashboard(request: HttpRequest) -> HttpResponse:
-    # ── FIX: _get_dashboard_range now handles all param aliases and range shortcuts
     start_dt, end_dt, range_label = _get_dashboard_range(request)
     scope_kam_id, scope_label = _resolve_scope(request, request.user)
 
@@ -1056,12 +1034,8 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             leads_target_mt = _safe_decimal(ts.leads_target_mt)
             collections_plan_amount = _safe_decimal(ts.collections_target_amount)
 
-    # ── FIX: Use .date() comparisons consistently for DateField columns,
-    #         and datetime comparisons for DateTimeField columns.
-    #         invoice_date and doe are DateFields → use __gte/__lt with .date()
-    #         call_datetime and txn_datetime are DateTimeFields → use aware datetimes directly
     start_date = start_dt.date()
-    end_date = end_dt.date()  # exclusive upper bound (midnight of next day)
+    end_date = end_dt.date()
 
     inv_qs = InvoiceFact.objects.filter(
         invoice_date__gte=start_date,
@@ -1080,7 +1054,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         call_datetime__lt=end_dt,
     )
 
-    # ── FIX: LeadFact.doe is a DateField — compare with date objects, not datetimes
     lead_qs = LeadFact.objects.filter(
         doe__gte=start_date,
         doe__lt=end_date,
@@ -1091,15 +1064,11 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         txn_datetime__lt=end_dt,
     )
 
-    # ── Apply KAM scope to all querysets ──────────────────────────
     inv_qs = _filter_qs_by_kam_scope(inv_qs, request.user, scope_kam_id, "kam_id")
     visit_plan_qs = _filter_qs_by_kam_scope(visit_plan_qs, request.user, scope_kam_id, "kam_id")
     visit_act_qs = _filter_qs_by_kam_scope(visit_act_qs, request.user, scope_kam_id, "plan__kam_id")
     call_qs = _filter_qs_by_kam_scope(call_qs, request.user, scope_kam_id, "kam_id")
-
-    # ── FIX: Lead scope uses kam_id field (matches how import_leads saves kam=user) ──
     lead_qs = _filter_qs_by_kam_scope(lead_qs, request.user, scope_kam_id, "kam_id")
-
     coll_qs = _filter_qs_by_kam_scope(coll_qs, request.user, scope_kam_id, "kam_id")
 
     sales_mt = _safe_decimal(inv_qs.aggregate(mt=Sum("qty_mt")).get("mt"))
@@ -1239,7 +1208,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
                 .values_list("username", flat=True)
             )
 
-    # ── Build context for ALL roles ──────────────────────────────
     ctx = {
         "page_title": "KAM Dashboard",
         "range_label": range_label,
@@ -1347,7 +1315,6 @@ def manager_kpis(request: HttpRequest) -> HttpResponse:
             CollectionTxn.objects.filter(kam=kam, txn_datetime__gte=start_dt, txn_datetime__lt=end_dt).aggregate(a=Sum("amount")).get("a")
         )
 
-        # FIX: Use date objects for doe (DateField) comparison
         leads_agg = LeadFact.objects.filter(
             kam=kam,
             doe__gte=start_dt.date(),
@@ -1416,6 +1383,8 @@ def manager_kpis(request: HttpRequest) -> HttpResponse:
 
 # ---------------------------------------------------------------------
 # Plan Visit: redesigned page (Single Draft + Batch primary)
+# FIX ISSUE 1: Location removed from POST processing in both proceed and draft paths.
+#              Customer address is used directly. DB field is preserved (backward-compatible).
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_plan")
@@ -1537,7 +1506,10 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
                 for cust in customers_selected:
                     lp = (request.POST.get(f"purpose_{cust.id}") or "").strip()
-                    loc = (request.POST.get(f"location_{cust.id}") or "").strip() or (cust.address or "").strip()
+
+                    # FIX ISSUE 1: Do NOT read location from POST — use customer address directly.
+                    # The location DB field is preserved for backward compatibility with existing data.
+                    loc = (cust.address or "").strip()
 
                     es_raw = request.POST.get(f"expected_sales_mt_{cust.id}") or ""
                     ec_raw = request.POST.get(f"expected_collection_{cust.id}") or ""
@@ -1558,7 +1530,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                             "visit_date": from_date,
                             "visit_date_to": to_date,
                             "purpose": lp or None,
-                            "location": loc or "",
+                            "location": loc,
                             "expected_sales_mt": expected_sales,
                             "expected_collection": expected_coll,
                         }
@@ -1662,6 +1634,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                 messages.success(request, f"Submitted for manager approval: {len(line_rows)} customers (Batch #{batch.id}).")
                 return redirect(reverse("kam:plan"))
 
+            # ── Draft save ─────────────────────────────────────────
             with transaction.atomic():
                 batch: VisitBatch = batch_form.save(commit=False)
                 batch.kam = user
@@ -1683,7 +1656,8 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
                     customers_selected = list(Customer.objects.filter(id__in=selected_ids).order_by("name"))
                     for cust in customers_selected:
-                        loc = (request.POST.get(f"location_{cust.id}") or "").strip() or (cust.address or "").strip()
+                        # FIX ISSUE 1: Do NOT read location from POST — use customer address directly.
+                        loc = (cust.address or "").strip()
                         lp = (request.POST.get(f"purpose_{cust.id}") or "").strip()
                         es_raw = request.POST.get(f"expected_sales_mt_{cust.id}") or ""
                         ec_raw = request.POST.get(f"expected_collection") or request.POST.get(f"expected_collection_{cust.id}") or ""
@@ -2262,6 +2236,13 @@ def visit_batch_reject_link(request: HttpRequest, token: str) -> HttpResponse:
 
 # ---------------------------------------------------------------------
 # Visits & Calls
+# FIX ISSUE 2 & 3:
+#   - Added role-based scoping (KAM=own, Manager=mapped, Admin=all)
+#   - Added CallLog querying alongside VisitPlan
+#   - Filter values (from_date / to_date) are passed back to template context
+#     so the form retains selected values after Apply
+#   - Default window is last 30 days (not hardcoded 14) to reduce empty-state surprises
+#   - Date parsing uses _parse_iso_date which supports any valid date, no year restrictions
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_visits")
@@ -2272,6 +2253,7 @@ def visits(request: HttpRequest) -> HttpResponse:
 
     if request.method == "POST":
         plan_id_post = request.POST.get("plan_id") or plan_id
+        # KAM can only submit actuals for their own plans
         plan = get_object_or_404(VisitPlan, id=plan_id_post, kam=user)
         instance = getattr(plan, "actual", None)
         form = VisitActualForm(request.POST, instance=instance)
@@ -2326,30 +2308,70 @@ def visits(request: HttpRequest) -> HttpResponse:
         instance = getattr(selected_plan, "actual", None)
         form = VisitActualForm(instance=instance)
 
-    days = (request.GET.get("days") or "").strip()
-    from_date = _parse_iso_date(request.GET.get("from_date") or "")
-    to_date = _parse_iso_date(request.GET.get("to_date") or "")
+    # ── FIX ISSUE 2 & 3: Dynamic date range, no hardcoded year logic ──────
+    days_raw = (request.GET.get("days") or "").strip()
+    from_date_raw = (request.GET.get("from_date") or "").strip()
+    to_date_raw = (request.GET.get("to_date") or "").strip()
 
-    end = timezone.localtime(timezone.now()).date() + timezone.timedelta(days=1)
-    start = end - timezone.timedelta(days=14)
+    from_date = _parse_iso_date(from_date_raw)
+    to_date = _parse_iso_date(to_date_raw)
 
-    if days.isdigit():
-        start = end - timezone.timedelta(days=int(days))
+    today = timezone.localtime(timezone.now()).date()
+    # Default: last 30 days (inclusive of today)
+    start = today - timezone.timedelta(days=29)
+    end = today + timezone.timedelta(days=1)
+
+    if days_raw.isdigit():
+        n = int(days_raw)
+        start = today - timezone.timedelta(days=n - 1)
+        end = today + timezone.timedelta(days=1)
     elif from_date and to_date and from_date <= to_date:
         start = from_date
         end = to_date + timezone.timedelta(days=1)
+    elif from_date:
+        start = from_date
+        end = from_date + timezone.timedelta(days=1)
 
+    # ── FIX ISSUE 2: Role-based scoping for both visits and calls ──────────
+    # KAM sees only own data; Manager sees mapped KAMs; Admin sees all.
+    # POST for actual logging is still restricted to kam=user (above).
+    if _is_admin(user):
+        visit_qs = VisitPlan.objects.select_related("customer", "kam")
+        call_qs = CallLog.objects.select_related("customer", "kam")
+    elif _is_manager(user):
+        kam_ids = _kams_managed_by_manager(user)
+        visit_qs = VisitPlan.objects.select_related("customer", "kam").filter(kam_id__in=kam_ids)
+        call_qs = CallLog.objects.select_related("customer", "kam").filter(kam_id__in=kam_ids)
+    else:
+        # KAM role: own data only
+        visit_qs = VisitPlan.objects.select_related("customer", "kam").filter(kam=user)
+        call_qs = CallLog.objects.select_related("customer", "kam").filter(kam=user)
+
+    # Apply date filter — uses visit_date (DateField) and call_datetime__date
     recent_plans = (
-        VisitPlan.objects.select_related("customer")
-        .filter(kam=user, visit_date__gte=start, visit_date__lt=end)
+        visit_qs
+        .filter(visit_date__gte=start, visit_date__lt=end)
         .order_by("-visit_date")
     )
 
+    recent_calls = (
+        call_qs
+        .filter(call_datetime__date__gte=start, call_datetime__date__lt=end)
+        .order_by("-call_datetime")
+    )
+
+    # Pass filter values back so the template retains them after Apply
     ctx = {
         "page_title": "Visits & Calls",
         "form": form,
         "selected_plan": selected_plan,
         "recent_plans": recent_plans,
+        "recent_calls": recent_calls,
+        # ── retained filter values ──
+        "filter_from": from_date.isoformat() if from_date else start.isoformat(),
+        "filter_to": to_date.isoformat() if to_date else (end - timezone.timedelta(days=1)).isoformat(),
+        "filter_days": days_raw,
+        "is_manager": _is_manager(user),
     }
     return render(request, "kam/visit_actual.html", ctx)
 

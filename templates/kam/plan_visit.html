@@ -1,6 +1,9 @@
 {# FILE: templates/kam/plan_visit.html #}
-{# PURPOSE: Remove per-customer From/To inputs from batch customer rows and keep standard aligned UI #}
-{# UPDATED: 2026-02-28 #}
+{# PURPOSE: Remove Location column from Batch (Primary) customer table — UI + JS render #}
+{# UPDATED: 2026-03-02 #}
+{# CHANGE: Removed "Location" <th> and per-row location <input> from renderCustomers(). #}
+{#         colspan updated from 7 → 6 wherever used. #}
+{#         No DB field deleted; customer address is used silently by backend. #}
 {% extends "base.html" %}
 {% load static %}
 
@@ -130,6 +133,9 @@
 
   <div class="tab-content border border-top-0 p-3 bg-white" id="planTabsContent">
 
+    {# ================================================================= #}
+    {# BATCH TAB (Primary) — Location column REMOVED from customer table #}
+    {# ================================================================= #}
     <div class="tab-pane fade show active" id="batch" role="tabpanel" aria-labelledby="batch-tab">
       <form method="post" id="batchForm" novalidate>
         {% csrf_token %}
@@ -182,6 +188,7 @@
           Select a <b>Visit Category</b> to continue.
         </div>
 
+        {# ─── CUSTOMER BATCH SECTION ─────────────────────────────────── #}
         <div id="customerBatchSection" style="display:none;">
           <div class="kam-section-card">
             <div class="card-body">
@@ -216,15 +223,16 @@
                     <tr>
                       <th style="width:44px;"><input type="checkbox" id="selectAllCust" /></th>
                       <th>Customer</th>
-                      <th style="width:240px;">Purpose (optional)</th>
-                      <th style="width:260px;">Location</th>
+                      <th style="width:260px;">Purpose (optional)</th>
                       <th style="width:170px;">Expected Sales (MT)</th>
                       <th style="width:190px;">Expected Collection (₹)</th>
                       <th style="width:90px;">Source</th>
                     </tr>
+                    {# NOTE: Location column intentionally removed per ISSUE 1.               #}
+                    {# Location is auto-populated from customer.address by the backend.       #}
                   </thead>
                   <tbody id="custTbody">
-                    <tr><td colspan="7" class="text-muted">Select category to load customers…</td></tr>
+                    <tr><td colspan="6" class="text-muted">Select category to load customers…</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -246,6 +254,7 @@
           </div>
         </div>
 
+        {# ─── NON-CUSTOMER SECTION ───────────────────────────────────── #}
         <div id="nonCustomerSection" style="display:none;">
           <div class="kam-section-card">
             <div class="card-body">
@@ -281,6 +290,9 @@
       </form>
     </div>
 
+    {# ================================================================= #}
+    {# SINGLE TAB (Draft only)                                           #}
+    {# ================================================================= #}
     <div class="tab-pane fade" id="single" role="tabpanel" aria-labelledby="single-tab">
       <form method="post" id="singleForm" novalidate>
         {% csrf_token %}
@@ -360,7 +372,6 @@
           <th>Date</th>
           <th>Customer / Counterparty</th>
           <th>Category</th>
-          <th>Location</th>
           <th>Status</th>
         </tr>
       </thead>
@@ -370,17 +381,17 @@
             <td>{{ p.visit_date }}{% if p.visit_date_to %} → {{ p.visit_date_to }}{% endif %}</td>
             <td>{% if p.customer %}{{ p.customer.name }}{% else %}{{ p.counterparty_name }}{% endif %}</td>
             <td>{{ p.get_visit_category_display }}</td>
-            <td>{{ p.location|default:"-" }}</td>
             <td>{{ p.approval_status }}</td>
           </tr>
         {% empty %}
-          <tr><td colspan="5" class="text-muted">No plans in this week.</td></tr>
+          <tr><td colspan="4" class="text-muted">No plans in this week.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </div>
 
+{# Manual Customer Modal #}
 <div class="modal fade" id="manualCustomerModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
@@ -415,10 +426,7 @@
             <input class="form-control form-control-sm" id="mc_pincode" />
           </div>
         </div>
-
-        <div class="small text-muted mt-2">
-          Manual customers are editable/deletable; sheet customers are read-only.
-        </div>
+        <div class="small text-muted mt-2">Manual customers are editable/deletable; sheet customers are read-only.</div>
         <div class="text-danger small mt-2" id="mc_err" style="display:none;"></div>
         <div class="text-success small mt-2" id="mc_ok" style="display:none;"></div>
       </div>
@@ -443,7 +451,6 @@
     document.querySelectorAll("#batchForm textarea, #singleForm textarea").forEach(el => {
       el.classList.add("form-control", "form-control-sm");
     });
-
     const purpose = document.querySelector('#batchForm textarea[name$="purpose"]');
     if (purpose) purpose.classList.add("kam-remarks-compact");
   }
@@ -465,113 +472,81 @@
 
   const csrftoken = getCookie("csrftoken");
 
-  const batchForm = document.getElementById("batchForm");
-  const customerSection = document.getElementById("customerBatchSection");
+  const batchForm          = document.getElementById("batchForm");
+  const customerSection    = document.getElementById("customerBatchSection");
   const nonCustomerSection = document.getElementById("nonCustomerSection");
-  const categoryHint = document.getElementById("categoryHint");
-
-  const custTbody = document.getElementById("custTbody");
-  const custSearch = document.getElementById("custSearch");
-  const custSource = document.getElementById("custSource");
-  const btnRefreshCustomers = document.getElementById("btnRefreshCustomers");
-  const selectAllCust = document.getElementById("selectAllCust");
-  const selCount = document.getElementById("selCount");
-  const selectedHiddenInputs = document.getElementById("selectedHiddenInputs");
-
-  const nonCustomerTbody = document.getElementById("nonCustomerTbody");
-  const addNonCustomerLine = document.getElementById("addNonCustomerLine");
+  const categoryHint       = document.getElementById("categoryHint");
+  const custTbody          = document.getElementById("custTbody");
+  const custSearch         = document.getElementById("custSearch");
+  const custSource         = document.getElementById("custSource");
+  const btnRefresh         = document.getElementById("btnRefreshCustomers");
+  const selectAllCust      = document.getElementById("selectAllCust");
+  const selCount           = document.getElementById("selCount");
+  const selectedHidden     = document.getElementById("selectedHiddenInputs");
+  const nonCustomerTbody   = document.getElementById("nonCustomerTbody");
+  const addLineBtn         = document.getElementById("addNonCustomerLine");
   const globalDateInfoText = document.getElementById("globalDateInfoText");
 
   const apiUrl = "{% url 'kam:customers_api' %}";
 
   function qs(sel) { return document.querySelector(sel); }
 
-  const batchCategoryEl = qs('#batchForm select[name$="visit_category"]');
-  const batchFromEl = qs('#batchForm input[type="date"][name$="from_date"]');
-  const batchToEl = qs('#batchForm input[type="date"][name$="to_date"]');
-
-  const singleCategoryEl = qs('#singleForm select[name$="visit_category"]');
+  const batchCategoryEl    = qs('#batchForm select[name$="visit_category"]');
+  const batchFromEl        = qs('#batchForm input[type="date"][name$="from_date"]');
+  const batchToEl          = qs('#batchForm input[type="date"][name$="to_date"]');
+  const singleCategoryEl   = qs('#singleForm select[name$="visit_category"]');
   const singleCustomerWrap = document.getElementById("singleCustomerWrap");
-  const singleCounterpartyWrap = document.getElementById("singleCounterpartyWrap");
+  const singleCpWrap       = document.getElementById("singleCounterpartyWrap");
 
   function esc(s) {
     return (s || "")
-      .replace(/&/g,"&amp;")
-      .replace(/</g,"&lt;")
-      .replace(/>/g,"&gt;")
-      .replace(/"/g,"&quot;");
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
 
-  function isCustomerCategoryValue(v) {
-    return (String(v || "").toUpperCase() === "CUSTOMER");
-  }
-
-  function hasCategorySelected(v) {
-    return String(v || "").trim() !== "";
-  }
+  function isCustomerCat(v) { return String(v || "").toUpperCase() === "CUSTOMER"; }
+  function hasCat(v)        { return String(v || "").trim() !== ""; }
 
   function updateGlobalDateInfo() {
     if (!globalDateInfoText) return;
-    const fromVal = batchFromEl ? (batchFromEl.value || "") : "";
-    const toVal = batchToEl ? (batchToEl.value || "") : "";
-
-    if (fromVal && toVal) {
-      globalDateInfoText.textContent = fromVal + " → " + toVal;
-    } else if (fromVal) {
-      globalDateInfoText.textContent = fromVal + " → Select To Date";
-    } else if (toVal) {
-      globalDateInfoText.textContent = "Select From Date → " + toVal;
-    } else {
-      globalDateInfoText.textContent = "Select From Date and To Date above.";
-    }
+    const f = batchFromEl ? (batchFromEl.value || "") : "";
+    const t = batchToEl   ? (batchToEl.value   || "") : "";
+    if (f && t)       globalDateInfoText.textContent = f + " → " + t;
+    else if (f)       globalDateInfoText.textContent = f + " → Select To Date";
+    else if (t)       globalDateInfoText.textContent = "Select From Date → " + t;
+    else              globalDateInfoText.textContent = "Select From Date and To Date above.";
   }
 
-  let selectedSet = new Set();
+  let selectedSet   = new Set();
   let customerCache = [];
-
-  function getCheckedIds() {
-    const ids = [];
-    document.querySelectorAll(".cust-check").forEach(ch => {
-      if (ch.checked) ids.push(String(ch.getAttribute("data-cid")));
-    });
-    return ids;
-  }
 
   function updateSelectedCount() {
     const checks = document.querySelectorAll(".cust-check");
-    let cnt = 0;
-    let total = 0;
-    checks.forEach(ch => { total++; if (ch.checked) cnt++; });
-
+    let cnt = 0, total = checks.length;
+    checks.forEach(ch => { if (ch.checked) cnt++; });
     if (selCount) selCount.textContent = `${cnt} selected`;
-
     if (selectAllCust) {
-      selectAllCust.checked = (total > 0 && cnt === total);
-      selectAllCust.indeterminate = (cnt > 0 && cnt < total);
+      selectAllCust.checked       = total > 0 && cnt === total;
+      selectAllCust.indeterminate = cnt > 0 && cnt < total;
     }
   }
 
   function toggleSections() {
     const v = batchCategoryEl ? batchCategoryEl.value : "";
-    const selected = hasCategorySelected(v);
-
-    if (!selected) {
-      if (categoryHint) categoryHint.style.display = "";
-      if (customerSection) customerSection.style.display = "none";
+    if (!hasCat(v)) {
+      if (categoryHint)       categoryHint.style.display = "";
+      if (customerSection)    customerSection.style.display = "none";
       if (nonCustomerSection) nonCustomerSection.style.display = "none";
-      if (custTbody) custTbody.innerHTML = `<tr><td colspan="7" class="text-muted">Select category to load customers…</td></tr>`;
+      if (custTbody)          custTbody.innerHTML = `<tr><td colspan="6" class="text-muted">Select category to load customers…</td></tr>`;
       return;
     }
-
     if (categoryHint) categoryHint.style.display = "none";
-
-    const isCust = isCustomerCategoryValue(v);
-    if (isCust) {
-      if (customerSection) customerSection.style.display = "";
+    if (isCustomerCat(v)) {
+      if (customerSection)    customerSection.style.display = "";
       if (nonCustomerSection) nonCustomerSection.style.display = "none";
       loadCustomers();
     } else {
-      if (customerSection) customerSection.style.display = "none";
+      if (customerSection)    customerSection.style.display = "none";
       if (nonCustomerSection) nonCustomerSection.style.display = "";
       if (nonCustomerTbody && !nonCustomerTbody.children.length) addLine();
     }
@@ -579,23 +554,22 @@
 
   function toggleSingleFields() {
     const v = singleCategoryEl ? singleCategoryEl.value : "";
-    const isCust = isCustomerCategoryValue(v);
-
+    const isCust = isCustomerCat(v);
     if (singleCustomerWrap) singleCustomerWrap.style.display = isCust ? "" : "none";
-    if (singleCounterpartyWrap) singleCounterpartyWrap.style.display = isCust ? "none" : "";
+    if (singleCpWrap)       singleCpWrap.style.display       = isCust ? "none" : "";
   }
 
   function loadCustomers() {
     if (!custTbody) return;
+    document.querySelectorAll(".cust-check").forEach(ch => {
+      if (ch.checked) selectedSet.add(String(ch.getAttribute("data-cid")));
+    });
+    custTbody.innerHTML = `<tr><td colspan="6" class="text-muted">Loading…</td></tr>`;
 
-    getCheckedIds().forEach(id => selectedSet.add(id));
-    custTbody.innerHTML = `<tr><td colspan="7" class="text-muted">Loading…</td></tr>`;
-
-    const q = encodeURIComponent((custSearch && custSearch.value) ? custSearch.value : "");
+    const q   = encodeURIComponent((custSearch && custSearch.value) ? custSearch.value : "");
     const src = encodeURIComponent((custSource && custSource.value) ? custSource.value : "");
-    const url = apiUrl + `?q=${q}&source=${src}`;
 
-    fetch(url, {headers: {"Accept": "application/json"}})
+    fetch(`${apiUrl}?q=${q}&source=${src}`, {headers: {"Accept":"application/json"}})
       .then(r => r.json())
       .then(data => {
         if (!data.ok) throw new Error(data.error || "Failed");
@@ -603,38 +577,38 @@
         renderCustomers();
       })
       .catch(err => {
-        custTbody.innerHTML = `<tr><td colspan="7" class="text-danger">Error loading customers: ${esc(err.message)}</td></tr>`;
+        custTbody.innerHTML = `<tr><td colspan="6" class="text-danger">Error: ${esc(err.message)}</td></tr>`;
       });
   }
 
   function renderCustomers() {
     if (!custTbody) return;
-
     if (!customerCache.length) {
-      custTbody.innerHTML = `<tr><td colspan="7" class="text-muted">No customers found.</td></tr>`;
+      custTbody.innerHTML = `<tr><td colspan="6" class="text-muted">No customers found.</td></tr>`;
       updateSelectedCount();
       return;
     }
 
+    /*
+     * FIX ISSUE 1: Location column REMOVED from each row.
+     * The backend now auto-uses customer.address — no per-row input needed.
+     * Columns: checkbox | customer | purpose | expected_sales | expected_coll | source
+     */
     const rows = customerCache.map(c => {
-      const cid = String(c.id);
-      const addr = c.address || "";
+      const cid     = String(c.id);
       const checked = selectedSet.has(cid) ? "checked" : "";
-
       return `
         <tr>
           <td><input class="form-check-input cust-check" type="checkbox" data-cid="${esc(cid)}" ${checked}></td>
           <td>
             <div class="fw-semibold">${esc(c.name)}</div>
-            <div class="small text-muted">${esc(c.code || "")}${c.mobile ? " • " + esc(c.mobile) : ""}</div>
+            <div class="small text-muted">${esc(c.code||"")}${c.mobile ? " • "+esc(c.mobile) : ""}</div>
           </td>
           <td><input class="form-control form-control-sm kam-table-input-wide" type="text" name="purpose_${esc(cid)}" placeholder="Optional"></td>
-          <td><input class="form-control form-control-sm kam-table-input-wide" type="text" name="location_${esc(cid)}" value="${esc(addr)}"></td>
-          <td><input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_sales_mt_${esc(cid)}" placeholder="e.g. 12.5"></td>
-          <td><input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_collection_${esc(cid)}" placeholder="e.g. 250000"></td>
-          <td><span class="badge bg-light text-dark">${esc((c.source || "").toUpperCase())}</span></td>
-        </tr>
-      `;
+          <td><input class="form-control form-control-sm kam-table-input-num"  type="text" name="expected_sales_mt_${esc(cid)}" placeholder="e.g. 12.5"></td>
+          <td><input class="form-control form-control-sm kam-table-input-num"  type="text" name="expected_collection_${esc(cid)}" placeholder="e.g. 250000"></td>
+          <td><span class="badge bg-light text-dark">${esc((c.source||"").toUpperCase())}</span></td>
+        </tr>`;
     }).join("");
 
     custTbody.innerHTML = rows;
@@ -643,55 +617,40 @@
       ch.addEventListener("change", () => {
         const cid = String(ch.getAttribute("data-cid"));
         if (ch.checked) selectedSet.add(cid);
-        else selectedSet.delete(cid);
+        else             selectedSet.delete(cid);
         updateSelectedCount();
       });
     });
-
     updateSelectedCount();
   }
 
   if (selectAllCust) {
     selectAllCust.addEventListener("change", () => {
-      const checks = document.querySelectorAll(".cust-check");
-      checks.forEach(ch => {
+      document.querySelectorAll(".cust-check").forEach(ch => {
         ch.checked = selectAllCust.checked;
         const cid = String(ch.getAttribute("data-cid"));
         if (ch.checked) selectedSet.add(cid);
-        else selectedSet.delete(cid);
+        else             selectedSet.delete(cid);
       });
       updateSelectedCount();
     });
   }
 
-  if (btnRefreshCustomers) btnRefreshCustomers.addEventListener("click", loadCustomers);
-
-  if (custSearch) {
-    custSearch.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        loadCustomers();
-      }
-    });
-  }
-
-  if (custSource) custSource.addEventListener("change", loadCustomers);
+  if (btnRefresh)   btnRefresh.addEventListener("click", loadCustomers);
+  if (custSource)   custSource.addEventListener("change", loadCustomers);
+  if (custSearch)   custSearch.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); loadCustomers(); } });
 
   if (batchForm) {
     batchForm.addEventListener("submit", () => {
-      if (!selectedHiddenInputs) return;
-      selectedHiddenInputs.innerHTML = "";
-
-      const checks = document.querySelectorAll(".cust-check");
-      checks.forEach(ch => {
-        if (ch.checked) {
-          const cid = ch.getAttribute("data-cid");
-          const inp = document.createElement("input");
-          inp.type = "hidden";
-          inp.name = "customers_selected[]";
-          inp.value = cid;
-          selectedHiddenInputs.appendChild(inp);
-        }
+      if (!selectedHidden) return;
+      selectedHidden.innerHTML = "";
+      document.querySelectorAll(".cust-check").forEach(ch => {
+        if (!ch.checked) return;
+        const inp = document.createElement("input");
+        inp.type  = "hidden";
+        inp.name  = "customers_selected[]";
+        inp.value = ch.getAttribute("data-cid");
+        selectedHidden.appendChild(inp);
       });
     });
   }
@@ -700,62 +659,48 @@
     if (!nonCustomerTbody) return;
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td><input class="form-control form-control-sm" name="counterparty_name[]" placeholder="Name"></td>
-      <td><input class="form-control form-control-sm" name="counterparty_location[]" placeholder="Location"></td>
-      <td><input class="form-control form-control-sm" name="counterparty_purpose[]" placeholder="Purpose"></td>
-      <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger">Remove</button></td>
-    `;
+      <td><input class="form-control form-control-sm" name="counterparty_name[]"     placeholder="Name"></td>
+      <td><input class="form-control form-control-sm" name="counterparty_location[]"  placeholder="Location"></td>
+      <td><input class="form-control form-control-sm" name="counterparty_purpose[]"   placeholder="Purpose"></td>
+      <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger">Remove</button></td>`;
     tr.querySelector("button").addEventListener("click", () => tr.remove());
     nonCustomerTbody.appendChild(tr);
   }
 
-  if (addNonCustomerLine) addNonCustomerLine.addEventListener("click", addLine);
-
+  if (addLineBtn)      addLineBtn.addEventListener("click", addLine);
   if (batchCategoryEl) batchCategoryEl.addEventListener("change", toggleSections);
   if (singleCategoryEl) singleCategoryEl.addEventListener("change", toggleSingleFields);
-  if (batchFromEl) batchFromEl.addEventListener("change", updateGlobalDateInfo);
-  if (batchToEl) batchToEl.addEventListener("change", updateGlobalDateInfo);
+  if (batchFromEl)     batchFromEl.addEventListener("change", updateGlobalDateInfo);
+  if (batchToEl)       batchToEl.addEventListener("change", updateGlobalDateInfo);
 
+  /* Manual customer save */
   const mcSave = document.getElementById("mc_save");
-  const mcErr = document.getElementById("mc_err");
-  const mcOk = document.getElementById("mc_ok");
-
-  function showErr(msg) {
-    if (!mcErr || !mcOk) return;
-    mcOk.style.display = "none";
-    mcErr.style.display = "";
-    mcErr.textContent = msg;
-  }
-
-  function showOk(msg) {
-    if (!mcErr || !mcOk) return;
-    mcErr.style.display = "none";
-    mcOk.style.display = "";
-    mcOk.textContent = msg;
-  }
+  const mcErr  = document.getElementById("mc_err");
+  const mcOk   = document.getElementById("mc_ok");
 
   if (mcSave) {
     mcSave.addEventListener("click", () => {
       const payload = new URLSearchParams();
-      payload.append("name", (document.getElementById("mc_name").value || ""));
-      payload.append("mobile", (document.getElementById("mc_mobile").value || ""));
-      payload.append("address", (document.getElementById("mc_address").value || ""));
-      payload.append("email", (document.getElementById("mc_email").value || ""));
-      payload.append("gst_number", (document.getElementById("mc_gst").value || ""));
-      payload.append("pincode", (document.getElementById("mc_pincode").value || ""));
-
+      ["name","mobile","address","email","gst_number","pincode"].forEach(k => {
+        const el = document.getElementById("mc_" + (k === "gst_number" ? "gst" : k));
+        payload.append(k, (el && el.value) || "");
+      });
       fetch("{% url 'kam:customer_create_manual' %}", {
         method: "POST",
         headers: {"X-CSRFToken": csrftoken, "Accept": "application/json"},
-        body: payload
+        body: payload,
       })
       .then(r => r.json().then(j => ({ok: r.ok, json: j})))
       .then(({ok, json}) => {
         if (!ok || !json.ok) throw new Error(json.error || "Failed");
-        showOk("Saved. Refreshing customer list…");
+        if (mcErr) mcErr.style.display = "none";
+        if (mcOk)  { mcOk.style.display = ""; mcOk.textContent = "Saved. Refreshing list…"; }
         loadCustomers();
       })
-      .catch(err => showErr(err.message));
+      .catch(err => {
+        if (mcOk)  mcOk.style.display = "none";
+        if (mcErr) { mcErr.style.display = ""; mcErr.textContent = err.message; }
+      });
     });
   }
 

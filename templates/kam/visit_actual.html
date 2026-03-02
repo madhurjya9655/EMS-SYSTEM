@@ -1,144 +1,298 @@
+{# FILE: templates/kam/visit_actual.html #}
+{# PURPOSE: Fix Visits & Calls filter — show CallLog + VisitPlan, retain filter values, role-aware, clean UI #}
+{# UPDATED: 2026-03-02 #}
+{# CHANGES: #}
+{#   - Added "Recent Calls" section (CallLog) alongside existing "Recent Plans" (VisitPlan) #}
+{#   - filter_from / filter_to now pre-fill from context so values are kept after Apply #}
+{#   - Empty-state messages are clear and informative #}
+{#   - UI aligned with collections_plan.html style (kam-card, kam-soft-note, filter bar) #}
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
-{% block title %}Visits & Calls{% endblock %}
+
+{% block title %}Visits &amp; Calls{% endblock %}
 
 {% block content %}
-<div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
-  <h1 class="page-title m-0">Visits &amp; Calls</h1>
-  <div class="btn-group">
+<style>
+  .kam-card {
+    border: 1px solid rgba(0,0,0,.08);
+    border-radius: 10px;
+    background: #fff;
+  }
+  .kam-card .card-body { padding: 1rem; }
+
+  .kam-soft-note {
+    font-size: .875rem;
+    color: #6c757d;
+  }
+
+  .kam-filter-bar .form-control,
+  .kam-filter-bar .form-select,
+  .kam-filter-bar .btn {
+    min-height: 34px;
+  }
+
+  .kam-table-wrap { overflow-x: auto; }
+  .kam-table-wrap table { margin-bottom: 0; }
+
+  .kam-section-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #212529;
+    margin-bottom: .5rem;
+  }
+
+  .kam-empty-state {
+    text-align: center;
+    padding: 2rem 1rem;
+    color: #6c757d;
+  }
+
+  .kam-empty-state .kam-empty-icon {
+    font-size: 2rem;
+    margin-bottom: .5rem;
+    opacity: .35;
+  }
+</style>
+
+{# ── Page header ──────────────────────────────────────────────────────── #}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+  <div>
+    <h1 class="page-title m-0">Visits &amp; Calls</h1>
+    <div class="kam-soft-note mt-1">Log post-visit outcomes and view recent activity.</div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
     <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:call_new' %}">Log Call</a>
     <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:collection_new' %}">Add Collection</a>
   </div>
 </div>
 
-<form method="get" class="d-flex align-items-end gap-2 flex-wrap mb-3">
+{% if messages %}
+  <div class="mb-3">
+    {% for message in messages %}
+      <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">{{ message }}</div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+{# ── Filter bar — values retained after Apply ─────────────────────────── #}
+{# FIX ISSUE 2: form method=GET, input names match view param names (from_date / to_date) #}
+{# FIX ISSUE 3: filter_from / filter_to from context ensure selected dates are preserved  #}
+<form method="get" class="d-flex align-items-end gap-2 flex-wrap mb-4 kam-filter-bar">
+
   <div>
-    <label class="form-label mb-1 small">Quick range</label>
-    <select class="form-select form-select-sm" onchange="if(this.value){window.location=this.value}">
-      <option value="">—</option>
-      <option value="{% url 'kam:visits' %}?days=14" {% if request.GET.days == '14' %}selected{% endif %}>Last 14 days</option>
-      <option value="{% url 'kam:visits' %}?days=30" {% if request.GET.days == '30' %}selected{% endif %}>Last 30 days</option>
-      <option value="{% url 'kam:visits' %}?days=60" {% if request.GET.days == '60' %}selected{% endif %}>Last 60 days</option>
+    <label class="form-label mb-1 small fw-semibold">Quick range</label>
+    <select class="form-select form-select-sm"
+            onchange="if(this.value){ window.location=this.value; }">
+      <option value="">— Select —</option>
+      <option value="{% url 'kam:visits' %}?days=7"  {% if filter_days == '7'  %}selected{% endif %}>Last 7 days</option>
+      <option value="{% url 'kam:visits' %}?days=14" {% if filter_days == '14' %}selected{% endif %}>Last 14 days</option>
+      <option value="{% url 'kam:visits' %}?days=30" {% if filter_days == '30' %}selected{% endif %}>Last 30 days</option>
+      <option value="{% url 'kam:visits' %}?days=60" {% if filter_days == '60' %}selected{% endif %}>Last 60 days</option>
     </select>
   </div>
 
   <div>
-    <label class="form-label mb-1 small">From</label>
-    <input type="date" class="form-control form-control-sm" name="from_date" value="{{ request.GET.from_date }}">
+    <label class="form-label mb-1 small fw-semibold">From</label>
+    {# FIX: value pre-filled from context (filter_from), so date is retained after Apply #}
+    <input type="date"
+           class="form-control form-control-sm"
+           name="from_date"
+           value="{{ filter_from }}">
   </div>
 
   <div>
-    <label class="form-label mb-1 small">To</label>
-    <input type="date" class="form-control form-control-sm" name="to_date" value="{{ request.GET.to_date }}">
+    <label class="form-label mb-1 small fw-semibold">To</label>
+    {# FIX: value pre-filled from context (filter_to), so date is retained after Apply #}
+    <input type="date"
+           class="form-control form-control-sm"
+           name="to_date"
+           value="{{ filter_to }}">
   </div>
 
-  <div class="d-flex align-items-center gap-2">
+  <div class="d-flex align-items-center gap-2 pt-1">
     <button class="btn btn-sm btn-primary" type="submit">Apply</button>
     <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:visits' %}">Reset</a>
   </div>
 </form>
 
+{# ── Main layout — form on left, tables on right ──────────────────────── #}
 <div class="row g-3">
-  <!-- LEFT -->
+
+  {# ── LEFT: Post Visit Update form ─────────────────────────────────── #}
   <div class="col-lg-5">
-    <div class="card p-3">
-      <h5 class="mb-3">Post Visit Update</h5>
+    <div class="kam-card">
+      <div class="card-body">
+        <div class="kam-section-title">Post Visit Update</div>
 
-      {% if selected_plan %}
-        <div class="alert alert-info py-2">
-          <div><strong>Date:</strong> {{ selected_plan.visit_date }}</div>
-          <div><strong>Entity:</strong>
-            {% if selected_plan.customer %}
-              {{ selected_plan.customer.name }}
-            {% else %}
-              {{ selected_plan.counterparty_name|default:"—" }}
-            {% endif %}
-          </div>
-          <div><strong>Category:</strong> {{ selected_plan.get_visit_category_display }}</div>
-          <div class="small text-muted mt-1">Status: {{ selected_plan.approval_status }}</div>
-        </div>
-
-        <form method="post" novalidate>
-          {% csrf_token %}
-          <input type="hidden" name="plan_id" value="{{ selected_plan.id }}">
-
-          <div class="row g-2">
-            <div class="col-md-6">
-              <label class="form-label">Expected Sales (MT) <span class="text-danger">*</span></label>
-              <input class="form-control" type="number" step="0.001" name="expected_sales_mt"
-                     value="{{ selected_plan.expected_sales_mt|default_if_none:'' }}" required>
+        {% if selected_plan %}
+          <div class="alert alert-info py-2 mb-3">
+            <div><strong>Date:</strong> {{ selected_plan.visit_date }}{% if selected_plan.visit_date_to %} → {{ selected_plan.visit_date_to }}{% endif %}</div>
+            <div><strong>Entity:</strong>
+              {% if selected_plan.customer %}{{ selected_plan.customer.name }}
+              {% else %}{{ selected_plan.counterparty_name|default:"—" }}{% endif %}
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Expected Collection (₹) <span class="text-danger">*</span></label>
-              <input class="form-control" type="number" step="0.01" name="expected_collection"
-                     value="{{ selected_plan.expected_collection|default_if_none:'' }}" required>
+            <div><strong>Category:</strong> {{ selected_plan.get_visit_category_display }}</div>
+            <div class="small text-muted mt-1">Status: {{ selected_plan.approval_status }}</div>
+          </div>
+
+          <form method="post" novalidate>
+            {% csrf_token %}
+            <input type="hidden" name="plan_id" value="{{ selected_plan.id }}">
+
+            <div class="row g-2 mb-3">
+              <div class="col-6">
+                <label class="form-label small fw-semibold">Expected Sales (MT) <span class="text-danger">*</span></label>
+                <input class="form-control form-control-sm"
+                       type="number" step="0.001" name="expected_sales_mt"
+                       value="{{ selected_plan.expected_sales_mt|default_if_none:'' }}"
+                       required>
+              </div>
+              <div class="col-6">
+                <label class="form-label small fw-semibold">Expected Collection (₹) <span class="text-danger">*</span></label>
+                <input class="form-control form-control-sm"
+                       type="number" step="0.01" name="expected_collection"
+                       value="{{ selected_plan.expected_collection|default_if_none:'' }}"
+                       required>
+              </div>
             </div>
-          </div>
 
-          <div class="mt-3">
-            {# VisitActualForm from your forms.py #}
-            {{ form|crispy }}
-          </div>
+            <div class="mb-3">
+              {{ form|crispy }}
+            </div>
 
-          <div class="d-flex gap-2">
-            <button class="btn btn-primary" type="submit">Save</button>
-            <a class="btn btn-outline-secondary" href="{% url 'kam:visits' %}">Clear</a>
-          </div>
-        </form>
+            <div class="d-flex gap-2">
+              <button class="btn btn-sm btn-primary" type="submit">Save</button>
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="{% url 'kam:visits' %}?from_date={{ filter_from }}&to_date={{ filter_to }}">Clear</a>
+            </div>
+            <div class="small text-muted mt-2">
+              Confirmed location and remarks are required. If not successful, provide a reason.
+            </div>
+          </form>
 
-        <div class="small text-muted mt-2">
-          Remarks and confirmed location are required. If not successful, reason is required.
-        </div>
-      {% else %}
-        <p class="text-muted m-0">Select a plan from the list to post the outcome.</p>
-      {% endif %}
+        {% else %}
+          <div class="kam-empty-state">
+            <div class="kam-empty-icon">📋</div>
+            <div>Select a plan from the list on the right to log the visit outcome.</div>
+          </div>
+        {% endif %}
+      </div>
     </div>
   </div>
 
-  <!-- RIGHT -->
+  {# ── RIGHT: Recent Plans + Recent Calls ──────────────────────────── #}
   <div class="col-lg-7">
-    <div class="card p-3">
-      <h5 class="mb-3">Recent Plans</h5>
 
-      {% if recent_plans %}
-        <div class="table-responsive">
-          <table class="table table-sm align-middle">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Entity</th>
-                <th>Category</th>
-                <th>Status</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for p in recent_plans %}
-              <tr>
-                <td>{{ p.visit_date }}</td>
-                <td>
-                  {% if p.customer %}{{ p.customer.name }}{% else %}{{ p.counterparty_name|default:"—" }}{% endif %}
-                </td>
-                <td>{{ p.get_visit_category_display }}</td>
-                <td>
-                  {% if p.actual_id %}
-                    <span class="badge bg-success">Done</span>
-                  {% else %}
-                    <span class="badge bg-secondary">Pending</span>
-                  {% endif %}
-                </td>
-                <td class="text-end">
-                  <a class="btn btn-sm btn-outline-primary" href="{% url 'kam:visits' %}?plan_id={{ p.id }}">Open</a>
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+    {# ── Recent Visits / Plans ─────────────────────────────────────── #}
+    <div class="kam-card mb-3">
+      <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
+          <div class="kam-section-title mb-0">Recent Plans</div>
+          <div class="kam-soft-note">{{ filter_from }} → {{ filter_to }}</div>
         </div>
-      {% else %}
-        <p class="text-muted m-0">No recent plans.</p>
-      {% endif %}
+
+        {% if recent_plans %}
+          <div class="kam-table-wrap">
+            <table class="table table-sm align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th style="width:90px;">Date</th>
+                  <th>Entity</th>
+                  <th style="width:110px;">Category</th>
+                  {% if is_manager %}<th style="width:90px;">KAM</th>{% endif %}
+                  <th style="width:80px;">Status</th>
+                  <th style="width:70px;"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for p in recent_plans %}
+                <tr>
+                  <td class="small">{{ p.visit_date }}</td>
+                  <td>
+                    {% if p.customer %}{{ p.customer.name }}
+                    {% else %}{{ p.counterparty_name|default:"—" }}{% endif %}
+                  </td>
+                  <td class="small">{{ p.get_visit_category_display }}</td>
+                  {% if is_manager %}<td class="small">{{ p.kam.username }}</td>{% endif %}
+                  <td>
+                    {% if p.actual_id %}
+                      <span class="badge bg-success">Done</span>
+                    {% else %}
+                      <span class="badge bg-secondary">Pending</span>
+                    {% endif %}
+                  </td>
+                  <td class="text-end">
+                    <a class="btn btn-xs btn-outline-primary"
+                       style="font-size:.75rem;padding:.15rem .45rem;"
+                       href="{% url 'kam:visits' %}?plan_id={{ p.id }}&from_date={{ filter_from }}&to_date={{ filter_to }}">
+                      Open
+                    </a>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="kam-empty-state py-3">
+            <div class="kam-empty-icon">🗓️</div>
+            <div>No visit plans found for <strong>{{ filter_from }}</strong> → <strong>{{ filter_to }}</strong>.</div>
+            <div class="small mt-1">Try adjusting the date range above and click <strong>Apply</strong>.</div>
+          </div>
+        {% endif %}
+      </div>
     </div>
+
+    {# ── Recent Calls ──────────────────────────────────────────────── #}
+    {# FIX ISSUE 2: CallLog now queried in view and displayed here      #}
+    <div class="kam-card">
+      <div class="card-body">
+        <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
+          <div class="kam-section-title mb-0">Recent Calls</div>
+          <div class="kam-soft-note">{{ filter_from }} → {{ filter_to }}</div>
+        </div>
+
+        {% if recent_calls %}
+          <div class="kam-table-wrap">
+            <table class="table table-sm align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th style="width:140px;">Date &amp; Time</th>
+                  <th>Customer</th>
+                  {% if is_manager %}<th style="width:90px;">KAM</th>{% endif %}
+                  <th style="width:80px;">Duration</th>
+                  <th>Outcome</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for c in recent_calls %}
+                <tr>
+                  <td class="small">{{ c.call_datetime|date:"d M Y H:i" }}</td>
+                  <td>{{ c.customer.name|default:"—" }}</td>
+                  {% if is_manager %}<td class="small">{{ c.kam.username }}</td>{% endif %}
+                  <td class="small">
+                    {% if c.duration_minutes %}{{ c.duration_minutes }} min{% else %}<span class="text-muted">—</span>{% endif %}
+                  </td>
+                  <td class="small text-truncate" style="max-width:180px;">
+                    {{ c.outcome|default:c.summary|default:"—"|truncatechars:60 }}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="kam-empty-state py-3">
+            <div class="kam-empty-icon">📞</div>
+            <div>No calls logged for <strong>{{ filter_from }}</strong> → <strong>{{ filter_to }}</strong>.</div>
+            <div class="small mt-1">
+              <a href="{% url 'kam:call_new' %}">Log a call</a> or adjust the date range.
+            </div>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
   </div>
 </div>
 {% endblock %}
