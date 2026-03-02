@@ -1,12 +1,12 @@
 # FILE: apps/kam/models.py
-# PURPOSE: Preserve existing KAM data model while supporting dashboard aggregation fixes without schema changes
+# PURPOSE: Preserve KAM data model while safely supporting sync ownership alignment for dashboard Sales/Leads correctness
 # UPDATED: 2026-02-28
 from __future__ import annotations
 
-from django.db import models
 from django.contrib.auth import get_user_model
-from django.core.validators import MinValueValidator
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
+from django.db import models
 from django.utils import timezone
 
 User = get_user_model()
@@ -24,10 +24,10 @@ class Customer(TimeStamped):
     """
     NOTE:
     - Keep legacy fields intact (sync + existing templates depend on them).
-    - Add explicit source + ownership fields required by redesigned Plan Visit.
     - Preserve backward compatibility:
         * primary_kam is legacy owner used widely -> keep.
-        * kam is the new explicit owner field per requirements -> keep in sync with primary_kam.
+        * kam is the explicit owner field used by strict scoping -> keep in sync with primary_kam.
+    - No schema/business redesign here.
     """
 
     SOURCE_SHEET = "SHEET"
@@ -56,9 +56,6 @@ class Customer(TimeStamped):
     credit_limit = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     agreed_credit_period_days = models.IntegerField(default=0)
 
-    # ---------------------------------------------------------------------
-    # Ownership / source (REQUIRED by redesign)
-    # ---------------------------------------------------------------------
     kam = models.ForeignKey(
         User,
         null=True,
@@ -85,22 +82,38 @@ class Customer(TimeStamped):
 
     synced_identifier = models.CharField(max_length=128, blank=True, null=True, db_index=True)
 
-    # ---------------------------------------------------------------------
-    # Legacy owner (kept for compatibility)
-    # ---------------------------------------------------------------------
     primary_kam = models.ForeignKey(
-        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="primary_customers"
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="primary_customers",
     )
 
     @property
     def phone(self) -> str:
         return self.mobile or ""
 
-    def clean(self):
+    def sync_owner_fields(self) -> None:
         if self.kam_id and not self.primary_kam_id:
             self.primary_kam_id = self.kam_id
         elif self.primary_kam_id and not self.kam_id:
             self.kam_id = self.primary_kam_id
+
+    def assign_kam(self, kam_user: User | None) -> bool:
+        if not kam_user or not getattr(kam_user, "id", None):
+            return False
+        changed = False
+        if self.kam_id != kam_user.id:
+            self.kam = kam_user
+            changed = True
+        if self.primary_kam_id != kam_user.id:
+            self.primary_kam = kam_user
+            changed = True
+        return changed
+
+    def clean(self):
+        self.sync_owner_fields()
 
         if (self.source or "").upper() == self.SOURCE_MANUAL and not self.created_by_id:
             raise ValidationError({"created_by": "created_by is required for MANUAL customers."})
@@ -108,10 +121,7 @@ class Customer(TimeStamped):
         super().clean()
 
     def save(self, *args, **kwargs):
-        if self.kam_id and not self.primary_kam_id:
-            self.primary_kam_id = self.kam_id
-        elif self.primary_kam_id and not self.kam_id:
-            self.kam_id = self.primary_kam_id
+        self.sync_owner_fields()
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -394,7 +404,6 @@ class VisitBatch(TimeStamped):
     to_date = models.DateField()
     visit_category = models.CharField(max_length=16, choices=VISIT_CATEGORY_CHOICES)
 
-    # Changed to TextField (matches form + views expecting longer remarks)
     purpose = models.TextField(blank=True, null=True)
 
     approval_status = models.CharField(
@@ -447,7 +456,6 @@ class VisitPlan(TimeStamped):
     visit_date = models.DateField()
     visit_date_to = models.DateField(null=True, blank=True)
 
-    # Default added so single-save doesn’t break if field missing
     visit_type = models.CharField(
         max_length=12,
         choices=[(PLANNED, "Planned"), (UNPLANNED, "Unplanned")],
@@ -467,13 +475,11 @@ class VisitPlan(TimeStamped):
 
     counterparty_name = models.CharField(max_length=255, blank=True, null=True)
 
-    # Changed to TextField to support real remarks length
     purpose = models.TextField(blank=True, null=True)
 
     expected_sales_mt = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
     expected_collection = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
 
-    # Changed to TextField (addresses often exceed 255)
     location = models.TextField(blank=True, null=True)
 
     approval_status = models.CharField(
@@ -503,10 +509,8 @@ class VisitActual(TimeStamped):
 
     actual_datetime = models.DateTimeField(null=True, blank=True, default=timezone.now)
 
-    # New canonical field (UI uses this)
     meeting_notes = models.TextField(blank=True, null=True)
 
-    # Legacy field (kept for compatibility)
     summary = models.TextField(blank=True, null=True)
 
     successful = models.BooleanField(default=False)
@@ -534,7 +538,6 @@ class VisitActual(TimeStamped):
     reminder_cc_manager = models.BooleanField(default=True)
 
     def save(self, *args, **kwargs):
-        # keep legacy summary in sync with meeting_notes
         if (self.meeting_notes or "").strip() and not (self.summary or "").strip():
             self.summary = self.meeting_notes
         elif (self.summary or "").strip() and not (self.meeting_notes or "").strip():
@@ -552,12 +555,10 @@ class CallLog(TimeStamped):
     call_type = models.CharField(max_length=32, blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
 
-    # legacy fields kept
     summary = models.TextField(blank=True, null=True)
     outcome = models.CharField(max_length=64, blank=True, null=True)
 
     def save(self, *args, **kwargs):
-        # sync notes <-> summary (compat)
         if (self.notes or "").strip() and not (self.summary or "").strip():
             self.summary = self.notes
         elif (self.summary or "").strip() and not (self.notes or "").strip():
@@ -582,7 +583,6 @@ class CollectionTxn(TimeStamped):
     notes = models.TextField(blank=True, null=True)
 
     def save(self, *args, **kwargs):
-        # reference <-> reference_no sync
         if (self.reference_no or "").strip() and not (self.reference or "").strip():
             self.reference = self.reference_no
         elif (self.reference or "").strip() and not (self.reference_no or "").strip():

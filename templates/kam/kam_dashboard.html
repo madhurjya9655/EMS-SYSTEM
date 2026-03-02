@@ -1,33 +1,47 @@
 {# FILE: templates/kam/kam_dashboard.html #}
-{# PURPOSE: Ensure KAM dropdown binding + selection persistence + role-based display consistency. #}
-{# UPDATED: 2026-02-27 #}
+{# PURPOSE: Fix dashboard filter UX so visible date/KAM state matches backend scope and deep links preserve applied filters. #}
+{# UPDATED: 2026-02-28 #}
 {% extends "base.html" %}
 {% load humanize %}
 {% block title %}KAM Dashboard{% endblock %}
 
 {% block content %}
 <div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
-  <h1 class="page-title m-0">KAM Dashboard</h1>
+  <div>
+    <h1 class="page-title m-0">KAM Dashboard</h1>
+    {% if range_label %}
+      <div class="small text-muted mt-1">Showing: {{ range_label }}</div>
+    {% endif %}
+  </div>
 
   <form class="d-flex align-items-end gap-2 flex-wrap" method="get">
     <div>
       <label class="form-label mb-1 small">From Date</label>
-      <input type="date" name="from" value="{{ request.GET.from }}" class="form-control form-control-sm" />
+      <input
+        type="date"
+        name="from"
+        value="{% firstof request.GET.from filter_from %}"
+        class="form-control form-control-sm"
+      />
     </div>
 
     <div>
       <label class="form-label mb-1 small">To Date</label>
-      <input type="date" name="to" value="{{ request.GET.to }}" class="form-control form-control-sm" />
+      <input
+        type="date"
+        name="to"
+        value="{% firstof request.GET.to filter_to %}"
+        class="form-control form-control-sm"
+      />
     </div>
 
-    {# Strict role-based KAM filter #}
     {% if can_choose_kam %}
       <div>
         <label class="form-label mb-1 small">KAM</label>
         <select name="user" class="form-select form-select-sm">
-          <option value="" {% if not request.GET.user %}selected{% endif %}>ALL</option>
+          <option value="" {% if not request.GET.user and not selected_user %}selected{% endif %}>ALL</option>
           {% for uname in kam_options %}
-            <option value="{{ uname }}" {% if request.GET.user == uname %}selected{% endif %}>{{ uname }}</option>
+            <option value="{{ uname }}" {% if request.GET.user == uname or selected_user == uname %}selected{% endif %}>{{ uname }}</option>
           {% endfor %}
         </select>
       </div>
@@ -51,8 +65,10 @@
     <div class="card p-3 h-100">
       <div class="d-flex justify-content-between align-items-center mb-1">
         <div class="fw-bold">Sales (MT)</div>
-        <a class="btn btn-sm btn-outline-primary"
-           href="{% url 'kam:reports' %}?metric=sales&from={{ request.GET.from }}&to={{ request.GET.to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+        <a
+          class="btn btn-sm btn-outline-primary"
+          href="{% url 'kam:reports' %}?metric=sales{% if request.GET.from or filter_from %}&from={% firstof request.GET.from filter_from %}{% endif %}{% if request.GET.to or filter_to %}&to={% firstof request.GET.to filter_to %}{% endif %}{% if request.GET.user or selected_user %}&user={% firstof request.GET.user selected_user %}{% endif %}"
+        >
           Deep Analysis
         </a>
       </div>
@@ -73,8 +89,10 @@
     <div class="card p-3 h-100">
       <div class="d-flex justify-content-between align-items-center mb-1">
         <div class="fw-bold">Visits</div>
-        <a class="btn btn-sm btn-outline-primary"
-           href="{% url 'kam:reports' %}?metric=visits&from={{ request.GET.from }}&to={{ request.GET.to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+        <a
+          class="btn btn-sm btn-outline-primary"
+          href="{% url 'kam:reports' %}?metric=visits{% if request.GET.from or filter_from %}&from={% firstof request.GET.from filter_from %}{% endif %}{% if request.GET.to or filter_to %}&to={% firstof request.GET.to filter_to %}{% endif %}{% if request.GET.user or selected_user %}&user={% firstof request.GET.user selected_user %}{% endif %}"
+        >
           Deep Analysis
         </a>
       </div>
@@ -101,8 +119,10 @@
     <div class="card p-3 h-100">
       <div class="d-flex justify-content-between align-items-center mb-1">
         <div class="fw-bold">Calls</div>
-        <a class="btn btn-sm btn-outline-primary"
-           href="{% url 'kam:reports' %}?metric=calls&from={{ request.GET.from }}&to={{ request.GET.to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+        <a
+          class="btn btn-sm btn-outline-primary"
+          href="{% url 'kam:reports' %}?metric=calls{% if request.GET.from or filter_from %}&from={% firstof request.GET.from filter_from %}{% endif %}{% if request.GET.to or filter_to %}&to={% firstof request.GET.to filter_to %}{% endif %}{% if request.GET.user or selected_user %}&user={% firstof request.GET.user selected_user %}{% endif %}"
+        >
           Deep Analysis
         </a>
       </div>
@@ -213,6 +233,7 @@
       {% endif %}
     </div>
   </div>
+
   <div class="col-lg-6">
     <div class="card p-3">
       <h6 class="fw-bold mb-2">Product Mix by Size</h6>
