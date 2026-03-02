@@ -675,11 +675,10 @@ def _find_user_by_map(
 
     logger.warning(
         "KAM matching failed for display_name='%s' (normalised='%s'). "
-        "Fix: set KAM_USERMAP_JSON env var. "
-        'Example: KAM_USERMAP_JSON=\'{"%(n)s": "actual_django_username"}\'',
+        "Add to KAM_USERMAP_JSON: {\"%s\": \"actual_django_username\"}",
         raw,
         normalized,
-        {"n": normalized},
+        normalized,
     )
     return None
 
