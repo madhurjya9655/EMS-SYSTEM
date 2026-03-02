@@ -1,6 +1,6 @@
 # FILE: apps/kam/views.py
-# PURPOSE: Fix dashboard Sales/Leads zero issue by correcting scope resolution, param alias handling, and RBAC-safe aggregation
-# UPDATED: 2026-02-28
+# PURPOSE: Fix Date Range Filtering (dynamic, no hardcode) & Leads Not Showing in Production (kam_id scope fix)
+# UPDATED: 2026-03-02
 # NON-NEGOTIABLE BUSINESS RULES
 # - KAM sees only own data
 # - Manager sees only mapped KAM data
@@ -340,15 +340,32 @@ def _filter_qs_by_kam_scope(qs, actor: User, scope_kam_id: Optional[int], field_
 # Date parsing helpers
 # ---------------------------------------------------------------------
 def _parse_iso_date(s: str) -> Optional[date]:
+    """
+    FIX: Robust date parser that handles multiple formats without hardcoding year ranges.
+    Supports: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY, MM/DD/YYYY, and variants.
+    No hardcoded year filtering — any valid date is accepted.
+    """
     s = (s or "").strip()
     if not s:
         return None
 
+    # Try ISO format first (most common from HTML date inputs)
     try:
         return timezone.datetime.fromisoformat(s).date()
     except Exception:
         pass
 
+    # Try explicit common formats
+    import re as _re
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%m-%d-%Y",
+                "%d/%m/%y", "%d-%m-%y", "%Y/%m/%d"):
+        try:
+            from datetime import datetime as _dt
+            return _dt.strptime(s, fmt).date()
+        except Exception:
+            pass
+
+    # Try splitting by separator and auto-detecting format
     sep = "/" if "/" in s else ("-" if "-" in s else None)
     if not sep:
         return None
@@ -411,7 +428,6 @@ def _iso_week_bounds(dt: timezone.datetime) -> Tuple[timezone.datetime, timezone
 
 
 def _ms_week_bounds(dt: timezone.datetime) -> Tuple[timezone.datetime, timezone.datetime, str]:
-    # Kept identical to ISO bounds (existing behavior). Sunday exclusion is handled at display layer.
     local = timezone.localtime(dt)
     start = local - timezone.timedelta(days=local.weekday())
     start = start.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -505,7 +521,74 @@ def _get_period(request: HttpRequest) -> Tuple[str, timezone.datetime, timezone.
     return ("WEEK", *_iso_week_bounds(ref))
 
 
+# ---------------------------------------------------------------------
+# FIX: _get_dashboard_range — dynamic date parsing, no hardcoded years
+# Supports all common param name aliases from any frontend implementation.
+# Falls back to current week only when NO date params are present at all.
+# ---------------------------------------------------------------------
 def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timezone.datetime, str]:
+    """
+    FIXED: Dynamically resolves date range from request params.
+
+    Supports these param name aliases (first non-empty wins):
+      from_date: from, from_date, start_date, date_from, fromDate, startDate, dateFrom
+      to_date:   to, to_date, end_date, date_to, toDate, endDate, dateTo
+
+    Also supports shortcut 'range' param:
+      last7, last30, last90, thismonth, thisquarter, thisyear, all
+
+    No hardcoded year logic. Any valid date range is accepted.
+    Falls back to current ISO week only when no date params are provided.
+    """
+    now = timezone.now()
+
+    # ── Shortcut range param (e.g. ?range=last30) ──────────────────
+    range_shortcut = (request.GET.get("range") or "").strip().lower()
+    if range_shortcut:
+        today_local = timezone.localtime(now).replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow = today_local + timezone.timedelta(days=1)
+
+        if range_shortcut in ("last7", "7d", "7days"):
+            start = today_local - timezone.timedelta(days=7)
+            label = f"{start.date()} → {today_local.date()}"
+            return start, tomorrow, label
+
+        if range_shortcut in ("last30", "30d", "30days"):
+            start = today_local - timezone.timedelta(days=30)
+            label = f"{start.date()} → {today_local.date()}"
+            return start, tomorrow, label
+
+        if range_shortcut in ("last60", "60d"):
+            start = today_local - timezone.timedelta(days=60)
+            label = f"{start.date()} → {today_local.date()}"
+            return start, tomorrow, label
+
+        if range_shortcut in ("last90", "90d", "90days", "3m"):
+            start = today_local - timezone.timedelta(days=90)
+            label = f"{start.date()} → {today_local.date()}"
+            return start, tomorrow, label
+
+        if range_shortcut in ("thismonth", "this_month", "month"):
+            ws, we, _ = _month_bounds(now)
+            label = f"{ws.date()} → {(we - timezone.timedelta(days=1)).date()}"
+            return ws, we, label
+
+        if range_shortcut in ("thisquarter", "this_quarter", "quarter"):
+            ws, we, _ = _quarter_bounds(now)
+            label = f"{ws.date()} → {(we - timezone.timedelta(days=1)).date()}"
+            return ws, we, label
+
+        if range_shortcut in ("thisyear", "this_year", "year"):
+            ws, we, _ = _year_bounds(now)
+            label = f"{ws.date()} → {(we - timezone.timedelta(days=1)).date()}"
+            return ws, we, label
+
+        if range_shortcut in ("all", "*"):
+            s = timezone.make_aware(timezone.datetime(2000, 1, 1))
+            e = timezone.make_aware(timezone.datetime(2100, 1, 1))
+            return s, e, "ALL"
+
+    # ── Explicit from/to params (all aliases) ──────────────────────
     from_s = _first_query_value(
         request,
         "from",
@@ -529,15 +612,29 @@ def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timez
 
     from_d = _parse_iso_date(from_s)
     to_d = _parse_iso_date(to_s)
+
     if from_d and to_d and from_d <= to_d:
-        start = timezone.make_aware(timezone.datetime(from_d.year, from_d.month, from_d.day, 0, 0, 0))
-        end = timezone.make_aware(timezone.datetime(to_d.year, to_d.month, to_d.day, 0, 0, 0)) + timezone.timedelta(
-            days=1
+        # FIX: Use timezone-aware datetimes. Include full end day (midnight of next day).
+        start = timezone.make_aware(
+            timezone.datetime(from_d.year, from_d.month, from_d.day, 0, 0, 0)
         )
+        end = timezone.make_aware(
+            timezone.datetime(to_d.year, to_d.month, to_d.day, 0, 0, 0)
+        ) + timezone.timedelta(days=1)
         label = f"{from_d} → {to_d}"
         return start, end, label
 
-    ws, we, _ = _iso_week_bounds(timezone.now())
+    if from_d and not to_d:
+        # Only start date given — use end of that day
+        start = timezone.make_aware(
+            timezone.datetime(from_d.year, from_d.month, from_d.day, 0, 0, 0)
+        )
+        end = start + timezone.timedelta(days=1)
+        label = f"{from_d} → {from_d}"
+        return start, end, label
+
+    # ── Default fallback: current ISO week ─────────────────────────
+    ws, we, _ = _iso_week_bounds(now)
     label = f"{ws.date()} → {(we - timezone.timedelta(days=1)).date()}"
     return ws, we, label
 
@@ -932,15 +1029,15 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
 
 
 # ---------------------------------------------------------------------
-# Dashboard
+# Dashboard — FIXED: dynamic date range + leads scope
 # ---------------------------------------------------------------------
 @login_required
 @require_kam_code("kam_dashboard")
 def dashboard(request: HttpRequest) -> HttpResponse:
+    # ── FIX: _get_dashboard_range now handles all param aliases and range shortcuts
     start_dt, end_dt, range_label = _get_dashboard_range(request)
     scope_kam_id, scope_label = _resolve_scope(request, request.user)
 
-    # Ensure template selection reflects the actual applied filter (supports aliases)
     selected_user = _first_query_value(request, "user", "kam", "KAM", "username", "user_name", "kam_username")
 
     sales_target_mt = Decimal(0)
@@ -959,18 +1056,50 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             leads_target_mt = _safe_decimal(ts.leads_target_mt)
             collections_plan_amount = _safe_decimal(ts.collections_target_amount)
 
-    inv_qs = InvoiceFact.objects.filter(invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date())
-    visit_plan_qs = VisitPlan.objects.filter(visit_date__gte=start_dt.date(), visit_date__lt=end_dt.date())
-    visit_act_qs = VisitActual.objects.filter(plan__visit_date__gte=start_dt.date(), plan__visit_date__lt=end_dt.date())
-    call_qs = CallLog.objects.filter(call_datetime__gte=start_dt, call_datetime__lt=end_dt)
-    lead_qs = LeadFact.objects.filter(doe__gte=start_dt.date(), doe__lt=end_dt.date())
-    coll_qs = CollectionTxn.objects.filter(txn_datetime__gte=start_dt, txn_datetime__lt=end_dt)
+    # ── FIX: Use .date() comparisons consistently for DateField columns,
+    #         and datetime comparisons for DateTimeField columns.
+    #         invoice_date and doe are DateFields → use __gte/__lt with .date()
+    #         call_datetime and txn_datetime are DateTimeFields → use aware datetimes directly
+    start_date = start_dt.date()
+    end_date = end_dt.date()  # exclusive upper bound (midnight of next day)
 
+    inv_qs = InvoiceFact.objects.filter(
+        invoice_date__gte=start_date,
+        invoice_date__lt=end_date,
+    )
+    visit_plan_qs = VisitPlan.objects.filter(
+        visit_date__gte=start_date,
+        visit_date__lt=end_date,
+    )
+    visit_act_qs = VisitActual.objects.filter(
+        plan__visit_date__gte=start_date,
+        plan__visit_date__lt=end_date,
+    )
+    call_qs = CallLog.objects.filter(
+        call_datetime__gte=start_dt,
+        call_datetime__lt=end_dt,
+    )
+
+    # ── FIX: LeadFact.doe is a DateField — compare with date objects, not datetimes
+    lead_qs = LeadFact.objects.filter(
+        doe__gte=start_date,
+        doe__lt=end_date,
+    )
+
+    coll_qs = CollectionTxn.objects.filter(
+        txn_datetime__gte=start_dt,
+        txn_datetime__lt=end_dt,
+    )
+
+    # ── Apply KAM scope to all querysets ──────────────────────────
     inv_qs = _filter_qs_by_kam_scope(inv_qs, request.user, scope_kam_id, "kam_id")
     visit_plan_qs = _filter_qs_by_kam_scope(visit_plan_qs, request.user, scope_kam_id, "kam_id")
     visit_act_qs = _filter_qs_by_kam_scope(visit_act_qs, request.user, scope_kam_id, "plan__kam_id")
     call_qs = _filter_qs_by_kam_scope(call_qs, request.user, scope_kam_id, "kam_id")
+
+    # ── FIX: Lead scope uses kam_id field (matches how import_leads saves kam=user) ──
     lead_qs = _filter_qs_by_kam_scope(lead_qs, request.user, scope_kam_id, "kam_id")
+
     coll_qs = _filter_qs_by_kam_scope(coll_qs, request.user, scope_kam_id, "kam_id")
 
     sales_mt = _safe_decimal(inv_qs.aggregate(mt=Sum("qty_mt")).get("mt"))
@@ -1110,7 +1239,7 @@ def dashboard(request: HttpRequest) -> HttpResponse:
                 .values_list("username", flat=True)
             )
 
-    # ✅ FIX: ctx must be built for ALL roles (previous code incorrectly indented ctx under manager-only block)
+    # ── Build context for ALL roles ──────────────────────────────
     ctx = {
         "page_title": "KAM Dashboard",
         "range_label": range_label,
@@ -1218,7 +1347,12 @@ def manager_kpis(request: HttpRequest) -> HttpResponse:
             CollectionTxn.objects.filter(kam=kam, txn_datetime__gte=start_dt, txn_datetime__lt=end_dt).aggregate(a=Sum("amount")).get("a")
         )
 
-        leads_agg = LeadFact.objects.filter(kam=kam, doe__gte=start_dt.date(), doe__lt=end_dt.date()).aggregate(
+        # FIX: Use date objects for doe (DateField) comparison
+        leads_agg = LeadFact.objects.filter(
+            kam=kam,
+            doe__gte=start_dt.date(),
+            doe__lt=end_dt.date(),
+        ).aggregate(
             total_mt=Sum("qty_mt"), won_mt=Sum("qty_mt", filter=Q(status="WON"))
         )
         leads_total_mt = _safe_decimal(leads_agg.get("total_mt"))

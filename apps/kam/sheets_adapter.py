@@ -1,6 +1,6 @@
 # FILE: apps/kam/sheets_adapter.py
-# PURPOSE: Fix KAM sheet sync — corrected KAM user matching (username decomposition + pattern fallback),
-#          leads import fix, and broader tab fallbacks. Sales/Leads now populate correctly.
+# PURPOSE: Fix KAM user matching — robust usermap lookup, first-name DB fallback,
+#          full display-name DB lookup, and orphaned-kam recovery on re-sync.
 # UPDATED: 2026-03-02
 # NON-NEGOTIABLE BUSINESS RULES
 # - KAM sees only own data (kam_id filter in views unchanged)
@@ -61,10 +61,7 @@ def _with_write_retry(fn: Callable[[], object]):
             sleep_for = WRITE_RETRY_SLEEP_SECONDS * attempt
             logger.warning(
                 "KAM sync write retry due to DB lock (attempt=%s/%s, sleep=%.2fs): %s",
-                attempt,
-                WRITE_RETRY_COUNT,
-                sleep_for,
-                exc,
+                attempt, WRITE_RETRY_COUNT, sleep_for, exc,
             )
             time.sleep(sleep_for)
     if last_exc:
@@ -73,7 +70,7 @@ def _with_write_retry(fn: Callable[[], object]):
 
 
 # ----------------------------
-# Env helpers / flexibility
+# Env helpers
 # ----------------------------
 
 def _getenv(key: str, default: Optional[str] = None) -> Optional[str]:
@@ -102,7 +99,7 @@ def resolve_sections() -> List[str]:
 
 
 # ----------------------------
-# Header normalization / parsing
+# Text normalization
 # ----------------------------
 
 def _norm_spaces(s: str) -> str:
@@ -137,20 +134,43 @@ def _dry_run() -> bool:
     return _truthy(_getenv("KAM_IMPORT_DRY_RUN", "0"))
 
 
+# ----------------------------
+# FIX: Robust usermap — normalizes ALL keys to lowercase at load time
+# so mixed-case entries like "Pravin Nagargoje" and "pravin nagargoje"
+# both match correctly regardless of how they appear in .env
+# ----------------------------
 def _usermap() -> Dict[str, str]:
+    """
+    Load KAM_USERMAP_JSON and normalize ALL keys to canonical lowercase.
+
+    Example .env entry:
+      KAM_USERMAP_JSON={"Pravin Nagargoje":"pravin","Amit Saha":"amit"}
+
+    After normalization:
+      {"pravin nagargoje": "pravin", "amit saha": "amit", ...}
+
+    This means sheet display names like 'Pravin Nagargoje' will always
+    match regardless of the case used in the .env file.
+    """
     raw = _getenv("KAM_USERMAP_JSON", "{}")
     try:
         data = json.loads(raw) if raw else {}
     except Exception:
+        logger.warning("KAM_USERMAP_JSON is not valid JSON — ignored: %r", raw)
         return {}
 
     out: Dict[str, str] = {}
     if isinstance(data, dict):
         for k, v in data.items():
+            # Normalize key to canonical form (lowercase, trimmed, collapsed spaces)
             key = _canon_text(str(k or ""))
             val = str(v or "").strip()
             if key and val:
                 out[key] = val
+                # Also register without spaces (e.g. "pravin nagargoje" → "pravinnagargoje")
+                compact_key = re.sub(r"\s+", "", key)
+                if compact_key and compact_key not in out:
+                    out[compact_key] = val
     return out
 
 
@@ -183,32 +203,20 @@ def _parse_date(s: str) -> Optional[date]:
         return serial_dt
 
     direct_patterns = [
-        "%Y-%m-%d",
-        "%Y/%m/%d",
-        "%d-%m-%Y",
-        "%d/%m/%Y",
-        "%d-%m-%y",
-        "%d/%m/%y",
-        "%m/%d/%Y",
-        "%m-%d-%Y",
+        "%Y-%m-%d", "%Y/%m/%d",
+        "%d-%m-%Y", "%d/%m/%Y",
+        "%d-%m-%y", "%d/%m/%y",
+        "%m/%d/%Y", "%m-%d-%Y",
     ]
     datetime_patterns = [
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y/%m/%d %H:%M:%S",
-        "%Y/%m/%d %H:%M",
-        "%d-%m-%Y %H:%M:%S",
-        "%d-%m-%Y %H:%M",
-        "%d/%m/%Y %H:%M:%S",
-        "%d/%m/%Y %H:%M",
-        "%d-%m-%y %H:%M:%S",
-        "%d-%m-%y %H:%M",
-        "%d/%m/%y %H:%M:%S",
-        "%d/%m/%y %H:%M",
-        "%m/%d/%Y %H:%M:%S",
-        "%m/%d/%Y %H:%M",
-        "%m-%d-%Y %H:%M:%S",
-        "%m-%d-%Y %H:%M",
+        "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M",
+        "%d-%m-%Y %H:%M:%S", "%d-%m-%Y %H:%M",
+        "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M",
+        "%d-%m-%y %H:%M:%S", "%d-%m-%y %H:%M",
+        "%d/%m/%y %H:%M:%S", "%d/%m/%y %H:%M",
+        "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M",
+        "%m-%d-%Y %H:%M:%S", "%m-%d-%Y %H:%M",
     ]
 
     tried = []
@@ -259,8 +267,7 @@ def _to_decimal(s) -> Decimal:
     s = str(s).strip()
     if not s:
         return Decimal(0)
-    s = s.replace(",", "")
-    s = s.replace(" ", "")
+    s = s.replace(",", "").replace(" ", "")
     s = re.sub(r"[₹$€£]", "", s)
     try:
         return Decimal(s)
@@ -301,41 +308,27 @@ def _normalize_status(raw: str) -> str:
     value = _canon_text(raw)
     if not value:
         return "OPEN"
-
     mapping = {
-        "open": "OPEN",
-        "new": "OPEN",
-        "fresh": "OPEN",
-        "active": "OPEN",
-        "negotiation": "NEGOTIATION",
-        "under negotiation": "NEGOTIATION",
-        "in negotiation": "NEGOTIATION",
-        "negotiating": "NEGOTIATION",
-        "won": "WON",
-        "closed won": "WON",
-        "converted": "WON",
-        "booked": "WON",
-        "lost": "LOST",
-        "closed lost": "LOST",
-        "dropped": "LOST",
-        "cancelled": "LOST",
-        "canceled": "LOST",
+        "open": "OPEN", "new": "OPEN", "fresh": "OPEN", "active": "OPEN",
+        "negotiation": "NEGOTIATION", "under negotiation": "NEGOTIATION",
+        "in negotiation": "NEGOTIATION", "negotiating": "NEGOTIATION",
+        "won": "WON", "closed won": "WON", "converted": "WON", "booked": "WON",
+        "lost": "LOST", "closed lost": "LOST", "dropped": "LOST",
+        "cancelled": "LOST", "canceled": "LOST",
     }
     return mapping.get(value, "OPEN")
 
 
 # ----------------------------
-# Google Sheet open helpers
+# Google Sheet helpers
 # ----------------------------
 
 def _open_sheet():
     try:
         scopes_raw = (_getenv("GOOGLE_SHEET_SCOPES") or "").strip()
         scopes = [s.strip() for s in scopes_raw.split(",") if s.strip()] if scopes_raw else None
-
         creds_bundle = get_google_credentials(
-            scopes=scopes
-            or [
+            scopes=scopes or [
                 "https://www.googleapis.com/auth/spreadsheets.readonly",
                 "https://www.googleapis.com/auth/drive.readonly",
             ]
@@ -388,7 +381,7 @@ def _read_tab(ws_name: str) -> Tuple[List[str], List[List[str]]]:
 
 
 # ----------------------------
-# User matching  *** CORE FIX ***
+# FIX: User matching — robust multi-strategy resolution
 # ----------------------------
 
 def _full_name_of_user(user: User) -> str:
@@ -398,37 +391,13 @@ def _full_name_of_user(user: User) -> str:
 
 
 def _split_username_to_name_parts(username: str) -> List[str]:
-    """
-    Decompose a separator-based username into word parts.
-
-    Examples:
-      "jivan.more"      → ["jivan", "more"]
-      "jivan_more"      → ["jivan", "more"]
-      "saurabh.kumavat" → ["saurabh", "kumavat"]
-      "jm"              → []   (single token, no split)
-      "jmore"           → []   (no separator)
-
-    This is the KEY FIX: Django users typically have blank first_name/last_name
-    but username like 'jivan.more'. The Google Sheet stores full display names
-    like 'Jivan More'. Without decomposing the username, 'jivan more' is never
-    registered as a lookup key and matching fails for every row → Sales/Leads = 0.
-    """
     if not username:
         return []
     parts = re.split(r"[._\-]+", username.strip().lower())
-    # Keep only parts that look like real name words: at least 2 chars, all alpha
     return [p for p in parts if p and len(p) >= 2 and re.match(r"^[a-z]+$", p)]
 
 
 def _username_pattern_candidates(display_name: str) -> List[str]:
-    """
-    Given a display name like 'Jivan More', generate common username patterns
-    that an admin might have assigned: jivan.more, jivan_more, jivanmore,
-    j.more, jmore, more.jivan, etc.
-
-    Used as a last-resort fallback when exact/compact lookup fails.
-    Handles abbreviated usernames like 'jmore' or 'j.more'.
-    """
     raw = display_name.strip()
     if not raw:
         return []
@@ -441,30 +410,27 @@ def _username_pattern_candidates(display_name: str) -> List[str]:
 
     if len(words) >= 2:
         last = words[-1]
-        # Most common patterns first (highest hit rate)
         candidates += [
-            f"{first}.{last}",       # jivan.more
-            f"{first}_{last}",       # jivan_more
-            f"{first}{last}",        # jivanmore
-            f"{first[0]}.{last}",   # j.more
-            f"{first[0]}_{last}",   # j_more
-            f"{first[0]}{last}",    # jmore
-            f"{last}.{first}",       # more.jivan
-            f"{last}_{first}",       # more_jivan
-            f"{last}{first}",        # morejivan
+            first,              # "pravin"  ← MOST LIKELY for this project's naming pattern
+            f"{first}.{last}",
+            f"{first}_{last}",
+            f"{first}{last}",
+            f"{first[0]}.{last}",
+            f"{first[0]}_{last}",
+            f"{first[0]}{last}",
+            f"{last}.{first}",
+            f"{last}_{first}",
+            f"{last}{first}",
         ]
-        # Handle 3-word names
         if len(words) >= 3:
             middle = words[1]
             candidates += [
                 f"{first}.{middle}.{last}",
                 f"{first}{middle[0]}{last}",
             ]
+    else:
+        candidates.append(first)
 
-    # Always include bare first name as final fallback
-    candidates.append(first)
-
-    # Deduplicate preserving order
     seen: set = set()
     out = []
     for c in candidates:
@@ -476,18 +442,12 @@ def _username_pattern_candidates(display_name: str) -> List[str]:
 
 def _build_user_lookup() -> Dict[str, User]:
     """
-    Build a normalised-display-name → User dictionary.
+    Build normalized display-name → User mapping.
 
-    *** CORE FIX ***
-    For users with username like 'jivan.more' (separator-based), we now register
-    'jivan more' (space-joined parts) as an additional lookup key.
-
-    Before this fix: sheet display name 'Jivan More' normalised to 'jivan more'
-    had NO matching key in the dict (because first_name/last_name were blank),
-    causing every such row to be skipped → Sales/Leads imported as 0.
-
-    After this fix: 'jivan more' is registered → direct match → row imported
-    correctly with kam=<correct User> → dashboard filter kam_id=user.id works.
+    FIX: Username decomposition so 'jivan.more' registers as 'jivan more'.
+    FIX: First-name-only shortcut so 'Pravin Nagargoje' → 'pravin' username.
+    FIX: Single first-name bucket for users whose Django username IS their first name
+         (the pattern used by this project: amit, vivek, ganesh, pravin, etc.)
     """
     exact_lookup: Dict[str, User] = {}
     first_name_buckets: Dict[str, List[User]] = {}
@@ -501,40 +461,52 @@ def _build_user_lookup() -> Dict[str, User]:
         first = (getattr(user, "first_name", "") or "").strip()
         last = (getattr(user, "last_name", "") or "").strip()
 
-        # 1. Raw username (e.g. "jivan.more")
+        # 1. Raw username (e.g. "pravin", "amit", "ganesh@blueoceansteels.com")
         if username:
             exact_keys.add(_canon_text(username))
 
-            # *** CORE FIX: decompose username by separators ***
-            # "jivan.more" → parts=["jivan","more"] → register "jivan more" + "more jivan"
-            uname_parts = _split_username_to_name_parts(username)
-            if len(uname_parts) >= 2:
-                forward = " ".join(uname_parts)
-                backward = " ".join(reversed(uname_parts))
-                exact_keys.add(_canon_text(forward))   # "jivan more"  ← matches sheet
-                exact_keys.add(_canon_text(backward))  # "more jivan"  ← reverse guard
-                # Also register separator variants in case sheet uses them
-                exact_keys.add(_canon_text(".".join(uname_parts)))  # "jivan.more"
-                exact_keys.add(_canon_text("_".join(uname_parts)))  # "jivan_more"
-                # First word bucket for single-first-name fallback
-                if len(uname_parts[0]) >= 3:
-                    first_name_buckets.setdefault(
-                        _canon_text(uname_parts[0]), []
-                    ).append(user)
+            # FIX: Handle email-as-username pattern (this production project)
+            # username="pravin@blueoceansteels.com" → local part "pravin" → first-name bucket
+            if "@" in username:
+                email_local = username.split("@", 1)[0].strip().lower()
+                if email_local and len(email_local) >= 2:
+                    exact_keys.add(_canon_text(email_local))
+                    # Register first name from email local part as bucket
+                    email_parts = _split_username_to_name_parts(email_local)
+                    if email_parts:
+                        first_name_buckets.setdefault(email_parts[0], []).append(user)
+                    elif len(email_local) >= 3 and re.match(r"^[a-z]+$", email_local):
+                        first_name_buckets.setdefault(email_local, []).append(user)
+            else:
+                # Decompose separator-based usernames (e.g. ravi.pandey → ravi, pandey)
+                uname_parts = _split_username_to_name_parts(username)
+                if len(uname_parts) >= 2:
+                    forward = " ".join(uname_parts)
+                    backward = " ".join(reversed(uname_parts))
+                    exact_keys.add(_canon_text(forward))
+                    exact_keys.add(_canon_text(backward))
+                    exact_keys.add(_canon_text(".".join(uname_parts)))
+                    exact_keys.add(_canon_text("_".join(uname_parts)))
+                    if len(uname_parts[0]) >= 3:
+                        first_name_buckets.setdefault(_canon_text(uname_parts[0]), []).append(user)
 
-        # 2. Email and email-local-part
+                # Simple username IS the first name (e.g. username="pravin")
+                uname_lower = username.lower().strip()
+                if len(uname_lower) >= 3 and re.match(r"^[a-z]+$", uname_lower):
+                    first_name_buckets.setdefault(uname_lower, []).append(user)
+
+        # 2. Email and email local part
         if email:
             exact_keys.add(_canon_text(email))
             email_local = email.split("@", 1)[0].strip()
             if email_local:
                 exact_keys.add(_canon_text(email_local))
-                # Decompose email local part too ("jivan.more@co.in" → "jivan more")
                 email_parts = _split_username_to_name_parts(email_local)
                 if len(email_parts) >= 2:
                     exact_keys.add(_canon_text(" ".join(email_parts)))
                     exact_keys.add(_canon_text(" ".join(reversed(email_parts))))
 
-        # 3. first_name + last_name (standard Django profile fields, if populated)
+        # 3. First + last name from Django profile (if populated)
         if full_name:
             exact_keys.add(_canon_text(full_name))
             exact_keys.add(_canon_text(full_name.replace(".", " ")))
@@ -545,20 +517,27 @@ def _build_user_lookup() -> Dict[str, User]:
         if first and last:
             exact_keys.add(_canon_text(f"{first} {last}"))
 
-        # 4. Register all collected keys → first writer wins (no overwrite)
+        # 4. Register all keys (first writer wins)
         for key in exact_keys:
             if key and key not in exact_lookup:
                 exact_lookup[key] = user
 
-        # 5. First-name-only bucket (from first_name field)
+        # 5. First-name bucket from Django profile field
         if first and len(first) >= 3:
-            first_key = _canon_text(first)
-            first_name_buckets.setdefault(first_key, []).append(user)
+            first_name_buckets.setdefault(_canon_text(first), []).append(user)
 
     # Single-user first-name shortcuts
+    # If only ONE user has a given first name (or username matching first name),
+    # register it as a direct lookup key.
+    # This is what makes "Pravin Nagargoje" → username "pravin" work:
+    #   bucket["pravin"] = [pravin_user] → only 1 → exact_lookup["pravin"] = pravin_user
     for first_key, users in first_name_buckets.items():
         if len(users) == 1 and first_key not in exact_lookup:
             exact_lookup[first_key] = users[0]
+            logger.debug(
+                "KAM first-name shortcut registered: '%s' → username='%s'",
+                first_key, users[0].username,
+            )
 
     return exact_lookup
 
@@ -569,15 +548,16 @@ def _find_user_by_map(
     user_lookup: Optional[Dict[str, User]] = None,
 ) -> Optional[User]:
     """
-    Resolve a sheet display name (e.g. 'Jivan More') to a Django User.
+    Resolve sheet display name to Django User.
 
-    Matching order — first match wins:
-      1. KAM_USERMAP_JSON explicit override  (admin config, highest trust)
-      2. Exact key in pre-built lookup       (covers username, email, decomposed username)
-      3. Compact alphanumeric key match      (handles minor punctuation differences)
-      4. Direct DB username/email query      (case-insensitive)
-      5. DB first_name + last_name query     (if profile fields are populated)
-      6. Pattern-based username generation   (last resort: tries jivan.more, jmore, etc.)
+    Match order (first match wins):
+    1. KAM_USERMAP_JSON explicit override       ← "Pravin Nagargoje" → "pravin"
+    2. Exact key in pre-built lookup dict        ← covers username, email, decomposed
+    3. Compact alphanumeric key match            ← handles punctuation differences
+    4. Direct DB username/email query            ← case-insensitive
+    5. First-name-only DB query                  ← "Pravin" matches username "pravin"
+    6. First + last name DB profile query        ← if first_name/last_name populated
+    7. Pattern-based username generation         ← last resort
     """
     raw = _norm_spaces(display_name)
     if not raw:
@@ -586,21 +566,28 @@ def _find_user_by_map(
     normalized = _canon_text(raw)
     user_lookup = user_lookup or _build_user_lookup()
 
-    # Step 1: explicit usermap override
+    # Step 1: Explicit usermap override (highest priority)
+    # Handles: KAM_USERMAP_JSON={"Pravin Nagargoje":"pravin"}
     mapped_username = usermap.get(normalized)
+    if not mapped_username:
+        # Also try compact form in case there are extra spaces
+        compact_norm = re.sub(r"\s+", "", normalized)
+        mapped_username = usermap.get(compact_norm)
+
     if mapped_username:
         mapped_raw = mapped_username.strip()
+        # Try exact username/email match first
         user = User.objects.filter(
-            Q(username__iexact=mapped_raw)
-            | Q(email__iexact=mapped_raw)
-            | Q(first_name__iexact=mapped_raw),
+            Q(username__iexact=mapped_raw) | Q(email__iexact=mapped_raw),
             is_active=True,
         ).first()
         if user:
             return user
+        # Try lookup dict with the mapped value
         mapped_norm = _canon_text(mapped_raw)
         if mapped_norm in user_lookup:
             return user_lookup[mapped_norm]
+        # Try first+last split if it looks like a full name
         if " " in mapped_raw:
             parts = [p for p in mapped_raw.split() if p]
             if len(parts) >= 2:
@@ -612,29 +599,69 @@ def _find_user_by_map(
                 if user:
                     return user
 
-    # Step 2: exact lookup match
-    # After _build_user_lookup fix, 'jivan more' is now registered as a key
-    # for user with username 'jivan.more', making this the primary success path.
+    # Step 2: Exact lookup match
     if normalized in user_lookup:
         return user_lookup[normalized]
 
-    # Step 3: compact (strip non-alphanumeric) match
-    # "jivan more" compact → "jivanmore" == "jivan.more" compact → match
+    # Step 3: Compact key match (strips non-alphanumeric)
     compact = re.sub(r"[^a-z0-9]+", "", normalized)
     if compact:
         for key, user in user_lookup.items():
             if re.sub(r"[^a-z0-9]+", "", key) == compact:
                 return user
 
-    # Step 4: direct DB query (case-insensitive username / email)
+    # Step 4: Direct DB query (case-insensitive username/email)
     direct = User.objects.filter(
         Q(username__iexact=raw) | Q(email__iexact=raw), is_active=True
     ).first()
     if direct:
         return direct
 
-    # Step 5: DB query by first_name + last_name (if profile is populated)
+    # Step 5: First-name-only matching
+    # Handles BOTH patterns:
+    #   A) username IS first name: "Pravin" → username="pravin" (simple projects)
+    #   B) username IS email: "Pravin" → username starts with "pravin@" (this project!)
+    # "Pravin Nagargoje" → first word "pravin" → username__istartswith="pravin@" → FOUND
     parts = [p for p in re.split(r"\s+", raw) if p]
+    if parts:
+        first_word = parts[0]
+        if len(first_word) >= 3:
+            # Try exact username match (simple username pattern)
+            first_match = User.objects.filter(
+                username__iexact=first_word, is_active=True
+            ).first()
+            if first_match:
+                logger.debug(
+                    "KAM match via first-name exact username: '%s' → username='%s'",
+                    raw, first_match.username,
+                )
+                return first_match
+
+            # FIX: Try email-based username pattern (username starts with first_word@)
+            # This is the key fix for production: username="pravin@blueoceansteels.com"
+            # "Pravin Nagargoje" → first_word="pravin" → username__istartswith="pravin@"
+            email_match = User.objects.filter(
+                username__istartswith=f"{first_word}@", is_active=True
+            ).first()
+            if email_match:
+                logger.debug(
+                    "KAM match via first-name email username: '%s' → username='%s'",
+                    raw, email_match.username,
+                )
+                return email_match
+
+            # Also try: email local part starts with first_word
+            email_local_match = User.objects.filter(
+                email__istartswith=f"{first_word}@", is_active=True
+            ).first()
+            if email_local_match:
+                logger.debug(
+                    "KAM match via first-name email field: '%s' → username='%s'",
+                    raw, email_local_match.username,
+                )
+                return email_local_match
+
+    # Step 6: DB query by first_name + last_name Django profile fields
     if len(parts) >= 2:
         user = User.objects.filter(
             first_name__iexact=parts[0],
@@ -643,11 +670,18 @@ def _find_user_by_map(
         ).first()
         if user:
             return user
+        # Also try first name only against profile first_name field
+        user = User.objects.filter(
+            first_name__iexact=parts[0], is_active=True
+        ).first()
+        if user:
+            logger.debug(
+                "KAM match via first_name profile field: '%s' → username='%s'",
+                raw, user.username,
+            )
+            return user
 
-    # Step 6: pattern-based username generation from display name
-    # Handles cases where username is 'jmore', 'j.more', 'jivan' etc.
-    # Generates jivan.more, jivan_more, jivanmore, j.more, jmore, ...
-    # Checks lookup dict first (free, no DB), then one batched DB OR query.
+    # Step 7: Pattern-based username generation from display name
     candidates = _username_pattern_candidates(raw)
     if candidates:
         for candidate in candidates:
@@ -655,12 +689,11 @@ def _find_user_by_map(
             if ckey in user_lookup:
                 logger.debug(
                     "KAM match via pattern candidate '%s' for display_name='%s'",
-                    candidate,
-                    raw,
+                    candidate, raw,
                 )
                 return user_lookup[ckey]
 
-        # Batched DB query — max 8 patterns to keep it fast
+        # Batched DB query
         q = Q()
         for c in candidates[:8]:
             q |= Q(username__iexact=c)
@@ -668,17 +701,14 @@ def _find_user_by_map(
         if user:
             logger.debug(
                 "KAM match via DB pattern query for display_name='%s' → username='%s'",
-                raw,
-                user.username,
+                raw, user.username,
             )
             return user
 
     logger.warning(
         "KAM matching failed for display_name='%s' (normalised='%s'). "
         "Add to KAM_USERMAP_JSON: {\"%s\": \"actual_django_username\"}",
-        raw,
-        normalized,
-        normalized,
+        raw, normalized, normalized,
     )
     return None
 
@@ -792,35 +822,21 @@ def _required_customers_groups() -> List[List[str]]:
 def _required_sales_groups() -> List[List[str]]:
     return [
         ["KAM Name", "KAM", "kam_username", "kam name", "sales person", "marketing person", "Full Name"],
-        ["Customer Name", "Consignee Name", "Buyer's Name", "Buyer's Name", "customer_name", "party name", "customer"],
+        ["Customer Name", "Consignee Name", "Buyer's Name", "customer_name", "party name", "customer"],
         ["Invoice Date", "Date of Invoice", "invoice_date", "Date", "bill date"],
     ]
 
 
 def _required_leads_groups() -> List[List[str]]:
-    # FIXED: Added more date column aliases to improve tab detection
     return [
         [
-            "Timestamp",
-            "Date of Enquiry",
-            "doe",
-            "enquiry date",
-            "lead date",
-            "created at",
-            "date",
-            "enquiry_date",
-            "Entry Date",
-            "entry date",
+            "Timestamp", "Date of Enquiry", "doe", "enquiry date",
+            "lead date", "created at", "date", "enquiry_date",
+            "Entry Date", "entry date",
         ],
         [
-            "KAM Name",
-            "KAM",
-            "kam_username",
-            "kam name",
-            "sales person",
-            "marketing person",
-            "Full Name",
-            "Employee Name",
+            "KAM Name", "KAM", "kam_username", "kam name",
+            "sales person", "marketing person", "Full Name", "Employee Name",
         ],
     ]
 
@@ -888,12 +904,8 @@ def _resolve_customers_tab() -> str:
         canonical="KAM_TAB_CUSTOMERS",
         default="Customer Details",
         aliases=["KAM_CUSTOMERS_TAB"],
-        fallbacks=_csv(
-            _getenv(
-                "KAM_TAB_CUSTOMERS_FALLBACKS",
-                "Customer Details,Customers,Customer Master",
-            )
-        ),
+        fallbacks=_csv(_getenv("KAM_TAB_CUSTOMERS_FALLBACKS",
+            "Customer Details,Customers,Customer Master,Customer Details (F),Customer Data")),
         required_groups=_required_customers_groups(),
     )
 
@@ -903,34 +915,23 @@ def _resolve_sales_tab() -> str:
         canonical="KAM_TAB_SALES",
         default="Sales (F)",
         aliases=["KAM_SALES_TAB", "KAM_TAB_INVOICES", "KAM_INVOICES_TAB"],
-        fallbacks=_csv(
-            _getenv(
-                "KAM_TAB_SALES_FALLBACKS",
-                "Sales (F),Sales,Sheet1,Front End,Invoice",
-            )
-        ),
+        fallbacks=_csv(_getenv("KAM_TAB_SALES_FALLBACKS",
+            "Sales (F),Sales,Sheet1,Front End,Invoice")),
         required_groups=_required_sales_groups(),
     )
 
 
 def _resolve_leads_tab() -> str:
-    # FIXED: Significantly expanded fallback list.
-    # Previous list was too narrow, causing leads to silently skip on many deployments.
     return _resolve_tab_with_headers(
         canonical="KAM_TAB_LEADS",
         default="Enquiry (F)",
         aliases=["KAM_LEADS_TAB"],
-        fallbacks=_csv(
-            _getenv(
-                "KAM_TAB_LEADS_FALLBACKS",
-                (
-                    "Enquiry (F),Enquiry,Leads,Lead,Enquiries,"
-                    "Lead Data,Leads Data,Lead Form,Enquiry Form,"
-                    "Lead Entry,Enquiry Entry,NBD,New Business,Prospects,"
-                    "Pipeline,CRM,Opportunities"
-                ),
-            )
-        ),
+        fallbacks=_csv(_getenv("KAM_TAB_LEADS_FALLBACKS", (
+            "Enquiry (F),Enquiry,Leads,Lead,Enquiries,"
+            "Lead Data,Leads Data,Lead Form,Enquiry Form,"
+            "Lead Entry,Enquiry Entry,NBD,New Business,Prospects,"
+            "Pipeline,CRM,Opportunities"
+        ))),
         required_groups=_required_leads_groups(),
     )
 
@@ -1011,13 +1012,9 @@ def import_customers(stats: ImportStats):
 
     c_addr = _col(idx, "Address", "address", "customer address")
     c_email = _col(idx, "Email", "email", "mail id")
-    c_mobile = _col(
-        idx, "Mobile No", "Mobile", "mobile", "phone", "contact no", "mobile number"
-    )
+    c_mobile = _col(idx, "Mobile No", "Mobile", "mobile", "phone", "contact no", "mobile number")
     c_credit_limit = _col(idx, "Credit Limit", "credit_limit")
-    c_credit_days = _col(
-        idx, "Agreed Credit Period", "agreed_credit_period_days", "Agreed Credit Period "
-    )
+    c_credit_days = _col(idx, "Agreed Credit Period", "agreed_credit_period_days", "Agreed Credit Period ")
 
     usermap = _usermap()
     user_lookup = _build_user_lookup()
@@ -1054,14 +1051,9 @@ def import_customers(stats: ImportStats):
         def _write():
             with transaction.atomic():
                 _get_or_create_customer(
-                    name=name,
-                    kam=kam,
-                    address=addr,
-                    email=email,
-                    mobile=mobile,
-                    credit_limit=credit_limit,
-                    agreed_credit_period_days=credit_days,
-                    force_kam_assignment=True,
+                    name=name, kam=kam, address=addr, email=email,
+                    mobile=mobile, credit_limit=credit_limit,
+                    agreed_credit_period_days=credit_days, force_kam_assignment=True,
                 )
             return None
 
@@ -1078,33 +1070,16 @@ def import_sales(stats: ImportStats):
 
     idx = _index(headers)
     c_customer = _col(
-        idx,
-        "Customer Name",
-        "Consignee Name",
-        "Buyer's Name",
-        "Buyer's Name",
-        "Buyer\\'s Name",
-        "customer_name",
-        "party name",
-        "customer",
+        idx, "Customer Name", "Consignee Name", "Buyer's Name", "Buyer's Name",
+        "Buyer\\'s Name", "customer_name", "party name", "customer",
     )
     c_date = _col(idx, "Invoice Date", "Date of Invoice", "invoice_date", "Date", "bill date")
-    c_qty = _col(
-        idx, "QTY", "Qty(MT)", "Quantity", "qty_mt", "qty mt", "quantity mt", "invoice qty"
-    )
+    c_qty = _col(idx, "QTY", "Qty(MT)", "Quantity", "qty_mt", "qty mt", "quantity mt", "invoice qty")
     c_val = _col(
-        idx,
-        "Invoice Value With GST",
-        "Invoice Value with GST",
-        "Invoice Value",
-        "revenue_gst",
-        "invoice value with gst rs",
-        "invoice amount",
-        "invoice value rs",
+        idx, "Invoice Value With GST", "Invoice Value with GST", "Invoice Value",
+        "revenue_gst", "invoice value with gst rs", "invoice amount", "invoice value rs",
     )
-    c_invno = _col(
-        idx, "Invoice Number", "Invoice No", "invoice_number", "bill no", "bill number"
-    )
+    c_invno = _col(idx, "Invoice Number", "Invoice No", "invoice_number", "bill no", "bill number")
     c_grade = _col(idx, "Grade", "grade")
     c_size = _col(idx, "Size", "size", "Size(MM)", "size mm")
 
@@ -1129,37 +1104,20 @@ def import_sales(stats: ImportStats):
             stats.skipped += 1
             continue
 
-        cust_name = (
-            r[c_customer] if c_customer is not None and c_customer < len(r) else ""
-        ).strip()
+        cust_name = (r[c_customer] if c_customer is not None and c_customer < len(r) else "").strip()
         if not cust_name:
             stats.skipped += 1
             continue
 
-        qty_mt = (
-            _to_decimal(r[c_qty])
-            if c_qty is not None and c_qty < len(r)
-            else Decimal(0)
-        )
-        value_gst = (
-            _to_decimal(r[c_val])
-            if c_val is not None and c_val < len(r)
-            else Decimal(0)
-        )
+        qty_mt = _to_decimal(r[c_qty] if c_qty is not None and c_qty < len(r) else "")
+        value_gst = _to_decimal(r[c_val] if c_val is not None and c_val < len(r) else "")
         inv_no = (r[c_invno] if c_invno is not None and c_invno < len(r) else "").strip()
         grade = (r[c_grade] if c_grade is not None and c_grade < len(r) else "").strip() or None
         size = (r[c_size] if c_size is not None and c_size < len(r) else "").strip() or None
 
         row_uuid = inv_no or _hash_row(
-            "sales",
-            tab,
-            cust_name,
-            kam.username,
-            str(inv_date),
-            str(qty_mt),
-            str(value_gst),
-            str(grade or ""),
-            str(size or ""),
+            "sales", tab, cust_name, kam.username, str(inv_date),
+            str(qty_mt), str(value_gst), str(grade or ""), str(size or ""),
         )
 
         if dry:
@@ -1168,44 +1126,30 @@ def import_sales(stats: ImportStats):
 
         def _write():
             with transaction.atomic():
-                cust = _get_or_create_customer(
-                    name=cust_name, kam=kam, force_kam_assignment=False
-                )
+                cust = _get_or_create_customer(name=cust_name, kam=kam, force_kam_assignment=False)
                 inv, created = InvoiceFact.objects.get_or_create(
                     row_uuid=row_uuid,
                     defaults=dict(
-                        invoice_date=inv_date,
-                        customer=cust,
-                        kam=kam,
-                        grade=grade,
-                        size=size,
-                        qty_mt=qty_mt,
-                        revenue_gst=value_gst,
+                        invoice_date=inv_date, customer=cust, kam=kam,
+                        grade=grade, size=size, qty_mt=qty_mt, revenue_gst=value_gst,
                     ),
                 )
                 if not created:
                     changed = False
-                    if inv.invoice_date != inv_date:
-                        inv.invoice_date = inv_date
-                        changed = True
-                    if inv.customer_id != cust.id:
-                        inv.customer = cust
-                        changed = True
-                    if inv.kam_id != kam.id:
-                        inv.kam = kam
-                        changed = True
-                    if inv.grade != grade:
-                        inv.grade = grade
-                        changed = True
-                    if inv.size != size:
-                        inv.size = size
-                        changed = True
-                    if inv.qty_mt != qty_mt:
-                        inv.qty_mt = qty_mt
-                        changed = True
-                    if inv.revenue_gst != value_gst:
-                        inv.revenue_gst = value_gst
-                        changed = True
+                    for attr, val in [
+                        ("invoice_date", inv_date), ("customer_id", cust.id),
+                        ("kam_id", kam.id), ("grade", grade), ("size", size),
+                        ("qty_mt", qty_mt), ("revenue_gst", value_gst),
+                    ]:
+                        field_name = attr.replace("_id", "")
+                        if attr.endswith("_id"):
+                            if getattr(inv, attr) != val:
+                                setattr(inv, field_name, cust if attr == "customer_id" else kam)
+                                changed = True
+                        else:
+                            if getattr(inv, attr) != val:
+                                setattr(inv, attr, val)
+                                changed = True
                     if changed:
                         inv.save()
             return None
@@ -1223,54 +1167,19 @@ def import_leads(stats: ImportStats):
 
     idx = _index(headers)
     c_ts = _col(
-        idx,
-        "Timestamp",
-        "Date of Enquiry",
-        "doe",
-        "enquiry date",
-        "lead date",
-        "created at",
-        "date",
-        "enquiry_date",
-        "Entry Date",
-        "entry date",
+        idx, "Timestamp", "Date of Enquiry", "doe", "enquiry date",
+        "lead date", "created at", "date", "enquiry_date", "Entry Date", "entry date",
     )
     c_customer = _col(
-        idx,
-        "Customer Name",
-        "customer_name",
-        "party name",
-        "customer",
-        "company name",
-        "Company Name",
-        "Firm Name",
-        "firm name",
+        idx, "Customer Name", "customer_name", "party name", "customer",
+        "company name", "Company Name", "Firm Name", "firm name",
     )
     c_qty = _col(
-        idx,
-        "Qty (MT)",
-        "QTY",
-        "Qty",
-        "qty_mt",
-        "qty",
-        "quantity",
-        "requirement mt",
-        "requirement",
-        "Requirement (MT)",
-        "Req (MT)",
+        idx, "Qty (MT)", "QTY", "Qty", "qty_mt", "qty", "quantity",
+        "requirement mt", "requirement", "Requirement (MT)", "Req (MT)",
     )
-    c_status = _col(
-        idx,
-        "Status",
-        "status",
-        "lead status",
-        "enquiry status",
-        "Lead Status",
-        "Enquiry Status",
-    )
-    c_remarks = _col(
-        idx, "Remarks", "remarks", "remark", "notes", "comment", "Notes", "Comments"
-    )
+    c_status = _col(idx, "Status", "status", "lead status", "enquiry status", "Lead Status", "Enquiry Status")
+    c_remarks = _col(idx, "Remarks", "remarks", "remark", "notes", "comment", "Notes", "Comments")
     c_grade = _col(idx, "Grade", "grade")
     c_size = _col(idx, "Size", "Size(MM)", "size", "size mm")
 
@@ -1281,12 +1190,7 @@ def import_leads(stats: ImportStats):
             f"Actual headers (first 20): {actual_headers}. "
             f"Set KAM_TAB_LEADS env var to the correct tab name."
         )
-        logger.warning(
-            "Leads import skipped: date column not found in tab '%s'. "
-            "Actual canonicalized headers: %s",
-            tab,
-            list(idx.keys()),
-        )
+        logger.warning("Leads import skipped: date column not found in tab '%s'. Headers: %s", tab, list(idx.keys()))
         return
 
     usermap = _usermap()
@@ -1306,36 +1210,16 @@ def import_leads(stats: ImportStats):
             stats.skipped += 1
             continue
 
-        qty_mt = (
-            _to_decimal(r[c_qty]) if c_qty is not None and c_qty < len(r) else Decimal(0)
-        )
-        status = _normalize_status(
-            r[c_status] if c_status is not None and c_status < len(r) else ""
-        )
-        cust_name = (
-            r[c_customer] if c_customer is not None and c_customer < len(r) else ""
-        ).strip()
-        grade = (
-            r[c_grade] if c_grade is not None and c_grade < len(r) else ""
-        ).strip() or None
-        size = (
-            r[c_size] if c_size is not None and c_size < len(r) else ""
-        ).strip() or None
-        remarks = (
-            r[c_remarks] if c_remarks is not None and c_remarks < len(r) else ""
-        ).strip() or None
+        qty_mt = _to_decimal(r[c_qty] if c_qty is not None and c_qty < len(r) else "")
+        status = _normalize_status(r[c_status] if c_status is not None and c_status < len(r) else "")
+        cust_name = (r[c_customer] if c_customer is not None and c_customer < len(r) else "").strip()
+        grade = (r[c_grade] if c_grade is not None and c_grade < len(r) else "").strip() or None
+        size = (r[c_size] if c_size is not None and c_size < len(r) else "").strip() or None
+        remarks = (r[c_remarks] if c_remarks is not None and c_remarks < len(r) else "").strip() or None
 
         row_uuid = _hash_row(
-            "lead",
-            tab,
-            kam.username,
-            str(doe),
-            cust_name,
-            str(qty_mt),
-            status,
-            str(grade or ""),
-            str(size or ""),
-            str(remarks or ""),
+            "lead", tab, kam.username, str(doe), cust_name,
+            str(qty_mt), status, str(grade or ""), str(size or ""), str(remarks or ""),
         )
 
         if dry:
@@ -1345,23 +1229,14 @@ def import_leads(stats: ImportStats):
         def _write():
             with transaction.atomic():
                 cust = (
-                    _get_or_create_customer(
-                        name=cust_name, kam=kam, force_kam_assignment=False
-                    )
-                    if cust_name
-                    else None
+                    _get_or_create_customer(name=cust_name, kam=kam, force_kam_assignment=False)
+                    if cust_name else None
                 )
                 LeadFact.objects.update_or_create(
                     row_uuid=row_uuid,
                     defaults=dict(
-                        doe=doe,
-                        kam=kam,
-                        customer=cust,
-                        qty_mt=qty_mt,
-                        status=status,
-                        grade=grade,
-                        size=size,
-                        remarks=remarks,
+                        doe=doe, kam=kam, customer=cust, qty_mt=qty_mt,
+                        status=status, grade=grade, size=size, remarks=remarks,
                     ),
                 )
             return None
@@ -1398,21 +1273,12 @@ def import_overdues(stats: ImportStats):
         cust_name = (r[c_customer] if c_customer < len(r) else "").strip()
         if not cust_name:
             continue
-        cur = totals.setdefault(
-            cust_name,
-            {
-                "overdue": Decimal(0),
-                "exposure": Decimal(0),
-                "a0": Decimal(0),
-                "a31": Decimal(0),
-                "a61": Decimal(0),
-                "a90": Decimal(0),
-            },
-        )
+        cur = totals.setdefault(cust_name, {
+            "overdue": Decimal(0), "exposure": Decimal(0),
+            "a0": Decimal(0), "a31": Decimal(0), "a61": Decimal(0), "a90": Decimal(0),
+        })
         cur["overdue"] += _to_decimal(r[c_overdue] if c_overdue < len(r) else "0")
-        cur["exposure"] += _to_decimal(
-            r[c_exposure] if c_exposure is not None and c_exposure < len(r) else "0"
-        )
+        cur["exposure"] += _to_decimal(r[c_exposure] if c_exposure is not None and c_exposure < len(r) else "0")
         cur["a0"] += _to_decimal(r[a0] if a0 is not None and a0 < len(r) else "0")
         cur["a31"] += _to_decimal(r[a31] if a31 is not None and a31 < len(r) else "0")
         cur["a61"] += _to_decimal(r[a61] if a61 is not None and a61 < len(r) else "0")
@@ -1427,15 +1293,11 @@ def import_overdues(stats: ImportStats):
             with transaction.atomic():
                 cust = _get_or_create_customer(name=cust_name)
                 OverdueSnapshot.objects.update_or_create(
-                    snapshot_date=snap_date,
-                    customer=cust,
+                    snapshot_date=snap_date, customer=cust,
                     defaults=dict(
-                        exposure=vals["exposure"],
-                        overdue=vals["overdue"],
-                        ageing_0_30=vals["a0"],
-                        ageing_31_60=vals["a31"],
-                        ageing_61_90=vals["a61"],
-                        ageing_90_plus=vals["a90"],
+                        exposure=vals["exposure"], overdue=vals["overdue"],
+                        ageing_0_30=vals["a0"], ageing_31_60=vals["a31"],
+                        ageing_61_90=vals["a61"], ageing_90_plus=vals["a90"],
                     ),
                 )
             return None
@@ -1447,7 +1309,6 @@ def import_overdues(stats: ImportStats):
 def run_sync_now() -> ImportStats:
     stats = ImportStats()
     sections = resolve_sections()
-
     logger.info("KAM sync sections=%s tabs=%s", sections, resolve_tabs_for_logging())
 
     if "customers" in sections:
@@ -1505,7 +1366,7 @@ def _process_page(tab: str, cursor: Optional[str], handler) -> Tuple[int, Option
     total_rows = len(values)
     start, new_cur = _cursor(cursor, total_rows)
     headers = _headers(values)
-    page_values = [headers] + values[start - 1 : min(start - 1 + BATCH_SIZE, total_rows)]
+    page_values = [headers] + values[start - 1: min(start - 1 + BATCH_SIZE, total_rows)]
     processed = handler(page_values)
     return processed, new_cur
 
@@ -1516,13 +1377,9 @@ def _customers_handler(values: List[List[str]]) -> int:
     cn = _pick(idm, "Customer Name", "Customer", "Name", "customer_name", "party name")
     addr = _pick(idm, "Address", "address", "customer address")
     email = _pick(idm, "Email", "email", "mail id")
-    mob = _pick(
-        idm, "Mobile No", "Mobile", "mobile", "phone", "contact no", "mobile number"
-    )
+    mob = _pick(idm, "Mobile No", "Mobile", "mobile", "phone", "contact no", "mobile number")
     cl = _pick(idm, "Credit Limit", "credit_limit")
-    acp = _pick(
-        idm, "Agreed Credit Period", "Agreed Credit Period ", "agreed_credit_period_days"
-    )
+    acp = _pick(idm, "Agreed Credit Period", "Agreed Credit Period ", "agreed_credit_period_days")
     usermap = _usermap()
     user_lookup = _build_user_lookup()
     processed = 0
@@ -1536,8 +1393,7 @@ def _customers_handler(values: List[List[str]]) -> int:
         def _write():
             with transaction.atomic():
                 _get_or_create_customer(
-                    name=name,
-                    kam=kam,
+                    name=name, kam=kam,
                     address=_val(r, addr) or None,
                     email=_val(r, email) or None,
                     mobile=_val(r, mob) or None,
@@ -1556,33 +1412,16 @@ def _invoices_handler(values: List[List[str]]) -> int:
     headers = _headers(values)
     idm = _idx(headers)
     cust = _pick(
-        idm,
-        "Customer Name",
-        "Consignee Name",
-        "Buyer's Name",
-        "Buyer's Name",
-        "Buyer\\'s Name",
-        "customer_name",
-        "party name",
-        "customer",
+        idm, "Customer Name", "Consignee Name", "Buyer's Name", "Buyer's Name",
+        "Buyer\\'s Name", "customer_name", "party name", "customer",
     )
     invd = _pick(idm, "Invoice Date", "Date of Invoice", "invoice_date", "Date", "bill date")
-    qty = _pick(
-        idm, "QTY", "Qty(MT)", "Quantity", "qty_mt", "qty mt", "quantity mt", "invoice qty"
-    )
+    qty = _pick(idm, "QTY", "Qty(MT)", "Quantity", "qty_mt", "qty mt", "quantity mt", "invoice qty")
     val = _pick(
-        idm,
-        "Invoice Value With GST",
-        "Invoice Value with GST",
-        "Invoice Value",
-        "revenue_gst",
-        "invoice value with gst rs",
-        "invoice amount",
-        "invoice value rs",
+        idm, "Invoice Value With GST", "Invoice Value with GST", "Invoice Value",
+        "revenue_gst", "invoice value with gst rs", "invoice amount", "invoice value rs",
     )
-    invno = _pick(
-        idm, "Invoice Number", "Invoice No", "invoice_number", "bill no", "bill number"
-    )
+    invno = _pick(idm, "Invoice Number", "Invoice No", "invoice_number", "bill no", "bill number")
     grade_i = _pick(idm, "Grade", "grade")
     size_i = _pick(idm, "Size", "size", "Size(MM)", "size mm")
     usermap = _usermap()
@@ -1604,32 +1443,18 @@ def _invoices_handler(values: List[List[str]]) -> int:
         grade = _val(r, grade_i) or None
         size = _val(r, size_i) or None
         row_uuid = inv_no or _hash_row(
-            "sales",
-            "step",
-            customer_name,
-            kam.username,
-            str(inv_date),
-            str(qty_mt),
-            str(revenue_gst),
-            str(grade or ""),
-            str(size or ""),
+            "sales", "step", customer_name, kam.username, str(inv_date),
+            str(qty_mt), str(revenue_gst), str(grade or ""), str(size or ""),
         )
 
         def _write():
             with transaction.atomic():
-                customer = _get_or_create_customer(
-                    name=customer_name, kam=kam, force_kam_assignment=False
-                )
+                customer = _get_or_create_customer(name=customer_name, kam=kam, force_kam_assignment=False)
                 InvoiceFact.objects.update_or_create(
                     row_uuid=row_uuid,
                     defaults={
-                        "invoice_date": inv_date,
-                        "customer": customer,
-                        "kam": kam,
-                        "grade": grade,
-                        "size": size,
-                        "qty_mt": qty_mt,
-                        "revenue_gst": revenue_gst,
+                        "invoice_date": inv_date, "customer": customer, "kam": kam,
+                        "grade": grade, "size": size, "qty_mt": qty_mt, "revenue_gst": revenue_gst,
                     },
                 )
             return None
@@ -1643,56 +1468,21 @@ def _leads_handler(values: List[List[str]]) -> int:
     headers = _headers(values)
     idm = _idx(headers)
     ts = _pick(
-        idm,
-        "Timestamp",
-        "Date of Enquiry",
-        "doe",
-        "enquiry date",
-        "lead date",
-        "created at",
-        "date",
-        "enquiry_date",
-        "Entry Date",
-        "entry date",
+        idm, "Timestamp", "Date of Enquiry", "doe", "enquiry date",
+        "lead date", "created at", "date", "enquiry_date", "Entry Date", "entry date",
     )
     cust = _pick(
-        idm,
-        "Customer Name",
-        "customer_name",
-        "party name",
-        "customer",
-        "company name",
-        "Company Name",
-        "Firm Name",
-        "firm name",
+        idm, "Customer Name", "customer_name", "party name", "customer",
+        "company name", "Company Name", "Firm Name", "firm name",
     )
     qty = _pick(
-        idm,
-        "Qty (MT)",
-        "QTY",
-        "Qty",
-        "qty_mt",
-        "qty",
-        "quantity",
-        "requirement mt",
-        "requirement",
-        "Requirement (MT)",
-        "Req (MT)",
+        idm, "Qty (MT)", "QTY", "Qty", "qty_mt", "qty", "quantity",
+        "requirement mt", "requirement", "Requirement (MT)", "Req (MT)",
     )
-    status_i = _pick(
-        idm,
-        "Status",
-        "status",
-        "lead status",
-        "enquiry status",
-        "Lead Status",
-        "Enquiry Status",
-    )
+    status_i = _pick(idm, "Status", "status", "lead status", "enquiry status", "Lead Status", "Enquiry Status")
     grade_i = _pick(idm, "Grade", "grade")
     size_i = _pick(idm, "Size", "Size(MM)", "size", "size mm")
-    remarks_i = _pick(
-        idm, "Remarks", "remarks", "remark", "notes", "comment", "Notes", "Comments"
-    )
+    remarks_i = _pick(idm, "Remarks", "remarks", "remark", "notes", "comment", "Notes", "Comments")
     usermap = _usermap()
     user_lookup = _build_user_lookup()
     processed = 0
@@ -1710,38 +1500,21 @@ def _leads_handler(values: List[List[str]]) -> int:
         size = _val(r, size_i) or None
         remarks = _val(r, remarks_i) or None
         row_uuid = _hash_row(
-            "lead",
-            "step",
-            kam.username,
-            str(doe),
-            cust_name,
-            str(qty_mt),
-            status,
-            str(grade or ""),
-            str(size or ""),
-            str(remarks or ""),
+            "lead", "step", kam.username, str(doe), cust_name,
+            str(qty_mt), status, str(grade or ""), str(size or ""), str(remarks or ""),
         )
 
         def _write():
             with transaction.atomic():
                 customer = (
-                    _get_or_create_customer(
-                        name=cust_name, kam=kam, force_kam_assignment=False
-                    )
-                    if cust_name
-                    else None
+                    _get_or_create_customer(name=cust_name, kam=kam, force_kam_assignment=False)
+                    if cust_name else None
                 )
                 LeadFact.objects.update_or_create(
                     row_uuid=row_uuid,
                     defaults={
-                        "doe": doe,
-                        "kam": kam,
-                        "customer": customer,
-                        "qty_mt": qty_mt,
-                        "status": status,
-                        "grade": grade,
-                        "size": size,
-                        "remarks": remarks,
+                        "doe": doe, "kam": kam, "customer": customer, "qty_mt": qty_mt,
+                        "status": status, "grade": grade, "size": size, "remarks": remarks,
                     },
                 )
             return None
@@ -1756,9 +1529,7 @@ def _overdues_handler(values: List[List[str]]) -> int:
     idm = _idx(headers)
     cust = _pick(idm, "Customer Name", "customer_name", "Customer", "party name")
     overdue_i = _pick(idm, "Overdues (Rs)", "Overdue", "overdue", "total overdue")
-    exposure_i = _pick(
-        idm, "Total Exposure (Rs)", "Exposure", "exposure", "total exposure"
-    )
+    exposure_i = _pick(idm, "Total Exposure (Rs)", "Exposure", "exposure", "total exposure")
     a0 = _pick(idm, "0-30", "ageing_0_30", "0 30")
     a31 = _pick(idm, "31-60", "ageing_31_60", "31 60")
     a61 = _pick(idm, "61-90", "ageing_61_90", "61 60")
@@ -1770,17 +1541,10 @@ def _overdues_handler(values: List[List[str]]) -> int:
         cust_name = _val(r, cust)
         if not cust_name:
             continue
-        cur = totals.setdefault(
-            cust_name,
-            {
-                "overdue": Decimal(0),
-                "exposure": Decimal(0),
-                "a0": Decimal(0),
-                "a31": Decimal(0),
-                "a61": Decimal(0),
-                "a90": Decimal(0),
-            },
-        )
+        cur = totals.setdefault(cust_name, {
+            "overdue": Decimal(0), "exposure": Decimal(0),
+            "a0": Decimal(0), "a31": Decimal(0), "a61": Decimal(0), "a90": Decimal(0),
+        })
         cur["overdue"] += _to_decimal(_val(r, overdue_i))
         cur["exposure"] += _to_decimal(_val(r, exposure_i))
         cur["a0"] += _to_decimal(_val(r, a0))
@@ -1790,20 +1554,15 @@ def _overdues_handler(values: List[List[str]]) -> int:
 
     processed = 0
     for cust_name, vals in totals.items():
-
         def _write():
             with transaction.atomic():
                 cust_obj = _get_or_create_customer(name=cust_name)
                 OverdueSnapshot.objects.update_or_create(
-                    snapshot_date=snap_date,
-                    customer=cust_obj,
+                    snapshot_date=snap_date, customer=cust_obj,
                     defaults=dict(
-                        exposure=vals["exposure"],
-                        overdue=vals["overdue"],
-                        ageing_0_30=vals["a0"],
-                        ageing_31_60=vals["a31"],
-                        ageing_61_90=vals["a61"],
-                        ageing_90_plus=vals["a90"],
+                        exposure=vals["exposure"], overdue=vals["overdue"],
+                        ageing_0_30=vals["a0"], ageing_31_60=vals["a31"],
+                        ageing_61_90=vals["a61"], ageing_90_plus=vals["a90"],
                     ),
                 )
             return None
@@ -1817,11 +1576,8 @@ def step_sync(intent: SyncIntent) -> Dict:
     sheet_id = _getenv("KAM_SALES_SHEET_ID")
     if not sheet_id:
         return {
-            "last_customer_cursor": None,
-            "last_invoice_cursor": None,
-            "last_lead_cursor": None,
-            "last_overdue_cursor": None,
-            "done": True,
+            "last_customer_cursor": None, "last_invoice_cursor": None,
+            "last_lead_cursor": None, "last_overdue_cursor": None, "done": True,
         }
 
     tabs = {
