@@ -1,706 +1,683 @@
 {# FILE: templates/kam/collections_plan.html #}
-{# PURPOSE: Collections Plan — view, add, edit, delete plans #}
+{# PURPOSE: Redesigned Collections Plan — financial-ledger aesthetic #}
 {# UPDATED: 2026-03-03 #}
 {% extends "base.html" %}
-{% load humanize %}
+{% load humanize crispy_forms_tags %}
 
-{% block title %}Collections Plan — BOS Lakshya{% endblock %}
-{% block breadcrumb %}Collections Plan{% endblock %}
+{% block title %}Collections Plan{% endblock %}
 
 {% block head_extra %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
 <style>
-  /* =============================================
-     COLLECTIONS PLAN — LOCAL STYLES
-  ============================================= */
-
-  .cp-filter-bar {
-    display: flex;
-    align-items: flex-end;
-    gap: 10px;
-    flex-wrap: wrap;
-    background: var(--navy, #1a2744);
-    border-radius: var(--radius);
-    padding: 16px 20px;
-    margin-bottom: 24px;
-  }
-
-  .cp-filter-group {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .cp-filter-label {
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: rgba(255, 255, 255, 0.55);
-  }
-
-  .cp-filter-bar .form-control {
-    min-width: 140px;
-    height: 36px;
-    font-size: 13px;
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.15);
-    color: #fff;
-  }
-
-  .cp-filter-bar .form-control::placeholder {
-    color: rgba(255, 255, 255, 0.35);
-  }
-
-  .cp-filter-bar .form-select {
-    min-width: 140px;
-    height: 36px;
-    font-size: 13px;
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.15);
-    color: #fff;
-  }
-
-  .cp-layout {
-    display: grid;
-    grid-template-columns: 400px 1fr;
-    gap: 20px;
-    align-items: start;
-  }
-
-  .cp-form-card {
-    background: var(--navy, #1a2744);
-    border-radius: var(--radius);
-    overflow: hidden;
-    position: sticky;
-    top: 80px;
-  }
-
-  .cp-form-header {
-    padding: 16px 20px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  }
-
-  .cp-form-title {
-    font-size: 16px;
-    font-weight: 700;
-    color: #fff;
-  }
-
-  .cp-form-subtitle {
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.5);
-    margin-top: 2px;
-  }
-
-  .cp-form-body {
-    padding: 20px;
-  }
-
-  .cp-field-label {
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: rgba(255, 255, 255, 0.55);
-    margin-bottom: 5px;
-  }
-
-  .cp-form-body .form-control {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.15);
-    color: #fff;
-    font-size: 13px;
-    height: 38px;
-  }
-
-  .cp-form-body .form-control::placeholder {
-    color: rgba(255, 255, 255, 0.3);
-  }
-
-  .cp-form-body .form-select {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.15);
-    color: #fff;
-    font-size: 13px;
-    height: 38px;
-  }
-
-  .cp-form-body .form-select option {
-    background: #1a2744;
-    color: #fff;
-  }
-
-  .cp-divider {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin: 14px 0;
-  }
-
-  .cp-divider::before,
-  .cp-divider::after {
-    content: "";
-    flex: 1;
-    height: 1px;
-    background: rgba(255, 255, 255, 0.12);
-  }
-
-  .cp-divider span {
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: rgba(255, 255, 255, 0.35);
-  }
-
-  .cp-kpi-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
-    margin-bottom: 18px;
-  }
-
-  .cp-kpi-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px 16px;
-  }
-
-  .cp-kpi-label {
-    font-size: 10.5px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--muted);
-    margin-bottom: 6px;
-  }
-
-  .cp-kpi-value {
-    font-size: 1.5rem;
-    font-weight: 800;
-    color: var(--text);
-    font-family: var(--font-display);
-    line-height: 1;
-  }
-
-  .cp-kpi-value.danger {
-    color: var(--danger);
-  }
-
-  .cp-table-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow: hidden;
-  }
-
-  .cp-table-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 13px 16px;
-    border-bottom: 1px solid var(--border-light);
-  }
-
-  .cp-table-title {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--text);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .cp-table-title i {
-    color: var(--muted);
-    font-size: 12px;
-  }
-
-  .cp-count-badge {
-    background: var(--primary);
-    color: #fff;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 7px;
-    border-radius: 999px;
-  }
-
-  table.cp-table th {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--muted);
-    white-space: nowrap;
-  }
-
-  table.cp-table td {
-    font-size: 13px;
-    vertical-align: middle;
-  }
-
-  table.cp-table .r {
-    text-align: right;
-  }
-
-  table.cp-table .c {
-    text-align: center;
-  }
-
-  .cp-ach-cell {
-    min-width: 120px;
-  }
-
-  .cp-ach-bar-wrap {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .cp-ach-bar {
-    flex: 1;
-    height: 6px;
-    background: var(--border-light);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-
-  .cp-ach-bar-fill {
-    height: 100%;
-    width: 0;
-    border-radius: 3px;
-    background: var(--success);
-    transition: width 0.3s ease;
-  }
-
-  .cp-ach-bar-fill.warn {
-    background: var(--warning);
-  }
-
-  .cp-ach-bar-fill.low {
-    background: var(--danger);
-  }
-
-  .cp-ach-pct {
-    font-size: 11.5px;
-    font-weight: 700;
-    color: var(--text-secondary);
-    min-width: 34px;
-    text-align: right;
-  }
-
-  .cp-window-badge {
-    display: inline-block;
-    background: var(--surface-alt);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    padding: 2px 7px;
-  }
-
-  .cp-actions {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .btn-cp-edit {
-    padding: 3px 10px;
-    font-size: 11.5px;
-    font-weight: 600;
-    border-radius: 4px;
-    border: 1px solid var(--primary-border, #b3c4f0);
-    background: var(--primary-soft, #edf2ff);
-    color: var(--primary);
-    cursor: pointer;
-    transition: all 0.13s ease;
-    white-space: nowrap;
-  }
-
-  .btn-cp-edit:hover {
-    background: var(--primary);
-    color: #fff;
-    border-color: var(--primary);
-  }
-
-  .btn-cp-delete {
-    padding: 3px 10px;
-    font-size: 11.5px;
-    font-weight: 600;
-    border-radius: 4px;
-    border: 1px solid #fecaca;
-    background: #fef2f2;
-    color: var(--danger);
-    cursor: pointer;
-    transition: all 0.13s ease;
-    white-space: nowrap;
-  }
-
-  .btn-cp-delete:hover {
-    background: var(--danger);
-    color: #fff;
-    border-color: var(--danger);
-  }
-
-  .cp-editing-banner {
-    display: none;
-    background: #fffbeb;
-    border: 1px solid #fcd34d;
-    border-radius: 6px;
-    padding: 8px 14px;
-    margin-bottom: 12px;
-    font-size: 12.5px;
-    color: #92400e;
-    font-weight: 600;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .cp-editing-banner.visible {
-    display: flex;
-  }
-
-  .cp-delete-modal-backdrop {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.45);
-    z-index: 1050;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .cp-delete-modal-backdrop.visible {
-    display: flex;
-  }
-
-  .cp-delete-modal {
-    background: var(--surface);
-    border-radius: var(--radius);
-    padding: 28px 28px 24px;
-    max-width: 380px;
-    width: 90%;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
-    text-align: center;
-  }
-
-  .cp-delete-modal-icon {
-    font-size: 2.5rem;
-    color: var(--danger);
-    margin-bottom: 10px;
-  }
-
-  .cp-delete-modal h4 {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--text);
-    margin-bottom: 8px;
-  }
-
-  .cp-delete-modal p {
-    font-size: 13px;
-    color: var(--muted);
-    margin-bottom: 20px;
-  }
-
-  .cp-delete-modal-actions {
-    display: flex;
-    gap: 10px;
-    justify-content: center;
-  }
-
-  .cp-form-grid-2 {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-
-  .cp-inline-danger {
-    color: var(--danger);
-    font-size: 11.5px;
-    margin-top: 3px;
-  }
-
-  .cp-kam-pill {
-    background: var(--primary-soft);
-    color: var(--primary);
-    font-size: 11.5px;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 4px;
-  }
-
-  .cp-subtle {
-    color: var(--subtle);
-  }
-
-  .cp-overdue-text {
-    color: var(--danger);
-    font-weight: 600;
-  }
-
-  .cp-empty-state {
-    padding: 36px 20px;
-    text-align: center;
-    color: var(--subtle);
-    font-size: 13px;
-  }
-
-  .cp-empty-state i {
-    font-size: 2rem;
-    margin-bottom: 10px;
-    display: block;
-  }
-
-  .cp-window-badge-small {
-    font-size: 10px;
-  }
-
-  @media (max-width: 900px) {
-    .cp-layout {
-      grid-template-columns: 1fr;
-    }
-
-    .cp-form-card {
-      position: static;
-    }
-
-    .cp-kpi-grid {
-      grid-template-columns: repeat(2, 1fr);
-    }
-  }
-
-  @media (max-width: 500px) {
-    .cp-kpi-grid {
-      grid-template-columns: 1fr 1fr;
-    }
-  }
+/* ─── Design Tokens ──────────────────────────────────────────── */
+:root {
+  --paper:        #faf9f7;
+  --paper-2:      #f3f1ee;
+  --paper-3:      #ede9e4;
+  --ink:          #18160f;
+  --ink-2:        #3a3830;
+  --ink-3:        #706c62;
+  --ink-4:        #a09b8f;
+  --rule:         #e3dfd8;
+  --rule-2:       #ede9e4;
+  --navy:         #1c2d4f;
+  --navy-l:       #26406e;
+  --navy-s:       #e8edf5;
+  --navy-s2:      #d4deee;
+  --teal:         #0c5c52;
+  --teal-s:       #d6f0ec;
+  --amber:        #7a4800;
+  --amber-s:      #fdf0d5;
+  --red:          #7c1c1c;
+  --red-s:        #fde8e8;
+  --font-body:    'Sora', system-ui, sans-serif;
+  --font-mono:    'IBM Plex Mono', monospace;
+  --r-xs:         4px;
+  --r-sm:         7px;
+  --r-md:         12px;
+  --r-lg:         16px;
+  --sh-card:      0 1px 3px rgba(24,22,15,.06), 0 4px 16px rgba(24,22,15,.05);
+  --sh-lift:      0 4px 24px rgba(24,22,15,.12), 0 1px 4px rgba(24,22,15,.06);
+}
+
+.cp * { box-sizing: border-box; font-family: var(--font-body); }
+
+/* ─── Page header ────────────────────────────────────────────── */
+.cp-hd {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-bottom: 18px;
+  margin-bottom: 20px;
+  border-bottom: 2px solid var(--ink);
+}
+.cp-hd-eyebrow {
+  font-size: .63rem;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin-bottom: 6px;
+}
+.cp-hd h1 {
+  font-size: 1.45rem;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -.04em;
+  margin: 0;
+  line-height: 1;
+}
+.cp-hd p {
+  margin: 5px 0 0;
+  font-size: .78rem;
+  color: var(--ink-3);
+}
+
+/* ─── Filter strip ───────────────────────────────────────────── */
+.cp-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  background: var(--navy);
+  border-radius: var(--r-md);
+  padding: 14px 18px;
+  margin-bottom: 22px;
+}
+.cp-filters label {
+  display: block;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,.45);
+  margin-bottom: 4px;
+}
+.cp-filters select,
+.cp-filters input[type="date"],
+.cp-filters input[type="text"] {
+  height: 34px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: #fff;
+  background: rgba(255,255,255,.1);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: var(--r-xs);
+  padding: 0 10px;
+  outline: none;
+  transition: border-color .15s, background .15s;
+}
+.cp-filters select:focus,
+.cp-filters input:focus {
+  border-color: rgba(255,255,255,.45);
+  background: rgba(255,255,255,.16);
+}
+.cp-filters select option { background: var(--navy); color: #fff; }
+.cp-filter-sep { width: 1px; height: 34px; background: rgba(255,255,255,.12); align-self: flex-end; }
+.cp-filter-btn {
+  height: 34px;
+  padding: 0 20px;
+  background: rgba(255,255,255,.92);
+  color: var(--navy);
+  border: none;
+  border-radius: var(--r-xs);
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--font-body);
+  letter-spacing: .04em;
+  cursor: pointer;
+  align-self: flex-end;
+  transition: background .15s;
+}
+.cp-filter-btn:hover { background: #fff; }
+
+/* ─── Alerts ─────────────────────────────────────────────────── */
+.cp-alerts { margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px; }
+.cp-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 500;
+  border-left: 3px solid;
+}
+.cp-alert.success { background: var(--teal-s);  color: var(--teal);  border-color: var(--teal); }
+.cp-alert.error   { background: var(--red-s);   color: var(--red);   border-color: var(--red); }
+.cp-alert.info    { background: var(--navy-s);  color: var(--navy);  border-color: var(--navy); }
+
+/* ─── Two-column layout ──────────────────────────────────────── */
+.cp-layout {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 960px) { .cp-layout { grid-template-columns: 1fr; } }
+
+/* ─── Form panel ─────────────────────────────────────────────── */
+.cp-panel {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-card);
+  overflow: hidden;
+  animation: cpUp .35s ease both;
+}
+.cp-panel-hd {
+  background: var(--navy);
+  padding: 16px 20px;
+}
+.cp-panel-hd h2 {
+  font-size: .875rem;
+  font-weight: 700;
+  color: #fff;
+  margin: 0;
+  letter-spacing: -.01em;
+}
+.cp-panel-hd p {
+  font-size: .72rem;
+  color: rgba(255,255,255,.48);
+  margin: 3px 0 0;
+}
+.cp-panel-body { padding: 20px; }
+
+/* ─── Form controls ──────────────────────────────────────────── */
+.cp-field { margin-bottom: 14px; }
+.cp-field:last-child { margin-bottom: 0; }
+.cp-lbl {
+  display: block;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 5px;
+}
+.cp-field select,
+.cp-field input {
+  width: 100%;
+  height: 38px;
+  font-size: 13px;
+  font-family: var(--font-body);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-xs);
+  padding: 0 12px;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.cp-field select:focus, .cp-field input:focus {
+  border-color: var(--navy-l);
+  box-shadow: 0 0 0 3px var(--navy-s2);
+}
+.cp-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.cp-section-rule {
+  height: 1px;
+  background: var(--rule);
+  margin: 18px -20px;
+}
+.cp-mode-lbl {
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cp-mode-lbl::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+}
+
+.cp-or {
+  text-align: center;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin: 14px 0;
+  position: relative;
+}
+.cp-or::before,
+.cp-or::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 38%;
+  height: 1px;
+  background: var(--rule);
+}
+.cp-or::before { left:0; }
+.cp-or::after  { right:0; }
+
+.cp-form-err {
+  background: var(--red-s);
+  border: 1px solid #f9baba;
+  border-radius: var(--r-sm);
+  padding: 11px 14px;
+  font-size: 12.5px;
+  color: var(--red);
+  margin-bottom: 16px;
+}
+.cp-form-err strong { font-weight: 700; }
+.cp-form-err ul { margin: 6px 0 0 14px; padding: 0; }
+
+.cp-save-row {
+  padding-top: 16px;
+  margin-top: 18px;
+  border-top: 1px solid var(--rule-2);
+  display: flex;
+  justify-content: flex-end;
+}
+.cp-save-btn {
+  height: 38px;
+  padding: 0 28px;
+  background: var(--navy);
+  color: #fff;
+  border: none;
+  border-radius: var(--r-xs);
+  font-size: 13px;
+  font-weight: 700;
+  font-family: var(--font-body);
+  letter-spacing: .03em;
+  cursor: pointer;
+  transition: background .15s, box-shadow .15s;
+}
+.cp-save-btn:hover {
+  background: var(--navy-l);
+  box-shadow: 0 4px 16px rgba(28,45,79,.3);
+}
+
+/* ─── Right column ───────────────────────────────────────────── */
+.cp-right { display: flex; flex-direction: column; gap: 16px; }
+
+/* ─── Summary bar ────────────────────────────────────────────── */
+.cp-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  background: var(--paper);
+  box-shadow: var(--sh-card);
+  overflow: hidden;
+  animation: cpUp .3s ease both;
+}
+@media (max-width: 640px) { .cp-summary { grid-template-columns: 1fr 1fr; } }
+.cp-sum-cell {
+  padding: 16px 18px;
+  border-right: 1px solid var(--rule);
+}
+.cp-sum-cell:last-child { border-right: none; }
+.cp-sum-lbl {
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin-bottom: 7px;
+}
+.cp-sum-val {
+  font-family: var(--font-mono);
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1;
+  letter-spacing: -.02em;
+}
+.cp-sum-val.navy { color: var(--navy); }
+.cp-sum-val.teal { color: var(--teal); }
+.cp-sum-val.red  { color: var(--red); }
+
+/* ─── Table card ─────────────────────────────────────────────── */
+.cp-tcard {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-card);
+  overflow: hidden;
+  animation: cpUp .4s .06s ease both;
+}
+.cp-tcard-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper-2);
+}
+.cp-tcard-title {
+  font-size: .875rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0;
+  letter-spacing: -.01em;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cp-count-pill {
+  background: var(--navy);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+.cp-tcard-sub {
+  font-size: 11.5px;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+}
+
+/* ─── Data table ─────────────────────────────────────────────── */
+.cp-scroll { overflow-x: auto; }
+.cp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.cp-table thead tr {
+  background: var(--paper-3);
+  border-bottom: 2px solid var(--rule);
+}
+.cp-table thead th {
+  padding: 9px 16px;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  white-space: nowrap;
+  text-align: left;
+}
+.cp-table thead th.r { text-align: right; }
+.cp-table thead th.c { text-align: center; }
+.cp-table tbody tr {
+  border-bottom: 1px solid var(--rule-2);
+  transition: background .1s;
+}
+.cp-table tbody tr:last-child { border-bottom: none; }
+.cp-table tbody tr:hover { background: var(--paper-2); }
+.cp-table tbody td {
+  padding: 13px 16px;
+  color: var(--ink-2);
+  vertical-align: middle;
+}
+.cp-table tbody td.r { text-align: right; }
+.cp-table tbody td.c { text-align: center; }
+
+.cp-cname {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 13.5px;
+}
+.cp-kam {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--navy-s);
+  border: 1px solid var(--navy-s2);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--navy-l);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.cp-amt {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.cp-amt.overdue { color: var(--red); }
+.cp-amt.planned { color: var(--ink-2); }
+.cp-amt.hit     { color: var(--teal); font-weight: 600; }
+.cp-amt.partial { color: var(--amber); }
+.cp-amt.zero    { color: var(--ink-4); }
+
+/* Achievement bar */
+.cp-ach-cell { min-width: 130px; }
+.cp-ach-wrap { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.cp-ach-track {
+  flex: 1;
+  height: 5px;
+  background: var(--rule);
+  border-radius: 999px;
+  overflow: hidden;
+  min-width: 50px;
+  max-width: 72px;
+}
+.cp-ach-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width .5s cubic-bezier(.4,0,.2,1);
+}
+.cp-ach-fill.hit     { background: var(--teal); }
+.cp-ach-fill.partial { background: #d97706; }
+.cp-ach-fill.low     { background: #dc2626; }
+.cp-ach-pct {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-3);
+  min-width: 36px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Window badge */
+.cp-win {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+  border: 1px solid;
+}
+.cp-win.range  { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
+.cp-win.period { background: var(--navy-s); color: var(--navy); border-color: var(--navy-s2); }
+
+/* Empty state */
+.cp-empty { text-align: center; padding: 52px 24px; }
+.cp-empty-ico { color: var(--rule); margin-bottom: 12px; }
+.cp-empty p { font-size: 13px; color: var(--ink-3); margin: 0; font-weight: 500; }
+.cp-empty small { font-size: 11.5px; color: var(--ink-4); display: block; margin-top: 4px; }
+
+/* Animations */
+@keyframes cpUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 </style>
 {% endblock %}
 
 {% block content %}
+<div class="cp">
 
-<div style="margin-bottom: 6px;">
-  <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 4px;">KAM MODULE</div>
-  <h1 class="page-title" style="margin-bottom: 2px;">Collections Plan</h1>
-  <p style="font-size: 13px; color: var(--muted); margin: 0;">Set planned collection targets per customer and track actual recovery.</p>
-</div>
-<hr style="border-color: var(--border); margin: 12px 0 20px;">
-
-<form class="cp-filter-bar" method="get" id="cpFilterForm">
-  <div class="cp-filter-group">
-    <span class="cp-filter-label">Period</span>
-    <select name="period" class="form-select" id="cpPeriodSelect" onchange="this.form.submit()">
-      <option value="week" {% if period == 'week' %}selected{% endif %}>This Week</option>
-      <option value="month" {% if period == 'month' %}selected{% endif %}>This Month</option>
-      <option value="quarter" {% if period == 'quarter' %}selected{% endif %}>This Quarter</option>
-      <option value="custom" {% if period == 'custom' %}selected{% endif %}>Custom</option>
-    </select>
-  </div>
-
-  <div class="cp-filter-group">
-    <span class="cp-filter-label">As of</span>
-    <input type="text" name="asof" value="{{ request.GET.asof }}" class="form-control" placeholder="YYYY-MM-DD">
-  </div>
-
-  <div class="cp-filter-group">
-    <span class="cp-filter-label">From</span>
-    <input type="date" name="from" value="{{ request.GET.from }}" class="form-control" id="cpFrom">
-  </div>
-
-  <div class="cp-filter-group">
-    <span class="cp-filter-label">To</span>
-    <input type="date" name="to" value="{{ request.GET.to }}" class="form-control" id="cpTo">
-  </div>
-
-  <div style="display: flex; gap: 8px; align-items: flex-end;">
-    <button class="btn btn-light btn-sm" type="submit" style="font-weight: 600;">Apply Filter</button>
-  </div>
-</form>
-
-<div class="cp-layout">
-
-  <div class="cp-form-card">
-    <div class="cp-form-header">
-      <div class="cp-form-title" id="cpFormTitle">Add / Update Plan</div>
-      <div class="cp-form-subtitle">Use a period window or an explicit date range.</div>
+  {# ── PAGE HEADER ── #}
+  <div class="cp-hd">
+    <div>
+      <div class="cp-hd-eyebrow">KAM Module</div>
+      <h1>Collections Plan</h1>
+      <p>Set planned collection targets per customer and track actual recovery.</p>
     </div>
-    <div class="cp-form-body">
+  </div>
 
-      <div class="cp-editing-banner" id="cpEditingBanner">
-        <i class="fas fa-pen-to-square"></i>
-        <span id="cpEditingLabel">Editing plan…</span>
-        <button type="button" onclick="cancelEdit()" style="margin-left: auto; background: none; border: none; cursor: pointer; color: #92400e; font-size: 13px;">
-          <i class="fas fa-xmark"></i> Cancel
-        </button>
+  {# ── FILTER STRIP ── #}
+  <form class="cp-filters" method="get">
+    <div>
+      <label>Period</label>
+      <select name="period">
+        <option value="week"    {% if period_type == 'WEEK'    %}selected{% endif %}>This Week</option>
+        <option value="month"   {% if period_type == 'MONTH'   %}selected{% endif %}>This Month</option>
+        <option value="quarter" {% if period_type == 'QUARTER' %}selected{% endif %}>Quarter</option>
+        <option value="year"    {% if period_type == 'YEAR'    %}selected{% endif %}>Year</option>
+        <option value="all"     {% if period_type == 'ALL'     %}selected{% endif %}>All Time</option>
+      </select>
+    </div>
+    <div>
+      <label>As of</label>
+      <input type="text" name="asof" value="{{ request.GET.asof }}" placeholder="YYYY-MM-DD" style="width:134px;" />
+    </div>
+    <div class="cp-filter-sep"></div>
+    <div>
+      <label>From</label>
+      <input type="date" name="from" value="{{ request.GET.from }}" />
+    </div>
+    <div>
+      <label>To</label>
+      <input type="date" name="to" value="{{ request.GET.to }}" />
+    </div>
+    <button type="submit" class="cp-filter-btn">Apply Filter</button>
+  </form>
+
+  {# ── ALERTS ── #}
+  {% if messages %}
+  <div class="cp-alerts">
+    {% for message in messages %}
+      {% if 'error' in message.tags %}
+        <div class="cp-alert error"><i class="fas fa-circle-xmark"></i> {{ message }}</div>
+      {% elif 'success' in message.tags %}
+        <div class="cp-alert success"><i class="fas fa-circle-check"></i> {{ message }}</div>
+      {% else %}
+        <div class="cp-alert info"><i class="fas fa-circle-info"></i> {{ message }}</div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {# ── MAIN GRID ── #}
+  <div class="cp-layout">
+
+    {# ── LEFT: ADD FORM ── #}
+    <div class="cp-panel">
+      <div class="cp-panel-hd">
+        <h2>Add / Update Plan</h2>
+        <p>Use a period window or an explicit date range.</p>
       </div>
+      <div class="cp-panel-body">
 
-      {% if form.non_field_errors %}
-        <div class="alert alert-danger alert-sm py-2 px-3 mb-3" style="font-size: 12.5px;">
-          {% for err in form.non_field_errors %}{{ err }}{% endfor %}
+        {% if form.errors %}
+        <div class="cp-form-err">
+          <strong>Please fix the errors below:</strong>
+          {% if form.non_field_errors %}<div style="margin-top:5px;">{{ form.non_field_errors }}</div>{% endif %}
+          <ul>
+            {% for field in form %}{% for err in field.errors %}
+              <li><strong>{{ field.label }}:</strong> {{ err }}</li>
+            {% endfor %}{% endfor %}
+          </ul>
         </div>
+        {% endif %}
+
+        <form method="post" novalidate>
+          {% csrf_token %}
+
+          <div class="cp-field">
+            <label class="cp-lbl" for="{{ form.customer.id_for_label }}">Customer</label>
+            {{ form.customer }}
+          </div>
+
+          <div class="cp-field">
+            <label class="cp-lbl" for="{{ form.planned_amount.id_for_label }}">Planned Amount (₹)</label>
+            {{ form.planned_amount }}
+          </div>
+
+          <div class="cp-section-rule"></div>
+
+          <div class="cp-mode-lbl">Period-Based</div>
+          <div class="cp-2col">
+            <div class="cp-field" style="margin:0;">
+              <label class="cp-lbl" for="{{ form.period_type.id_for_label }}">Period Type</label>
+              {{ form.period_type }}
+            </div>
+            <div class="cp-field" style="margin:0;">
+              <label class="cp-lbl" for="{{ form.period_id.id_for_label }}">Period ID</label>
+              {{ form.period_id }}
+            </div>
+          </div>
+
+          <div class="cp-or">or</div>
+
+          <div class="cp-mode-lbl">Custom Date Range</div>
+          <div class="cp-2col">
+            <div class="cp-field" style="margin:0;">
+              <label class="cp-lbl" for="{{ form.from_date.id_for_label }}">From</label>
+              {{ form.from_date }}
+            </div>
+            <div class="cp-field" style="margin:0;">
+              <label class="cp-lbl" for="{{ form.to_date.id_for_label }}">To</label>
+              {{ form.to_date }}
+            </div>
+          </div>
+
+          <div class="cp-save-row">
+            <button type="submit" class="cp-save-btn">Save Plan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    {# ── RIGHT: DATA ── #}
+    <div class="cp-right">
+
+      {# Summary strip — shown only when rows exist #}
+      {% if rows %}
+      <div class="cp-summary">
+        <div class="cp-sum-cell">
+          <div class="cp-sum-lbl">Plans</div>
+          <div class="cp-sum-val navy">{{ rows|length }}</div>
+        </div>
+        <div class="cp-sum-cell">
+          <div class="cp-sum-lbl">Total Planned</div>
+          <div class="cp-sum-val">₹ —</div>
+        </div>
+        <div class="cp-sum-cell">
+          <div class="cp-sum-lbl">Collected</div>
+          <div class="cp-sum-val teal">₹ —</div>
+        </div>
+        <div class="cp-sum-cell">
+          <div class="cp-sum-lbl">Total Overdue</div>
+          <div class="cp-sum-val red">₹ —</div>
+        </div>
+      </div>
       {% endif %}
 
-      <form method="post" id="cpPlanForm">
-        {% csrf_token %}
-        <input type="hidden" name="plan_id" id="cpEditPlanId" value="">
-
-        <div class="mb-3">
-          <div class="cp-field-label">Customer</div>
-          <select name="customer" class="form-select" id="cpCustomerSelect" required>
-            <option value="">— — — — — — — — —</option>
-            {% for c in customers %}
-              <option value="{{ c.id }}" {% if form.customer.value == c.id|stringformat:"s" %}selected{% endif %}>
-                {{ c.name }}
-              </option>
-            {% endfor %}
-          </select>
-          {% if form.customer.errors %}
-            <div class="cp-inline-danger">{{ form.customer.errors|join:", " }}</div>
-          {% endif %}
+      {# Table #}
+      <div class="cp-tcard">
+        <div class="cp-tcard-hd">
+          <h2 class="cp-tcard-title">
+            Planned vs Actual
+            {% if rows %}<span class="cp-count-pill">{{ rows|length }}</span>{% endif %}
+          </h2>
+          <span class="cp-tcard-sub">
+            {{ period_type|lower|capfirst }}{% if period_id %} · {{ period_id }}{% endif %}
+          </span>
         </div>
 
-        <div class="mb-3">
-          <div class="cp-field-label">Planned Amount (₹)</div>
-          <input
-            type="number"
-            name="planned_amount"
-            id="cpPlannedAmount"
-            value="{{ form.planned_amount.value|default:'0' }}"
-            class="form-control"
-            min="0"
-            step="1000"
-            required>
-          {% if form.planned_amount.errors %}
-            <div class="cp-inline-danger">{{ form.planned_amount.errors|join:", " }}</div>
-          {% endif %}
-        </div>
-
-        <div class="cp-divider"><span>Period-Based</span></div>
-
-        <div class="cp-form-grid-2 mb-3">
-          <div>
-            <div class="cp-field-label">Period Type</div>
-            <select name="period_type" class="form-select" id="cpPeriodType">
-              <option value="">—</option>
-              {% for val, label in form.period_type.field.choices %}
-                {% if val %}
-                  <option value="{{ val }}" {% if form.period_type.value == val %}selected{% endif %}>{{ label }}</option>
-                {% endif %}
-              {% endfor %}
-            </select>
-          </div>
-          <div>
-            <div class="cp-field-label">Period ID</div>
-            <input
-              type="text"
-              name="period_id"
-              id="cpPeriodId"
-              value="{{ form.period_id.value|default:'' }}"
-              class="form-control"
-              placeholder="e.g. 2026-W09">
-          </div>
-        </div>
-
-        <div class="cp-divider"><span>Custom Date Range</span></div>
-
-        <div class="cp-form-grid-2 mb-4">
-          <div>
-            <div class="cp-field-label">From</div>
-            <input
-              type="date"
-              name="from_date"
-              id="cpFromDate"
-              value="{{ form.from_date.value|default:'' }}"
-              class="form-control">
-          </div>
-          <div>
-            <div class="cp-field-label">To</div>
-            <input
-              type="date"
-              name="to_date"
-              id="cpToDate"
-              value="{{ form.to_date.value|default:'' }}"
-              class="form-control">
-          </div>
-        </div>
-
-        <button type="submit" class="btn btn-primary w-100" id="cpSubmitBtn">
-          <i class="fas fa-plus me-1"></i> Add Plan
-        </button>
-      </form>
-
-    </div>
-  </div>
-
-  <div>
-
-    <div class="cp-kpi-grid">
-      <div class="cp-kpi-card">
-        <div class="cp-kpi-label">Plans</div>
-        <div class="cp-kpi-value">{{ summary.plan_count|default:"0" }}</div>
-      </div>
-      <div class="cp-kpi-card">
-        <div class="cp-kpi-label">Total Planned</div>
-        <div class="cp-kpi-value">
-          {% if summary.total_planned %}
-            ₹ {{ summary.total_planned|floatformat:0|intcomma }}
-          {% else %}
-            <span class="cp-overdue-text">₹ —</span>
-          {% endif %}
-        </div>
-      </div>
-      <div class="cp-kpi-card">
-        <div class="cp-kpi-label">Collected</div>
-        <div class="cp-kpi-value">
-          {% if summary.total_actual %}
-            ₹ {{ summary.total_actual|floatformat:0|intcomma }}
-          {% else %}
-            <span class="cp-overdue-text">₹ —</span>
-          {% endif %}
-        </div>
-      </div>
-      <div class="cp-kpi-card">
-        <div class="cp-kpi-label">Total Overdue</div>
-        <div class="cp-kpi-value danger">
-          {% if summary.total_overdue %}
-            ₹ {{ summary.total_overdue|floatformat:0|intcomma }}
-          {% else %}
-            <span>₹ —</span>
-          {% endif %}
-        </div>
-      </div>
-    </div>
-
-    {% if messages %}
-      {% for msg in messages %}
-        <div class="alert alert-{{ msg.tags|default:'info' }} alert-sm py-2 px-3 mb-3" style="font-size: 12.5px;">
-          {{ msg }}
-        </div>
-      {% endfor %}
-    {% endif %}
-
-    <div class="cp-table-card">
-      <div class="cp-table-header">
-        <div class="cp-table-title">
-          <i class="fas fa-list-check"></i>
-          Planned vs Actual
-          {% if rows %}
-            <span class="cp-count-badge">{{ rows|length }}</span>
-          {% endif %}
-        </div>
-        {% if window_label %}
-          <span style="font-size: 12px; color: var(--muted);">{{ window_label }}</span>
-        {% endif %}
-      </div>
-
-      {% if rows %}
-        <div class="table-responsive">
-          <table class="table table-sm cp-table align-middle mb-0">
+        <div class="cp-scroll">
+          <table class="cp-table">
             <thead>
               <tr>
                 <th>Customer</th>
@@ -710,277 +687,92 @@
                 <th class="r">Actual (₹)</th>
                 <th class="r cp-ach-cell">Achievement</th>
                 <th class="c">Window</th>
-                <th class="c">Actions</th>
               </tr>
             </thead>
             <tbody>
               {% for r in rows %}
-                {% if r.planned %}
-                  {% widthratio r.actual r.planned 100 as ach_percent %}
-                {% else %}
-                  {% with ach_percent="0" %}{% endwith %}
-                {% endif %}
-                <tr>
-                  <td style="font-weight: 600;">{{ r.customer.name }}</td>
-                  <td>
-                    {% if r.kam %}
-                      <span class="cp-kam-pill">
-                        {{ r.kam.get_full_name|default:r.kam.username }}
-                      </span>
-                    {% else %}
-                      <span class="cp-subtle">—</span>
-                    {% endif %}
-                  </td>
-                  <td class="r">
-                    {% if r.overdue %}
-                      <span class="cp-overdue-text">₹ {{ r.overdue|floatformat:0|intcomma }}</span>
-                    {% else %}
-                      <span class="cp-subtle">—</span>
-                    {% endif %}
-                  </td>
-                  <td class="r" style="font-weight: 600;">₹ {{ r.planned|floatformat:0|intcomma }}</td>
-                  <td class="r">₹ {{ r.actual|floatformat:0|intcomma }}</td>
-                  <td class="r cp-ach-cell">
-                    {% if r.planned %}
-                      <div class="cp-ach-bar-wrap">
-                        <div class="cp-ach-bar">
-                          <div
-                            class="cp-ach-bar-fill js-cp-ach-fill{% if r.actual < r.planned %}{% if ach_percent|add:0 >= 70 %} warn{% else %} low{% endif %}{% endif %}"
-                            data-width="{% if ach_percent|add:0 > 100 %}100{% else %}{{ ach_percent }}{% endif %}"></div>
-                        </div>
-                        <span class="cp-ach-pct">{{ ach_percent }}%</span>
+              <tr>
+                <td><span class="cp-cname">{{ r.customer.name }}</span></td>
+                <td>
+                  {% if r.kam %}
+                    <span class="cp-kam">{{ r.kam.get_full_name|default:r.kam.username }}</span>
+                  {% else %}
+                    <span style="color:var(--ink-4);">—</span>
+                  {% endif %}
+                </td>
+                <td class="r">
+                  <span class="cp-amt overdue">
+                    {% if r.overdue %}₹ {{ r.overdue|floatformat:0|intcomma }}{% else %}—{% endif %}
+                  </span>
+                </td>
+                <td class="r">
+                  <span class="cp-amt planned">₹ {{ r.planned|floatformat:0|intcomma }}</span>
+                </td>
+                <td class="r">
+                  {% if r.actual > 0 %}
+                    <span class="cp-amt {% if r.actual >= r.planned %}hit{% else %}partial{% endif %}">
+                      ₹ {{ r.actual|floatformat:0|intcomma }}
+                    </span>
+                  {% else %}
+                    <span class="cp-amt zero">₹ 0</span>
+                  {% endif %}
+                </td>
+                <td class="r cp-ach-cell">
+                  {% if r.planned and r.planned > 0 %}
+                    {% widthratio r.actual r.planned 100 as pct %}
+                    <div class="cp-ach-wrap">
+                      <div class="cp-ach-track">
+                        <div class="cp-ach-fill {% if pct >= 100 %}hit{% elif pct >= 60 %}partial{% else %}low{% endif %}"
+                             data-width="{% if pct > 100 %}100{% else %}{{ pct }}{% endif %}"></div>
                       </div>
-                    {% else %}
-                      <span class="cp-subtle" style="font-size: 12px;">—</span>
-                    {% endif %}
-                  </td>
-                  <td class="c">
-                    {% if r.period_id %}
-                      <span class="cp-window-badge">{{ r.period_id }}</span>
-                    {% elif r.from_date and r.to_date %}
-                      <span class="cp-window-badge cp-window-badge-small">{{ r.from_date|date:"d M" }} – {{ r.to_date|date:"d M" }}</span>
-                    {% else %}
-                      <span class="cp-subtle" style="font-size: 12px;">—</span>
-                    {% endif %}
-                  </td>
-                  <td class="c">
-                    <div class="cp-actions">
-                      <button
-                        type="button"
-                        class="btn-cp-edit js-edit-plan"
-                        title="Edit this plan"
-                        data-plan-id="{{ r.plan_id }}"
-                        data-customer-id="{{ r.customer.id }}"
-                        data-customer-name="{{ r.customer.name|escapejs }}"
-                        data-planned-amount="{{ r.planned|default:0 }}"
-                        data-period-type="{{ r.period_type|default:''|escapejs }}"
-                        data-period-id="{{ r.period_id|default:''|escapejs }}"
-                        data-from-date="{{ r.from_date|date:'Y-m-d'|default:'' }}"
-                        data-to-date="{{ r.to_date|date:'Y-m-d'|default:'' }}">
-                        <i class="fas fa-pen"></i> Edit
-                      </button>
-                      <button
-                        type="button"
-                        class="btn-cp-delete js-delete-plan"
-                        title="Delete this plan"
-                        data-plan-id="{{ r.plan_id }}"
-                        data-customer-name="{{ r.customer.name|escapejs }}">
-                        <i class="fas fa-trash"></i>
-                      </button>
+                      <span class="cp-ach-pct">{{ pct }}%</span>
                     </div>
-                  </td>
-                </tr>
+                  {% else %}
+                    <span style="color:var(--ink-4);font-family:var(--font-mono);font-size:12px;">—</span>
+                  {% endif %}
+                </td>
+                <td class="c">
+                  {% if r.from_date and r.to_date %}
+                    <span class="cp-win range">{{ r.from_date|date:"d M" }} → {{ r.to_date|date:"d M" }}</span>
+                  {% elif r.period_type and r.period_id %}
+                    <span class="cp-win period">{{ r.period_id }}</span>
+                  {% else %}
+                    <span style="color:var(--ink-4);">—</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% empty %}
+              <tr>
+                <td colspan="7">
+                  <div class="cp-empty">
+                    <div class="cp-empty-ico">
+                      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+                        <rect x="3" y="4" width="18" height="18" rx="2"/>
+                        <path d="M8 4V2M16 4V2M3 10h18"/>
+                        <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/>
+                      </svg>
+                    </div>
+                    <p>No plans for this window</p>
+                    <small>Add a plan using the form on the left, or adjust the filter above.</small>
+                  </div>
+                </td>
+              </tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
-      {% else %}
-        <div class="cp-empty-state">
-          <i class="fas fa-list-check"></i>
-          No collection plans for this period.<br>
-          <span style="font-size: 12px;">Add one using the form on the left.</span>
-        </div>
-      {% endif %}
-    </div>
+      </div>
 
-  </div>
-</div>
+    </div>{# /right #}
+  </div>{# /layout #}
 
-<div class="cp-delete-modal-backdrop" id="cpDeleteBackdrop">
-  <div class="cp-delete-modal">
-    <div class="cp-delete-modal-icon">
-      <i class="fas fa-triangle-exclamation"></i>
-    </div>
-    <h4>Delete Collection Plan?</h4>
-    <p id="cpDeleteDesc">This action cannot be undone.</p>
-    <div class="cp-delete-modal-actions">
-      <button type="button" class="btn btn-outline-secondary btn-sm" onclick="closeDeleteModal()">
-        Cancel
-      </button>
-      <form method="post" id="cpDeleteForm" style="display: inline;">
-        {% csrf_token %}
-        <input type="hidden" name="_method" value="delete">
-        <button type="submit" class="btn btn-danger btn-sm">
-          <i class="fas fa-trash me-1"></i>Delete
-        </button>
-      </form>
-    </div>
-  </div>
-</div>
+</div>{# /cp #}
 
-{% endblock %}
-
-{% block extra_js %}
 <script>
-(function () {
-  var deleteUrlTemplate = "{% url 'kam:collection_plan_delete' 0 %}";
-
-  function getById(id) {
-    return document.getElementById(id);
-  }
-
-  function safeValue(value) {
-    return value || "";
-  }
-
-  function clampWidth(value) {
-    var num = parseFloat(value);
-    if (isNaN(num)) {
-      return 0;
-    }
-    if (num < 0) {
-      return 0;
-    }
-    if (num > 100) {
-      return 100;
-    }
-    return num;
-  }
-
-  window.editPlan = function (planId, customerId, customerName, plannedAmount, periodType, periodId, fromDate, toDate) {
-    getById("cpEditPlanId").value = planId;
-    getById("cpPlannedAmount").value = plannedAmount;
-    getById("cpPeriodType").value = safeValue(periodType);
-    getById("cpPeriodId").value = safeValue(periodId);
-    getById("cpFromDate").value = safeValue(fromDate);
-    getById("cpToDate").value = safeValue(toDate);
-
-    var sel = getById("cpCustomerSelect");
-    for (var i = 0; i < sel.options.length; i += 1) {
-      if (sel.options[i].value === String(customerId)) {
-        sel.selectedIndex = i;
-        break;
-      }
-    }
-
-    getById("cpFormTitle").textContent = "Edit Plan";
-    getById("cpSubmitBtn").innerHTML = '<i class="fas fa-save me-1"></i> Save Changes';
-    getById("cpEditingLabel").textContent = "Editing: " + customerName;
-    getById("cpEditingBanner").classList.add("visible");
-
-    var form = getById("cpPlanForm");
-    var card = form ? form.closest(".cp-form-card") : null;
-    if (card && typeof card.scrollIntoView === "function") {
-      card.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  };
-
-  window.cancelEdit = function () {
-    getById("cpEditPlanId").value = "";
-    getById("cpPlannedAmount").value = "0";
-    getById("cpPeriodType").value = "";
-    getById("cpPeriodId").value = "";
-    getById("cpFromDate").value = "";
-    getById("cpToDate").value = "";
-    getById("cpCustomerSelect").selectedIndex = 0;
-
-    getById("cpFormTitle").textContent = "Add / Update Plan";
-    getById("cpSubmitBtn").innerHTML = '<i class="fas fa-plus me-1"></i> Add Plan';
-    getById("cpEditingBanner").classList.remove("visible");
-  };
-
-  window.confirmDelete = function (planId, customerName) {
-    getById("cpDeleteDesc").textContent =
-      'Delete collection plan for "' + customerName + '"? This cannot be undone.';
-    getById("cpDeleteForm").action = deleteUrlTemplate.replace("/0/", "/" + planId + "/");
-    getById("cpDeleteBackdrop").classList.add("visible");
-  };
-
-  window.closeDeleteModal = function () {
-    getById("cpDeleteBackdrop").classList.remove("visible");
-  };
-
-  var backdrop = getById("cpDeleteBackdrop");
-  if (backdrop) {
-    backdrop.addEventListener("click", function (e) {
-      if (e.target === this) {
-        closeDeleteModal();
-      }
-    });
-  }
-
-  document.querySelectorAll(".js-edit-plan").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      editPlan(
-        this.dataset.planId,
-        this.dataset.customerId,
-        this.dataset.customerName,
-        this.dataset.plannedAmount,
-        this.dataset.periodType,
-        this.dataset.periodId,
-        this.dataset.fromDate,
-        this.dataset.toDate
-      );
-    });
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('[data-width]').forEach(function (el) {
+    el.style.width = (el.dataset.width || 0) + '%';
   });
-
-  document.querySelectorAll(".js-delete-plan").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      confirmDelete(this.dataset.planId, this.dataset.customerName);
-    });
-  });
-
-  document.querySelectorAll(".js-cp-ach-fill").forEach(function (el) {
-    el.style.width = clampWidth(el.dataset.width) + "%";
-  });
-
-  var periodSel = getById("cpPeriodSelect");
-  var periodIdInp = getById("cpPeriodId");
-  var periodTypeInp = getById("cpPeriodType");
-
-  if (periodSel && periodIdInp && periodTypeInp) {
-    function syncPeriodFromFilter() {
-      var val = periodSel.value;
-
-      if (val === "week") {
-        periodTypeInp.value = "week";
-        if (!periodIdInp.value) {
-          var today = new Date();
-          var jan4 = new Date(today.getFullYear(), 0, 4);
-          var diffDays = Math.floor((today - jan4) / 86400000);
-          var weekNum = Math.ceil((diffDays + jan4.getDay() + 1) / 7);
-          periodIdInp.value = today.getFullYear() + "-W" + String(weekNum).padStart(2, "0");
-        }
-      } else if (val === "month") {
-        periodTypeInp.value = "month";
-        if (!periodIdInp.value) {
-          var d = new Date();
-          periodIdInp.value = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
-        }
-      } else if (val === "quarter") {
-        periodTypeInp.value = "quarter";
-        if (!periodIdInp.value) {
-          var d2 = new Date();
-          var q = Math.ceil((d2.getMonth() + 1) / 3);
-          periodIdInp.value = d2.getFullYear() + "-Q" + q;
-        }
-      }
-    }
-
-    if (!getById("cpEditPlanId").value) {
-      syncPeriodFromFilter();
-    }
-  }
-})();
+});
 </script>
 {% endblock %}
