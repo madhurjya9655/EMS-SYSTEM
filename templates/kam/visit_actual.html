@@ -1,11 +1,10 @@
 {# FILE: templates/kam/visit_actual.html #}
-{# PURPOSE: Fix Visits & Calls filter — show CallLog + VisitPlan, retain filter values, role-aware, clean UI #}
-{# UPDATED: 2026-03-02 #}
-{# CHANGES: #}
-{#   - Added "Recent Calls" section (CallLog) alongside existing "Recent Plans" (VisitPlan) #}
-{#   - filter_from / filter_to now pre-fill from context so values are kept after Apply #}
-{#   - Empty-state messages are clear and informative #}
-{#   - UI aligned with collections_plan.html style (kam-card, kam-soft-note, filter bar) #}
+{# PURPOSE: Fix Visits & Calls — correct plan_id link format (query param not path), #}
+{#          show CallLog + VisitPlan, retain filter values, role-aware UI #}
+{# UPDATED: 2026-03-03 #}
+{# FIX ISSUE 2: All "Open" links use ?plan_id=N&from_date=...&to_date=... (GET params). #}
+{#              There is NO path-based /kam/visits/<int:pk>/ URL — using path params #}
+{#              caused 404. Query params are the only correct form. #}
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
 
@@ -74,9 +73,9 @@
   </div>
 {% endif %}
 
-{# ── Filter bar — values retained after Apply ─────────────────────────── #}
-{# FIX ISSUE 2: form method=GET, input names match view param names (from_date / to_date) #}
-{# FIX ISSUE 3: filter_from / filter_to from context ensure selected dates are preserved  #}
+{# ── Filter bar ─────────────────────────────────────────────────────────── #}
+{# FIX ISSUE 2: method=GET, param names from_date / to_date match view exactly #}
+{# FIX ISSUE 3: filter_from / filter_to from context retain selected dates     #}
 <form method="get" class="d-flex align-items-end gap-2 flex-wrap mb-4 kam-filter-bar">
 
   <div>
@@ -93,7 +92,7 @@
 
   <div>
     <label class="form-label mb-1 small fw-semibold">From</label>
-    {# FIX: value pre-filled from context (filter_from), so date is retained after Apply #}
+    {# FIX ISSUE 2: name=from_date, value pre-filled from context so date retained after Apply #}
     <input type="date"
            class="form-control form-control-sm"
            name="from_date"
@@ -102,7 +101,7 @@
 
   <div>
     <label class="form-label mb-1 small fw-semibold">To</label>
-    {# FIX: value pre-filled from context (filter_to), so date is retained after Apply #}
+    {# FIX ISSUE 2: name=to_date, value pre-filled from context so date retained after Apply #}
     <input type="date"
            class="form-control form-control-sm"
            name="to_date"
@@ -115,10 +114,10 @@
   </div>
 </form>
 
-{# ── Main layout — form on left, tables on right ──────────────────────── #}
+{# ── Main layout ──────────────────────────────────────────────────────────── #}
 <div class="row g-3">
 
-  {# ── LEFT: Post Visit Update form ─────────────────────────────────── #}
+  {# ── LEFT: Post Visit Update form ─────────────────────────────────────── #}
   <div class="col-lg-5">
     <div class="kam-card">
       <div class="card-body">
@@ -137,6 +136,7 @@
 
           <form method="post" novalidate>
             {% csrf_token %}
+            {# FIX ISSUE 2: plan_id sent as hidden field in POST body, not in URL path #}
             <input type="hidden" name="plan_id" value="{{ selected_plan.id }}">
 
             <div class="row g-2 mb-3">
@@ -162,6 +162,7 @@
 
             <div class="d-flex gap-2">
               <button class="btn btn-sm btn-primary" type="submit">Save</button>
+              {# FIX ISSUE 2: Clear link uses query params, not path params #}
               <a class="btn btn-sm btn-outline-secondary"
                  href="{% url 'kam:visits' %}?from_date={{ filter_from }}&to_date={{ filter_to }}">Clear</a>
             </div>
@@ -180,10 +181,10 @@
     </div>
   </div>
 
-  {# ── RIGHT: Recent Plans + Recent Calls ──────────────────────────── #}
+  {# ── RIGHT: Recent Plans + Recent Calls ──────────────────────────────── #}
   <div class="col-lg-7">
 
-    {# ── Recent Visits / Plans ─────────────────────────────────────── #}
+    {# ── Recent Visits / Plans ──────────────────────────────────────────── #}
     <div class="kam-card mb-3">
       <div class="card-body">
         <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
@@ -222,6 +223,8 @@
                     {% endif %}
                   </td>
                   <td class="text-end">
+                    {# FIX ISSUE 2: ALWAYS use query-param style ?plan_id=N #}
+                    {# NEVER use path param /kam/visits/<pk>/ — that URL does NOT exist #}
                     <a class="btn btn-xs btn-outline-primary"
                        style="font-size:.75rem;padding:.15rem .45rem;"
                        href="{% url 'kam:visits' %}?plan_id={{ p.id }}&from_date={{ filter_from }}&to_date={{ filter_to }}">
@@ -243,8 +246,7 @@
       </div>
     </div>
 
-    {# ── Recent Calls ──────────────────────────────────────────────── #}
-    {# FIX ISSUE 2: CallLog now queried in view and displayed here      #}
+    {# ── Recent Calls ───────────────────────────────────────────────────── #}
     <div class="kam-card">
       <div class="card-body">
         <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">

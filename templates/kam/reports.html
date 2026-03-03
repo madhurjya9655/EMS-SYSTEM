@@ -1,173 +1,417 @@
 {# FILE: templates/kam/reports.html #}
-{# PURPOSE: Fix KAM dropdown selection persistence and “ALL” selection consistency (template-only). #}
-{# UPDATED: 2026-02-27 #}
+{# PURPOSE: KAM Reports — Sales / Calls / Visits breakdown tables #}
+{# UPDATED: 2026-03-03 — Fix {{ row.customer }} → {{ row.customer_name }}, {{ row.kam }} → {{ row.kam_username }} #}
 {% extends "base.html" %}
 {% load humanize %}
-{% block title %}KAM Reports{% endblock %}
+
+{% block title %}KAM Reports — BOS Lakshya{% endblock %}
+{% block breadcrumb %}Reports{% endblock %}
+
+{% block head_extra %}
+<style>
+  /* =============================================
+     REPORTS — LOCAL STYLES
+  ============================================= */
+  .reports-filter-bar {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    margin-bottom: 20px;
+  }
+  .reports-filter-group { display: flex; flex-direction: column; gap: 4px; }
+  .reports-filter-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--subtle);
+  }
+  .reports-filter-bar .form-control {
+    min-width: 140px;
+    height: 36px;
+    font-size: 13px;
+  }
+  .reports-filter-bar .form-select {
+    min-width: 140px;
+    height: 36px;
+    font-size: 13px;
+  }
+
+  .metric-tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+  }
+  .metric-tab {
+    padding: 6px 16px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: all 0.14s ease;
+  }
+  .metric-tab:hover { background: var(--surface-alt); color: var(--text); }
+  .metric-tab.active {
+    background: var(--primary);
+    color: #fff;
+    border-color: var(--primary);
+  }
+
+  .report-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .report-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 13px 16px;
+    border-bottom: 1px solid var(--border-light);
+  }
+  .report-card-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .report-card-title i { color: var(--muted); font-size: 12px; }
+
+  .badge-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .report-table th {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .report-table td { font-size: 13px; vertical-align: middle; }
+  .report-table .r { text-align: right; }
+  .report-table .c { text-align: center; }
+
+  .success-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+  .success-badge.yes { background: #ecfdf5; color: var(--success); }
+  .success-badge.no  { background: #fef2f2; color: var(--danger); }
+
+  .range-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--primary-soft);
+    border: 1px solid var(--primary-border);
+    color: var(--primary);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 999px;
+  }
+
+  .empty-state {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--subtle);
+    font-size: 13px;
+  }
+  .empty-state i { font-size: 2rem; margin-bottom: 10px; display: block; }
+
+  @media (max-width: 768px) {
+    .reports-filter-bar {
+      gap: 8px;
+    }
+    .reports-filter-group {
+      width: 100%;
+    }
+    .reports-filter-bar .form-control {
+      width: 100%;
+      min-width: 0;
+    }
+    .reports-filter-bar .form-select {
+      width: 100%;
+      min-width: 0;
+    }
+  }
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
-  <h1 class="page-title m-0">KAM Reports</h1>
 
-  <form class="d-flex align-items-end gap-2 flex-wrap" method="get">
-    <input type="hidden" name="metric" value="{{ metric }}" />
-
-    <div>
-      <label class="form-label mb-1 small">From Date</label>
-      <input type="date" name="from" value="{{ request.GET.from }}" class="form-control form-control-sm" />
-    </div>
-
-    <div>
-      <label class="form-label mb-1 small">To Date</label>
-      <input type="date" name="to" value="{{ request.GET.to }}" class="form-control form-control-sm" />
-    </div>
-
-    {% if can_choose_kam %}
-      <div>
-        <label class="form-label mb-1 small">KAM</label>
-        <select name="user" class="form-select form-select-sm">
-          <option value="" {% if not request.GET.user %}selected{% endif %}>ALL</option>
-          {% for uname in kam_options %}
-            <option value="{{ uname }}" {% if request.GET.user == uname %}selected{% endif %}>{{ uname }}</option>
-          {% endfor %}
-        </select>
-      </div>
-    {% else %}
-      <div>
-        <label class="form-label mb-1 small">KAM</label>
-        <input type="text" class="form-control form-control-sm" value="{{ scope_label }}" readonly />
+{# ── PAGE HEADER ─────────────────────────────────────────────────────── #}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:6px;">
+  <div>
+    <h1 class="page-title">KAM Reports</h1>
+    {% if range_label %}
+      <div class="mt-2">
+        <span class="range-pill">
+          <i class="fas fa-calendar-range"></i>{{ range_label }}
+        </span>
       </div>
     {% endif %}
-
-    <div class="d-flex align-items-center gap-2">
-      <button class="btn btn-sm btn-primary" type="submit">Apply</button>
-      <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:reports' %}?metric={{ metric }}">Reset</a>
-      <a class="btn btn-sm btn-outline-secondary"
-         href="{% url 'kam:dashboard' %}?from={{ request.GET.from }}&to={{ request.GET.to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
-        Back
-      </a>
-    </div>
-  </form>
-</div>
-
-<div class="mb-3">
-  <div class="btn-group" role="group">
-    <a class="btn btn-sm {% if metric == 'sales' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-       href="{% url 'kam:reports' %}?metric=sales&from={{ request.GET.from }}&to={{ request.GET.to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
-      Sales
-    </a>
-
-    <a class="btn btn-sm {% if metric == 'calls' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-       href="{% url 'kam:reports' %}?metric=calls&from={{ request.GET.from }}&to={{ request.GET.to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
-      Calls
-    </a>
-
-    <a class="btn btn-sm {% if metric == 'visits' %}btn-primary{% else %}btn-outline-primary{% endif %}"
-       href="{% url 'kam:reports' %}?metric=visits&from={{ request.GET.from }}&to={{ request.GET.to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
-      Visits
-    </a>
   </div>
+  <a href="{% url 'kam:dashboard' %}" class="btn btn-sm btn-outline-secondary">
+    <i class="fas fa-arrow-left me-1"></i>Back to Dashboard
+  </a>
 </div>
 
-<div class="card p-3">
-  {% if metric == 'sales' %}
-    <h6 class="fw-bold mb-2">Sales Breakdown</h6>
-    <div class="table-responsive">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>Customer</th>
-            <th>KAM</th>
-            <th class="text-end">MT</th>
-            <th class="text-end">Revenue (₹)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in rows %}
-            <tr>
-              <td>{{ r.customer__name|default:r.customer.name|default:"—" }}</td>
-              <td>{{ r.kam__username|default:r.kam.username|default:"—" }}</td>
-              <td class="text-end">{{ r.mt|default:r.qty_mt|default:"0"|floatformat:3 }}</td>
-              <td class="text-end">
-                {% if r.revenue %}
-                  ₹ {{ r.revenue|floatformat:2|intcomma }}
-                {% else %}
-                  —
-                {% endif %}
-              </td>
-            </tr>
-          {% empty %}
-            <tr><td colspan="4" class="text-muted">No sales rows.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+{# ── FILTER BAR ───────────────────────────────────────────────────────── #}
+<form class="reports-filter-bar" method="get" id="reportsFilterForm">
+  <input type="hidden" name="metric" value="{{ metric }}">
 
-  {% elif metric == 'calls' %}
-    <h6 class="fw-bold mb-2">Calls Breakdown</h6>
-    <div class="table-responsive">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>Date/Time</th>
-            <th>Customer</th>
-            <th>KAM</th>
-            <th class="text-end">Duration</th>
-            <th>Outcome</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for c in rows %}
-            <tr>
-              <td>{{ c.call_datetime }}</td>
-              <td>{{ c.customer.name|default:c.customer__name|default:"—" }}</td>
-              <td>{{ c.kam.username|default:c.kam__username|default:"—" }}</td>
-              <td class="text-end">{{ c.duration_minutes|default:"—" }}</td>
-              <td>{{ c.outcome|default:"—" }}</td>
-            </tr>
-          {% empty %}
-            <tr><td colspan="5" class="text-muted">No call logs.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+  <div class="reports-filter-group">
+    <span class="reports-filter-label"><i class="fas fa-calendar-day me-1"></i>From</span>
+    <input type="date" name="from" value="{% firstof request.GET.from filter_from %}" class="form-control" id="filterFrom">
+  </div>
 
-  {% elif metric == 'visits' %}
-    <h6 class="fw-bold mb-2">Visits Breakdown</h6>
-    <div class="table-responsive">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Customer / Counterparty</th>
-            <th>KAM</th>
-            <th>Successful</th>
-            <th class="text-end">Actual Sales (MT)</th>
-            <th class="text-end">Actual Collection (₹)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for v in rows %}
-            <tr>
-              <td>{{ v.plan.visit_date|default:v.plan__visit_date|default:"—" }}</td>
-              <td>
-                {{ v.plan.customer.name
-                    |default:v.plan.counterparty_name
-                    |default:v.plan__customer__name
-                    |default:v.plan__counterparty_name
-                    |default:"—" }}
-              </td>
-              <td>{{ v.plan.kam.username|default:v.plan__kam__username|default:"—" }}</td>
-              <td>{% if v.successful %}Yes{% else %}No{% endif %}</td>
-              <td class="text-end">{{ v.actual_sales_mt|default:"0"|floatformat:3 }}</td>
-              <td class="text-end">₹ {{ v.actual_collection|default:"0"|floatformat:2|intcomma }}</td>
-            </tr>
-          {% empty %}
-            <tr><td colspan="6" class="text-muted">No visit actuals.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
+  <div class="reports-filter-group">
+    <span class="reports-filter-label"><i class="fas fa-calendar-day me-1"></i>To</span>
+    <input type="date" name="to" value="{% firstof request.GET.to filter_to %}" class="form-control" id="filterTo">
+  </div>
+
+  {% if can_choose_kam %}
+    <div class="reports-filter-group">
+      <span class="reports-filter-label"><i class="fas fa-user me-1"></i>KAM</span>
+      <select name="user" class="form-select">
+        <option value="" {% if not request.GET.user %}selected{% endif %}>ALL KAMs</option>
+        {% for uname in kam_options %}
+          <option value="{{ uname }}" {% if request.GET.user == uname %}selected{% endif %}>{{ uname }}</option>
+        {% endfor %}
+      </select>
     </div>
   {% endif %}
+
+  <div style="display:flex;gap:8px;align-items:flex-end;">
+    <button class="btn btn-primary btn-sm" type="submit">
+      <i class="fas fa-filter me-1"></i>Apply
+    </button>
+    <a class="btn btn-outline-secondary btn-sm" href="{% url 'kam:reports' %}?metric={{ metric }}">
+      <i class="fas fa-rotate-left me-1"></i>Reset
+    </a>
+  </div>
+</form>
+
+{# ── METRIC TABS ──────────────────────────────────────────────────────── #}
+<div class="metric-tabs">
+  <a href="?metric=sales{% if request.GET.from %}&from={{ request.GET.from }}{% endif %}{% if request.GET.to %}&to={{ request.GET.to }}{% endif %}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
+     class="metric-tab {% if metric == 'sales' %}active{% endif %}">
+    <i class="fas fa-boxes-stacked me-1"></i>Sales
+  </a>
+  <a href="?metric=calls{% if request.GET.from %}&from={{ request.GET.from }}{% endif %}{% if request.GET.to %}&to={{ request.GET.to }}{% endif %}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
+     class="metric-tab {% if metric == 'calls' %}active{% endif %}">
+    <i class="fas fa-phone-volume me-1"></i>Calls
+  </a>
+  <a href="?metric=visits{% if request.GET.from %}&from={{ request.GET.from }}{% endif %}{% if request.GET.to %}&to={{ request.GET.to }}{% endif %}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
+     class="metric-tab {% if metric == 'visits' %}active{% endif %}">
+    <i class="fas fa-route me-1"></i>Visits
+  </a>
 </div>
+
+{# ── SALES TABLE ──────────────────────────────────────────────────────── #}
+{% if metric == 'sales' %}
+<div class="report-card">
+  <div class="report-card-header">
+    <div class="report-card-title">
+      <i class="fas fa-boxes-stacked"></i>
+      Sales by Customer
+      <span class="badge-count">{{ rows|length }}</span>
+    </div>
+    {% if rows %}
+      <span style="font-size:12px;color:var(--muted);">Top 300 rows by MT</span>
+    {% endif %}
+  </div>
+  {% if rows %}
+  <div class="table-responsive">
+    <table class="table table-sm report-table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Customer</th>
+          <th>KAM</th>
+          <th class="r">Sales (MT)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td style="color:var(--subtle);font-size:11px;">{{ forloop.counter }}</td>
+          <td style="font-weight:600;">{{ row.customer_name|default:"—" }}</td>
+          <td>
+            {% if row.kam_username %}
+              <span style="background:var(--primary-soft);color:var(--primary);font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:4px;">
+                {{ row.kam_username }}
+              </span>
+            {% else %}
+              <span style="color:var(--subtle);">—</span>
+            {% endif %}
+          </td>
+          <td class="r" style="font-weight:700;font-family:var(--font-display);">
+            {{ row.mt|floatformat:2 }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <i class="fas fa-boxes-stacked"></i>
+    No sales data for this period.
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ── CALLS TABLE ──────────────────────────────────────────────────────── #}
+{% if metric == 'calls' %}
+<div class="report-card">
+  <div class="report-card-header">
+    <div class="report-card-title">
+      <i class="fas fa-phone-volume"></i>
+      Calls Log
+      <span class="badge-count">{{ rows|length }}</span>
+    </div>
+    {% if rows %}
+      <span style="font-size:12px;color:var(--muted);">Latest 500 calls</span>
+    {% endif %}
+  </div>
+  {% if rows %}
+  <div class="table-responsive">
+    <table class="table table-sm report-table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Customer</th>
+          <th>KAM</th>
+          <th>Date &amp; Time</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td style="color:var(--subtle);font-size:11px;">{{ forloop.counter }}</td>
+          <td style="font-weight:600;">{{ row.customer_name|default:"—" }}</td>
+          <td>
+            {% if row.kam_username %}
+              <span style="background:var(--primary-soft);color:var(--primary);font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:4px;">
+                {{ row.kam_username }}
+              </span>
+            {% else %}
+              <span style="color:var(--subtle);">—</span>
+            {% endif %}
+          </td>
+          <td style="color:var(--muted);font-size:12.5px;">
+            {{ row.call_datetime|date:"d M Y, H:i" }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <i class="fas fa-phone-slash"></i>
+    No calls recorded for this period.
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ── VISITS TABLE ─────────────────────────────────────────────────────── #}
+{% if metric == 'visits' %}
+<div class="report-card">
+  <div class="report-card-header">
+    <div class="report-card-title">
+      <i class="fas fa-route"></i>
+      Visits Log
+      <span class="badge-count">{{ rows|length }}</span>
+    </div>
+    {% if rows %}
+      <span style="font-size:12px;color:var(--muted);">Latest 500 visits</span>
+    {% endif %}
+  </div>
+  {% if rows %}
+  <div class="table-responsive">
+    <table class="table table-sm report-table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Customer</th>
+          <th>KAM</th>
+          <th>Visit Date</th>
+          <th class="c">Outcome</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td style="color:var(--subtle);font-size:11px;">{{ forloop.counter }}</td>
+          <td style="font-weight:600;">{{ row.customer_name|default:"—" }}</td>
+          <td>
+            {% if row.kam_username %}
+              <span style="background:var(--primary-soft);color:var(--primary);font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:4px;">
+                {{ row.kam_username }}
+              </span>
+            {% else %}
+              <span style="color:var(--subtle);">—</span>
+            {% endif %}
+          </td>
+          <td style="color:var(--muted);font-size:12.5px;">
+            {{ row.visit_date|date:"d M Y" }}
+          </td>
+          <td class="c">
+            {% if row.successful is True %}
+              <span class="success-badge yes"><i class="fas fa-check"></i>Success</span>
+            {% elif row.successful is False %}
+              <span class="success-badge no"><i class="fas fa-xmark"></i>Not done</span>
+            {% else %}
+              <span style="color:var(--subtle);font-size:12px;">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <i class="fas fa-route"></i>
+    No visits recorded for this period.
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
 {% endblock %}

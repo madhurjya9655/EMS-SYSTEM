@@ -1,6 +1,6 @@
 # FILE: apps/kam/forms.py
 # PURPOSE: Fix Plan Visit batch date handling and Collections Plan input validation/UI support without touching unrelated business rules
-# UPDATED: 2026-02-28
+# UPDATED: 2026-03-03
 from __future__ import annotations
 
 from decimal import Decimal
@@ -399,10 +399,11 @@ class ManagerTargetForm(forms.Form):
 # ---------------------------------------------------------------------
 class CollectionPlanForm(forms.ModelForm):
     """
-    Keep business rules intact:
-    - allow either (period_type + period_id) OR (from_date + to_date)
-    - do not allow both modes together
-    - do not allow partial date range or partial period input
+    FIX 2026-03-03:
+    - Removed strict mutual-exclusion error when both period AND date range are submitted.
+      The view applies precedence logic: period_type+period_id takes priority over from/to.
+    - Kept the "neither provided" error so incomplete submissions still fail.
+    - Partial-pair errors (period_type without period_id, from without to) are still raised.
     """
 
     class Meta:
@@ -442,18 +443,23 @@ class CollectionPlanForm(forms.ModelForm):
 
         has_period_type = bool(ptype)
         has_period_id = bool(pid)
-        has_period = has_period_type or has_period_id
+        has_period = has_period_type and has_period_id  # both required for a valid period
 
         has_from = bool(fd)
         has_to = bool(td)
-        has_range = has_from or has_to
+        has_range = has_from and has_to  # both required for a valid range
 
+        # Date order check
         if fd and td and td < fd:
             self.add_error("to_date", "To date cannot be earlier than From date.")
 
-        if has_period and has_range:
-            raise ValidationError("Choose either Period Type/Id OR From/To date range (not both).")
+        # -----------------------------------------------------------------
+        # REMOVED: if has_period and has_range: raise ValidationError(...)
+        # The view applies precedence: period wins over date range.
+        # This allows the UI to pre-fill period fields without blocking saves.
+        # -----------------------------------------------------------------
 
+        # Partial-pair errors still apply
         if has_period_type and not has_period_id:
             self.add_error("period_id", "Period ID is required when Period Type is selected.")
         if has_period_id and not has_period_type:
@@ -464,8 +470,9 @@ class CollectionPlanForm(forms.ModelForm):
         if has_to and not has_from:
             self.add_error("from_date", "From date is required when To date is provided.")
 
-        if not ((has_period_type and has_period_id) or (has_from and has_to)):
-            raise ValidationError("Provide either Period Type/Id OR From/To date range.")
+        # Must have at least one complete mode
+        if not has_period and not has_range:
+            raise ValidationError("Provide either Period Type + Period ID, or From Date + To Date.")
 
         data["period_id"] = pid or None
         return data
