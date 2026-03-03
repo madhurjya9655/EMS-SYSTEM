@@ -620,10 +620,17 @@ def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timez
         label = f"{from_d} → {from_d}"
         return start, end, label
 
-    # ── Default fallback: current ISO week ─────────────────────────
-    ws, we, _ = _iso_week_bounds(now)
-    label = f"{ws.date()} → {(we - timezone.timedelta(days=1)).date()}"
-    return ws, we, label
+    # ── Default fallback: Indian Fiscal Year (April 1 → today) ────
+    # Data in sheets spans 2023-2025; fiscal year captures it all.
+    today_local = timezone.localtime(now).replace(hour=0, minute=0, second=0, microsecond=0)
+    m, y = today_local.month, today_local.year
+    fy_start_year = y if m >= 4 else y - 1          # FY starts April 1
+    fy_start = timezone.make_aware(
+        timezone.datetime(fy_start_year, 4, 1, 0, 0, 0)
+    )
+    fy_end = today_local + timezone.timedelta(days=1)
+    label = f"{fy_start.date()} → {today_local.date()} (Fiscal YTD)"
+    return fy_start, fy_end, label
 
 
 def _resolve_scope(request: HttpRequest, actor: User) -> Tuple[Optional[int], str]:

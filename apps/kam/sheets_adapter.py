@@ -1,14 +1,7 @@
 # FILE: apps/kam/sheets_adapter.py
-# PURPOSE: Fix KAM user matching — robust usermap lookup, first-name DB fallback,
-#          full display-name DB lookup, and orphaned-kam recovery on re-sync.
-# UPDATED: 2026-03-02
-# NON-NEGOTIABLE BUSINESS RULES
-# - KAM sees only own data (kam_id filter in views unchanged)
-# - Manager sees only mapped KAM data
-# - Admin sees all
-# - No cross-data leakage
-# - No approval/leave/reimbursement/mail logic touched
-# - No schema changes
+# PURPOSE: Google Sheets sync adapter — all 7 tabs with correct column schemas
+# TABS:  Sheet1 | Sales (F) | KAM names | Front End | Enquiry (F) | Customer Details | Overdues
+# UPDATED: 2026-03-03
 
 from __future__ import annotations
 
@@ -16,1606 +9,1185 @@ import json
 import logging
 import os
 import re
-import time
+import unicodedata
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from hashlib import md5
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-import gspread
 from django.contrib.auth import get_user_model
-from django.db import OperationalError, transaction
-from django.db.models import Q
+from django.db import transaction
 from django.utils import timezone
 
-from apps.common.google_auth import GoogleCredentialError, get_google_credentials
-from .models import Customer, InvoiceFact, LeadFact, OverdueSnapshot, SyncIntent
-
-User = get_user_model()
-logger = logging.getLogger(__name__)
-
-
-# ----------------------------
-# SQLite / write safety
-# ----------------------------
-
-WRITE_RETRY_COUNT = 5
-WRITE_RETRY_SLEEP_SECONDS = 0.35
-
-
-def _is_db_locked_error(exc: Exception) -> bool:
-    msg = str(exc or "").lower()
-    return "database is locked" in msg or "database table is locked" in msg
-
-
-def _with_write_retry(fn: Callable[[], object]):
-    last_exc = None
-    for attempt in range(1, WRITE_RETRY_COUNT + 1):
-        try:
-            return fn()
-        except OperationalError as exc:
-            last_exc = exc
-            if not _is_db_locked_error(exc) or attempt >= WRITE_RETRY_COUNT:
-                raise
-            sleep_for = WRITE_RETRY_SLEEP_SECONDS * attempt
-            logger.warning(
-                "KAM sync write retry due to DB lock (attempt=%s/%s, sleep=%.2fs): %s",
-                attempt, WRITE_RETRY_COUNT, sleep_for, exc,
-            )
-            time.sleep(sleep_for)
-    if last_exc:
-        raise last_exc
-    return None
-
-
-# ----------------------------
-# Env helpers
-# ----------------------------
-
-def _getenv(key: str, default: Optional[str] = None) -> Optional[str]:
-    v = os.getenv(key, default)
-    return v.strip() if isinstance(v, str) else v
-
-
-def _truthy(v: Optional[str]) -> bool:
-    return (v or "").strip().lower() in ("1", "true", "yes", "y", "on")
-
-
-def _csv(v: Optional[str]) -> List[str]:
-    if not v:
-        return []
-    return [x.strip() for x in v.split(",") if x.strip()]
-
-
-def resolve_sections() -> List[str]:
-    raw = _getenv("KAM_SYNC_SECTIONS")
-    if not raw:
-        return ["customers", "sales", "leads", "overdues"]
-    allowed = {"customers", "sales", "leads", "overdues"}
-    out = [s.strip().lower() for s in raw.split(",") if s.strip()]
-    out = [s for s in out if s in allowed]
-    return out or ["customers", "sales", "leads", "overdues"]
-
-
-# ----------------------------
-# Text normalization
-# ----------------------------
-
-def _norm_spaces(s: str) -> str:
-    return re.sub(r"\s+", " ", (s or "").strip())
-
-
-def _canon_text(s: str) -> str:
-    s = (s or "").strip()
-    s = s.replace("\u2019", "'").replace("`", "'")
-    s = s.replace("\u2013", "-").replace("\u2014", "-")
-    s = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", s)
-    s = _norm_spaces(s)
-    return s.casefold()
-
-
-def _canon_header(s: str) -> str:
-    s = _canon_text(s)
-    s = s.replace("&", " and ")
-    s = s.replace("/", " ")
-    s = s.replace("\\", " ")
-    s = re.sub(r"[\(\)\[\]\{\}:;,#]", " ", s)
-    s = re.sub(r"[^a-z0-9.+%'\- ]+", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-def _datefmt() -> str:
-    return _getenv("KAM_DATE_FMT", "%d-%m-%Y")
-
-
-def _dry_run() -> bool:
-    return _truthy(_getenv("KAM_IMPORT_DRY_RUN", "0"))
-
-
-# ----------------------------
-# FIX: Robust usermap — normalizes ALL keys to lowercase at load time
-# so mixed-case entries like "Pravin Nagargoje" and "pravin nagargoje"
-# both match correctly regardless of how they appear in .env
-# ----------------------------
-def _usermap() -> Dict[str, str]:
-    """
-    Load KAM_USERMAP_JSON and normalize ALL keys to canonical lowercase.
-
-    Example .env entry:
-      KAM_USERMAP_JSON={"Pravin Nagargoje":"pravin","Amit Saha":"amit"}
-
-    After normalization:
-      {"pravin nagargoje": "pravin", "amit saha": "amit", ...}
-
-    This means sheet display names like 'Pravin Nagargoje' will always
-    match regardless of the case used in the .env file.
-    """
-    raw = _getenv("KAM_USERMAP_JSON", "{}")
-    try:
-        data = json.loads(raw) if raw else {}
-    except Exception:
-        logger.warning("KAM_USERMAP_JSON is not valid JSON — ignored: %r", raw)
-        return {}
-
-    out: Dict[str, str] = {}
-    if isinstance(data, dict):
-        for k, v in data.items():
-            # Normalize key to canonical form (lowercase, trimmed, collapsed spaces)
-            key = _canon_text(str(k or ""))
-            val = str(v or "").strip()
-            if key and val:
-                out[key] = val
-                # Also register without spaces (e.g. "pravin nagargoje" → "pravinnagargoje")
-                compact_key = re.sub(r"\s+", "", key)
-                if compact_key and compact_key not in out:
-                    out[compact_key] = val
-    return out
-
-
-def _excel_serial_to_date(s: str) -> Optional[date]:
-    try:
-        num = Decimal(str(s).strip())
-    except Exception:
-        return None
-    if num <= 0:
-        return None
-    whole = int(num)
-    if whole < 20000 or whole > 80000:
-        return None
-    base = date(1899, 12, 30)
-    try:
-        return base + timedelta(days=whole)
-    except Exception:
-        return None
-
-
-def _parse_date(s: str) -> Optional[date]:
-    if s is None:
-        return None
-    s = str(s).strip()
-    if not s:
-        return None
-
-    serial_dt = _excel_serial_to_date(s)
-    if serial_dt:
-        return serial_dt
-
-    direct_patterns = [
-        "%Y-%m-%d", "%Y/%m/%d",
-        "%d-%m-%Y", "%d/%m/%Y",
-        "%d-%m-%y", "%d/%m/%y",
-        "%m/%d/%Y", "%m-%d-%Y",
-    ]
-    datetime_patterns = [
-        "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
-        "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M",
-        "%d-%m-%Y %H:%M:%S", "%d-%m-%Y %H:%M",
-        "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M",
-        "%d-%m-%y %H:%M:%S", "%d-%m-%y %H:%M",
-        "%d/%m/%y %H:%M:%S", "%d/%m/%y %H:%M",
-        "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M",
-        "%m-%d-%Y %H:%M:%S", "%m-%d-%Y %H:%M",
-    ]
-
-    tried = []
-    if _datefmt():
-        tried.append(_datefmt())
-    tried.extend(direct_patterns)
-    tried.extend(datetime_patterns)
-
-    seen = set()
-    for fmt in tried:
-        if fmt in seen:
-            continue
-        seen.add(fmt)
-        try:
-            return datetime.strptime(s, fmt).date()
-        except Exception:
-            pass
-
-    iso_candidate = s.replace("T", " ")
-    if "." in iso_candidate:
-        iso_candidate = iso_candidate.split(".", 1)[0]
-    try:
-        return datetime.fromisoformat(iso_candidate).date()
-    except Exception:
+# Import only GoogleCredentialError (always exists in google_auth). We build the
+# Sheets service ourselves so we never depend on build_sheets_service which may
+# not be present in all versions of google_auth.py.
+try:
+    from apps.common.google_auth import GoogleCredentialError
+except ImportError:
+    class GoogleCredentialError(Exception):
         pass
 
-    digits = re.findall(r"\d+", s)
-    if len(digits) >= 3:
-        a, b, c = digits[0], digits[1], digits[2]
-        candidates = [f"{a}-{b}-{c}", f"{a}/{b}/{c}"]
-        for candidate in candidates:
-            for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%Y/%m/%d", "%m-%d-%Y", "%m/%d/%Y"):
-                try:
-                    return datetime.strptime(candidate, fmt).date()
-                except Exception:
-                    pass
+from .models import (
+    Customer,
+    InvoiceFact,
+    LeadFact,
+    OverdueSnapshot,
+    SyncIntent,
+)
 
-    return None
+logger = logging.getLogger(__name__)
+User = get_user_model()
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ENV HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
 
-def _to_decimal(s) -> Decimal:
-    if s is None:
-        return Decimal(0)
-    if isinstance(s, Decimal):
-        return s
-    if isinstance(s, (int, float)):
-        return Decimal(str(s))
-    s = str(s).strip()
-    if not s:
-        return Decimal(0)
-    s = s.replace(",", "").replace(" ", "")
-    s = re.sub(r"[₹$€£]", "", s)
-    try:
-        return Decimal(s)
-    except (InvalidOperation, ValueError, TypeError):
-        return Decimal(0)
+def _env(name: str, default: str = "") -> str:
+    return (os.getenv(name) or default).strip()
 
+def _env_flag(name: str, default: bool = True) -> bool:
+    v = _env(name, "1" if default else "0").lower()
+    return v not in ("0", "false", "no", "off", "")
 
-def _to_int(s) -> int:
-    try:
-        return int(Decimal(str(s)))
-    except Exception:
-        return 0
+def _require_env(name: str) -> str:
+    val = _env(name)
+    if not val:
+        raise RuntimeError(f"Missing required env var: {name}")
+    return val
 
+# ─────────────────────────────────────────────────────────────────────────────
+# GOOGLE SHEETS SERVICE BUILDER
+#
+# Priority order for credentials (first match wins):
+#
+#   1. KAM_SA_JSON_CONTENT  — raw JSON string in env var  ← Render / cloud best practice
+#   2. KAM_SA_JSON          — file path (local dev)
+#   3. GOOGLE_SERVICE_ACCOUNT_FILE — legacy file path fallback
+#
+# For Render deployments: paste the *contents* of the JSON file into the
+# KAM_SA_JSON_CONTENT env var. No files required, survives every redeploy.
+# ─────────────────────────────────────────────────────────────────────────────
 
-def _hash_row(*parts: str) -> str:
-    base = "||".join([p if p is not None else "" for p in parts])
-    return md5(base.encode("utf-8")).hexdigest()
-
-
-def _index(headers: List[str]) -> Dict[str, int]:
-    return {h: i for i, h in enumerate(headers)}
-
-
-def _col(idx: Dict[str, int], *names: str) -> Optional[int]:
-    aliases = [_canon_header(n) for n in names if n]
-    for alias in aliases:
-        if alias in idx:
-            return idx[alias]
-    for alias in aliases:
-        alias_compact = re.sub(r"[^a-z0-9]+", "", alias)
-        for header, pos in idx.items():
-            if re.sub(r"[^a-z0-9]+", "", header) == alias_compact:
-                return pos
-    return None
-
-
-def _normalize_status(raw: str) -> str:
-    value = _canon_text(raw)
-    if not value:
-        return "OPEN"
-    mapping = {
-        "open": "OPEN", "new": "OPEN", "fresh": "OPEN", "active": "OPEN",
-        "negotiation": "NEGOTIATION", "under negotiation": "NEGOTIATION",
-        "in negotiation": "NEGOTIATION", "negotiating": "NEGOTIATION",
-        "won": "WON", "closed won": "WON", "converted": "WON", "booked": "WON",
-        "lost": "LOST", "closed lost": "LOST", "dropped": "LOST",
-        "cancelled": "LOST", "canceled": "LOST",
-    }
-    return mapping.get(value, "OPEN")
-
-
-# ----------------------------
-# Google Sheet helpers
-# ----------------------------
-
-def _open_sheet():
-    try:
-        scopes_raw = (_getenv("GOOGLE_SHEET_SCOPES") or "").strip()
-        scopes = [s.strip() for s in scopes_raw.split(",") if s.strip()] if scopes_raw else None
-        creds_bundle = get_google_credentials(
-            scopes=scopes or [
-                "https://www.googleapis.com/auth/spreadsheets.readonly",
-                "https://www.googleapis.com/auth/drive.readonly",
-            ]
-        )
-    except GoogleCredentialError as e:
-        raise RuntimeError(str(e)) from e
-
-    gc = gspread.authorize(creds_bundle.credentials)
-    sheet_id = _getenv("KAM_SALES_SHEET_ID")
-    if not sheet_id:
-        raise RuntimeError("KAM_SALES_SHEET_ID missing")
-    return gc.open_by_key(sheet_id)
-
-
-def _ws_by_name(tab: str):
-    sh = _open_sheet()
-    try:
-        return sh.worksheet(tab)
-    except gspread.WorksheetNotFound:
-        raise RuntimeError(f"Worksheet not found: {tab}")
-
-
-def _worksheet_headers(tab: str) -> List[str]:
-    ws = _ws_by_name(tab)
-    values = ws.get_all_values()
-    if not values:
-        return []
-    return [_canon_header(h) for h in values[0]]
-
-
-def _worksheet_has_data(tab: str) -> bool:
-    ws = _ws_by_name(tab)
-    values = ws.get_all_values()
-    if not values or len(values) < 2:
-        return False
-    for r in values[1:]:
-        if any((c or "").strip() for c in r):
-            return True
-    return False
-
-
-def _read_tab(ws_name: str) -> Tuple[List[str], List[List[str]]]:
-    ws = _ws_by_name(ws_name)
-    values = ws.get_all_values()
-    if not values:
-        return [], []
-    headers = [_canon_header(h) for h in values[0]]
-    rows = values[1:]
-    return headers, rows
-
-
-# ----------------------------
-# FIX: User matching — robust multi-strategy resolution
-# ----------------------------
-
-def _full_name_of_user(user: User) -> str:
-    first = (getattr(user, "first_name", "") or "").strip()
-    last = (getattr(user, "last_name", "") or "").strip()
-    return _norm_spaces(f"{first} {last}".strip())
-
-
-def _split_username_to_name_parts(username: str) -> List[str]:
-    if not username:
-        return []
-    parts = re.split(r"[._\-]+", username.strip().lower())
-    return [p for p in parts if p and len(p) >= 2 and re.match(r"^[a-z]+$", p)]
-
-
-def _username_pattern_candidates(display_name: str) -> List[str]:
-    raw = display_name.strip()
-    if not raw:
-        return []
-    words = [w.lower() for w in re.split(r"\s+", raw) if w]
-    if not words:
-        return []
-
-    first = words[0]
-    candidates: List[str] = []
-
-    if len(words) >= 2:
-        last = words[-1]
-        candidates += [
-            first,              # "pravin"  ← MOST LIKELY for this project's naming pattern
-            f"{first}.{last}",
-            f"{first}_{last}",
-            f"{first}{last}",
-            f"{first[0]}.{last}",
-            f"{first[0]}_{last}",
-            f"{first[0]}{last}",
-            f"{last}.{first}",
-            f"{last}_{first}",
-            f"{last}{first}",
-        ]
-        if len(words) >= 3:
-            middle = words[1]
-            candidates += [
-                f"{first}.{middle}.{last}",
-                f"{first}{middle[0]}{last}",
-            ]
-    else:
-        candidates.append(first)
-
-    seen: set = set()
-    out = []
-    for c in candidates:
-        if c not in seen:
-            seen.add(c)
-            out.append(c)
-    return out
-
-
-def _build_user_lookup() -> Dict[str, User]:
+def _load_sa_info() -> dict:
     """
-    Build normalized display-name → User mapping.
-
-    FIX: Username decomposition so 'jivan.more' registers as 'jivan more'.
-    FIX: First-name-only shortcut so 'Pravin Nagargoje' → 'pravin' username.
-    FIX: Single first-name bucket for users whose Django username IS their first name
-         (the pattern used by this project: amit, vivek, ganesh, pravin, etc.)
+    Load service account info dict from env.
+    Resolution priority (first non-empty value wins):
+      1. KAM_SA_JSON_CONTENT           — raw JSON string in env (optional cloud approach)
+      2. GOOGLE_SA_JSON_CONTENT        — alternate name for #1
+      3. KAM_SA_JSON                   — file path (local Windows dev)
+      4. GOOGLE_SERVICE_ACCOUNT_JSON_PATH — Render Secret File path (already set on Render)
+      5. GOOGLE_SERVICE_ACCOUNT_FILE   — legacy path (also already set on Render)
     """
-    exact_lookup: Dict[str, User] = {}
-    first_name_buckets: Dict[str, List[User]] = {}
+    import json as _json
+    import os as _os
 
-    for user in User.objects.filter(is_active=True):
-        exact_keys: set = set()
-
-        username = (getattr(user, "username", "") or "").strip()
-        email = (getattr(user, "email", "") or "").strip()
-        full_name = _full_name_of_user(user)
-        first = (getattr(user, "first_name", "") or "").strip()
-        last = (getattr(user, "last_name", "") or "").strip()
-
-        # 1. Raw username (e.g. "pravin", "amit", "ganesh@blueoceansteels.com")
-        if username:
-            exact_keys.add(_canon_text(username))
-
-            # FIX: Handle email-as-username pattern (this production project)
-            # username="pravin@blueoceansteels.com" → local part "pravin" → first-name bucket
-            if "@" in username:
-                email_local = username.split("@", 1)[0].strip().lower()
-                if email_local and len(email_local) >= 2:
-                    exact_keys.add(_canon_text(email_local))
-                    # Register first name from email local part as bucket
-                    email_parts = _split_username_to_name_parts(email_local)
-                    if email_parts:
-                        first_name_buckets.setdefault(email_parts[0], []).append(user)
-                    elif len(email_local) >= 3 and re.match(r"^[a-z]+$", email_local):
-                        first_name_buckets.setdefault(email_local, []).append(user)
-            else:
-                # Decompose separator-based usernames (e.g. ravi.pandey → ravi, pandey)
-                uname_parts = _split_username_to_name_parts(username)
-                if len(uname_parts) >= 2:
-                    forward = " ".join(uname_parts)
-                    backward = " ".join(reversed(uname_parts))
-                    exact_keys.add(_canon_text(forward))
-                    exact_keys.add(_canon_text(backward))
-                    exact_keys.add(_canon_text(".".join(uname_parts)))
-                    exact_keys.add(_canon_text("_".join(uname_parts)))
-                    if len(uname_parts[0]) >= 3:
-                        first_name_buckets.setdefault(_canon_text(uname_parts[0]), []).append(user)
-
-                # Simple username IS the first name (e.g. username="pravin")
-                uname_lower = username.lower().strip()
-                if len(uname_lower) >= 3 and re.match(r"^[a-z]+$", uname_lower):
-                    first_name_buckets.setdefault(uname_lower, []).append(user)
-
-        # 2. Email and email local part
-        if email:
-            exact_keys.add(_canon_text(email))
-            email_local = email.split("@", 1)[0].strip()
-            if email_local:
-                exact_keys.add(_canon_text(email_local))
-                email_parts = _split_username_to_name_parts(email_local)
-                if len(email_parts) >= 2:
-                    exact_keys.add(_canon_text(" ".join(email_parts)))
-                    exact_keys.add(_canon_text(" ".join(reversed(email_parts))))
-
-        # 3. First + last name from Django profile (if populated)
-        if full_name:
-            exact_keys.add(_canon_text(full_name))
-            exact_keys.add(_canon_text(full_name.replace(".", " ")))
-            if first and last:
-                exact_keys.add(_canon_text(f"{first}.{last}"))
-                exact_keys.add(_canon_text(f"{first}_{last}"))
-                exact_keys.add(_canon_text(f"{last} {first}"))
-        if first and last:
-            exact_keys.add(_canon_text(f"{first} {last}"))
-
-        # 4. Register all keys (first writer wins)
-        for key in exact_keys:
-            if key and key not in exact_lookup:
-                exact_lookup[key] = user
-
-        # 5. First-name bucket from Django profile field
-        if first and len(first) >= 3:
-            first_name_buckets.setdefault(_canon_text(first), []).append(user)
-
-    # Single-user first-name shortcuts
-    # If only ONE user has a given first name (or username matching first name),
-    # register it as a direct lookup key.
-    # This is what makes "Pravin Nagargoje" → username "pravin" work:
-    #   bucket["pravin"] = [pravin_user] → only 1 → exact_lookup["pravin"] = pravin_user
-    for first_key, users in first_name_buckets.items():
-        if len(users) == 1 and first_key not in exact_lookup:
-            exact_lookup[first_key] = users[0]
-            logger.debug(
-                "KAM first-name shortcut registered: '%s' → username='%s'",
-                first_key, users[0].username,
-            )
-
-    return exact_lookup
-
-
-def _find_user_by_map(
-    display_name: str,
-    usermap: Dict[str, str],
-    user_lookup: Optional[Dict[str, User]] = None,
-) -> Optional[User]:
-    """
-    Resolve sheet display name to Django User.
-
-    Match order (first match wins):
-    1. KAM_USERMAP_JSON explicit override       ← "Pravin Nagargoje" → "pravin"
-    2. Exact key in pre-built lookup dict        ← covers username, email, decomposed
-    3. Compact alphanumeric key match            ← handles punctuation differences
-    4. Direct DB username/email query            ← case-insensitive
-    5. First-name-only DB query                  ← "Pravin" matches username "pravin"
-    6. First + last name DB profile query        ← if first_name/last_name populated
-    7. Pattern-based username generation         ← last resort
-    """
-    raw = _norm_spaces(display_name)
-    if not raw:
-        return None
-
-    normalized = _canon_text(raw)
-    user_lookup = user_lookup or _build_user_lookup()
-
-    # Step 1: Explicit usermap override (highest priority)
-    # Handles: KAM_USERMAP_JSON={"Pravin Nagargoje":"pravin"}
-    mapped_username = usermap.get(normalized)
-    if not mapped_username:
-        # Also try compact form in case there are extra spaces
-        compact_norm = re.sub(r"\s+", "", normalized)
-        mapped_username = usermap.get(compact_norm)
-
-    if mapped_username:
-        mapped_raw = mapped_username.strip()
-        # Try exact username/email match first
-        user = User.objects.filter(
-            Q(username__iexact=mapped_raw) | Q(email__iexact=mapped_raw),
-            is_active=True,
-        ).first()
-        if user:
-            return user
-        # Try lookup dict with the mapped value
-        mapped_norm = _canon_text(mapped_raw)
-        if mapped_norm in user_lookup:
-            return user_lookup[mapped_norm]
-        # Try first+last split if it looks like a full name
-        if " " in mapped_raw:
-            parts = [p for p in mapped_raw.split() if p]
-            if len(parts) >= 2:
-                user = User.objects.filter(
-                    first_name__iexact=parts[0],
-                    last_name__iexact=" ".join(parts[1:]),
-                    is_active=True,
-                ).first()
-                if user:
-                    return user
-
-    # Step 2: Exact lookup match
-    if normalized in user_lookup:
-        return user_lookup[normalized]
-
-    # Step 3: Compact key match (strips non-alphanumeric)
-    compact = re.sub(r"[^a-z0-9]+", "", normalized)
-    if compact:
-        for key, user in user_lookup.items():
-            if re.sub(r"[^a-z0-9]+", "", key) == compact:
-                return user
-
-    # Step 4: Direct DB query (case-insensitive username/email)
-    direct = User.objects.filter(
-        Q(username__iexact=raw) | Q(email__iexact=raw), is_active=True
-    ).first()
-    if direct:
-        return direct
-
-    # Step 5: First-name-only matching
-    # Handles BOTH patterns:
-    #   A) username IS first name: "Pravin" → username="pravin" (simple projects)
-    #   B) username IS email: "Pravin" → username starts with "pravin@" (this project!)
-    # "Pravin Nagargoje" → first word "pravin" → username__istartswith="pravin@" → FOUND
-    parts = [p for p in re.split(r"\s+", raw) if p]
-    if parts:
-        first_word = parts[0]
-        if len(first_word) >= 3:
-            # Try exact username match (simple username pattern)
-            first_match = User.objects.filter(
-                username__iexact=first_word, is_active=True
-            ).first()
-            if first_match:
-                logger.debug(
-                    "KAM match via first-name exact username: '%s' → username='%s'",
-                    raw, first_match.username,
-                )
-                return first_match
-
-            # FIX: Try email-based username pattern (username starts with first_word@)
-            # This is the key fix for production: username="pravin@blueoceansteels.com"
-            # "Pravin Nagargoje" → first_word="pravin" → username__istartswith="pravin@"
-            email_match = User.objects.filter(
-                username__istartswith=f"{first_word}@", is_active=True
-            ).first()
-            if email_match:
-                logger.debug(
-                    "KAM match via first-name email username: '%s' → username='%s'",
-                    raw, email_match.username,
-                )
-                return email_match
-
-            # Also try: email local part starts with first_word
-            email_local_match = User.objects.filter(
-                email__istartswith=f"{first_word}@", is_active=True
-            ).first()
-            if email_local_match:
-                logger.debug(
-                    "KAM match via first-name email field: '%s' → username='%s'",
-                    raw, email_local_match.username,
-                )
-                return email_local_match
-
-    # Step 6: DB query by first_name + last_name Django profile fields
-    if len(parts) >= 2:
-        user = User.objects.filter(
-            first_name__iexact=parts[0],
-            last_name__iexact=" ".join(parts[1:]),
-            is_active=True,
-        ).first()
-        if user:
-            return user
-        # Also try first name only against profile first_name field
-        user = User.objects.filter(
-            first_name__iexact=parts[0], is_active=True
-        ).first()
-        if user:
-            logger.debug(
-                "KAM match via first_name profile field: '%s' → username='%s'",
-                raw, user.username,
-            )
-            return user
-
-    # Step 7: Pattern-based username generation from display name
-    candidates = _username_pattern_candidates(raw)
-    if candidates:
-        for candidate in candidates:
-            ckey = _canon_text(candidate)
-            if ckey in user_lookup:
-                logger.debug(
-                    "KAM match via pattern candidate '%s' for display_name='%s'",
-                    candidate, raw,
-                )
-                return user_lookup[ckey]
-
-        # Batched DB query
-        q = Q()
-        for c in candidates[:8]:
-            q |= Q(username__iexact=c)
-        user = User.objects.filter(q, is_active=True).first()
-        if user:
-            logger.debug(
-                "KAM match via DB pattern query for display_name='%s' → username='%s'",
-                raw, user.username,
-            )
-            return user
-
-    logger.warning(
-        "KAM matching failed for display_name='%s' (normalised='%s'). "
-        "Add to KAM_USERMAP_JSON: {\"%s\": \"actual_django_username\"}",
-        raw, normalized, normalized,
-    )
-    return None
-
-
-def _pick_row_kam(
-    row: Sequence[str],
-    idx: Dict[str, int],
-    usermap: Dict[str, str],
-    user_lookup: Dict[str, User],
-) -> Tuple[Optional[User], str]:
-    candidate_cols = [
-        _col(idx, "KAM Name", "KAM", "kam_username", "kam name", "sales person", "marketing person"),
-        _col(idx, "Full Name", "Employee Name", "Sales Person Name", "Marketing Person Name", "Owner Name"),
-        _col(idx, "primary_kam_username"),
-    ]
-
-    seen_values: set = set()
-    for col_idx in candidate_cols:
-        if col_idx is None or col_idx >= len(row):
-            continue
-        raw = _norm_spaces(row[col_idx])
-        if not raw or raw in seen_values:
-            continue
-        seen_values.add(raw)
-        user = _find_user_by_map(raw, usermap, user_lookup=user_lookup)
-        if user:
-            return user, raw
-
-    for raw in seen_values:
-        if raw:
-            return None, raw
-
-    return None, ""
-
-
-# ----------------------------
-# Customer upsert
-# ----------------------------
-
-def _get_or_create_customer(
-    *,
-    name: str,
-    kam: Optional[User] = None,
-    address: Optional[str] = None,
-    email: Optional[str] = None,
-    mobile: Optional[str] = None,
-    credit_limit: Optional[Decimal] = None,
-    agreed_credit_period_days: Optional[int] = None,
-    force_kam_assignment: bool = False,
-) -> Customer:
-    clean_name = _norm_spaces(name)
-    cust = Customer.objects.filter(name__iexact=clean_name).first()
-
-    if not cust:
-        cust = Customer(name=clean_name)
-
-    changed = False
-
-    if clean_name and cust.name != clean_name:
-        cust.name = clean_name
-        changed = True
-
-    if address is not None and address != getattr(cust, "address", None):
-        cust.address = address or None
-        changed = True
-    if email is not None and email != getattr(cust, "email", None):
-        cust.email = email or None
-        changed = True
-    if mobile is not None and mobile != getattr(cust, "mobile", None):
-        cust.mobile = mobile or None
-        changed = True
-    if credit_limit is not None and credit_limit != getattr(cust, "credit_limit", None):
-        cust.credit_limit = credit_limit
-        changed = True
-    if agreed_credit_period_days is not None and agreed_credit_period_days != getattr(
-        cust, "agreed_credit_period_days", None
-    ):
-        cust.agreed_credit_period_days = agreed_credit_period_days
-        changed = True
-
-    if getattr(cust, "source", None) != Customer.SOURCE_SHEET:
-        cust.source = Customer.SOURCE_SHEET
-        changed = True
-
-    if kam:
-        should_assign = force_kam_assignment or (not cust.kam_id and not cust.primary_kam_id)
-        if should_assign:
-            if cust.kam_id != kam.id:
-                cust.kam = kam
-                changed = True
-            if cust.primary_kam_id != kam.id:
-                cust.primary_kam = kam
-                changed = True
-
-    if not getattr(cust, "pk", None):
-        cust.save()
-    elif changed:
-        cust.save()
-
-    return cust
-
-
-# ----------------------------
-# Header-aware tab resolution
-# ----------------------------
-
-def _required_customers_groups() -> List[List[str]]:
-    return [["Customer Name", "Customer", "Name", "customer_name", "party name"]]
-
-
-def _required_sales_groups() -> List[List[str]]:
-    return [
-        ["KAM Name", "KAM", "kam_username", "kam name", "sales person", "marketing person", "Full Name"],
-        ["Customer Name", "Consignee Name", "Buyer's Name", "customer_name", "party name", "customer"],
-        ["Invoice Date", "Date of Invoice", "invoice_date", "Date", "bill date"],
-    ]
-
-
-def _required_leads_groups() -> List[List[str]]:
-    return [
-        [
-            "Timestamp", "Date of Enquiry", "doe", "enquiry date",
-            "lead date", "created at", "date", "enquiry_date",
-            "Entry Date", "entry date",
-        ],
-        [
-            "KAM Name", "KAM", "kam_username", "kam name",
-            "sales person", "marketing person", "Full Name", "Employee Name",
-        ],
-    ]
-
-
-def _required_overdues_groups() -> List[List[str]]:
-    return [
-        ["Customer Name", "Customer", "customer_name", "party name"],
-        ["Overdues (Rs)", "Overdue", "overdue", "total overdue"],
-    ]
-
-
-def _header_group_match_score(headers: List[str], groups: List[List[str]]) -> int:
-    idx = _index(headers)
-    score = 0
-    for aliases in groups:
-        if _col(idx, *aliases) is not None:
-            score += 1
-    return score
-
-
-def _resolve_tab_with_headers(
-    *,
-    canonical: str,
-    default: str,
-    aliases: List[str],
-    fallbacks: List[str],
-    required_groups: List[List[str]],
-) -> str:
-    candidates = [canonical] + aliases
-    explicit = None
-    for k in candidates:
-        v = _getenv(k)
-        if v:
-            explicit = v.strip()
-            break
-
-    if explicit and explicit.upper() not in ("AUTO", "*"):
-        return explicit
-
-    best_tab = None
-    best_score = -1
-
-    for tab in fallbacks:
-        tab = tab.strip()
-        if not tab:
-            continue
+    # ── Option 1 & 2: raw JSON string in env var ─────────────────────────────
+    raw_content = _env("KAM_SA_JSON_CONTENT") or _env("GOOGLE_SA_JSON_CONTENT")
+    if raw_content:
         try:
-            headers = _worksheet_headers(tab)
-            if not headers or not _worksheet_has_data(tab):
-                continue
-            score = _header_group_match_score(headers, required_groups)
-            if score > best_score:
-                best_tab = tab
-                best_score = score
-            if score == len(required_groups):
-                return tab
-        except Exception:
+            return _json.loads(raw_content)
+        except _json.JSONDecodeError as exc:
+            raise GoogleCredentialError(
+                f"KAM_SA_JSON_CONTENT is not valid JSON: {exc}"
+            ) from exc
+
+    # ── Options 3-5: file path ───────────────────────────────────────────────
+    # Try each path env var in order — use the first one that points to a real file
+    path_candidates = [
+        ("KAM_SA_JSON",                    _env("KAM_SA_JSON")),
+        ("GOOGLE_SERVICE_ACCOUNT_JSON_PATH", _env("GOOGLE_SERVICE_ACCOUNT_JSON_PATH")),
+        ("GOOGLE_SERVICE_ACCOUNT_FILE",    _env("GOOGLE_SERVICE_ACCOUNT_FILE")),
+    ]
+
+    attempted_paths = []
+    for env_name, sa_path in path_candidates:
+        if not sa_path:
             continue
+        attempted_paths.append(sa_path)
+        if _os.path.isfile(sa_path):
+            try:
+                with open(sa_path) as fh:
+                    return _json.load(fh)
+            except Exception as exc:
+                raise GoogleCredentialError(
+                    f"Could not read service account file {sa_path}: {exc}"
+                ) from exc
+        # path set but file missing — keep trying other candidates
 
-    return best_tab or default
+    if attempted_paths:
+        raise GoogleCredentialError(
+            f"Service account file not found at any of these paths:\n"
+            + "\n".join(f"  {p}" for p in attempted_paths)
+            + "\n\nFix options:"
+            + "\n  LOCAL: Set KAM_SA_JSON to your Windows path, e.g.:"
+            + "\n    KAM_SA_JSON=E:\\CLIENT PROJECT\\...\\ems-software-467508-ad809646ed23.json"
+            + "\n  RENDER: KAM_SA_JSON is already correct (/etc/secrets/...) — no action needed."
+        )
 
-
-def _resolve_customers_tab() -> str:
-    return _resolve_tab_with_headers(
-        canonical="KAM_TAB_CUSTOMERS",
-        default="Customer Details",
-        aliases=["KAM_CUSTOMERS_TAB"],
-        fallbacks=_csv(_getenv("KAM_TAB_CUSTOMERS_FALLBACKS",
-            "Customer Details,Customers,Customer Master,Customer Details (F),Customer Data")),
-        required_groups=_required_customers_groups(),
+    raise GoogleCredentialError(
+        "No Google service account credentials configured.\n"
+        "Set KAM_SA_JSON to the path of your service account JSON file."
     )
 
 
-def _resolve_sales_tab() -> str:
-    return _resolve_tab_with_headers(
-        canonical="KAM_TAB_SALES",
-        default="Sales (F)",
-        aliases=["KAM_SALES_TAB", "KAM_TAB_INVOICES", "KAM_INVOICES_TAB"],
-        fallbacks=_csv(_getenv("KAM_TAB_SALES_FALLBACKS",
-            "Sales (F),Sales,Sheet1,Front End,Invoice")),
-        required_groups=_required_sales_groups(),
-    )
+def build_sheets_service():
+    """
+    Build and return an authenticated Google Sheets API v4 service object.
+    Works on Render (env var JSON content) and locally (file path).
+    Raises GoogleCredentialError on any failure.
+    """
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build as _gapi_build
+    except ImportError as exc:
+        raise GoogleCredentialError(
+            f"Google API client libraries not installed: {exc}\n"
+            "Run: pip install google-auth google-api-python-client"
+        ) from exc
+
+    sa_info = _load_sa_info()
+
+    try:
+        creds = service_account.Credentials.from_service_account_info(
+            sa_info,
+            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
+        )
+        service = _gapi_build("sheets", "v4", credentials=creds, cache_discovery=False)
+        return service
+    except GoogleCredentialError:
+        raise
+    except Exception as exc:
+        raise GoogleCredentialError(
+            f"Failed to build Sheets service: {exc}"
+        ) from exc
 
 
-def _resolve_leads_tab() -> str:
-    return _resolve_tab_with_headers(
-        canonical="KAM_TAB_LEADS",
-        default="Enquiry (F)",
-        aliases=["KAM_LEADS_TAB"],
-        fallbacks=_csv(_getenv("KAM_TAB_LEADS_FALLBACKS", (
-            "Enquiry (F),Enquiry,Leads,Lead,Enquiries,"
-            "Lead Data,Leads Data,Lead Form,Enquiry Form,"
-            "Lead Entry,Enquiry Entry,NBD,New Business,Prospects,"
-            "Pipeline,CRM,Opportunities"
-        ))),
-        required_groups=_required_leads_groups(),
-    )
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB NAME RESOLUTION
+# ─────────────────────────────────────────────────────────────────────────────
+# All tab names configurable via env. Defaults match the actual sheet tab names.
 
+def _tab_sales_f()        -> str: return _env("KAM_TAB_SALES",        "Sales (F)")
+def _tab_sheet1()         -> str: return _env("KAM_TAB_SHEET1",       "Sheet1")
+def _tab_kam_names()      -> str: return _env("KAM_TAB_KAM_NAMES",    "KAM names")
+def _tab_frontend()       -> str: return _env("KAM_TAB_FRONTEND",     "Front End")
+def _tab_enquiry_f()      -> str: return _env("KAM_TAB_ENQUIRY",      "Enquiry (F)")
+def _tab_customers()      -> str: return _env("KAM_TAB_CUSTOMERS",    "Customer Details")
+def _tab_overdues()       -> str: return _env("KAM_TAB_OVERDUES",     "Overdues")
 
-def _resolve_overdues_tab() -> str:
-    return _resolve_tab_with_headers(
-        canonical="KAM_TAB_OVERDUES",
-        default="Overdues",
-        aliases=["KAM_OVERDUES_TAB"],
-        fallbacks=_csv(_getenv("KAM_TAB_OVERDUES_FALLBACKS", "Overdues,Overdue")),
-        required_groups=_required_overdues_groups(),
-    )
-
+def resolve_sections() -> Dict[str, bool]:
+    return {
+        "sales_f":       _env_flag("KAM_SYNC_SALES",      True),
+        "sheet1":        _env_flag("KAM_SYNC_SHEET1",     True),
+        "frontend":      _env_flag("KAM_SYNC_FRONTEND",   True),
+        "enquiry_f":     _env_flag("KAM_SYNC_ENQUIRY",    True),
+        "customers":     _env_flag("KAM_SYNC_CUSTOMERS",  True),
+        "overdues":      _env_flag("KAM_SYNC_OVERDUES",   True),
+    }
 
 def resolve_tabs_for_logging() -> Dict[str, str]:
     return {
-        "customers": _resolve_customers_tab(),
-        "sales": _resolve_sales_tab(),
-        "leads": _resolve_leads_tab(),
-        "overdues": _resolve_overdues_tab(),
+        "sales_f":   _tab_sales_f(),
+        "sheet1":    _tab_sheet1(),
+        "kam_names": _tab_kam_names(),
+        "frontend":  _tab_frontend(),
+        "enquiry_f": _tab_enquiry_f(),
+        "customers": _tab_customers(),
+        "overdues":  _tab_overdues(),
     }
 
 
-# ----------------------------
-# ImportStats + importers
-# ----------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# SYNC STATS
+# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
-class ImportStats:
+class SyncStats:
     customers_upserted: int = 0
-    sales_upserted: int = 0
-    leads_upserted: int = 0
-    overdues_upserted: int = 0
-    skipped: int = 0
-    unknown_kam: List[str] = field(default_factory=list)
-    notes: List[str] = field(default_factory=list)
+    sales_upserted: int     = 0
+    leads_upserted: int     = 0
+    overdues_upserted: int  = 0
+    skipped: int            = 0
+    unknown_kam: int        = 0
+    notes: List[str]        = field(default_factory=list)
 
-    def add_unknown(self, name: str):
-        clean = _norm_spaces(name)
-        if clean and clean not in self.unknown_kam:
-            self.unknown_kam.append(clean)
+    def merge(self, other: "SyncStats") -> None:
+        self.customers_upserted += other.customers_upserted
+        self.sales_upserted     += other.sales_upserted
+        self.leads_upserted     += other.leads_upserted
+        self.overdues_upserted  += other.overdues_upserted
+        self.skipped            += other.skipped
+        self.unknown_kam        += other.unknown_kam
+        self.notes.extend(other.notes)
 
     def as_message(self) -> str:
-        parts = [
-            f"Customers: {self.customers_upserted}",
-            f"Sales rows: {self.sales_upserted}",
-            f"Leads rows: {self.leads_upserted}",
-            f"Overdue snapshots: {self.overdues_upserted}",
-            f"Skipped: {self.skipped}",
-        ]
-        if self.unknown_kam:
-            parts.append(
-                "Unknown KAM(s): "
-                + ", ".join(self.unknown_kam[:6])
-                + ("\u2026" if len(self.unknown_kam) > 6 else "")
-            )
-        if self.notes:
-            parts.append(
-                "Notes: "
-                + " | ".join(self.notes[:4])
-                + ("\u2026" if len(self.notes) > 4 else "")
-            )
-        return " | ".join(parts)
+        parts = []
+        if self.customers_upserted:  parts.append(f"Customers: {self.customers_upserted}")
+        if self.sales_upserted:      parts.append(f"Sales: {self.sales_upserted}")
+        if self.leads_upserted:      parts.append(f"Leads: {self.leads_upserted}")
+        if self.overdues_upserted:   parts.append(f"Overdues: {self.overdues_upserted}")
+        if self.skipped:             parts.append(f"Skipped: {self.skipped}")
+        if self.unknown_kam:         parts.append(f"Unknown KAM: {self.unknown_kam}")
+        return " | ".join(parts) if parts else "No changes"
 
 
-def import_customers(stats: ImportStats):
-    tab = _resolve_customers_tab()
-    headers, rows = _read_tab(tab)
-    if not headers or not rows:
-        stats.notes.append(f"Customers: empty sheet ({tab})")
-        return
+# ─────────────────────────────────────────────────────────────────────────────
+# GOOGLE SHEETS CLIENT
+# ─────────────────────────────────────────────────────────────────────────────
 
-    idx = _index(headers)
-    c_customer = _col(idx, "Customer Name", "Customer", "Name", "customer_name", "party name")
-    if c_customer is None:
-        stats.notes.append(f"Customers: required customer column missing in ({tab})")
-        return
+def _get_sheet_values(service, sheet_id: str, tab: str) -> List[List[str]]:
+    """Fetch all rows from a tab. Returns list of rows (list of str)."""
+    try:
+        result = (
+            service.spreadsheets()
+            .values()
+            .get(spreadsheetId=sheet_id, range=tab)
+            .execute()
+        )
+        return result.get("values", [])
+    except Exception as exc:
+        logger.warning("Could not read tab '%s': %s", tab, exc)
+        return []
 
-    c_addr = _col(idx, "Address", "address", "customer address")
-    c_email = _col(idx, "Email", "email", "mail id")
-    c_mobile = _col(idx, "Mobile No", "Mobile", "mobile", "phone", "contact no", "mobile number")
-    c_credit_limit = _col(idx, "Credit Limit", "credit_limit")
-    c_credit_days = _col(idx, "Agreed Credit Period", "agreed_credit_period_days", "Agreed Credit Period ")
 
-    usermap = _usermap()
-    user_lookup = _build_user_lookup()
-    dry = _dry_run()
+# ─────────────────────────────────────────────────────────────────────────────
+# FIELD PARSING HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
 
-    for r in rows:
-        name = (r[c_customer] if c_customer < len(r) else "").strip()
+def _cell(row: List[str], idx: int, default: str = "") -> str:
+    """Safe column access — returns stripped string."""
+    try:
+        return (row[idx] or "").strip()
+    except IndexError:
+        return default
+
+def _decimal(val: str) -> Optional[Decimal]:
+    """Parse a decimal value, handling commas and currency symbols."""
+    if not val:
+        return None
+    cleaned = re.sub(r"[₹,\s]", "", val)
+    try:
+        return Decimal(cleaned)
+    except InvalidOperation:
+        return None
+
+def _parse_date(val: str) -> Optional[date]:
+    """Parse date from common Indian/ISO formats."""
+    if not val:
+        return None
+    val = val.strip()
+    # Try formats in order of likelihood
+    for fmt in (
+        "%Y-%m-%d",   # 2025-04-01
+        "%d/%m/%Y",   # 01/04/2025
+        "%d-%m-%Y",   # 01-04-2025
+        "%m/%d/%Y",   # 04/01/2025 (US)
+        "%d/%m/%y",   # 01/04/25
+        "%Y/%m/%d",   # 2025/04/01
+    ):
+        try:
+            return datetime.strptime(val, fmt).date()
+        except ValueError:
+            continue
+    # Try parsing serial date (Google Sheets sometimes exports numbers)
+    try:
+        serial = int(float(val))
+        # Google Sheets epoch: Dec 30, 1899
+        from datetime import timedelta
+        epoch = date(1899, 12, 30)
+        return epoch + timedelta(days=serial)
+    except (ValueError, OverflowError):
+        pass
+    logger.debug("Could not parse date: %r", val)
+    return None
+
+def _parse_timestamp(val: str) -> Optional[datetime]:
+    """Parse timestamp from Google Forms timestamp format."""
+    if not val:
+        return None
+    val = val.strip()
+    for fmt in (
+        "%m/%d/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%m/%d/%Y %H:%M",
+        "%d/%m/%Y %H:%M",
+        "%Y-%m-%dT%H:%M:%S",
+    ):
+        try:
+            dt = datetime.strptime(val, fmt)
+            return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+        except ValueError:
+            continue
+    return None
+
+def _normalize(s: str) -> str:
+    """Normalize name for fuzzy matching."""
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SAFE CUSTOMER LOOKUP
+# Replaces all direct get_or_create(name=...) / update_or_create(name=...) calls.
+# Handles duplicates gracefully — merges them rather than crashing.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _normalize_customer_name(name: str) -> str:
+    """Normalise for dedup comparison: strip, collapse whitespace, title-case."""
+    return " ".join(name.strip().split()).strip()
+
+
+def _safe_get_or_create_customer(
+    name: str,
+    kam_user=None,
+    extra_defaults: dict = None,
+) -> "Customer":
+    """
+    Thread-safe, duplicate-safe Customer lookup.
+
+    Strategy:
+      1. Query ALL customers whose name matches (case-insensitive).
+      2. If zero  → create fresh.
+      3. If one   → return it (and update kam/fields if missing).
+      4. If 2+    → keep the first (lowest pk), merge FKs from duplicates,
+                    delete the duplicates, return the survivor.
+         This self-heals the DB on every sync — no manual intervention needed.
+    """
+    clean_name = _normalize_customer_name(name)
+    if not clean_name:
+        raise ValueError("Customer name cannot be blank")
+
+    defaults = {"kam": kam_user}
+    if extra_defaults:
+        defaults.update(extra_defaults)
+
+    # --- find all matches (case-insensitive) ---------------------------------
+    matches = list(Customer.objects.filter(name__iexact=clean_name).order_by("pk"))
+
+    if not matches:
+        # create — use get_or_create inside atomic to handle race conditions
+        try:
+            with transaction.atomic():
+                customer, _ = Customer.objects.get_or_create(
+                    name=clean_name,
+                    defaults=defaults,
+                )
+            return customer
+        except Customer.MultipleObjectsReturned:
+            # Lost the race — fall through to merge logic below
+            matches = list(Customer.objects.filter(name__iexact=clean_name).order_by("pk"))
+
+    if len(matches) == 1:
+        customer = matches[0]
+        # Fill in missing fields
+        changed = False
+        if kam_user and not customer.kam:
+            customer.kam = kam_user
+            changed = True
+        if extra_defaults:
+            for field, val in extra_defaults.items():
+                if val is not None and not getattr(customer, field, None):
+                    setattr(customer, field, val)
+                    changed = True
+        if changed:
+            try:
+                customer.save()
+            except Exception:
+                pass
+        return customer
+
+    # --- 2+ duplicates: merge into the oldest (lowest pk) --------------------
+    survivor = matches[0]
+    duplicates = matches[1:]
+    logger.warning(
+        "Customer duplicate detected: '%s' has %d records (pks: %s). "
+        "Merging into pk=%s.",
+        clean_name, len(matches),
+        [c.pk for c in matches], survivor.pk,
+    )
+
+    for dup in duplicates:
+        try:
+            with transaction.atomic():
+                # Re-point all related objects to the survivor
+                for rel in dup._meta.get_fields():
+                    if rel.is_relation and rel.one_to_many and rel.related_model:
+                        try:
+                            accessor = rel.get_accessor_name()
+                            related_qs = getattr(dup, accessor).all()
+                            related_qs.update(**{rel.field.name: survivor})
+                        except Exception as merge_exc:
+                            logger.debug(
+                                "Could not re-point %s.%s: %s",
+                                rel.related_model.__name__, rel.field.name, merge_exc,
+                            )
+                dup.delete()
+        except Exception as del_exc:
+            logger.error("Could not delete duplicate customer pk=%s: %s", dup.pk, del_exc)
+
+    # Update survivor fields if we have better data now
+    changed = False
+    if kam_user and not survivor.kam:
+        survivor.kam = kam_user
+        changed = True
+    if extra_defaults:
+        for field, val in extra_defaults.items():
+            if val is not None and not getattr(survivor, field, None):
+                setattr(survivor, field, val)
+                changed = True
+    if changed:
+        try:
+            survivor.save()
+        except Exception:
+            pass
+
+    return survivor
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# KAM USER MAPPING
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Module-level cache: rebuilt on each sync
+_kam_user_cache: Dict[str, Optional[User]] = {}
+
+
+def _load_kam_names_tab(service, sheet_id: str) -> Dict[str, str]:
+    """
+    Read KAM names tab → returns {display_name: email} dict.
+    Tab schema: Short Name[0] | KAM Name[1] | Email[2]
+    Also registers short names as aliases.
+    """
+    rows = _get_sheet_values(service, sheet_id, _tab_kam_names())
+    if not rows:
+        logger.warning("KAM names tab empty or missing")
+        return {}
+
+    mapping: Dict[str, str] = {}
+    for row in rows[1:]:  # skip header
+        short_name = _cell(row, 0)
+        kam_name   = _cell(row, 1)
+        email      = _cell(row, 2)
+        if not email or "@" not in email:
+            continue
+        if kam_name:
+            mapping[kam_name] = email
+        if short_name and short_name != kam_name:
+            mapping[short_name] = email
+
+    logger.info("KAM names tab loaded: %d entries", len(mapping))
+    return mapping
+
+
+def _build_user_lookup() -> Dict[str, User]:
+    """Build a display-name → User lookup from DB users."""
+    lookup: Dict[str, User] = {}
+    first_name_index: Dict[str, List[User]] = {}
+
+    for u in User.objects.filter(is_active=True).select_related("profile") if hasattr(User, "profile") else User.objects.filter(is_active=True):
+        # Full name from profile
+        try:
+            full = f"{u.first_name} {u.last_name}".strip()
+            if full:
+                lookup[_normalize(full)] = u
+        except Exception:
+            pass
+
+        # Email
+        if u.email:
+            lookup[_normalize(u.email)] = u
+            local = u.email.split("@")[0]
+            lookup[_normalize(local)] = u
+
+        # Username
+        uname = u.username or ""
+        lookup[_normalize(uname)] = u
+
+        # Decompose separator-based username (ravi.pandey → ravi, pandey)
+        parts = re.split(r"[._\-]", uname)
+        if len(parts) >= 2:
+            lookup[_normalize(parts[0])] = u          # first part
+            lookup[_normalize("".join(parts))] = u    # joined
+
+        # Track first names for single-user shortcuts
+        first = (u.first_name or parts[0] if parts else "").strip().lower()
+        if first:
+            first_name_index.setdefault(first, []).append(u)
+
+    # Register unambiguous first names
+    for fname, users in first_name_index.items():
+        if len(users) == 1:
+            lookup[_normalize(fname)] = users[0]
+
+    return lookup
+
+
+def _resolve_kam_user(
+    name: str,
+    tab_mapping: Dict[str, str],   # from KAM names tab: name → email
+    db_lookup: Dict[str, User],    # from DB
+    env_usermap: Dict[str, str],   # from KAM_USERMAP_JSON env
+    stats: SyncStats,
+) -> Optional[User]:
+    """
+    Multi-strategy KAM resolution (highest priority first):
+    1. env_usermap override (KAM_USERMAP_JSON)
+    2. KAM names tab mapping (name → email → DB user)
+    3. DB lookup by normalized name
+    4. DB lookup by compact key
+    5. Direct DB query
+    """
+    if not name:
+        return None
+
+    key = _normalize(name)
+
+    # Check module cache
+    if key in _kam_user_cache:
+        return _kam_user_cache[key]
+
+    user: Optional[User] = None
+
+    # 1. Env override
+    email_override = env_usermap.get(name) or env_usermap.get(key)
+    if email_override:
+        try:
+            user = User.objects.get(email__iexact=email_override)
+        except User.DoesNotExist:
+            try:
+                user = User.objects.get(username__iexact=email_override)
+            except User.DoesNotExist:
+                pass
+
+    # 2. KAM names tab → email → DB
+    if not user:
+        email_from_tab = tab_mapping.get(name) or tab_mapping.get(key)
+        if not email_from_tab:
+            # Try normalized match
+            for tab_name, tab_email in tab_mapping.items():
+                if _normalize(tab_name) == key:
+                    email_from_tab = tab_email
+                    break
+        if email_from_tab:
+            try:
+                user = User.objects.get(email__iexact=email_from_tab)
+            except User.DoesNotExist:
+                try:
+                    user = User.objects.get(username__iexact=email_from_tab)
+                except User.DoesNotExist:
+                    # Create or get by email if auto-create enabled
+                    if _env_flag("KAM_AUTO_CREATE_USERS", False):
+                        kam_full = name
+                        parts = kam_full.split()
+                        user, created = User.objects.get_or_create(
+                            email=email_from_tab,
+                            defaults={
+                                "username": email_from_tab,
+                                "first_name": parts[0] if parts else "",
+                                "last_name": " ".join(parts[1:]) if len(parts) > 1 else "",
+                            }
+                        )
+                        if created:
+                            logger.info("Auto-created user for KAM '%s' → %s", name, email_from_tab)
+
+    # 3. DB lookup dict
+    if not user:
+        user = db_lookup.get(key)
+
+    # 4. Compact key (strip all non-alphanumeric)
+    if not user:
+        compact = re.sub(r"[^a-z0-9]", "", key)
+        user = db_lookup.get(compact)
+
+    # 5. Direct DB query
+    if not user:
+        try:
+            user = User.objects.get(username__iexact=name)
+        except User.DoesNotExist:
+            pass
+    if not user:
+        try:
+            user = User.objects.filter(
+                first_name__iexact=name.split()[0],
+                last_name__iexact=name.split()[-1] if len(name.split()) > 1 else "",
+            ).first()
+        except Exception:
+            pass
+
+    if not user:
+        stats.unknown_kam += 1
+        stats.notes.append(f"Unknown KAM: '{name}'")
+        logger.warning("KAM not found: '%s'", name)
+
+    _kam_user_cache[key] = user
+    return user
+
+
+def _load_env_usermap() -> Dict[str, str]:
+    """Parse KAM_USERMAP_JSON env var → {name: email} dict."""
+    raw = _env("KAM_USERMAP_JSON", "{}")
+    try:
+        data = json.loads(raw)
+        # Normalize keys
+        return {_normalize(k): v for k, v in data.items()} | data
+    except json.JSONDecodeError:
+        logger.warning("KAM_USERMAP_JSON is not valid JSON")
+        return {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION: CUSTOMER DETAILS
+# Tab: Customer Details
+# Cols: Customer Name[0] | KAM Name[1] | Address[2] | Email[3] | Mobile No[4]
+#       Person Name[5] | Credit Limit[6] | Agreed Credit Period[7]
+#       Total Exposure (Rs)[8] | Overdues (Rs)[9] | Current Credit Limit[10]
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sync_customers(
+    service, sheet_id: str,
+    tab_mapping: Dict[str, str],
+    db_lookup: Dict[str, User],
+    env_usermap: Dict[str, str],
+) -> SyncStats:
+    stats = SyncStats()
+    rows = _get_sheet_values(service, sheet_id, _tab_customers())
+    if len(rows) < 2:
+        stats.notes.append("Customer Details tab: no data rows")
+        return stats
+
+    for row in rows[1:]:
+        name = _cell(row, 0)
         if not name:
             stats.skipped += 1
             continue
 
-        kam, kam_raw = _pick_row_kam(r, idx, usermap, user_lookup)
-        if not kam and kam_raw:
-            stats.add_unknown(kam_raw)
+        kam_name = _cell(row, 1)
+        kam_user = _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats) if kam_name else None
 
-        addr = (r[c_addr] if c_addr is not None and c_addr < len(r) else "").strip() or None
-        email = (r[c_email] if c_email is not None and c_email < len(r) else "").strip() or None
-        mobile = (r[c_mobile] if c_mobile is not None and c_mobile < len(r) else "").strip() or None
-        credit_limit = (
-            _to_decimal(r[c_credit_limit])
-            if c_credit_limit is not None and c_credit_limit < len(r)
-            else Decimal(0)
-        )
-        credit_days = (
-            _to_int(r[c_credit_days])
-            if c_credit_days is not None and c_credit_days < len(r)
-            else 0
-        )
-
-        if dry:
-            stats.customers_upserted += 1
-            continue
-
-        def _write():
+        try:
             with transaction.atomic():
-                _get_or_create_customer(
-                    name=name, kam=kam, address=addr, email=email,
-                    mobile=mobile, credit_limit=credit_limit,
-                    agreed_credit_period_days=credit_days, force_kam_assignment=True,
+                obj = _safe_get_or_create_customer(
+                    name,
+                    kam_user=kam_user,
+                    extra_defaults={
+                        "address":             _cell(row, 2),
+                        "email":               _cell(row, 3),
+                        "mobile":              _cell(row, 4),
+                        "contact_person":      _cell(row, 5),
+                        "credit_limit":        _decimal(_cell(row, 6)),
+                        "credit_period_days":  _decimal(_cell(row, 7)),
+                        "total_exposure":      _decimal(_cell(row, 8)),
+                        "current_credit_limit":_decimal(_cell(row, 10)),
+                    },
                 )
-            return None
-
-        _with_write_retry(_write)
-        stats.customers_upserted += 1
-
-
-def import_sales(stats: ImportStats):
-    tab = _resolve_sales_tab()
-    headers, rows = _read_tab(tab)
-    if not headers or not rows:
-        stats.notes.append(f"Sales: empty sheet ({tab})")
-        return
-
-    idx = _index(headers)
-    c_customer = _col(
-        idx, "Customer Name", "Consignee Name", "Buyer's Name", "Buyer's Name",
-        "Buyer\\'s Name", "customer_name", "party name", "customer",
-    )
-    c_date = _col(idx, "Invoice Date", "Date of Invoice", "invoice_date", "Date", "bill date")
-    c_qty = _col(idx, "QTY", "Qty(MT)", "Quantity", "qty_mt", "qty mt", "quantity mt", "invoice qty")
-    c_val = _col(
-        idx, "Invoice Value With GST", "Invoice Value with GST", "Invoice Value",
-        "revenue_gst", "invoice value with gst rs", "invoice amount", "invoice value rs",
-    )
-    c_invno = _col(idx, "Invoice Number", "Invoice No", "invoice_number", "bill no", "bill number")
-    c_grade = _col(idx, "Grade", "grade")
-    c_size = _col(idx, "Size", "size", "Size(MM)", "size mm")
-
-    if None in (c_customer, c_date):
-        stats.notes.append(f"Sales: required columns missing in ({tab})")
-        return
-
-    usermap = _usermap()
-    user_lookup = _build_user_lookup()
-    dry = _dry_run()
-
-    for r in rows:
-        kam, kam_raw = _pick_row_kam(r, idx, usermap, user_lookup)
-        if not kam:
-            if kam_raw:
-                stats.add_unknown(kam_raw)
+                # Always update all fields from Customer Details tab (authoritative)
+                obj.address             = _cell(row, 2) or obj.address
+                obj.email               = _cell(row, 3) or obj.email
+                obj.mobile              = _cell(row, 4) or obj.mobile
+                obj.contact_person      = _cell(row, 5) or obj.contact_person
+                obj.credit_limit        = _decimal(_cell(row, 6)) or obj.credit_limit
+                obj.credit_period_days  = _decimal(_cell(row, 7)) or obj.credit_period_days
+                obj.total_exposure      = _decimal(_cell(row, 8)) or obj.total_exposure
+                obj.current_credit_limit= _decimal(_cell(row, 10)) or obj.current_credit_limit
+                if kam_user:
+                    obj.kam = kam_user
+                obj.save()
+                stats.customers_upserted += 1
+        except Exception as exc:
+            logger.error("Customer upsert failed for '%s': %s", name, exc)
             stats.skipped += 1
-            continue
 
-        inv_date = _parse_date(r[c_date] if c_date < len(r) else "")
-        if not inv_date:
-            stats.skipped += 1
-            continue
-
-        cust_name = (r[c_customer] if c_customer is not None and c_customer < len(r) else "").strip()
-        if not cust_name:
-            stats.skipped += 1
-            continue
-
-        qty_mt = _to_decimal(r[c_qty] if c_qty is not None and c_qty < len(r) else "")
-        value_gst = _to_decimal(r[c_val] if c_val is not None and c_val < len(r) else "")
-        inv_no = (r[c_invno] if c_invno is not None and c_invno < len(r) else "").strip()
-        grade = (r[c_grade] if c_grade is not None and c_grade < len(r) else "").strip() or None
-        size = (r[c_size] if c_size is not None and c_size < len(r) else "").strip() or None
-
-        row_uuid = inv_no or _hash_row(
-            "sales", tab, cust_name, kam.username, str(inv_date),
-            str(qty_mt), str(value_gst), str(grade or ""), str(size or ""),
-        )
-
-        if dry:
-            stats.sales_upserted += 1
-            continue
-
-        def _write():
-            with transaction.atomic():
-                cust = _get_or_create_customer(name=cust_name, kam=kam, force_kam_assignment=False)
-                inv, created = InvoiceFact.objects.get_or_create(
-                    row_uuid=row_uuid,
-                    defaults=dict(
-                        invoice_date=inv_date, customer=cust, kam=kam,
-                        grade=grade, size=size, qty_mt=qty_mt, revenue_gst=value_gst,
-                    ),
-                )
-                if not created:
-                    changed = False
-                    for attr, val in [
-                        ("invoice_date", inv_date), ("customer_id", cust.id),
-                        ("kam_id", kam.id), ("grade", grade), ("size", size),
-                        ("qty_mt", qty_mt), ("revenue_gst", value_gst),
-                    ]:
-                        field_name = attr.replace("_id", "")
-                        if attr.endswith("_id"):
-                            if getattr(inv, attr) != val:
-                                setattr(inv, field_name, cust if attr == "customer_id" else kam)
-                                changed = True
-                        else:
-                            if getattr(inv, attr) != val:
-                                setattr(inv, attr, val)
-                                changed = True
-                    if changed:
-                        inv.save()
-            return None
-
-        _with_write_retry(_write)
-        stats.sales_upserted += 1
-
-
-def import_leads(stats: ImportStats):
-    tab = _resolve_leads_tab()
-    headers, rows = _read_tab(tab)
-    if not headers or not rows:
-        stats.notes.append(f"Leads: empty sheet ({tab})")
-        return
-
-    idx = _index(headers)
-    c_ts = _col(
-        idx, "Timestamp", "Date of Enquiry", "doe", "enquiry date",
-        "lead date", "created at", "date", "enquiry_date", "Entry Date", "entry date",
-    )
-    c_customer = _col(
-        idx, "Customer Name", "customer_name", "party name", "customer",
-        "company name", "Company Name", "Firm Name", "firm name",
-    )
-    c_qty = _col(
-        idx, "Qty (MT)", "QTY", "Qty", "qty_mt", "qty", "quantity",
-        "requirement mt", "requirement", "Requirement (MT)", "Req (MT)",
-    )
-    c_status = _col(idx, "Status", "status", "lead status", "enquiry status", "Lead Status", "Enquiry Status")
-    c_remarks = _col(idx, "Remarks", "remarks", "remark", "notes", "comment", "Notes", "Comments")
-    c_grade = _col(idx, "Grade", "grade")
-    c_size = _col(idx, "Size", "Size(MM)", "size", "size mm")
-
-    if c_ts is None:
-        actual_headers = list(idx.keys())[:20]
-        stats.notes.append(
-            f"Leads: required date column missing in tab '{tab}'. "
-            f"Actual headers (first 20): {actual_headers}. "
-            f"Set KAM_TAB_LEADS env var to the correct tab name."
-        )
-        logger.warning("Leads import skipped: date column not found in tab '%s'. Headers: %s", tab, list(idx.keys()))
-        return
-
-    usermap = _usermap()
-    user_lookup = _build_user_lookup()
-    dry = _dry_run()
-
-    for r in rows:
-        kam, kam_raw = _pick_row_kam(r, idx, usermap, user_lookup)
-        if not kam:
-            if kam_raw:
-                stats.add_unknown(kam_raw)
-            stats.skipped += 1
-            continue
-
-        doe = _parse_date(r[c_ts] if c_ts < len(r) else "")
-        if not doe:
-            stats.skipped += 1
-            continue
-
-        qty_mt = _to_decimal(r[c_qty] if c_qty is not None and c_qty < len(r) else "")
-        status = _normalize_status(r[c_status] if c_status is not None and c_status < len(r) else "")
-        cust_name = (r[c_customer] if c_customer is not None and c_customer < len(r) else "").strip()
-        grade = (r[c_grade] if c_grade is not None and c_grade < len(r) else "").strip() or None
-        size = (r[c_size] if c_size is not None and c_size < len(r) else "").strip() or None
-        remarks = (r[c_remarks] if c_remarks is not None and c_remarks < len(r) else "").strip() or None
-
-        row_uuid = _hash_row(
-            "lead", tab, kam.username, str(doe), cust_name,
-            str(qty_mt), status, str(grade or ""), str(size or ""), str(remarks or ""),
-        )
-
-        if dry:
-            stats.leads_upserted += 1
-            continue
-
-        def _write():
-            with transaction.atomic():
-                cust = (
-                    _get_or_create_customer(name=cust_name, kam=kam, force_kam_assignment=False)
-                    if cust_name else None
-                )
-                LeadFact.objects.update_or_create(
-                    row_uuid=row_uuid,
-                    defaults=dict(
-                        doe=doe, kam=kam, customer=cust, qty_mt=qty_mt,
-                        status=status, grade=grade, size=size, remarks=remarks,
-                    ),
-                )
-            return None
-
-        _with_write_retry(_write)
-        stats.leads_upserted += 1
-
-
-def import_overdues(stats: ImportStats):
-    tab = _resolve_overdues_tab()
-    headers, rows = _read_tab(tab)
-    if not headers or not rows:
-        stats.notes.append(f"Overdues: empty sheet ({tab})")
-        return
-
-    idx = _index(headers)
-    c_customer = _col(idx, "Customer Name", "Customer", "customer_name", "party name")
-    c_overdue = _col(idx, "Overdues (Rs)", "Overdue", "overdue", "total overdue")
-    c_exposure = _col(idx, "Total Exposure (Rs)", "Exposure", "exposure", "total exposure")
-    a0 = _col(idx, "0-30", "ageing_0_30", "0 30")
-    a31 = _col(idx, "31-60", "ageing_31_60", "31 60")
-    a61 = _col(idx, "61-90", "ageing_61_90", "61 90")
-    a90 = _col(idx, "90+", "ageing_90_plus", "90 plus")
-
-    if c_customer is None or c_overdue is None:
-        stats.notes.append(f"Overdues: required columns missing in ({tab})")
-        return
-
-    dry = _dry_run()
-    snap_date = timezone.localdate()
-    totals: Dict[str, Dict[str, Decimal]] = {}
-
-    for r in rows:
-        cust_name = (r[c_customer] if c_customer < len(r) else "").strip()
-        if not cust_name:
-            continue
-        cur = totals.setdefault(cust_name, {
-            "overdue": Decimal(0), "exposure": Decimal(0),
-            "a0": Decimal(0), "a31": Decimal(0), "a61": Decimal(0), "a90": Decimal(0),
-        })
-        cur["overdue"] += _to_decimal(r[c_overdue] if c_overdue < len(r) else "0")
-        cur["exposure"] += _to_decimal(r[c_exposure] if c_exposure is not None and c_exposure < len(r) else "0")
-        cur["a0"] += _to_decimal(r[a0] if a0 is not None and a0 < len(r) else "0")
-        cur["a31"] += _to_decimal(r[a31] if a31 is not None and a31 < len(r) else "0")
-        cur["a61"] += _to_decimal(r[a61] if a61 is not None and a61 < len(r) else "0")
-        cur["a90"] += _to_decimal(r[a90] if a90 is not None and a90 < len(r) else "0")
-
-    for cust_name, vals in totals.items():
-        if dry:
-            stats.overdues_upserted += 1
-            continue
-
-        def _write():
-            with transaction.atomic():
-                cust = _get_or_create_customer(name=cust_name)
-                OverdueSnapshot.objects.update_or_create(
-                    snapshot_date=snap_date, customer=cust,
-                    defaults=dict(
-                        exposure=vals["exposure"], overdue=vals["overdue"],
-                        ageing_0_30=vals["a0"], ageing_31_60=vals["a31"],
-                        ageing_61_90=vals["a61"], ageing_90_plus=vals["a90"],
-                    ),
-                )
-            return None
-
-        _with_write_retry(_write)
-        stats.overdues_upserted += 1
-
-
-def run_sync_now() -> ImportStats:
-    stats = ImportStats()
-    sections = resolve_sections()
-    logger.info("KAM sync sections=%s tabs=%s", sections, resolve_tabs_for_logging())
-
-    if "customers" in sections:
-        import_customers(stats)
-    if "sales" in sections:
-        import_sales(stats)
-    if "leads" in sections:
-        import_leads(stats)
-    if "overdues" in sections:
-        import_overdues(stats)
-
-    logger.info("KAM sync stats: %s", stats.as_message())
     return stats
 
 
-# ----------------------------
-# Step sync (paged)
-# ----------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION: SALES — Sales (F)
+# Tab: Sales (F)
+# Cols: Date of Invoice[0] | Buyer's Name[1] | KAM[2] | Qty(MT)[3] | Full Name[4]
+# ─────────────────────────────────────────────────────────────────────────────
 
-BATCH_SIZE = 50
+def _sync_sales_f(
+    service, sheet_id: str,
+    tab_mapping: Dict[str, str],
+    db_lookup: Dict[str, User],
+    env_usermap: Dict[str, str],
+) -> SyncStats:
+    stats = SyncStats()
+    rows = _get_sheet_values(service, sheet_id, _tab_sales_f())
+    if len(rows) < 2:
+        stats.notes.append("Sales (F) tab: no data rows")
+        return stats
 
+    for i, row in enumerate(rows[1:], start=2):
+        invoice_date_raw = _cell(row, 0)
+        buyer_name       = _cell(row, 1)
+        kam_name         = _cell(row, 2)
+        qty_raw          = _cell(row, 3)
+        full_name        = _cell(row, 4)  # Full buyer name if buyer_name is abbreviated
 
-def _cursor(current: Optional[str], total_rows: int) -> Tuple[int, Optional[str]]:
-    start = int(current) if current else 2
-    end = min(start + BATCH_SIZE - 1, total_rows)
-    new_cur = str(end + 1) if end < total_rows else None
-    return start, new_cur
-
-
-def _headers(values: List[List[str]]) -> List[str]:
-    if not values:
-        return []
-    return [_canon_header(h) for h in values[0]]
-
-
-def _idx(headers: List[str]) -> Dict[str, int]:
-    return {h: i for i, h in enumerate(headers)}
-
-
-def _val(row: List[str], i: Optional[int]) -> str:
-    if i is None or i >= len(row):
-        return ""
-    return (row[i] or "").strip()
-
-
-def _pick(idm: Dict[str, int], *names: str) -> Optional[int]:
-    return _col(idm, *names)
-
-
-def _process_page(tab: str, cursor: Optional[str], handler) -> Tuple[int, Optional[str]]:
-    ws = _ws_by_name(tab)
-    values = ws.get_all_values()
-    if not values or len(values) < 2:
-        return 0, None
-    total_rows = len(values)
-    start, new_cur = _cursor(cursor, total_rows)
-    headers = _headers(values)
-    page_values = [headers] + values[start - 1: min(start - 1 + BATCH_SIZE, total_rows)]
-    processed = handler(page_values)
-    return processed, new_cur
-
-
-def _customers_handler(values: List[List[str]]) -> int:
-    headers = _headers(values)
-    idm = _idx(headers)
-    cn = _pick(idm, "Customer Name", "Customer", "Name", "customer_name", "party name")
-    addr = _pick(idm, "Address", "address", "customer address")
-    email = _pick(idm, "Email", "email", "mail id")
-    mob = _pick(idm, "Mobile No", "Mobile", "mobile", "phone", "contact no", "mobile number")
-    cl = _pick(idm, "Credit Limit", "credit_limit")
-    acp = _pick(idm, "Agreed Credit Period", "Agreed Credit Period ", "agreed_credit_period_days")
-    usermap = _usermap()
-    user_lookup = _build_user_lookup()
-    processed = 0
-
-    for r in values[1:]:
-        name = _val(r, cn)
-        if not name:
+        if not buyer_name and not full_name:
+            stats.skipped += 1
             continue
-        kam, _kam_raw = _pick_row_kam(r, idm, usermap, user_lookup)
 
-        def _write():
+        customer_name = full_name or buyer_name
+        invoice_date  = _parse_date(invoice_date_raw)
+        if not invoice_date:
+            logger.debug("Sales (F) row %d: cannot parse date '%s'", i, invoice_date_raw)
+            stats.skipped += 1
+            continue
+
+        qty = _decimal(qty_raw)
+        kam_user = _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats) if kam_name else None
+
+        # Get or create customer
+        customer = _safe_get_or_create_customer(customer_name, kam_user=kam_user)
+
+        try:
             with transaction.atomic():
-                _get_or_create_customer(
-                    name=name, kam=kam,
-                    address=_val(r, addr) or None,
-                    email=_val(r, email) or None,
-                    mobile=_val(r, mob) or None,
-                    credit_limit=_to_decimal(_val(r, cl)),
-                    agreed_credit_period_days=_to_int(_val(r, acp)),
-                    force_kam_assignment=True,
+                InvoiceFact.objects.update_or_create(
+                    customer=customer,
+                    invoice_date=invoice_date,
+                    source_tab="Sales (F)",
+                    # Use buyer_name + date as natural key to avoid duplicates
+                    defaults={
+                        "kam":         kam_user,
+                        "qty_mt":      qty or Decimal("0"),
+                        "invoice_value": Decimal("0"),  # Sales (F) has no value column
+                        "raw_buyer_name": buyer_name,
+                    },
                 )
-            return None
+                stats.sales_upserted += 1
+        except Exception as exc:
+            logger.error("Sales (F) row %d upsert failed: %s", i, exc)
+            stats.skipped += 1
 
-        _with_write_retry(_write)
-        processed += 1
-    return processed
+    return stats
 
 
-def _invoices_handler(values: List[List[str]]) -> int:
-    headers = _headers(values)
-    idm = _idx(headers)
-    cust = _pick(
-        idm, "Customer Name", "Consignee Name", "Buyer's Name", "Buyer's Name",
-        "Buyer\\'s Name", "customer_name", "party name", "customer",
-    )
-    invd = _pick(idm, "Invoice Date", "Date of Invoice", "invoice_date", "Date", "bill date")
-    qty = _pick(idm, "QTY", "Qty(MT)", "Quantity", "qty_mt", "qty mt", "quantity mt", "invoice qty")
-    val = _pick(
-        idm, "Invoice Value With GST", "Invoice Value with GST", "Invoice Value",
-        "revenue_gst", "invoice value with gst rs", "invoice amount", "invoice value rs",
-    )
-    invno = _pick(idm, "Invoice Number", "Invoice No", "invoice_number", "bill no", "bill number")
-    grade_i = _pick(idm, "Grade", "grade")
-    size_i = _pick(idm, "Size", "size", "Size(MM)", "size mm")
-    usermap = _usermap()
-    user_lookup = _build_user_lookup()
-    processed = 0
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION: SALES — Sheet1 (historical invoices)
+# Tab: Sheet1
+# Cols: KAM Name[0] | Customer Name[1] | Consignee Name[2] | Vehicle Number[3]
+#       Invoice Number[4] | Invoice Date[5] | Invoice Value With GST[6]
+#       Business Vertical[7] | Dispatch From[8] | Dispatch To[9]
+#       Transporter Name[10] | Heat Number[11] | Grade[12] | Size[13]
+#       QTY[14] | Shape[15] | Rate/MT[16] | Invoice Value[17]
+#       Freight[18] | Other Cost[19] | Remarks[20] | Steel Mill[21]
+#       TC Copy[22] | Invoice Image[23] | LR Copy[24] | Truck Image[25]
+#       OA/PO[26] | Material Identification[27]
+# ─────────────────────────────────────────────────────────────────────────────
 
-    for r in values[1:]:
-        kam, _kam_raw = _pick_row_kam(r, idm, usermap, user_lookup)
-        inv_date = _parse_date(_val(r, invd))
-        if not kam or not inv_date:
+def _sync_sheet1(
+    service, sheet_id: str,
+    tab_mapping: Dict[str, str],
+    db_lookup: Dict[str, User],
+    env_usermap: Dict[str, str],
+) -> SyncStats:
+    stats = SyncStats()
+    rows = _get_sheet_values(service, sheet_id, _tab_sheet1())
+    if len(rows) < 2:
+        stats.notes.append("Sheet1 tab: no data rows")
+        return stats
+
+    for i, row in enumerate(rows[1:], start=2):
+        kam_name      = _cell(row, 0)
+        customer_name = _cell(row, 1)
+        invoice_no    = _cell(row, 4)
+        invoice_date  = _parse_date(_cell(row, 5))
+        value_gst     = _decimal(_cell(row, 6))
+        qty           = _decimal(_cell(row, 14))
+        invoice_value = _decimal(_cell(row, 17))
+        rate_mt       = _decimal(_cell(row, 16))
+        grade         = _cell(row, 12)
+        size          = _cell(row, 13)
+
+        if not customer_name:
+            stats.skipped += 1
             continue
-        customer_name = _val(r, cust)
+        if not invoice_date:
+            stats.skipped += 1
+            continue
+
+        kam_user = _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats) if kam_name else None
+
+        customer = _safe_get_or_create_customer(customer_name, kam_user=kam_user)
+
+        try:
+            with transaction.atomic():
+                lookup_kwargs = {"invoice_no": invoice_no} if invoice_no else {
+                    "customer": customer,
+                    "invoice_date": invoice_date,
+                    "source_tab": "Sheet1",
+                }
+                InvoiceFact.objects.update_or_create(
+                    **lookup_kwargs,
+                    defaults={
+                        "customer":      customer,
+                        "kam":           kam_user,
+                        "invoice_date":  invoice_date,
+                        "invoice_no":    invoice_no,
+                        "invoice_value": value_gst or invoice_value or Decimal("0"),
+                        "qty_mt":        qty or Decimal("0"),
+                        "rate_mt":       rate_mt,
+                        "grade":         grade,
+                        "size":          size,
+                        "source_tab":    "Sheet1",
+                    },
+                )
+                stats.sales_upserted += 1
+        except Exception as exc:
+            logger.error("Sheet1 row %d upsert failed: %s", i, exc)
+            stats.skipped += 1
+
+    return stats
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION: LEADS — Front End (enquiry pipeline)
+# Tab: Front End
+# Cols: Enquiry Number[0] | Timestamp[1] | Email[2] | Type[3] | KAM Name[4]
+#       Customer Name[5] | Grade[6] | Size(MM)[7] | Qty (MT)[8]
+#       Supply Condition[9] | Shape[10] | Steel Mill[11] | Enquiry PDF[12]
+#       Response Time[13] | Regret Enquiry[14] | Response Time for Regret[15]
+#       Quotation PDF[16] | Response for Quotation[17]
+#       Stock Available When Captured[18] | Pending Order When Captured[19]
+#       Offer/Quotation rate (Rs/MT)[20] | Status[21] | Revenue RS/MT[22]
+#       Remarks[23]
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sync_frontend(
+    service, sheet_id: str,
+    tab_mapping: Dict[str, str],
+    db_lookup: Dict[str, User],
+    env_usermap: Dict[str, str],
+) -> SyncStats:
+    stats = SyncStats()
+    rows = _get_sheet_values(service, sheet_id, _tab_frontend())
+    if len(rows) < 2:
+        stats.notes.append("Front End tab: no data rows")
+        return stats
+
+    for i, row in enumerate(rows[1:], start=2):
+        enquiry_no    = _cell(row, 0)
+        timestamp_raw = _cell(row, 1)
+        kam_name      = _cell(row, 4)
+        customer_name = _cell(row, 5)
+        grade         = _cell(row, 6)
+        size          = _cell(row, 7)
+        qty_raw       = _cell(row, 8)
+        status        = _cell(row, 21)
+        revenue_mt    = _decimal(_cell(row, 22))
+        remarks       = _cell(row, 23)
+
+        if not customer_name:
+            stats.skipped += 1
+            continue
+
+        ts = _parse_timestamp(timestamp_raw)
+        qty = _decimal(qty_raw)
+        kam_user = _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats) if kam_name else None
+
+        customer = _safe_get_or_create_customer(customer_name, kam_user=kam_user)
+
+        try:
+            with transaction.atomic():
+                lookup_kwargs = {"enquiry_no": enquiry_no} if enquiry_no else {
+                    "customer": customer,
+                    "source_tab": "Front End",
+                    "created_at": ts,
+                }
+                LeadFact.objects.update_or_create(
+                    **lookup_kwargs,
+                    defaults={
+                        "customer":    customer,
+                        "kam":         kam_user,
+                        "created_at":  ts,
+                        "qty_mt":      qty or Decimal("0"),
+                        "status":      status or "OPEN",
+                        "grade":       grade,
+                        "size":        size,
+                        "revenue_mt":  revenue_mt,
+                        "remarks":     remarks,
+                        "source_tab":  "Front End",
+                        "enquiry_no":  enquiry_no,
+                    },
+                )
+                stats.leads_upserted += 1
+        except Exception as exc:
+            logger.error("Front End row %d upsert failed: %s", i, exc)
+            stats.skipped += 1
+
+    return stats
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION: LEADS — Enquiry (F) (simpler follow-up tracker)
+# Tab: Enquiry (F)
+# Cols: Timestamp[0] | KAM Name[1] | Customer Name[2] | Qty (MT)[3]
+#       Status[4] | Remarks[5]
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sync_enquiry_f(
+    service, sheet_id: str,
+    tab_mapping: Dict[str, str],
+    db_lookup: Dict[str, User],
+    env_usermap: Dict[str, str],
+) -> SyncStats:
+    stats = SyncStats()
+    rows = _get_sheet_values(service, sheet_id, _tab_enquiry_f())
+    if len(rows) < 2:
+        stats.notes.append("Enquiry (F) tab: no data rows")
+        return stats
+
+    for i, row in enumerate(rows[1:], start=2):
+        timestamp_raw = _cell(row, 0)
+        kam_name      = _cell(row, 1)
+        customer_name = _cell(row, 2)
+        qty_raw       = _cell(row, 3)
+        status        = _cell(row, 4)
+        remarks       = _cell(row, 5)
+
+        if not customer_name:
+            stats.skipped += 1
+            continue
+
+        ts  = _parse_timestamp(timestamp_raw)
+        qty = _decimal(qty_raw)
+        kam_user = _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats) if kam_name else None
+
+        customer = _safe_get_or_create_customer(customer_name, kam_user=kam_user)
+
+        try:
+            with transaction.atomic():
+                LeadFact.objects.update_or_create(
+                    customer=customer,
+                    source_tab="Enquiry (F)",
+                    created_at=ts,
+                    defaults={
+                        "kam":        kam_user,
+                        "qty_mt":     qty or Decimal("0"),
+                        "status":     status or "OPEN",
+                        "remarks":    remarks,
+                        "source_tab": "Enquiry (F)",
+                    },
+                )
+                stats.leads_upserted += 1
+        except Exception as exc:
+            logger.error("Enquiry (F) row %d upsert failed: %s", i, exc)
+            stats.skipped += 1
+
+    return stats
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION: OVERDUES
+# Tab: Overdues
+# Cols: Customer Name[0] | KAM Name[1] | Overdues (Rs)[2] | [blank][3]
+#       KAM Name[4] | Overdue[5]   ← cols 4-5 are a separate summary block
+#
+# Strategy: read cols 0-2 first (customer-level), then cols 4-5 (KAM summary).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sync_overdues(
+    service, sheet_id: str,
+    tab_mapping: Dict[str, str],
+    db_lookup: Dict[str, User],
+    env_usermap: Dict[str, str],
+) -> SyncStats:
+    stats = SyncStats()
+    rows = _get_sheet_values(service, sheet_id, _tab_overdues())
+    if len(rows) < 2:
+        stats.notes.append("Overdues tab: no data rows")
+        return stats
+
+    snapshot_date = timezone.now().date()
+
+    for i, row in enumerate(rows[1:], start=2):
+        customer_name = _cell(row, 0)
+        kam_name      = _cell(row, 1)
+        overdue_raw   = _cell(row, 2)
+
         if not customer_name:
             continue
 
-        qty_mt = _to_decimal(_val(r, qty))
-        revenue_gst = _to_decimal(_val(r, val))
-        inv_no = _val(r, invno)
-        grade = _val(r, grade_i) or None
-        size = _val(r, size_i) or None
-        row_uuid = inv_no or _hash_row(
-            "sales", "step", customer_name, kam.username, str(inv_date),
-            str(qty_mt), str(revenue_gst), str(grade or ""), str(size or ""),
-        )
-
-        def _write():
-            with transaction.atomic():
-                customer = _get_or_create_customer(name=customer_name, kam=kam, force_kam_assignment=False)
-                InvoiceFact.objects.update_or_create(
-                    row_uuid=row_uuid,
-                    defaults={
-                        "invoice_date": inv_date, "customer": customer, "kam": kam,
-                        "grade": grade, "size": size, "qty_mt": qty_mt, "revenue_gst": revenue_gst,
-                    },
-                )
-            return None
-
-        _with_write_retry(_write)
-        processed += 1
-    return processed
-
-
-def _leads_handler(values: List[List[str]]) -> int:
-    headers = _headers(values)
-    idm = _idx(headers)
-    ts = _pick(
-        idm, "Timestamp", "Date of Enquiry", "doe", "enquiry date",
-        "lead date", "created at", "date", "enquiry_date", "Entry Date", "entry date",
-    )
-    cust = _pick(
-        idm, "Customer Name", "customer_name", "party name", "customer",
-        "company name", "Company Name", "Firm Name", "firm name",
-    )
-    qty = _pick(
-        idm, "Qty (MT)", "QTY", "Qty", "qty_mt", "qty", "quantity",
-        "requirement mt", "requirement", "Requirement (MT)", "Req (MT)",
-    )
-    status_i = _pick(idm, "Status", "status", "lead status", "enquiry status", "Lead Status", "Enquiry Status")
-    grade_i = _pick(idm, "Grade", "grade")
-    size_i = _pick(idm, "Size", "Size(MM)", "size", "size mm")
-    remarks_i = _pick(idm, "Remarks", "remarks", "remark", "notes", "comment", "Notes", "Comments")
-    usermap = _usermap()
-    user_lookup = _build_user_lookup()
-    processed = 0
-
-    for r in values[1:]:
-        doe = _parse_date(_val(r, ts))
-        kam, _kam_raw = _pick_row_kam(r, idm, usermap, user_lookup)
-        if not kam or not doe:
+        overdue_amt = _decimal(overdue_raw)
+        if overdue_amt is None:
+            stats.skipped += 1
             continue
 
-        cust_name = _val(r, cust)
-        qty_mt = _to_decimal(_val(r, qty))
-        status = _normalize_status(_val(r, status_i))
-        grade = _val(r, grade_i) or None
-        size = _val(r, size_i) or None
-        remarks = _val(r, remarks_i) or None
-        row_uuid = _hash_row(
-            "lead", "step", kam.username, str(doe), cust_name,
-            str(qty_mt), status, str(grade or ""), str(size or ""), str(remarks or ""),
-        )
+        kam_user = _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats) if kam_name else None
 
-        def _write():
+        customer = _safe_get_or_create_customer(customer_name, kam_user=kam_user)
+
+        try:
             with transaction.atomic():
-                customer = (
-                    _get_or_create_customer(name=cust_name, kam=kam, force_kam_assignment=False)
-                    if cust_name else None
-                )
-                LeadFact.objects.update_or_create(
-                    row_uuid=row_uuid,
-                    defaults={
-                        "doe": doe, "kam": kam, "customer": customer, "qty_mt": qty_mt,
-                        "status": status, "grade": grade, "size": size, "remarks": remarks,
-                    },
-                )
-            return None
-
-        _with_write_retry(_write)
-        processed += 1
-    return processed
-
-
-def _overdues_handler(values: List[List[str]]) -> int:
-    headers = _headers(values)
-    idm = _idx(headers)
-    cust = _pick(idm, "Customer Name", "customer_name", "Customer", "party name")
-    overdue_i = _pick(idm, "Overdues (Rs)", "Overdue", "overdue", "total overdue")
-    exposure_i = _pick(idm, "Total Exposure (Rs)", "Exposure", "exposure", "total exposure")
-    a0 = _pick(idm, "0-30", "ageing_0_30", "0 30")
-    a31 = _pick(idm, "31-60", "ageing_31_60", "31 60")
-    a61 = _pick(idm, "61-90", "ageing_61_90", "61 60")
-    a90 = _pick(idm, "90+", "ageing_90_plus", "90 plus")
-    snap_date = timezone.localdate()
-    totals: Dict[str, Dict[str, Decimal]] = {}
-
-    for r in values[1:]:
-        cust_name = _val(r, cust)
-        if not cust_name:
-            continue
-        cur = totals.setdefault(cust_name, {
-            "overdue": Decimal(0), "exposure": Decimal(0),
-            "a0": Decimal(0), "a31": Decimal(0), "a61": Decimal(0), "a90": Decimal(0),
-        })
-        cur["overdue"] += _to_decimal(_val(r, overdue_i))
-        cur["exposure"] += _to_decimal(_val(r, exposure_i))
-        cur["a0"] += _to_decimal(_val(r, a0))
-        cur["a31"] += _to_decimal(_val(r, a31))
-        cur["a61"] += _to_decimal(_val(r, a61))
-        cur["a90"] += _to_decimal(_val(r, a90))
-
-    processed = 0
-    for cust_name, vals in totals.items():
-        def _write():
-            with transaction.atomic():
-                cust_obj = _get_or_create_customer(name=cust_name)
                 OverdueSnapshot.objects.update_or_create(
-                    snapshot_date=snap_date, customer=cust_obj,
-                    defaults=dict(
-                        exposure=vals["exposure"], overdue=vals["overdue"],
-                        ageing_0_30=vals["a0"], ageing_31_60=vals["a31"],
-                        ageing_61_90=vals["a61"], ageing_90_plus=vals["a90"],
-                    ),
+                    customer=customer,
+                    snapshot_date=snapshot_date,
+                    defaults={
+                        "kam":         kam_user,
+                        "overdue_amt": overdue_amt,
+                    },
                 )
-            return None
+                stats.overdues_upserted += 1
+        except Exception as exc:
+            logger.error("Overdues row %d upsert failed: %s", i, exc)
+            stats.skipped += 1
 
-        _with_write_retry(_write)
-        processed += 1
-    return processed
+    return stats
 
 
-def step_sync(intent: SyncIntent) -> Dict:
-    sheet_id = _getenv("KAM_SALES_SHEET_ID")
-    if not sheet_id:
-        return {
-            "last_customer_cursor": None, "last_invoice_cursor": None,
-            "last_lead_cursor": None, "last_overdue_cursor": None, "done": True,
-        }
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN SYNC ORCHESTRATOR
+# ─────────────────────────────────────────────────────────────────────────────
 
-    tabs = {
-        "customers": _resolve_customers_tab(),
-        "invoices": _resolve_sales_tab(),
-        "leads": _resolve_leads_tab(),
-        "overdues": _resolve_overdues_tab(),
-    }
+def run_sync_now() -> SyncStats:
+    """
+    Run full sync across all enabled sections.
+    Order: KAM names (lookup) → Customers → Sales (F) → Sheet1 → Front End → Enquiry (F) → Overdues
+    """
+    global _kam_user_cache
+    _kam_user_cache = {}  # Reset cache on each full sync
 
-    order = [
-        ("last_customer_cursor", tabs["customers"], _customers_handler),
-        ("last_invoice_cursor", tabs["invoices"], _invoices_handler),
-        ("last_lead_cursor", tabs["leads"], _leads_handler),
-        ("last_overdue_cursor", tabs["overdues"], _overdues_handler),
+    sheet_id = _require_env("KAM_SALES_SHEET_ID")
+    sections = resolve_sections()
+    total    = SyncStats()
+
+    try:
+        service = build_sheets_service()
+    except GoogleCredentialError:
+        raise
+
+    # ── 1. Load KAM names tab (always — needed for all other sections) ──────
+    tab_mapping  = _load_kam_names_tab(service, sheet_id)
+    db_lookup    = _build_user_lookup()
+    env_usermap  = _load_env_usermap()
+
+    logger.info(
+        "Starting sync | sheet=%s | tab_mapping_entries=%d | db_users=%d",
+        sheet_id, len(tab_mapping), len(db_lookup)
+    )
+
+    # ── 2. Customer Details ──────────────────────────────────────────────────
+    if sections.get("customers"):
+        logger.info("Syncing: Customer Details")
+        s = _sync_customers(service, sheet_id, tab_mapping, db_lookup, env_usermap)
+        total.merge(s)
+        logger.info("  → %d upserted, %d skipped", s.customers_upserted, s.skipped)
+
+    # ── 3. Sales (F) ────────────────────────────────────────────────────────
+    if sections.get("sales_f"):
+        logger.info("Syncing: Sales (F)")
+        s = _sync_sales_f(service, sheet_id, tab_mapping, db_lookup, env_usermap)
+        total.merge(s)
+        logger.info("  → %d upserted, %d skipped", s.sales_upserted, s.skipped)
+
+    # ── 4. Sheet1 (historical invoices) ─────────────────────────────────────
+    if sections.get("sheet1"):
+        logger.info("Syncing: Sheet1")
+        s = _sync_sheet1(service, sheet_id, tab_mapping, db_lookup, env_usermap)
+        total.merge(s)
+        logger.info("  → %d upserted, %d skipped", s.sales_upserted, s.skipped)
+
+    # ── 5. Front End (lead pipeline) ────────────────────────────────────────
+    if sections.get("frontend"):
+        logger.info("Syncing: Front End")
+        s = _sync_frontend(service, sheet_id, tab_mapping, db_lookup, env_usermap)
+        total.merge(s)
+        logger.info("  → %d upserted, %d skipped", s.leads_upserted, s.skipped)
+
+    # ── 6. Enquiry (F) ──────────────────────────────────────────────────────
+    if sections.get("enquiry_f"):
+        logger.info("Syncing: Enquiry (F)")
+        s = _sync_enquiry_f(service, sheet_id, tab_mapping, db_lookup, env_usermap)
+        total.merge(s)
+        logger.info("  → %d upserted, %d skipped", s.leads_upserted, s.skipped)
+
+    # ── 7. Overdues ──────────────────────────────────────────────────────────
+    if sections.get("overdues"):
+        logger.info("Syncing: Overdues")
+        s = _sync_overdues(service, sheet_id, tab_mapping, db_lookup, env_usermap)
+        total.merge(s)
+        logger.info("  → %d upserted, %d skipped", s.overdues_upserted, s.skipped)
+
+    logger.info("Sync complete: %s", total.as_message())
+    if total.notes:
+        logger.warning("Sync notes: %s", "; ".join(total.notes))
+
+    return total
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP SYNC (for views that use SyncIntent / paging)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def step_sync(intent: SyncIntent, *args, **kwargs) -> Dict[str, Any]:
+    """
+    Run one step of a paged sync.
+    Each step runs one section. Cursor stored on SyncIntent.
+    """
+    STEPS = [
+        ("customers",  "Customer Details"),
+        ("sales_f",    "Sales (F)"),
+        ("sheet1",     "Sheet1"),
+        ("frontend",   "Front End"),
+        ("enquiry_f",  "Enquiry (F)"),
+        ("overdues",   "Overdues"),
     ]
 
-    for attr, tab, handler in order:
-        cur = getattr(intent, attr)
-        _processed, new_cur = _process_page(tab, cur, handler)
+    cursor     = getattr(intent, "cursor_position", 0) or 0
+    sections   = resolve_sections()
+    sheet_id   = _require_env("KAM_SALES_SHEET_ID")
 
-        def _save_cursor():
-            with transaction.atomic():
-                locked = SyncIntent.objects.select_for_update().get(pk=intent.pk)
-                setattr(locked, attr, new_cur)
-                locked.save(update_fields=[attr, "updated_at"])
-                setattr(intent, attr, new_cur)
-            return None
+    if cursor >= len(STEPS):
+        intent.status = "COMPLETE"
+        intent.save(update_fields=["status"])
+        return {"done": True, "message": "Sync complete"}
 
-        _with_write_retry(_save_cursor)
+    section_key, section_label = STEPS[cursor]
 
-        if new_cur is not None:
-            break
+    try:
+        service     = build_sheets_service()
+        tab_mapping = _load_kam_names_tab(service, sheet_id)
+        db_lookup   = _build_user_lookup()
+        env_usermap = _load_env_usermap()
 
-    done = all(getattr(intent, a) is None for a, _, __ in order)
-    return {
-        "last_customer_cursor": intent.last_customer_cursor,
-        "last_invoice_cursor": intent.last_invoice_cursor,
-        "last_lead_cursor": intent.last_lead_cursor,
-        "last_overdue_cursor": intent.last_overdue_cursor,
-        "done": done,
-    }
+        stats = SyncStats()
+        if sections.get(section_key):
+            fn_map = {
+                "customers": _sync_customers,
+                "sales_f":   _sync_sales_f,
+                "sheet1":    _sync_sheet1,
+                "frontend":  _sync_frontend,
+                "enquiry_f": _sync_enquiry_f,
+                "overdues":  _sync_overdues,
+            }
+            fn = fn_map.get(section_key)
+            if fn:
+                stats = fn(service, sheet_id, tab_mapping, db_lookup, env_usermap)
+
+        intent.cursor_position = cursor + 1
+        intent.status = "COMPLETE" if (cursor + 1) >= len(STEPS) else "IN_PROGRESS"
+        intent.save(update_fields=["cursor_position", "status"])
+
+        return {
+            "done":    intent.status == "COMPLETE",
+            "step":    section_label,
+            "message": stats.as_message(),
+            "stats":   {
+                "customers_upserted": stats.customers_upserted,
+                "sales_upserted":     stats.sales_upserted,
+                "leads_upserted":     stats.leads_upserted,
+                "overdues_upserted":  stats.overdues_upserted,
+                "skipped":            stats.skipped,
+                "unknown_kam":        stats.unknown_kam,
+            },
+        }
+
+    except Exception as exc:
+        logger.error("step_sync failed at step '%s': %s", section_label, exc)
+        intent.status = "ERROR"
+        intent.save(update_fields=["status"])
+        raise

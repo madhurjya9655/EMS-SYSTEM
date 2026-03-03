@@ -1,231 +1,778 @@
 {# FILE: templates/kam/collections_plan.html #}
-{# PURPOSE: Clean Collections Plan UI, remove duplicate message, remove unused placeholders, keep business rules intact #}
-{# UPDATED: 2026-02-28 #}
+{# PURPOSE: Redesigned Collections Plan — financial-ledger aesthetic #}
+{# UPDATED: 2026-03-03 #}
 {% extends "base.html" %}
 {% load humanize crispy_forms_tags %}
 
 {% block title %}Collections Plan{% endblock %}
 
-{% block content %}
+{% block head_extra %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
 <style>
-  .kam-card {
-    border: 1px solid rgba(0,0,0,.08);
-    border-radius: 10px;
-    background: #fff;
-  }
+/* ─── Design Tokens ──────────────────────────────────────────── */
+:root {
+  --paper:        #faf9f7;
+  --paper-2:      #f3f1ee;
+  --paper-3:      #ede9e4;
+  --ink:          #18160f;
+  --ink-2:        #3a3830;
+  --ink-3:        #706c62;
+  --ink-4:        #a09b8f;
+  --rule:         #e3dfd8;
+  --rule-2:       #ede9e4;
+  --navy:         #1c2d4f;
+  --navy-l:       #26406e;
+  --navy-s:       #e8edf5;
+  --navy-s2:      #d4deee;
+  --teal:         #0c5c52;
+  --teal-s:       #d6f0ec;
+  --amber:        #7a4800;
+  --amber-s:      #fdf0d5;
+  --red:          #7c1c1c;
+  --red-s:        #fde8e8;
+  --font-body:    'Sora', system-ui, sans-serif;
+  --font-mono:    'IBM Plex Mono', monospace;
+  --r-xs:         4px;
+  --r-sm:         7px;
+  --r-md:         12px;
+  --r-lg:         16px;
+  --sh-card:      0 1px 3px rgba(24,22,15,.06), 0 4px 16px rgba(24,22,15,.05);
+  --sh-lift:      0 4px 24px rgba(24,22,15,.12), 0 1px 4px rgba(24,22,15,.06);
+}
 
-  .kam-card .card-body {
-    padding: 1rem;
-  }
+.cp * { box-sizing: border-box; font-family: var(--font-body); }
 
-  .kam-filter-bar .form-control,
-  .kam-filter-bar .form-select,
-  .kam-plan-form .form-control,
-  .kam-plan-form .form-select {
-    min-height: 38px;
-  }
+/* ─── Page header ────────────────────────────────────────────── */
+.cp-hd {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-bottom: 18px;
+  margin-bottom: 20px;
+  border-bottom: 2px solid var(--ink);
+}
+.cp-hd-eyebrow {
+  font-size: .63rem;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin-bottom: 6px;
+}
+.cp-hd h1 {
+  font-size: 1.45rem;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: -.04em;
+  margin: 0;
+  line-height: 1;
+}
+.cp-hd p {
+  margin: 5px 0 0;
+  font-size: .78rem;
+  color: var(--ink-3);
+}
 
-  .kam-soft-note {
-    font-size: .875rem;
-    color: #6c757d;
-  }
+/* ─── Filter strip ───────────────────────────────────────────── */
+.cp-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  background: var(--navy);
+  border-radius: var(--r-md);
+  padding: 14px 18px;
+  margin-bottom: 22px;
+}
+.cp-filters label {
+  display: block;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,.45);
+  margin-bottom: 4px;
+}
+.cp-filters select,
+.cp-filters input[type="date"],
+.cp-filters input[type="text"] {
+  height: 34px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: #fff;
+  background: rgba(255,255,255,.1);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: var(--r-xs);
+  padding: 0 10px;
+  outline: none;
+  transition: border-color .15s, background .15s;
+}
+.cp-filters select:focus,
+.cp-filters input:focus {
+  border-color: rgba(255,255,255,.45);
+  background: rgba(255,255,255,.16);
+}
+.cp-filters select option { background: var(--navy); color: #fff; }
+.cp-filter-sep { width: 1px; height: 34px; background: rgba(255,255,255,.12); align-self: flex-end; }
+.cp-filter-btn {
+  height: 34px;
+  padding: 0 20px;
+  background: rgba(255,255,255,.92);
+  color: var(--navy);
+  border: none;
+  border-radius: var(--r-xs);
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--font-body);
+  letter-spacing: .04em;
+  cursor: pointer;
+  align-self: flex-end;
+  transition: background .15s;
+}
+.cp-filter-btn:hover { background: #fff; }
 
-  .kam-form-section-title {
-    font-size: .95rem;
-    font-weight: 600;
-    color: #212529;
-    margin-bottom: .5rem;
-  }
+/* ─── Alerts ─────────────────────────────────────────────────── */
+.cp-alerts { margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px; }
+.cp-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 500;
+  border-left: 3px solid;
+}
+.cp-alert.success { background: var(--teal-s);  color: var(--teal);  border-color: var(--teal); }
+.cp-alert.error   { background: var(--red-s);   color: var(--red);   border-color: var(--red); }
+.cp-alert.info    { background: var(--navy-s);  color: var(--navy);  border-color: var(--navy); }
 
-  .kam-divider-text {
-    font-size: .78rem;
-    font-weight: 700;
-    letter-spacing: .04em;
-    color: #6c757d;
-    text-transform: uppercase;
-  }
+/* ─── Two-column layout ──────────────────────────────────────── */
+.cp-layout {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 960px) { .cp-layout { grid-template-columns: 1fr; } }
 
-  .kam-inline-help {
-    background: #f8f9fa;
-    border: 1px solid rgba(0,0,0,.07);
-    border-radius: 8px;
-    padding: .7rem .85rem;
-    color: #495057;
-  }
+/* ─── Form panel ─────────────────────────────────────────────── */
+.cp-panel {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-card);
+  overflow: hidden;
+  animation: cpUp .35s ease both;
+}
+.cp-panel-hd {
+  background: var(--navy);
+  padding: 16px 20px;
+}
+.cp-panel-hd h2 {
+  font-size: .875rem;
+  font-weight: 700;
+  color: #fff;
+  margin: 0;
+  letter-spacing: -.01em;
+}
+.cp-panel-hd p {
+  font-size: .72rem;
+  color: rgba(255,255,255,.48);
+  margin: 3px 0 0;
+}
+.cp-panel-body { padding: 20px; }
 
-  .kam-table-wrap {
-    overflow-x: auto;
-  }
+/* ─── Form controls ──────────────────────────────────────────── */
+.cp-field { margin-bottom: 14px; }
+.cp-field:last-child { margin-bottom: 0; }
+.cp-lbl {
+  display: block;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 5px;
+}
+.cp-field select,
+.cp-field input {
+  width: 100%;
+  height: 38px;
+  font-size: 13px;
+  font-family: var(--font-body);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-xs);
+  padding: 0 12px;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.cp-field select:focus, .cp-field input:focus {
+  border-color: var(--navy-l);
+  box-shadow: 0 0 0 3px var(--navy-s2);
+}
+.cp-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
-  .kam-table-wrap table {
-    margin-bottom: 0;
-  }
+.cp-section-rule {
+  height: 1px;
+  background: var(--rule);
+  margin: 18px -20px;
+}
+.cp-mode-lbl {
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cp-mode-lbl::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+}
 
-  .kam-empty-cell {
-    color: #6c757d;
-  }
+.cp-or {
+  text-align: center;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin: 14px 0;
+  position: relative;
+}
+.cp-or::before,
+.cp-or::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 38%;
+  height: 1px;
+  background: var(--rule);
+}
+.cp-or::before { left:0; }
+.cp-or::after  { right:0; }
+
+.cp-form-err {
+  background: var(--red-s);
+  border: 1px solid #f9baba;
+  border-radius: var(--r-sm);
+  padding: 11px 14px;
+  font-size: 12.5px;
+  color: var(--red);
+  margin-bottom: 16px;
+}
+.cp-form-err strong { font-weight: 700; }
+.cp-form-err ul { margin: 6px 0 0 14px; padding: 0; }
+
+.cp-save-row {
+  padding-top: 16px;
+  margin-top: 18px;
+  border-top: 1px solid var(--rule-2);
+  display: flex;
+  justify-content: flex-end;
+}
+.cp-save-btn {
+  height: 38px;
+  padding: 0 28px;
+  background: var(--navy);
+  color: #fff;
+  border: none;
+  border-radius: var(--r-xs);
+  font-size: 13px;
+  font-weight: 700;
+  font-family: var(--font-body);
+  letter-spacing: .03em;
+  cursor: pointer;
+  transition: background .15s, box-shadow .15s;
+}
+.cp-save-btn:hover {
+  background: var(--navy-l);
+  box-shadow: 0 4px 16px rgba(28,45,79,.3);
+}
+
+/* ─── Right column ───────────────────────────────────────────── */
+.cp-right { display: flex; flex-direction: column; gap: 16px; }
+
+/* ─── Summary bar ────────────────────────────────────────────── */
+.cp-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  background: var(--paper);
+  box-shadow: var(--sh-card);
+  overflow: hidden;
+  animation: cpUp .3s ease both;
+}
+@media (max-width: 640px) { .cp-summary { grid-template-columns: 1fr 1fr; } }
+.cp-sum-cell {
+  padding: 16px 18px;
+  border-right: 1px solid var(--rule);
+}
+.cp-sum-cell:last-child { border-right: none; }
+.cp-sum-lbl {
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  margin-bottom: 7px;
+}
+.cp-sum-val {
+  font-family: var(--font-mono);
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1;
+  letter-spacing: -.02em;
+}
+.cp-sum-val.navy { color: var(--navy); }
+.cp-sum-val.teal { color: var(--teal); }
+.cp-sum-val.red  { color: var(--red); }
+
+/* ─── Table card ─────────────────────────────────────────────── */
+.cp-tcard {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-card);
+  overflow: hidden;
+  animation: cpUp .4s .06s ease both;
+}
+.cp-tcard-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper-2);
+}
+.cp-tcard-title {
+  font-size: .875rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0;
+  letter-spacing: -.01em;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cp-count-pill {
+  background: var(--navy);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+.cp-tcard-sub {
+  font-size: 11.5px;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+}
+
+/* ─── Data table ─────────────────────────────────────────────── */
+.cp-scroll { overflow-x: auto; }
+.cp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.cp-table thead tr {
+  background: var(--paper-3);
+  border-bottom: 2px solid var(--rule);
+}
+.cp-table thead th {
+  padding: 9px 16px;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  white-space: nowrap;
+  text-align: left;
+}
+.cp-table thead th.r { text-align: right; }
+.cp-table thead th.c { text-align: center; }
+.cp-table tbody tr {
+  border-bottom: 1px solid var(--rule-2);
+  transition: background .1s;
+}
+.cp-table tbody tr:last-child { border-bottom: none; }
+.cp-table tbody tr:hover { background: var(--paper-2); }
+.cp-table tbody td {
+  padding: 13px 16px;
+  color: var(--ink-2);
+  vertical-align: middle;
+}
+.cp-table tbody td.r { text-align: right; }
+.cp-table tbody td.c { text-align: center; }
+
+.cp-cname {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 13.5px;
+}
+.cp-kam {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--navy-s);
+  border: 1px solid var(--navy-s2);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--navy-l);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.cp-amt {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.cp-amt.overdue { color: var(--red); }
+.cp-amt.planned { color: var(--ink-2); }
+.cp-amt.hit     { color: var(--teal); font-weight: 600; }
+.cp-amt.partial { color: var(--amber); }
+.cp-amt.zero    { color: var(--ink-4); }
+
+/* Achievement bar */
+.cp-ach-cell { min-width: 130px; }
+.cp-ach-wrap { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.cp-ach-track {
+  flex: 1;
+  height: 5px;
+  background: var(--rule);
+  border-radius: 999px;
+  overflow: hidden;
+  min-width: 50px;
+  max-width: 72px;
+}
+.cp-ach-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width .5s cubic-bezier(.4,0,.2,1);
+}
+.cp-ach-fill.hit     { background: var(--teal); }
+.cp-ach-fill.partial { background: #d97706; }
+.cp-ach-fill.low     { background: #dc2626; }
+.cp-ach-pct {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-3);
+  min-width: 36px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Window badge */
+.cp-win {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+  border: 1px solid;
+}
+.cp-win.range  { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
+.cp-win.period { background: var(--navy-s); color: var(--navy); border-color: var(--navy-s2); }
+
+/* Empty state */
+.cp-empty { text-align: center; padding: 52px 24px; }
+.cp-empty-ico { color: var(--rule); margin-bottom: 12px; }
+.cp-empty p { font-size: 13px; color: var(--ink-3); margin: 0; font-weight: 500; }
+.cp-empty small { font-size: 11.5px; color: var(--ink-4); display: block; margin-top: 4px; }
+
+/* Animations */
+@keyframes cpUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 </style>
+{% endblock %}
 
-<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
-  <div>
-    <h1 class="page-title m-0">Collections Plan</h1>
-    <div class="kam-soft-note mt-1">Plan collections by period or by custom date range.</div>
+{% block content %}
+<div class="cp">
+
+  {# ── PAGE HEADER ── #}
+  <div class="cp-hd">
+    <div>
+      <div class="cp-hd-eyebrow">KAM Module</div>
+      <h1>Collections Plan</h1>
+      <p>Set planned collection targets per customer and track actual recovery.</p>
+    </div>
   </div>
 
-  <form class="d-flex gap-2 flex-wrap kam-filter-bar" method="get">
-    <select name="period" class="form-select form-select-sm">
-      <option value="week" {% if period_type == 'WEEK' %}selected{% endif %}>Week</option>
-      <option value="month" {% if period_type == 'MONTH' %}selected{% endif %}>Month</option>
-      <option value="quarter" {% if period_type == 'QUARTER' %}selected{% endif %}>Quarter</option>
-      <option value="year" {% if period_type == 'YEAR' %}selected{% endif %}>Year</option>
-      <option value="all" {% if period_type == 'ALL' %}selected{% endif %}>All</option>
-    </select>
-
-    <input name="asof" value="{{ request.GET.asof }}" class="form-control form-control-sm" placeholder="As of: YYYY or YYYY-MM or YYYY-MM-DD" />
-    <input type="date" name="from" value="{{ request.GET.from }}" class="form-control form-control-sm" />
-    <input type="date" name="to" value="{{ request.GET.to }}" class="form-control form-control-sm" />
-
-    <button class="btn btn-sm btn-primary">Apply</button>
+  {# ── FILTER STRIP ── #}
+  <form class="cp-filters" method="get">
+    <div>
+      <label>Period</label>
+      <select name="period">
+        <option value="week"    {% if period_type == 'WEEK'    %}selected{% endif %}>This Week</option>
+        <option value="month"   {% if period_type == 'MONTH'   %}selected{% endif %}>This Month</option>
+        <option value="quarter" {% if period_type == 'QUARTER' %}selected{% endif %}>Quarter</option>
+        <option value="year"    {% if period_type == 'YEAR'    %}selected{% endif %}>Year</option>
+        <option value="all"     {% if period_type == 'ALL'     %}selected{% endif %}>All Time</option>
+      </select>
+    </div>
+    <div>
+      <label>As of</label>
+      <input type="text" name="asof" value="{{ request.GET.asof }}" placeholder="YYYY-MM-DD" style="width:134px;" />
+    </div>
+    <div class="cp-filter-sep"></div>
+    <div>
+      <label>From</label>
+      <input type="date" name="from" value="{{ request.GET.from }}" />
+    </div>
+    <div>
+      <label>To</label>
+      <input type="date" name="to" value="{{ request.GET.to }}" />
+    </div>
+    <button type="submit" class="cp-filter-btn">Apply Filter</button>
   </form>
-</div>
 
-{% if messages %}
-  <div class="mb-3">
+  {# ── ALERTS ── #}
+  {% if messages %}
+  <div class="cp-alerts">
     {% for message in messages %}
-      <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
-        {{ message }}
-      </div>
+      {% if 'error' in message.tags %}
+        <div class="cp-alert error"><i class="fas fa-circle-xmark"></i> {{ message }}</div>
+      {% elif 'success' in message.tags %}
+        <div class="cp-alert success"><i class="fas fa-circle-check"></i> {{ message }}</div>
+      {% else %}
+        <div class="cp-alert info"><i class="fas fa-circle-info"></i> {{ message }}</div>
+      {% endif %}
     {% endfor %}
   </div>
-{% endif %}
+  {% endif %}
 
-<div class="kam-card mb-3">
-  <div class="card-body">
-    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
-      <div>
-        <h6 class="fw-bold mb-0">Add / Update Plan</h6>
-        <div class="kam-soft-note mt-1">Choose exactly one input mode: period-based or date-range based.</div>
+  {# ── MAIN GRID ── #}
+  <div class="cp-layout">
+
+    {# ── LEFT: ADD FORM ── #}
+    <div class="cp-panel">
+      <div class="cp-panel-hd">
+        <h2>Add / Update Plan</h2>
+        <p>Use a period window or an explicit date range.</p>
       </div>
-    </div>
+      <div class="cp-panel-body">
 
-    {% if form.errors %}
-      <div class="alert alert-danger">
-        <div class="fw-semibold mb-1">Please fix the errors below:</div>
-        {% if form.non_field_errors %}
-          <div class="mb-2">{{ form.non_field_errors }}</div>
-        {% endif %}
-        <ul class="mb-0">
-          {% for field in form %}
-            {% for err in field.errors %}
+        {% if form.errors %}
+        <div class="cp-form-err">
+          <strong>Please fix the errors below:</strong>
+          {% if form.non_field_errors %}<div style="margin-top:5px;">{{ form.non_field_errors }}</div>{% endif %}
+          <ul>
+            {% for field in form %}{% for err in field.errors %}
               <li><strong>{{ field.label }}:</strong> {{ err }}</li>
-            {% endfor %}
-          {% endfor %}
-        </ul>
-      </div>
-    {% endif %}
-
-    <div class="kam-inline-help mb-3">
-      Use <strong>either</strong> <em>Period Type + Period ID</em> <strong>or</strong> <em>From Date + To Date</em>.
-    </div>
-
-    <form method="post" class="kam-plan-form" novalidate>
-      {% csrf_token %}
-
-      <div class="row g-3 align-items-end">
-        <div class="col-12 col-lg-6">
-          <div class="kam-form-section-title">Common Details</div>
-          <div class="row g-3">
-            <div class="col-12 col-md-7">
-              <label class="form-label mb-1" for="{{ form.customer.id_for_label }}">{{ form.customer.label }}</label>
-              {{ form.customer }}
-            </div>
-            <div class="col-12 col-md-5">
-              <label class="form-label mb-1" for="{{ form.planned_amount.id_for_label }}">{{ form.planned_amount.label }}</label>
-              {{ form.planned_amount }}
-            </div>
-          </div>
+            {% endfor %}{% endfor %}
+          </ul>
         </div>
+        {% endif %}
 
-        <div class="col-12 col-lg-6">
-          <div class="kam-form-section-title">Input Window</div>
-          <div class="row g-3">
-            <div class="col-12 col-md-6">
-              <label class="form-label mb-1" for="{{ form.period_type.id_for_label }}">{{ form.period_type.label }}</label>
+        <form method="post" novalidate>
+          {% csrf_token %}
+
+          <div class="cp-field">
+            <label class="cp-lbl" for="{{ form.customer.id_for_label }}">Customer</label>
+            {{ form.customer }}
+          </div>
+
+          <div class="cp-field">
+            <label class="cp-lbl" for="{{ form.planned_amount.id_for_label }}">Planned Amount (₹)</label>
+            {{ form.planned_amount }}
+          </div>
+
+          <div class="cp-section-rule"></div>
+
+          <div class="cp-mode-lbl">Period-Based</div>
+          <div class="cp-2col">
+            <div class="cp-field" style="margin:0;">
+              <label class="cp-lbl" for="{{ form.period_type.id_for_label }}">Period Type</label>
               {{ form.period_type }}
             </div>
-            <div class="col-12 col-md-6">
-              <label class="form-label mb-1" for="{{ form.period_id.id_for_label }}">{{ form.period_id.label }}</label>
+            <div class="cp-field" style="margin:0;">
+              <label class="cp-lbl" for="{{ form.period_id.id_for_label }}">Period ID</label>
               {{ form.period_id }}
             </div>
-            <div class="col-12">
-              <div class="kam-divider-text">or</div>
-            </div>
-            <div class="col-12 col-md-6">
-              <label class="form-label mb-1" for="{{ form.from_date.id_for_label }}">{{ form.from_date.label }}</label>
+          </div>
+
+          <div class="cp-or">or</div>
+
+          <div class="cp-mode-lbl">Custom Date Range</div>
+          <div class="cp-2col">
+            <div class="cp-field" style="margin:0;">
+              <label class="cp-lbl" for="{{ form.from_date.id_for_label }}">From</label>
               {{ form.from_date }}
             </div>
-            <div class="col-12 col-md-6">
-              <label class="form-label mb-1" for="{{ form.to_date.id_for_label }}">{{ form.to_date.label }}</label>
+            <div class="cp-field" style="margin:0;">
+              <label class="cp-lbl" for="{{ form.to_date.id_for_label }}">To</label>
               {{ form.to_date }}
             </div>
           </div>
-        </div>
 
-        <div class="col-12 d-flex justify-content-end">
-          <button class="btn btn-primary px-4">Save</button>
-        </div>
-      </div>
-    </form>
-  </div>
-</div>
-
-<div class="kam-card">
-  <div class="card-body">
-    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
-      <div>
-        <h6 class="fw-bold mb-0">Planned vs Actual (₹)</h6>
-        <div class="kam-soft-note mt-1">Showing plans matching the current filter window.</div>
+          <div class="cp-save-row">
+            <button type="submit" class="cp-save-btn">Save Plan</button>
+          </div>
+        </form>
       </div>
     </div>
 
-    <div class="kam-table-wrap">
-      <table class="table table-sm align-middle">
-        <thead class="table-light">
-          <tr>
-            <th>Customer</th>
-            <th>KAM</th>
-            <th class="text-end">Overdues (latest)</th>
-            <th class="text-end">Planned</th>
-            <th class="text-end">Actual</th>
-            <th class="text-center">Plan Window</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in rows %}
-          <tr>
-            <td>{{ r.customer.name }}</td>
-            <td>{% if r.kam %}{{ r.kam.username }}{% else %}<span class="kam-empty-cell">—</span>{% endif %}</td>
-            <td class="text-end">₹ {{ r.overdue|floatformat:2|intcomma }}</td>
-            <td class="text-end">₹ {{ r.planned|floatformat:2|intcomma }}</td>
-            <td class="text-end">₹ {{ r.actual|floatformat:2|intcomma }}</td>
-            <td class="text-center">
-              {% if r.from_date and r.to_date %}
-                {{ r.from_date }} → {{ r.to_date }}
-              {% elif r.period_type and r.period_id %}
-                {{ r.period_type }} • {{ r.period_id }}
-              {% else %}
-                <span class="kam-empty-cell">—</span>
-              {% endif %}
-            </td>
-          </tr>
-          {% empty %}
-          <tr>
-            <td colspan="6" class="text-muted text-center py-3">No plans for this window.</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</div>
+    {# ── RIGHT: DATA ── #}
+    <div class="cp-right">
+
+      {# Summary strip — shown only when rows exist #}
+      {% if rows %}
+      <div class="cp-summary">
+        <div class="cp-sum-cell">
+          <div class="cp-sum-lbl">Plans</div>
+          <div class="cp-sum-val navy">{{ rows|length }}</div>
+        </div>
+        <div class="cp-sum-cell">
+          <div class="cp-sum-lbl">Total Planned</div>
+          <div class="cp-sum-val">₹ —</div>
+        </div>
+        <div class="cp-sum-cell">
+          <div class="cp-sum-lbl">Collected</div>
+          <div class="cp-sum-val teal">₹ —</div>
+        </div>
+        <div class="cp-sum-cell">
+          <div class="cp-sum-lbl">Total Overdue</div>
+          <div class="cp-sum-val red">₹ —</div>
+        </div>
+      </div>
+      {% endif %}
+
+      {# Table #}
+      <div class="cp-tcard">
+        <div class="cp-tcard-hd">
+          <h2 class="cp-tcard-title">
+            Planned vs Actual
+            {% if rows %}<span class="cp-count-pill">{{ rows|length }}</span>{% endif %}
+          </h2>
+          <span class="cp-tcard-sub">
+            {{ period_type|lower|capfirst }}{% if period_id %} · {{ period_id }}{% endif %}
+          </span>
+        </div>
+
+        <div class="cp-scroll">
+          <table class="cp-table">
+            <thead>
+              <tr>
+                <th>Customer</th>
+                <th>KAM</th>
+                <th class="r">Overdue (₹)</th>
+                <th class="r">Planned (₹)</th>
+                <th class="r">Actual (₹)</th>
+                <th class="r cp-ach-cell">Achievement</th>
+                <th class="c">Window</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in rows %}
+              <tr>
+                <td><span class="cp-cname">{{ r.customer.name }}</span></td>
+                <td>
+                  {% if r.kam %}
+                    <span class="cp-kam">{{ r.kam.get_full_name|default:r.kam.username }}</span>
+                  {% else %}
+                    <span style="color:var(--ink-4);">—</span>
+                  {% endif %}
+                </td>
+                <td class="r">
+                  <span class="cp-amt overdue">
+                    {% if r.overdue %}₹ {{ r.overdue|floatformat:0|intcomma }}{% else %}—{% endif %}
+                  </span>
+                </td>
+                <td class="r">
+                  <span class="cp-amt planned">₹ {{ r.planned|floatformat:0|intcomma }}</span>
+                </td>
+                <td class="r">
+                  {% if r.actual > 0 %}
+                    <span class="cp-amt {% if r.actual >= r.planned %}hit{% else %}partial{% endif %}">
+                      ₹ {{ r.actual|floatformat:0|intcomma }}
+                    </span>
+                  {% else %}
+                    <span class="cp-amt zero">₹ 0</span>
+                  {% endif %}
+                </td>
+                <td class="r cp-ach-cell">
+                  {% if r.planned and r.planned > 0 %}
+                    {% widthratio r.actual r.planned 100 as pct %}
+                    <div class="cp-ach-wrap">
+                      <div class="cp-ach-track">
+                        <div class="cp-ach-fill {% if pct >= 100 %}hit{% elif pct >= 60 %}partial{% else %}low{% endif %}"
+                             data-width="{% if pct > 100 %}100{% else %}{{ pct }}{% endif %}"></div>
+                      </div>
+                      <span class="cp-ach-pct">{{ pct }}%</span>
+                    </div>
+                  {% else %}
+                    <span style="color:var(--ink-4);font-family:var(--font-mono);font-size:12px;">—</span>
+                  {% endif %}
+                </td>
+                <td class="c">
+                  {% if r.from_date and r.to_date %}
+                    <span class="cp-win range">{{ r.from_date|date:"d M" }} → {{ r.to_date|date:"d M" }}</span>
+                  {% elif r.period_type and r.period_id %}
+                    <span class="cp-win period">{{ r.period_id }}</span>
+                  {% else %}
+                    <span style="color:var(--ink-4);">—</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% empty %}
+              <tr>
+                <td colspan="7">
+                  <div class="cp-empty">
+                    <div class="cp-empty-ico">
+                      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+                        <rect x="3" y="4" width="18" height="18" rx="2"/>
+                        <path d="M8 4V2M16 4V2M3 10h18"/>
+                        <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/>
+                      </svg>
+                    </div>
+                    <p>No plans for this window</p>
+                    <small>Add a plan using the form on the left, or adjust the filter above.</small>
+                  </div>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>{# /right #}
+  </div>{# /layout #}
+
+</div>{# /cp #}
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('[data-width]').forEach(function (el) {
+    el.style.width = (el.dataset.width || 0) + '%';
+  });
+});
+</script>
 {% endblock %}
