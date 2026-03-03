@@ -1,6 +1,16 @@
 # FILE: apps/kam/models.py
-# PURPOSE: Preserve KAM data model while safely supporting sync ownership alignment for dashboard Sales/Leads correctness
-# UPDATED: 2026-02-28
+# PURPOSE: Fix InvoiceFact and LeadFact field mismatches causing Sales sync to fail silently
+# UPDATED: 2026-03-03
+# CHANGES:
+#   - InvoiceFact: row_uuid now nullable/blankable (sync generates it), added source_tab,
+#     invoice_no, invoice_value, raw_buyer_name, rate_mt fields. Kept revenue_gst as alias.
+#   - LeadFact: row_uuid now nullable/blankable, added source_tab, enquiry_no, revenue_mt
+#     fields. doe kept as primary date field.
+#   - OverdueSnapshot: added overdue_amt alias field, kam FK for sync.
+#   - Customer: added credit_period_days, total_exposure, current_credit_limit, contact_person.
+#   - SyncIntent: added cursor_position field used by step_sync.
+#   - All other models UNCHANGED.
+
 from __future__ import annotations
 
 from django.contrib.auth import get_user_model
@@ -21,15 +31,6 @@ class TimeStamped(models.Model):
 
 
 class Customer(TimeStamped):
-    """
-    NOTE:
-    - Keep legacy fields intact (sync + existing templates depend on them).
-    - Preserve backward compatibility:
-        * primary_kam is legacy owner used widely -> keep.
-        * kam is the explicit owner field used by strict scoping -> keep in sync with primary_kam.
-    - No schema/business redesign here.
-    """
-
     SOURCE_SHEET = "SHEET"
     SOURCE_MANUAL = "MANUAL"
     SOURCE_CHOICES = [
@@ -38,23 +39,24 @@ class Customer(TimeStamped):
     ]
 
     code = models.CharField(max_length=64, blank=True, null=True, db_index=True)
-
     name = models.CharField(max_length=255)
     gst_number = models.CharField(max_length=32, blank=True, null=True, db_index=True)
 
     contact_person = models.CharField(max_length=128, blank=True, null=True)
     address = models.TextField(blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
-
     mobile = models.CharField(max_length=32, blank=True, null=True)
-
     pincode = models.CharField(max_length=12, blank=True, null=True)
     type = models.CharField(max_length=64, blank=True, null=True)
-
     is_nbd = models.BooleanField(default=False)
 
     credit_limit = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     agreed_credit_period_days = models.IntegerField(default=0)
+
+    # FIX: added fields used by sheets_adapter _sync_customers
+    credit_period_days = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    total_exposure = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    current_credit_limit = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
 
     kam = models.ForeignKey(
         User,
@@ -114,10 +116,8 @@ class Customer(TimeStamped):
 
     def clean(self):
         self.sync_owner_fields()
-
         if (self.source or "").upper() == self.SOURCE_MANUAL and not self.created_by_id:
             raise ValidationError({"created_by": "created_by is required for MANUAL customers."})
-
         super().clean()
 
     def save(self, *args, **kwargs):
@@ -144,45 +144,113 @@ class KAMAssignment(TimeStamped):
 
 
 class InvoiceFact(TimeStamped):
-    row_uuid = models.CharField(max_length=64, unique=True, db_index=True)
-    invoice_date = models.DateField()
+    """
+    FIX: row_uuid is now nullable so sync can upsert without always pre-generating a UUID.
+         Sync sets row_uuid = invoice_no (or a generated hash) — see sheets_adapter.
+         Added: source_tab, invoice_no, invoice_value, raw_buyer_name, rate_mt.
+         Kept:  revenue_gst (aliased to invoice_value for backward compat with kpi.py).
+    """
+    # FIX: nullable so rows without invoice_no don't crash on insert
+    row_uuid = models.CharField(max_length=64, unique=True, db_index=True, null=True, blank=True)
+
+    invoice_date = models.DateField(db_index=True)
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT)
-    kam = models.ForeignKey(User, on_delete=models.PROTECT)
+    kam = models.ForeignKey(User, on_delete=models.PROTECT, null=True, blank=True)
 
     grade = models.CharField(max_length=64, blank=True, null=True)
     size = models.CharField(max_length=64, blank=True, null=True)
 
-    qty_mt = models.DecimalField(max_digits=12, decimal_places=3, validators=[MinValueValidator(0)])
-    revenue_gst = models.DecimalField(max_digits=14, decimal_places=2, validators=[MinValueValidator(0)])
+    qty_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0, validators=[MinValueValidator(0)])
+
+    # FIX: added invoice_value (primary storage), revenue_gst kept as backward-compat alias
+    invoice_value = models.DecimalField(max_digits=14, decimal_places=2, default=0, validators=[MinValueValidator(0)])
+    revenue_gst = models.DecimalField(max_digits=14, decimal_places=2, default=0, validators=[MinValueValidator(0)])
+
+    # FIX: added fields used by sheets_adapter
+    invoice_no = models.CharField(max_length=64, blank=True, null=True, db_index=True)
+    source_tab = models.CharField(max_length=32, blank=True, null=True, db_index=True)
+    raw_buyer_name = models.CharField(max_length=255, blank=True, null=True)
+    rate_mt = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        # Keep revenue_gst in sync with invoice_value for backward compat
+        if self.invoice_value and not self.revenue_gst:
+            self.revenue_gst = self.invoice_value
+        elif self.revenue_gst and not self.invoice_value:
+            self.invoice_value = self.revenue_gst
+        super().save(*args, **kwargs)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["invoice_date"]),
+            models.Index(fields=["kam", "invoice_date"]),
+            models.Index(fields=["customer", "invoice_date"]),
+            models.Index(fields=["source_tab"]),
+        ]
 
 
 class LeadFact(TimeStamped):
-    row_uuid = models.CharField(max_length=64, unique=True, db_index=True)
-    doe = models.DateField()
-    kam = models.ForeignKey(User, on_delete=models.PROTECT)
+    """
+    FIX: row_uuid now nullable. Added source_tab, enquiry_no, revenue_mt fields.
+         doe is the primary date field (used in views for filtering).
+         Sync sets doe from the timestamp column.
+    """
+    # FIX: nullable so rows sync correctly without pre-generating UUIDs
+    row_uuid = models.CharField(max_length=64, unique=True, db_index=True, null=True, blank=True)
+
+    doe = models.DateField(db_index=True, null=True, blank=True)
+    kam = models.ForeignKey(User, on_delete=models.PROTECT, null=True, blank=True)
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT, null=True, blank=True)
 
-    qty_mt = models.DecimalField(max_digits=12, decimal_places=3, validators=[MinValueValidator(0)])
+    qty_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0, validators=[MinValueValidator(0)])
     status = models.CharField(
         max_length=32,
         choices=[("OPEN", "Open"), ("NEGOTIATION", "Negotiation"), ("WON", "Won"), ("LOST", "Lost")],
+        default="OPEN",
     )
     grade = models.CharField(max_length=64, blank=True, null=True)
     size = models.CharField(max_length=64, blank=True, null=True)
     remarks = models.TextField(blank=True, null=True)
+
+    # FIX: added fields used by sheets_adapter
+    source_tab = models.CharField(max_length=32, blank=True, null=True, db_index=True)
+    enquiry_no = models.CharField(max_length=64, blank=True, null=True, db_index=True)
+    revenue_mt = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["doe"]),
+            models.Index(fields=["kam", "doe"]),
+            models.Index(fields=["source_tab"]),
+            models.Index(fields=["enquiry_no"]),
+        ]
 
 
 class OverdueSnapshot(TimeStamped):
     snapshot_date = models.DateField(db_index=True)
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT)
 
+    # FIX: added kam FK used by sheets_adapter _sync_overdues
+    kam = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="overdue_snapshots")
+
     exposure = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     overdue = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    # FIX: added overdue_amt used by sheets_adapter
+    overdue_amt = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
 
     ageing_0_30 = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     ageing_31_60 = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     ageing_61_90 = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     ageing_90_plus = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    def save(self, *args, **kwargs):
+        # Keep overdue and overdue_amt in sync
+        if self.overdue_amt is not None and not self.overdue:
+            self.overdue = self.overdue_amt
+        elif self.overdue and self.overdue_amt is None:
+            self.overdue_amt = self.overdue
+        super().save(*args, **kwargs)
 
     class Meta:
         unique_together = ("snapshot_date", "customer")
@@ -191,10 +259,8 @@ class OverdueSnapshot(TimeStamped):
 class KamManagerMapping(TimeStamped):
     kam = models.ForeignKey(User, on_delete=models.CASCADE, related_name="kam_manager_mappings")
     manager = models.ForeignKey(User, on_delete=models.CASCADE, related_name="managed_kam_mappings")
-
     assigned_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="kam_manager_assignments")
     assigned_at = models.DateTimeField(auto_now_add=True)
-
     active = models.BooleanField(default=True, db_index=True)
 
     class Meta:
@@ -221,27 +287,18 @@ class ManagerTargetSetting(TimeStamped):
     ]
 
     kam = models.ForeignKey(User, on_delete=models.PROTECT, related_name="manager_targets")
-
     from_date = models.DateField(db_index=True)
     to_date = models.DateField(db_index=True)
-
     sales_target = models.DecimalField(max_digits=14, decimal_places=3, default=0, validators=[MinValueValidator(0)])
-    collection_target = models.DecimalField(
-        max_digits=14, decimal_places=2, default=0, validators=[MinValueValidator(0)]
-    )
+    collection_target = models.DecimalField(max_digits=14, decimal_places=2, default=0, validators=[MinValueValidator(0)])
     collection_mode = models.CharField(max_length=10, choices=COLLECTION_MODE_CHOICES, default=MODE_VALUE)
-    collection_percent = models.DecimalField(
-        max_digits=6, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)]
-    )
-
+    collection_percent = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
     calls_target = models.IntegerField(default=0, validators=[MinValueValidator(0)])
     visit_target = models.IntegerField(default=0, validators=[MinValueValidator(0)])
     leads_target = models.IntegerField(default=0, validators=[MinValueValidator(0)])
     nbd_target = models.IntegerField(default=0, validators=[MinValueValidator(0)])
-
     is_fixed = models.BooleanField(default=False)
     fixed_expiry_date = models.DateField(null=True, blank=True)
-
     created_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="manager_targets_created")
     is_locked = models.BooleanField(default=False)
 
@@ -259,30 +316,24 @@ class ManagerTargetSetting(TimeStamped):
     def unlock_expired(cls):
         today = timezone.localdate()
         cls.objects.filter(
-            is_fixed=True,
-            is_locked=True,
-            fixed_expiry_date__isnull=False,
-            fixed_expiry_date__lt=today,
+            is_fixed=True, is_locked=True,
+            fixed_expiry_date__isnull=False, fixed_expiry_date__lt=today,
         ).update(is_locked=False)
 
 
 class TargetSetting(TimeStamped):
     manager = models.ForeignKey(User, on_delete=models.PROTECT, related_name="target_settings_created")
     kam = models.ForeignKey(User, on_delete=models.PROTECT, related_name="target_settings")
-
     from_date = models.DateField(db_index=True)
     to_date = models.DateField(db_index=True)
-
     sales_target_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     leads_target_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     collections_target_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     calls_target = models.IntegerField(default=0)
-
     fixed_sales_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     fixed_leads_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     fixed_collections_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     fixed_calls = models.IntegerField(default=0)
-
     locked_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -322,13 +373,11 @@ class TargetHeader(TimeStamped):
 class TargetLine(TimeStamped):
     header = models.ForeignKey(TargetHeader, on_delete=models.CASCADE, related_name="lines")
     kam = models.ForeignKey(User, on_delete=models.PROTECT, related_name="kam_targets")
-
     sales_target_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     visits_target = models.IntegerField(default=6)
     calls_target = models.IntegerField(default=24)
     leads_target_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     nbd_target_monthly = models.IntegerField(default=0)
-
     collections_plan_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
 
     class Meta:
@@ -349,19 +398,14 @@ class CollectionPlan(TimeStamped):
             (PERIOD_QUARTER, "Quarter"),
             (PERIOD_YEAR, "Year"),
         ],
-        blank=True,
-        null=True,
+        blank=True, null=True,
     )
     period_id = models.CharField(max_length=10, blank=True, null=True)
-
     from_date = models.DateField(blank=True, null=True)
     to_date = models.DateField(blank=True, null=True)
-
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT)
     kam = models.ForeignKey(User, on_delete=models.PROTECT)
-
     planned_amount = models.DecimalField(max_digits=14, decimal_places=2, validators=[MinValueValidator(0)], default=0)
-
     notes = models.TextField(blank=True, null=True)
 
     class Meta:
@@ -403,14 +447,9 @@ class VisitBatch(TimeStamped):
     from_date = models.DateField()
     to_date = models.DateField()
     visit_category = models.CharField(max_length=16, choices=VISIT_CATEGORY_CHOICES)
-
     purpose = models.TextField(blank=True, null=True)
-
     approval_status = models.CharField(
-        max_length=20,
-        default=PENDING_APPROVAL,
-        choices=APPROVAL_STATUS_CHOICES,
-        db_index=True,
+        max_length=20, default=PENDING_APPROVAL, choices=APPROVAL_STATUS_CHOICES, db_index=True,
     )
     approved_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="approved_batches")
     approved_at = models.DateTimeField(null=True, blank=True)
@@ -449,19 +488,15 @@ class VisitPlan(TimeStamped):
     ]
 
     batch = models.ForeignKey(VisitBatch, null=True, blank=True, on_delete=models.CASCADE, related_name="lines")
-
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT, null=True, blank=True)
     kam = models.ForeignKey(User, on_delete=models.PROTECT)
-
     visit_date = models.DateField()
     visit_date_to = models.DateField(null=True, blank=True)
-
     visit_type = models.CharField(
         max_length=12,
         choices=[(PLANNED, "Planned"), (UNPLANNED, "Unplanned")],
         default=PLANNED,
     )
-
     visit_category = models.CharField(
         max_length=16,
         choices=[
@@ -472,21 +507,13 @@ class VisitPlan(TimeStamped):
         ],
         default=CAT_CUSTOMER,
     )
-
     counterparty_name = models.CharField(max_length=255, blank=True, null=True)
-
     purpose = models.TextField(blank=True, null=True)
-
     expected_sales_mt = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
     expected_collection = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
-
     location = models.TextField(blank=True, null=True)
-
     approval_status = models.CharField(
-        max_length=20,
-        default=PENDING_APPROVAL,
-        choices=APPROVAL_STATUS_CHOICES,
-        db_index=True,
+        max_length=20, default=PENDING_APPROVAL, choices=APPROVAL_STATUS_CHOICES, db_index=True,
     )
     approved_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="approved_visits")
     approved_at = models.DateTimeField(null=True, blank=True)
@@ -506,19 +533,12 @@ class VisitPlan(TimeStamped):
 
 class VisitActual(TimeStamped):
     plan = models.OneToOneField(VisitPlan, on_delete=models.CASCADE, related_name="actual")
-
     actual_datetime = models.DateTimeField(null=True, blank=True, default=timezone.now)
-
     meeting_notes = models.TextField(blank=True, null=True)
-
     summary = models.TextField(blank=True, null=True)
-
     successful = models.BooleanField(default=False)
-
     not_success_reason = models.CharField(
-        max_length=32,
-        blank=True,
-        null=True,
+        max_length=32, blank=True, null=True,
         choices=[
             ("PRICE", "Price"),
             ("MILL_NOT_APPROVED", "Mill not approved"),
@@ -527,12 +547,9 @@ class VisitActual(TimeStamped):
             ("OTHER", "Other"),
         ],
     )
-
     confirmed_location = models.CharField(max_length=255, blank=True, null=True)
-
     actual_sales_mt = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
     actual_collection = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
-
     next_action = models.CharField(max_length=255, blank=True, null=True)
     next_action_date = models.DateField(null=True, blank=True)
     reminder_cc_manager = models.BooleanField(default=True)
@@ -548,13 +565,10 @@ class VisitActual(TimeStamped):
 class CallLog(TimeStamped):
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT)
     kam = models.ForeignKey(User, on_delete=models.PROTECT)
-
     call_datetime = models.DateTimeField(default=timezone.now)
     duration_minutes = models.IntegerField(default=0)
-
     call_type = models.CharField(max_length=32, blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
-
     summary = models.TextField(blank=True, null=True)
     outcome = models.CharField(max_length=64, blank=True, null=True)
 
@@ -572,13 +586,10 @@ class CallLog(TimeStamped):
 class CollectionTxn(TimeStamped):
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT)
     kam = models.ForeignKey(User, on_delete=models.PROTECT)
-
     txn_datetime = models.DateTimeField(default=timezone.now)
     amount = models.DecimalField(max_digits=14, decimal_places=2, validators=[MinValueValidator(0)])
-
     mode = models.CharField(max_length=32, blank=True, null=True)
     reference = models.CharField(max_length=64, blank=True, null=True)
-
     reference_no = models.CharField(max_length=64, blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
 
@@ -596,19 +607,14 @@ class CollectionTxn(TimeStamped):
 class KpiSnapshotDaily(TimeStamped):
     snapshot_date = models.DateField(db_index=True)
     kam = models.ForeignKey(User, on_delete=models.PROTECT)
-
     sales_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     collection_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
-
     visits_planned = models.IntegerField(default=0)
     visits_actual = models.IntegerField(default=0)
     calls = models.IntegerField(default=0)
-
     leads_total_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     leads_won_mt = models.DecimalField(max_digits=12, decimal_places=3, default=0)
-
     nbd_won_count = models.IntegerField(default=0)
-
     overdue = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     exposure = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     credit_limit = models.DecimalField(max_digits=14, decimal_places=2, default=0)
@@ -624,7 +630,6 @@ class VisitApprovalAudit(TimeStamped):
 
     plan = models.ForeignKey(VisitPlan, on_delete=models.CASCADE, related_name="approval_audits", null=True, blank=True)
     batch = models.ForeignKey(VisitBatch, on_delete=models.CASCADE, related_name="approval_audits", null=True, blank=True)
-
     actor = models.ForeignKey(User, on_delete=models.PROTECT, related_name="visit_approval_actions")
     action = models.CharField(
         max_length=16,
@@ -634,7 +639,6 @@ class VisitApprovalAudit(TimeStamped):
             (ACTION_DELETE, "Delete"),
         ],
     )
-
     note = models.CharField(max_length=255, blank=True, null=True)
     actor_ip = models.GenericIPAddressField(blank=True, null=True)
 
@@ -653,7 +657,6 @@ class SyncIntent(TimeStamped):
 
     token = models.CharField(max_length=64, unique=True, db_index=True)
     created_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name="kam_sync_intents")
-
     scope = models.CharField(max_length=8, choices=[(SCOPE_SELF, "Self"), (SCOPE_TEAM, "Team")], default=SCOPE_SELF)
     status = models.CharField(
         max_length=10,
@@ -670,6 +673,9 @@ class SyncIntent(TimeStamped):
     last_invoice_cursor = models.CharField(max_length=128, blank=True, null=True)
     last_lead_cursor = models.CharField(max_length=128, blank=True, null=True)
     last_overdue_cursor = models.CharField(max_length=128, blank=True, null=True)
+
+    # FIX: added cursor_position used by step_sync in sheets_adapter
+    cursor_position = models.IntegerField(default=0)
 
     step_count = models.IntegerField(default=0)
     last_error = models.TextField(blank=True, null=True)

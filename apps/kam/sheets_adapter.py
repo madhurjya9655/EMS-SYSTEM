@@ -1,10 +1,20 @@
 # FILE: apps/kam/sheets_adapter.py
-# PURPOSE: Google Sheets sync adapter — all 7 tabs with correct column schemas
-# TABS:  Sheet1 | Sales (F) | KAM names | Front End | Enquiry (F) | Customer Details | Overdues
+# PURPOSE: Fix Sales sync field mismatches: row_uuid generation, invoice_value vs revenue_gst,
+#          doe field for LeadFact, overdue_amt for OverdueSnapshot.
+#          No hardcoded year filtering anywhere. Any valid date syncs correctly.
 # UPDATED: 2026-03-03
+# ROOT CAUSE FIXED:
+#   - _sync_sales_f: was using invoice_value/raw_buyer_name/source_tab that didn't exist in model
+#     → all Sales (F) rows crashed silently → zero sales in DB → zero on dashboard
+#   - _sync_sheet1: same issue with invoice_no/source_tab/rate_mt/grade/size
+#   - _sync_enquiry_f / _sync_frontend: used created_at instead of doe for LeadFact
+#   - _sync_overdues: used overdue_amt which didn't exist in model
+#   - All update_or_create calls: never set row_uuid → IntegrityError on unique constraint
+#   All fixed below. No hardcoded year ranges anywhere.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -19,9 +29,6 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 
-# Import only GoogleCredentialError (always exists in google_auth). We build the
-# Sheets service ourselves so we never depend on build_sheets_service which may
-# not be present in all versions of google_auth.py.
 try:
     from apps.common.google_auth import GoogleCredentialError
 except ImportError:
@@ -38,6 +45,7 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ENV HELPERS
@@ -56,48 +64,42 @@ def _require_env(name: str) -> str:
         raise RuntimeError(f"Missing required env var: {name}")
     return val
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROW UUID GENERATION
+# FIX: Every InvoiceFact and LeadFact row needs a unique row_uuid.
+#      We generate a deterministic hash from the natural key so re-syncing
+#      the same row always produces the same UUID (idempotent).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_row_uuid(*parts) -> str:
+    """
+    Deterministic UUID from natural key parts.
+    Safe for use as row_uuid — re-syncing same data produces same value.
+    """
+    key = "|".join(str(p or "") for p in parts)
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:64]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # GOOGLE SHEETS SERVICE BUILDER
-#
-# Priority order for credentials (first match wins):
-#
-#   1. KAM_SA_JSON_CONTENT  — raw JSON string in env var  ← Render / cloud best practice
-#   2. KAM_SA_JSON          — file path (local dev)
-#   3. GOOGLE_SERVICE_ACCOUNT_FILE — legacy file path fallback
-#
-# For Render deployments: paste the *contents* of the JSON file into the
-# KAM_SA_JSON_CONTENT env var. No files required, survives every redeploy.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _load_sa_info() -> dict:
-    """
-    Load service account info dict from env.
-    Resolution priority (first non-empty value wins):
-      1. KAM_SA_JSON_CONTENT           — raw JSON string in env (optional cloud approach)
-      2. GOOGLE_SA_JSON_CONTENT        — alternate name for #1
-      3. KAM_SA_JSON                   — file path (local Windows dev)
-      4. GOOGLE_SERVICE_ACCOUNT_JSON_PATH — Render Secret File path (already set on Render)
-      5. GOOGLE_SERVICE_ACCOUNT_FILE   — legacy path (also already set on Render)
-    """
     import json as _json
     import os as _os
 
-    # ── Option 1 & 2: raw JSON string in env var ─────────────────────────────
     raw_content = _env("KAM_SA_JSON_CONTENT") or _env("GOOGLE_SA_JSON_CONTENT")
     if raw_content:
         try:
             return _json.loads(raw_content)
         except _json.JSONDecodeError as exc:
-            raise GoogleCredentialError(
-                f"KAM_SA_JSON_CONTENT is not valid JSON: {exc}"
-            ) from exc
+            raise GoogleCredentialError(f"KAM_SA_JSON_CONTENT is not valid JSON: {exc}") from exc
 
-    # ── Options 3-5: file path ───────────────────────────────────────────────
-    # Try each path env var in order — use the first one that points to a real file
     path_candidates = [
-        ("KAM_SA_JSON",                    _env("KAM_SA_JSON")),
-        ("GOOGLE_SERVICE_ACCOUNT_JSON_PATH", _env("GOOGLE_SERVICE_ACCOUNT_JSON_PATH")),
-        ("GOOGLE_SERVICE_ACCOUNT_FILE",    _env("GOOGLE_SERVICE_ACCOUNT_FILE")),
+        ("KAM_SA_JSON",                      _env("KAM_SA_JSON")),
+        ("GOOGLE_SERVICE_ACCOUNT_JSON_PATH",  _env("GOOGLE_SERVICE_ACCOUNT_JSON_PATH")),
+        ("GOOGLE_SERVICE_ACCOUNT_FILE",       _env("GOOGLE_SERVICE_ACCOUNT_FILE")),
     ]
 
     attempted_paths = []
@@ -110,19 +112,12 @@ def _load_sa_info() -> dict:
                 with open(sa_path) as fh:
                     return _json.load(fh)
             except Exception as exc:
-                raise GoogleCredentialError(
-                    f"Could not read service account file {sa_path}: {exc}"
-                ) from exc
-        # path set but file missing — keep trying other candidates
+                raise GoogleCredentialError(f"Could not read service account file {sa_path}: {exc}") from exc
 
     if attempted_paths:
         raise GoogleCredentialError(
             f"Service account file not found at any of these paths:\n"
             + "\n".join(f"  {p}" for p in attempted_paths)
-            + "\n\nFix options:"
-            + "\n  LOCAL: Set KAM_SA_JSON to your Windows path, e.g.:"
-            + "\n    KAM_SA_JSON=E:\\CLIENT PROJECT\\...\\ems-software-467508-ad809646ed23.json"
-            + "\n  RENDER: KAM_SA_JSON is already correct (/etc/secrets/...) — no action needed."
         )
 
     raise GoogleCredentialError(
@@ -132,11 +127,6 @@ def _load_sa_info() -> dict:
 
 
 def build_sheets_service():
-    """
-    Build and return an authenticated Google Sheets API v4 service object.
-    Works on Render (env var JSON content) and locally (file path).
-    Raises GoogleCredentialError on any failure.
-    """
     try:
         from google.oauth2 import service_account
         from googleapiclient.discovery import build as _gapi_build
@@ -147,7 +137,6 @@ def build_sheets_service():
         ) from exc
 
     sa_info = _load_sa_info()
-
     try:
         creds = service_account.Credentials.from_service_account_info(
             sa_info,
@@ -158,32 +147,29 @@ def build_sheets_service():
     except GoogleCredentialError:
         raise
     except Exception as exc:
-        raise GoogleCredentialError(
-            f"Failed to build Sheets service: {exc}"
-        ) from exc
+        raise GoogleCredentialError(f"Failed to build Sheets service: {exc}") from exc
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB NAME RESOLUTION
 # ─────────────────────────────────────────────────────────────────────────────
-# All tab names configurable via env. Defaults match the actual sheet tab names.
 
-def _tab_sales_f()        -> str: return _env("KAM_TAB_SALES",        "Sales (F)")
-def _tab_sheet1()         -> str: return _env("KAM_TAB_SHEET1",       "Sheet1")
-def _tab_kam_names()      -> str: return _env("KAM_TAB_KAM_NAMES",    "KAM names")
-def _tab_frontend()       -> str: return _env("KAM_TAB_FRONTEND",     "Front End")
-def _tab_enquiry_f()      -> str: return _env("KAM_TAB_ENQUIRY",      "Enquiry (F)")
-def _tab_customers()      -> str: return _env("KAM_TAB_CUSTOMERS",    "Customer Details")
-def _tab_overdues()       -> str: return _env("KAM_TAB_OVERDUES",     "Overdues")
+def _tab_sales_f()    -> str: return _env("KAM_TAB_SALES",     "Sales (F)")
+def _tab_sheet1()     -> str: return _env("KAM_TAB_SHEET1",    "Sheet1")
+def _tab_kam_names()  -> str: return _env("KAM_TAB_KAM_NAMES", "KAM names")
+def _tab_frontend()   -> str: return _env("KAM_TAB_FRONTEND",  "Front End")
+def _tab_enquiry_f()  -> str: return _env("KAM_TAB_ENQUIRY",   "Enquiry (F)")
+def _tab_customers()  -> str: return _env("KAM_TAB_CUSTOMERS", "Customer Details")
+def _tab_overdues()   -> str: return _env("KAM_TAB_OVERDUES",  "Overdues")
 
 def resolve_sections() -> Dict[str, bool]:
     return {
-        "sales_f":       _env_flag("KAM_SYNC_SALES",      True),
-        "sheet1":        _env_flag("KAM_SYNC_SHEET1",     True),
-        "frontend":      _env_flag("KAM_SYNC_FRONTEND",   True),
-        "enquiry_f":     _env_flag("KAM_SYNC_ENQUIRY",    True),
-        "customers":     _env_flag("KAM_SYNC_CUSTOMERS",  True),
-        "overdues":      _env_flag("KAM_SYNC_OVERDUES",   True),
+        "sales_f":   _env_flag("KAM_SYNC_SALES",     True),
+        "sheet1":    _env_flag("KAM_SYNC_SHEET1",    True),
+        "frontend":  _env_flag("KAM_SYNC_FRONTEND",  True),
+        "enquiry_f": _env_flag("KAM_SYNC_ENQUIRY",   True),
+        "customers": _env_flag("KAM_SYNC_CUSTOMERS", True),
+        "overdues":  _env_flag("KAM_SYNC_OVERDUES",  True),
     }
 
 def resolve_tabs_for_logging() -> Dict[str, str]:
@@ -223,12 +209,12 @@ class SyncStats:
 
     def as_message(self) -> str:
         parts = []
-        if self.customers_upserted:  parts.append(f"Customers: {self.customers_upserted}")
-        if self.sales_upserted:      parts.append(f"Sales: {self.sales_upserted}")
-        if self.leads_upserted:      parts.append(f"Leads: {self.leads_upserted}")
-        if self.overdues_upserted:   parts.append(f"Overdues: {self.overdues_upserted}")
-        if self.skipped:             parts.append(f"Skipped: {self.skipped}")
-        if self.unknown_kam:         parts.append(f"Unknown KAM: {self.unknown_kam}")
+        if self.customers_upserted: parts.append(f"Customers: {self.customers_upserted}")
+        if self.sales_upserted:     parts.append(f"Sales: {self.sales_upserted}")
+        if self.leads_upserted:     parts.append(f"Leads: {self.leads_upserted}")
+        if self.overdues_upserted:  parts.append(f"Overdues: {self.overdues_upserted}")
+        if self.skipped:            parts.append(f"Skipped: {self.skipped}")
+        if self.unknown_kam:        parts.append(f"Unknown KAM: {self.unknown_kam}")
         return " | ".join(parts) if parts else "No changes"
 
 
@@ -237,7 +223,6 @@ class SyncStats:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _get_sheet_values(service, sheet_id: str, tab: str) -> List[List[str]]:
-    """Fetch all rows from a tab. Returns list of rows (list of str)."""
     try:
         result = (
             service.spreadsheets()
@@ -256,14 +241,12 @@ def _get_sheet_values(service, sheet_id: str, tab: str) -> List[List[str]]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _cell(row: List[str], idx: int, default: str = "") -> str:
-    """Safe column access — returns stripped string."""
     try:
         return (row[idx] or "").strip()
     except IndexError:
         return default
 
 def _decimal(val: str) -> Optional[Decimal]:
-    """Parse a decimal value, handling commas and currency symbols."""
     if not val:
         return None
     cleaned = re.sub(r"[₹,\s]", "", val)
@@ -273,37 +256,44 @@ def _decimal(val: str) -> Optional[Decimal]:
         return None
 
 def _parse_date(val: str) -> Optional[date]:
-    """Parse date from common Indian/ISO formats."""
+    """
+    Parse date from common Indian/ISO formats.
+    NO hardcoded year restrictions — any valid date is accepted.
+    Supports serial numbers from Google Sheets too.
+    """
     if not val:
         return None
     val = val.strip()
-    # Try formats in order of likelihood
+
     for fmt in (
         "%Y-%m-%d",   # 2025-04-01
         "%d/%m/%Y",   # 01/04/2025
         "%d-%m-%Y",   # 01-04-2025
-        "%m/%d/%Y",   # 04/01/2025 (US)
+        "%m/%d/%Y",   # 04/01/2025
         "%d/%m/%y",   # 01/04/25
         "%Y/%m/%d",   # 2025/04/01
+        "%d %b %Y",   # 01 Apr 2025
+        "%d-%b-%Y",   # 01-Apr-2025
     ):
         try:
             return datetime.strptime(val, fmt).date()
         except ValueError:
             continue
-    # Try parsing serial date (Google Sheets sometimes exports numbers)
+
+    # Google Sheets serial date (integer representing days since Dec 30, 1899)
     try:
         serial = int(float(val))
-        # Google Sheets epoch: Dec 30, 1899
-        from datetime import timedelta
-        epoch = date(1899, 12, 30)
-        return epoch + timedelta(days=serial)
+        if 1 < serial < 100000:  # sanity check — valid serial range
+            from datetime import timedelta
+            epoch = date(1899, 12, 30)
+            return epoch + timedelta(days=serial)
     except (ValueError, OverflowError):
         pass
+
     logger.debug("Could not parse date: %r", val)
     return None
 
 def _parse_timestamp(val: str) -> Optional[datetime]:
-    """Parse timestamp from Google Forms timestamp format."""
     if not val:
         return None
     val = val.strip()
@@ -323,19 +313,15 @@ def _parse_timestamp(val: str) -> Optional[datetime]:
     return None
 
 def _normalize(s: str) -> str:
-    """Normalize name for fuzzy matching."""
     s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SAFE CUSTOMER LOOKUP
-# Replaces all direct get_or_create(name=...) / update_or_create(name=...) calls.
-# Handles duplicates gracefully — merges them rather than crashing.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _normalize_customer_name(name: str) -> str:
-    """Normalise for dedup comparison: strip, collapse whitespace, title-case."""
     return " ".join(name.strip().split()).strip()
 
 
@@ -344,17 +330,6 @@ def _safe_get_or_create_customer(
     kam_user=None,
     extra_defaults: dict = None,
 ) -> "Customer":
-    """
-    Thread-safe, duplicate-safe Customer lookup.
-
-    Strategy:
-      1. Query ALL customers whose name matches (case-insensitive).
-      2. If zero  → create fresh.
-      3. If one   → return it (and update kam/fields if missing).
-      4. If 2+    → keep the first (lowest pk), merge FKs from duplicates,
-                    delete the duplicates, return the survivor.
-         This self-heals the DB on every sync — no manual intervention needed.
-    """
     clean_name = _normalize_customer_name(name)
     if not clean_name:
         raise ValueError("Customer name cannot be blank")
@@ -363,11 +338,9 @@ def _safe_get_or_create_customer(
     if extra_defaults:
         defaults.update(extra_defaults)
 
-    # --- find all matches (case-insensitive) ---------------------------------
     matches = list(Customer.objects.filter(name__iexact=clean_name).order_by("pk"))
 
     if not matches:
-        # create — use get_or_create inside atomic to handle race conditions
         try:
             with transaction.atomic():
                 customer, _ = Customer.objects.get_or_create(
@@ -376,20 +349,18 @@ def _safe_get_or_create_customer(
                 )
             return customer
         except Customer.MultipleObjectsReturned:
-            # Lost the race — fall through to merge logic below
             matches = list(Customer.objects.filter(name__iexact=clean_name).order_by("pk"))
 
     if len(matches) == 1:
         customer = matches[0]
-        # Fill in missing fields
         changed = False
         if kam_user and not customer.kam:
             customer.kam = kam_user
             changed = True
         if extra_defaults:
-            for field, val in extra_defaults.items():
-                if val is not None and not getattr(customer, field, None):
-                    setattr(customer, field, val)
+            for f, val in extra_defaults.items():
+                if val is not None and not getattr(customer, f, None):
+                    setattr(customer, f, val)
                     changed = True
         if changed:
             try:
@@ -398,20 +369,17 @@ def _safe_get_or_create_customer(
                 pass
         return customer
 
-    # --- 2+ duplicates: merge into the oldest (lowest pk) --------------------
+    # Merge duplicates
     survivor = matches[0]
     duplicates = matches[1:]
     logger.warning(
-        "Customer duplicate detected: '%s' has %d records (pks: %s). "
-        "Merging into pk=%s.",
-        clean_name, len(matches),
-        [c.pk for c in matches], survivor.pk,
+        "Customer duplicate: '%s' has %d records. Merging into pk=%s.",
+        clean_name, len(matches), survivor.pk,
     )
 
     for dup in duplicates:
         try:
             with transaction.atomic():
-                # Re-point all related objects to the survivor
                 for rel in dup._meta.get_fields():
                     if rel.is_relation and rel.one_to_many and rel.related_model:
                         try:
@@ -419,23 +387,19 @@ def _safe_get_or_create_customer(
                             related_qs = getattr(dup, accessor).all()
                             related_qs.update(**{rel.field.name: survivor})
                         except Exception as merge_exc:
-                            logger.debug(
-                                "Could not re-point %s.%s: %s",
-                                rel.related_model.__name__, rel.field.name, merge_exc,
-                            )
+                            logger.debug("Could not re-point %s: %s", rel.related_model.__name__, merge_exc)
                 dup.delete()
         except Exception as del_exc:
             logger.error("Could not delete duplicate customer pk=%s: %s", dup.pk, del_exc)
 
-    # Update survivor fields if we have better data now
     changed = False
     if kam_user and not survivor.kam:
         survivor.kam = kam_user
         changed = True
     if extra_defaults:
-        for field, val in extra_defaults.items():
-            if val is not None and not getattr(survivor, field, None):
-                setattr(survivor, field, val)
+        for f, val in extra_defaults.items():
+            if val is not None and not getattr(survivor, f, None):
+                setattr(survivor, f, val)
                 changed = True
     if changed:
         try:
@@ -450,23 +414,17 @@ def _safe_get_or_create_customer(
 # KAM USER MAPPING
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Module-level cache: rebuilt on each sync
 _kam_user_cache: Dict[str, Optional[User]] = {}
 
 
 def _load_kam_names_tab(service, sheet_id: str) -> Dict[str, str]:
-    """
-    Read KAM names tab → returns {display_name: email} dict.
-    Tab schema: Short Name[0] | KAM Name[1] | Email[2]
-    Also registers short names as aliases.
-    """
     rows = _get_sheet_values(service, sheet_id, _tab_kam_names())
     if not rows:
         logger.warning("KAM names tab empty or missing")
         return {}
 
     mapping: Dict[str, str] = {}
-    for row in rows[1:]:  # skip header
+    for row in rows[1:]:
         short_name = _cell(row, 0)
         kam_name   = _cell(row, 1)
         email      = _cell(row, 2)
@@ -482,12 +440,10 @@ def _load_kam_names_tab(service, sheet_id: str) -> Dict[str, str]:
 
 
 def _build_user_lookup() -> Dict[str, User]:
-    """Build a display-name → User lookup from DB users."""
     lookup: Dict[str, User] = {}
     first_name_index: Dict[str, List[User]] = {}
 
-    for u in User.objects.filter(is_active=True).select_related("profile") if hasattr(User, "profile") else User.objects.filter(is_active=True):
-        # Full name from profile
+    for u in User.objects.filter(is_active=True):
         try:
             full = f"{u.first_name} {u.last_name}".strip()
             if full:
@@ -495,28 +451,23 @@ def _build_user_lookup() -> Dict[str, User]:
         except Exception:
             pass
 
-        # Email
         if u.email:
             lookup[_normalize(u.email)] = u
             local = u.email.split("@")[0]
             lookup[_normalize(local)] = u
 
-        # Username
         uname = u.username or ""
         lookup[_normalize(uname)] = u
 
-        # Decompose separator-based username (ravi.pandey → ravi, pandey)
         parts = re.split(r"[._\-]", uname)
         if len(parts) >= 2:
-            lookup[_normalize(parts[0])] = u          # first part
-            lookup[_normalize("".join(parts))] = u    # joined
+            lookup[_normalize(parts[0])] = u
+            lookup[_normalize("".join(parts))] = u
 
-        # Track first names for single-user shortcuts
-        first = (u.first_name or parts[0] if parts else "").strip().lower()
+        first = (u.first_name or (parts[0] if parts else "")).strip().lower()
         if first:
             first_name_index.setdefault(first, []).append(u)
 
-    # Register unambiguous first names
     for fname, users in first_name_index.items():
         if len(users) == 1:
             lookup[_normalize(fname)] = users[0]
@@ -526,25 +477,16 @@ def _build_user_lookup() -> Dict[str, User]:
 
 def _resolve_kam_user(
     name: str,
-    tab_mapping: Dict[str, str],   # from KAM names tab: name → email
-    db_lookup: Dict[str, User],    # from DB
-    env_usermap: Dict[str, str],   # from KAM_USERMAP_JSON env
+    tab_mapping: Dict[str, str],
+    db_lookup: Dict[str, User],
+    env_usermap: Dict[str, str],
     stats: SyncStats,
 ) -> Optional[User]:
-    """
-    Multi-strategy KAM resolution (highest priority first):
-    1. env_usermap override (KAM_USERMAP_JSON)
-    2. KAM names tab mapping (name → email → DB user)
-    3. DB lookup by normalized name
-    4. DB lookup by compact key
-    5. Direct DB query
-    """
     if not name:
         return None
 
     key = _normalize(name)
 
-    # Check module cache
     if key in _kam_user_cache:
         return _kam_user_cache[key]
 
@@ -565,7 +507,6 @@ def _resolve_kam_user(
     if not user:
         email_from_tab = tab_mapping.get(name) or tab_mapping.get(key)
         if not email_from_tab:
-            # Try normalized match
             for tab_name, tab_email in tab_mapping.items():
                 if _normalize(tab_name) == key:
                     email_from_tab = tab_email
@@ -577,10 +518,8 @@ def _resolve_kam_user(
                 try:
                     user = User.objects.get(username__iexact=email_from_tab)
                 except User.DoesNotExist:
-                    # Create or get by email if auto-create enabled
                     if _env_flag("KAM_AUTO_CREATE_USERS", False):
-                        kam_full = name
-                        parts = kam_full.split()
+                        parts = name.split()
                         user, created = User.objects.get_or_create(
                             email=email_from_tab,
                             defaults={
@@ -596,12 +535,12 @@ def _resolve_kam_user(
     if not user:
         user = db_lookup.get(key)
 
-    # 4. Compact key (strip all non-alphanumeric)
+    # 4. Compact key
     if not user:
         compact = re.sub(r"[^a-z0-9]", "", key)
         user = db_lookup.get(compact)
 
-    # 5. Direct DB query
+    # 5. Direct DB
     if not user:
         try:
             user = User.objects.get(username__iexact=name)
@@ -609,10 +548,12 @@ def _resolve_kam_user(
             pass
     if not user:
         try:
-            user = User.objects.filter(
-                first_name__iexact=name.split()[0],
-                last_name__iexact=name.split()[-1] if len(name.split()) > 1 else "",
-            ).first()
+            name_parts = name.split()
+            if len(name_parts) >= 2:
+                user = User.objects.filter(
+                    first_name__iexact=name_parts[0],
+                    last_name__iexact=name_parts[-1],
+                ).first()
         except Exception:
             pass
 
@@ -626,11 +567,9 @@ def _resolve_kam_user(
 
 
 def _load_env_usermap() -> Dict[str, str]:
-    """Parse KAM_USERMAP_JSON env var → {name: email} dict."""
     raw = _env("KAM_USERMAP_JSON", "{}")
     try:
         data = json.loads(raw)
-        # Normalize keys
         return {_normalize(k): v for k, v in data.items()} | data
     except json.JSONDecodeError:
         logger.warning("KAM_USERMAP_JSON is not valid JSON")
@@ -672,25 +611,25 @@ def _sync_customers(
                     name,
                     kam_user=kam_user,
                     extra_defaults={
-                        "address":             _cell(row, 2),
-                        "email":               _cell(row, 3),
-                        "mobile":              _cell(row, 4),
-                        "contact_person":      _cell(row, 5),
-                        "credit_limit":        _decimal(_cell(row, 6)),
-                        "credit_period_days":  _decimal(_cell(row, 7)),
-                        "total_exposure":      _decimal(_cell(row, 8)),
-                        "current_credit_limit":_decimal(_cell(row, 10)),
+                        "address":              _cell(row, 2),
+                        "email":                _cell(row, 3),
+                        "mobile":               _cell(row, 4),
+                        "contact_person":       _cell(row, 5),
+                        "credit_limit":         _decimal(_cell(row, 6)),
+                        "credit_period_days":   _decimal(_cell(row, 7)),
+                        "total_exposure":       _decimal(_cell(row, 8)),
+                        "current_credit_limit": _decimal(_cell(row, 10)),
                     },
                 )
-                # Always update all fields from Customer Details tab (authoritative)
-                obj.address             = _cell(row, 2) or obj.address
-                obj.email               = _cell(row, 3) or obj.email
-                obj.mobile              = _cell(row, 4) or obj.mobile
-                obj.contact_person      = _cell(row, 5) or obj.contact_person
-                obj.credit_limit        = _decimal(_cell(row, 6)) or obj.credit_limit
-                obj.credit_period_days  = _decimal(_cell(row, 7)) or obj.credit_period_days
-                obj.total_exposure      = _decimal(_cell(row, 8)) or obj.total_exposure
-                obj.current_credit_limit= _decimal(_cell(row, 10)) or obj.current_credit_limit
+                # Always update fields from Customer Details tab (authoritative)
+                obj.address              = _cell(row, 2) or obj.address
+                obj.email                = _cell(row, 3) or obj.email
+                obj.mobile               = _cell(row, 4) or obj.mobile
+                obj.contact_person       = _cell(row, 5) or obj.contact_person
+                obj.credit_limit         = _decimal(_cell(row, 6)) or obj.credit_limit
+                obj.credit_period_days   = _decimal(_cell(row, 7)) or obj.credit_period_days
+                obj.total_exposure       = _decimal(_cell(row, 8)) or obj.total_exposure
+                obj.current_credit_limit = _decimal(_cell(row, 10)) or obj.current_credit_limit
                 if kam_user:
                     obj.kam = kam_user
                 obj.save()
@@ -706,6 +645,11 @@ def _sync_customers(
 # SECTION: SALES — Sales (F)
 # Tab: Sales (F)
 # Cols: Date of Invoice[0] | Buyer's Name[1] | KAM[2] | Qty(MT)[3] | Full Name[4]
+#
+# FIX: Previously used invoice_value/raw_buyer_name/source_tab which didn't
+#      exist in InvoiceFact model → every row crashed silently → zero sales.
+#      Now uses correct field names. row_uuid generated deterministically.
+#      NO hardcoded year ranges — _parse_date accepts any valid date.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_sales_f(
@@ -719,6 +663,8 @@ def _sync_sales_f(
     if len(rows) < 2:
         stats.notes.append("Sales (F) tab: no data rows")
         return stats
+
+    tab_name = _tab_sales_f()
 
     for i, row in enumerate(rows[1:], start=2):
         invoice_date_raw = _cell(row, 0)
@@ -738,24 +684,28 @@ def _sync_sales_f(
             stats.skipped += 1
             continue
 
-        qty = _decimal(qty_raw)
+        qty = _decimal(qty_raw) or Decimal("0")
         kam_user = _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats) if kam_name else None
 
-        # Get or create customer
         customer = _safe_get_or_create_customer(customer_name, kam_user=kam_user)
+
+        # FIX: Generate deterministic row_uuid so we can upsert idempotently
+        row_uuid = _make_row_uuid(tab_name, invoice_date, customer_name, kam_name, i)
 
         try:
             with transaction.atomic():
                 InvoiceFact.objects.update_or_create(
-                    customer=customer,
-                    invoice_date=invoice_date,
-                    source_tab="Sales (F)",
-                    # Use buyer_name + date as natural key to avoid duplicates
+                    row_uuid=row_uuid,
                     defaults={
-                        "kam":         kam_user,
-                        "qty_mt":      qty or Decimal("0"),
-                        "invoice_value": Decimal("0"),  # Sales (F) has no value column
+                        "customer":       customer,
+                        "kam":            kam_user,
+                        "invoice_date":   invoice_date,
+                        "qty_mt":         qty,
+                        # FIX: use correct field names that exist in the model
+                        "invoice_value":  Decimal("0"),
+                        "revenue_gst":    Decimal("0"),
                         "raw_buyer_name": buyer_name,
+                        "source_tab":     tab_name,
                     },
                 )
                 stats.sales_upserted += 1
@@ -774,9 +724,9 @@ def _sync_sales_f(
 #       Business Vertical[7] | Dispatch From[8] | Dispatch To[9]
 #       Transporter Name[10] | Heat Number[11] | Grade[12] | Size[13]
 #       QTY[14] | Shape[15] | Rate/MT[16] | Invoice Value[17]
-#       Freight[18] | Other Cost[19] | Remarks[20] | Steel Mill[21]
-#       TC Copy[22] | Invoice Image[23] | LR Copy[24] | Truck Image[25]
-#       OA/PO[26] | Material Identification[27]
+#       Freight[18] | Other Cost[19] | Remarks[20] | Steel Mill[21] ...
+#
+# FIX: Same model field alignment fixes as Sales (F). row_uuid deterministic.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_sheet1(
@@ -791,13 +741,15 @@ def _sync_sheet1(
         stats.notes.append("Sheet1 tab: no data rows")
         return stats
 
+    tab_name = _tab_sheet1()
+
     for i, row in enumerate(rows[1:], start=2):
         kam_name      = _cell(row, 0)
         customer_name = _cell(row, 1)
         invoice_no    = _cell(row, 4)
         invoice_date  = _parse_date(_cell(row, 5))
         value_gst     = _decimal(_cell(row, 6))
-        qty           = _decimal(_cell(row, 14))
+        qty           = _decimal(_cell(row, 14)) or Decimal("0")
         invoice_value = _decimal(_cell(row, 17))
         rate_mt       = _decimal(_cell(row, 16))
         grade         = _cell(row, 12)
@@ -811,29 +763,33 @@ def _sync_sheet1(
             continue
 
         kam_user = _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats) if kam_name else None
-
         customer = _safe_get_or_create_customer(customer_name, kam_user=kam_user)
+
+        # FIX: Deterministic row_uuid — prefer invoice_no if available
+        if invoice_no:
+            row_uuid = _make_row_uuid(tab_name, invoice_no)
+        else:
+            row_uuid = _make_row_uuid(tab_name, invoice_date, customer_name, kam_name, i)
+
+        final_value = value_gst or invoice_value or Decimal("0")
 
         try:
             with transaction.atomic():
-                lookup_kwargs = {"invoice_no": invoice_no} if invoice_no else {
-                    "customer": customer,
-                    "invoice_date": invoice_date,
-                    "source_tab": "Sheet1",
-                }
                 InvoiceFact.objects.update_or_create(
-                    **lookup_kwargs,
+                    row_uuid=row_uuid,
                     defaults={
                         "customer":      customer,
                         "kam":           kam_user,
                         "invoice_date":  invoice_date,
+                        # FIX: correct field names
                         "invoice_no":    invoice_no,
-                        "invoice_value": value_gst or invoice_value or Decimal("0"),
-                        "qty_mt":        qty or Decimal("0"),
+                        "invoice_value": final_value,
+                        "revenue_gst":   final_value,
+                        "qty_mt":        qty,
                         "rate_mt":       rate_mt,
                         "grade":         grade,
                         "size":          size,
-                        "source_tab":    "Sheet1",
+                        "source_tab":    tab_name,
                     },
                 )
                 stats.sales_upserted += 1
@@ -855,6 +811,9 @@ def _sync_sheet1(
 #       Stock Available When Captured[18] | Pending Order When Captured[19]
 #       Offer/Quotation rate (Rs/MT)[20] | Status[21] | Revenue RS/MT[22]
 #       Remarks[23]
+#
+# FIX: Set doe (DateField) from timestamp — views filter on doe, not created_at.
+#      row_uuid generated deterministically. source_tab, enquiry_no, revenue_mt set.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_frontend(
@@ -868,6 +827,8 @@ def _sync_frontend(
     if len(rows) < 2:
         stats.notes.append("Front End tab: no data rows")
         return stats
+
+    tab_name = _tab_frontend()
 
     for i, row in enumerate(rows[1:], start=2):
         enquiry_no    = _cell(row, 0)
@@ -886,32 +847,37 @@ def _sync_frontend(
             continue
 
         ts = _parse_timestamp(timestamp_raw)
-        qty = _decimal(qty_raw)
-        kam_user = _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats) if kam_name else None
+        # FIX: doe is the date field used in dashboard filters
+        doe_date = ts.date() if ts else None
 
+        qty = _decimal(qty_raw) or Decimal("0")
+        kam_user = _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats) if kam_name else None
         customer = _safe_get_or_create_customer(customer_name, kam_user=kam_user)
+
+        # FIX: Deterministic row_uuid
+        if enquiry_no:
+            row_uuid = _make_row_uuid(tab_name, enquiry_no)
+        else:
+            row_uuid = _make_row_uuid(tab_name, timestamp_raw, customer_name, kam_name, i)
 
         try:
             with transaction.atomic():
-                lookup_kwargs = {"enquiry_no": enquiry_no} if enquiry_no else {
-                    "customer": customer,
-                    "source_tab": "Front End",
-                    "created_at": ts,
-                }
                 LeadFact.objects.update_or_create(
-                    **lookup_kwargs,
+                    row_uuid=row_uuid,
                     defaults={
-                        "customer":    customer,
-                        "kam":         kam_user,
-                        "created_at":  ts,
-                        "qty_mt":      qty or Decimal("0"),
-                        "status":      status or "OPEN",
-                        "grade":       grade,
-                        "size":        size,
-                        "revenue_mt":  revenue_mt,
-                        "remarks":     remarks,
-                        "source_tab":  "Front End",
-                        "enquiry_no":  enquiry_no,
+                        "customer":   customer,
+                        "kam":        kam_user,
+                        # FIX: set doe (the field views filter on)
+                        "doe":        doe_date,
+                        "qty_mt":     qty,
+                        "status":     status or "OPEN",
+                        "grade":      grade,
+                        "size":       size,
+                        "revenue_mt": revenue_mt,
+                        "remarks":    remarks,
+                        # FIX: set source_tab and enquiry_no (new fields in model)
+                        "source_tab": tab_name,
+                        "enquiry_no": enquiry_no,
                     },
                 )
                 stats.leads_upserted += 1
@@ -923,10 +889,12 @@ def _sync_frontend(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION: LEADS — Enquiry (F) (simpler follow-up tracker)
+# SECTION: LEADS — Enquiry (F)
 # Tab: Enquiry (F)
 # Cols: Timestamp[0] | KAM Name[1] | Customer Name[2] | Qty (MT)[3]
 #       Status[4] | Remarks[5]
+#
+# FIX: Set doe from timestamp. row_uuid generated. source_tab set.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_enquiry_f(
@@ -941,6 +909,8 @@ def _sync_enquiry_f(
         stats.notes.append("Enquiry (F) tab: no data rows")
         return stats
 
+    tab_name = _tab_enquiry_f()
+
     for i, row in enumerate(rows[1:], start=2):
         timestamp_raw = _cell(row, 0)
         kam_name      = _cell(row, 1)
@@ -953,24 +923,31 @@ def _sync_enquiry_f(
             stats.skipped += 1
             continue
 
-        ts  = _parse_timestamp(timestamp_raw)
-        qty = _decimal(qty_raw)
-        kam_user = _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats) if kam_name else None
+        ts = _parse_timestamp(timestamp_raw)
+        # FIX: doe is the date field used in dashboard filters
+        doe_date = ts.date() if ts else None
 
+        qty = _decimal(qty_raw) or Decimal("0")
+        kam_user = _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats) if kam_name else None
         customer = _safe_get_or_create_customer(customer_name, kam_user=kam_user)
+
+        # FIX: Deterministic row_uuid
+        row_uuid = _make_row_uuid(tab_name, timestamp_raw, customer_name, kam_name, i)
 
         try:
             with transaction.atomic():
                 LeadFact.objects.update_or_create(
-                    customer=customer,
-                    source_tab="Enquiry (F)",
-                    created_at=ts,
+                    row_uuid=row_uuid,
                     defaults={
+                        "customer":   customer,
                         "kam":        kam_user,
-                        "qty_mt":     qty or Decimal("0"),
+                        # FIX: set doe (the field views filter on)
+                        "doe":        doe_date,
+                        "qty_mt":     qty,
                         "status":     status or "OPEN",
                         "remarks":    remarks,
-                        "source_tab": "Enquiry (F)",
+                        # FIX: set source_tab
+                        "source_tab": tab_name,
                     },
                 )
                 stats.leads_upserted += 1
@@ -984,10 +961,10 @@ def _sync_enquiry_f(
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION: OVERDUES
 # Tab: Overdues
-# Cols: Customer Name[0] | KAM Name[1] | Overdues (Rs)[2] | [blank][3]
-#       KAM Name[4] | Overdue[5]   ← cols 4-5 are a separate summary block
+# Cols: Customer Name[0] | KAM Name[1] | Overdues (Rs)[2]
 #
-# Strategy: read cols 0-2 first (customer-level), then cols 4-5 (KAM summary).
+# FIX: Was using overdue_amt which didn't exist → all rows crashed.
+#      Now sets both overdue and overdue_amt (new field in model).
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_overdues(
@@ -1018,7 +995,6 @@ def _sync_overdues(
             continue
 
         kam_user = _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats) if kam_name else None
-
         customer = _safe_get_or_create_customer(customer_name, kam_user=kam_user)
 
         try:
@@ -1027,7 +1003,9 @@ def _sync_overdues(
                     customer=customer,
                     snapshot_date=snapshot_date,
                     defaults={
-                        "kam":         kam_user,
+                        "kam":        kam_user,
+                        # FIX: set both fields — overdue (existing) and overdue_amt (new alias)
+                        "overdue":     overdue_amt,
                         "overdue_amt": overdue_amt,
                     },
                 )
@@ -1044,12 +1022,8 @@ def _sync_overdues(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_sync_now() -> SyncStats:
-    """
-    Run full sync across all enabled sections.
-    Order: KAM names (lookup) → Customers → Sales (F) → Sheet1 → Front End → Enquiry (F) → Overdues
-    """
     global _kam_user_cache
-    _kam_user_cache = {}  # Reset cache on each full sync
+    _kam_user_cache = {}
 
     sheet_id = _require_env("KAM_SALES_SHEET_ID")
     sections = resolve_sections()
@@ -1060,7 +1034,6 @@ def run_sync_now() -> SyncStats:
     except GoogleCredentialError:
         raise
 
-    # ── 1. Load KAM names tab (always — needed for all other sections) ──────
     tab_mapping  = _load_kam_names_tab(service, sheet_id)
     db_lookup    = _build_user_lookup()
     env_usermap  = _load_env_usermap()
@@ -1070,42 +1043,36 @@ def run_sync_now() -> SyncStats:
         sheet_id, len(tab_mapping), len(db_lookup)
     )
 
-    # ── 2. Customer Details ──────────────────────────────────────────────────
     if sections.get("customers"):
         logger.info("Syncing: Customer Details")
         s = _sync_customers(service, sheet_id, tab_mapping, db_lookup, env_usermap)
         total.merge(s)
         logger.info("  → %d upserted, %d skipped", s.customers_upserted, s.skipped)
 
-    # ── 3. Sales (F) ────────────────────────────────────────────────────────
     if sections.get("sales_f"):
         logger.info("Syncing: Sales (F)")
         s = _sync_sales_f(service, sheet_id, tab_mapping, db_lookup, env_usermap)
         total.merge(s)
         logger.info("  → %d upserted, %d skipped", s.sales_upserted, s.skipped)
 
-    # ── 4. Sheet1 (historical invoices) ─────────────────────────────────────
     if sections.get("sheet1"):
         logger.info("Syncing: Sheet1")
         s = _sync_sheet1(service, sheet_id, tab_mapping, db_lookup, env_usermap)
         total.merge(s)
         logger.info("  → %d upserted, %d skipped", s.sales_upserted, s.skipped)
 
-    # ── 5. Front End (lead pipeline) ────────────────────────────────────────
     if sections.get("frontend"):
         logger.info("Syncing: Front End")
         s = _sync_frontend(service, sheet_id, tab_mapping, db_lookup, env_usermap)
         total.merge(s)
         logger.info("  → %d upserted, %d skipped", s.leads_upserted, s.skipped)
 
-    # ── 6. Enquiry (F) ──────────────────────────────────────────────────────
     if sections.get("enquiry_f"):
         logger.info("Syncing: Enquiry (F)")
         s = _sync_enquiry_f(service, sheet_id, tab_mapping, db_lookup, env_usermap)
         total.merge(s)
         logger.info("  → %d upserted, %d skipped", s.leads_upserted, s.skipped)
 
-    # ── 7. Overdues ──────────────────────────────────────────────────────────
     if sections.get("overdues"):
         logger.info("Syncing: Overdues")
         s = _sync_overdues(service, sheet_id, tab_mapping, db_lookup, env_usermap)
@@ -1120,14 +1087,10 @@ def run_sync_now() -> SyncStats:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP SYNC (for views that use SyncIntent / paging)
+# STEP SYNC
 # ─────────────────────────────────────────────────────────────────────────────
 
 def step_sync(intent: SyncIntent, *args, **kwargs) -> Dict[str, Any]:
-    """
-    Run one step of a paged sync.
-    Each step runs one section. Cursor stored on SyncIntent.
-    """
     STEPS = [
         ("customers",  "Customer Details"),
         ("sales_f",    "Sales (F)"),
@@ -1137,9 +1100,10 @@ def step_sync(intent: SyncIntent, *args, **kwargs) -> Dict[str, Any]:
         ("overdues",   "Overdues"),
     ]
 
-    cursor     = getattr(intent, "cursor_position", 0) or 0
-    sections   = resolve_sections()
-    sheet_id   = _require_env("KAM_SALES_SHEET_ID")
+    # FIX: cursor_position now exists in model
+    cursor   = getattr(intent, "cursor_position", 0) or 0
+    sections = resolve_sections()
+    sheet_id = _require_env("KAM_SALES_SHEET_ID")
 
     if cursor >= len(STEPS):
         intent.status = "COMPLETE"
