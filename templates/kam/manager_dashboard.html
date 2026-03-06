@@ -1,60 +1,313 @@
+{# FILE: templates/kam/manager_dashboard.html #}
+{# PURPOSE: Today's Details — renamed from Manager Console. Shows today's Visits, Calls, Leads, Collections. #}
+{# UPDATED: 2026-03-05 #}
 {% extends "base.html" %}
 {% load humanize %}
-{% block title %}Manager Dashboard{% endblock %}
+
+{% block title %}Today's Details — BOS Lakshya{% endblock %}
+{% block breadcrumb %}Today's Details{% endblock %}
+
+{% block head_extra %}
+<style>
+  .today-stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    box-shadow: var(--shadow-xs);
+  }
+  .today-stat-icon {
+    width: 44px; height: 44px; border-radius: 12px;
+    display: grid; place-items: center;
+    font-size: 18px; flex-shrink: 0;
+  }
+  .today-stat-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--subtle); }
+  .today-stat-value { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; color: var(--text); line-height: 1.1; }
+  .today-stat-sub   { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+  .section-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; border-bottom: 1px solid var(--border-light);
+    font-size: 13px; font-weight: 700;
+  }
+  .section-table th {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--muted); white-space: nowrap;
+  }
+  .section-table td { font-size: 13px; vertical-align: middle; }
+  .kam-chip {
+    display: inline-block; background: var(--primary-soft); color: var(--primary);
+    font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 4px;
+  }
+  .empty-state { padding: 30px 20px; text-align: center; color: var(--subtle); font-size: 13px; }
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
-  <h1 class="page-title m-0">Manager Dashboard</h1>
 
-  <div class="d-flex gap-2 flex-wrap align-items-center">
-    <a class="btn btn-outline-secondary btn-sm" href="{% url 'kam:targets' %}">Targets</a>
-
-    {# targets_lines route exists in your URL mappings #}
-    <a class="btn btn-outline-secondary btn-sm" href="{% url 'kam:targets_lines' %}">Target Lines</a>
-
-    <a class="btn btn-outline-secondary btn-sm" href="{% url 'kam:dashboard' %}?period=week">Back to Dashboard</a>
-
-    <form method="post" action="{% url 'kam:sync_step' %}" class="d-inline">
-      {% csrf_token %}
-      <button class="btn btn-primary btn-sm" type="submit" title="Trigger sync step">
-        <i class="fas fa-rotate"></i> Sync now
-      </button>
-    </form>
+<div class="page-header d-flex align-items-start justify-content-between flex-wrap gap-2">
+  <div>
+    <h1 class="page-title">Today's Details</h1>
+    <p class="text-muted small mt-1">Live snapshot — what your team has done today</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{% url 'kam:manager_view' %}" class="btn btn-sm btn-outline-secondary">
+      <i class="fas fa-chart-bar me-1"></i>Manager View
+    </a>
+    <a href="{% url 'kam:dashboard' %}" class="btn btn-sm btn-outline-secondary">
+      <i class="fas fa-arrow-left me-1"></i>Dashboard
+    </a>
   </div>
 </div>
+
+{# ── Summary Stats ─────────────────────────────────────────────────── #}
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="today-stat-card">
+      <div class="today-stat-icon" style="background:#eff6ff;">
+        <i class="fas fa-route" style="color:#3b82f6;"></i>
+      </div>
+      <div>
+        <div class="today-stat-label">Visits Today</div>
+        <div class="today-stat-value">{{ today_visits_count|default:"0" }}</div>
+        <div class="today-stat-sub">{{ today_visits_success|default:"0" }} successful</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="today-stat-card">
+      <div class="today-stat-icon" style="background:#f5f3ff;">
+        <i class="fas fa-phone-volume" style="color:#7c3aed;"></i>
+      </div>
+      <div>
+        <div class="today-stat-label">Calls Today</div>
+        <div class="today-stat-value">{{ today_calls_count|default:"0" }}</div>
+        <div class="today-stat-sub">Logged calls</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="today-stat-card">
+      <div class="today-stat-icon" style="background:#fff7ed;">
+        <i class="fas fa-bullseye" style="color:#f59e0b;"></i>
+      </div>
+      <div>
+        <div class="today-stat-label">Leads Today</div>
+        <div class="today-stat-value">{{ today_leads_count|default:"0" }}</div>
+        <div class="today-stat-sub">New leads</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="today-stat-card">
+      <div class="today-stat-icon" style="background:#ecfdf5;">
+        <i class="fas fa-money-bill-wave" style="color:#10b981;"></i>
+      </div>
+      <div>
+        <div class="today-stat-label">Collections Today</div>
+        <div class="today-stat-value" style="font-size:1.1rem;">₹ {{ today_collections_amount|floatformat:0|intcomma|default:"0" }}</div>
+        <div class="today-stat-sub">{{ today_collections_count|default:"0" }} txns</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── KAM breakdown table ────────────────────────────────────────────── #}
+{% if kam_rows %}
+<div class="section-card mb-4">
+  <div class="section-header">
+    <span><i class="fas fa-users me-2 text-muted"></i>KAM Activity Today</span>
+    <span class="text-muted small">{{ today|date:"d M Y" }}</span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm section-table align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>KAM</th>
+          <th class="text-center">Visits</th>
+          <th class="text-center">Calls</th>
+          <th class="text-center">Leads</th>
+          <th class="text-end">Collections (₹)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in kam_rows %}
+        <tr>
+          <td>
+            <span class="kam-chip">{{ row.kam.username }}</span>
+            <div class="text-muted small">{{ row.kam.get_full_name }}</div>
+          </td>
+          <td class="text-center fw-semibold">{{ row.visits }}</td>
+          <td class="text-center fw-semibold">{{ row.calls }}</td>
+          <td class="text-center fw-semibold">{{ row.leads }}</td>
+          <td class="text-end fw-semibold {% if row.collections > 0 %}text-success{% else %}text-muted{% endif %}">
+            {% if row.collections > 0 %}₹ {{ row.collections|floatformat:0|intcomma }}{% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 
 <div class="row g-3">
-  <div class="col-md-4">
-    <div class="card p-3 h-100">
-      <div class="fw-bold">Calls today</div>
-      <div class="fs-3">
-        {% if kpi and kpi.calls_today is not None %}{{ kpi.calls_today }}{% else %}0{% endif %}
+
+  {# ── Today's Visits ────────────────────────────────────────────────── #}
+  <div class="col-lg-6">
+    <div class="section-card">
+      <div class="section-header">
+        <span><i class="fas fa-route me-2 text-muted"></i>Today's Visits</span>
+        <span class="badge bg-primary" style="font-size:11px;">{{ today_visits|length }}</span>
       </div>
+      {% if today_visits %}
+      <div class="table-responsive">
+        <table class="table table-sm section-table align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>KAM</th>
+              <th>Customer</th>
+              <th class="text-center">Outcome</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for v in today_visits %}
+            <tr>
+              <td><span class="kam-chip">{{ v.plan.kam.username }}</span></td>
+              <td style="font-weight:600;font-size:12.5px;">{{ v.plan.customer.name|default:v.plan.counterparty_name|default:"—" }}</td>
+              <td class="text-center">
+                {% if v.successful %}
+                  <span style="background:#ecfdf5;color:#10b981;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;">✓ Success</span>
+                {% else %}
+                  <span style="background:#fef2f2;color:#ef4444;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;">✕ Missed</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-state">No visits recorded today.</div>
+      {% endif %}
     </div>
   </div>
 
-  <div class="col-md-4">
-    <div class="card p-3 h-100">
-      <div class="fw-bold">Visits today</div>
-      <div class="fs-3">
-        {% if kpi and kpi.visits_today is not None %}{{ kpi.visits_today }}{% else %}0{% endif %}
+  {# ── Today's Calls ─────────────────────────────────────────────────── #}
+  <div class="col-lg-6">
+    <div class="section-card">
+      <div class="section-header">
+        <span><i class="fas fa-phone-volume me-2 text-muted"></i>Today's Calls</span>
+        <span class="badge bg-primary" style="font-size:11px;">{{ today_calls|length }}</span>
       </div>
+      {% if today_calls %}
+      <div class="table-responsive">
+        <table class="table table-sm section-table align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>KAM</th>
+              <th>Customer</th>
+              <th>Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for c in today_calls %}
+            <tr>
+              <td><span class="kam-chip">{{ c.kam.username }}</span></td>
+              <td style="font-weight:600;font-size:12.5px;">{{ c.customer.name|default:"—" }}</td>
+              <td class="text-muted small">{{ c.call_datetime|time:"H:i" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-state">No calls logged today.</div>
+      {% endif %}
     </div>
   </div>
 
-  <div class="col-md-4">
-    <div class="card p-3 h-100">
-      <div class="fw-bold">Collections today</div>
-      <div class="fs-3">
-        ₹ {% if kpi and kpi.collections_today is not None %}{{ kpi.collections_today|floatformat:2|intcomma }}{% else %}0.00{% endif %}
+  {# ── Today's Leads ─────────────────────────────────────────────────── #}
+  <div class="col-lg-6">
+    <div class="section-card">
+      <div class="section-header">
+        <span><i class="fas fa-bullseye me-2 text-muted"></i>Today's Leads</span>
+        <span class="badge bg-primary" style="font-size:11px;">{{ today_leads|length }}</span>
       </div>
+      {% if today_leads %}
+      <div class="table-responsive">
+        <table class="table table-sm section-table align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>KAM</th>
+              <th>Customer</th>
+              <th class="text-end">MT</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for l in today_leads %}
+            <tr>
+              <td><span class="kam-chip">{{ l.kam.username }}</span></td>
+              <td style="font-weight:600;font-size:12.5px;">{{ l.customer.name|default:"—" }}</td>
+              <td class="text-end">{{ l.qty_mt|floatformat:2 }}</td>
+              <td>
+                {% if l.status == "WON" %}
+                  <span style="background:#ecfdf5;color:#10b981;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;">WON</span>
+                {% elif l.status == "LOST" %}
+                  <span style="background:#fef2f2;color:#ef4444;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;">LOST</span>
+                {% else %}
+                  <span style="background:#fffbeb;color:#f59e0b;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;">{{ l.status }}</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-state">No leads added today.</div>
+      {% endif %}
     </div>
   </div>
-</div>
 
-<div class="mt-3 d-flex flex-wrap gap-2">
-  <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:export_kpi_csv' %}?period=week">Export KPI (This Week)</a>
-  <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:export_kpi_csv' %}?period=month">Export KPI (This Month)</a>
-  <a class="btn btn-sm btn-outline-primary" href="{% url 'kam:reports' %}?period=week">Deep Analysis</a>
+  {# ── Today's Collections ───────────────────────────────────────────── #}
+  <div class="col-lg-6">
+    <div class="section-card">
+      <div class="section-header">
+        <span><i class="fas fa-money-bill-wave me-2 text-muted"></i>Today's Collections</span>
+        <span class="badge bg-primary" style="font-size:11px;">{{ today_collections|length }}</span>
+      </div>
+      {% if today_collections %}
+      <div class="table-responsive">
+        <table class="table table-sm section-table align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>KAM</th>
+              <th>Customer</th>
+              <th class="text-end">Amount (₹)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for t in today_collections %}
+            <tr>
+              <td><span class="kam-chip">{{ t.kam.username }}</span></td>
+              <td style="font-weight:600;font-size:12.5px;">{{ t.customer.name|default:"—" }}</td>
+              <td class="text-end fw-semibold text-success">₹ {{ t.amount|floatformat:0|intcomma }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-state">No collections recorded today.</div>
+      {% endif %}
+    </div>
+  </div>
+
 </div>
 {% endblock %}

@@ -1,0 +1,163 @@
+{# FILE: templates/kam/visit_history_edit.html #}
+{# PURPOSE: Edit VisitPlan (date/purpose/location) + VisitActual (outcome/notes) in one form. No crispy. #}
+{# UPDATED: 2026-03-05 #}
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block title %}Edit Visit #{{ plan.id }}{% endblock %}
+{% block breadcrumb %}Visit History / Edit Visit{% endblock %}
+
+{% block head_extra %}
+<style>
+  .vhe-label { font-size: 12.5px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block; }
+  .info-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: var(--surface-alt); border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 10px;
+    font-size: 12px; color: var(--muted);
+  }
+  .section-divider {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--subtle);
+    padding-bottom: 8px; border-bottom: 1px solid var(--border-light);
+    margin-bottom: 14px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="d-flex align-items-start justify-content-between flex-wrap gap-2 mb-4">
+  <div>
+    <h1 class="page-title">Edit Visit #{{ plan.id }}</h1>
+    <div class="d-flex flex-wrap gap-2 mt-2">
+      <span class="info-chip"><i class="fas fa-calendar-alt"></i>{{ plan.visit_date|date:"d M Y" }}{% if plan.visit_date_to %} → {{ plan.visit_date_to|date:"d M Y" }}{% endif %}</span>
+      <span class="info-chip"><i class="fas fa-tag"></i>{{ plan.get_visit_category_display }}</span>
+      {% if plan.customer %}<span class="info-chip"><i class="fas fa-building"></i>{{ plan.customer.name }}</span>{% endif %}
+      <span class="info-chip"><i class="fas fa-user"></i>{{ plan.kam.get_full_name|default:plan.kam.username }}</span>
+      {% if plan.approval_status == 'APPROVED' %}
+        <span class="info-chip" style="background:#ecfdf5;border-color:#a7f3d0;color:#10b981;"><i class="fas fa-check"></i>Approved</span>
+      {% elif plan.approval_status == 'PENDING_APPROVAL' %}
+        <span class="info-chip" style="background:#fffbeb;border-color:#fde68a;color:#d97706;"><i class="fas fa-clock"></i>Pending</span>
+      {% elif plan.approval_status == 'REJECTED' %}
+        <span class="info-chip" style="background:#fef2f2;border-color:#fecaca;color:#ef4444;"><i class="fas fa-xmark"></i>Rejected</span>
+      {% else %}
+        <span class="info-chip"><i class="fas fa-pencil"></i>Draft</span>
+      {% endif %}
+    </div>
+  </div>
+  <a href="{% url 'kam:visit_batches' %}" class="btn btn-sm btn-outline-secondary">
+    <i class="fas fa-arrow-left me-1"></i>Visit History
+  </a>
+</div>
+
+<form method="post" novalidate id="editVisitForm">
+  {% csrf_token %}
+
+  <div class="row g-3">
+
+    {# ── LEFT: VisitPlan fields ─────────────────────────────────────── #}
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-header">
+          <div class="section-divider m-0"><i class="fas fa-calendar-alt me-2"></i>Plan Details</div>
+        </div>
+        <div class="card-body">
+
+          <div class="mb-3">
+            <label class="vhe-label">Visit Date</label>
+            <input type="date" name="visit_date" class="form-control form-control-sm"
+                   value="{{ plan.visit_date|date:'Y-m-d' }}">
+          </div>
+
+          <div class="mb-3">
+            <label class="vhe-label">Visit Date To <span class="fw-normal text-muted" style="font-size:11px;">(optional)</span></label>
+            <input type="date" name="visit_date_to" class="form-control form-control-sm"
+                   value="{{ plan.visit_date_to|date:'Y-m-d'|default:'' }}">
+          </div>
+
+          <div class="mb-3">
+            <label class="vhe-label">Purpose / Remarks <span class="fw-normal text-muted" style="font-size:11px;">(optional)</span></label>
+            <textarea name="purpose" class="form-control form-control-sm" rows="2"
+                      placeholder="What was the visit purpose?">{{ plan.purpose|default:'' }}</textarea>
+          </div>
+
+          <div class="mb-3">
+            <label class="vhe-label">Location <span class="fw-normal text-muted" style="font-size:11px;">(optional)</span></label>
+            <input type="text" name="location" class="form-control form-control-sm"
+                   value="{{ plan.location|default:'' }}"
+                   placeholder="Auto-filled from customer address">
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    {# ── RIGHT: VisitActual fields ──────────────────────────────────── #}
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-header">
+          <div class="section-divider m-0"><i class="fas fa-clipboard-check me-2"></i>Post-Visit Outcome</div>
+        </div>
+        <div class="card-body" id="actualFormBody">
+
+          {% if existing_actual %}
+            <div class="alert alert-success py-2 mb-3 small">
+              <i class="fas fa-check-circle me-1"></i>Post-visit record exists — editing will update it.
+            </div>
+          {% else %}
+            <div class="alert alert-info py-2 mb-3 small">
+              <i class="fas fa-info-circle me-1"></i>No post-visit record yet. Fill below to create one.
+            </div>
+          {% endif %}
+
+          {# Render actual_form fields — no crispy dependency #}
+          {% for field in actual_form %}
+            <div class="mb-3">
+              <label class="vhe-label" for="{{ field.id_for_label }}">
+                {{ field.label }}
+                {% if field.field.required %}<span class="text-danger">*</span>{% endif %}
+              </label>
+              {{ field }}
+              {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+              {% for error in field.errors %}
+                <div style="font-size:12px;color:var(--danger);margin-top:3px;">{{ error }}</div>
+              {% endfor %}
+            </div>
+          {% endfor %}
+
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="d-flex gap-2 mt-3">
+    <button type="submit" class="btn btn-primary">
+      <i class="fas fa-save me-1"></i>Save Changes
+    </button>
+    <a href="{% url 'kam:visit_batches' %}" class="btn btn-outline-secondary">Cancel</a>
+  </div>
+
+</form>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function(){
+  // Apply Bootstrap classes to all form widgets in the actual form body
+  var body = document.getElementById('actualFormBody');
+  if (!body) return;
+  body.querySelectorAll('input:not([type=checkbox]):not([type=radio]),textarea').forEach(function(el){
+    el.classList.add('form-control', 'form-control-sm');
+  });
+  body.querySelectorAll('select').forEach(function(el){
+    el.classList.add('form-select', 'form-select-sm');
+  });
+  body.querySelectorAll('input[type=checkbox],input[type=radio]').forEach(function(el){
+    el.classList.add('form-check-input');
+  });
+})();
+</script>
+{% endblock %}

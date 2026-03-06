@@ -1,53 +1,31 @@
 {# FILE: templates/kam/reports.html #}
-{# PURPOSE: KAM Reports — Sales / Calls / Visits breakdown tables #}
-{# UPDATED: 2026-03-03 — Fix {{ row.customer }} → {{ row.customer_name }}, {{ row.kam }} → {{ row.kam_username }} #}
+{# PURPOSE: KAM Reports — last 4 weeks analytics with Chart.js trend charts + detail tables #}
+{# UPDATED: 2026-03-05 #}
 {% extends "base.html" %}
 {% load humanize %}
 
 {% block title %}KAM Reports — BOS Lakshya{% endblock %}
-{% block breadcrumb %}Reports{% endblock %}
+{% block breadcrumb %}KAM Reports{% endblock %}
 
 {% block head_extra %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
-  /* =============================================
-     REPORTS — LOCAL STYLES
-  ============================================= */
-  .reports-filter-bar {
-    display: flex;
-    align-items: flex-end;
-    gap: 10px;
-    flex-wrap: wrap;
+  .chart-card {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 14px 16px;
-    margin-bottom: 20px;
+    padding: 1.25rem;
   }
-  .reports-filter-group { display: flex; flex-direction: column; gap: 4px; }
-  .reports-filter-label {
+  .chart-title {
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--subtle);
+    margin-bottom: 0.75rem;
   }
-  .reports-filter-bar .form-control {
-    min-width: 140px;
-    height: 36px;
-    font-size: 13px;
-  }
-  .reports-filter-bar .form-select {
-    min-width: 140px;
-    height: 36px;
-    font-size: 13px;
-  }
+  .chart-wrap { position: relative; height: 180px; }
 
-  .metric-tabs {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 18px;
-    flex-wrap: wrap;
-  }
   .metric-tab {
     padding: 6px 16px;
     border-radius: 999px;
@@ -61,11 +39,7 @@
     transition: all 0.14s ease;
   }
   .metric-tab:hover { background: var(--surface-alt); color: var(--text); }
-  .metric-tab.active {
-    background: var(--primary);
-    color: #fff;
-    border-color: var(--primary);
-  }
+  .metric-tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 
   .report-card {
     background: var(--surface);
@@ -79,17 +53,9 @@
     justify-content: space-between;
     padding: 13px 16px;
     border-bottom: 1px solid var(--border-light);
-  }
-  .report-card-title {
     font-size: 13px;
     font-weight: 700;
-    color: var(--text);
-    display: flex;
-    align-items: center;
-    gap: 7px;
   }
-  .report-card-title i { color: var(--muted); font-size: 12px; }
-
   .badge-count {
     display: inline-flex;
     align-items: center;
@@ -103,19 +69,14 @@
     font-size: 11px;
     font-weight: 700;
   }
-
   .report-table th {
     font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--muted);
-    white-space: nowrap;
   }
   .report-table td { font-size: 13px; vertical-align: middle; }
-  .report-table .r { text-align: right; }
-  .report-table .c { text-align: center; }
-
   .success-badge {
     display: inline-flex;
     align-items: center;
@@ -127,7 +88,6 @@
   }
   .success-badge.yes { background: #ecfdf5; color: var(--success); }
   .success-badge.no  { background: #fef2f2; color: var(--danger); }
-
   .range-pill {
     display: inline-flex;
     align-items: center;
@@ -140,7 +100,6 @@
     padding: 3px 10px;
     border-radius: 999px;
   }
-
   .empty-state {
     padding: 40px 20px;
     text-align: center;
@@ -148,23 +107,6 @@
     font-size: 13px;
   }
   .empty-state i { font-size: 2rem; margin-bottom: 10px; display: block; }
-
-  @media (max-width: 768px) {
-    .reports-filter-bar {
-      gap: 8px;
-    }
-    .reports-filter-group {
-      width: 100%;
-    }
-    .reports-filter-bar .form-control {
-      width: 100%;
-      min-width: 0;
-    }
-    .reports-filter-bar .form-select {
-      width: 100%;
-      min-width: 0;
-    }
-  }
 </style>
 {% endblock %}
 
@@ -182,49 +124,140 @@
       </div>
     {% endif %}
   </div>
-  <a href="{% url 'kam:dashboard' %}" class="btn btn-sm btn-outline-secondary">
-    <i class="fas fa-arrow-left me-1"></i>Back to Dashboard
-  </a>
+  <div class="d-flex gap-2">
+    <a href="{% url 'kam:export_kpi_csv' %}?from={{ filter_from }}&to={{ filter_to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
+       class="btn btn-sm btn-outline-secondary">
+      <i class="fas fa-download me-1"></i>Export CSV
+    </a>
+    <a href="{% url 'kam:dashboard' %}" class="btn btn-sm btn-outline-secondary">
+      <i class="fas fa-arrow-left me-1"></i>Dashboard
+    </a>
+  </div>
 </div>
 
 {# ── FILTER BAR ───────────────────────────────────────────────────────── #}
-<form class="reports-filter-bar" method="get" id="reportsFilterForm">
+<form method="get" class="d-flex align-items-end gap-2 flex-wrap mb-3 p-3 border rounded"
+      style="background:var(--surface);" id="reportsFilterForm">
   <input type="hidden" name="metric" value="{{ metric }}">
 
-  <div class="reports-filter-group">
-    <span class="reports-filter-label"><i class="fas fa-calendar-day me-1"></i>From</span>
-    <input type="date" name="from" value="{% firstof request.GET.from filter_from %}" class="form-control" id="filterFrom">
+  <div class="d-flex flex-column gap-1">
+    <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--subtle);">From</span>
+    <input type="date" name="from" value="{% firstof request.GET.from filter_from %}"
+           class="form-control form-control-sm" style="min-width:140px;">
   </div>
 
-  <div class="reports-filter-group">
-    <span class="reports-filter-label"><i class="fas fa-calendar-day me-1"></i>To</span>
-    <input type="date" name="to" value="{% firstof request.GET.to filter_to %}" class="form-control" id="filterTo">
+  <div class="d-flex flex-column gap-1">
+    <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--subtle);">To</span>
+    <input type="date" name="to" value="{% firstof request.GET.to filter_to %}"
+           class="form-control form-control-sm" style="min-width:140px;">
   </div>
 
   {% if can_choose_kam %}
-    <div class="reports-filter-group">
-      <span class="reports-filter-label"><i class="fas fa-user me-1"></i>KAM</span>
-      <select name="user" class="form-select">
-        <option value="" {% if not request.GET.user %}selected{% endif %}>ALL KAMs</option>
-        {% for uname in kam_options %}
-          <option value="{{ uname }}" {% if request.GET.user == uname %}selected{% endif %}>{{ uname }}</option>
-        {% endfor %}
-      </select>
-    </div>
+  <div class="d-flex flex-column gap-1">
+    <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--subtle);">KAM</span>
+    <select name="user" class="form-select form-select-sm" style="min-width:140px;">
+      <option value="" {% if not request.GET.user %}selected{% endif %}>ALL KAMs</option>
+      {% for uname in kam_options %}
+        <option value="{{ uname }}" {% if request.GET.user == uname %}selected{% endif %}>{{ uname }}</option>
+      {% endfor %}
+    </select>
+  </div>
   {% endif %}
 
-  <div style="display:flex;gap:8px;align-items:flex-end;">
+  <div class="d-flex gap-2 align-items-end">
     <button class="btn btn-primary btn-sm" type="submit">
       <i class="fas fa-filter me-1"></i>Apply
     </button>
-    <a class="btn btn-outline-secondary btn-sm" href="{% url 'kam:reports' %}?metric={{ metric }}">
+    <a class="btn btn-outline-secondary btn-sm"
+       href="{% url 'kam:reports' %}?metric={{ metric }}">
       <i class="fas fa-rotate-left me-1"></i>Reset
     </a>
   </div>
 </form>
 
+{# ── 4-WEEK TREND CHARTS ──────────────────────────────────────────────── #}
+{% if weeks_trend %}
+<div class="mb-4">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <h5 class="fw-bold m-0">Last 4 Weeks Analytics</h5>
+    <span class="text-muted small">Scope: {{ scope_label }}</span>
+  </div>
+  <div class="row g-3">
+
+    <div class="col-md-6 col-xl-4">
+      <div class="chart-card">
+        <div class="chart-title"><i class="fas fa-boxes-stacked me-1"></i>Sales Trend (MT)</div>
+        <div class="chart-wrap"><canvas id="chartSales"></canvas></div>
+      </div>
+    </div>
+
+    <div class="col-md-6 col-xl-4">
+      <div class="chart-card">
+        <div class="chart-title"><i class="fas fa-route me-1"></i>Visits Trend</div>
+        <div class="chart-wrap"><canvas id="chartVisits"></canvas></div>
+      </div>
+    </div>
+
+    <div class="col-md-6 col-xl-4">
+      <div class="chart-card">
+        <div class="chart-title"><i class="fas fa-phone-volume me-1"></i>Calls Trend</div>
+        <div class="chart-wrap"><canvas id="chartCalls"></canvas></div>
+      </div>
+    </div>
+
+    <div class="col-md-6 col-xl-6">
+      <div class="chart-card">
+        <div class="chart-title"><i class="fas fa-bullseye me-1"></i>Leads Trend</div>
+        <div class="chart-wrap"><canvas id="chartLeads"></canvas></div>
+      </div>
+    </div>
+
+    <div class="col-md-6 col-xl-6">
+      <div class="chart-card">
+        <div class="chart-title"><i class="fas fa-money-bill-wave me-1"></i>Collections Trend (₹)</div>
+        <div class="chart-wrap"><canvas id="chartCollections"></canvas></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+{# ── 4-week raw table ─────────────────────────────────────────────────── #}
+<div class="report-card mb-4">
+  <div class="report-card-header">
+    <span><i class="fas fa-table me-1 text-muted"></i>4-Week Trend Data</span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm report-table mb-0">
+      <thead>
+        <tr>
+          <th>Week</th>
+          <th class="text-end">Sales (MT)</th>
+          <th class="text-end">Visits</th>
+          <th class="text-end">Calls</th>
+          <th class="text-end">Leads</th>
+          <th class="text-end">Collections (₹)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in weeks_trend %}
+        <tr>
+          <td class="fw-semibold">{{ row.week }}</td>
+          <td class="text-end">{{ row.sales_mt|floatformat:3 }}</td>
+          <td class="text-end">{{ row.visits }}</td>
+          <td class="text-end">{{ row.calls }}</td>
+          <td class="text-end">{{ row.leads }}</td>
+          <td class="text-end">₹ {{ row.collections|floatformat:0 }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
 {# ── METRIC TABS ──────────────────────────────────────────────────────── #}
-<div class="metric-tabs">
+<div class="d-flex gap-2 flex-wrap mb-3">
   <a href="?metric=sales{% if request.GET.from %}&from={{ request.GET.from }}{% endif %}{% if request.GET.to %}&to={{ request.GET.to }}{% endif %}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
      class="metric-tab {% if metric == 'sales' %}active{% endif %}">
     <i class="fas fa-boxes-stacked me-1"></i>Sales
@@ -243,14 +276,10 @@
 {% if metric == 'sales' %}
 <div class="report-card">
   <div class="report-card-header">
-    <div class="report-card-title">
-      <i class="fas fa-boxes-stacked"></i>
-      Sales by Customer
-      <span class="badge-count">{{ rows|length }}</span>
-    </div>
-    {% if rows %}
-      <span style="font-size:12px;color:var(--muted);">Top 300 rows by MT</span>
-    {% endif %}
+    <span><i class="fas fa-boxes-stacked me-1 text-muted"></i>Sales by Customer
+      <span class="badge-count ms-2">{{ rows|length }}</span>
+    </span>
+    {% if rows %}<span style="font-size:12px;color:var(--muted);">Top 300 by MT</span>{% endif %}
   </div>
   {% if rows %}
   <div class="table-responsive">
@@ -260,7 +289,7 @@
           <th>#</th>
           <th>Customer</th>
           <th>KAM</th>
-          <th class="r">Sales (MT)</th>
+          <th class="text-end">Sales (MT)</th>
         </tr>
       </thead>
       <tbody>
@@ -277,9 +306,7 @@
               <span style="color:var(--subtle);">—</span>
             {% endif %}
           </td>
-          <td class="r" style="font-weight:700;font-family:var(--font-display);">
-            {{ row.mt|floatformat:2 }}
-          </td>
+          <td class="text-end" style="font-weight:700;">{{ row.mt|floatformat:2 }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -287,8 +314,7 @@
   </div>
   {% else %}
   <div class="empty-state">
-    <i class="fas fa-boxes-stacked"></i>
-    No sales data for this period.
+    <i class="fas fa-boxes-stacked"></i>No sales data for this period.
   </div>
   {% endif %}
 </div>
@@ -298,14 +324,10 @@
 {% if metric == 'calls' %}
 <div class="report-card">
   <div class="report-card-header">
-    <div class="report-card-title">
-      <i class="fas fa-phone-volume"></i>
-      Calls Log
-      <span class="badge-count">{{ rows|length }}</span>
-    </div>
-    {% if rows %}
-      <span style="font-size:12px;color:var(--muted);">Latest 500 calls</span>
-    {% endif %}
+    <span><i class="fas fa-phone-volume me-1 text-muted"></i>Calls Log
+      <span class="badge-count ms-2">{{ rows|length }}</span>
+    </span>
+    {% if rows %}<span style="font-size:12px;color:var(--muted);">Latest 500 calls</span>{% endif %}
   </div>
   {% if rows %}
   <div class="table-responsive">
@@ -342,8 +364,7 @@
   </div>
   {% else %}
   <div class="empty-state">
-    <i class="fas fa-phone-slash"></i>
-    No calls recorded for this period.
+    <i class="fas fa-phone-slash"></i>No calls recorded for this period.
   </div>
   {% endif %}
 </div>
@@ -353,14 +374,10 @@
 {% if metric == 'visits' %}
 <div class="report-card">
   <div class="report-card-header">
-    <div class="report-card-title">
-      <i class="fas fa-route"></i>
-      Visits Log
-      <span class="badge-count">{{ rows|length }}</span>
-    </div>
-    {% if rows %}
-      <span style="font-size:12px;color:var(--muted);">Latest 500 visits</span>
-    {% endif %}
+    <span><i class="fas fa-route me-1 text-muted"></i>Visits Log
+      <span class="badge-count ms-2">{{ rows|length }}</span>
+    </span>
+    {% if rows %}<span style="font-size:12px;color:var(--muted);">Latest 500 visits</span>{% endif %}
   </div>
   {% if rows %}
   <div class="table-responsive">
@@ -371,7 +388,7 @@
           <th>Customer</th>
           <th>KAM</th>
           <th>Visit Date</th>
-          <th class="c">Outcome</th>
+          <th class="text-center">Outcome</th>
         </tr>
       </thead>
       <tbody>
@@ -391,7 +408,7 @@
           <td style="color:var(--muted);font-size:12.5px;">
             {{ row.visit_date|date:"d M Y" }}
           </td>
-          <td class="c">
+          <td class="text-center">
             {% if row.successful is True %}
               <span class="success-badge yes"><i class="fas fa-check"></i>Success</span>
             {% elif row.successful is False %}
@@ -407,11 +424,79 @@
   </div>
   {% else %}
   <div class="empty-state">
-    <i class="fas fa-route"></i>
-    No visits recorded for this period.
+    <i class="fas fa-route"></i>No visits recorded for this period.
   </div>
   {% endif %}
 </div>
 {% endif %}
 
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  var trendRaw = '{{ weeks_trend|escapejs }}';
+  var trendData = [];
+  try {
+    // weeks_trend is passed as a Python list — use json_script pattern via inline assignment
+    trendData = JSON.parse(document.getElementById('trendDataJson').textContent);
+  } catch (_) {}
+
+  if (!trendData.length) return;
+
+  var labels      = trendData.map(function(r){ return r.week; });
+  var salesData   = trendData.map(function(r){ return r.sales_mt; });
+  var visitsData  = trendData.map(function(r){ return r.visits; });
+  var callsData   = trendData.map(function(r){ return r.calls; });
+  var leadsData   = trendData.map(function(r){ return r.leads; });
+  var collData    = trendData.map(function(r){ return r.collections; });
+
+  var baseOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: { mode: 'index', intersect: false }
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+      y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,.05)' }, ticks: { font: { size: 11 } } }
+    }
+  };
+
+  function mkChart(id, label, data, color) {
+    var ctx = document.getElementById(id);
+    if (!ctx) return;
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: label,
+          data: data,
+          borderColor: color,
+          backgroundColor: color.replace('rgb(', 'rgba(').replace(')', ', 0.08)'),
+          fill: true,
+          tension: 0.35,
+          pointRadius: 4,
+          pointBackgroundColor: color,
+          pointBorderColor: '#fff',
+          pointBorderWidth: 2
+        }]
+      },
+      options: JSON.parse(JSON.stringify(baseOpts))
+    });
+  }
+
+  mkChart('chartSales',       'Sales (MT)',       salesData,  'rgb(59, 130, 246)');
+  mkChart('chartVisits',      'Visits',           visitsData, 'rgb(34, 197, 94)');
+  mkChart('chartCalls',       'Calls',            callsData,  'rgb(168, 85, 247)');
+  mkChart('chartLeads',       'Leads',            leadsData,  'rgb(249, 115, 22)');
+  mkChart('chartCollections', 'Collections (₹)',  collData,   'rgb(20, 184, 166)');
+})();
+</script>
+{% endblock %}
+
+{% block body_end %}
+{{ weeks_trend|json_script:"trendDataJson" }}
 {% endblock %}

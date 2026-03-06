@@ -1,6 +1,9 @@
 # FILE: apps/leave/models.py
 # PURPOSE: Date-only leave (remove time-based leave restrictions)
-# UPDATED: 2026-02-25
+# UPDATED: 2026-03-06
+# CHANGE:  Replaced `import pytz` / `pytz.timezone("Asia/Kolkata")` with
+#          `from zoneinfo import ZoneInfo` / `ZoneInfo("Asia/Kolkata")`.
+#          No leave business logic changed.  All timezone behaviour identical.
 
 from __future__ import annotations
 
@@ -9,8 +12,8 @@ import logging
 import os
 from datetime import date, datetime, time, timedelta
 from typing import Iterable, Optional, List, Tuple
+from zoneinfo import ZoneInfo          # ← replaces: import pytz
 
-import pytz
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AbstractUser
@@ -26,7 +29,7 @@ User = get_user_model()
 UserType = AbstractUser
 
 # Single source of truth for all time localization (IST)
-IST = pytz.timezone("Asia/Kolkata")
+IST = ZoneInfo("Asia/Kolkata")         # ← replaces: pytz.timezone("Asia/Kolkata")
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +61,7 @@ def now_ist() -> datetime:
 def _ist_date(dt: datetime) -> date:
     """Convert any aware/naive dt to its IST calendar date."""
     if timezone.is_naive(dt):
-        dt = timezone.make_aware(dt, IST)
+        dt = dt.replace(tzinfo=IST)   # ← replaces: timezone.make_aware(dt, IST) / IST.localize(dt)
     return dt.astimezone(IST).date()
 
 
@@ -77,7 +80,7 @@ def _to_ist(dt: Optional[datetime]) -> Optional[datetime]:
     except Exception:
         if timezone.is_naive(dt):
             try:
-                return dt.replace(tzinfo=IST)
+                return dt.replace(tzinfo=IST)   # ← replaces: dt.replace(tzinfo=IST) was already correct
             except Exception:
                 return dt
         return dt
@@ -609,7 +612,7 @@ class LeaveRequest(models.Model):
             return False
 
         if timezone.is_naive(when_dt):
-            when_ist = when_dt.replace(tzinfo=IST)
+            when_ist = when_dt.replace(tzinfo=IST)   # ← replaces: when_dt.replace(tzinfo=IST) already correct
         else:
             try:
                 when_ist = when_dt.astimezone(IST)
@@ -618,6 +621,7 @@ class LeaveRequest(models.Model):
 
         try:
             target_day = when_ist.date()
+            # Use replace(tzinfo=IST) instead of IST.localize() — zoneinfo pattern
             day_start = datetime.combine(target_day, time.min).replace(tzinfo=IST)
             next_day_start = datetime.combine(target_day + timedelta(days=1), time.min).replace(tzinfo=IST)
 
@@ -654,6 +658,7 @@ class LeaveRequest(models.Model):
         - Full-day leaves block the day.
         - Half-day leaves block only if they overlap the 10:00 IST anchor.
         """
+        # Use replace(tzinfo=IST) instead of IST.localize() — zoneinfo pattern
         anchor = datetime.combine(d, time(10, 0)).replace(tzinfo=IST)
         return LeaveRequest.is_user_blocked_at(user, anchor)
 

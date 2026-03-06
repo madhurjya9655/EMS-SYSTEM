@@ -1,12 +1,130 @@
-{# File: E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\kam\targets_lines.html #}
+{# FILE: templates/kam/targets_lines.html #}
 {% extends "base.html" %}
-{% block title %}Target Lines (Manager){% endblock %}
+{% block title %}Target Lines — KAM{% endblock %}
+{% block breadcrumb %}KAM &rsaquo; Target Lines{% endblock %}
+
+{% block head_extra %}
+<style>
+  .tgtl-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 52vh;
+    padding: 40px 20px;
+  }
+
+  .tgtl-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    max-width: 480px;
+    width: 100%;
+    overflow: hidden;
+    text-align: center;
+    box-shadow: var(--shadow-sm, 0 1px 4px rgba(0,0,0,0.07));
+  }
+
+  .tgtl-icon-band {
+    padding: 32px 20px 20px;
+    background: var(--primary-soft, #eff6ff);
+    border-bottom: 1px solid var(--primary-border, #bfdbfe);
+  }
+
+  .tgtl-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    background: var(--primary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 1.4rem;
+    margin-bottom: 0;
+  }
+
+  .tgtl-body {
+    padding: 24px 28px 28px;
+  }
+
+  .tgtl-title {
+    font-size: 1.1rem;
+    font-weight: 800;
+    color: var(--text);
+    margin-bottom: 8px;
+    letter-spacing: -0.2px;
+  }
+
+  .tgtl-desc {
+    font-size: 13.5px;
+    color: var(--muted);
+    line-height: 1.55;
+    margin-bottom: 22px;
+  }
+
+  .tgtl-desc strong {
+    color: var(--text-secondary, #374151);
+    font-weight: 600;
+  }
+
+  .tgtl-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .tgtl-actions .btn {
+    font-size: 13.5px;
+    padding: 9px 20px;
+    font-weight: 600;
+    border-radius: 7px;
+  }
+
+  .tgtl-footer-note {
+    font-size: 11.5px;
+    color: var(--subtle, #9ca3af);
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-light);
+  }
+
+  .tgtl-footer-note i { font-size: 11px; margin-right: 4px; }
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="card p-3">
-  <h5 class="mb-2">Target Lines</h5>
-  <p class="text-muted m-0">
-    This page has been moved. Use <a href="{% url 'kam:targets' %}">Target Setting</a>.
-  </p>
+<div class="tgtl-wrap">
+  <div class="tgtl-card">
+
+    <div class="tgtl-icon-band">
+      <div class="tgtl-icon">
+        <i class="fas fa-arrow-right-to-bracket"></i>
+      </div>
+    </div>
+
+    <div class="tgtl-body">
+      <div class="tgtl-title">Page Moved</div>
+      <div class="tgtl-desc">
+        <strong>Target Lines</strong> has been consolidated into the
+        unified <strong>Target Setting</strong> page, where you can
+        create, edit, and filter all KAM targets in one place.
+      </div>
+
+      <div class="tgtl-actions">
+        <a href="{% url 'kam:targets' %}" class="btn btn-primary">
+          <i class="fas fa-bullseye me-2"></i>Go to Target Setting
+        </a>
+        <a href="{% url 'kam:dashboard' %}" class="btn btn-outline-secondary">
+          <i class="fas fa-gauge me-2"></i>Back to Dashboard
+        </a>
+      </div>
+
+      <div class="tgtl-footer-note">
+        <i class="fas fa-circle-info"></i>
+        Bookmark <strong>{% url 'kam:targets' %}</strong> to go directly next time.
+      </div>
+    </div>
+
+  </div>
 </div>
 {% endblock %}

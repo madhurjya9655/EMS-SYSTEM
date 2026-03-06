@@ -1,188 +1,777 @@
 {# FILE: templates/kam/targets.html #}
 {% extends "base.html" %}
 
+{% block title %}Target Setting — KAM{% endblock %}
+{% block breadcrumb %}KAM &rsaquo; Target Setting{% endblock %}
+
+{% block head_extra %}
+<style>
+  /* ═══════════════════════════════════════════
+     TARGETS PAGE — LOCAL STYLES
+  ═══════════════════════════════════════════ */
+
+  /* ── Page header ── */
+  .tgt-page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .tgt-page-title {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--text);
+    letter-spacing: -0.4px;
+    margin: 0;
+  }
+
+  .tgt-page-subtitle {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  /* ── Cards ── */
+  .tgt-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-bottom: 20px;
+  }
+
+  .tgt-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border-light);
+    background: var(--surface-alt, #fafafa);
+  }
+
+  .tgt-card-title {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .tgt-card-title i {
+    color: var(--primary);
+    font-size: 13px;
+  }
+
+  .tgt-card-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--primary-soft, #eff6ff);
+    color: var(--primary);
+    border: 1px solid var(--primary-border, #bfdbfe);
+  }
+
+  .tgt-card-body {
+    padding: 20px;
+  }
+
+  /* ── Form layout ── */
+  .tgt-form-section {
+    margin-bottom: 20px;
+  }
+
+  .tgt-section-label {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--subtle, #9ca3af);
+    padding-bottom: 10px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--border-light);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .tgt-section-label i { font-size: 11px; color: var(--muted); }
+
+  .tgt-form-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px 16px;
+  }
+
+  .tgt-form-grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px 16px;
+  }
+
+  .tgt-form-grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px 16px;
+  }
+
+  .tgt-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .tgt-field label {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-secondary, #374151);
+    letter-spacing: 0.01em;
+  }
+
+  .tgt-field .form-control,
+  .tgt-field .form-select {
+    height: 38px;
+    font-size: 13px;
+    border-color: var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+
+  .tgt-field .form-control:focus,
+  .tgt-field .form-select:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+    outline: none;
+  }
+
+  .tgt-field .field-hint {
+    font-size: 11px;
+    color: var(--subtle, #9ca3af);
+    line-height: 1.4;
+  }
+
+  .tgt-field .field-error {
+    font-size: 11px;
+    color: var(--danger);
+    font-weight: 500;
+  }
+
+  /* ── Toggle rows ── */
+  .tgt-toggle-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    padding: 14px 16px;
+    background: var(--surface-alt, #f9fafb);
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    margin-top: 4px;
+  }
+
+  .tgt-toggle-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+  }
+
+  .tgt-toggle-item input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary);
+    cursor: pointer;
+  }
+
+  .tgt-toggle-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .tgt-toggle-desc {
+    font-size: 11px;
+    color: var(--muted);
+    display: block;
+    margin-top: 1px;
+  }
+
+  /* ── Form actions ── */
+  .tgt-form-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-light);
+    margin-top: 4px;
+  }
+
+  /* ── Filter bar ── */
+  .tgt-filter-bar {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border-light);
+    background: var(--surface-alt, #fafafa);
+  }
+
+  .tgt-filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .tgt-filter-label {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--subtle, #9ca3af);
+  }
+
+  .tgt-filter-bar .form-control,
+  .tgt-filter-bar .form-select {
+    height: 34px;
+    font-size: 12.5px;
+    min-width: 140px;
+  }
+
+  /* ── Table ── */
+  .tgt-table-wrap {
+    overflow-x: auto;
+  }
+
+  .tgt-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  .tgt-table thead th {
+    padding: 10px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+    background: var(--surface-alt, #f9fafb);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    text-align: left;
+  }
+
+  .tgt-table thead th.text-end { text-align: right; }
+
+  .tgt-table tbody tr {
+    border-bottom: 1px solid var(--border-light);
+    transition: background 0.1s;
+  }
+
+  .tgt-table tbody tr:hover { background: var(--surface-hover, #f8fafc); }
+  .tgt-table tbody tr:last-child { border-bottom: none; }
+
+  .tgt-table tbody td {
+    padding: 11px 14px;
+    color: var(--text);
+    vertical-align: middle;
+  }
+
+  .tgt-table tbody td.text-end { text-align: right; }
+  .tgt-table tbody td.text-muted-cell { color: var(--muted); }
+
+  .tgt-id-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 11.5px;
+    font-weight: 700;
+    font-family: monospace;
+    color: var(--muted);
+    background: var(--surface-alt, #f3f4f6);
+    border: 1px solid var(--border-light);
+    border-radius: 4px;
+    padding: 2px 7px;
+    letter-spacing: 0.02em;
+  }
+
+  .tgt-kam-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .tgt-kam-chip i {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .tgt-window-range {
+    font-size: 12.5px;
+    color: var(--text-secondary, #374151);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+
+  .tgt-window-range .arrow {
+    color: var(--subtle, #9ca3af);
+    font-size: 10px;
+  }
+
+  .tgt-metric-val {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    font-family: var(--font-display, inherit);
+    text-align: right;
+  }
+
+  .tgt-metric-unit {
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--muted);
+    margin-left: 2px;
+  }
+
+  .tgt-edit-btn {
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  .tgt-table tbody tr:hover .tgt-edit-btn {
+    opacity: 1;
+  }
+
+  .tgt-empty-state {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--subtle, #9ca3af);
+  }
+
+  .tgt-empty-state i {
+    font-size: 2rem;
+    display: block;
+    margin-bottom: 10px;
+    color: var(--border);
+  }
+
+  .tgt-empty-state p {
+    font-size: 13px;
+    margin: 0;
+  }
+
+  /* ── Edit active row highlight ── */
+  .tgt-row-editing {
+    background: var(--primary-soft, #eff6ff) !important;
+    outline: 2px solid var(--primary-border, #bfdbfe);
+    outline-offset: -1px;
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 1100px) {
+    .tgt-form-grid { grid-template-columns: repeat(2, 1fr); }
+    .tgt-form-grid-3 { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  @media (max-width: 768px) {
+    .tgt-form-grid,
+    .tgt-form-grid-3,
+    .tgt-form-grid-2 { grid-template-columns: 1fr; }
+    .tgt-filter-bar { gap: 8px; }
+    .tgt-filter-bar .form-control,
+    .tgt-filter-bar .form-select { min-width: 0; width: 100%; }
+    .tgt-page-header { flex-direction: column; }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="container-fluid">
-  <div class="d-flex align-items-center justify-content-between mb-3">
-    <h3 class="mb-0">{{ page_title|default:"Manager Target Setting" }}</h3>
+
+{# ── Page Header ── #}
+<div class="tgt-page-header">
+  <div>
+    <h1 class="tgt-page-title">
+      <i class="fas fa-bullseye me-2" style="color:var(--primary); font-size:1.2rem;"></i>
+      {{ page_title|default:"Target Setting" }}
+    </h1>
+    <div class="tgt-page-subtitle">
+      Set sales, visit, call, and collection targets for KAMs by date window.
+    </div>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{% url 'kam:manager_kpis' %}" class="btn btn-sm btn-outline-secondary">
+      <i class="fas fa-chart-bar me-1"></i> Manager KPIs
+    </a>
+    <a href="{% url 'kam:dashboard' %}" class="btn btn-sm btn-outline-secondary">
+      <i class="fas fa-gauge me-1"></i> Dashboard
+    </a>
+  </div>
+</div>
+
+{% if messages %}
+  {% for msg in messages %}
+    <div class="alert alert-{{ msg.tags|default:'info' }} alert-dismissible fade show py-2 px-3 mb-3" role="alert" style="font-size:13px;">
+      <i class="fas fa-{% if msg.tags == 'success' %}circle-check{% elif msg.tags == 'error' or msg.tags == 'danger' %}triangle-exclamation{% else %}info-circle{% endif %} me-2"></i>
+      {{ msg }}
+      <button type="button" class="btn-close btn-close-sm" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+  {% endfor %}
+{% endif %}
+
+{# ── Create / Update Form ── #}
+<div class="tgt-card">
+  <div class="tgt-card-header">
+    <div class="tgt-card-title">
+      <i class="fas fa-{% if edit_obj %}pen-to-square{% else %}plus-circle{% endif %}"></i>
+      {% if edit_obj %}Edit Target &mdash; #{{ edit_obj.id }}{% else %}Create New Target{% endif %}
+    </div>
+    {% if edit_obj %}
+      <a href="{% url 'kam:targets' %}" class="btn btn-sm btn-outline-secondary">
+        <i class="fas fa-xmark me-1"></i> Cancel Edit
+      </a>
+    {% endif %}
   </div>
 
-  <div class="card mb-4">
-    <div class="card-header fw-semibold">Create / Update Targets</div>
-    <div class="card-body">
-      <form method="post" class="row g-3">
-        {% csrf_token %}
-        {% if form.id %}{{ form.id }}{% endif %}
+  <div class="tgt-card-body">
+    <form method="post" id="tgtForm">
+      {% csrf_token %}
+      {% if form.id %}
+        <input type="hidden" name="id" value="{{ form.id.value }}">
+      {% endif %}
 
-        <div class="col-md-3">
-          <label class="form-label">From Date</label>
-          {{ form.from_date }}
-          {% if form.from_date.errors %}<div class="text-danger small">{{ form.from_date.errors }}</div>{% endif %}
+      {# ── Section 1: Date Window & Options ── #}
+      <div class="tgt-form-section">
+        <div class="tgt-section-label">
+          <i class="fas fa-calendar-days"></i> Date Window &amp; Options
         </div>
 
-        <div class="col-md-3">
-          <label class="form-label">To Date (optional)</label>
-          {{ form.to_date }}
-          {% if form.to_date.errors %}<div class="text-danger small">{{ form.to_date.errors }}</div>{% endif %}
-          <div class="form-text">If blank, it will default (week) or fixed 3 months.</div>
-        </div>
-
-        <div class="col-md-3 d-flex align-items-end">
-          <div class="form-check">
-            {{ form.fixed_for_next_3_months }}
-            <label class="form-check-label" for="{{ form.fixed_for_next_3_months.id_for_label }}">
-              Fixed for next 3 months
-            </label>
-          </div>
-        </div>
-
-        <div class="col-md-3 d-flex align-items-end">
-          <div class="form-check">
-            {{ form.bulk_all_kams }}
-            <label class="form-check-label" for="{{ form.bulk_all_kams.id_for_label }}">
-              Apply to all my KAMs
-            </label>
-          </div>
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">KAM</label>
-
-          {% with current_kam=form.kam_username.value|default:form.kam_username.initial|default:selected_user|default:"" %}
-            <select
-              class="form-select"
-              name="kam_username"
-              id="{{ form.kam_username.id_for_label|default:'id_kam_username' }}"
-              {% if form.bulk_all_kams.value %}disabled{% endif %}
-            >
-              <option value="">— Select KAM —</option>
-              {% for u in kam_options %}
-                <option value="{{ u }}" {% if current_kam == u %}selected{% endif %}>{{ u }}</option>
-              {% endfor %}
-            </select>
-
-            {% if form.bulk_all_kams.value and current_kam %}
-              <input type="hidden" name="kam_username" value="{{ current_kam }}">
+        <div class="tgt-form-grid">
+          <div class="tgt-field">
+            <label for="{{ form.from_date.id_for_label }}">From Date <span class="text-danger">*</span></label>
+            {{ form.from_date }}
+            {% if form.from_date.errors %}
+              <span class="field-error">{{ form.from_date.errors|join:", " }}</span>
             {% endif %}
-          {% endwith %}
+          </div>
 
-          {% if form.kam_username.errors %}<div class="text-danger small">{{ form.kam_username.errors }}</div>{% endif %}
-          <div class="form-text">Ignored if bulk apply is enabled.</div>
+          <div class="tgt-field">
+            <label for="{{ form.to_date.id_for_label }}">To Date</label>
+            {{ form.to_date }}
+            {% if form.to_date.errors %}
+              <span class="field-error">{{ form.to_date.errors|join:", " }}</span>
+            {% endif %}
+            <span class="field-hint">Leave blank to auto-calculate (week / 3 months)</span>
+          </div>
+
+          <div class="tgt-field" style="grid-column: span 2;">
+            <div class="tgt-toggle-row" style="margin-top: 22px;">
+              <label class="tgt-toggle-item">
+                {{ form.fixed_for_next_3_months }}
+                <span>
+                  <span class="tgt-toggle-label">Fixed for next 3 months</span>
+                  <span class="tgt-toggle-desc">To-date auto-set to 3 months from start</span>
+                </span>
+              </label>
+              <label class="tgt-toggle-item" id="bulkToggleWrap">
+                {{ form.bulk_all_kams }}
+                <span>
+                  <span class="tgt-toggle-label">Apply to all my KAMs</span>
+                  <span class="tgt-toggle-desc">Bulk-sets same targets for entire team</span>
+                </span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# ── Section 2: KAM Selection ── #}
+      <div class="tgt-form-section" id="kamSelectSection">
+        <div class="tgt-section-label">
+          <i class="fas fa-user-tie"></i> KAM Selection
         </div>
 
-        <div class="col-md-2">
-          <label class="form-label">Sales Target (MT)</label>
-          {{ form.sales_target_mt }}
-          {% if form.sales_target_mt.errors %}<div class="text-danger small">{{ form.sales_target_mt.errors }}</div>{% endif %}
+        <div class="tgt-form-grid-2">
+          <div class="tgt-field">
+            <label for="{{ form.kam_username.id_for_label|default:'id_kam_username' }}">KAM</label>
+            {% with current_kam=form.kam_username.value|default:form.kam_username.initial|default:selected_user|default:"" %}
+              <select
+                class="form-select"
+                name="kam_username"
+                id="{{ form.kam_username.id_for_label|default:'id_kam_username' }}"
+              >
+                <option value="">— Select KAM —</option>
+                {% for u in kam_options %}
+                  <option value="{{ u }}" {% if current_kam == u %}selected{% endif %}>{{ u }}</option>
+                {% endfor %}
+              </select>
+              {# Hidden backup for bulk mode #}
+              <input type="hidden" id="kamHiddenVal" name="_kam_hidden" value="{{ current_kam }}">
+            {% endwith %}
+            {% if form.kam_username.errors %}
+              <span class="field-error">{{ form.kam_username.errors|join:", " }}</span>
+            {% endif %}
+            <span class="field-hint">Ignored when "Apply to all KAMs" is enabled</span>
+          </div>
+        </div>
+      </div>
+
+      {# ── Section 3: KPI Targets ── #}
+      <div class="tgt-form-section">
+        <div class="tgt-section-label">
+          <i class="fas fa-chart-line"></i> KPI Targets
         </div>
 
-        <div class="col-md-2">
-          <label class="form-label">Leads Target (MT)</label>
-          {{ form.leads_target_mt }}
-          {% if form.leads_target_mt.errors %}<div class="text-danger small">{{ form.leads_target_mt.errors }}</div>{% endif %}
-        </div>
-
-        <div class="col-md-2">
-          <label class="form-label">Calls Target</label>
-          {{ form.calls_target }}
-          {% if form.calls_target.errors %}<div class="text-danger small">{{ form.calls_target.errors }}</div>{% endif %}
-        </div>
-
-        <div class="col-md-2">
-          <label class="form-label">Collections Target (₹)</label>
-          {{ form.collections_target_amount }}
-          {% if form.collections_target_amount.errors %}<div class="text-danger small">{{ form.collections_target_amount.errors }}</div>{% endif %}
-        </div>
-
-        <div class="col-md-4 d-flex align-items-end">
-          <div class="form-check">
-            {{ form.auto_collections_30pct_overdue }}
-            <label class="form-check-label" for="{{ form.auto_collections_30pct_overdue.id_for_label }}">
-              Auto collections (system decides)
+        <div class="tgt-form-grid">
+          <div class="tgt-field">
+            <label for="{{ form.sales_target_mt.id_for_label }}">
+              <i class="fas fa-boxes-stacked me-1" style="color:var(--primary);font-size:10px;"></i>
+              Sales Target (MT)
             </label>
+            {{ form.sales_target_mt }}
+            {% if form.sales_target_mt.errors %}
+              <span class="field-error">{{ form.sales_target_mt.errors|join:", " }}</span>
+            {% endif %}
+          </div>
+
+          <div class="tgt-field">
+            <label for="{{ form.leads_target_mt.id_for_label }}">
+              <i class="fas fa-filter-circle-dollar me-1" style="color:#7c3aed;font-size:10px;"></i>
+              Leads Target (MT)
+            </label>
+            {{ form.leads_target_mt }}
+            {% if form.leads_target_mt.errors %}
+              <span class="field-error">{{ form.leads_target_mt.errors|join:", " }}</span>
+            {% endif %}
+          </div>
+
+          <div class="tgt-field">
+            <label for="{{ form.calls_target.id_for_label }}">
+              <i class="fas fa-phone-volume me-1" style="color:var(--accent);font-size:10px;"></i>
+              Calls Target
+            </label>
+            {{ form.calls_target }}
+            {% if form.calls_target.errors %}
+              <span class="field-error">{{ form.calls_target.errors|join:", " }}</span>
+            {% endif %}
+          </div>
+
+          <div class="tgt-field">
+            <label for="{{ form.collections_target_amount.id_for_label }}">
+              <i class="fas fa-indian-rupee-sign me-1" style="color:var(--warning);font-size:10px;"></i>
+              Collections Target (₹)
+            </label>
+            {{ form.collections_target_amount }}
+            {% if form.collections_target_amount.errors %}
+              <span class="field-error">{{ form.collections_target_amount.errors|join:", " }}</span>
+            {% endif %}
           </div>
         </div>
 
-        <div class="col-12">
-          <button class="btn btn-primary" type="submit">Save Targets</button>
+        <div class="tgt-toggle-row mt-3">
+          <label class="tgt-toggle-item">
+            {{ form.auto_collections_30pct_overdue }}
+            <span>
+              <span class="tgt-toggle-label">Auto-calculate collections target</span>
+              <span class="tgt-toggle-desc">System derives target from overdue data; overrides manual entry above</span>
+            </span>
+          </label>
         </div>
-      </form>
+      </div>
+
+      {# ── Actions ── #}
+      <div class="tgt-form-actions">
+        {% if edit_obj %}
+          <a href="{% url 'kam:targets' %}" class="btn btn-outline-secondary btn-sm">
+            <i class="fas fa-xmark me-1"></i> Cancel
+          </a>
+        {% endif %}
+        <button class="btn btn-primary" type="submit">
+          <i class="fas fa-{% if edit_obj %}floppy-disk{% else %}plus{% endif %} me-1"></i>
+          {% if edit_obj %}Update Target{% else %}Save Targets{% endif %}
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── Existing Targets Table ── #}
+<div class="tgt-card">
+  <div class="tgt-card-header">
+    <div class="tgt-card-title">
+      <i class="fas fa-table-list"></i>
+      Existing Targets
+      {% if rows %}
+        <span class="tgt-card-badge">{{ rows|length }} record{% if rows|length != 1 %}s{% endif %}</span>
+      {% endif %}
     </div>
   </div>
 
-  <div class="d-flex align-items-center justify-content-between mb-2">
-    <div class="fw-semibold">Existing Targets</div>
-
-    <form method="get" class="d-flex gap-2">
+  {# Filter bar #}
+  <form method="get" class="tgt-filter-bar">
+    <div class="tgt-filter-group">
+      <span class="tgt-filter-label"><i class="fas fa-calendar-day me-1"></i>From</span>
       <input
-        class="form-control form-control-sm"
+        class="form-control"
         type="date"
         name="from"
         value="{% if filter_from %}{{ filter_from|date:'Y-m-d' }}{% endif %}"
       >
+    </div>
+
+    <div class="tgt-filter-group">
+      <span class="tgt-filter-label"><i class="fas fa-calendar-day me-1"></i>To</span>
       <input
-        class="form-control form-control-sm"
+        class="form-control"
         type="date"
         name="to"
         value="{% if filter_to %}{{ filter_to|date:'Y-m-d' }}{% endif %}"
       >
+    </div>
 
-      <select class="form-select form-select-sm" name="user">
+    <div class="tgt-filter-group">
+      <span class="tgt-filter-label"><i class="fas fa-user me-1"></i>KAM</span>
+      <select class="form-select" name="user">
         <option value="" {% if not selected_user %}selected{% endif %}>All KAMs</option>
         {% for u in kam_options %}
           <option value="{{ u }}" {% if selected_user == u %}selected{% endif %}>{{ u }}</option>
         {% endfor %}
       </select>
+    </div>
 
-      <button class="btn btn-sm btn-outline-primary" type="submit">Filter</button>
-    </form>
-  </div>
+    <div style="display:flex; align-items:flex-end; gap:8px;">
+      <button class="btn btn-sm btn-primary" type="submit">
+        <i class="fas fa-filter me-1"></i>Filter
+      </button>
+      <a href="{% url 'kam:targets' %}" class="btn btn-sm btn-outline-secondary">
+        <i class="fas fa-rotate-left me-1"></i>Reset
+      </a>
+    </div>
+  </form>
 
-  <div class="table-responsive">
-    <table class="table table-sm table-hover align-middle">
-      <thead class="table-light">
-        <tr>
-          <th style="width:90px;">ID</th>
-          <th style="width:140px;">KAM</th>
-          <th style="width:220px;">Window</th>
-          <th style="width:140px;">Sales (MT)</th>
-          <th style="width:140px;">Leads (MT)</th>
-          <th style="width:120px;">Calls</th>
-          <th style="width:170px;">Collections (₹)</th>
-          <th style="width:180px;">Manager</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in rows %}
+  <div class="tgt-table-wrap">
+    {% if rows %}
+      <table class="tgt-table">
+        <thead>
           <tr>
-            <td>#{{ r.id }}</td>
-            <td>{{ r.kam.username }}</td>
-            <td>{{ r.from_date }} → {{ r.to_date }}</td>
-            <td>{{ r.sales_target_mt }}</td>
-            <td>{{ r.leads_target_mt }}</td>
-            <td>{{ r.calls_target }}</td>
-            <td>{{ r.collections_target_amount }}</td>
-            <td>{{ r.manager.username|default:"-" }}</td>
+            <th style="width:70px;">ID</th>
+            <th style="width:140px;">KAM</th>
+            <th style="width:220px;">Date Window</th>
+            <th class="text-end" style="width:130px;">Sales (MT)</th>
+            <th class="text-end" style="width:130px;">Leads (MT)</th>
+            <th class="text-end" style="width:100px;">Calls</th>
+            <th class="text-end" style="width:160px;">Collections (₹)</th>
+            <th style="width:150px;">Manager</th>
+            <th style="width:60px;"></th>
           </tr>
-        {% empty %}
-          <tr><td colspan="8" class="text-muted">No target settings found.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+            <tr {% if edit_obj and edit_obj.id == r.id %}class="tgt-row-editing"{% endif %}>
+              <td>
+                <span class="tgt-id-badge">#{{ r.id }}</span>
+              </td>
+              <td>
+                <span class="tgt-kam-chip">
+                  <i class="fas fa-user-tie"></i>
+                  {{ r.kam.username }}
+                </span>
+              </td>
+              <td>
+                <span class="tgt-window-range">
+                  {{ r.from_date }}
+                  <span class="arrow"><i class="fas fa-arrow-right"></i></span>
+                  {{ r.to_date }}
+                </span>
+              </td>
+              <td class="tgt-metric-val">
+                {{ r.sales_target_mt|default:"&mdash;" }}
+                {% if r.sales_target_mt %}<span class="tgt-metric-unit">MT</span>{% endif %}
+              </td>
+              <td class="tgt-metric-val">
+                {{ r.leads_target_mt|default:"&mdash;" }}
+                {% if r.leads_target_mt %}<span class="tgt-metric-unit">MT</span>{% endif %}
+              </td>
+              <td class="tgt-metric-val">{{ r.calls_target|default:"&mdash;" }}</td>
+              <td class="tgt-metric-val">
+                {% if r.collections_target_amount %}
+                  &#8377; {{ r.collections_target_amount }}
+                {% else %}
+                  &mdash;
+                {% endif %}
+              </td>
+              <td class="text-muted-cell" style="font-size:12.5px;">
+                {{ r.manager.username|default:"&mdash;" }}
+              </td>
+              <td>
+                <a
+                  href="{% url 'kam:targets' %}?id={{ r.id }}{% if selected_user %}&user={{ selected_user }}{% endif %}{% if filter_from %}&from={{ filter_from|date:'Y-m-d' }}{% endif %}{% if filter_to %}&to={{ filter_to|date:'Y-m-d' }}{% endif %}"
+                  class="btn btn-xs btn-outline-secondary tgt-edit-btn"
+                  title="Edit this target"
+                  style="font-size:11px; padding:3px 8px;"
+                >
+                  <i class="fas fa-pen"></i>
+                </a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="tgt-empty-state">
+        <i class="fas fa-inbox"></i>
+        <p>No target settings found for the selected filters.</p>
+      </div>
+    {% endif %}
   </div>
 </div>
 
-<script>
-  (function () {
-    var bulk = document.getElementById("{{ form.bulk_all_kams.id_for_label|default:'id_bulk_all_kams' }}");
-    var kamSel = document.getElementById("{{ form.kam_username.id_for_label|default:'id_kam_username' }}");
-    if (!bulk || !kamSel) return;
+{% endblock %}
 
-    function sync() {
-      kamSel.disabled = !!bulk.checked;
+{% block extra_js %}
+<script>
+(function () {
+  var bulkCb  = document.getElementById("{{ form.bulk_all_kams.id_for_label|default:'id_bulk_all_kams' }}");
+  var kamSel  = document.getElementById("{{ form.kam_username.id_for_label|default:'id_kam_username' }}");
+  var kamSection = document.getElementById("kamSelectSection");
+
+  function syncBulk () {
+    if (!bulkCb || !kamSel) return;
+    var isBulk = bulkCb.checked;
+    kamSel.disabled = isBulk;
+    if (kamSection) {
+      kamSection.style.opacity = isBulk ? "0.45" : "1";
+      kamSection.style.pointerEvents = isBulk ? "none" : "";
     }
-    bulk.addEventListener("change", sync);
-    sync();
-  })();
+  }
+
+  if (bulkCb) {
+    bulkCb.addEventListener("change", syncBulk);
+    syncBulk();
+  }
+
+  /* Auto-collapse hint — add form-control class if Django widget didn't */
+  document.querySelectorAll("#tgtForm input[type='date'], #tgtForm input[type='number'], #tgtForm input[type='text']").forEach(function(el) {
+    if (!el.classList.contains("form-control") && !el.classList.contains("form-check-input")) {
+      el.classList.add("form-control");
+    }
+  });
+  document.querySelectorAll("#tgtForm select").forEach(function(el) {
+    if (!el.classList.contains("form-select") && !el.classList.contains("form-check-input")) {
+      el.classList.add("form-select");
+    }
+  });
+})();
 </script>
 {% endblock %}

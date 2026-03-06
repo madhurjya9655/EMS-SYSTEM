@@ -1,13 +1,26 @@
-{# FILE: templates/kam/kam_dashboard.html #}
-{# PURPOSE: KAM Dashboard — polished KPI cards, proper date-range UX, deep-link filter preservation #}
-{# UPDATED: 2026-03-03 #}
 {% extends "base.html" %}
+{% comment %}
+FILE: templates/kam/kam_dashboard.html
+PURPOSE: KAM Dashboard — KPI cards + Lead Analysis + Collection Analysis with Chart.js
+UPDATED: 2026-03-05
+
+New context variables required from view (in addition to existing ones):
+  kpi.leads_total_count      — int  : total LeadFact count in period
+  kpi.leads_converted_count  — int  : WON LeadFact count
+  kpi.lead_count_conv_pct    — float|None : leads_converted_count / leads_total_count * 100
+  kpi.leads_converted_value  — Decimal : MT of WON leads (sum qty_mt where status=WON)
+  kpi.collection_planned     — Decimal : SUM(CollectionPlan.planned_amount) in period
+  kpi.collection_actual      — Decimal : SUM(CollectionPlan.actual_amount) in period
+  kpi.collection_ach_pct     — float|None : actual/planned * 100
+  kpi.collection_overdue_amt — Decimal : current overdue (from OverdueSnapshot)
+{% endcomment %}
 {% load humanize %}
 
 {% block title %}KAM Dashboard — BOS Lakshya{% endblock %}
 {% block breadcrumb %}KAM Dashboard{% endblock %}
 
 {% block head_extra %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   /* =============================================
      KAM DASHBOARD — LOCAL STYLES
@@ -40,13 +53,7 @@
     color: var(--subtle);
   }
 
-  .kam-filter-bar .form-control {
-    min-width: 140px;
-    height: 36px;
-    padding: 6px 10px;
-    font-size: 13px;
-  }
-
+  .kam-filter-bar .form-control,
   .kam-filter-bar .form-select {
     min-width: 140px;
     height: 36px;
@@ -81,11 +88,8 @@
     border-radius: 999px;
   }
 
-  .range-pill i {
-    font-size: 11px;
-  }
+  .range-pill i { font-size: 11px; }
 
-  /* Page header row */
   .kam-header {
     display: flex;
     align-items: flex-start;
@@ -127,40 +131,20 @@
     transform: translateY(-1px);
   }
 
-  /* Left accent bar per card type */
   .kpi-card::before {
     content: "";
     position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
+    left: 0; top: 0; bottom: 0;
     width: 4px;
     border-radius: 4px 0 0 4px;
   }
 
-  .kpi-card.kpi-sales::before {
-    background: var(--primary);
-  }
-
-  .kpi-card.kpi-visits::before {
-    background: var(--success);
-  }
-
-  .kpi-card.kpi-calls::before {
-    background: var(--accent);
-  }
-
-  .kpi-card.kpi-leads::before {
-    background: #7c3aed;
-  }
-
-  .kpi-card.kpi-collections::before {
-    background: var(--warning);
-  }
-
-  .kpi-card.kpi-overdue::before {
-    background: var(--danger);
-  }
+  .kpi-card.kpi-sales::before       { background: var(--primary); }
+  .kpi-card.kpi-visits::before      { background: var(--success); }
+  .kpi-card.kpi-calls::before       { background: var(--accent); }
+  .kpi-card.kpi-leads::before       { background: #7c3aed; }
+  .kpi-card.kpi-collections::before { background: var(--warning); }
+  .kpi-card.kpi-overdue::before     { background: var(--danger); }
 
   .kpi-card-header {
     display: flex;
@@ -180,14 +164,8 @@
     gap: 6px;
   }
 
-  .kpi-card-title i {
-    font-size: 12px;
-  }
-
-  .kpi-card-action .btn {
-    font-size: 11px;
-    padding: 4px 9px;
-  }
+  .kpi-card-title i { font-size: 12px; }
+  .kpi-card-action .btn { font-size: 11px; padding: 4px 9px; }
 
   .kpi-main-value {
     font-family: var(--font-display);
@@ -199,13 +177,8 @@
     margin-bottom: 6px;
   }
 
-  .kpi-main-value.kpi-value-md {
-    font-size: 1.5rem;
-  }
-
-  .kpi-main-value.kpi-value-sm {
-    font-size: 1.25rem;
-  }
+  .kpi-main-value.kpi-value-md { font-size: 1.5rem; }
+  .kpi-main-value.kpi-value-sm { font-size: 1.25rem; }
 
   .kpi-sub-row {
     display: flex;
@@ -215,17 +188,9 @@
     gap: 4px;
   }
 
-  .kpi-meta {
-    font-size: 12px;
-    color: var(--muted);
-  }
+  .kpi-meta { font-size: 12px; color: var(--muted); }
+  .kpi-meta strong { color: var(--text-secondary); font-weight: 600; }
 
-  .kpi-meta strong {
-    color: var(--text-secondary);
-    font-weight: 600;
-  }
-
-  /* Achievement pill */
   .ach-pill {
     display: inline-flex;
     align-items: center;
@@ -236,38 +201,17 @@
     border-radius: 999px;
   }
 
-  .ach-pill.good {
-    background: #ecfdf5;
-    color: var(--success);
-  }
+  .ach-pill.good    { background: #ecfdf5; color: var(--success); }
+  .ach-pill.ok      { background: #fffbeb; color: var(--warning); }
+  .ach-pill.low     { background: #fef2f2; color: var(--danger); }
+  .ach-pill.neutral { background: var(--surface-alt); color: var(--muted); }
 
-  .ach-pill.ok {
-    background: #fffbeb;
-    color: var(--warning);
-  }
-
-  .ach-pill.low {
-    background: #fef2f2;
-    color: var(--danger);
-  }
-
-  .ach-pill.neutral {
-    background: var(--surface-alt);
-    color: var(--muted);
-  }
-
-  /* Two-col sub data in visits/calls */
   .kpi-two-col {
     display: flex;
     gap: 16px;
   }
 
-  .kpi-two-col-item {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
+  .kpi-two-col-item { display: flex; flex-direction: column; gap: 2px; }
   .kpi-two-col-label {
     font-size: 11px;
     color: var(--subtle);
@@ -283,7 +227,6 @@
     color: var(--text);
   }
 
-  /* Overdue card extras */
   .overdue-row {
     display: flex;
     align-items: baseline;
@@ -291,26 +234,12 @@
     margin-bottom: 4px;
   }
 
-  .overdue-label {
-    font-size: 11px;
-    color: var(--muted);
-    min-width: 96px;
-  }
-
-  .overdue-val {
-    font-size: 13.5px;
-    font-weight: 700;
-    color: var(--text);
-  }
-
-  .overdue-snapshot {
-    font-size: 11px;
-    color: var(--subtle);
-    margin-left: 2px;
-  }
+  .overdue-label    { font-size: 11px; color: var(--muted); min-width: 96px; }
+  .overdue-val      { font-size: 13.5px; font-weight: 700; color: var(--text); }
+  .overdue-snapshot { font-size: 11px; color: var(--subtle); margin-left: 2px; }
 
   /* =============================================
-     SECTION CARDS (Product Mix + Trend)
+     SECTION / DASH CARDS
   ============================================= */
   .section-grid {
     display: grid;
@@ -343,23 +272,98 @@
     gap: 7px;
   }
 
-  .dash-card-title i {
-    color: var(--muted);
-    font-size: 12px;
+  .dash-card-title i { color: var(--muted); font-size: 12px; }
+  .dash-card-body { padding: 14px 16px; }
+  .dash-empty { padding: 28px 16px; text-align: center; color: var(--subtle); font-size: 13px; }
+
+  /* =============================================
+     ANALYSIS CARDS (Lead + Collection)
+  ============================================= */
+  .analysis-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 20px;
   }
 
-  .dash-card-body {
-    padding: 14px 16px;
+  .analysis-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
   }
 
-  .dash-empty {
-    padding: 28px 16px;
-    text-align: center;
-    color: var(--subtle);
+  .analysis-card-header {
+    padding: 13px 16px;
+    border-bottom: 1px solid var(--border-light);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .analysis-card-title {
     font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 7px;
   }
 
-  /* Trend section */
+  .analysis-card-title i { color: var(--muted); font-size: 12px; }
+
+  .analysis-card-body { padding: 14px 16px; }
+
+  .analysis-kpi-row {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .analysis-kpi-item {
+    background: var(--surface-alt);
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+
+  .analysis-kpi-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--subtle);
+    margin-bottom: 4px;
+  }
+
+  .analysis-kpi-value {
+    font-size: 1.1rem;
+    font-weight: 800;
+    font-family: var(--font-display);
+    color: var(--text);
+    line-height: 1.1;
+  }
+
+  /* Named colour classes — replaces style="color: var(--success/danger)" in HTML */
+  .analysis-kpi-value.color-success { color: var(--success); }
+  .analysis-kpi-value.color-danger  { color: var(--danger); }
+  .analysis-kpi-value.font-sm       { font-size: 0.95rem; }
+
+  .analysis-kpi-sub {
+    font-size: 10.5px;
+    color: var(--subtle);
+    margin-top: 2px;
+  }
+
+  .analysis-chart-wrap {
+    position: relative;
+    height: 160px;
+  }
+
+  /* =============================================
+     TREND CARD
+  ============================================= */
   .trend-card {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -368,65 +372,24 @@
     margin-bottom: 20px;
   }
 
-  .trend-note {
-    font-size: 11.5px;
-    color: var(--subtle);
-    margin-top: 2px;
-  }
+  .trend-note { font-size: 11.5px; color: var(--subtle); margin-top: 2px; }
 
   /* Product mix bars */
-  .mix-share-wrap {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    justify-content: flex-end;
-  }
-
-  .mix-bar {
-    width: 50px;
-    height: 5px;
-    background: var(--border-light);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-
-  .mix-bar-fill {
-    height: 100%;
-    border-radius: 3px;
-    width: 0;
-  }
-
-  .mix-bar-fill.mix-grade {
-    background: var(--primary);
-  }
-
-  .mix-bar-fill.mix-size {
-    background: var(--accent);
-  }
-
-  .mix-pct {
-    font-size: 11.5px;
-    color: var(--muted);
-    min-width: 32px;
-    text-align: right;
-  }
+  .mix-share-wrap { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
+  .mix-bar { width: 50px; height: 5px; background: var(--border-light); border-radius: 3px; overflow: hidden; }
+  .mix-bar-fill { height: 100%; border-radius: 3px; width: 0; }
+  .mix-bar-fill.mix-grade { background: var(--primary); }
+  .mix-bar-fill.mix-size  { background: var(--accent); }
+  .mix-pct { font-size: 11.5px; color: var(--muted); min-width: 32px; text-align: right; }
 
   /* Utility */
-  .kam-readonly-input {
-    background: var(--surface-alt);
-    color: var(--text-secondary);
-  }
-
-  .kam-section-no-padding {
-    padding: 0;
-  }
-
+  .kam-readonly-input  { background: var(--surface-alt); color: var(--text-secondary); }
+  .kam-section-no-padding { padding: 0; }
   .kam-divider-top {
     margin-top: 10px;
     padding-top: 10px;
     border-top: 1px solid var(--border-light);
   }
-
   .kam-overdue-footer {
     margin-top: 10px;
     padding-top: 10px;
@@ -435,104 +398,48 @@
     gap: 12px;
     flex-wrap: wrap;
   }
+  .kam-risk-ratio   { align-self: center; }
+  .kam-empty-icon   { font-size: 1.5rem; margin-bottom: 8px; display: block; }
+  .kam-sales-unit   { font-size: 0.55em; font-weight: 600; color: var(--muted); }
+  .kam-muted-small  { color: var(--muted); font-size: 0.95rem; }
+  .kam-meta-subtle  { color: var(--subtle); }
+  .kam-table-strong { font-weight: 600; }
 
-  .kam-risk-ratio {
-    align-self: center;
-  }
-
-  .kam-empty-icon {
-    font-size: 1.5rem;
-    margin-bottom: 8px;
-    display: block;
-  }
-
-  .kam-sales-unit {
-    font-size: 0.55em;
-    font-weight: 600;
-    color: var(--muted);
-  }
-
-  .kam-muted-small {
-    color: var(--muted);
-    font-size: 0.95rem;
-  }
-
-  .kam-meta-subtle {
-    color: var(--subtle);
-  }
-
-  .kam-table-strong {
-    font-weight: 600;
-  }
+  /* Table column width for product mix share */
+  .col-share { width: 90px; }
 
   /* =============================================
      QUICK ACTIONS BAR
   ============================================= */
-  .quick-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    padding-top: 4px;
-  }
-
-  .quick-actions .btn {
-    font-size: 12.5px;
-  }
+  .quick-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+  .quick-actions .btn { font-size: 12.5px; }
 
   /* =============================================
      RESPONSIVE
   ============================================= */
   @media (max-width: 1100px) {
-    .kpi-grid {
-      grid-template-columns: repeat(2, 1fr);
-    }
-
-    .kpi-grid-bottom {
-      grid-template-columns: repeat(2, 1fr);
-    }
+    .kpi-grid,
+    .kpi-grid-bottom { grid-template-columns: repeat(2, 1fr); }
+    .analysis-grid   { grid-template-columns: 1fr; }
   }
 
   @media (max-width: 768px) {
-    .kpi-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .kpi-grid-bottom {
-      grid-template-columns: 1fr;
-    }
-
-    .section-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .kam-filter-bar {
-      gap: 8px;
-    }
-
-    .kam-filter-bar .form-control {
-      min-width: 0;
-      width: 100%;
-    }
-
-    .kam-filter-bar .form-select {
-      min-width: 0;
-      width: 100%;
-    }
-
-    .kam-filter-group {
-      width: 100%;
-    }
-
-    .kam-filter-actions {
-      width: 100%;
-    }
+    .kpi-grid,
+    .kpi-grid-bottom,
+    .section-grid,
+    .analysis-grid { grid-template-columns: 1fr; }
+    .kam-filter-bar { gap: 8px; }
+    .kam-filter-bar .form-control,
+    .kam-filter-bar .form-select,
+    .kam-filter-group { width: 100%; min-width: 0; }
+    .kam-filter-actions { width: 100%; }
   }
 </style>
 {% endblock %}
 
 {% block content %}
 
-{# ── PAGE HEADER ─────────────────────────────────────────────────────────── #}
+{% comment %}PAGE HEADER{% endcomment %}
 <div class="kam-header page-header">
   <div>
     <h1 class="page-title">KAM Dashboard</h1>
@@ -546,49 +453,38 @@
     {% endif %}
   </div>
 
-  {% if can_choose_kam and kpi.sales_mt is not None %}
+  {% if can_choose_kam %}
     <div class="d-flex gap-2 align-items-center">
-      {% if can_choose_kam %}
-        <a href="{% url 'kam:manager_kpis' %}" class="btn btn-sm btn-primary">
-          <i class="fas fa-chart-bar me-1"></i> Manager KPIs
-        </a>
-      {% endif %}
+      <a href="{% url 'kam:manager_kpis' %}" class="btn btn-sm btn-primary">
+        <i class="fas fa-chart-bar me-1"></i> Manager KPIs
+      </a>
     </div>
   {% endif %}
 </div>
 
-{# ── FILTER BAR ──────────────────────────────────────────────────────────── #}
+{% comment %}FILTER BAR{% endcomment %}
 <form class="kam-filter-bar" method="get" id="kamFilterForm">
   <div class="kam-filter-group">
     <span class="kam-filter-label"><i class="fas fa-calendar-day me-1"></i>From</span>
-    <input
-      type="date"
-      name="from"
-      value="{% firstof request.GET.from filter_from %}"
-      class="form-control"
-      id="filterFrom"
-    />
+    <input type="date" name="from"
+           value="{% firstof request.GET.from filter_from %}"
+           class="form-control" id="filterFrom" />
   </div>
 
   <div class="kam-filter-group">
     <span class="kam-filter-label"><i class="fas fa-calendar-day me-1"></i>To</span>
-    <input
-      type="date"
-      name="to"
-      value="{% firstof request.GET.to filter_to %}"
-      class="form-control"
-      id="filterTo"
-    />
+    <input type="date" name="to"
+           value="{% firstof request.GET.to filter_to %}"
+           class="form-control" id="filterTo" />
   </div>
 
-  {# Quick date shortcuts #}
   <div class="kam-filter-group">
     <span class="kam-filter-label">Quick Range</span>
     <select class="form-select" id="quickRange" onchange="applyQuickRange(this.value)">
-      <option value="">— Custom —</option>
+      <option value="">&#8212; Custom &#8212;</option>
       <option value="this_month">This Month</option>
       <option value="last_month">Last Month</option>
-      <option value="this_fy">This FY (Apr–Mar)</option>
+      <option value="this_fy">This FY (Apr&#8211;Mar)</option>
       <option value="last_fy">Last FY</option>
       <option value="this_week">This Week</option>
       <option value="last_7">Last 7 Days</option>
@@ -604,7 +500,10 @@
       <select name="user" class="form-select">
         <option value="" {% if not request.GET.user and not selected_user %}selected{% endif %}>ALL KAMs</option>
         {% for uname in kam_options %}
-          <option value="{{ uname }}" {% if request.GET.user == uname or selected_user == uname %}selected{% endif %}>{{ uname }}</option>
+          <option value="{{ uname }}"
+            {% if request.GET.user == uname or selected_user == uname %}selected{% endif %}>
+            {{ uname }}
+          </option>
         {% endfor %}
       </select>
     </div>
@@ -627,15 +526,13 @@
   </div>
 </form>
 
-{# ── KPI ROW 1: Sales, Visits, Calls ─────────────────────────────────────── #}
+{% comment %}KPI ROW 1: Sales, Visits, Calls{% endcomment %}
 <div class="kpi-grid">
 
-  {# SALES #}
+  {% comment %}SALES{% endcomment %}
   <div class="kpi-card kpi-sales">
     <div class="kpi-card-header">
-      <div class="kpi-card-title">
-        <i class="fas fa-boxes-stacked"></i>Sales
-      </div>
+      <div class="kpi-card-title"><i class="fas fa-boxes-stacked"></i>Sales</div>
       <div class="kpi-card-action">
         <a class="btn btn-sm btn-outline-primary"
            href="{% url 'kam:reports' %}?metric=sales{% if request.GET.from or filter_from %}&from={% firstof request.GET.from filter_from %}{% endif %}{% if request.GET.to or filter_to %}&to={% firstof request.GET.to filter_to %}{% endif %}{% if request.GET.user or selected_user %}&user={% firstof request.GET.user selected_user %}{% endif %}">
@@ -651,17 +548,15 @@
           <i class="fas fa-bullseye"></i>{{ kpi.sales_ach_pct|floatformat:1 }}%
         </span>
       {% else %}
-        <span class="ach-pill neutral">Achv —</span>
+        <span class="ach-pill neutral">Achv &mdash;</span>
       {% endif %}
     </div>
   </div>
 
-  {# VISITS #}
+  {% comment %}VISITS{% endcomment %}
   <div class="kpi-card kpi-visits">
     <div class="kpi-card-header">
-      <div class="kpi-card-title">
-        <i class="fas fa-route"></i>Visits
-      </div>
+      <div class="kpi-card-title"><i class="fas fa-route"></i>Visits</div>
       <div class="kpi-card-action">
         <a class="btn btn-sm btn-outline-primary"
            href="{% url 'kam:reports' %}?metric=visits{% if request.GET.from or filter_from %}&from={% firstof request.GET.from filter_from %}{% endif %}{% if request.GET.to or filter_to %}&to={% firstof request.GET.to filter_to %}{% endif %}{% if request.GET.user or selected_user %}&user={% firstof request.GET.user selected_user %}{% endif %}">
@@ -689,7 +584,7 @@
           <i class="fas fa-bullseye"></i>{{ kpi.visit_ach_pct|floatformat:1 }}%
         </span>
       {% else %}
-        <span class="ach-pill neutral">Achv —</span>
+        <span class="ach-pill neutral">Achv &mdash;</span>
       {% endif %}
       {% if kpi.visit_success_pct is not None %}
         <span class="kpi-meta">Success: <strong>{{ kpi.visit_success_pct|floatformat:1 }}%</strong></span>
@@ -697,12 +592,10 @@
     </div>
   </div>
 
-  {# CALLS #}
+  {% comment %}CALLS{% endcomment %}
   <div class="kpi-card kpi-calls">
     <div class="kpi-card-header">
-      <div class="kpi-card-title">
-        <i class="fas fa-phone-volume"></i>Calls
-      </div>
+      <div class="kpi-card-title"><i class="fas fa-phone-volume"></i>Calls</div>
       <div class="kpi-card-action">
         <a class="btn btn-sm btn-outline-primary"
            href="{% url 'kam:reports' %}?metric=calls{% if request.GET.from or filter_from %}&from={% firstof request.GET.from filter_from %}{% endif %}{% if request.GET.to or filter_to %}&to={% firstof request.GET.to filter_to %}{% endif %}{% if request.GET.user or selected_user %}&user={% firstof request.GET.user selected_user %}{% endif %}">
@@ -718,22 +611,20 @@
           <i class="fas fa-bullseye"></i>{{ kpi.call_ach_pct|floatformat:1 }}%
         </span>
       {% else %}
-        <span class="ach-pill neutral">Achv —</span>
+        <span class="ach-pill neutral">Achv &mdash;</span>
       {% endif %}
     </div>
   </div>
 
 </div>
 
-{# ── KPI ROW 2: Leads, Collections, Overdues ─────────────────────────────── #}
+{% comment %}KPI ROW 2: Leads, Collections, Overdues{% endcomment %}
 <div class="kpi-grid-bottom">
 
-  {# LEADS #}
+  {% comment %}LEADS{% endcomment %}
   <div class="kpi-card kpi-leads">
     <div class="kpi-card-header">
-      <div class="kpi-card-title">
-        <i class="fas fa-filter-circle-dollar"></i>Leads
-      </div>
+      <div class="kpi-card-title"><i class="fas fa-filter-circle-dollar"></i>Leads</div>
     </div>
     <div class="kpi-two-col mb-3">
       <div class="kpi-two-col-item">
@@ -751,19 +642,17 @@
           <i class="fas fa-trophy"></i>{{ kpi.lead_conv_pct|floatformat:1 }}% conv.
         </span>
       {% else %}
-        <span class="ach-pill neutral">Conversion —</span>
+        <span class="ach-pill neutral">Conversion &mdash;</span>
       {% endif %}
     </div>
   </div>
 
-  {# COLLECTIONS #}
+  {% comment %}COLLECTIONS{% endcomment %}
   <div class="kpi-card kpi-collections">
     <div class="kpi-card-header">
-      <div class="kpi-card-title">
-        <i class="fas fa-indian-rupee-sign"></i>Collections
-      </div>
+      <div class="kpi-card-title"><i class="fas fa-indian-rupee-sign"></i>Collections</div>
     </div>
-    <div class="kpi-main-value kpi-value-sm">₹ {{ kpi.collections_actual|floatformat:0|intcomma }}</div>
+    <div class="kpi-main-value kpi-value-sm">&#8377; {{ kpi.collections_actual|floatformat:0|intcomma }}</div>
     <div class="kpi-sub-row mt-1">
       {% if kpi.collections_eff_pct is not None %}
         <span class="kpi-meta">Efficiency: <strong>{{ kpi.collections_eff_pct|floatformat:1 }}%</strong></span>
@@ -773,7 +662,7 @@
     </div>
     {% if kpi.prev_overdue_sum %}
       <div class="kam-divider-top">
-        <span class="kpi-meta">Prev Overdue: <strong>₹ {{ kpi.prev_overdue_sum|floatformat:0|intcomma }}</strong></span>
+        <span class="kpi-meta">Prev Overdue: <strong>&#8377; {{ kpi.prev_overdue_sum|floatformat:0|intcomma }}</strong></span>
         {% if kpi.prev_overdue_snapshot_date %}
           <span class="overdue-snapshot">({{ kpi.prev_overdue_snapshot_date }})</span>
         {% endif %}
@@ -781,27 +670,25 @@
     {% endif %}
   </div>
 
-  {# OVERDUES & RISK #}
+  {% comment %}OVERDUES AND RISK{% endcomment %}
   <div class="kpi-card kpi-overdue">
     <div class="kpi-card-header">
-      <div class="kpi-card-title">
-        <i class="fas fa-triangle-exclamation"></i>Overdues &amp; Risk
-      </div>
+      <div class="kpi-card-title"><i class="fas fa-triangle-exclamation"></i>Overdues &amp; Risk</div>
     </div>
     <div class="overdue-row">
       <span class="overdue-label">Overdue</span>
-      <span class="overdue-val">₹ {{ kpi.overdue_sum|floatformat:0|intcomma }}</span>
+      <span class="overdue-val">&#8377; {{ kpi.overdue_sum|floatformat:0|intcomma }}</span>
       {% if kpi.overdue_snapshot_date %}
         <span class="overdue-snapshot">({{ kpi.overdue_snapshot_date }})</span>
       {% endif %}
     </div>
     <div class="overdue-row">
       <span class="overdue-label">Exposure</span>
-      <span class="overdue-val">₹ {{ kpi.exposure_sum|floatformat:0|intcomma }}</span>
+      <span class="overdue-val">&#8377; {{ kpi.exposure_sum|floatformat:0|intcomma }}</span>
     </div>
     <div class="overdue-row">
       <span class="overdue-label">Credit Limit</span>
-      <span class="overdue-val">₹ {{ kpi.credit_limit_sum|floatformat:0|intcomma }}</span>
+      <span class="overdue-val">&#8377; {{ kpi.credit_limit_sum|floatformat:0|intcomma }}</span>
     </div>
     <div class="kam-overdue-footer">
       {% if kpi.overdue_reduction_pct is not None %}
@@ -809,7 +696,7 @@
           <i class="fas fa-arrow-trend-down"></i>{{ kpi.overdue_reduction_pct|floatformat:1 }}% reduction
         </span>
       {% else %}
-        <span class="ach-pill neutral">Reduction —</span>
+        <span class="ach-pill neutral">Reduction &mdash;</span>
       {% endif %}
       {% if kpi.overdue_risk_ratio %}
         <span class="kpi-meta kam-risk-ratio">Risk Ratio: <strong>{{ kpi.overdue_risk_ratio|floatformat:2 }}</strong></span>
@@ -819,12 +706,131 @@
 
 </div>
 
-{# ── PRODUCT MIX ─────────────────────────────────────────────────────────── #}
+{% comment %}ANALYSIS SECTION — Lead Analysis + Collection Analysis{% endcomment %}
+<div class="analysis-grid">
+
+  {% comment %}LEAD ANALYSIS{% endcomment %}
+  <div class="analysis-card">
+    <div class="analysis-card-header">
+      <div class="analysis-card-title">
+        <i class="fas fa-filter-circle-dollar"></i>Lead Analysis
+      </div>
+      <a href="{% url 'kam:reports' %}?metric=sales{% if request.GET.from or filter_from %}&from={% firstof request.GET.from filter_from %}{% endif %}{% if request.GET.to or filter_to %}&to={% firstof request.GET.to filter_to %}{% endif %}{% if request.GET.user or selected_user %}&user={% firstof request.GET.user selected_user %}{% endif %}"
+         class="btn btn-sm btn-outline-secondary btn-report-link">
+        Full Report <i class="fas fa-arrow-right ms-1"></i>
+      </a>
+    </div>
+    <div class="analysis-card-body">
+
+      <div class="analysis-kpi-row">
+        <div class="analysis-kpi-item">
+          <div class="analysis-kpi-label">Total Leads</div>
+          <div class="analysis-kpi-value">{{ kpi.leads_total_count|default:0 }}</div>
+          <div class="analysis-kpi-sub">Enquiries (all status)</div>
+        </div>
+        <div class="analysis-kpi-item">
+          <div class="analysis-kpi-label">Converted (Won)</div>
+          <div class="analysis-kpi-value color-success">
+            {{ kpi.leads_converted_count|default:0 }}
+          </div>
+          <div class="analysis-kpi-sub">Status = WON</div>
+        </div>
+        <div class="analysis-kpi-item">
+          <div class="analysis-kpi-label">Conversion Rate</div>
+          <div class="analysis-kpi-value">
+            {% if kpi.lead_count_conv_pct is not None %}
+              {{ kpi.lead_count_conv_pct|floatformat:1 }}%
+            {% else %}&mdash;{% endif %}
+          </div>
+          <div class="analysis-kpi-sub">Won &divide; Total</div>
+        </div>
+        <div class="analysis-kpi-item">
+          <div class="analysis-kpi-label">Won Value (MT)</div>
+          <div class="analysis-kpi-value">
+            {{ kpi.leads_converted_value|default:0|floatformat:2 }}
+          </div>
+          <div class="analysis-kpi-sub">Converted volume</div>
+        </div>
+      </div>
+
+      <div class="analysis-chart-wrap">
+        <canvas id="chartLeadAnalysis"></canvas>
+      </div>
+
+    </div>
+  </div>
+
+  {% comment %}COLLECTION ANALYSIS{% endcomment %}
+  <div class="analysis-card">
+    <div class="analysis-card-header">
+      <div class="analysis-card-title">
+        <i class="fas fa-indian-rupee-sign"></i>Collection Analysis
+      </div>
+      {% if can_choose_kam %}
+        <a href="{% url 'kam:collections_plan' %}{% if request.GET.from or filter_from %}?from={% firstof request.GET.from filter_from %}{% if request.GET.to or filter_to %}&to={% firstof request.GET.to filter_to %}{% endif %}{% if request.GET.user or selected_user %}&user={% firstof request.GET.user selected_user %}{% endif %}{% endif %}"
+           class="btn btn-sm btn-outline-primary btn-report-link">
+          <i class="fas fa-list-check me-1"></i>Plan Detail
+        </a>
+      {% endif %}
+    </div>
+    <div class="analysis-card-body">
+
+      <div class="analysis-kpi-row">
+        <div class="analysis-kpi-item">
+          <div class="analysis-kpi-label">Total Planned</div>
+          <div class="analysis-kpi-value font-sm">
+            &#8377; {{ kpi.collection_planned|default:0|floatformat:0|intcomma }}
+          </div>
+          <div class="analysis-kpi-sub">From Collection Plans</div>
+        </div>
+        <div class="analysis-kpi-item">
+          <div class="analysis-kpi-label">Total Collected</div>
+          <div class="analysis-kpi-value color-success font-sm">
+            &#8377; {{ kpi.collection_actual|default:0|floatformat:0|intcomma }}
+          </div>
+          <div class="analysis-kpi-sub">Actual recorded</div>
+        </div>
+        <div class="analysis-kpi-item">
+          <div class="analysis-kpi-label">Achievement</div>
+          <div class="analysis-kpi-value">
+            {% if kpi.collection_ach_pct is not None %}
+              <span class="{% if kpi.collection_ach_pct >= 100 %}text-success{% elif kpi.collection_ach_pct >= 70 %}text-warning{% else %}text-danger{% endif %}">
+                {{ kpi.collection_ach_pct|floatformat:1 }}%
+              </span>
+            {% else %}&mdash;{% endif %}
+          </div>
+          <div class="analysis-kpi-sub">Actual &divide; Planned</div>
+        </div>
+        <div class="analysis-kpi-item">
+          <div class="analysis-kpi-label">Overdue Amt</div>
+          <div class="analysis-kpi-value color-danger font-sm">
+            &#8377; {{ kpi.collection_overdue_amt|default:kpi.overdue_sum|default:0|floatformat:0|intcomma }}
+          </div>
+          <div class="analysis-kpi-sub">
+            {% if kpi.overdue_reduction_pct is not None %}
+              {{ kpi.overdue_reduction_pct|floatformat:1 }}% reduction
+            {% else %}
+              vs previous period
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="analysis-chart-wrap">
+        <canvas id="chartCollectionAnalysis"></canvas>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+{% comment %}PRODUCT MIX{% endcomment %}
 <div class="section-grid">
 
   <div class="dash-card">
     <div class="dash-card-header">
-      <div class="dash-card-title"><i class="fas fa-layer-group"></i>Product Mix — Grade</div>
+      <div class="dash-card-title"><i class="fas fa-layer-group"></i>Product Mix &mdash; Grade</div>
     </div>
     {% if prod_by_grade %}
       <div class="dash-card-body kam-section-no-padding">
@@ -833,23 +839,21 @@
             <tr>
               <th>Grade</th>
               <th class="text-end">MT</th>
-              <th class="text-end" style="width: 90px;">Share</th>
+              <th class="text-end col-share">Share</th>
             </tr>
           </thead>
           <tbody>
             {% for r in prod_by_grade %}
               <tr>
-                <td>{{ r.grade|default:"—" }}</td>
+                <td>{{ r.grade|default:"&mdash;" }}</td>
                 <td class="text-end kam-table-strong">{{ r.mt|floatformat:2 }}</td>
                 <td class="text-end">
                   <div class="mix-share-wrap">
                     <div class="mix-bar">
-                      <div
-                        class="mix-bar-fill mix-grade js-mix-bar"
-                        data-pct="{{ r.pct|default_if_none:0 }}"
-                        aria-hidden="true"></div>
+                      <div class="mix-bar-fill mix-grade js-mix-bar"
+                           data-pct="{{ r.pct|default_if_none:0 }}" aria-hidden="true"></div>
                     </div>
-                    <span class="mix-pct">{{ r.pct|default:"—" }}%</span>
+                    <span class="mix-pct">{{ r.pct|default:"&mdash;" }}%</span>
                   </div>
                 </td>
               </tr>
@@ -864,7 +868,7 @@
 
   <div class="dash-card">
     <div class="dash-card-header">
-      <div class="dash-card-title"><i class="fas fa-ruler-combined"></i>Product Mix — Size</div>
+      <div class="dash-card-title"><i class="fas fa-ruler-combined"></i>Product Mix &mdash; Size</div>
     </div>
     {% if prod_by_size %}
       <div class="dash-card-body kam-section-no-padding">
@@ -873,23 +877,21 @@
             <tr>
               <th>Size</th>
               <th class="text-end">MT</th>
-              <th class="text-end" style="width: 90px;">Share</th>
+              <th class="text-end col-share">Share</th>
             </tr>
           </thead>
           <tbody>
             {% for r in prod_by_size %}
               <tr>
-                <td>{{ r.size|default:"—" }}</td>
+                <td>{{ r.size|default:"&mdash;" }}</td>
                 <td class="text-end kam-table-strong">{{ r.mt|floatformat:2 }}</td>
                 <td class="text-end">
                   <div class="mix-share-wrap">
                     <div class="mix-bar">
-                      <div
-                        class="mix-bar-fill mix-size js-mix-bar"
-                        data-pct="{{ r.pct|default_if_none:0 }}"
-                        aria-hidden="true"></div>
+                      <div class="mix-bar-fill mix-size js-mix-bar"
+                           data-pct="{{ r.pct|default_if_none:0 }}" aria-hidden="true"></div>
                     </div>
-                    <span class="mix-pct">{{ r.pct|default:"—" }}%</span>
+                    <span class="mix-pct">{{ r.pct|default:"&mdash;" }}%</span>
                   </div>
                 </td>
               </tr>
@@ -904,12 +906,12 @@
 
 </div>
 
-{# ── 4-WEEK TREND ─────────────────────────────────────────────────────────── #}
+{% comment %}4-WEEK TREND{% endcomment %}
 <div class="trend-card">
   <div class="dash-card-header">
     <div>
       <div class="dash-card-title"><i class="fas fa-chart-line"></i>4-Week Trend</div>
-      <div class="trend-note">Last 4 completed weeks (Mon–Sat). Sunday excluded.</div>
+      <div class="trend-note">Last 4 completed weeks (Mon&ndash;Sat). Sunday excluded.</div>
     </div>
   </div>
   {% if trend_rows %}
@@ -921,19 +923,17 @@
             <th class="text-end">Sales (MT)</th>
             <th class="text-end">Visits</th>
             <th class="text-end">Calls</th>
-            <th class="text-end">Collections (₹)</th>
+            <th class="text-end">Collections (&#8377;)</th>
           </tr>
         </thead>
         <tbody>
           {% for row in trend_rows %}
             <tr>
-              <td>
-                <span class="kam-table-strong">{{ row.week }}</span>
-              </td>
+              <td><span class="kam-table-strong">{{ row.week }}</span></td>
               <td class="text-end">{{ row.sales_mt|floatformat:2 }}</td>
               <td class="text-end">{{ row.visits }}</td>
               <td class="text-end">{{ row.calls }}</td>
-              <td class="text-end">₹ {{ row.collections|floatformat:0|intcomma }}</td>
+              <td class="text-end">&#8377; {{ row.collections|floatformat:0|intcomma }}</td>
             </tr>
           {% endfor %}
         </tbody>
@@ -944,7 +944,7 @@
   {% endif %}
 </div>
 
-{# ── QUICK ACTIONS ─────────────────────────────────────────────────────────── #}
+{% comment %}QUICK ACTIONS{% endcomment %}
 <div class="dash-card">
   <div class="dash-card-header">
     <div class="dash-card-title"><i class="fas fa-bolt"></i>Quick Actions</div>
@@ -983,74 +983,151 @@
 {% block extra_js %}
 <script>
 (function () {
-  function pad(n) {
-    return String(n).padStart(2, "0");
-  }
 
-  function fmt(d) {
-    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
-  }
+  // ── Utility ───────────────────────────────────────────────────────────────
+  function pad(n)      { return String(n).padStart(2, "0"); }
+  function fmt(d)      { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+  function clampPct(v) { var n = parseFloat(v); return Number.isNaN(n) ? 0 : Math.max(0, Math.min(100, n)); }
 
-  function clampPct(v) {
-    const n = parseFloat(v);
-    if (Number.isNaN(n)) {
-      return 0;
-    }
-    return Math.max(0, Math.min(100, n));
-  }
-
+  // ── Quick date range ──────────────────────────────────────────────────────
   window.applyQuickRange = function (val) {
-    if (!val) {
-      return;
-    }
-
-    const today = new Date();
-    let from;
-    let to;
-
-    const y = today.getFullYear();
-    const m = today.getMonth();
-    const d = today.getDate();
-
-    if (val === "this_month") {
-      from = new Date(y, m, 1);
-      to = new Date(y, m + 1, 0);
-    } else if (val === "last_month") {
-      from = new Date(y, m - 1, 1);
-      to = new Date(y, m, 0);
-    } else if (val === "this_week") {
-      const dow = (today.getDay() + 6) % 7;
-      from = new Date(y, m, d - dow);
-      to = new Date(y, m, d - dow + 5);
-    } else if (val === "last_7") {
-      from = new Date(y, m, d - 6);
-      to = today;
-    } else if (val === "last_30") {
-      from = new Date(y, m, d - 29);
-      to = today;
-    } else if (val === "last_90") {
-      from = new Date(y, m, d - 89);
-      to = today;
-    } else if (val === "this_fy") {
-      const fyStart = m >= 3 ? y : y - 1;
-      from = new Date(fyStart, 3, 1);
-      to = new Date(fyStart + 1, 2, 31);
-    } else if (val === "last_fy") {
-      const fyStart = (m >= 3 ? y : y - 1) - 1;
-      from = new Date(fyStart, 3, 1);
-      to = new Date(fyStart + 1, 2, 31);
-    }
-
+    if (!val) return;
+    var today = new Date(), y = today.getFullYear(), m = today.getMonth(), d = today.getDate();
+    var from, to;
+    if      (val === "this_month") { from = new Date(y, m, 1);       to = new Date(y, m + 1, 0); }
+    else if (val === "last_month") { from = new Date(y, m - 1, 1);   to = new Date(y, m, 0); }
+    else if (val === "this_week")  { var dow = (today.getDay() + 6) % 7; from = new Date(y, m, d - dow); to = new Date(y, m, d - dow + 5); }
+    else if (val === "last_7")     { from = new Date(y, m, d - 6);   to = today; }
+    else if (val === "last_30")    { from = new Date(y, m, d - 29);  to = today; }
+    else if (val === "last_90")    { from = new Date(y, m, d - 89);  to = today; }
+    else if (val === "this_fy")    { var fs = m >= 3 ? y : y - 1;   from = new Date(fs, 3, 1);     to = new Date(fs + 1, 2, 31); }
+    else if (val === "last_fy")    { var fs = (m >= 3 ? y : y - 1) - 1; from = new Date(fs, 3, 1); to = new Date(fs + 1, 2, 31); }
     if (from && to) {
       document.getElementById("filterFrom").value = fmt(from);
-      document.getElementById("filterTo").value = fmt(to);
+      document.getElementById("filterTo").value   = fmt(to);
       document.getElementById("kamFilterForm").submit();
     }
   };
 
+  // ── Product mix bars ──────────────────────────────────────────────────────
   document.querySelectorAll(".js-mix-bar").forEach(function (el) {
     el.style.width = clampPct(el.dataset.pct) + "%";
   });
-})();
+
+  // ── Safe read of json_script data elements ────────────────────────────────
+  function safeNum(elId) {
+    var el = document.getElementById(elId);
+    if (!el) return null;
+    try { return JSON.parse(el.textContent); } catch (_) { return null; }
+  }
+
+  // ── Lead Analysis Doughnut Chart ──────────────────────────────────────────
+  var leadData = safeNum("leadAnalysisData");
+  if (leadData && document.getElementById("chartLeadAnalysis")) {
+    var totalLeads     = leadData.total     || 0;
+    var convertedLeads = leadData.converted || 0;
+    var openLeads      = Math.max(totalLeads - convertedLeads, 0);
+
+    new Chart(document.getElementById("chartLeadAnalysis"), {
+      type: "doughnut",
+      data: {
+        labels: ["Won / Converted", "Open / In Progress"],
+        datasets: [{
+          data: [convertedLeads, openLeads],
+          backgroundColor: ["rgba(34,197,94,0.8)",  "rgba(148,163,184,0.5)"],
+          borderColor:     ["rgb(34,197,94)",        "rgb(148,163,184)"],
+          borderWidth: 2,
+          hoverOffset: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: "65%",
+        plugins: {
+          legend: { position: "right", labels: { font: { size: 11 }, boxWidth: 12 } },
+          tooltip: {
+            callbacks: {
+              label: function (ctx) {
+                var pct = totalLeads > 0 ? ((ctx.raw / totalLeads) * 100).toFixed(1) : "0.0";
+                return " " + ctx.label + ": " + ctx.raw + " (" + pct + "%)";
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  // ── Collection Analysis Bar Chart ─────────────────────────────────────────
+  var collData = safeNum("collectionAnalysisData");
+  if (collData && document.getElementById("chartCollectionAnalysis")) {
+    new Chart(document.getElementById("chartCollectionAnalysis"), {
+      type: "bar",
+      data: {
+        labels: ["Collection"],
+        datasets: [
+          {
+            label: "Planned (\u20b9)",
+            data: [collData.planned || 0],
+            backgroundColor: "rgba(59,130,246,0.75)",
+            borderColor: "rgb(59,130,246)",
+            borderWidth: 1,
+            borderRadius: 5
+          },
+          {
+            label: "Actual (\u20b9)",
+            data: [collData.actual || 0],
+            backgroundColor: "rgba(34,197,94,0.75)",
+            borderColor: "rgb(34,197,94)",
+            borderWidth: 1,
+            borderRadius: 5
+          },
+          {
+            label: "Overdue (\u20b9)",
+            data: [collData.overdue || 0],
+            backgroundColor: "rgba(239,68,68,0.65)",
+            borderColor: "rgb(239,68,68)",
+            borderWidth: 1,
+            borderRadius: 5
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: "top", labels: { font: { size: 11 }, boxWidth: 12 } },
+          tooltip: {
+            callbacks: {
+              label: function (ctx) {
+                return " " + ctx.dataset.label + ": \u20b9" + Number(ctx.raw).toLocaleString("en-IN");
+              }
+            }
+          }
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: {
+            beginAtZero: true,
+            grid: { color: "rgba(0,0,0,.04)" },
+            ticks: {
+              font: { size: 10 },
+              callback: function (v) {
+                if (v >= 1e7) return "\u20b9" + (v / 1e7).toFixed(1) + "Cr";
+                if (v >= 1e5) return "\u20b9" + (v / 1e5).toFixed(1) + "L";
+                return "\u20b9" + (v / 1000).toFixed(0) + "k";
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+}());
 </script>
+
+{{ lead_analysis_data|default:"null"|json_script:"leadAnalysisData" }}
+{{ collection_analysis_data|default:"null"|json_script:"collectionAnalysisData" }}
 {% endblock %}

@@ -1,4 +1,10 @@
-# apps/leave/views.py
+# FILE: apps/leave/views.py
+# PURPOSE: Leave module views
+# UPDATED: 2026-03-06
+# CHANGE:  Replaced `import pytz` / `pytz.timezone("Asia/Kolkata")` with
+#          `from zoneinfo import ZoneInfo` / `ZoneInfo("Asia/Kolkata")`.
+#          No leave business logic changed.  All timezone behaviour identical.
+
 from __future__ import annotations
 
 import logging
@@ -6,8 +12,8 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from datetime import timedelta, date, time as dtime
+from zoneinfo import ZoneInfo          # ← replaces: import pytz
 
-import pytz  # ✅ align tz impl with models/forms
 from django.apps import apps as django_apps
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -71,8 +77,9 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
-# ✅ pytz (consistent with models/forms)
-IST = pytz.timezone("Asia/Kolkata")
+# ← replaces: IST = pytz.timezone("Asia/Kolkata")
+IST = ZoneInfo("Asia/Kolkata")
+
 TOKEN_SALT = "leave-action-v1"
 TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 days
 
@@ -249,6 +256,7 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
         start_at = leave.start_at
         end_at = leave.end_at
 
+        # ← replaces: timezone.localtime(start_at, IST) — same call, IST is now ZoneInfo
         start_date = timezone.localtime(start_at, IST).date() if start_at else None
         end_date = timezone.localtime(end_at, IST).date() if end_at else None
 
@@ -308,6 +316,7 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
 def _datespan_ist(start_dt, end_dt) -> List[date]:
     if not (start_dt and end_dt):
         return []
+    # ← replaces: timezone.localtime(start_dt, IST) — same call, IST is now ZoneInfo
     s = timezone.localtime(start_dt, IST).date()
     e = timezone.localtime(end_dt, IST).date()
     if e < s:
@@ -463,6 +472,7 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
 
                             if delegate_to and (cl_ids or dg_ids or ht_ids):
                                 handovers = []
+                                # ← replaces: timezone.localtime(lr.start_at, IST) — same call
                                 ef_start = getattr(lr, "start_date", None) or timezone.localtime(lr.start_at, IST).date()
                                 ef_end = getattr(lr, "end_date", None) or timezone.localtime(lr.end_at, IST).date()
 
@@ -637,6 +647,7 @@ def _build_approval_context(leave: LeaveRequest) -> Dict[str, object]:
         "employee_designation": designation,
         "employee_email": (emp.email or "").strip(),
         "leave_type_name": getattr(leave.leave_type, "name", str(leave.leave_type)),
+        # ← replaces: timezone.localtime(leave.start_at, IST) — same call, IST is now ZoneInfo
         "from_ist": timezone.localtime(leave.start_at, IST),
         "to_ist": timezone.localtime(leave.end_at, IST),
         "is_half_day": bool(leave.is_half_day),
@@ -729,6 +740,7 @@ def delete_leave(request: HttpRequest, pk: int) -> HttpResponse:
         return redirect("leave:dashboard")
 
     leave_type = leave.leave_type.name
+    # ← replaces: timezone.localtime(leave.start_at, IST) — same call, IST is now ZoneInfo
     start_date = timezone.localtime(leave.start_at, IST).strftime("%B %d, %Y")
 
     try:
@@ -1038,6 +1050,7 @@ def manager_widget(request: HttpRequest) -> HttpResponse:
     )
     rows = []
     for lr in leaves:
+        # ← replaces: timezone.localtime(lr.start_at, IST) — same call, IST is now ZoneInfo
         start = timezone.localtime(lr.start_at, IST).strftime("%b %d, %I:%M %p")
         rows.append(
             f"<tr><td>{lr.employee.get_full_name() or lr.employee.username}</td>"

@@ -1,0 +1,102 @@
+{# FILE: templates/kam/collection_plan_record_actual.html #}
+{# PURPOSE: Standalone form to record actual collection amount + date against a plan #}
+{# UPDATED: 2026-03-05 #}
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block title %}Record Actual Collection{% endblock %}
+{% block breadcrumb %}Collections Plan / Record Actual{% endblock %}
+
+{% block content %}
+
+<div class="d-flex align-items-start justify-content-between flex-wrap gap-2 mb-4">
+  <div>
+    <h1 class="page-title">Record Actual Collection</h1>
+    <p class="text-muted small mt-1">
+      <strong>{{ plan.customer.name }}</strong> · KAM: {{ plan.kam.username }}
+      {% if plan.period_type %} · {{ plan.period_type }}: {{ plan.period_id }}{% endif %}
+      {% if plan.from_date %} · {{ plan.from_date }} → {{ plan.to_date }}{% endif %}
+    </p>
+  </div>
+  <a href="{{ next_url }}" class="btn btn-sm btn-outline-secondary">
+    <i class="fas fa-arrow-left me-1"></i>Back to Plans
+  </a>
+</div>
+
+<div class="row justify-content-center">
+  <div class="col-md-8 col-lg-6">
+    <div class="card">
+      <div class="card-header fw-semibold">
+        <i class="fas fa-money-bill-wave me-2 text-muted"></i>Collection Details
+      </div>
+      <div class="card-body">
+
+        {# ── Planned amount (read-only) ──────────────────────────────── #}
+        <div class="mb-3 p-3 rounded" style="background:var(--surface-alt);border:1px solid var(--border);">
+          <div class="row">
+            <div class="col-6">
+              <div class="small text-muted fw-semibold">Planned Amount</div>
+              <div class="fs-5 fw-bold text-primary">₹ {{ plan.planned_amount|floatformat:0|intcomma }}</div>
+            </div>
+            {% if plan.actual_collection_amount %}
+            <div class="col-6">
+              <div class="small text-muted fw-semibold">Previously Recorded</div>
+              <div class="fs-5 fw-bold text-success">₹ {{ plan.actual_collection_amount|floatformat:0|intcomma }}</div>
+              {% if plan.actual_collection_date %}
+                <div class="text-muted small">on {{ plan.actual_collection_date }}</div>
+              {% endif %}
+            </div>
+            {% endif %}
+          </div>
+        </div>
+
+        <form method="post" novalidate>
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ next_url }}">
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">
+              Actual Collection Amount (₹)
+              <span class="text-danger">*</span>
+            </label>
+            <div class="input-group">
+              <span class="input-group-text">₹</span>
+              <input type="number"
+                     step="0.01"
+                     min="0"
+                     name="actual_collection_amount"
+                     class="form-control"
+                     value="{{ plan.actual_collection_amount|default:'' }}"
+                     placeholder="Enter collected amount"
+                     required>
+            </div>
+            <div class="form-text">
+              This does <strong>not</strong> overwrite the Planned Amount. Stored separately for tracking.
+            </div>
+          </div>
+
+          <div class="mb-4">
+            <label class="form-label fw-semibold">
+              Collection Date <span class="text-muted fw-normal">(optional)</span>
+            </label>
+            <input type="date"
+                   name="actual_collection_date"
+                   class="form-control"
+                   value="{{ plan.actual_collection_date|date:'Y-m-d'|default:'' }}">
+            <div class="form-text">Date when the payment was received.</div>
+          </div>
+
+          <div class="d-flex gap-2">
+            <button type="submit" class="btn btn-primary">
+              <i class="fas fa-save me-1"></i>Save Actual Collection
+            </button>
+            <a href="{{ next_url }}" class="btn btn-outline-secondary">Cancel</a>
+          </div>
+        </form>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

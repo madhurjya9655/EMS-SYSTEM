@@ -1,778 +1,720 @@
-{# FILE: templates/kam/collections_plan.html #}
-{# PURPOSE: Redesigned Collections Plan — financial-ledger aesthetic #}
-{# UPDATED: 2026-03-03 #}
 {% extends "base.html" %}
-{% load humanize crispy_forms_tags %}
+{% load humanize %}
 
-{% block title %}Collections Plan{% endblock %}
+{% block title %}Collections Plan — BOS Lakshya{% endblock %}
+{% block breadcrumb %}Collections Plan{% endblock %}
 
 {% block head_extra %}
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
-/* ─── Design Tokens ──────────────────────────────────────────── */
-:root {
-  --paper:        #faf9f7;
-  --paper-2:      #f3f1ee;
-  --paper-3:      #ede9e4;
-  --ink:          #18160f;
-  --ink-2:        #3a3830;
-  --ink-3:        #706c62;
-  --ink-4:        #a09b8f;
-  --rule:         #e3dfd8;
-  --rule-2:       #ede9e4;
-  --navy:         #1c2d4f;
-  --navy-l:       #26406e;
-  --navy-s:       #e8edf5;
-  --navy-s2:      #d4deee;
-  --teal:         #0c5c52;
-  --teal-s:       #d6f0ec;
-  --amber:        #7a4800;
-  --amber-s:      #fdf0d5;
-  --red:          #7c1c1c;
-  --red-s:        #fde8e8;
-  --font-body:    'Sora', system-ui, sans-serif;
-  --font-mono:    'IBM Plex Mono', monospace;
-  --r-xs:         4px;
-  --r-sm:         7px;
-  --r-md:         12px;
-  --r-lg:         16px;
-  --sh-card:      0 1px 3px rgba(24,22,15,.06), 0 4px 16px rgba(24,22,15,.05);
-  --sh-lift:      0 4px 24px rgba(24,22,15,.12), 0 1px 4px rgba(24,22,15,.06);
-}
+  /* ── Summary Cards ───────────────────────────────────────── */
+  .cp-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .cp-stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    position: relative;
+    overflow: hidden;
+  }
+  .cp-stat-card::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 4px;
+    border-radius: 4px 0 0 4px;
+  }
+  .cp-stat-card.stat-planned::before { background: var(--primary); }
+  .cp-stat-card.stat-actual::before  { background: var(--success); }
+  .cp-stat-card.stat-achv::before    { background: var(--accent); }
+  .cp-stat-card.stat-short::before   { background: var(--danger); }
+  .cp-stat-label {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .cp-stat-value {
+    font-size: 1.4rem;
+    font-weight: 800;
+    font-family: var(--font-display);
+    color: var(--text);
+    line-height: 1.1;
+  }
+  .cp-stat-sub {
+    font-size: 11px;
+    color: var(--subtle);
+    margin-top: 3px;
+  }
 
-.cp * { box-sizing: border-box; font-family: var(--font-body); }
+  /* ── Filter Bar ──────────────────────────────────────────── */
+  .cp-filter-bar {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    margin-bottom: 16px;
+  }
+  .cp-filter-group { display: flex; flex-direction: column; gap: 4px; }
+  .cp-filter-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--subtle);
+  }
+  .cp-filter-bar .form-control,
+  .cp-filter-bar .form-select {
+    min-width: 140px;
+    height: 36px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
 
-/* ─── Page header ────────────────────────────────────────────── */
-.cp-hd {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px;
-  padding-bottom: 18px;
-  margin-bottom: 20px;
-  border-bottom: 2px solid var(--ink);
-}
-.cp-hd-eyebrow {
-  font-size: .63rem;
-  font-weight: 700;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: var(--ink-4);
-  margin-bottom: 6px;
-}
-.cp-hd h1 {
-  font-size: 1.45rem;
-  font-weight: 700;
-  color: var(--ink);
-  letter-spacing: -.04em;
-  margin: 0;
-  line-height: 1;
-}
-.cp-hd p {
-  margin: 5px 0 0;
-  font-size: .78rem;
-  color: var(--ink-3);
-}
+  /* ── Plan Table ──────────────────────────────────────────── */
+  .cp-table th {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .cp-table td { font-size: 13px; vertical-align: middle; }
+  .cp-table .amount-col { font-weight: 700; font-family: var(--font-display); }
+  .cp-table .amount-actual { color: var(--success); }
+  .cp-table .amount-zero   { color: var(--subtle); }
 
-/* ─── Filter strip ───────────────────────────────────────────── */
-.cp-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: flex-end;
-  background: var(--navy);
-  border-radius: var(--r-md);
-  padding: 14px 18px;
-  margin-bottom: 22px;
-}
-.cp-filters label {
-  display: block;
-  font-size: .62rem;
-  font-weight: 700;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-  color: rgba(255,255,255,.45);
-  margin-bottom: 4px;
-}
-.cp-filters select,
-.cp-filters input[type="date"],
-.cp-filters input[type="text"] {
-  height: 34px;
-  font-size: 12px;
-  font-family: var(--font-mono);
-  color: #fff;
-  background: rgba(255,255,255,.1);
-  border: 1px solid rgba(255,255,255,.15);
-  border-radius: var(--r-xs);
-  padding: 0 10px;
-  outline: none;
-  transition: border-color .15s, background .15s;
-}
-.cp-filters select:focus,
-.cp-filters input:focus {
-  border-color: rgba(255,255,255,.45);
-  background: rgba(255,255,255,.16);
-}
-.cp-filters select option { background: var(--navy); color: #fff; }
-.cp-filter-sep { width: 1px; height: 34px; background: rgba(255,255,255,.12); align-self: flex-end; }
-.cp-filter-btn {
-  height: 34px;
-  padding: 0 20px;
-  background: rgba(255,255,255,.92);
-  color: var(--navy);
-  border: none;
-  border-radius: var(--r-xs);
-  font-size: 12px;
-  font-weight: 700;
-  font-family: var(--font-body);
-  letter-spacing: .04em;
-  cursor: pointer;
-  align-self: flex-end;
-  transition: background .15s;
-}
-.cp-filter-btn:hover { background: #fff; }
+  /* ── Status Badges ───────────────────────────────────────── */
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .status-badge.open      { background: #f3f4f6; color: #6b7280; }
+  .status-badge.partial   { background: #fffbeb; color: #d97706; }
+  .status-badge.collected { background: #ecfdf5; color: #059669; }
 
-/* ─── Alerts ─────────────────────────────────────────────────── */
-.cp-alerts { margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px; }
-.cp-alert {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 11px 14px;
-  border-radius: var(--r-sm);
-  font-size: 13px;
-  font-weight: 500;
-  border-left: 3px solid;
-}
-.cp-alert.success { background: var(--teal-s);  color: var(--teal);  border-color: var(--teal); }
-.cp-alert.error   { background: var(--red-s);   color: var(--red);   border-color: var(--red); }
-.cp-alert.info    { background: var(--navy-s);  color: var(--navy);  border-color: var(--navy); }
+  /* ── Progress Bar ────────────────────────────────────────── */
+  .cp-progress-wrap { min-width: 80px; }
+  .cp-progress {
+    height: 5px;
+    background: #e5e7eb;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 4px;
+  }
+  .cp-progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--success);
+    transition: width 0.4s ease;
+  }
+  .cp-progress-fill.over { background: var(--primary); }
 
-/* ─── Two-column layout ──────────────────────────────────────── */
-.cp-layout {
-  display: grid;
-  grid-template-columns: 360px 1fr;
-  gap: 20px;
-  align-items: start;
-}
-@media (max-width: 960px) { .cp-layout { grid-template-columns: 1fr; } }
+  /* ── New Plan Form Card ──────────────────────────────────── */
+  .cp-form-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-bottom: 20px;
+  }
+  .cp-form-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .cp-form-header .toggle-icon {
+    margin-left: auto;
+    transition: transform 0.2s ease;
+    color: var(--muted);
+  }
+  .cp-form-header.collapsed .toggle-icon { transform: rotate(-90deg); }
+  .cp-form-body { padding: 16px; }
 
-/* ─── Form panel ─────────────────────────────────────────────── */
-.cp-panel {
-  background: var(--paper);
-  border: 1px solid var(--rule);
-  border-radius: var(--r-lg);
-  box-shadow: var(--sh-card);
-  overflow: hidden;
-  animation: cpUp .35s ease both;
-}
-.cp-panel-hd {
-  background: var(--navy);
-  padding: 16px 20px;
-}
-.cp-panel-hd h2 {
-  font-size: .875rem;
-  font-weight: 700;
-  color: #fff;
-  margin: 0;
-  letter-spacing: -.01em;
-}
-.cp-panel-hd p {
-  font-size: .72rem;
-  color: rgba(255,255,255,.48);
-  margin: 3px 0 0;
-}
-.cp-panel-body { padding: 20px; }
+  /* ── Chart ───────────────────────────────────────────────── */
+  .cp-chart-wrap { position: relative; height: 200px; }
 
-/* ─── Form controls ──────────────────────────────────────────── */
-.cp-field { margin-bottom: 14px; }
-.cp-field:last-child { margin-bottom: 0; }
-.cp-lbl {
-  display: block;
-  font-size: .62rem;
-  font-weight: 700;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-  margin-bottom: 5px;
-}
-.cp-field select,
-.cp-field input {
-  width: 100%;
-  height: 38px;
-  font-size: 13px;
-  font-family: var(--font-body);
-  color: var(--ink);
-  background: var(--paper);
-  border: 1px solid var(--rule);
-  border-radius: var(--r-xs);
-  padding: 0 12px;
-  outline: none;
-  transition: border-color .15s, box-shadow .15s;
-}
-.cp-field select:focus, .cp-field input:focus {
-  border-color: var(--navy-l);
-  box-shadow: 0 0 0 3px var(--navy-s2);
-}
-.cp-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  /* ── Named classes replacing inline style with var() ── */
+  .cp-card-header {
+    font-size: 13px;
+    font-weight: 700;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .cp-count-pill {
+    display: inline-block;
+    background: var(--primary);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 999px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .cp-kam-pill {
+    display: inline-block;
+    background: #eff6ff;
+    color: var(--primary);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .cp-thead { background: #f9fafb; }
+  .cp-tfoot { background: #f9fafb; font-weight: 700; }
+  .cp-tfoot-actual { font-size: 13px; color: var(--success); }
+  .cp-td-counter { color: var(--subtle); font-size: 11px; padding: 10px 12px; }
+  .cp-td-period { font-size: 12px; color: var(--muted); }
+  .cp-period-strong { font-weight: 600; color: var(--text); }
+  .cp-td-date { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .cp-ref-hint { font-size: 11px; }
+  .cp-subtle { color: var(--subtle); }
+  .cp-pct-label { display: block; font-size: 11px; font-weight: 700; color: var(--text); }
+  .cp-pct-dash  { color: var(--subtle); font-size: 11px; }
+  .cp-notes-hint { font-size: 11px; font-weight: 400; color: var(--muted); }
+  .cp-empty-state {
+    padding: 48px 20px;
+    text-align: center;
+    color: var(--subtle);
+  }
+  .cp-empty-icon { font-size: 2rem; margin-bottom: 12px; display: block; }
+  .cp-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .cp-card-overflow {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
 
-.cp-section-rule {
-  height: 1px;
-  background: var(--rule);
-  margin: 18px -20px;
-}
-.cp-mode-lbl {
-  font-size: .62rem;
-  font-weight: 700;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-  color: var(--ink-4);
-  margin-bottom: 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.cp-mode-lbl::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--rule);
-}
-
-.cp-or {
-  text-align: center;
-  font-size: .62rem;
-  font-weight: 700;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-  color: var(--ink-4);
-  margin: 14px 0;
-  position: relative;
-}
-.cp-or::before,
-.cp-or::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  width: 38%;
-  height: 1px;
-  background: var(--rule);
-}
-.cp-or::before { left:0; }
-.cp-or::after  { right:0; }
-
-.cp-form-err {
-  background: var(--red-s);
-  border: 1px solid #f9baba;
-  border-radius: var(--r-sm);
-  padding: 11px 14px;
-  font-size: 12.5px;
-  color: var(--red);
-  margin-bottom: 16px;
-}
-.cp-form-err strong { font-weight: 700; }
-.cp-form-err ul { margin: 6px 0 0 14px; padding: 0; }
-
-.cp-save-row {
-  padding-top: 16px;
-  margin-top: 18px;
-  border-top: 1px solid var(--rule-2);
-  display: flex;
-  justify-content: flex-end;
-}
-.cp-save-btn {
-  height: 38px;
-  padding: 0 28px;
-  background: var(--navy);
-  color: #fff;
-  border: none;
-  border-radius: var(--r-xs);
-  font-size: 13px;
-  font-weight: 700;
-  font-family: var(--font-body);
-  letter-spacing: .03em;
-  cursor: pointer;
-  transition: background .15s, box-shadow .15s;
-}
-.cp-save-btn:hover {
-  background: var(--navy-l);
-  box-shadow: 0 4px 16px rgba(28,45,79,.3);
-}
-
-/* ─── Right column ───────────────────────────────────────────── */
-.cp-right { display: flex; flex-direction: column; gap: 16px; }
-
-/* ─── Summary bar ────────────────────────────────────────────── */
-.cp-summary {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  border: 1px solid var(--rule);
-  border-radius: var(--r-md);
-  background: var(--paper);
-  box-shadow: var(--sh-card);
-  overflow: hidden;
-  animation: cpUp .3s ease both;
-}
-@media (max-width: 640px) { .cp-summary { grid-template-columns: 1fr 1fr; } }
-.cp-sum-cell {
-  padding: 16px 18px;
-  border-right: 1px solid var(--rule);
-}
-.cp-sum-cell:last-child { border-right: none; }
-.cp-sum-lbl {
-  font-size: .62rem;
-  font-weight: 700;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-  color: var(--ink-4);
-  margin-bottom: 7px;
-}
-.cp-sum-val {
-  font-family: var(--font-mono);
-  font-size: 1.15rem;
-  font-weight: 600;
-  color: var(--ink);
-  line-height: 1;
-  letter-spacing: -.02em;
-}
-.cp-sum-val.navy { color: var(--navy); }
-.cp-sum-val.teal { color: var(--teal); }
-.cp-sum-val.red  { color: var(--red); }
-
-/* ─── Table card ─────────────────────────────────────────────── */
-.cp-tcard {
-  background: var(--paper);
-  border: 1px solid var(--rule);
-  border-radius: var(--r-lg);
-  box-shadow: var(--sh-card);
-  overflow: hidden;
-  animation: cpUp .4s .06s ease both;
-}
-.cp-tcard-hd {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--rule);
-  background: var(--paper-2);
-}
-.cp-tcard-title {
-  font-size: .875rem;
-  font-weight: 700;
-  color: var(--ink);
-  margin: 0;
-  letter-spacing: -.01em;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.cp-count-pill {
-  background: var(--navy);
-  color: #fff;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 9px;
-  border-radius: 999px;
-}
-.cp-tcard-sub {
-  font-size: 11.5px;
-  color: var(--ink-4);
-  font-family: var(--font-mono);
-}
-
-/* ─── Data table ─────────────────────────────────────────────── */
-.cp-scroll { overflow-x: auto; }
-.cp-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-.cp-table thead tr {
-  background: var(--paper-3);
-  border-bottom: 2px solid var(--rule);
-}
-.cp-table thead th {
-  padding: 9px 16px;
-  font-size: .62rem;
-  font-weight: 700;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-  white-space: nowrap;
-  text-align: left;
-}
-.cp-table thead th.r { text-align: right; }
-.cp-table thead th.c { text-align: center; }
-.cp-table tbody tr {
-  border-bottom: 1px solid var(--rule-2);
-  transition: background .1s;
-}
-.cp-table tbody tr:last-child { border-bottom: none; }
-.cp-table tbody tr:hover { background: var(--paper-2); }
-.cp-table tbody td {
-  padding: 13px 16px;
-  color: var(--ink-2);
-  vertical-align: middle;
-}
-.cp-table tbody td.r { text-align: right; }
-.cp-table tbody td.c { text-align: center; }
-
-.cp-cname {
-  font-weight: 600;
-  color: var(--ink);
-  font-size: 13.5px;
-}
-.cp-kam {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: var(--navy-s);
-  border: 1px solid var(--navy-s2);
-  border-radius: 999px;
-  padding: 2px 9px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--navy-l);
-  font-family: var(--font-mono);
-  white-space: nowrap;
-}
-.cp-amt {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.cp-amt.overdue { color: var(--red); }
-.cp-amt.planned { color: var(--ink-2); }
-.cp-amt.hit     { color: var(--teal); font-weight: 600; }
-.cp-amt.partial { color: var(--amber); }
-.cp-amt.zero    { color: var(--ink-4); }
-
-/* Achievement bar */
-.cp-ach-cell { min-width: 130px; }
-.cp-ach-wrap { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
-.cp-ach-track {
-  flex: 1;
-  height: 5px;
-  background: var(--rule);
-  border-radius: 999px;
-  overflow: hidden;
-  min-width: 50px;
-  max-width: 72px;
-}
-.cp-ach-fill {
-  height: 100%;
-  border-radius: 999px;
-  transition: width .5s cubic-bezier(.4,0,.2,1);
-}
-.cp-ach-fill.hit     { background: var(--teal); }
-.cp-ach-fill.partial { background: #d97706; }
-.cp-ach-fill.low     { background: #dc2626; }
-.cp-ach-pct {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--ink-3);
-  min-width: 36px;
-  text-align: right;
-  white-space: nowrap;
-}
-
-/* Window badge */
-.cp-win {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10.5px;
-  font-family: var(--font-mono);
-  font-weight: 500;
-  padding: 3px 9px;
-  border-radius: var(--r-xs);
-  white-space: nowrap;
-  border: 1px solid;
-}
-.cp-win.range  { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
-.cp-win.period { background: var(--navy-s); color: var(--navy); border-color: var(--navy-s2); }
-
-/* Empty state */
-.cp-empty { text-align: center; padding: 52px 24px; }
-.cp-empty-ico { color: var(--rule); margin-bottom: 12px; }
-.cp-empty p { font-size: 13px; color: var(--ink-3); margin: 0; font-weight: 500; }
-.cp-empty small { font-size: 11.5px; color: var(--ink-4); display: block; margin-top: 4px; }
-
-/* Animations */
-@keyframes cpUp {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
+  /* ── Responsive ──────────────────────────────────────────── */
+  @media (max-width: 900px) { .cp-summary-grid { grid-template-columns: repeat(2,1fr); } }
+  @media (max-width: 560px) { .cp-summary-grid { grid-template-columns: 1fr; } }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="cp">
 
-  {# ── PAGE HEADER ── #}
-  <div class="cp-hd">
-    <div>
-      <div class="cp-hd-eyebrow">KAM Module</div>
-      <h1>Collections Plan</h1>
-      <p>Set planned collection targets per customer and track actual recovery.</p>
-    </div>
+{% comment %}PAGE HEADER{% endcomment %}
+<div class="page-header d-flex align-items-start justify-content-between flex-wrap gap-2 mb-3">
+  <div>
+    <h1 class="page-title">Collections Plan</h1>
+    <p class="text-muted small mb-0">Plan collections per customer and record actual amounts received.</p>
   </div>
+  <div class="d-flex gap-2">
+    <a href="{% url 'kam:dashboard' %}" class="btn btn-sm btn-outline-secondary">
+      <i class="fas fa-arrow-left me-1"></i>Dashboard
+    </a>
+  </div>
+</div>
 
-  {# ── FILTER STRIP ── #}
-  <form class="cp-filters" method="get">
-    <div>
-      <label>Period</label>
-      <select name="period">
-        <option value="week"    {% if period_type == 'WEEK'    %}selected{% endif %}>This Week</option>
-        <option value="month"   {% if period_type == 'MONTH'   %}selected{% endif %}>This Month</option>
-        <option value="quarter" {% if period_type == 'QUARTER' %}selected{% endif %}>Quarter</option>
-        <option value="year"    {% if period_type == 'YEAR'    %}selected{% endif %}>Year</option>
-        <option value="all"     {% if period_type == 'ALL'     %}selected{% endif %}>All Time</option>
-      </select>
+{% comment %}FLASH MESSAGES{% endcomment %}
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show mb-3" role="alert">
+      {{ message }}
+      <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>
-    <div>
-      <label>As of</label>
-      <input type="text" name="asof" value="{{ request.GET.asof }}" placeholder="YYYY-MM-DD" style="width:134px;" />
-    </div>
-    <div class="cp-filter-sep"></div>
-    <div>
-      <label>From</label>
-      <input type="date" name="from" value="{{ request.GET.from }}" />
-    </div>
-    <div>
-      <label>To</label>
-      <input type="date" name="to" value="{{ request.GET.to }}" />
-    </div>
-    <button type="submit" class="cp-filter-btn">Apply Filter</button>
-  </form>
+  {% endfor %}
+{% endif %}
 
-  {# ── ALERTS ── #}
-  {% if messages %}
-  <div class="cp-alerts">
-    {% for message in messages %}
-      {% if 'error' in message.tags %}
-        <div class="cp-alert error"><i class="fas fa-circle-xmark"></i> {{ message }}</div>
-      {% elif 'success' in message.tags %}
-        <div class="cp-alert success"><i class="fas fa-circle-check"></i> {{ message }}</div>
-      {% else %}
-        <div class="cp-alert info"><i class="fas fa-circle-info"></i> {{ message }}</div>
-      {% endif %}
-    {% endfor %}
+{% comment %}Hidden flag: JS reads data-open="1" to auto-open the new-plan form on errors.{% endcomment %}
+<span id="cpFormHasErrors" {% if form.errors %}data-open="1"{% endif %} hidden></span>
+
+{% comment %}Chart data rendered in HTML so the json_script element exists before extra_js runs.{% endcomment %}
+{{ cp_chart_data|default:"null"|json_script:"cpChartData" }}
+
+{% comment %}FILTER BAR{% endcomment %}
+<form class="cp-filter-bar" method="get" id="cpFilterForm">
+  <div class="cp-filter-group">
+    <span class="cp-filter-label"><i class="fas fa-calendar-day me-1"></i>From</span>
+    <input type="date" name="from" value="{% firstof request.GET.from filter_from %}" class="form-control">
+  </div>
+  <div class="cp-filter-group">
+    <span class="cp-filter-label"><i class="fas fa-calendar-day me-1"></i>To</span>
+    <input type="date" name="to" value="{% firstof request.GET.to filter_to %}" class="form-control">
+  </div>
+  {% if can_choose_kam %}
+  <div class="cp-filter-group">
+    <span class="cp-filter-label"><i class="fas fa-user me-1"></i>KAM</span>
+    <select name="user" class="form-select">
+      <option value="" {% if not selected_user %}selected{% endif %}>ALL KAMs</option>
+      {% for uname in kam_options %}
+        <option value="{{ uname }}" {% if selected_user == uname %}selected{% endif %}>{{ uname }}</option>
+      {% endfor %}
+    </select>
   </div>
   {% endif %}
+  <div class="cp-filter-group">
+    <span class="cp-filter-label">Status</span>
+    <select name="status" class="form-select">
+      <option value=""         {% if not request.GET.status               %}selected{% endif %}>All Statuses</option>
+      <option value="OPEN"      {% if request.GET.status == 'OPEN'      %}selected{% endif %}>Open</option>
+      <option value="PARTIAL"   {% if request.GET.status == 'PARTIAL'   %}selected{% endif %}>Partial</option>
+      <option value="COLLECTED" {% if request.GET.status == 'COLLECTED' %}selected{% endif %}>Collected</option>
+    </select>
+  </div>
+  <div class="d-flex gap-2 align-items-end">
+    <button class="btn btn-primary btn-sm" type="submit"><i class="fas fa-filter me-1"></i>Apply</button>
+    <a class="btn btn-outline-secondary btn-sm" href="{% url 'kam:collections_plan' %}">
+      <i class="fas fa-rotate-left me-1"></i>Reset
+    </a>
+  </div>
+</form>
 
-  {# ── MAIN GRID ── #}
-  <div class="cp-layout">
-
-    {# ── LEFT: ADD FORM ── #}
-    <div class="cp-panel">
-      <div class="cp-panel-hd">
-        <h2>Add / Update Plan</h2>
-        <p>Use a period window or an explicit date range.</p>
-      </div>
-      <div class="cp-panel-body">
-
-        {% if form.errors %}
-        <div class="cp-form-err">
-          <strong>Please fix the errors below:</strong>
-          {% if form.non_field_errors %}<div style="margin-top:5px;">{{ form.non_field_errors }}</div>{% endif %}
-          <ul>
-            {% for field in form %}{% for err in field.errors %}
-              <li><strong>{{ field.label }}:</strong> {{ err }}</li>
-            {% endfor %}{% endfor %}
-          </ul>
-        </div>
-        {% endif %}
-
-        <form method="post" novalidate>
-          {% csrf_token %}
-
-          <div class="cp-field">
-            <label class="cp-lbl" for="{{ form.customer.id_for_label }}">Customer</label>
-            {{ form.customer }}
-          </div>
-
-          <div class="cp-field">
-            <label class="cp-lbl" for="{{ form.planned_amount.id_for_label }}">Planned Amount (₹)</label>
-            {{ form.planned_amount }}
-          </div>
-
-          <div class="cp-section-rule"></div>
-
-          <div class="cp-mode-lbl">Period-Based</div>
-          <div class="cp-2col">
-            <div class="cp-field" style="margin:0;">
-              <label class="cp-lbl" for="{{ form.period_type.id_for_label }}">Period Type</label>
-              {{ form.period_type }}
-            </div>
-            <div class="cp-field" style="margin:0;">
-              <label class="cp-lbl" for="{{ form.period_id.id_for_label }}">Period ID</label>
-              {{ form.period_id }}
-            </div>
-          </div>
-
-          <div class="cp-or">or</div>
-
-          <div class="cp-mode-lbl">Custom Date Range</div>
-          <div class="cp-2col">
-            <div class="cp-field" style="margin:0;">
-              <label class="cp-lbl" for="{{ form.from_date.id_for_label }}">From</label>
-              {{ form.from_date }}
-            </div>
-            <div class="cp-field" style="margin:0;">
-              <label class="cp-lbl" for="{{ form.to_date.id_for_label }}">To</label>
-              {{ form.to_date }}
-            </div>
-          </div>
-
-          <div class="cp-save-row">
-            <button type="submit" class="cp-save-btn">Save Plan</button>
-          </div>
-        </form>
-      </div>
+{% comment %}SUMMARY CARDS{% endcomment %}
+<div class="cp-summary-grid">
+  <div class="cp-stat-card stat-planned">
+    <div class="cp-stat-label"><i class="fas fa-calendar-check me-1"></i>Total Planned</div>
+    <div class="cp-stat-value">&#8377; {{ totals.planned|default:0|floatformat:0|intcomma }}</div>
+    <div class="cp-stat-sub">{{ plans|length }} plan entr{{ plans|length|pluralize:"y,ies" }}</div>
+  </div>
+  <div class="cp-stat-card stat-actual">
+    <div class="cp-stat-label"><i class="fas fa-check-circle me-1"></i>Total Collected</div>
+    <div class="cp-stat-value">&#8377; {{ totals.actual|default:0|floatformat:0|intcomma }}</div>
+    <div class="cp-stat-sub">Actual received</div>
+  </div>
+  <div class="cp-stat-card stat-achv">
+    <div class="cp-stat-label"><i class="fas fa-bullseye me-1"></i>Achievement</div>
+    <div class="cp-stat-value">
+      {% if totals.achievement_pct is not None %}{{ totals.achievement_pct|floatformat:1 }}%{% else %}&mdash;{% endif %}
     </div>
+    <div class="cp-stat-sub">Actual &divide; Planned</div>
+  </div>
+  <div class="cp-stat-card stat-short">
+    <div class="cp-stat-label"><i class="fas fa-triangle-exclamation me-1"></i>Shortfall</div>
+    <div class="cp-stat-value">&#8377; {{ totals.shortfall|default:0|floatformat:0|intcomma }}</div>
+    <div class="cp-stat-sub">Planned &minus; Collected</div>
+  </div>
+</div>
 
-    {# ── RIGHT: DATA ── #}
-    <div class="cp-right">
+{% comment %}CHART{% endcomment %}
+{% if plans %}
+<div class="card mb-4 cp-card">
+  <div class="card-header fw-semibold" style="font-size:13px;">
+    <i class="fas fa-chart-bar me-1 text-muted"></i>Planned vs Actual &mdash; by Customer
+  </div>
+  <div class="card-body" style="padding:14px 16px;">
+    <div class="cp-chart-wrap"><canvas id="cpBarChart"></canvas></div>
+  </div>
+</div>
+{% endif %}
 
-      {# Summary strip — shown only when rows exist #}
-      {% if rows %}
-      <div class="cp-summary">
-        <div class="cp-sum-cell">
-          <div class="cp-sum-lbl">Plans</div>
-          <div class="cp-sum-val navy">{{ rows|length }}</div>
+{% comment %}NEW PLAN FORM (collapsible){% endcomment %}
+<div class="cp-form-card mb-4" id="newPlanCard">
+  <div class="cp-form-header" id="newPlanToggle" onclick="toggleNewPlan()">
+    <i class="fas fa-plus-circle text-primary me-1"></i>
+    Add New Collection Plan Entry
+    <i class="fas fa-chevron-down toggle-icon" id="newPlanChevron"></i>
+  </div>
+  <div class="cp-form-body" id="newPlanBody" style="display:none;">
+    <form method="post" action="{% url 'kam:collections_plan' %}" novalidate>
+      {% csrf_token %}
+      <input type="hidden" name="action" value="create">
+      {% if form.non_field_errors %}
+        <div class="alert alert-danger mb-3 py-2">
+          {% for e in form.non_field_errors %}<div>{{ e }}</div>{% endfor %}
         </div>
-        <div class="cp-sum-cell">
-          <div class="cp-sum-lbl">Total Planned</div>
-          <div class="cp-sum-val">₹ —</div>
-        </div>
-        <div class="cp-sum-cell">
-          <div class="cp-sum-lbl">Collected</div>
-          <div class="cp-sum-val teal">₹ —</div>
-        </div>
-        <div class="cp-sum-cell">
-          <div class="cp-sum-lbl">Total Overdue</div>
-          <div class="cp-sum-val red">₹ —</div>
-        </div>
-      </div>
       {% endif %}
-
-      {# Table #}
-      <div class="cp-tcard">
-        <div class="cp-tcard-hd">
-          <h2 class="cp-tcard-title">
-            Planned vs Actual
-            {% if rows %}<span class="cp-count-pill">{{ rows|length }}</span>{% endif %}
-          </h2>
-          <span class="cp-tcard-sub">
-            {{ period_type|lower|capfirst }}{% if period_id %} · {{ period_id }}{% endif %}
-          </span>
+      <div class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label small fw-semibold">Customer <span class="text-danger">*</span></label>
+          {{ form.customer }}
+          {% if form.customer.errors %}<div class="text-danger small mt-1">{{ form.customer.errors.0 }}</div>{% endif %}
         </div>
-
-        <div class="cp-scroll">
-          <table class="cp-table">
-            <thead>
-              <tr>
-                <th>Customer</th>
-                <th>KAM</th>
-                <th class="r">Overdue (₹)</th>
-                <th class="r">Planned (₹)</th>
-                <th class="r">Actual (₹)</th>
-                <th class="r cp-ach-cell">Achievement</th>
-                <th class="c">Window</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for r in rows %}
-              <tr>
-                <td><span class="cp-cname">{{ r.customer.name }}</span></td>
-                <td>
-                  {% if r.kam %}
-                    <span class="cp-kam">{{ r.kam.get_full_name|default:r.kam.username }}</span>
-                  {% else %}
-                    <span style="color:var(--ink-4);">—</span>
-                  {% endif %}
-                </td>
-                <td class="r">
-                  <span class="cp-amt overdue">
-                    {% if r.overdue %}₹ {{ r.overdue|floatformat:0|intcomma }}{% else %}—{% endif %}
-                  </span>
-                </td>
-                <td class="r">
-                  <span class="cp-amt planned">₹ {{ r.planned|floatformat:0|intcomma }}</span>
-                </td>
-                <td class="r">
-                  {% if r.actual > 0 %}
-                    <span class="cp-amt {% if r.actual >= r.planned %}hit{% else %}partial{% endif %}">
-                      ₹ {{ r.actual|floatformat:0|intcomma }}
-                    </span>
-                  {% else %}
-                    <span class="cp-amt zero">₹ 0</span>
-                  {% endif %}
-                </td>
-                <td class="r cp-ach-cell">
-                  {% if r.planned and r.planned > 0 %}
-                    {% widthratio r.actual r.planned 100 as pct %}
-                    <div class="cp-ach-wrap">
-                      <div class="cp-ach-track">
-                        <div class="cp-ach-fill {% if pct >= 100 %}hit{% elif pct >= 60 %}partial{% else %}low{% endif %}"
-                             data-width="{% if pct > 100 %}100{% else %}{{ pct }}{% endif %}"></div>
-                      </div>
-                      <span class="cp-ach-pct">{{ pct }}%</span>
-                    </div>
-                  {% else %}
-                    <span style="color:var(--ink-4);font-family:var(--font-mono);font-size:12px;">—</span>
-                  {% endif %}
-                </td>
-                <td class="c">
-                  {% if r.from_date and r.to_date %}
-                    <span class="cp-win range">{{ r.from_date|date:"d M" }} → {{ r.to_date|date:"d M" }}</span>
-                  {% elif r.period_type and r.period_id %}
-                    <span class="cp-win period">{{ r.period_id }}</span>
-                  {% else %}
-                    <span style="color:var(--ink-4);">—</span>
-                  {% endif %}
-                </td>
-              </tr>
-              {% empty %}
-              <tr>
-                <td colspan="7">
-                  <div class="cp-empty">
-                    <div class="cp-empty-ico">
-                      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
-                        <rect x="3" y="4" width="18" height="18" rx="2"/>
-                        <path d="M8 4V2M16 4V2M3 10h18"/>
-                        <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/>
-                      </svg>
-                    </div>
-                    <p>No plans for this window</p>
-                    <small>Add a plan using the form on the left, or adjust the filter above.</small>
-                  </div>
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">Planned Amount (&#8377;) <span class="text-danger">*</span></label>
+          {{ form.planned_amount }}
+          {% if form.planned_amount.errors %}<div class="text-danger small mt-1">{{ form.planned_amount.errors.0 }}</div>{% endif %}
+        </div>
+        <div class="col-md-5">
+          <label class="form-label small fw-semibold">Notes <span class="text-muted fw-normal">(optional)</span></label>
+          {{ form.notes }}
+          {% if form.notes.errors %}<div class="text-danger small mt-1">{{ form.notes.errors.0 }}</div>{% endif %}
+        </div>
+        <div class="col-12">
+          <div class="alert alert-light py-2 small mb-2">
+            <i class="fas fa-info-circle me-1 text-primary"></i>
+            Provide either <strong>From / To Date</strong> or <strong>Period Type + Period ID</strong>.
+            Period takes priority if both are filled.
+          </div>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">From Date</label>
+          {{ form.from_date }}
+          {% if form.from_date.errors %}<div class="text-danger small mt-1">{{ form.from_date.errors.0 }}</div>{% endif %}
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">To Date</label>
+          {{ form.to_date }}
+          {% if form.to_date.errors %}<div class="text-danger small mt-1">{{ form.to_date.errors.0 }}</div>{% endif %}
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">Period Type</label>
+          {{ form.period_type }}
+          {% if form.period_type.errors %}<div class="text-danger small mt-1">{{ form.period_type.errors.0 }}</div>{% endif %}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small fw-semibold">Period ID</label>
+          {{ form.period_id }}
+          {% if form.period_id.errors %}<div class="text-danger small mt-1">{{ form.period_id.errors.0 }}</div>{% endif %}
         </div>
       </div>
+      <div class="d-flex gap-2 mt-3">
+        <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-plus me-1"></i>Add Plan Entry</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleNewPlan()">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
 
-    </div>{# /right #}
-  </div>{# /layout #}
+{% comment %}PLANS TABLE{% endcomment %}
+<div class="card cp-card-overflow">
 
-</div>{# /cp #}
+  <div class="cp-card-header">
+    <span>
+      <i class="fas fa-list-check me-1 text-muted"></i>
+      Collection Plans
+      <span class="cp-count-pill">{{ plans|length }}</span>
+    </span>
+    <span class="text-muted small">Scope: {{ scope_label }}</span>
+  </div>
 
+  {% if plans %}
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0 cp-table">
+      <thead class="cp-thead">
+        <tr>
+          <th style="padding:10px 12px;">#</th>
+          <th>Customer</th>
+          {% if can_choose_kam %}<th>KAM</th>{% endif %}
+          <th>Period / Range</th>
+          <th class="text-end">Planned (&#8377;)</th>
+          <th class="text-end">Collected (&#8377;)</th>
+          <th class="text-center" style="min-width:100px;">Progress</th>
+          <th class="text-center">Status</th>
+          <th style="white-space:nowrap;">Coll. Date</th>
+          <th class="text-center">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for plan in plans %}
+        <tr id="plan-row-{{ plan.id }}">
+
+          <td class="cp-td-counter">{{ forloop.counter }}</td>
+
+          <td style="font-weight:600;">
+            {{ plan.customer.name }}
+            {% if plan.notes %}<div class="cp-notes-hint">{{ plan.notes|truncatechars:40 }}</div>{% endif %}
+          </td>
+
+          {% if can_choose_kam %}
+          <td><span class="cp-kam-pill">{{ plan.kam.username }}</span></td>
+          {% endif %}
+
+          <td class="cp-td-period">
+            {% if plan.period_type and plan.period_id %}
+              <span class="cp-period-strong">{{ plan.period_type }}</span> {{ plan.period_id }}
+            {% elif plan.from_date and plan.to_date %}
+              {{ plan.from_date|date:"d M" }} &ndash; {{ plan.to_date|date:"d M Y" }}
+            {% else %}
+              <span class="cp-subtle">&mdash;</span>
+            {% endif %}
+          </td>
+
+          <td class="text-end amount-col">&#8377; {{ plan.planned_amount|floatformat:0|intcomma }}</td>
+
+          <td class="text-end amount-col {% if plan.actual_amount %}amount-actual{% else %}amount-zero{% endif %}">
+            {% if plan.actual_amount is not None %}
+              &#8377; {{ plan.actual_amount|floatformat:0|intcomma }}
+            {% else %}
+              <span class="cp-subtle" style="font-weight:400;font-size:12px;">Not recorded</span>
+            {% endif %}
+          </td>
+
+          <td class="text-center cp-progress-wrap">
+            {% if plan.planned_amount and plan.planned_amount > 0 %}
+              {% widthratio plan.actual_amount|default:0 plan.planned_amount 100 as bar_pct %}
+              <span class="cp-pct-label">{{ bar_pct|default:0 }}%</span>
+              <div class="cp-progress">
+                <div class="cp-progress-fill js-progress-fill"
+                     data-pct="{{ bar_pct|default:0 }}">
+                </div>
+              </div>
+            {% else %}
+              <span class="cp-pct-dash">&mdash;</span>
+            {% endif %}
+          </td>
+
+          <td class="text-center">
+            {% if plan.collection_status == 'COLLECTED' %}
+              <span class="status-badge collected"><i class="fas fa-check"></i> Collected</span>
+            {% elif plan.collection_status == 'PARTIAL' %}
+              <span class="status-badge partial"><i class="fas fa-circle-half-stroke"></i> Partial</span>
+            {% else %}
+              <span class="status-badge open"><i class="fas fa-circle-dot"></i> Open</span>
+            {% endif %}
+          </td>
+
+          <td class="cp-td-date">
+            {% if plan.collection_date %}
+              {{ plan.collection_date|date:"d M Y" }}
+              {% if plan.collection_reference %}<div class="cp-ref-hint">Ref: {{ plan.collection_reference }}</div>{% endif %}
+            {% else %}
+              <span class="cp-subtle">&mdash;</span>
+            {% endif %}
+          </td>
+
+          <td class="text-center">
+            <div class="d-flex gap-1 justify-content-center">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline-success js-open-actual"
+                style="font-size:11px;padding:3px 8px;"
+                data-action-url="{% url 'kam:collection_plan_record_actual' plan.id %}"
+                data-customer="{{ plan.customer.name|escapejs }}"
+                data-planned="{{ plan.planned_amount }}"
+                data-actual="{{ plan.actual_amount|default:'' }}"
+                data-date="{{ plan.collection_date|date:'Y-m-d'|default:'' }}"
+                data-ref="{{ plan.collection_reference|default:''|escapejs }}"
+                title="Record actual collection">
+                <i class="fas fa-indian-rupee-sign me-1"></i>Record Actual
+              </button>
+              {% if not plan.actual_amount %}
+                <form method="post" action="{% url 'kam:collection_plan_delete' plan.id %}"
+                      onsubmit="return confirm('Delete this plan entry?')" style="display:inline;">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-sm btn-outline-danger"
+                          style="font-size:11px;padding:3px 8px;" title="Delete plan entry">
+                    <i class="fas fa-trash"></i>
+                  </button>
+                </form>
+              {% endif %}
+            </div>
+          </td>
+
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot class="cp-tfoot">
+        <tr>
+          <td colspan="{% if can_choose_kam %}4{% else %}3{% endif %}" style="padding:10px 12px;font-size:13px;">
+            Totals
+          </td>
+          <td class="text-end" style="font-size:13px;">&#8377; {{ totals.planned|default:0|floatformat:0|intcomma }}</td>
+          <td class="text-end cp-tfoot-actual">&#8377; {{ totals.actual|default:0|floatformat:0|intcomma }}</td>
+          <td class="text-center" style="font-size:13px;">
+            {% if totals.achievement_pct is not None %}{{ totals.achievement_pct|floatformat:1 }}%{% else %}&mdash;{% endif %}
+          </td>
+          <td colspan="3"></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  {% else %}
+  <div class="cp-empty-state">
+    <i class="fas fa-list-check cp-empty-icon"></i>
+    No collection plan entries found for this period.
+    <div class="mt-2">
+      <button class="btn btn-primary btn-sm" onclick="toggleNewPlan()">
+        <i class="fas fa-plus me-1"></i>Add First Entry
+      </button>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{% comment %}RECORD ACTUAL MODAL{% endcomment %}
+<div class="modal fade" id="actualModal" tabindex="-1" aria-labelledby="actualModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered" style="max-width:480px;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="actualModalLabel">
+          <i class="fas fa-indian-rupee-sign me-2 text-success"></i>Record Actual Collection
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="post" id="actualModalForm" novalidate>
+        {% csrf_token %}
+        <input type="hidden" name="action" value="record_actual">
+        <div class="modal-body">
+          <div class="alert alert-light py-2 mb-3 small">
+            <strong>Customer:</strong> <span id="modalCustomerName"></span><br>
+            <strong>Planned Amount:</strong> &#8377; <span id="modalPlannedAmt"></span>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Amount Collected (&#8377;) <span class="text-danger">*</span></label>
+            <input type="number" name="actual_amount" id="modalActualAmount"
+                   class="form-control" step="0.01" min="0" placeholder="0.00" required>
+            <div class="text-muted small mt-1">The planned amount will NOT be changed.</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Date of Collection <span class="text-danger">*</span></label>
+            <input type="date" name="collection_date" id="modalCollectionDate" class="form-control" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Reference / UTR <span class="text-muted fw-normal">(optional)</span></label>
+            <input type="text" name="collection_reference" id="modalCollectionRef"
+                   class="form-control" placeholder="Cheque no / UTR / NEFT reference">
+          </div>
+          <div class="mb-1">
+            <label class="form-label small fw-semibold">Notes <span class="text-muted fw-normal">(optional)</span></label>
+            <textarea name="notes" id="modalNotes" class="form-control" rows="2" placeholder="Any remarks"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer gap-2">
+          <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-success btn-sm">
+            <i class="fas fa-save me-1"></i>Save Actual
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
 <script>
-document.addEventListener('DOMContentLoaded', function () {
-  document.querySelectorAll('[data-width]').forEach(function (el) {
-    el.style.width = (el.dataset.width || 0) + '%';
+(function () {
+
+  // Toggle the new-plan form panel
+  window.toggleNewPlan = function () {
+    var body   = document.getElementById("newPlanBody");
+    var header = document.getElementById("newPlanToggle");
+    var open   = body.style.display === "none";
+    body.style.display = open ? "block" : "none";
+    header.classList.toggle("collapsed", !open);
+  };
+
+  // Auto-open form when there are validation errors.
+  // Data attribute set server-side in the hidden span#cpFormHasErrors.
+  var errFlag = document.getElementById("cpFormHasErrors");
+  if (errFlag && errFlag.dataset.open === "1") {
+    toggleNewPlan();
+  }
+
+  // Record Actual modal — event delegation on .js-open-actual buttons.
+  // All plan data comes from data-* attributes on the button so no
+  // Django template expressions appear inside JS code.
+  document.addEventListener("click", function (evt) {
+    var btn = evt.target.closest(".js-open-actual");
+    if (!btn) { return; }
+
+    var form    = document.getElementById("actualModalForm");
+    form.action = btn.dataset.actionUrl;
+
+    document.getElementById("modalCustomerName").textContent =
+      btn.dataset.customer || "";
+    document.getElementById("modalPlannedAmt").textContent =
+      Number(btn.dataset.planned || 0).toLocaleString("en-IN");
+    document.getElementById("modalActualAmount").value   = btn.dataset.actual || "";
+    document.getElementById("modalCollectionDate").value = btn.dataset.date   || "";
+    document.getElementById("modalCollectionRef").value  = btn.dataset.ref    || "";
+    document.getElementById("modalNotes").value          = "";
+
+    new bootstrap.Modal(document.getElementById("actualModal")).show();
   });
-});
+
+  // Apply progress bar widths from data-pct attributes.
+  // Keeps Django template tags out of style="" attributes entirely.
+  document.querySelectorAll(".js-progress-fill").forEach(function (el) {
+    var pct = parseInt(el.dataset.pct || "0", 10);
+    el.style.width = (pct > 100 ? 100 : pct) + "%";
+    if (pct >= 100) { el.classList.add("over"); }
+  });
+
+  // Planned vs Actual bar chart.
+  // Chart data is read from the json_script element rendered in the HTML block
+  // above, so there are no Django tags inside this script at all.
+  var chartMeta = document.getElementById("cpChartData");
+  var chartEl   = document.getElementById("cpBarChart");
+  if (chartMeta && chartEl) {
+    var chartData = JSON.parse(chartMeta.textContent || "null");
+    if (chartData && chartData.labels && chartData.labels.length) {
+      new Chart(chartEl, {
+        type: "bar",
+        data: {
+          labels: chartData.labels,
+          datasets: [
+            {
+              label: "Planned (\u20b9)",
+              data: chartData.planned,
+              backgroundColor: "rgba(59,130,246,0.7)",
+              borderColor: "rgb(59,130,246)",
+              borderWidth: 1,
+              borderRadius: 4
+            },
+            {
+              label: "Collected (\u20b9)",
+              data: chartData.actual,
+              backgroundColor: "rgba(34,197,94,0.7)",
+              borderColor: "rgb(34,197,94)",
+              borderWidth: 1,
+              borderRadius: 4
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { position: "top", labels: { font: { size: 11 } } },
+            tooltip: {
+              callbacks: {
+                label: function (ctx) {
+                  return " \u20b9 " + Number(ctx.raw).toLocaleString("en-IN");
+                }
+              }
+            }
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { font: { size: 10 }, maxRotation: 30 } },
+            y: {
+              beginAtZero: true,
+              grid: { color: "rgba(0,0,0,.04)" },
+              ticks: {
+                font: { size: 10 },
+                callback: function (v) { return "\u20b9" + (v / 1000).toFixed(0) + "k"; }
+              }
+            }
+          }
+        }
+      });
+    }
+  }
+
+}());
 </script>
 {% endblock %}

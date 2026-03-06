@@ -1,206 +1,413 @@
 {# FILE: templates/kam/customer_360.html #}
-{# PURPOSE: Fix KAM dropdown selection persistence and “ALL” selection consistency (template-only). #}
-{# UPDATED: 2026-02-27 #}
+{# PURPOSE: Customer 360 — fixed data display, Quick Action removed, Call History added #}
+{# UPDATED: 2026-03-05 #}
 {% extends "base.html" %}
 {% load humanize %}
-{% block title %}Customer 360{% endblock %}
+
+{% block title %}{% if customer %}{{ customer.name }} — Customer 360{% else %}Customer 360{% endif %}{% endblock %}
+{% block breadcrumb %}Customer 360{% endblock %}
 
 {% block content %}
-<div class="page-header d-flex align-items-center justify-content-between flex-wrap gap-2">
-  <h1 class="page-title m-0">Customer 360</h1>
 
-  <form method="get" class="d-flex align-items-end gap-2 flex-wrap">
-    <div>
-      <label class="form-label mb-1 small">Customer</label>
-      <select class="form-select form-select-sm" name="id">
-        {% if customer %}
-          <option value="{{ customer.id }}" selected>{{ customer.name }}</option>
-        {% else %}
-          <option value="" selected>—</option>
-        {% endif %}
-        {% for c in customer_list %}
-          {% if not customer or c.id != customer.id %}
-            <option value="{{ c.id }}">{{ c.name }}</option>
-          {% endif %}
-        {% endfor %}
-      </select>
-    </div>
+{# ─── Filter / Selector Bar ───────────────────────────────────────────── #}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+  <div>
+    <h1 class="page-title m-0">Customer 360</h1>
+    <div class="text-muted small mt-1">{{ period_type }} · {{ period_id }}</div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap align-items-center">
+    {% if can_choose_kam %}
+      <form method="get" class="d-flex gap-2 align-items-center">
+        <input type="hidden" name="id" value="{{ customer.id|default:'' }}">
+        <select name="user" class="form-select form-select-sm" style="min-width:140px;" onchange="this.form.submit()">
+          <option value="">All KAMs</option>
+          {% for uname in kam_options %}
+            <option value="{{ uname }}" {% if scope_label == uname %}selected{% endif %}>{{ uname }}</option>
+          {% endfor %}
+        </select>
+      </form>
+    {% endif %}
 
-    <div>
-      <label class="form-label mb-1 small">Period</label>
-      <select name="period" class="form-select form-select-sm">
-        <option value="week"  {% if period_type == 'WEEK' %}selected{% endif %}>This Week</option>
+    <form method="get" class="d-flex gap-2 align-items-center">
+      {% if request.GET.user %}<input type="hidden" name="user" value="{{ request.GET.user }}">{% endif %}
+      <input type="hidden" name="id" value="{{ customer.id|default:'' }}">
+      <select name="period" class="form-select form-select-sm" onchange="this.form.submit()">
+        <option value="week" {% if period_type == 'WEEK' %}selected{% endif %}>This Week</option>
         <option value="month" {% if period_type == 'MONTH' %}selected{% endif %}>This Month</option>
         <option value="quarter" {% if period_type == 'QUARTER' %}selected{% endif %}>This Quarter</option>
         <option value="year" {% if period_type == 'YEAR' %}selected{% endif %}>This Year</option>
-        <option value="all"   {% if period_type == 'ALL' %}selected{% endif %}>All Time</option>
+        <option value="all" {% if period_type == 'ALL' %}selected{% endif %}>All Time</option>
       </select>
-    </div>
+    </form>
+  </div>
+</div>
 
-    <div>
-      <label class="form-label mb-1 small">From</label>
-      <input type="date" name="from" value="{{ request.GET.from }}" class="form-control form-control-sm" />
+{# ─── Customer Picker + Detail ─────────────────────────────────────────── #}
+<div class="row g-3 mb-3">
+  <div class="col-md-3">
+    <div class="card h-100">
+      <div class="card-header fw-semibold small">Select Customer</div>
+      <div class="card-body p-0" style="overflow-y:auto;max-height:400px;">
+        {% if customer_list %}
+          <div class="list-group list-group-flush">
+            {% for c in customer_list %}
+              <a href="?id={{ c.id }}&period={{ period_type|lower }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
+                 class="list-group-item list-group-item-action small py-2 {% if customer and c.id == customer.id %}active{% endif %}">
+                {{ c.name }}
+                <div class="text-muted" style="font-size:11px;">{{ c.code|default:"" }}</div>
+              </a>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="p-3 text-muted small">No customers in scope.</div>
+        {% endif %}
+      </div>
     </div>
-    <div>
-      <label class="form-label mb-1 small">To</label>
-      <input type="date" name="to" value="{{ request.GET.to }}" class="form-control form-control-sm" />
-    </div>
+  </div>
 
-    {% if kam_options %}
-      <div>
-        <label class="form-label mb-1 small">KAM</label>
-        <select name="user" class="form-select form-select-sm">
-          <option value="" {% if not request.GET.user %}selected{% endif %}>ALL</option>
-          {% for uname in kam_options %}
-            <option value="{{ uname }}" {% if request.GET.user == uname %}selected{% endif %}>{{ uname }}</option>
-          {% endfor %}
-        </select>
+  <div class="col-md-9">
+    {% if customer %}
+
+      {# ─── Customer Header ──────────────────────────────────────────── #}
+      <div class="card mb-3">
+        <div class="card-body py-3">
+          <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+            <div>
+              <h4 class="mb-1 fw-bold">
+                {{ customer.name }}
+                {% if customer.is_nbd %}<span class="badge bg-info ms-2">NBD</span>{% endif %}
+              </h4>
+              <div class="text-muted small">
+                {% if customer.code %}Code: <strong>{{ customer.code }}</strong>{% endif %}
+                {% if customer.gst_number %}&nbsp;·&nbsp; GST: <strong>{{ customer.gst_number }}</strong>{% endif %}
+                {% if customer.type %}&nbsp;·&nbsp; {{ customer.type }}{% endif %}
+              </div>
+              <div class="text-muted small mt-1">
+                KAM: <strong>{{ customer.kam.get_full_name|default:customer.kam.username|default:"Unassigned" }}</strong>
+                {% if customer.mobile %}&nbsp;·&nbsp; 📞 <a href="tel:{{ customer.mobile }}">{{ customer.mobile }}</a>{% endif %}
+                {% if customer.address %}&nbsp;·&nbsp; {{ customer.address|truncatechars:60 }}{% endif %}
+              </div>
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+              <a href="{% url 'kam:plan' %}?customer={{ customer.pk }}" class="btn btn-sm btn-outline-secondary">+ Plan Visit</a>
+              <a href="{% url 'kam:call_new' %}?customer={{ customer.pk }}" class="btn btn-sm btn-outline-secondary">+ Log Call</a>
+              <a href="{% url 'kam:collection_new' %}?customer={{ customer.pk }}" class="btn btn-sm btn-outline-secondary">+ Collection</a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# ─── KPI Summary ─────────────────────────────────────────────── #}
+      <div class="row g-2 mb-3">
+        <div class="col-6 col-lg-3">
+          <div class="card p-3 text-center h-100">
+            <div class="small text-muted">Exposure</div>
+            <div class="fs-5 fw-bold {% if exposure > 0 %}text-warning{% endif %}">₹ {{ exposure|floatformat:0|intcomma }}</div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card p-3 text-center h-100">
+            <div class="small text-muted">Overdue</div>
+            <div class="fs-5 fw-bold {% if overdue > 0 %}text-danger{% endif %}">₹ {{ overdue|floatformat:0|intcomma }}</div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card p-3 text-center h-100">
+            <div class="small text-muted">Credit Limit</div>
+            <div class="fs-5 fw-bold">₹ {{ credit_limit|floatformat:0|intcomma }}</div>
+          </div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="card p-3 text-center h-100">
+            <div class="small text-muted">Risk Ratio</div>
+            <div class="fs-5 fw-bold {% if risk_ratio and risk_ratio > 1 %}text-danger{% elif risk_ratio %}text-success{% endif %}">
+              {% if risk_ratio %}{{ risk_ratio|floatformat:2 }}{% else %}—{% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# ─── Tabs ───────────────────────────────────────────────────── #}
+      {% with tab=request.GET.tab|default:'sales' %}
+      <ul class="nav nav-tabs mb-3" role="tablist">
+        <li class="nav-item"><a class="nav-link {% if tab == 'sales' %}active{% endif %}" href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=sales{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">Sales</a></li>
+        <li class="nav-item"><a class="nav-link {% if tab == 'visits' %}active{% endif %}" href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=visits{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">Visits</a></li>
+        <li class="nav-item"><a class="nav-link {% if tab == 'calls' %}active{% endif %}" href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=calls{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">Call History</a></li>
+        <li class="nav-item"><a class="nav-link {% if tab == 'leads' %}active{% endif %}" href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=leads{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">Leads</a></li>
+        <li class="nav-item"><a class="nav-link {% if tab == 'collections' %}active{% endif %}" href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=collections{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">Collections</a></li>
+        <li class="nav-item"><a class="nav-link {% if tab == 'overdue' %}active{% endif %}" href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=overdue{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">Overdues</a></li>
+        <li class="nav-item"><a class="nav-link {% if tab == 'ageing' %}active{% endif %}" href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=ageing{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">Ageing</a></li>
+      </ul>
+
+      {# ─── TAB: Sales History ──────────────────────────────────────── #}
+      {% if tab == 'sales' %}
+        <div class="card">
+          <div class="card-header fw-semibold">Sales History ({{ period_type }})</div>
+          <div class="card-body p-0">
+            {% if sales_history %}
+              <table class="table table-sm table-hover mb-0">
+                <thead class="table-light">
+                  <tr><th>Year</th><th>Month</th><th class="text-end">MT</th></tr>
+                </thead>
+                <tbody>
+                  {% for r in sales_history %}
+                  <tr>
+                    <td>{{ r.year }}</td>
+                    <td>{{ r.month }}</td>
+                    <td class="text-end fw-bold">{{ r.mt|floatformat:3 }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+                <tfoot class="table-light">
+                  <tr>
+                    <td colspan="2" class="fw-bold">Total</td>
+                    <td class="text-end fw-bold">
+                      {% with total=0 %}
+                        {{ sales_history|length }} months
+                      {% endwith %}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            {% else %}
+              <div class="p-3 text-muted">No sales data for this period.</div>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+
+      {# ─── TAB: Visit History ─────────────────────────────────────── #}
+      {% if tab == 'visits' %}
+        <div class="card">
+          <div class="card-header fw-semibold">Visit History</div>
+          <div class="card-body p-0">
+            {% if visit_history %}
+              <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                  <thead class="table-light">
+                    <tr><th>Date</th><th>Category</th><th>KAM</th><th>Status</th><th>Outcome</th><th>Notes</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    {% for v in visit_history %}
+                    <tr>
+                      <td class="text-nowrap">{{ v.visit_date }}</td>
+                      <td>{{ v.get_visit_category_display }}</td>
+                      <td class="small">{{ v.kam.get_full_name|default:v.kam.username }}</td>
+                      <td>
+                        {% if v.approval_status == 'APPROVED' %}<span class="badge bg-success">Approved</span>
+                        {% elif v.approval_status == 'PENDING_APPROVAL' %}<span class="badge bg-warning text-dark">Pending</span>
+                        {% elif v.approval_status == 'REJECTED' %}<span class="badge bg-danger">Rejected</span>
+                        {% else %}<span class="badge bg-secondary">Draft</span>{% endif %}
+                      </td>
+                      <td>
+                        {% if v.actual %}
+                          {% if v.actual.successful %}<span class="badge bg-success">Done ✓</span>
+                          {% else %}<span class="badge bg-danger">Not Done</span>{% endif %}
+                        {% else %}<span class="text-muted small">—</span>{% endif %}
+                      </td>
+                      <td class="small text-muted" style="max-width:180px;">{{ v.actual.meeting_notes|default:"—"|truncatechars:50 }}</td>
+                      <td>
+                        <a href="{% url 'kam:visit_history_edit' v.pk %}" class="btn btn-xs btn-outline-primary" style="font-size:.75rem;padding:.15rem .45rem;">Edit</a>
+                      </td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <div class="p-3 text-muted">No visit history for this period.</div>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+
+      {# ─── TAB: Call History (ADDED) ───────────────────────────────── #}
+      {% if tab == 'calls' %}
+        <div class="card">
+          <div class="card-header fw-semibold">Call History</div>
+          <div class="card-body p-0">
+            {% if call_history %}
+              <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                  <thead class="table-light">
+                    <tr><th>Date</th><th>KAM</th><th>Call Notes / Summary</th><th>Outcome</th><th>Duration</th></tr>
+                  </thead>
+                  <tbody>
+                    {% for c in call_history %}
+                    <tr>
+                      <td class="text-nowrap">{{ c.call_datetime|date:"d M Y H:i" }}</td>
+                      <td class="small">{{ c.kam.get_full_name|default:c.kam.username }}</td>
+                      <td class="small text-muted" style="max-width:240px;">{{ c.summary|default:"—"|truncatechars:80 }}</td>
+                      <td class="small">{{ c.outcome|default:"—" }}</td>
+                      <td class="small">{% if c.duration_minutes %}{{ c.duration_minutes }} min{% else %}—{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <div class="p-3 text-muted">No call history for this period.</div>
+            {% endif %}
+          </div>
+          <div class="card-footer bg-transparent">
+            <a href="{% url 'kam:call_new' %}?customer={{ customer.pk }}" class="btn btn-sm btn-outline-secondary">+ Log Call</a>
+          </div>
+        </div>
+      {% endif %}
+
+      {# ─── TAB: Leads ─────────────────────────────────────────────── #}
+      {% if tab == 'leads' %}
+        <div class="card">
+          <div class="card-header fw-semibold">Lead / Enquiry History</div>
+          <div class="card-body p-0">
+            {% if lead_history %}
+              <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                  <thead class="table-light">
+                    <tr><th>Date</th><th>Enquiry No</th><th>Grade</th><th>Size</th><th class="text-end">MT</th><th>Status</th><th>Remarks</th></tr>
+                  </thead>
+                  <tbody>
+                    {% for l in lead_history %}
+                    <tr>
+                      <td class="text-nowrap">{{ l.doe|default:"—" }}</td>
+                      <td>{{ l.enquiry_no|default:"—" }}</td>
+                      <td>{{ l.grade|default:"—" }}</td>
+                      <td>{{ l.size|default:"—" }}</td>
+                      <td class="text-end">{{ l.qty_mt|floatformat:3 }}</td>
+                      <td>
+                        {% if l.status == 'WON' %}<span class="badge bg-success">Won</span>
+                        {% elif l.status == 'LOST' %}<span class="badge bg-danger">Lost</span>
+                        {% elif l.status == 'NEGOTIATION' %}<span class="badge bg-warning text-dark">Negotiation</span>
+                        {% else %}<span class="badge bg-info">Open</span>{% endif %}
+                      </td>
+                      <td class="small text-muted">{{ l.remarks|default:"—"|truncatechars:50 }}</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <div class="p-3 text-muted">No leads for this period.</div>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+
+      {# ─── TAB: Collections ───────────────────────────────────────── #}
+      {% if tab == 'collections' %}
+        <div class="card">
+          <div class="card-header fw-semibold">Collection History ({{ period_type }})</div>
+          <div class="card-body p-0">
+            {% if collections_history %}
+              <table class="table table-sm table-hover mb-0">
+                <thead class="table-light">
+                  <tr><th>Year</th><th>Month</th><th class="text-end">Amount (₹)</th></tr>
+                </thead>
+                <tbody>
+                  {% for r in collections_history %}
+                  <tr>
+                    <td>{{ r.year }}</td>
+                    <td>{{ r.month }}</td>
+                    <td class="text-end fw-bold">{{ r.amount|floatformat:0|intcomma }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            {% else %}
+              <div class="p-3 text-muted">No collection data for this period.</div>
+            {% endif %}
+          </div>
+          <div class="card-footer bg-transparent">
+            <a href="{% url 'kam:collection_new' %}?customer={{ customer.pk }}" class="btn btn-sm btn-outline-secondary">+ Add Collection</a>
+          </div>
+        </div>
+      {% endif %}
+
+      {# ─── TAB: Overdues ──────────────────────────────────────────── #}
+      {% if tab == 'overdue' %}
+        <div class="card">
+          <div class="card-header fw-semibold">Overdue History</div>
+          <div class="card-body p-0">
+            {% if overdue_history %}
+              <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                  <thead class="table-light">
+                    <tr>
+                      <th>Snapshot</th>
+                      <th class="text-end">Exposure (₹)</th>
+                      <th class="text-end">0–30d</th>
+                      <th class="text-end">31–60d</th>
+                      <th class="text-end">61–90d</th>
+                      <th class="text-end">90d+</th>
+                      <th class="text-end text-danger">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for od in overdue_history %}
+                    <tr>
+                      <td>{{ od.snapshot_date }}</td>
+                      <td class="text-end">{{ od.exposure|floatformat:0|intcomma }}</td>
+                      <td class="text-end">{{ od.ageing_0_30|floatformat:0|intcomma }}</td>
+                      <td class="text-end">{{ od.ageing_31_60|floatformat:0|intcomma }}</td>
+                      <td class="text-end">{{ od.ageing_61_90|floatformat:0|intcomma }}</td>
+                      <td class="text-end {% if od.ageing_90_plus > 0 %}text-danger{% endif %}">{{ od.ageing_90_plus|floatformat:0|intcomma }}</td>
+                      <td class="text-end fw-bold {% if od.overdue > 0 %}text-danger{% endif %}">{{ od.overdue|floatformat:0|intcomma }}</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <div class="p-3 text-muted">No overdue snapshots on record.</div>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+
+      {# ─── TAB: Ageing (current) ──────────────────────────────────── #}
+      {% if tab == 'ageing' %}
+        <div class="card">
+          <div class="card-header fw-semibold">Current Ageing Bucket</div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-6 col-md-3">
+                <div class="card text-center p-3 border">
+                  <div class="small text-muted">0–30 Days</div>
+                  <div class="fs-5 fw-bold">₹ {{ ageing.a0_30|floatformat:0|intcomma }}</div>
+                </div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="card text-center p-3 border">
+                  <div class="small text-muted">31–60 Days</div>
+                  <div class="fs-5 fw-bold">₹ {{ ageing.a31_60|floatformat:0|intcomma }}</div>
+                </div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="card text-center p-3 border">
+                  <div class="small text-muted">61–90 Days</div>
+                  <div class="fs-5 fw-bold">₹ {{ ageing.a61_90|floatformat:0|intcomma }}</div>
+                </div>
+              </div>
+              <div class="col-6 col-md-3">
+                <div class="card text-center p-3 border border-danger">
+                  <div class="small text-muted">90+ Days</div>
+                  <div class="fs-5 fw-bold text-danger">₹ {{ ageing.a90_plus|floatformat:0|intcomma }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+      {% endwith %}
+
+    {% else %}
+      <div class="card p-4 text-center text-muted">
+        <div style="font-size:2rem;">📋</div>
+        <div class="mt-2">Select a customer from the list to view 360° details.</div>
       </div>
     {% endif %}
-
-    <div class="d-flex align-items-center gap-2">
-      <button class="btn btn-sm btn-primary" type="submit">Apply</button>
-      <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:customers' %}">Reset</a>
-    </div>
-
-    <div class="form-text small w-100">
-      Rule: If From+To are provided, they override Period. No “As of” mode exists.
-    </div>
-  </form>
-</div>
-
-{% if customer %}
-  <div class="mb-2 text-muted">
-    <small>Scope: <strong>{{ scope_label }}</strong> | Window: <strong>{{ period_id }}</strong></small>
-  </div>
-{% endif %}
-
-<div class="row g-3">
-  <div class="col-lg-4">
-    <div class="card p-3 h-100">
-      <h6 class="fw-bold mb-3">Exposure &amp; Risk</h6>
-      {% if customer %}
-        <div class="mb-1">Credit Limit: ₹ {{ credit_limit|floatformat:2|intcomma }}</div>
-        <div class="mb-1">Exposure: ₹ {{ exposure|floatformat:2|intcomma }}</div>
-        <div class="mb-1">Overdue: ₹ {{ overdue|floatformat:2|intcomma }}</div>
-        <div class="mt-2 small">
-          Risk Ratio:
-          {% if risk_ratio %}{{ risk_ratio|floatformat:2 }}{% else %}<span class="text-muted">—</span>{% endif %}
-        </div>
-      {% else %}
-        <p class="text-muted m-0">No customer in scope.</p>
-      {% endif %}
-    </div>
-  </div>
-
-  <div class="col-lg-4">
-    <div class="card p-3 h-100">
-      <h6 class="fw-bold mb-3">Key Facts</h6>
-      {% if customer %}
-        <div class="mb-1"><strong>GST:</strong> {{ customer.gst_number|default:"—" }}</div>
-        <div class="mb-1"><strong>Contact:</strong> {{ customer.contact_person|default:"—" }}</div>
-        <div class="mb-1"><strong>Address:</strong> {{ customer.address|default:"—" }}</div>
-        <div class="mb-1"><strong>KAM:</strong> {{ customer.primary_kam.username|default:"—" }}</div>
-        <div class="mb-1"><strong>Mobile:</strong> {{ customer.mobile|default:"—" }}</div>
-        <div class="mb-1"><strong>Email:</strong> {{ customer.email|default:"—" }}</div>
-        <div class="mb-1"><strong>Pincode:</strong> {{ customer.pincode|default:"—" }}</div>
-      {% else %}
-        <p class="text-muted m-0">—</p>
-      {% endif %}
-    </div>
-  </div>
-
-  <div class="col-lg-4">
-    <div class="card p-3 h-100">
-      <h6 class="fw-bold mb-3">Quick Actions</h6>
-      <div class="d-grid gap-2">
-        <a class="btn btn-outline-secondary" href="{% url 'kam:plan' %}">Plan Visit</a>
-        <a class="btn btn-outline-secondary" href="{% url 'kam:visits' %}">Post Visit</a>
-        <a class="btn btn-outline-secondary" href="{% url 'kam:call_new' %}">Log Call</a>
-        <a class="btn btn-outline-secondary" href="{% url 'kam:collection_new' %}">Add Collection</a>
-      </div>
-      <div class="form-text small mt-2">Actions may be blocked by permissions if your role doesn’t allow them.</div>
-    </div>
   </div>
 </div>
 
-<div class="row g-3 mt-1">
-  <div class="col-lg-6">
-    <div class="card p-3">
-      <h6 class="fw-bold mb-3">Sales (selected window)</h6>
-      {% if sales_last12 %}
-        <div class="table-responsive">
-          <table class="table table-sm align-middle mb-0">
-            <thead><tr><th>Period</th><th class="text-end">MT</th></tr></thead>
-            <tbody>
-              {% for r in sales_last12 %}
-              <tr>
-                <td>{{ r.year }}-{{ r.month|stringformat:"02d" }}</td>
-                <td class="text-end">{{ r.mt|floatformat:3 }}</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <p class="text-muted m-0">No sales data.</p>
-      {% endif %}
-    </div>
-  </div>
-
-  <div class="col-lg-6">
-    <div class="card p-3">
-      <h6 class="fw-bold mb-3">Collections (selected window)</h6>
-      {% if collections_last12 %}
-        <div class="table-responsive">
-          <table class="table table-sm align-middle mb-0">
-            <thead><tr><th>Period</th><th class="text-end">Amount (₹)</th></tr></thead>
-            <tbody>
-              {% for r in collections_last12 %}
-              <tr>
-                <td>{{ r.year }}-{{ r.month|stringformat:"02d" }}</td>
-                <td class="text-end">₹ {{ r.amount|floatformat:2|intcomma }}</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <p class="text-muted m-0">No collections data.</p>
-      {% endif %}
-    </div>
-  </div>
-</div>
-
-<div class="row g-3 mt-1">
-  <div class="col-lg-6">
-    <div class="card p-3">
-      <h6 class="fw-bold mb-3">Recent Visits</h6>
-      {% if recent_visits %}
-        <ul class="list-unstyled mb-0">
-          {% for v in recent_visits %}
-            <li class="mb-1">{{ v.visit_date }} • {{ v.visit_type }} • {{ v.approval_status }}</li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="text-muted m-0">No visits logged.</p>
-      {% endif %}
-    </div>
-  </div>
-
-  <div class="col-lg-6">
-    <div class="card p-3">
-      <h6 class="fw-bold mb-3">Upcoming Follow-ups</h6>
-      {% if followups %}
-        <ul class="list-unstyled mb-0">
-          {% for f in followups %}
-            <li class="mb-1">{{ f.next_action }} • <strong>{{ f.next_action_date }}</strong></li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <p class="text-muted m-0">No follow-ups.</p>
-      {% endif %}
-    </div>
-  </div>
-</div>
 {% endblock %}
