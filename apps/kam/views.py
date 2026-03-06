@@ -1,6 +1,6 @@
 # FILE: apps/kam/views.py
 # PURPOSE: KAM module views — all functional improvements per spec
-# UPDATED: 2026-03-05
+# UPDATED: 2026-03-06
 #
 # FIXES APPLIED IN THIS VERSION:
 #   FIX-1  Import CollectionPlanActualForm
@@ -13,6 +13,10 @@
 #           cp_chart_data, scope_label, can_choose_kam etc. for new template
 #   FIX-5  _build_collections_rows() — correct field refs throughout
 #   FIX-6  collection_plan_record_actual() — uses CollectionPlanActualForm
+#   FIX-7  manager_view() — REMOVED @require_kam_code("kam_manager") decorator.
+#           Access is now controlled by _is_manager() group-based check only.
+#           This fixes 403 for Admin/Manager group users who don't have the
+#           'kam_manager' permission code explicitly assigned in the DB.
 #
 # NON-NEGOTIABLE BUSINESS RULES
 # - KAM sees only own data
@@ -834,8 +838,7 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
 
 
 # =====================================================================
-# DASHBOARD — FIX-2: added lead count metrics + CollectionPlan-based
-#              collection metrics + Chart.js data blobs
+# DASHBOARD
 # =====================================================================
 @login_required
 @require_kam_code("kam_dashboard")
@@ -891,7 +894,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     leads_total_mt = _safe_decimal(leads_agg.get("total_mt"))
     leads_won_mt = _safe_decimal(leads_agg.get("won_mt"))
 
-    # FIX-2: count-based lead metrics
     leads_total_count = lead_qs.count()
     leads_converted_count = lead_qs.filter(status="WON").count()
     leads_converted_value = _safe_decimal(
@@ -900,7 +902,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 
     collections_actual = _safe_decimal(coll_qs.aggregate(total_amt=Sum("amount")).get("total_amt"))
 
-    # Customer scope for overdue + old collection plan logic
     if scope_kam_id is not None:
         customer_ids_for_scope = list(
             Customer.objects.filter(Q(kam_id=scope_kam_id) | Q(primary_kam_id=scope_kam_id)).values_list("id", flat=True)
@@ -908,7 +909,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     else:
         customer_ids_for_scope = list(_customer_qs_for_user(request.user).values_list("id", flat=True))
 
-    # FIX-2: CollectionPlan-based planned/actual using correct field names
     cp_qs = CollectionPlan.objects.filter(
         Q(from_date__isnull=False, from_date__lte=end_date, to_date__gte=start_date)
         | Q(period_type__isnull=False)
@@ -916,12 +916,11 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     cp_qs = _filter_qs_by_kam_scope(cp_qs, request.user, scope_kam_id, "kam_id")
     cp_agg = cp_qs.aggregate(
         total_planned=Sum("planned_amount"),
-        total_actual=Sum("actual_amount"),   # FIX-2: correct field
+        total_actual=Sum("actual_amount"),
     )
     collection_planned = _safe_decimal(cp_agg.get("total_planned")) or collections_plan_amount
     collection_actual_plan = _safe_decimal(cp_agg.get("total_actual"))
 
-    # Legacy customer-scoped planned (fallback)
     coll_plan_legacy_agg = (
         CollectionPlan.objects.filter(customer_id__in=customer_ids_for_scope)
         .filter(
@@ -1031,21 +1030,17 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             "call_ach_pct": call_ach_pct, "calls_conversion_pct": calls_conversion_pct,
             "leads_total_mt": leads_total_mt, "leads_won_mt": leads_won_mt,
             "leads_target_mt": leads_target_mt, "lead_conv_pct": lead_conv_pct,
-            # FIX-2: count-based lead metrics
             "leads_total_count": leads_total_count,
             "leads_converted_count": leads_converted_count,
             "lead_count_conv_pct": lead_count_conv_pct,
             "leads_converted_value": leads_converted_value,
-            # Legacy CollectionTxn-based
             "collections_actual": collections_actual,
             "collections_planned": collections_planned,
             "collections_eff_pct": coll_eff_pct,
-            # FIX-2: CollectionPlan-based (new)
             "collection_planned": collection_planned,
             "collection_actual": collection_actual_plan,
             "collection_ach_pct": collection_ach_pct,
             "collection_overdue_amt": overdue_sum,
-            # Overdues
             "overdue_sum": overdue_sum, "prev_overdue_sum": prev_overdue_sum,
             "overdue_reduction_pct": overdue_reduction_pct, "credit_limit_sum": credit_limit_sum,
             "exposure_sum": exposure_sum, "overdue_risk_ratio": overdue_risk_ratio,
@@ -1055,7 +1050,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         "prod_by_grade": prod_by_grade,
         "prod_by_size": prod_by_size,
         "trend_rows": trend_rows,
-        # FIX-2: Chart.js data blobs
         "lead_analysis_data": {
             "total": leads_total_count,
             "converted": leads_converted_count,
@@ -1832,9 +1826,15 @@ def visits(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # MANAGER VIEW
 # =====================================================================
+# FIX-7: Removed @require_kam_code("kam_manager") decorator.
+# Root cause of 403: Manager/Admin group users don't have 'kam_manager'
+# permission code explicitly assigned in DB — group membership alone
+# is not checked by require_kam_code(). The internal _is_manager() check
+# uses Django group membership (Manager/Admin/Finance) which is correct.
+# =====================================================================
 @login_required
-@require_kam_code("kam_manager")
 def manager_view(request: HttpRequest) -> HttpResponse:
+    # Gate: only Admin / Manager / Finance group members (or superusers)
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
 
@@ -2298,7 +2298,7 @@ def export_kpi_csv(request: HttpRequest) -> StreamingHttpResponse:
 
 
 # =====================================================================
-# Collections Plan — FIX-3/4/5: correct field names, proper ctx
+# Collections Plan
 # =====================================================================
 @login_required
 @require_kam_code("kam_collections_plan")
@@ -2381,29 +2381,25 @@ def collections_plan(request: HttpRequest) -> HttpResponse:
 
 
 def _build_collections_plan_ctx(request, customer_qs, period_type, period_id, start_dt, end_dt, form, scope_label=None):
-    """FIX-4: Build rich context for collections_plan.html template."""
     plans_qs = _build_collections_plan_qs(customer_qs, period_type, period_id, start_dt, end_dt)
 
-    # Totals
     total_planned = Decimal(0)
     total_actual = Decimal(0)
     for p in plans_qs:
         total_planned += _safe_decimal(p.planned_amount)
-        total_actual += _safe_decimal(p.actual_amount)   # FIX-5: correct field
+        total_actual += _safe_decimal(p.actual_amount)
 
     shortfall = max(total_planned - total_actual, Decimal(0))
     achievement_pct = float((total_actual / total_planned * 100)) if total_planned else 0.0
 
-    # Chart data
     chart_labels = []
     chart_planned = []
     chart_actual = []
     for p in plans_qs.select_related("customer")[:30]:
         chart_labels.append(p.customer.name if p.customer else "—")
         chart_planned.append(float(_safe_decimal(p.planned_amount)))
-        chart_actual.append(float(_safe_decimal(p.actual_amount)))  # FIX-5
+        chart_actual.append(float(_safe_decimal(p.actual_amount)))
 
-    # KAM options (for managers)
     kam_options = _kam_options_for_user(request.user)
     can_choose_kam = _is_manager(request.user)
     selected_user = _first_query_value(request, "user", "kam", "KAM", "username")
@@ -2435,7 +2431,6 @@ def _build_collections_plan_ctx(request, customer_qs, period_type, period_id, st
 
 
 def _build_collections_plan_qs(customer_qs, period_type, period_id, start_dt, end_dt):
-    """FIX-5: Return a queryset of CollectionPlan objects for the period."""
     plan_qs = CollectionPlan.objects.select_related("customer", "kam").filter(customer__in=customer_qs)
     period_rows = plan_qs.filter(period_type=period_type, period_id=period_id)
     range_rows = plan_qs.filter(
@@ -2446,7 +2441,6 @@ def _build_collections_plan_qs(customer_qs, period_type, period_id, start_dt, en
 
 
 def _build_collections_rows(customer_qs, period_type, period_id, start_dt, end_dt) -> List[Dict]:
-    """Legacy row-builder kept for backward compat — now delegates to qs builder."""
     plans_qs = _build_collections_plan_qs(customer_qs, period_type, period_id, start_dt, end_dt)
     plan_customer_ids = list(plans_qs.values_list("customer_id", flat=True))
 
@@ -2470,10 +2464,10 @@ def _build_collections_rows(customer_qs, period_type, period_id, start_dt, end_d
             "kam": p.kam,
             "overdue": overdue_map.get(p.customer_id, Decimal(0)),
             "planned": _safe_decimal(p.planned_amount),
-            "actual": _safe_decimal(p.actual_amount),               # FIX-5: correct field
-            "collection_date": p.collection_date,                    # FIX-5: correct field
-            "collection_reference": p.collection_reference,         # FIX-5: correct field
-            "collection_status": p.collection_status,               # FIX-5: correct field
+            "actual": _safe_decimal(p.actual_amount),
+            "collection_date": p.collection_date,
+            "collection_reference": p.collection_reference,
+            "collection_status": p.collection_status,
             "from_date": getattr(p, "from_date", None),
             "to_date": getattr(p, "to_date", None),
             "period_type": getattr(p, "period_type", None),
@@ -2483,12 +2477,11 @@ def _build_collections_rows(customer_qs, period_type, period_id, start_dt, end_d
 
 
 # =====================================================================
-# Collection Plan — record actual: FIX-6 uses CollectionPlanActualForm
+# Collection Plan — record actual
 # =====================================================================
 @login_required
 @require_kam_code("kam_collections_plan")
 def collection_plan_record_actual(request: HttpRequest, plan_id: int) -> HttpResponse:
-    """Record actual collection amount against a collection plan."""
     plan = get_object_or_404(CollectionPlan, id=plan_id)
     customer_qs = _customer_qs_for_user(request.user)
     if not customer_qs.filter(id=plan.customer_id).exists():
@@ -2497,10 +2490,9 @@ def collection_plan_record_actual(request: HttpRequest, plan_id: int) -> HttpRes
     next_url = request.GET.get("next") or reverse("kam:collections_plan")
 
     if request.method == "POST":
-        # FIX-6: Use CollectionPlanActualForm which knows the correct fields
         form = CollectionPlanActualForm(request.POST, instance=plan)
         if form.is_valid():
-            form.save()  # model.save() auto-derives collection_status
+            form.save()
             messages.success(request, "Actual collection recorded.")
             return redirect(next_url)
         else:
@@ -2528,7 +2520,6 @@ def collection_plan_delete(request: HttpRequest, plan_id: int) -> HttpResponse:
     plan = get_object_or_404(CollectionPlan, id=plan_id)
     if not _customer_qs_for_user(request.user).filter(id=plan.customer_id).exists():
         return HttpResponseForbidden("403 Forbidden: Not your plan.")
-    # FIX-5: use correct field name actual_amount
     if plan.actual_amount is not None and plan.actual_amount > 0:
         messages.error(request, "Cannot delete a plan that already has an actual collection recorded.")
         return redirect(reverse("kam:collections_plan"))
