@@ -1,10 +1,9 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\management\commands\generate_recurring_tasks.py
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, time as dt_time, date
+from datetime import date, datetime, time as dt_time, timedelta
+from zoneinfo import ZoneInfo
 
-import pytz
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -14,23 +13,18 @@ from django.utils import timezone
 
 from apps.settings.models import Holiday
 from apps.tasks.models import Checklist, Delegation
-
-# ✅ FINAL recurrence math for Checklist generation (pins 19:00 IST; no holiday shift inside)
 from apps.tasks.recurrence_utils import (
-    normalize_mode,
     RECURRING_MODES,
     get_next_planned_date,
+    normalize_mode,
 )
-
+from apps.tasks.services.blocking import guard_assign
 from apps.tasks.utils import send_delegation_assignment_to_user
-from apps.tasks.services.blocking import guard_assign  # ✅ day-of email guard
-
-# ✅ unified leave blocking source of truth (time-aware)
 from apps.tasks.utils.blocking import is_user_blocked_at
 
 logger = logging.getLogger(__name__)
 
-IST = pytz.timezone("Asia/Kolkata")
+IST = ZoneInfo("Asia/Kolkata")
 SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
 SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
@@ -59,7 +53,12 @@ def _to_ist(dt: datetime) -> datetime:
 
 def _after_10am_today(now_ist: datetime | None = None) -> bool:
     now_ist = (now_ist or timezone.now()).astimezone(IST)
-    anchor = now_ist.replace(hour=ASSIGN_ANCHOR_T.hour, minute=ASSIGN_ANCHOR_T.minute, second=0, microsecond=0)
+    anchor = now_ist.replace(
+        hour=ASSIGN_ANCHOR_T.hour,
+        minute=ASSIGN_ANCHOR_T.minute,
+        second=0,
+        microsecond=0,
+    )
     return now_ist >= anchor
 
 
@@ -70,13 +69,14 @@ def _is_holiday_or_sunday(d: date) -> bool:
     except Exception:
         pass
     try:
-        return Holiday.objects.filter(date=d).exists()
+        return Holiday.is_holiday(d)
     except Exception:
         return False
 
 
 def _get_user(user_id: int):
     from django.contrib.auth import get_user_model
+
     User = get_user_model()
     return User.objects.filter(id=user_id, is_active=True).first()
 
@@ -85,7 +85,7 @@ def _is_user_blocked_on_date_at_10am(user_id: int, d: date) -> bool:
     user = _get_user(user_id)
     if not user:
         return False
-    anchor_ist = IST.localize(datetime.combine(d, ASSIGN_ANCHOR_T))
+    anchor_ist = datetime.combine(d, ASSIGN_ANCHOR_T, tzinfo=IST)
     return bool(is_user_blocked_at(user, anchor_ist))
 
 
@@ -128,8 +128,8 @@ def _send_delegation_10am_emails(today_ist: date, user_id: int | None, dry_run: 
     if SEND_RECUR_EMAILS_ONLY_AT_10AM and not _after_10am_today():
         return 0
 
-    start_today_ist = IST.localize(datetime.combine(today_ist, dt_time.min))
-    end_today_ist = IST.localize(datetime.combine(today_ist, dt_time.max))
+    start_today_ist = datetime.combine(today_ist, dt_time.min, tzinfo=IST)
+    end_today_ist = datetime.combine(today_ist, dt_time.max, tzinfo=IST)
     start_proj = start_today_ist.astimezone(timezone.get_current_timezone())
     end_proj = end_today_ist.astimezone(timezone.get_current_timezone())
 
@@ -149,15 +149,22 @@ def _send_delegation_10am_emails(today_ist: date, user_id: int | None, dry_run: 
             logger.info(_safe_console_text(f"Skip delegation 10AM email for DL-{obj.id}: self-assigned"))
             continue
 
-        # leave guard at 10:00 IST
         try:
             p_ist = _to_ist(obj.planned_date)
-            anchor_ist = p_ist.replace(hour=ASSIGN_ANCHOR_T.hour, minute=ASSIGN_ANCHOR_T.minute, second=0, microsecond=0)
+            anchor_ist = p_ist.replace(
+                hour=ASSIGN_ANCHOR_T.hour,
+                minute=ASSIGN_ANCHOR_T.minute,
+                second=0,
+                microsecond=0,
+            )
             if not guard_assign(obj.assign_to, anchor_ist):
-                logger.info(_safe_console_text(f"Skip delegation 10AM email for DL-{obj.id}: assignee blocked (leave @ 10:00 IST)"))
+                logger.info(
+                    _safe_console_text(
+                        f"Skip delegation 10AM email for DL-{obj.id}: assignee blocked (leave @ 10:00 IST)"
+                    )
+                )
                 continue
         except Exception:
-            # fail-safe: if we can't evaluate, do not send
             continue
 
         try:
@@ -208,7 +215,6 @@ class Command(BaseCommand):
         email_total = 0
         per_user_created: dict[int, int] = {}
 
-        # Series seeds (exclude tombstoned)
         filters = {"mode__in": RECURRING_MODES, "is_skipped_due_to_leave": False}
         if user_id:
             filters["assign_to_id"] = user_id
@@ -221,7 +227,6 @@ class Command(BaseCommand):
 
         logger.info(_safe_console_text(f"[RECUR] Starting @ {now_ist:%Y-%m-%d %H:%M IST} | seeds={seeds.count()}"))
 
-        # 1) Generate next ONLY if no Pending and there is a Completed base
         for s in seeds:
             mode_norm = normalize_mode(s["mode"])
             if mode_norm not in RECURRING_MODES:
@@ -235,7 +240,6 @@ class Command(BaseCommand):
                 group_name=s["group_name"],
             )
 
-            # Skip if any pending exists
             if Checklist.objects.filter(status="Pending").filter(q_series).exists():
                 continue
 
@@ -252,22 +256,19 @@ class Command(BaseCommand):
             if not next_dt:
                 continue
 
-            # Shift off holiday/leave (10AM anchor)
             next_date = _to_ist(next_dt).date()
             safe_date = _push_to_next_allowed_date(s["assign_to_id"], next_date)
             if safe_date != next_date:
-                next_dt = IST.localize(datetime.combine(safe_date, DUE_T)).astimezone(
+                next_dt = datetime.combine(safe_date, DUE_T, tzinfo=IST).astimezone(
                     timezone.get_current_timezone()
                 )
 
-            # Prevent recreating "today" here (avoids resurrecting deleted today tasks).
             try:
                 if _to_ist(next_dt).date() == today_ist:
                     continue
             except Exception:
                 continue
 
-            # dupe guard within tolerant series
             dupe = (
                 Checklist.objects.filter(status="Pending")
                 .filter(q_series)
@@ -283,10 +284,12 @@ class Command(BaseCommand):
             if dry_run:
                 created_total += 1
                 per_user_created[s["assign_to_id"]] = per_user_created.get(s["assign_to_id"], 0) + 1
-                logger.info(_safe_console_text(
-                    f"[DRY RUN] Would create '{s['task_name']}' for user_id={s['assign_to_id']} "
-                    f"at {_to_ist(next_dt):%Y-%m-%d %H:%M IST}"
-                ))
+                logger.info(
+                    _safe_console_text(
+                        f"[DRY RUN] Would create '{s['task_name']}' for user_id={s['assign_to_id']} "
+                        f"at {_to_ist(next_dt):%Y-%m-%d %H:%M IST}"
+                    )
+                )
             else:
                 try:
                     with transaction.atomic():
@@ -318,14 +321,15 @@ class Command(BaseCommand):
                         )
                     created_total += 1
                     per_user_created[s["assign_to_id"]] = per_user_created.get(s["assign_to_id"], 0) + 1
-                    logger.info(_safe_console_text(
-                        f"✅ Created next CL-{obj.id} '{obj.task_name}' for user_id={s['assign_to_id']} "
-                        f"at {_to_ist(obj.planned_date):%Y-%m-%d %H:%M IST}"
-                    ))
+                    logger.info(
+                        _safe_console_text(
+                            f"✅ Created next CL-{obj.id} '{obj.task_name}' for user_id={s['assign_to_id']} "
+                            f"at {_to_ist(obj.planned_date):%Y-%m-%d %H:%M IST}"
+                        )
+                    )
                 except Exception as e:
                     logger.exception("Failed creating next occurrence for %s: %s", s, e)
 
-        # 2) Send day-of reminders (Delegations only)
         if send_emails:
             email_total += _send_delegation_10am_emails(today_ist, user_id, dry_run)
 

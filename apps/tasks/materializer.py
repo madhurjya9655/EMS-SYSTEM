@@ -5,12 +5,13 @@ from __future__ import annotations
 Today-only materializer for recurring tasks.
 
 This module fills ONLY the gap:
-  • At (or just before) 10:00 IST, create the *missing* “today” row
+  • At (or just before) 10:00 IST, create the *missing* "today" row
     for each recurring series that *should* have one today.
   • It never creates future rows (generator keeps doing that).
   • It never emails (the 10:00 mailer will pick up after creation).
   • It respects leave/anchor rules (skips users blocked at 10:00 IST).
   • It is idempotent and extremely defensive against duplicates.
+  • It never runs on Sundays or admin-configured holidays.
 
 PRODUCTION SAFETY (critical)
 ----------------------------
@@ -38,6 +39,7 @@ from .recurrence_utils import (
     RECURRING_MODES,
     normalize_mode,
     get_next_planned_date,  # pins to 19:00 IST for stepped date
+    is_working_day,         # Sunday=False, Holiday=False
 )
 from .utils import _safe_console_text
 from apps.tasks.services.blocking import guard_assign  # single source of truth
@@ -77,15 +79,12 @@ def _acquire_day_series_marker(day_iso: str, series_hash: str, *, now_ist: datet
             return key
         return None
     except Exception:
-        # If cache is down, fall back to DB-only idempotency (less strong).
-        # Returning a special string keeps behavior consistent without crashing.
         return "NOLOCK"
 
 
 def _release_marker(lock_key: str | None) -> None:
     """
     Only used on failure to allow retry (do NOT remove marker on success).
-
     If cache is down ("NOLOCK"), no-op.
     """
     try:
@@ -151,7 +150,7 @@ def _today_row_exists(q_series) -> bool:
 def _future_pending_exists(q_series) -> bool:
     """
     Defensive: if a future Pending exists in the series (including skipped ones),
-    do not create another "today" row. This also prevents resurrection loops.
+    do not create another "today" row.
     """
     try:
         return (
@@ -165,10 +164,6 @@ def _future_pending_exists(q_series) -> bool:
 
 
 def _resolve_next_after_completed(latest_completed_dt: datetime | None, mode: str, freq: int) -> datetime | None:
-    """
-    Step using the canonical recurrence helper until >= now, then return the first next.
-    For 'today' materialization we will later compare the .date() with today (IST).
-    """
     if not latest_completed_dt:
         return None
     nxt = get_next_planned_date(latest_completed_dt, mode, freq)
@@ -182,7 +177,7 @@ def _resolve_next_after_completed(latest_completed_dt: datetime | None, mode: st
 
 def _create_today_from_completed(completed_obj: Checklist, next_dt: datetime, freq_norm: int) -> Checklist:
     """
-    Create a “today” row by cloning fields from the latest completed occurrence.
+    Create a "today" row by cloning fields from the latest completed occurrence.
     NOTE: Emails are NOT sent here. The 10:00 AM mailer will handle notifications.
     """
     with transaction.atomic():
@@ -195,7 +190,7 @@ def _create_today_from_completed(completed_obj: Checklist, next_dt: datetime, fr
             priority=completed_obj.priority,
             attachment_mandatory=completed_obj.attachment_mandatory,
             mode=completed_obj.mode,
-            frequency=freq_norm,  # normalized forward
+            frequency=freq_norm,
             time_per_task_minutes=completed_obj.time_per_task_minutes,
             remind_before_days=completed_obj.remind_before_days,
             assign_pc=completed_obj.assign_pc,
@@ -223,6 +218,7 @@ class MaterializeResult:
         self.skipped_not_today: int = 0
         self.skipped_future_pending: int = 0
         self.skipped_marker_exists: int = 0
+        self.skipped_non_working_day: int = 0
         self.per_user: Dict[int, int] = {}
         self.details: List[Dict[str, Any]] = []
 
@@ -240,6 +236,7 @@ class MaterializeResult:
             "skipped_not_today": self.skipped_not_today,
             "skipped_future_pending": self.skipped_future_pending,
             "skipped_marker_exists": self.skipped_marker_exists,
+            "skipped_non_working_day": self.skipped_non_working_day,
             "per_user": self.per_user,
             "details": self.details[:100],
         }
@@ -247,10 +244,11 @@ class MaterializeResult:
 
 def materialize_today_for_all(*, user_id: int | None = None, dry_run: bool = False) -> MaterializeResult:
     """
-    Create missing “today” rows (19:00 IST due) for recurring series that have
+    Create missing "today" rows (19:00 IST due) for recurring series that have
     their next occurrence scheduled for *today*.
 
     Guards:
+      • Skip entirely on Sundays and admin-configured holidays.
       • Skip if a today-row already exists (strong idempotency).
       • Skip if the assignee is blocked at 10:00 IST (leave-aware).
       • Requires at least one COMPLETED occurrence to compute the next step.
@@ -265,6 +263,21 @@ def materialize_today_for_all(*, user_id: int | None = None, dry_run: bool = Fal
     today_ist = now_ist.date()
     day_iso = today_ist.isoformat()
     anchor10 = _assignment_anchor_for_today_10am_ist(now_ist)
+
+    # -------------------------------------------------------------------------
+    # FIX (Issue 1 – Gap B): never materialise recurring rows on Sundays or
+    # admin-configured holidays.  recurrence_utils.get_next_planned_date()
+    # intentionally never shifts; this call-site enforces the working-day rule.
+    # -------------------------------------------------------------------------
+    if not is_working_day(today_ist):
+        import logging as _logging
+        _logging.getLogger(__name__).info(
+            _safe_console_text(
+                f"[TODAY MAT] Skipping: {day_iso} is a non-working day (Sunday or holiday)"
+            )
+        )
+        res.skipped_non_working_day = 1  # sentinel so callers can distinguish
+        return res
 
     filters = {"mode__in": RECURRING_MODES}
     if hasattr(Checklist, "is_skipped_due_to_leave"):
@@ -315,18 +328,16 @@ def materialize_today_for_all(*, user_id: int | None = None, dry_run: bool = Fal
                 continue
 
         try:
-            # DB idempotency: already have a “today” row in this tolerant series?
+            # DB idempotency: already have a "today" row in this tolerant series?
             if _today_row_exists(q_series):
                 res.skipped_exists += 1
                 res.add(uid, None, f"exists:{task_name}")
-                # keep marker if acquired (prevents resurrection)
                 continue
 
             # Defensive: if a future pending exists already, do not create another
             if _future_pending_exists(q_series):
                 res.skipped_future_pending += 1
                 res.add(uid, None, f"future_pending:{task_name}")
-                # keep marker if acquired (prevents repeated checks/spam)
                 continue
 
             # Need a completed occurrence to step from
@@ -338,7 +349,6 @@ def materialize_today_for_all(*, user_id: int | None = None, dry_run: bool = Fal
             if not completed:
                 res.skipped_no_completed += 1
                 res.add(uid, None, f"no_completed:{task_name}")
-                # allow retry (do not keep marker) because completion may appear later
                 if marker_lock:
                     _release_marker(marker_lock)
                 continue
@@ -347,12 +357,11 @@ def materialize_today_for_all(*, user_id: int | None = None, dry_run: bool = Fal
             if not next_dt or next_dt.astimezone(IST).date() != today_ist:
                 res.skipped_not_today += 1
                 res.add(uid, None, f"not_today:{task_name}")
-                # allow retry later (tomorrow)
                 if marker_lock:
                     _release_marker(marker_lock)
                 continue
 
-            # Leave-aware: if blocked at 10:00 IST, skip creating today’s row
+            # Leave-aware: if blocked at 10:00 IST, skip creating today's row
             try:
                 user_obj = completed.assign_to
             except Exception:
@@ -362,7 +371,6 @@ def materialize_today_for_all(*, user_id: int | None = None, dry_run: bool = Fal
                 if user_obj and not guard_assign(user_obj, anchor10):
                     res.skipped_leave += 1
                     res.add(uid, None, f"leave_blocked:{task_name}")
-                    # allow retry same day if leave revoked
                     if marker_lock:
                         _release_marker(marker_lock)
                     continue
@@ -411,7 +419,6 @@ def materialize_today_for_all(*, user_id: int | None = None, dry_run: bool = Fal
         except Exception as e:
             from logging import getLogger
             getLogger(__name__).error(_safe_console_text(f"[TODAY MAT] failure for user_id={uid}: {e}"))
-            # allow retry
             if marker_lock:
                 _release_marker(marker_lock)
             res.skipped_not_today += 1

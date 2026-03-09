@@ -1,4 +1,4 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\tasks.py
+# apps/tasks/tasks.py
 from __future__ import annotations
 
 import logging
@@ -19,7 +19,10 @@ from .models import Checklist, Delegation, FMS, HelpTicket
 from .recurrence_utils import (
     RECURRING_MODES,
     normalize_mode,
-    get_next_planned_date,  # pins 19:00 IST, NO working-day shift here
+    get_next_planned_date,   # pins 19:00 IST, NO working-day shift here
+    is_working_day,          # Sunday=False, Holiday=False
+    next_working_day,        # advance date to next non-Sunday/non-holiday
+    pin_7pm_ist_on_date,     # return project-TZ-aware 19:00 IST on a given date
 )
 from .utils import (
     _safe_console_text,
@@ -104,8 +107,6 @@ def _acquire_fanout_lock(day_iso: str, seconds: int = 180) -> bool:
     try:
         return bool(cache.add(_fanout_lock_key(day_iso), True, seconds))
     except Exception:
-        # If cache is down, we cannot guarantee cross-process idempotency.
-        # We still run (best-effort), but item-level guards below still reduce damage.
         logger.warning(_safe_console_text("[DUE@10] Cache lock unavailable; continuing best-effort"))
         return True
 
@@ -157,9 +158,6 @@ _TABLE_EXISTS_CACHE: Dict[str, bool] = {}
 
 
 def _table_exists_for_model(model) -> bool:
-    """
-    Introspection is expensive; cache in-process.
-    """
     try:
         db_table = model._meta.db_table
     except Exception:
@@ -183,10 +181,6 @@ def _table_exists_for_model(model) -> bool:
 # Recurrence generator (FUTURE ONLY, completion-gated)
 # -----------------------------------------------------------------------------
 def _should_send_recur_email_now() -> bool:
-    """
-    Generator emails are usually undesirable (it creates FUTURE rows, not today).
-    Keep OFF by default if SEND_RECUR_EMAILS_ONLY_AT_10AM=True.
-    """
     if not SEND_EMAILS_FOR_AUTO_RECUR:
         return False
     if SEND_RECUR_EMAILS_ONLY_AT_10AM:
@@ -201,10 +195,6 @@ def _series_q_for_frequency(
     freq_norm: int,
     group_name: str | None,
 ):
-    """
-    Legacy tolerant series grouping: treat NULL frequency as 1.
-    Excludes tombstoned rows so they don't drive series logic.
-    """
     freq_set = [freq_norm, None]
     q = Q(assign_to_id=assign_to_id, task_name=task_name, mode=mode)
     if group_name:
@@ -258,7 +248,29 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
     if not next_dt:
         return 0
 
-    # Never create today here (today creation is materializer’s job).
+    # -------------------------------------------------------------------------
+    # FIX (Issue 1 – Gap C): shift future occurrence off Sundays/holidays.
+    # get_next_planned_date() intentionally never shifts (no double-shifts).
+    # This call-site is the single place responsible for enforcing the
+    # working-day rule on future generated rows.
+    # -------------------------------------------------------------------------
+    try:
+        next_date_ist = next_dt.astimezone(IST).date()
+        shifted_date = next_working_day(next_date_ist)
+        if shifted_date != next_date_ist:
+            logger.info(
+                _safe_console_text(
+                    f"[RECUR GEN] Shifted '{series['task_name']}' from {next_date_ist} "
+                    f"(non-working) to {shifted_date} "
+                    f"for assign_to_id={series['assign_to_id']}"
+                )
+            )
+            next_dt = pin_7pm_ist_on_date(shifted_date)
+    except Exception as e:
+        logger.error(_safe_console_text(f"[RECUR GEN] Working-day shift failed: {e}"))
+        return 0
+
+    # Never create today here (today creation is materializer's job).
     try:
         if next_dt.astimezone(IST).date() == today_ist:
             logger.info(
@@ -389,10 +401,6 @@ def generate_recurring_checklists(self, user_id: int | None = None, dry_run: boo
 
 @shared_task(bind=True)
 def audit_recurring_health(self) -> dict:
-    """
-    Lightweight audit: counts suspicious series.
-    NOTE: This is informational; it is not the generator.
-    """
     series = (
         Checklist.objects.filter(mode__in=RECURRING_MODES)
         .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
@@ -403,7 +411,6 @@ def audit_recurring_health(self) -> dict:
     details = []
 
     for s in series:
-        # audit is best-effort; keep it simple
         has_pending = Checklist.objects.filter(status="Pending", **s).exists()
         has_completed = Checklist.objects.filter(status="Completed", **s).exists()
         if not has_pending and not has_completed:
@@ -431,15 +438,11 @@ def _sent_key(model: str, obj_id: int, day_ist_str: str) -> str:
 
 
 def _claim_send_for_today(model: str, obj_id: int, now_ist: Optional[datetime] = None) -> bool:
-    """
-    Atomic per-object/day claim. If claim fails, someone else already sent it.
-    """
     n = now_ist or _now_ist()
     key = _sent_key(model, obj_id, n.date().isoformat())
     try:
         return bool(cache.add(key, True, _ttl_until_next_3am_ist(n)))
     except Exception:
-        # Cache down -> best-effort fallback: allow send (may duplicate).
         return True
 
 
@@ -448,9 +451,6 @@ def _emp_day_key(user_id: int, day_iso: str) -> str:
 
 
 def _claim_emp_digest(user_id: int, now_ist: Optional[datetime] = None) -> bool:
-    """
-    Atomic per-user/day claim for digest to prevent race duplicates.
-    """
     n = now_ist or _now_ist()
     key = _emp_day_key(user_id, n.date().isoformat())
     ttl_seconds = max(_ttl_until_next_3am_ist(n), 6 * 60 * 60)
@@ -472,7 +472,7 @@ def _send_delegation_email(obj: Delegation) -> None:
         send_delegation_assignment_to_user(
             delegation=obj,
             complete_url=complete_url,
-            subject_prefix=f"Today’s Delegation – {obj.task_name} (due 7 PM)",
+            subject_prefix=f"Today's Delegation – {obj.task_name} (due 7 PM)",
         )
         logger.info(_safe_console_text(f"[DUE@10] Delegation {obj.id} mailed to user_id={obj.assign_to_id}"))
     except Exception as e:
@@ -552,6 +552,7 @@ def send_due_today_assignments(self) -> dict:
 
     HARD GUARDS:
       - Shared day-level idempotency with cron endpoints (due10_fanout_done/lock).
+      - Non-working day guard (Sunday / admin-configured Holiday).
       - Per-user digest atomic claim (prevents duplicate digest).
       - Per-delegation atomic claim (prevents duplicate emails).
       - Leave-aware (guard_assign @ 10:00 IST anchor).
@@ -567,6 +568,25 @@ def send_due_today_assignments(self) -> dict:
     if not _is_after_10am_ist(now_ist):
         logger.info(_safe_console_text("[DUE@10] Skipped: before 10:00 IST"))
         return {"sent": 0, "checklists_emails": 0, "checklists_tasks": 0, "delegations": 0, "skipped_before_10": True}
+
+    # -------------------------------------------------------------------------
+    # FIX (Issue 1 – Gap A): never send on Sundays or admin-configured holidays.
+    # Mark the day DONE so cron retries don't keep re-evaluating this.
+    # -------------------------------------------------------------------------
+    if not is_working_day(now_ist.date()):
+        logger.info(_safe_console_text(
+            f"[DUE@10] Skipped: {day_iso} is a non-working day (Sunday or holiday)"
+        ))
+        _mark_fanout_done(day_iso, now_ist)
+        return {
+            "sent": 0,
+            "checklists_emails": 0,
+            "checklists_tasks": 0,
+            "delegations": 0,
+            "skipped": True,
+            "reason": "non_working_day",
+            "day": day_iso,
+        }
 
     # If already done today, no-op
     if _fanout_already_done(day_iso):
@@ -622,7 +642,6 @@ def send_due_today_assignments(self) -> dict:
                     ))
                     continue
             except Exception:
-                # fail-safe: don't send if we cannot evaluate
                 continue
 
             # atomic claim for per-user digest
@@ -666,7 +685,6 @@ def send_due_today_assignments(self) -> dict:
                 ))
             except Exception as e:
                 logger.error(_safe_console_text(f"[DUE@10] Checklist digest email failure for user_id={uid}: {e}"))
-                # Do NOT un-claim: safer to avoid resend spam loops.
 
         # -------------------------
         # Delegations: individual emails (per-object atomic claim)
@@ -697,7 +715,6 @@ def send_due_today_assignments(self) -> dict:
             f"delegations={de_sent}, total_emails={sent_total}"
         ))
 
-        # Mark day done (prevents repeats from celery schedule + cron endpoints)
         _mark_fanout_done(day_iso, now_ist)
 
         return {
@@ -710,7 +727,6 @@ def send_due_today_assignments(self) -> dict:
         }
 
     finally:
-        # Release short running lock (day-done key remains)
         _release_fanout_lock(day_iso)
 
 
@@ -726,7 +742,6 @@ def _send_delegation_reminder_email(obj: Delegation) -> None:
         logger.info(_safe_console_text(f"[DL REM] Delegation {obj.id} skipped: self-assigned"))
         return
 
-    # leave guard (today @ 10:00 IST anchor)
     try:
         if not guard_assign(obj.assign_to, _assignment_anchor_for_today_10am_ist()):
             logger.info(_safe_console_text(f"[DL REM] Delegation {obj.id} suppressed (assignee on leave today)"))
@@ -751,7 +766,6 @@ def _send_delegation_reminder_email(obj: Delegation) -> None:
     except Exception:
         pass
 
-    # fallback (should rarely be used)
     send_checklist_assignment_to_user(
         task=obj,  # type: ignore[arg-type]
         complete_url=complete_url,
@@ -789,7 +803,6 @@ def dispatch_delegation_reminders(self) -> dict:
         claim_ts = timezone.now()
 
         try:
-            # DB-level claim (prevents races even if cache is weak)
             claimed = Delegation.objects.filter(
                 id=obj.id,
                 reminder_sent_at__isnull=True,
@@ -811,7 +824,6 @@ def dispatch_delegation_reminders(self) -> dict:
         except Exception as e:
             failed += 1
             logger.error(_safe_console_text(f"[DL REM] Failed reminder for Delegation {getattr(obj, 'id', '?')}: {e}"))
-            # rollback claim so it can retry later
             try:
                 Delegation.objects.filter(id=obj.id, reminder_sent_at=claim_ts).update(reminder_sent_at=None)
             except Exception:
@@ -844,7 +856,6 @@ def _is_sunday_or_holiday(d: dt_date) -> bool:
 
     try:
         from apps.settings.models import Holiday
-        # support either Holiday.is_holiday(date) or ORM lookup
         if hasattr(Holiday, "is_holiday"):
             return bool(Holiday.is_holiday(d))
         return Holiday.objects.filter(date=d).exists()
@@ -984,14 +995,12 @@ def send_daily_pending_task_summary(self, force: bool = False) -> dict:
 
     cache_key = _pending_summary_day_key(day_iso)
 
-    # atomic claim (prevents races)
     if not force:
         try:
             if not cache.add(cache_key, True, _pending_summary_ttl_seconds(now_ist)):
                 logger.info(_safe_console_text(f"[PENDING SUMMARY] Skipped: already sent/claimed for {day_iso}"))
                 return {"ok": True, "skipped": True, "reason": "already_sent", "day": day_iso}
         except Exception:
-            # cache down -> best-effort fallback: continue (may duplicate)
             pass
 
     try:
@@ -1030,7 +1039,6 @@ def send_daily_pending_task_summary(self, force: bool = False) -> dict:
         return {"ok": True, "skipped": False, "day": day_iso, "recipients": len(recipients), "total_pending": len(rows)}
     except Exception as e:
         logger.error(_safe_console_text(f"[PENDING SUMMARY] Send failed for {day_iso}: {e}"))
-        # Do NOT delete claim key; safer to avoid resend loops. Use force=True to resend intentionally.
         raise
 
 

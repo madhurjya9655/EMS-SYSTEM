@@ -1,9 +1,13 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\models.py
+# FILE: apps/tasks/models.py
+# PURPOSE: Enforce non-working-day task assignment rules and leave-aware validation
+# UPDATED: 2026-03-07
+
 from datetime import timedelta
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.utils.timesince import timesince
+from django.core.exceptions import ValidationError
 from apps.settings.models import Holiday
 
 User = get_user_model()
@@ -24,6 +28,18 @@ def is_holiday_or_sunday(date_val):
     return (
         hasattr(date_val, "weekday") and date_val.weekday() == 6
     ) or Holiday.objects.filter(date=date_val).exists()
+
+
+def _validate_non_working_day(planned_value, *, label: str = "task") -> None:
+    """
+    Block assignment/creation on Sundays and configured holidays.
+    """
+    if not planned_value:
+        return
+    if is_holiday_or_sunday(planned_value):
+        raise ValidationError(
+            f"This is a holiday date or Sunday, you cannot add a {label} on this day."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -222,14 +238,17 @@ class Checklist(models.Model):
 
     def clean(self):
         """
-        Hard block: from the moment a leave is APPLIED (Pending or Approved),
-        do not allow checklist assignments whose planned timestamp falls within
-        the assignee's leave window (full-day or half-day).
+        Hard block:
+        - no checklist assignment on Sunday / configured holiday
+        - no checklist assignment during assignee leave window
         """
         super().clean()
+
+        if self.planned_date:
+            _validate_non_working_day(self.planned_date, label="checklist")
+
         if self.assign_to_id and self.planned_date:
             if _is_on_leave_instant(self.assign_to, self.planned_date):
-                from django.core.exceptions import ValidationError
                 raise ValidationError("Assignee is on leave during the planned window.")
 
     def save(self, *args, **kwargs):
@@ -367,14 +386,21 @@ class Delegation(models.Model):
         return "Active"
 
     def clean(self):
-        # Delegations are non-recurring; blank out any mode/frequency
+        """
+        Hard block:
+        - delegations are one-time only
+        - no delegation assignment on Sunday / configured holiday
+        - no delegation assignment during assignee leave window
+        """
         self.mode = None
         self.frequency = None
         super().clean()
-        # Hard-block leave windows for the assignee at the planned instant
+
+        if self.planned_date:
+            _validate_non_working_day(self.planned_date, label="delegation")
+
         if self.assign_to_id and self.planned_date:
             if _is_on_leave_instant(self.assign_to, self.planned_date):
-                from django.core.exceptions import ValidationError
                 raise ValidationError("Assignee is on leave during the planned window.")
 
     def save(self, *args, **kwargs):
@@ -455,6 +481,12 @@ class FMS(models.Model):
             models.Index(fields=['is_skipped_due_to_leave', 'planned_date']),
         ]
 
+    def clean(self):
+        super().clean()
+
+        if self.planned_date:
+            _validate_non_working_day(self.planned_date, label="task")
+
     def __str__(self):
         return f"{self.task_name} → {self.assign_to}"
 
@@ -522,14 +554,14 @@ class HelpTicket(models.Model):
         return timesince(self.planned_date, end)
 
     def clean(self):
-        from django.core.exceptions import ValidationError
-        if is_holiday_or_sunday(self.planned_date):
-            raise ValidationError("This is a holiday date or Sunday, you cannot add a task on this day.")
+        super().clean()
+
+        _validate_non_working_day(self.planned_date, label="help ticket")
+
         # Hard-block if planned instant lies within a leave window for assignee
         if self.assign_to_id and self.planned_date:
             if _is_on_leave_instant(self.assign_to, self.planned_date):
                 raise ValidationError("Assignee is on leave during the planned window.")
-        super().clean()
 
     def save(self, *args, **kwargs):
         old_status = None

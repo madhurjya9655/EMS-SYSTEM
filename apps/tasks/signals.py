@@ -1,8 +1,11 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\signals.py
+# FILE: apps/tasks/signals.py
+# PURPOSE: Suppress signal-based task notifications on Sundays/holidays and respect leave/non-working day rules
+# UPDATED: 2026-03-07
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, time as dt_time
 
 import pytz
 from django.conf import settings
@@ -12,7 +15,7 @@ from django.dispatch import receiver
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import Checklist, Delegation, HelpTicket
+from .models import Checklist, Delegation, HelpTicket, is_holiday_or_sunday
 from . import utils as _utils  # email helpers & console-safe logging
 
 # Leave-blocking helpers
@@ -41,6 +44,19 @@ def _on_commit(fn):
             fn()
         except Exception:
             logger.exception("on_commit fallback failed")
+
+
+def _is_non_working_planned_day(planned_dt) -> bool:
+    """
+    Defensive signal-layer guard:
+    suppress notification if the task is planned on Sunday or configured holiday.
+    """
+    try:
+        return bool(planned_dt and is_holiday_or_sunday(planned_dt))
+    except Exception:
+        logger.exception("Non-working-day check failed for planned_dt=%r", planned_dt)
+        # fail-safe: suppress if the date cannot be evaluated reliably
+        return True
 
 
 # -----------------------------------------------------------------------------
@@ -74,9 +90,10 @@ def _send_delegation_assignment_immediate(obj: Delegation) -> None:
     """
     One-time "New Delegation Assigned" email, sent immediately after creation.
 
-    🔒 Guards:
+    Guards:
       - suppress self-assign (assigner == assignee)
       - suppress if assignee has no email
+      - suppress on Sunday / configured holiday
       - suppress if assignee is blocked NOW (leave at current instant in IST)
       - if ENABLE_CELERY_EMAIL is on, DO NOT send from signals at all
     """
@@ -85,19 +102,31 @@ def _send_delegation_assignment_immediate(obj: Delegation) -> None:
 
     try:
         if obj.assign_by_id and obj.assign_by_id == obj.assign_to_id:
-            logger.info(_utils._safe_console_text(f"[SIGNALS] Immediate delegation email suppressed for DL-{obj.id}: self-assigned."))
+            logger.info(_utils._safe_console_text(
+                f"[SIGNALS] Immediate delegation email suppressed for DL-{obj.id}: self-assigned."
+            ))
             return
     except Exception:
         pass
 
+    if _is_non_working_planned_day(getattr(obj, "planned_date", None)):
+        logger.info(_utils._safe_console_text(
+            f"[SIGNALS] Immediate delegation email suppressed for DL-{obj.id}: planned on Sunday/holiday."
+        ))
+        return
+
     to_email = (getattr(getattr(obj, "assign_to", None), "email", "") or "").strip()
     if not to_email:
-        logger.info(_utils._safe_console_text(f"[SIGNALS] Immediate delegation email skipped for DL-{obj.id}: no assignee email."))
+        logger.info(_utils._safe_console_text(
+            f"[SIGNALS] Immediate delegation email skipped for DL-{obj.id}: no assignee email."
+        ))
         return
 
     try:
         if is_user_blocked_at(obj.assign_to, timezone.now().astimezone(IST)):
-            logger.info(_utils._safe_console_text(f"[SIGNALS] Immediate delegation email suppressed for DL-{obj.id}: assignee on leave now."))
+            logger.info(_utils._safe_console_text(
+                f"[SIGNALS] Immediate delegation email suppressed for DL-{obj.id}: assignee on leave now."
+            ))
             return
     except Exception:
         # fail-safe: if we cannot evaluate, do not send
@@ -210,7 +239,7 @@ def schedule_delegation_email_on_create(sender, instance: Delegation, created: b
     if ENABLE_CELERY_EMAIL:
         return
 
-    # 1) Immediate "New Delegation Assigned" email (with leave guard)
+    # 1) Immediate "New Delegation Assigned" email (with leave + non-working-day guard)
     try:
         _on_commit(lambda: _send_delegation_assignment_immediate(instance))
     except Exception:
@@ -228,6 +257,12 @@ def send_help_ticket_email_on_create(sender, instance: HelpTicket, created: bool
     if not created:
         return
     if bool(getattr(instance, "is_skipped_due_to_leave", False)):
+        return
+
+    if _is_non_working_planned_day(getattr(instance, "planned_date", None)):
+        logger.info(_utils._safe_console_text(
+            f"[SIGNALS] HelpTicket HT-{getattr(instance, 'id', '?')} email suppressed: planned on Sunday/holiday."
+        ))
         return
 
     # If assignee is on leave NOW, or planned timestamp lies within leave window, suppress.

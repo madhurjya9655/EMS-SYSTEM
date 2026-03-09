@@ -1,4 +1,3 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
 from __future__ import annotations
 
 import csv
@@ -58,7 +57,6 @@ from .recurrence_utils import preserve_first_occurrence_time
 
 # ✅ Single source of truth: leave blocking
 from apps.tasks.utils.blocking import (
-    is_user_blocked,         # date-level @ 10:00 IST anchor (legacy visibility)
     is_user_blocked_at,      # time-aware exact instant (preferred)
 )
 
@@ -1580,10 +1578,7 @@ def assigned_to_me(request):
         .order_by("-planned_date")
     )
 
-    # If user is on leave RIGHT NOW, hide all help tickets.
-    if is_user_blocked_at(request.user, timezone.now().astimezone(IST)):
-        items = HelpTicket.objects.none()
-
+    # Keep tickets visible even if user is on leave now.
     return render(request, "tasks/list_help_ticket_assigned_to.html", {"items": items, "current_tab": "assigned_to"})
 
 
@@ -1831,7 +1826,7 @@ def close_help_ticket(request, pk: int):
 
 
 # -----------------------------------------------------------------------------
-# DASHBOARD (visibility + leave gating)
+# DASHBOARD (visibility only; do NOT hide on leave/holiday)
 # -----------------------------------------------------------------------------
 @login_required
 def dashboard_home(request):
@@ -1856,15 +1851,15 @@ def dashboard_home(request):
         curr_chk = prev_chk = curr_del = prev_del = curr_help = prev_help = 0
 
     week_score = {
-        'checklist':   {'previous': prev_chk,   'current': curr_chk},
-        'delegation':  {'previous': prev_del,   'current': curr_del},
-        'help_ticket': {'previous': prev_help,  'current': curr_help},
+        'checklist': {'previous': prev_chk, 'current': curr_chk},
+        'delegation': {'previous': prev_del, 'current': curr_del},
+        'help_ticket': {'previous': prev_help, 'current': curr_help},
     }
 
     try:
         pending_tasks = {
-            'checklist':   Checklist.objects.filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False).count(),
-            'delegation':  Delegation.objects.filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False).count(),
+            'checklist': Checklist.objects.filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False).count(),
+            'delegation': Delegation.objects.filter(assign_to=request.user, status='Pending', is_skipped_due_to_leave=False).count(),
             'help_ticket': HelpTicket.objects.filter(assign_to=request.user, is_skipped_due_to_leave=False).exclude(status='Closed').count(),
         }
     except Exception as e:
@@ -1917,17 +1912,12 @@ def dashboard_home(request):
                 if getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist)
             ]
 
-        # ✅ Leave filter: hide checklists whose planned DATE is blocked at 10:00 IST
-        checklist_qs = [
-            c for c in checklist_qs
-            if (_ist_date(c.planned_date) is not None) and not is_user_blocked(request.user, _ist_date(c.planned_date))
-        ]
-
         # ------------------- Delegations -------------------
         if today_only:
             base_delegations = list(
                 Delegation.objects.filter(
-                    assign_to=request.user, status='Pending',
+                    assign_to=request.user,
+                    status='Pending',
                     planned_date__date=today_ist,
                     is_skipped_due_to_leave=False,
                 ).select_related('assign_by').order_by('planned_date')
@@ -1935,7 +1925,8 @@ def dashboard_home(request):
         else:
             base_delegations = list(
                 Delegation.objects.filter(
-                    assign_to=request.user, status='Pending',
+                    assign_to=request.user,
+                    status='Pending',
                     is_skipped_due_to_leave=False,
                 ).select_related('assign_by').order_by('planned_date')
             )
@@ -1944,7 +1935,8 @@ def dashboard_home(request):
         if ho_ids_delegation:
             ho_delegations = list(
                 Delegation.objects.filter(
-                    id__in=ho_ids_delegation, status='Pending',
+                    id__in=ho_ids_delegation,
+                    status='Pending',
                     is_skipped_due_to_leave=False,
                 ).select_related('assign_by').order_by('planned_date')
             )
@@ -1955,15 +1947,16 @@ def dashboard_home(request):
             delegation_qs = base_delegations
 
         if not today_only:
-            delegation_qs = [d for d in delegation_qs if getattr(d, 'is_handover', False) or _should_show_today_or_past(d.planned_date, now_ist)]
+            delegation_qs = [
+                d for d in delegation_qs
+                if getattr(d, 'is_handover', False) or _should_show_today_or_past(d.planned_date, now_ist)
+            ]
         else:
-            delegation_qs = [d for d in delegation_qs if _ist_date(d.planned_date) == today_ist and (getattr(d, 'is_handover', False) or _should_show_today_or_past(d.planned_date, now_ist))]
-
-        # ✅ Leave filter: hide delegations whose planned DATE is blocked at 10:00 IST
-        delegation_qs = [
-            d for d in delegation_qs
-            if (_ist_date(d.planned_date) is not None) and not is_user_blocked(request.user, _ist_date(d.planned_date))
-        ]
+            delegation_qs = [
+                d for d in delegation_qs
+                if _ist_date(d.planned_date) == today_ist and
+                   (getattr(d, 'is_handover', False) or _should_show_today_or_past(d.planned_date, now_ist))
+            ]
 
         # ------------------- Help Tickets -------------------
         if today_only:
@@ -1997,13 +1990,12 @@ def dashboard_home(request):
             help_ticket_qs = base_help
 
         if not today_only:
-            help_ticket_qs = [h for h in help_ticket_qs if getattr(h, 'is_handover', False) or (_ist_date(h.planned_date) and _ist_date(h.planned_date) <= today_ist)]
+            help_ticket_qs = [
+                h for h in help_ticket_qs
+                if getattr(h, 'is_handover', False) or (_ist_date(h.planned_date) and _ist_date(h.planned_date) <= today_ist)
+            ]
         else:
             help_ticket_qs = [h for h in help_ticket_qs if _ist_date(h.planned_date) == today_ist]
-
-        # ✅ Leave filter for HT: if user is blocked RIGHT NOW, hide all HT
-        if is_user_blocked_at(request.user, now_ist):
-            help_ticket_qs = []
 
         logger.info(_safe_console_text(
             f"Dashboard filtering for {request.user.username}: today_only={today_only} | "
@@ -2021,12 +2013,12 @@ def dashboard_home(request):
     )
 
     return render(request, 'dashboard/dashboard.html', {
-        'week_score':    week_score,
+        'week_score': week_score,
         'pending_tasks': pending_tasks,
-        'tasks':         tasks,
-        'selected':      request.GET.get('task_type'),
-        'prev_time':     "00:00",
-        'curr_time':     "00:00",
-        'today_only':    today_only,
-        'handed_over':   handed_over,
+        'tasks': tasks,
+        'selected': request.GET.get('task_type'),
+        'prev_time': "00:00",
+        'curr_time': "00:00",
+        'today_only': today_only,
+        'handed_over': handed_over,
     })

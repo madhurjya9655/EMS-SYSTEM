@@ -1,12 +1,9 @@
-# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\management\commands\generate_missed_recurrences.py
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, time as dt_time, date
-from typing import Optional
+from datetime import date, datetime, time as dt_time, timedelta
+from zoneinfo import ZoneInfo
 
-import pytz
-from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.db.models import Q
@@ -14,27 +11,16 @@ from django.utils import timezone
 
 from apps.settings.models import Holiday
 from apps.tasks.models import Checklist
-
-# ✅ FINAL recurrence math: step date by mode/frequency and PIN to 19:00 IST.
-#    (No holiday shift inside.)
 from apps.tasks.recurrence_utils import (
-    normalize_mode,
     RECURRING_MODES,
     get_next_planned_date,
+    normalize_mode,
 )
-
-# ✅ Unified leave source-of-truth (time-aware)
 from apps.tasks.utils.blocking import is_user_blocked_at
 
 logger = logging.getLogger(__name__)
 
-IST = pytz.timezone("Asia/Kolkata")
-
-# NOTE: We intentionally DO NOT send checklist emails from this command.
-# Consolidated checklist emails are sent at 10:00 IST by apps/tasks/tasks.py::send_due_today_assignments
-SEND_EMAILS_FOR_AUTO_RECUR = getattr(settings, "SEND_EMAILS_FOR_AUTO_RECUR", True)
-SEND_RECUR_EMAILS_ONLY_AT_10AM = getattr(settings, "SEND_RECUR_EMAILS_ONLY_AT_10AM", True)
-
+IST = ZoneInfo("Asia/Kolkata")
 ASSIGN_ANCHOR_T = dt_time(10, 0)
 DUE_T = dt_time(19, 0)
 
@@ -63,13 +49,14 @@ def _is_holiday_or_sunday(d: date) -> bool:
     except Exception:
         pass
     try:
-        return Holiday.objects.filter(date=d).exists()
+        return Holiday.is_holiday(d)
     except Exception:
         return False
 
 
 def _get_user(user_id: int):
     from django.contrib.auth import get_user_model
+
     User = get_user_model()
     return User.objects.filter(id=user_id, is_active=True).first()
 
@@ -82,7 +69,7 @@ def _is_user_blocked_on_date_at_10am(user_id: int, d: date) -> bool:
     user = _get_user(user_id)
     if not user:
         return False
-    anchor_ist = IST.localize(datetime.combine(d, ASSIGN_ANCHOR_T))
+    anchor_ist = datetime.combine(d, ASSIGN_ANCHOR_T, tzinfo=IST)
     return bool(is_user_blocked_at(user, anchor_ist))
 
 
@@ -170,11 +157,9 @@ class Command(BaseCommand):
                 group_name=s["group_name"],
             )
 
-            # Golden rule #1: If ANY Pending exists → do not create future
             if Checklist.objects.filter(status="Pending").filter(q_series).exists():
                 continue
 
-            # Golden rule #2: Step only from the latest COMPLETED
             base = (
                 Checklist.objects.filter(status="Completed")
                 .filter(q_series)
@@ -188,28 +173,25 @@ class Command(BaseCommand):
             if not next_planned:
                 continue
 
-            # Shift off Sunday/holiday + leave (10AM anchor)
             next_date_ist = _to_ist(next_planned).date()
             safe_date = _push_to_next_allowed_date(s["assign_to_id"], next_date_ist)
             if safe_date != next_date_ist:
-                next_planned = IST.localize(datetime.combine(safe_date, DUE_T)).astimezone(
+                next_planned = datetime.combine(safe_date, DUE_T, tzinfo=IST).astimezone(
                     timezone.get_current_timezone()
                 )
 
-            # IMPORTANT: Don't create a "today" occurrence here.
-            # Today's due items are produced by completion-driven signals/pre-10 flow;
-            # re-creating today here can resurrect deleted tasks.
             try:
                 if _to_ist(next_planned).date() == now_ist.date():
-                    logger.info(_safe_console_text(
-                        f"[MISSED] Suppressed TODAY creation for series '{s['task_name']}' "
-                        f"(user_id={s['assign_to_id']}) @ {_to_ist(next_planned):%Y-%m-%d %H:%M IST}"
-                    ))
+                    logger.info(
+                        _safe_console_text(
+                            f"[MISSED] Suppressed TODAY creation for series '{s['task_name']}' "
+                            f"(user_id={s['assign_to_id']}) @ {_to_ist(next_planned):%Y-%m-%d %H:%M IST}"
+                        )
+                    )
                     continue
             except Exception:
                 continue
 
-            # Dupe guard within ±1 minute inside tolerant series
             dupe = (
                 Checklist.objects.filter(status="Pending")
                 .filter(q_series)
@@ -240,7 +222,7 @@ class Command(BaseCommand):
                         priority=getattr(base, "priority", None),
                         attachment_mandatory=getattr(base, "attachment_mandatory", False),
                         mode=base.mode,
-                        frequency=freq_norm,  # normalize going forward
+                        frequency=freq_norm,
                         time_per_task_minutes=getattr(base, "time_per_task_minutes", 0) or 0,
                         remind_before_days=getattr(base, "remind_before_days", 0) or 0,
                         assign_pc=getattr(base, "assign_pc", None),
