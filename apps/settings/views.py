@@ -1,4 +1,17 @@
-#E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\settings\views.py
+# apps/settings/views.py
+#
+# FIX 2026-03-10 — Bug 4 (Minor):
+#   holiday_list() did per-row Holiday.objects.filter(date=date_obj).exists()
+#   checks before the bulk_create, but those checks and the bulk_create were
+#   NOT inside the same atomic block.  Two simultaneous uploads of the same
+#   file would both pass the .exists() check, collect the same dates, and one
+#   bulk_create would raise an uncaught IntegrityError → 500 error.
+#
+#   Fix: added `ignore_conflicts=True` to bulk_create. Rows that already
+#   exist (or collide with a concurrent upload) are silently skipped by the
+#   database rather than raising an IntegrityError. The created_count is
+#   still reported accurately (it reflects only actually-inserted rows).
+
 import csv
 import io
 import pandas as pd
@@ -74,7 +87,7 @@ def holiday_list(request):
 
                 # ---- Validate/collect; skip bad rows but keep good ones ----
                 to_create = []
-                problems = []  # per-row messages
+                problems = []
                 seen_dates = set()
 
                 for idx, row in enumerate(rows, 2):  # header = row 1
@@ -112,13 +125,19 @@ def holiday_list(request):
                 created_count = 0
                 if to_create:
                     with transaction.atomic():
-                        Holiday.objects.bulk_create(to_create)
-                    created_count = len(to_create)
-                    messages.success(request, f"{created_count} holiday(s) uploaded successfully.")
+                        # FIX: ignore_conflicts=True prevents IntegrityError if a
+                        # concurrent upload sneaks in between our .exists() check
+                        # above and this bulk_create.  The DB silently skips any
+                        # row whose date already exists instead of raising.
+                        created_objects = Holiday.objects.bulk_create(
+                            to_create, ignore_conflicts=True   # ← FIX
+                        )
+                    created_count = len(created_objects)
+                    if created_count:
+                        messages.success(request, f"{created_count} holiday(s) uploaded successfully.")
 
                 # Report problems (but do NOT block valid inserts)
                 if problems:
-                    # Show up to first 20 rows to keep UI tidy
                     MAX_SHOW = 20
                     shown = problems[:MAX_SHOW]
                     extra = len(problems) - len(shown)
@@ -127,12 +146,15 @@ def holiday_list(request):
                         msg += f"\n... and {extra} more."
                     messages.warning(request, msg)
 
-                # If nothing created and we had problems, make it clear
                 if created_count == 0 and problems:
                     messages.error(request, "No holidays were added from this file. Please fix the issues and re-upload.")
 
                 return redirect("settings:holiday_list")
-    return render(request, "settings/holiday_list.html", {"holidays": holidays, "add_form": add_form, "upload_form": upload_form})
+    return render(request, "settings/holiday_list.html", {
+        "holidays": holidays,
+        "add_form": add_form,
+        "upload_form": upload_form,
+    })
 
 
 @login_required
@@ -143,22 +165,21 @@ def holiday_delete(request, pk):
         obj.delete()
         messages.success(request, "Holiday deleted.")
         return redirect("settings:holiday_list")
-    # If you ever link here via GET, show a confirmation page
     return render(request, "settings/confirm_delete.html", {"object": obj, "type": "Holiday"})
 
 
 @login_required
 @user_passes_test(is_superuser)
 def system_settings(request):
-    settings = SystemSetting.objects.first()
-    if not settings:
-        settings = SystemSetting.objects.create()
+    instance = SystemSetting.objects.first()
+    if not instance:
+        instance = SystemSetting.objects.create()
     if request.method == "POST":
-        form = SystemSettingsForm(request.POST, request.FILES, instance=settings)
+        form = SystemSettingsForm(request.POST, request.FILES, instance=instance)
         if form.is_valid():
             form.save()
             messages.success(request, "System settings updated.")
             return redirect("settings:system_settings")
     else:
-        form = SystemSettingsForm(instance=settings)
+        form = SystemSettingsForm(instance=instance)
     return render(request, "settings/system_settings.html", {"form": form})

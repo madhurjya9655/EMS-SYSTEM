@@ -1,4 +1,5 @@
 # FILE: apps/reimbursement/views.py
+# UPDATED: 2026-03-10
 from __future__ import annotations
 
 import os
@@ -310,13 +311,16 @@ class ExpenseItemDeleteView(LoginRequiredMixin, PermissionRequiredMixin, Templat
                 )
                 if req_ids:
                     messages.error(
-                        request,
+                        request,  # FIX (Issue #4): was missing `request` arg — caused AttributeError at runtime
                         "Cannot delete this expense because it is used in reimbursement request(s): "
                         + ", ".join(str(i) for i in sorted(req_ids))
                         + ". Remove it from those request(s) first."
                     )
                 else:
-                    messages.error("Cannot delete this expense because it is linked to other records.")
+                    messages.error(
+                        request,  # FIX (Issue #4): was missing `request` arg here too
+                        "Cannot delete this expense because it is linked to other records."
+                    )
         return redirect("reimbursement:expense_inbox")
 
     def get_context_data(self, **kwargs):
@@ -415,9 +419,7 @@ class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormV
 
     @transaction.atomic
     def form_valid(self, form: ReimbursementCreateForm):
-        """
-        HARD GUARD: never create a request with zero lines.
-        """
+        """HARD GUARD: never create a request with zero lines."""
         user = self.request.user
         expense_items: Iterable[ExpenseItem] = list(form.cleaned_data.get("expense_items") or [])
         employee_note: str = form.cleaned_data.get("employee_note") or ""
@@ -529,13 +531,10 @@ class ReimbursementBulkDeleteView(LoginRequiredMixin, PermissionRequiredMixin, T
         return redirect("reimbursement:my_reimbursements")
 
 # ---------------------------------------------------------------------------
-# Employee: Single request delete (RESTORED)
+# Employee: Single request delete
 # ---------------------------------------------------------------------------
 
 class ReimbursementRequestDeleteView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    Restored minimal delete view for a single reimbursement request.
-    """
     permission_code = "reimbursement_list"
     template_name = "reimbursement/request_confirm_delete.html"
 
@@ -581,15 +580,17 @@ class ReimbursementRequestDeleteView(LoginRequiredMixin, PermissionRequiredMixin
         return redirect("reimbursement:my_reimbursements")
 
 # ---------------------------------------------------------------------------
-# Employee: Request resubmit (RESTORED)
+# Employee: Request resubmit
 # ---------------------------------------------------------------------------
 
 class ReimbursementResubmitView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
     """
-    Minimal resubmit view:
-      - Only the creator can resubmit.
-      - Allowed only when request.status == REJECTED.
-      - Sets status to PENDING_FINANCE_VERIFY, logs, and notifies finance.
+    FIX (Issue #1): The original view set status to PENDING_FINANCE_VERIFY directly,
+    bypassing ReimbursementRequest.employee_resubmit(). That meant the stale
+    manager_decision, manager_decided_at, management_decision, verified_by, and
+    verified_at fields were NEVER cleared on resubmission. If Finance re-verified
+    and moved the request to Manager, the manager queue showed the old rejected
+    decision. Now delegates to the model method which clears the full chain atomically.
     """
     permission_code = "reimbursement_list"
     template_name = "reimbursement/request_resubmit_confirm.html"
@@ -616,23 +617,16 @@ class ReimbursementResubmitView(LoginRequiredMixin, PermissionRequiredMixin, Tem
             return redirect("reimbursement:request_detail", pk=req.pk)
 
         note = (request.POST.get("employee_note") or "").strip()
-        prev_status = req.status
-        req.status = ReimbursementRequest.Status.PENDING_FINANCE_VERIFY
-        if not req.submitted_at:
-            req.submitted_at = timezone.now()
-        req.updated_at = timezone.now()
-        req.save(update_fields=["status", "submitted_at", "updated_at"])
 
-        ReimbursementLog.log(
-            req,
-            ReimbursementLog.Action.STATUS_CHANGED,
-            actor=request.user,
-            message=note or "Employee resubmitted after rejection.",
-            from_status=prev_status,
-            to_status=req.status,
-        )
+        try:
+            # Delegate to model method — clears manager/management/verified chain atomically.
+            req.employee_resubmit(actor=request.user, note=note)
+        except DjangoCoreValidationError as e:
+            msg = getattr(e, "message", None) or str(e) or "Unable to resubmit the request."
+            messages.error(request, msg)
+            return redirect("reimbursement:request_detail", pk=req.pk)
+
         _send_safe("send_reimbursement_finance_verify", req, employee_note=note)
-
         messages.success(request, "Reimbursement request resubmitted to Finance for verification.")
         return redirect("reimbursement:request_detail", pk=req.pk)
 
@@ -783,7 +777,7 @@ class RequestLineDeleteView(LoginRequiredMixin, PermissionRequiredMixin, Templat
     def post(self, request, *args, **kwargs):
         req = get_object_or_404(
             ReimbursementRequest.objects.select_related("created_by"),
-            pk=kwargs.get("pk"),   # ✅ MUST be request id in URL
+            pk=kwargs.get("pk"),
         )
         if not (_user_is_admin(request.user) or req.created_by_id == request.user.id):
             return HttpResponseForbidden("Not allowed.")
@@ -901,18 +895,11 @@ class ManagerReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         )
 
     def get_context_data(self, **kwargs):
-        """
-        Ensure manager template can show ONLY eligible (finance-approved) bills.
-        """
         ctx = super().get_context_data(**kwargs)
         req: ReimbursementRequest = self.object
-
         approved = _eligible_manager_lines_qs(req)
-
-        # ✅ Provide BOTH keys for compatibility
         ctx["approved_lines"] = approved
         ctx["eligible_lines"] = approved
-
         ctx["all_lines"] = req.lines.select_related("expense_item").order_by("id")
         ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
         return ctx
@@ -990,18 +977,11 @@ class ManagementReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
         )
 
     def get_context_data(self, **kwargs):
-        """
-        Like Manager: only show finance-approved bills here as “in workflow”.
-        """
         ctx = super().get_context_data(**kwargs)
         req: ReimbursementRequest = self.object
-
         approved = _eligible_manager_lines_qs(req)
-
-        # ✅ Provide BOTH keys for compatibility
         ctx["approved_lines"] = approved
         ctx["eligible_lines"] = approved
-
         ctx["all_lines"] = req.lines.select_related("expense_item").order_by("id")
         ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
         return ctx
@@ -1046,9 +1026,20 @@ class ManagementReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
 
 class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
     """
-    Finance verification queue:
-      - request.status == PENDING_FINANCE_VERIFY
-      - has at least one INCLUDED bill with bill_status == SUBMITTED
+    Finance verification queue.
+
+    FIX (Issue #6): Removed `manager_decided_at__isnull=True` filter. The original
+    filter intended to exclude requests that had already been through the manager
+    but failed to account for two legitimate cases:
+      (a) Admin `reverse_to_finance_verification()` clears manager_decided_at,
+          so reversed requests correctly appeared — but was fragile.
+      (b) Email-action magic links set manager_decided_at without clearing it on
+          re-entry, so any request that re-entered PENDING_FINANCE_VERIFY via a
+          non-reversal path (e.g., employee bill-level resubmit) was hidden from
+          Finance forever.
+
+    The correct gate is: status == PENDING_FINANCE_VERIFY AND has pending-submitted
+    bills. That is sufficient — no manager timestamp filter needed.
     """
     permission_code = "reimbursement_finance_pending"
     model = ReimbursementRequest
@@ -1060,14 +1051,14 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
         L = ReimbursementLine
 
         inc = L.objects.filter(request_id=OuterRef("pk"), status=L.Status.INCLUDED)
-        inc_pending = inc.filter(bill_status=L.BillStatus.SUBMITTED)
-        bad = inc.exclude(bill_status__in=[L.BillStatus.FINANCE_APPROVED])
+        inc_pending = inc.filter(bill_status__in=[L.BillStatus.SUBMITTED, L.BillStatus.EMPLOYEE_RESUBMITTED])
+        bad = inc.exclude(bill_status=L.BillStatus.FINANCE_APPROVED)
 
         return (
             R.objects.filter(
                 status=R.Status.PENDING_FINANCE_VERIFY,
                 paid_at__isnull=True,
-                manager_decided_at__isnull=True,
+                # Removed: manager_decided_at__isnull=True  (see docstring above)
             )
             .annotate(
                 has_included=Exists(inc),
@@ -1094,9 +1085,7 @@ class FinanceQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
         return ctx
 
 class FinanceVerifyView(_FinanceHelperMixin, LoginRequiredMixin, PermissionRequiredMixin, TemplateView):
-    """
-    Finance verification screen (approve/reject/delete at bill level).
-    """
+    """Finance verification screen (approve/reject/delete at bill level)."""
     permission_code = "reimbursement_finance_review"
     template_name = "reimbursement/finance_verify.html"
 
@@ -1339,16 +1328,6 @@ class FinanceRejectedBillsQueueView(_FinanceHelperMixin, LoginRequiredMixin, Per
 # ---------------------------------------------------------------------------
 
 class FinanceSettlementQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
-    """
-    Settlement visibility for Finance/Admin only.
-
-    Shows requests that reached Finance settlement stage:
-      - request.status in {PENDING_FINANCE, APPROVED}
-      - not paid yet
-      - has at least one INCLUDED line
-    Annotates:
-      - can_mark_paid: True when all INCLUDED lines are FINANCE_APPROVED/PAID
-    """
     permission_code = "reimbursement_finance_review"
     model = ReimbursementRequest
     template_name = "reimbursement/finance_settlement_queue.html"
@@ -1362,6 +1341,7 @@ class FinanceSettlementQueueView(LoginRequiredMixin, PermissionRequiredMixin, Li
             R.objects.filter(status__in=[R.Status.PENDING_FINANCE, R.Status.APPROVED], paid_at__isnull=True)
             .annotate(
                 has_included=Exists(inc),
+                # FIX: also accept PAID lines (per-bill flow may have already paid some)
                 has_bad=Exists(inc.exclude(bill_status__in=[L.BillStatus.FINANCE_APPROVED, L.BillStatus.PAID])),
                 can_mark_paid=Case(
                     When(has_included=True, has_bad=False, then=Value(True)),
@@ -1539,9 +1519,6 @@ class FinanceReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
         ctx["can_mark_paid"] = can
         ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
         return ctx
-
-    def get_form(self, form_class=None):
-        return super().get_form(form_class)
 
     def form_valid(self, form: FinanceProcessForm):
         req: ReimbursementRequest = self.object

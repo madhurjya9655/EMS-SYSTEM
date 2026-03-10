@@ -1,6 +1,6 @@
 # FILE: apps/reimbursement/models.py
 # PURPOSE: Fix rejected/resubmitted bill amount syncing + exclude rejected lines from forward totals
-# UPDATED: 2026-02-27
+# UPDATED: 2026-03-10
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -290,13 +290,13 @@ class ExpenseItem(models.Model):
     def save(self, *args, **kwargs):
         """
         IMPORTANT FIX (Issue 3):
-        Employee edits are typically performed on ExpenseItem after Finance/Manager rejects a bill.
-        However, Finance/Manager queues and most templates display ReimbursementLine.amount.
+        Propagate ExpenseItem edits into any rejected/resubmitted ReimbursementLine rows
+        so Finance/Manager queues always display the latest amount and description.
 
-        To prevent stale UI (old line.amount), propagate ExpenseItem field updates into any
-        "returned-to-employee / resubmitted-to-finance" line states that must mirror the latest edits.
-
-        We intentionally DO NOT move workflow states here. This is data-sync only.
+        NOTE: We use QuerySet.update() intentionally here to avoid triggering
+        ReimbursementLine.save() auto-population (which would be circular). This
+        means the Sheets sync signal will not fire for those lines — acceptable,
+        since the parent request's next save will trigger the sync.
         """
         creating = self.pk is None
         old_amount = None
@@ -329,8 +329,7 @@ class ExpenseItem(models.Model):
         try:
             from .models import ReimbursementLine  # local import to avoid circulars
 
-            # Expand to include EMPLOYEE_RESUBMITTED so the "Resubmitted (Waiting Finance)" UI
-            # always shows the latest edited amount/description.
+            # Sync into rejected/resubmitted lines so Finance UI always shows latest values.
             sync_statuses = [
                 ReimbursementLine.BillStatus.FINANCE_REJECTED,
                 ReimbursementLine.BillStatus.MANAGER_REJECTED,
@@ -343,8 +342,6 @@ class ExpenseItem(models.Model):
                 bill_status__in=sync_statuses,
             )
 
-            # Update the same line record (no shadow rows, no duplicates).
-            # Use update() to avoid triggering ReimbursementLine.save() auto-population.
             qs.update(
                 amount=self.amount,
                 description=self.description,
@@ -354,7 +351,7 @@ class ExpenseItem(models.Model):
         except Exception:
             logger.exception(
                 "Failed to propagate edited ExpenseItem #%s into ReimbursementLine rows (rejected/resubmitted).",
-                self.pk
+                self.pk,
             )
 
 
@@ -443,6 +440,7 @@ class ReimbursementRequest(models.Model):
         BUSINESS RULE FIX (Issue 2):
         total_amount must reflect ONLY lines that remain in the forward workflow.
         Finance/Manager rejected lines are returned to the employee and MUST NOT be included.
+        PAID lines remain included so the total stays accurate after settlement.
         """
         L = self.lines.model  # ReimbursementLine
 
@@ -465,29 +463,55 @@ class ReimbursementRequest(models.Model):
 
     def derive_status_from_bills(self) -> str:
         """
-        Bill-split workflow:
-          - Any pending finance (SUBMITTED / EMPLOYEE_RESUBMITTED) => PENDING_FINANCE_VERIFY
-          - Else if any finance-approved => PENDING_MANAGER
-          - Else if any finance-rejected => REJECTED
-          - Else => PENDING_FINANCE_VERIFY
+        FIX (Issue #2): Extended to handle ALL bill statuses, not just the first
+        four. The original fell through to PENDING_FINANCE_VERIFY for
+        MANAGER_PENDING, MANAGER_APPROVED, MANAGER_REJECTED, and PAID bills,
+        which could silently regress workflow state.
+
+        Priority order (highest first):
+          1. Finance still needs to verify something          → PENDING_FINANCE_VERIFY
+          2. Manager still needs to act on approved bills     → PENDING_MANAGER
+          3. No active forward bills remain                   → REJECTED
+          4. All active bills paid                            → PAID
+          5. All active bills manager-approved                → PENDING_FINANCE
+          6. Fallback                                         → PENDING_FINANCE_VERIFY
         """
         L = ReimbursementLine
-        qs = self.lines.filter(status=L.Status.INCLUDED).values_list("bill_status", flat=True)
-        statuses = set(qs)
+        bill_statuses = list(
+            self.lines.filter(status=L.Status.INCLUDED)
+            .values_list("bill_status", flat=True)
+        )
 
-        if not statuses:
+        if not bill_statuses:
             return self.Status.DRAFT
 
-        pending_set = {L.BillStatus.SUBMITTED, L.BillStatus.EMPLOYEE_RESUBMITTED}
-        if statuses & pending_set:
+        statuses = set(bill_statuses)
+
+        # 1. Finance verification needed — blocks everything else.
+        #    MANAGER_REJECTED also returns the bill to Finance (employee must resubmit).
+        if statuses & {L.BillStatus.SUBMITTED, L.BillStatus.EMPLOYEE_RESUBMITTED, L.BillStatus.MANAGER_REJECTED}:
             return self.Status.PENDING_FINANCE_VERIFY
 
-        if L.BillStatus.FINANCE_APPROVED in statuses:
+        # 2. Manager action needed on finance-approved or already-queued bills.
+        if statuses & {L.BillStatus.FINANCE_APPROVED, L.BillStatus.MANAGER_PENDING}:
             return self.Status.PENDING_MANAGER
 
-        if L.BillStatus.FINANCE_REJECTED in statuses:
+        # Strip "returned-to-employee" bills from active consideration.
+        active = statuses - {L.BillStatus.FINANCE_REJECTED}
+
+        # 3. Nothing active in the forward workflow → all rejected.
+        if not active:
             return self.Status.REJECTED
 
+        # 4. Every active bill is already paid.
+        if active <= {L.BillStatus.PAID}:
+            return self.Status.PAID
+
+        # 5. Remaining active bills are manager-approved (awaiting Finance settlement).
+        if active <= {L.BillStatus.MANAGER_APPROVED, L.BillStatus.PAID}:
+            return self.Status.PENDING_FINANCE
+
+        # Fallback — should not normally be reached.
         return self.Status.PENDING_FINANCE_VERIFY
 
     _STATUS_ORDER = {
@@ -545,6 +569,13 @@ class ReimbursementRequest(models.Model):
         }
 
     def can_mark_paid(self, reference: str = "") -> Tuple[bool, str]:
+        """
+        FIX (Issue #3): The original excluded only FINANCE_APPROVED from the
+        "not yet approved" check. In the per-bill payment flow individual lines
+        can already be PAID before the request-level mark_paid is called.
+        Those PAID lines must also be accepted as settled, otherwise the gate
+        falsely blocks a fully-paid request.
+        """
         if self.status == self.Status.PAID:
             return True, _("Already paid")
 
@@ -558,8 +589,11 @@ class ReimbursementRequest(models.Model):
         inc = self.lines.filter(status=L.Status.INCLUDED)
         if not inc.exists():
             return False, _("No included bills to pay.")
-        if inc.exclude(bill_status=L.BillStatus.FINANCE_APPROVED).exists():
-            return False, _("Some bills are not Finance-Approved yet.")
+
+        # Accept both FINANCE_APPROVED and already-PAID lines.
+        unsettled = inc.exclude(bill_status__in=[L.BillStatus.FINANCE_APPROVED, L.BillStatus.PAID])
+        if unsettled.exists():
+            return False, _("Some bills are not Finance-Approved or Paid yet.")
 
         return True, ""
 
@@ -578,8 +612,13 @@ class ReimbursementRequest(models.Model):
 
         require_mgmt = ReimbursementSettings.get_solo().require_management_approval
 
+        # NOTE (Fix #12): Moving to PENDING_MANAGER without verified_by is intentionally
+        # allowed here because apply_derived_status_from_bills() advances the status when
+        # all finance-approved bills exist, and the calling view then stamps verified_by
+        # immediately after. The two-step is by design; verified_by is not a pre-condition
+        # enforced at the model transition layer.
         if new == self.Status.PENDING_MANAGER and not self.verified_by_id:
-            pass
+            pass  # intentional — verified_by set by calling view post-transition
 
         if new == self.Status.PENDING_MANAGEMENT and not self._is_manager_approved():
             raise DjangoCoreValidationError(_("Cannot move to Management before Manager approval."))
@@ -655,19 +694,22 @@ class ReimbursementRequest(models.Model):
 
         from_status = self.status
 
+        # FIX (Issue #8): Replace per-line loop with a single bulk UPDATE.
+        # The original iterated and saved each line individually causing N+1 queries.
+        # Signals and inline save() logic are intentionally bypassed here — the
+        # request itself is being stamped PAID immediately after, making
+        # re-derivation from each individual line update unnecessary.
         L = self.lines.model
-        inc = self.lines.filter(status=L.Status.INCLUDED)
         now = timezone.now()
-        for ln in inc:
-            ln.bill_status = L.BillStatus.PAID
-            if hasattr(ln, "payment_reference"):
-                ln.payment_reference = (reference or "").strip()
-            if hasattr(ln, "paid_at"):
-                ln.paid_at = now
-            ln.save(update_fields=[f for f in ["bill_status", "payment_reference", "paid_at", "updated_at"] if hasattr(ln, f)])
+        self.lines.filter(status=L.Status.INCLUDED).update(
+            bill_status=L.BillStatus.PAID,
+            payment_reference=reference.strip(),
+            paid_at=now,
+            updated_at=now,
+        )
 
         self.status = self.Status.PAID
-        self.finance_payment_reference = (reference or "").strip()
+        self.finance_payment_reference = reference.strip()
         self.paid_at = now
         if note:
             self.finance_note = f"{self.finance_note}\n{note}" if self.finance_note else note
@@ -694,6 +736,7 @@ class ReimbursementRequest(models.Model):
             self.status = self.Status.PENDING_FINANCE_VERIFY
             self.submitted_at = timezone.now()
 
+            # Clear the entire approval chain so reviewers start fresh.
             self.verified_by = None
             self.verified_at = None
 
@@ -852,10 +895,10 @@ class ReimbursementRequest(models.Model):
             ReimbursementLog.Action.STATUS_CHANGED,
             actor=actor,
             message=f"Admin force-moved. {('Reason: ' + reason) if reason else ''}".strip(),
-                from_status=from_status,
-                to_status=target_status,
-                extra={"type": "admin_force_move"},
-            )
+            from_status=from_status,
+            to_status=target_status,
+            extra={"type": "admin_force_move"},
+        )
 
 
 class ReimbursementLine(models.Model):
@@ -940,18 +983,34 @@ class ReimbursementLine(models.Model):
                 raise DjangoCoreValidationError({"description": _("Bill description is required for every bill.")})
 
     def save(self, *args, **kwargs):
-        creating = self.pk is None
-        old_bill_status = None
-        old_line_status = None
-        if not creating:
-            try:
-                prev = type(self).objects.only("bill_status", "status").get(pk=self.pk)
-                old_bill_status = prev.bill_status
-                old_line_status = prev.status
-            except type(self).DoesNotExist:
-                creating = True
+        """
+        FIX (Issues #5, #7, #10):
 
-        if self.expense_item_id:
+        #5 — Field auto-population from ExpenseItem was running unconditionally,
+             including on targeted `save(update_fields=[...])` calls. This mutated
+             the in-memory object (amount/description/receipt_file) without
+             persisting those changes, leaving callers with a stale object.
+             Now guarded behind `not updating_specific_fields`.
+
+        #7 — The original called apply_derived_status_from_bills() BOTH here
+             (synchronously) AND in the post_save signal (on_commit). This caused
+             double derivation and meant recalc_total was only called on commit,
+             leaving total_amount stale within the transaction.
+             Now: recalc_total + apply_derived_status_from_bills run inline here.
+             The post_save signal (_recalc_parent_on_line_change) is reduced to
+             a no-op; Sheets sync is handled by the ReimbursementRequest post_save
+             signal triggered when the parent is saved.
+
+        #10 — full_clean() was called on every save(), including status-only
+              update_fields saves. Each full_clean() fires a cross-table duplicate-
+              expense-item DB query. Now skipped for targeted field updates.
+        """
+        updating_specific_fields = kwargs.get("update_fields") is not None
+        update_fields_set = set(kwargs["update_fields"]) if updating_specific_fields else None
+        creating = self.pk is None
+
+        # --- Auto-populate from ExpenseItem (full saves only) ---
+        if self.expense_item_id and not updating_specific_fields:
             if not self.amount:
                 self.amount = self.expense_item.amount
             if not (self.description or "").strip():
@@ -959,18 +1018,39 @@ class ReimbursementLine(models.Model):
             if not self.receipt_file:
                 self.receipt_file = self.expense_item.receipt_file
 
-        self.full_clean()
+        # --- Validation (skip on targeted field-only saves) ---
+        if not updating_specific_fields:
+            self.full_clean()
 
-        super().save(*args, **kwargs)
-
-        try:
+        # --- Determine whether parent re-derivation is needed ---
+        # For targeted updates: re-derive only if bill_status or status is in the fields being updated.
+        # For full saves: compare against prior DB state to detect changes.
+        status_trigger_fields = {"bill_status", "status"}
+        if updating_specific_fields:
+            should_rederive = bool(update_fields_set & status_trigger_fields)
+        else:
+            old_bill_status = None
+            old_line_status = None
+            if not creating:
+                try:
+                    prev = type(self).objects.only("bill_status", "status").get(pk=self.pk)
+                    old_bill_status = prev.bill_status
+                    old_line_status = prev.status
+                except type(self).DoesNotExist:
+                    creating = True
             should_rederive = creating or (
                 (old_bill_status is not None and self.bill_status != old_bill_status)
                 or (old_line_status is not None and self.status != old_line_status)
             )
+
+        super().save(*args, **kwargs)
+
+        # --- Synchronously re-derive parent status and recalc totals ---
+        try:
             if should_rederive and self.request_id:
                 parent = self.request
                 if not parent.is_final:
+                    parent.recalc_total(save=True)
                     parent.apply_derived_status_from_bills(
                         actor=self.last_modified_by,
                         reason="Auto-derive after bill line change.",
@@ -978,7 +1058,7 @@ class ReimbursementLine(models.Model):
         except Exception:
             logger.exception(
                 "Failed to auto-derive parent status on line save (line_id=%s, request_id=%s).",
-                self.pk, self.request_id
+                self.pk, self.request_id,
             )
 
     # ---- Finance actions ----
@@ -1047,10 +1127,9 @@ class ReimbursementLine(models.Model):
     # ---- Employee actions ----
     def employee_resubmit_bill(self, *, actor: Optional[models.Model]) -> None:
         """
-        OPTION 2 FIX (Issue 3):
         When employee resubmits a corrected bill, the line record must reflect the
         latest ExpenseItem values (amount/description/receipt), otherwise UI keeps
-        showing stale line.amount (e.g. 293 instead of 393).
+        showing stale line.amount.
         """
         if self.bill_status not in (self.BillStatus.FINANCE_REJECTED, self.BillStatus.MANAGER_REJECTED):
             raise DjangoCoreValidationError(_("Only rejected bills can be resubmitted by employee."))

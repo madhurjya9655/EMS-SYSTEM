@@ -1,3 +1,14 @@
+# apps/leave/services/handover.py
+#
+# FIX 2026-03-10 — Bug 2 (Medium):
+#   send_handover_email() created an SMTP connection via get_connection() but
+#   never closed it. Under any load this leaks open SMTP sockets until the
+#   process terminates or the server closes the connection on its end.
+#
+#   Fix: replaced the bare get_connection() + manual EmailMultiAlternatives
+#   send with a `with get_connection(...) as conn:` context manager block,
+#   consistent with how notifications.py already handles its connections.
+
 from __future__ import annotations
 
 import logging
@@ -7,7 +18,6 @@ from typing import Iterable, List, Optional
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives, get_connection
 from django.template.loader import render_to_string
-from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import strip_tags
 from zoneinfo import ZoneInfo
@@ -129,7 +139,6 @@ def send_handover_email(leave: LeaveRequest, assignee, handovers: List[LeaveHand
 
         ctx = _build_handover_email_context(leave, assignee, handovers)
 
-        # Try to use a project template if present; otherwise render minimal inline HTML.
         try:
             html_body = render_to_string("leave/email_handover_summary.html", ctx)
         except Exception:
@@ -151,29 +160,39 @@ def send_handover_email(leave: LeaveRequest, assignee, handovers: List[LeaveHand
             html_body = "".join(lines)
 
         text_body = strip_tags(html_body)
-        subject = f"[Handover] Tasks assigned to you for {ctx['employee_name']}’s leave"
+        subject = f"[Handover] Tasks assigned to you for {ctx['employee_name']}'s leave"
 
-        conn = get_connection(
+        from_email = (
+            getattr(settings, "DEFAULT_FROM_EMAIL", None)
+            or getattr(settings, "EMAIL_HOST_USER", None)
+        )
+
+        # FIX: use context manager so the connection is always closed, even on error.
+        # Previously: conn = get_connection(...) with no corresponding close().
+        with get_connection(
             username=getattr(settings, "EMAIL_HOST_USER", None),
             password=getattr(settings, "EMAIL_HOST_PASSWORD", None),
             fail_silently=True,
-        )
-
-        msg = EmailMultiAlternatives(
-            subject=subject,
-            body=text_body,
-            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None),
-            to=[assignee.email],
-            connection=conn,
-        )
-        msg.attach_alternative(html_body, "text/html")
-        msg.send()
+        ) as conn:                                                      # ← FIX
+            msg = EmailMultiAlternatives(
+                subject=subject,
+                body=text_body,
+                from_email=from_email,
+                to=[assignee.email],
+                connection=conn,
+            )
+            msg.attach_alternative(html_body, "text/html")
+            msg.send()
 
         logger.info("Handover email sent to %s for leave %s (%d items).", assignee.email, leave.id, len(handovers))
         return True
 
     except Exception:
-        logger.exception("Failed sending handover email for leave %s to %s", getattr(leave, "id", None), getattr(assignee, "email", None))
+        logger.exception(
+            "Failed sending handover email for leave %s to %s",
+            getattr(leave, "id", None),
+            getattr(assignee, "email", None),
+        )
         return False
 
 

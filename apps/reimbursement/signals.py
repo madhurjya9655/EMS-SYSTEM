@@ -1,4 +1,5 @@
 # FILE: apps/reimbursement/signals.py
+# UPDATED: 2026-03-10
 from __future__ import annotations
 
 import logging
@@ -19,7 +20,7 @@ SYNC_DEBOUNCE_SECONDS = 15
 def _should_sync_req(req_id: int) -> bool:
     """
     Return True if we should perform a sync for this request id now,
-    and set a short-lived cache key to hold future calls.
+    and set a short-lived cache key to throttle subsequent calls.
     """
     key = f"reimb.req.sync.debounce.{req_id}"
     if cache.get(key):
@@ -56,68 +57,36 @@ def _sync_req_on_save(sender, instance: ReimbursementRequest, created, **kwargs)
 @receiver(post_save, sender=ReimbursementLine)
 def _recalc_parent_on_line_change(sender, instance: ReimbursementLine, created, **kwargs):
     """
-    Keep the parent request's derived status in sync with bill-level changes.
+    FIX (Issue #7): Parent recalc_total and apply_derived_status_from_bills are now
+    called SYNCHRONOUSLY inside ReimbursementLine.save() (for every save that changes
+    bill_status or line status). Running the same logic here on_commit was a second
+    duplicate execution that:
+      - Caused double status derivation per line save.
+      - Left total_amount stale within the originating transaction (signal runs after
+        commit, so any code in the same transaction reading req.total_amount would
+        see the old value).
 
-    IMPORTANT:
-    - Parent totals must always be computed dynamically from eligible lines.
-      The authoritative logic lives in ReimbursementRequest.recalc_total(), which
-      excludes rejected lines from forward totals.
+    The Sheets sync for the parent is handled by _sync_req_on_save which fires
+    automatically whenever the parent ReimbursementRequest is saved (which recalc_total
+    and apply_derived_status_from_bills both trigger via their own save() calls).
+
+    This handler is therefore intentionally left as a no-op for save events.
+    It is kept registered (rather than removed) to make the architecture explicit and
+    to act as a hook for future line-specific side-effects that must run post-commit.
     """
-    def _do():
-        try:
-            req = ReimbursementRequest.objects.get(pk=instance.request_id)
-            prev_status = req.status
-
-            # Recompute totals from current DB state (uses business-rule exclusion)
-            try:
-                req.recalc_total(save=True)
-            except Exception:
-                logger.debug(
-                    "Unable to recalc total for request %s after line %s save.",
-                    req.pk, instance.pk
-                )
-
-            # Re-derive request status based on bill workflow states
-            req.apply_derived_status_from_bills(
-                actor=getattr(instance, "last_modified_by", None),
-                reason=f"Bill line #{instance.pk} updated; re-deriving parent status.",
-            )
-
-            if prev_status != req.status:
-                logger.info(
-                    "Reimbursement %s status adjusted from %s to %s after line update.",
-                    req.pk, prev_status, req.status
-                )
-
-            # Soft-sync parent (debounced). We only sync the request object, not each line.
-            if _should_sync_req(req.pk):
-                from .integrations.sheets import sync_request  # lazy import
-                full = (
-                    ReimbursementRequest.objects.select_related(
-                        "created_by", "manager", "management", "verified_by"
-                    )
-                    .prefetch_related("lines__expense_item")
-                    .get(pk=req.pk)
-                )
-                sync_request(full)
-        except Exception:
-            logger.exception(
-                "Unable to derive parent status for request %s after line %s save.",
-                instance.request_id, instance.pk
-            )
-
-    transaction.on_commit(_do)
+    pass
 
 
 @receiver(post_delete, sender=ReimbursementLine)
 def _recalc_parent_on_line_delete(sender, instance: ReimbursementLine, **kwargs):
     """
-    When a bill line is deleted, make sure the parent total and derived status are updated.
+    When a bill line is deleted, recalc totals and re-derive parent status.
 
-    IMPORTANT:
-    - Parent totals must always be computed dynamically from eligible lines.
-      The authoritative logic lives in ReimbursementRequest.recalc_total(), which
-      excludes rejected lines from forward totals.
+    DELETE does not go through ReimbursementLine.save(), so the inline recalc
+    logic in save() is not triggered. We must handle it here on_commit.
+
+    Sheets sync is triggered indirectly: recalc_total and apply_derived_status_from_bills
+    both save the parent, which fires _sync_req_on_save.
     """
     def _do():
         try:
@@ -125,16 +94,14 @@ def _recalc_parent_on_line_delete(sender, instance: ReimbursementLine, **kwargs)
         except ReimbursementRequest.DoesNotExist:
             return
 
-        # Recompute totals from current DB state (uses business-rule exclusion)
         try:
             req.recalc_total(save=True)
         except Exception:
             logger.debug(
                 "Unable to recalc total for request %s after line %s delete.",
-                req.pk, instance.pk
+                req.pk, instance.pk,
             )
 
-        # Re-derive status based on remaining bill workflow states
         try:
             req.apply_derived_status_from_bills(
                 actor=None,
@@ -143,22 +110,7 @@ def _recalc_parent_on_line_delete(sender, instance: ReimbursementLine, **kwargs)
         except Exception:
             logger.exception(
                 "Unable to derive parent status for request %s after line %s delete.",
-                req.pk, instance.pk
+                req.pk, instance.pk,
             )
-
-        # Debounced export
-        try:
-            if _should_sync_req(req.pk):
-                from .integrations.sheets import sync_request  # lazy import
-                full = (
-                    ReimbursementRequest.objects.select_related(
-                        "created_by", "manager", "management", "verified_by"
-                    )
-                    .prefetch_related("lines__expense_item")
-                    .get(pk=req.pk)
-                )
-                sync_request(full)
-        except Exception:
-            logger.exception("Sheets sync scheduling failed for ReimbursementRequest %s", req.pk)
 
     transaction.on_commit(_do)

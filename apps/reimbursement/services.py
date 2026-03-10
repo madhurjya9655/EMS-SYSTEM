@@ -1,8 +1,10 @@
 # FILE: apps/reimbursement/services.py
+# UPDATED: 2026-03-10
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Q, Count, Exists, OuterRef, F
 
@@ -12,6 +14,41 @@ from .models import (
     ReimbursementSettings,
 )
 
+# ---------------------------------------------------------------------------
+# Settings cache helper
+# FIX (Issue #11): ReimbursementSettings.get_solo() performs a get_or_create DB
+# call on every invocation. Queue helpers like qs_finance_settlement_queue() are
+# called on every list view render. Caching the require_management_approval flag
+# for a short TTL eliminates the redundant round-trip without meaningful staleness
+# risk (a settings change will propagate within SETTINGS_CACHE_TTL seconds).
+# ---------------------------------------------------------------------------
+
+_SETTINGS_CACHE_KEY = "reimb.settings.require_mgmt_approval"
+_SETTINGS_CACHE_TTL = 120  # seconds
+
+
+def _get_require_management_approval() -> bool:
+    """
+    Return ReimbursementSettings.require_management_approval with a short cache.
+    Cache is invalidated automatically after TTL. Call invalidate_settings_cache()
+    after saving ReimbursementSettings to push changes immediately.
+    """
+    cached = cache.get(_SETTINGS_CACHE_KEY)
+    if cached is not None:
+        return bool(cached)
+    value = ReimbursementSettings.get_solo().require_management_approval
+    cache.set(_SETTINGS_CACHE_KEY, value, timeout=_SETTINGS_CACHE_TTL)
+    return value
+
+
+def invalidate_settings_cache() -> None:
+    """Call this after saving ReimbursementSettings so queues reflect changes immediately."""
+    cache.delete(_SETTINGS_CACHE_KEY)
+
+
+# ---------------------------------------------------------------------------
+# Service result wrapper
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class ServiceResult:
@@ -19,6 +56,10 @@ class ServiceResult:
     request_id: int
     status: str
 
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
 def _all_included_lines_finance_approved(req_id: int) -> bool:
     """
@@ -48,6 +89,10 @@ def _all_included_lines_finance_approved(req_id: int) -> bool:
         return False
     return agg["total"] > 0 and agg["total"] == agg["ok"]
 
+
+# ---------------------------------------------------------------------------
+# Service functions
+# ---------------------------------------------------------------------------
 
 @transaction.atomic
 def apply_derived_status_from_bills(
@@ -181,10 +226,15 @@ def qs_finance_settlement_queue():
           * Else: manager approved
       - Not paid yet
       - Request not rejected
+
+    FIX (Issue #11): require_management_approval is now read from a short-lived cache
+    instead of calling get_solo() (which issues a get_or_create DB query) on every
+    call. This avoids a per-request-per-view-render DB round-trip.
     """
     L = ReimbursementLine
     R = ReimbursementRequest
-    require_mgmt = ReimbursementSettings.get_solo().require_management_approval
+
+    require_mgmt = _get_require_management_approval()
 
     qs = (
         R.objects

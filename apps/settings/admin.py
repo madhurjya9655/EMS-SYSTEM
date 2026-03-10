@@ -1,3 +1,4 @@
+#E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\settings\admin.py
 from django.contrib import admin
 from .models import AuthorizedNumber, Holiday, SystemSetting
 

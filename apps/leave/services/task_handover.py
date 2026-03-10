@@ -1,7 +1,19 @@
-#apps/leave/services/task_handover.py
+# apps/leave/services/task_handover.py
+#
+# FIX 2026-03-10 — Bug 3 (Minor):
+#   deactivate_expired_handovers() was annotated with
+#   `Optional[timezone.datetime]` but django.utils.timezone has no `.datetime`
+#   attribute. `from __future__ import annotations` defers evaluation so this
+#   doesn't crash at runtime, but it produces wrong hover types in IDEs and
+#   fails any runtime introspection (e.g. `get_type_hints()`).
+#
+#   Fix: added `from datetime import datetime` and changed the annotation to
+#   `Optional[datetime]`.
+
 from __future__ import annotations
 
 import logging
+from datetime import datetime                        # ← FIX: import datetime
 from typing import Optional
 from django.utils import timezone
 
@@ -13,7 +25,7 @@ from .handover import apply_handover_for_leave, send_handover_email  # noqa: F40
 logger = logging.getLogger(__name__)
 
 
-def deactivate_expired_handovers(now_date: Optional[timezone.datetime] = None) -> int:
+def deactivate_expired_handovers(now_date: Optional[datetime] = None) -> int:  # ← FIX
     """
     Deactivate all expired LeaveHandover rows and stop their DelegationReminder rows.
     A handover is considered expired when:

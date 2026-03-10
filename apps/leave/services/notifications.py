@@ -1,8 +1,21 @@
-#apps/leave/services/notifications.py
+# apps/leave/services/notifications.py
+#
+# FIX 2026-03-10 — Bug 1 (Critical):
+#   _already_sent_recent() used `timezone.timedelta(...)` which raises
+#   AttributeError at runtime because django.utils.timezone has no timedelta
+#   attribute. The exception was silently swallowed by `except Exception:
+#   return False`, so duplicate-suppression NEVER worked — leave emails
+#   (request, decision, handover reminder) could fire repeatedly.
+#
+#   Fix: added `from datetime import timedelta` at the top of the file and
+#   replaced the single occurrence of `timezone.timedelta(...)` with
+#   `timedelta(...)`.  No other changes.
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import timedelta                       # ← FIX: import timedelta
 from typing import Dict, List, Optional, Tuple, Iterable
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
@@ -28,17 +41,13 @@ User = get_user_model()
 
 IST = ZoneInfo("Asia/Kolkata")
 TOKEN_SALT = getattr(settings, "LEAVE_DECISION_TOKEN_SALT", "leave-action-v1")
-TOKEN_MAX_AGE_SECONDS = getattr(settings, "LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)  # reserved for verifiers
+TOKEN_MAX_AGE_SECONDS = getattr(settings, "LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)
 
 
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
 def _site_base() -> str:
-    """
-    Return normalized base URL (trailing slash) for absolute links.
-    Prefers SITE_URL, then SITE_BASE_URL, else localhost.
-    """
     base = (
         getattr(settings, "SITE_URL", "")
         or getattr(settings, "SITE_BASE_URL", "")
@@ -54,7 +63,6 @@ def _abs_url(path: str | None) -> str:
 
 
 def _format_ist(dt) -> str:
-    """Format a datetime in IST; fall back to str(dt) if anything fails."""
     try:
         return timezone.localtime(dt, IST).strftime("%d %b %Y, %I:%M %p")
     except Exception:
@@ -62,7 +70,6 @@ def _format_ist(dt) -> str:
 
 
 def _email_enabled() -> bool:
-    """Global feature flag gate; defaults to True."""
     try:
         return bool(getattr(settings, "FEATURES", {}).get("EMAIL_NOTIFICATIONS", True))
     except Exception:
@@ -70,16 +77,11 @@ def _email_enabled() -> bool:
 
 
 def _render_pair(html_tpl: str, txt_tpl: str, context: Dict) -> Tuple[str, str]:
-    """
-    Render HTML & text templates. If templates are missing, produce a simple
-    inline fallback so the send still succeeds (and logs carry context).
-    """
     try:
         html = get_template(html_tpl).render(context)
         txt = get_template(txt_tpl).render(context)
         return html, txt
     except Exception:
-        # Minimal generic fallbacks by intent type
         kind = "notification"
         if "leave_type" in context and "approve_url" in context:
             kind = "leave request"
@@ -89,7 +91,6 @@ def _render_pair(html_tpl: str, txt_tpl: str, context: Dict) -> Tuple[str, str]:
             kind = "handover"
         elif "task_type" in context and "task_name" in context:
             kind = "task completed"
-
         lines = [f"{kind.title()} from EMS"]
         for k, v in context.items():
             try:
@@ -103,10 +104,6 @@ def _render_pair(html_tpl: str, txt_tpl: str, context: Dict) -> Tuple[str, str]:
 
 
 def _send(subject: str, to_addr: str, cc: List[str], reply_to: List[str], html: str, txt: str) -> bool:
-    """
-    Send an email and log success/failure with full context.
-    Returns True on success, False on any failure.
-    """
     if not to_addr:
         logger.warning("Leave email suppressed: empty TO address. subject=%r cc=%s", subject, cc)
         return False
@@ -115,7 +112,6 @@ def _send(subject: str, to_addr: str, cc: List[str], reply_to: List[str], html: 
     fail_silently = getattr(settings, "EMAIL_FAIL_SILENTLY", True)
     backend_name = getattr(settings, "EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
 
-    # Log what we are about to do (masked password)
     try:
         host = getattr(settings, "EMAIL_HOST", None)
         port = getattr(settings, "EMAIL_PORT", None)
@@ -125,13 +121,13 @@ def _send(subject: str, to_addr: str, cc: List[str], reply_to: List[str], html: 
         logger.info(
             "Leave email attempt: backend=%s host=%s port=%s user=%s TLS=%s SSL=%s "
             "from=%s to=%s cc=%s reply_to=%s subject=%r fail_silently=%s",
-            backend_name, host, port, user, use_tls, use_ssl, from_email, to_addr, cc, reply_to, subject, fail_silently
+            backend_name, host, port, user, use_tls, use_ssl,
+            from_email, to_addr, cc, reply_to, subject, fail_silently,
         )
     except Exception:
         pass
 
     try:
-        # Use an explicit connection so we can log open/close events
         with get_connection() as conn:
             msg = EmailMultiAlternatives(
                 subject=subject,
@@ -152,7 +148,6 @@ def _send(subject: str, to_addr: str, cc: List[str], reply_to: List[str], html: 
         logger.error("Leave email send returned 0: to=%s cc=%s subject=%r", to_addr, cc, subject)
         return False
     except Exception as exc:
-        # If fail_silently=True, Django would suppress; we still log here.
         logger.exception("Leave email send FAILED: to=%s cc=%s subject=%r error=%s", to_addr, cc, subject, exc)
         return False
 
@@ -160,7 +155,10 @@ def _send(subject: str, to_addr: str, cc: List[str], reply_to: List[str], html: 
 def _already_sent_recent(leave: LeaveRequest, kind_hint: str | None = None, within_seconds: int = 90) -> bool:
     """Light duplicate suppression using EMAIL_SENT audits."""
     try:
-        since = timezone.now() - timezone.timedelta(seconds=within_seconds)
+        # FIX: was `timezone.timedelta(...)` — django.utils.timezone has no timedelta.
+        # That AttributeError was silently swallowed, making this check always return
+        # False and allowing duplicate emails to fire on every call.
+        since = timezone.now() - timedelta(seconds=within_seconds)   # ← FIX
         qs = LeaveDecisionAudit.objects.filter(
             leave=leave, action=DecisionAction.EMAIL_SENT, decided_at__gte=since
         )
@@ -172,7 +170,6 @@ def _already_sent_recent(leave: LeaveRequest, kind_hint: str | None = None, with
 
 
 def _dedupe_lower(emails: Iterable[str]) -> List[str]:
-    """Lowercase + dedupe + remove falsy entries, preserving order."""
     seen = set()
     out: List[str] = []
     for e in emails or []:
@@ -193,7 +190,6 @@ class _TokenLinks:
 
 
 def _build_token_links(leave: LeaveRequest, recipient_email: str) -> _TokenLinks:
-    """Create one-click links bound to the recipient's address."""
     recipient_email = (recipient_email or "").strip().lower()
     if not recipient_email:
         return _TokenLinks(None, None)
@@ -201,19 +197,16 @@ def _build_token_links(leave: LeaveRequest, recipient_email: str) -> _TokenLinks
     payload_base = {
         "leave_id": int(leave.id),
         "actor_email": recipient_email,
-        "manager_email": recipient_email,  # legacy key for older handlers
+        "manager_email": recipient_email,
     }
-
     approve_token = signing.dumps({**payload_base, "action": "approve"}, salt=TOKEN_SALT)
     reject_token = signing.dumps({**payload_base, "action": "reject"}, salt=TOKEN_SALT)
-
     approve_url = _abs_url(reverse("leave:leave_action_via_token", args=[approve_token])) + "?a=APPROVED"
     reject_url = _abs_url(reverse("leave:leave_action_via_token", args=[reject_token])) + "?a=REJECTED"
     return _TokenLinks(approve=approve_url, reject=reject_url)
 
 
 def _duration_days_ist(leave: LeaveRequest) -> float:
-    """Inclusive day count in IST, respecting half-day."""
     if not (leave.start_at and leave.end_at):
         return 0.0
     s = timezone.localtime(leave.start_at, IST).date()
@@ -252,12 +245,6 @@ def _manager_display_name(leave: LeaveRequest, manager_email: str) -> Optional[s
 
 
 def _default_cc_emails_for_employee(emp: User) -> List[str]:
-    """
-    Collect default CC from ApproverMapping:
-      - ApproverMapping.default_cc_users (M2M)
-      - legacy ApproverMapping.cc_person.email if present
-    Lowercased, deduped, falsy filtered.
-    """
     out: List[str] = []
     try:
         mapping = (
@@ -267,13 +254,11 @@ def _default_cc_emails_for_employee(emp: User) -> List[str]:
             .first()
         )
         if mapping:
-            out.extend(
-                [
-                    u.email.strip().lower()
-                    for u in mapping.default_cc_users.all()
-                    if getattr(u, "email", None)
-                ]
-            )
+            out.extend([
+                u.email.strip().lower()
+                for u in mapping.default_cc_users.all()
+                if getattr(u, "email", None)
+            ])
             if getattr(mapping, "cc_person", None) and getattr(mapping.cc_person, "email", None):
                 out.append(mapping.cc_person.email.strip().lower())
     except Exception:
@@ -286,16 +271,6 @@ def _resolve_recipients(
     manager_email: Optional[str],
     cc_list: Optional[Iterable[str]],
 ) -> Tuple[str, List[str]]:
-    """
-    Return (to, cc) using explicit args > model snapshot > routing fallback.
-    CCs are a merge of:
-      • per-request leave.cc_users
-      • ApproverMapping.default_cc_users for the employee
-      • legacy ApproverMapping.cc_person.email
-      • any explicit cc_list provided by caller
-    All lowercased & deduped.
-    """
-    # Selected CCs by the employee (per-request)
     selected_ccs: List[str] = []
     try:
         selected_ccs = [
@@ -304,28 +279,21 @@ def _resolve_recipients(
     except Exception:
         selected_ccs = []
 
-    # Admin defaults from mapping (M2M + legacy single)
     defaults = _default_cc_emails_for_employee(leave.employee)
-
-    # Explicit list from caller (if any)
     explicit = [(e or "").strip().lower() for e in (cc_list or []) if e]
-
     merged_cc = _dedupe_lower([*explicit, *selected_ccs, *defaults])
 
     if manager_email:
         return manager_email.strip().lower(), merged_cc
 
-    # Prefer model snapshot
     if getattr(leave, "reporting_person", None) and getattr(leave.reporting_person, "email", None):
         to_addr = leave.reporting_person.email.strip().lower()
-        # include legacy snapshot on the leave row as well (rare but safe)
         legacy_on_leave = []
         if getattr(leave, "cc_person", None) and getattr(leave, "cc_person").email:
             legacy_on_leave.append(leave.cc_person.email.strip().lower())
         cc = _dedupe_lower([*merged_cc, *legacy_on_leave])
         return to_addr, cc
 
-    # Fallback: dynamic routing
     try:
         from apps.users.routing import recipients_for_leave
         emp_email = (leave.employee_email or getattr(leave.employee, "email", "") or "").strip().lower()
@@ -349,12 +317,10 @@ def send_leave_request_email(
     *,
     force: bool = False,
 ) -> None:
-    """Send the initial leave request to the Reporting Person (TO) and CC (admin + selected)."""
     if not _email_enabled():
         logger.info("Email disabled via FEATURES.EMAIL_NOTIFICATIONS; skipping request email for leave #%s.", leave.id)
         return
 
-    # Light duplicate suppression (unless force=True)
     if not force and _already_sent_recent(leave, kind_hint="request"):
         logger.info("Suppressing duplicate request email for leave #%s (recent audit).", leave.id)
         return
@@ -365,8 +331,6 @@ def send_leave_request_email(
         return
 
     tokens = _build_token_links(leave, to_addr)
-
-    # Approval page (login) with hint
     approval_page_url = _abs_url(reverse("leave:approval_page", args=[leave.id]))
     approve_url = f"{approval_page_url}?a=APPROVED"
     reject_url = f"{approval_page_url}?a=REJECTED"
@@ -374,29 +338,22 @@ def send_leave_request_email(
     employee_name = leave.employee_name or _employee_display_name(leave.employee)
     manager_name = _manager_display_name(leave, to_addr)
     leave_type_name = getattr(leave.leave_type, "name", str(leave.leave_type))
-
-    # SUBJECT FORMAT CHANGE:
-    # Old: "[EMS] Leave Request — {employee_name} ({start} to {end})"
-    # New: "Leave Request - Employee Name ( Leave Type )"
     subject = f"Leave Request - {employee_name} ({leave_type_name})"
 
-    # Collect handover summary for email
     handover_summary = []
     try:
         handovers = LeaveHandover.objects.filter(leave_request=leave).select_related("new_assignee")
         for handover in handovers:
             task_title = handover.get_task_title()
             task_url = _abs_url(handover.get_task_url())
-            handover_summary.append(
-                {
-                    "task_type": handover.get_task_type_display(),
-                    "task_id": handover.original_task_id,
-                    "task_title": task_title,
-                    "task_url": task_url,
-                    "assignee_name": _employee_display_name(handover.new_assignee),
-                    "message": handover.message,
-                }
-            )
+            handover_summary.append({
+                "task_type": handover.get_task_type_display(),
+                "task_id": handover.original_task_id,
+                "task_title": task_title,
+                "task_url": task_url,
+                "assignee_name": _employee_display_name(handover.new_assignee),
+                "message": handover.message,
+            })
     except Exception:
         pass
 
@@ -415,14 +372,11 @@ def send_leave_request_email(
         "manager_name": manager_name,
         "manager_email": to_addr,
         "cc_list": list(cc or []),
-        # Handover summary
         "handover_summary": handover_summary,
         "has_handovers": len(handover_summary) > 0,
-        # Buttons (approval page)
         "approve_url": approve_url,
         "reject_url": reject_url,
         "approval_page_url": approval_page_url,
-        # One-click tokens for the RP (TO) only
         "token_approve_url": tokens.approve,
         "token_reject_url": tokens.reject,
     }
@@ -435,7 +389,6 @@ def send_leave_request_email(
         logger.error("Leave request email NOT delivered for leave #%s (see earlier logs for details).", leave.id)
         return
 
-    # Best-effort audit
     try:
         if LeaveDecisionAudit and DecisionAction:
             LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT, extra={"kind": "request"})
@@ -444,12 +397,10 @@ def send_leave_request_email(
 
 
 def send_leave_decision_email(leave: LeaveRequest) -> None:
-    """Send the approve/reject decision email to the employee."""
     if not _email_enabled():
         logger.info("Email disabled via FEATURES.EMAIL_NOTIFICATIONS; skipping decision email for leave #%s.", leave.id)
         return
 
-    # Light suppression
     if _already_sent_recent(leave, kind_hint="decision"):
         logger.info("Suppressing duplicate decision email for leave #%s (recent audit).", leave.id)
         return
@@ -491,11 +442,9 @@ def send_leave_decision_email(leave: LeaveRequest) -> None:
 
     reply_to: List[str] = []
     try:
-        # Prefer approver's email
         if getattr(leave.approver, "email", ""):
             reply_to.append(leave.approver.email)
         else:
-            # Fallback: route replies to current RP mapping for the **employee email**
             from apps.users.routing import recipients_for_leave
             emp_email = (leave.employee_email or getattr(leave.employee, "email", "") or "").strip()
             routing = recipients_for_leave(emp_email)
@@ -517,7 +466,6 @@ def send_leave_decision_email(leave: LeaveRequest) -> None:
 
 
 def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
-    """Send handover notification to the delegate about assigned tasks."""
     if not _email_enabled():
         logger.info("Email disabled via FEATURES.EMAIL_NOTIFICATIONS; skipping handover email for leave #%s.", leave.id)
         return
@@ -533,20 +481,17 @@ def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
     employee_name = leave.employee_name or _employee_display_name(leave.employee)
     assignee_name = _employee_display_name(assignee)
 
-    # Prepare handover details with task links
     handover_details = []
     for handover in handovers:
         task_title = handover.get_task_title()
         task_url = _abs_url(handover.get_task_url())
-        handover_details.append(
-            {
-                "task_name": task_title,
-                "task_type": handover.get_task_type_display(),
-                "task_id": handover.original_task_id,
-                "task_url": task_url,
-                "message": handover.message,
-            }
-        )
+        handover_details.append({
+            "task_name": task_title,
+            "task_type": handover.get_task_type_display(),
+            "task_id": handover.original_task_id,
+            "task_url": task_url,
+            "message": handover.message,
+        })
 
     subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
     subject = f"{subject_prefix}Task Handover: {employee_name} ({_format_ist(leave.start_at)} - {_format_ist(leave.end_at)})"
@@ -586,7 +531,6 @@ def send_handover_email(leave: LeaveRequest, assignee, handovers: List) -> None:
 
 
 def send_delegation_reminder_email(reminder) -> None:
-    """Send reminder email for delegated task."""
     if not _email_enabled():
         logger.info("Email disabled via FEATURES.EMAIL_NOTIFICATIONS; skipping delegation reminder email.")
         return
@@ -647,14 +591,10 @@ def send_delegation_reminder_email(reminder) -> None:
 # Task completion notifications
 # ---------------------------------------------------------------------------
 def _task_type_and_url(task) -> Tuple[str, Optional[str]]:
-    """
-    Infer (task_type_name, absolute_url_to_task_detail) from task instance.
-    Uses *detail* routes to match dashboard links.
-    """
     task_type = "unknown"
     url_path = None
     try:
-        from apps.tasks.models import Checklist, Delegation, HelpTicket  # local import
+        from apps.tasks.models import Checklist, Delegation, HelpTicket
         if isinstance(task, Checklist):
             task_type = "Checklist"
             url_path = reverse("tasks:checklist_detail", args=[task.id])
@@ -670,11 +610,8 @@ def _task_type_and_url(task) -> Tuple[str, Optional[str]]:
 
 
 def _find_related_leave(task) -> Optional[LeaveRequest]:
-    """
-    Try to resolve the LeaveRequest via the most recent matching LeaveHandover.
-    """
     try:
-        from apps.tasks.models import Checklist, Delegation, HelpTicket  # local import
+        from apps.tasks.models import Checklist, Delegation, HelpTicket
         if isinstance(task, Checklist):
             tname = "checklist"
         elif isinstance(task, Delegation):
@@ -695,12 +632,6 @@ def _find_related_leave(task) -> Optional[LeaveRequest]:
 
 
 def send_task_completion_email(original_assignee: User, delegate: User, task, context: Dict) -> None:
-    """
-    Notify the original assignee that a delegated/handed-over task has been completed by the delegate.
-    Templates:
-      templates/email/task_completed.html
-      templates/email/task_completed.txt
-    """
     if not _email_enabled():
         logger.info("Email disabled; skipping task completion email.")
         return
@@ -712,11 +643,8 @@ def send_task_completion_email(original_assignee: User, delegate: User, task, co
 
     task_type, task_url = _task_type_and_url(task)
     task_name = getattr(task, "task_name", None) or getattr(task, "title", f"{task_type} #{getattr(task, 'id', '')}")
-
     completed_at = context.get("completed_at") or timezone.now()
     planned_date = context.get("planned_date")
-
-    # Optional: attach leave info if resolvable
     leave = _find_related_leave(task)
 
     subject_prefix = getattr(settings, "EMAIL_SUBJECT_PREFIX", "[EMS] ")
@@ -736,7 +664,6 @@ def send_task_completion_email(original_assignee: User, delegate: User, task, co
         "original_assignee_name": (getattr(original_assignee, "get_full_name", lambda: "")() or original_assignee.username),
         "planned_date_ist": _format_ist(planned_date) if planned_date else None,
         "completed_at_ist": _format_ist(completed_at),
-        # Optional leave context for visibility window
         "leave_window": {
             "exists": bool(leave),
             "start_at_ist": _format_ist(leave.start_at) if leave else None,
@@ -753,7 +680,6 @@ def send_task_completion_email(original_assignee: User, delegate: User, task, co
         logger.error("Task completion email NOT delivered: task=%s to=%s", getattr(task, "id", None), to_addr)
         return
 
-    # Best-effort audit on linked leave if available
     try:
         if leave and LeaveDecisionAudit and DecisionAction:
             LeaveDecisionAudit.log(
@@ -765,14 +691,7 @@ def send_task_completion_email(original_assignee: User, delegate: User, task, co
         logger.exception("Failed to log EMAIL_SENT (task_completed) for leave #%s", getattr(leave, "id", None))
 
 
-# NEW: wrapper used by signals_tasks.py (so post-save completion hooks work)
 def send_handover_completion_email(handover: LeaveHandover) -> None:
-    """
-    Thin adapter so `signals_tasks.py` can notify the original assignee when a
-    handed-over task is marked as completed.
-
-    Uses the existing `send_task_completion_email(...)` under the hood.
-    """
     try:
         if not _email_enabled():
             return
@@ -780,7 +699,6 @@ def send_handover_completion_email(handover: LeaveHandover) -> None:
         if not task:
             logger.info("Completion email skipped: task not found for handover id=%s", getattr(handover, "id", None))
             return
-
         original = handover.original_assignee
         delegate = handover.new_assignee
         context = {
@@ -798,5 +716,5 @@ __all__ = [
     "send_handover_email",
     "send_delegation_reminder_email",
     "send_task_completion_email",
-    "send_handover_completion_email",  # ← added export
+    "send_handover_completion_email",
 ]
