@@ -1,9 +1,10 @@
-﻿# FILE: employee_management/settings.py
+﻿#E:\CLIENT PROJECT\employee management system bos\employee_management_system\employee_management\settings.py
 import os
 import sqlite3
 from pathlib import Path
 from typing import List
 
+import dj_database_url  # type: ignore
 from dotenv import load_dotenv
 from django.db.backends.signals import connection_created  # type: ignore
 
@@ -214,21 +215,15 @@ else:
 # -----------------------------------------------------------------------------
 # DATABASE
 # -----------------------------------------------------------------------------
-try:
-    import dj_database_url  # type: ignore
-except Exception:
-    dj_database_url = None
-
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-CONN_MAX_AGE = env_int("CONN_MAX_AGE", 0)
 
-if DATABASE_URL and dj_database_url:
+if DATABASE_URL:
     DATABASES = {
-        "default": dj_database_url.parse(
-            DATABASE_URL,
-            conn_max_age=CONN_MAX_AGE,
-            ssl_require=env_bool("DB_SSL_REQUIRE", True),
-        ),
+        "default": dj_database_url.config(
+            default=DATABASE_URL,
+            conn_max_age=600,
+            conn_health_checks=True,
+        )
     }
 else:
     sqlite_path = os.getenv("SQLITE_PATH", "").strip()
@@ -243,7 +238,7 @@ else:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": sqlite_path,
-            "CONN_MAX_AGE": CONN_MAX_AGE,
+            "CONN_MAX_AGE": 600,
             "OPTIONS": {
                 "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
                 "timeout": 60,
@@ -285,8 +280,8 @@ def _robust_sqlite_decoder(val):
 
 try:
     for dt_type in [
-        "timestamp","datetime","timestamptz","timestamp with time zone",
-        "date","time","TIMESTAMP","DATETIME","DATE","TIME",
+        "timestamp", "datetime", "timestamptz", "timestamp with time zone",
+        "date", "time", "TIMESTAMP", "DATETIME", "DATE", "TIME",
     ]:
         sqlite3.register_converter(dt_type, _robust_sqlite_decoder)
 except Exception:
@@ -305,9 +300,9 @@ def _configure_sqlite_connection(sender, connection, **kwargs):
                 except Exception:
                     return str(data)
             if isinstance(data, (bytes, bytearray)):
-                for enc in ("utf-8","latin-1","ascii","cp1252"):
+                for enc in ("utf-8", "latin-1", "ascii", "cp1252"):
                     try:
-                        res = data.decode(enc).strip().replace("\x00","")
+                        res = data.decode(enc).strip().replace("\x00", "")
                         if res:
                             return res
                     except Exception:
@@ -317,7 +312,7 @@ def _configure_sqlite_connection(sender, connection, **kwargs):
                 except Exception:
                     return str(data)
             if isinstance(data, str):
-                return data.strip().replace("\x00","")
+                return data.strip().replace("\x00", "")
             try:
                 return str(data)
             except Exception:
@@ -389,26 +384,23 @@ LOGGING = {
         "detailed": {"format": "[{asctime}] {levelname} {name} {module}.{funcName}:{lineno} - {message}", "style": "{"},
     },
     "handlers": {
-        "console": {"level": "DEBUG" if DEBUG else "INFO","class": "logging.StreamHandler","formatter": "simple"},
-        "file": {"level": "INFO","class": "logging.FileHandler","filename": str(LOGS_DIR / "django.log"),"formatter": "verbose","encoding": "utf-8"},
-        "permissions_file": {"level": "DEBUG" if DEBUG else "INFO","class": "logging.FileHandler","filename": str(LOGS_DIR / "permissions.log"),"formatter": "detailed","encoding": "utf-8"},
-        "tasks_file": {"level": "DEBUG" if DEBUG else "INFO","class": "logging.FileHandler","filename": str(LOGS_DIR / "tasks.log"),"formatter": "detailed","encoding": "utf-8"},
-        "bulk_upload_file": {"level": "DEBUG" if DEBUG else "INFO","class": "logging.FileHandler","filename": str(LOGS_DIR / "bulk_upload.log"),"formatter": "detailed","encoding": "utf-8"},
-        "mail_admins": {"level": "ERROR","class": "django.utils.log.AdminEmailHandler"},
+        "console": {"level": "DEBUG" if DEBUG else "INFO", "class": "logging.StreamHandler", "formatter": "simple"},
+        "file": {"level": "INFO", "class": "logging.FileHandler", "filename": str(LOGS_DIR / "django.log"), "formatter": "verbose", "encoding": "utf-8"},
+        "permissions_file": {"level": "DEBUG" if DEBUG else "INFO", "class": "logging.FileHandler", "filename": str(LOGS_DIR / "permissions.log"), "formatter": "detailed", "encoding": "utf-8"},
+        "tasks_file": {"level": "DEBUG" if DEBUG else "INFO", "class": "logging.FileHandler", "filename": str(LOGS_DIR / "tasks.log"), "formatter": "detailed", "encoding": "utf-8"},
+        "bulk_upload_file": {"level": "DEBUG" if DEBUG else "INFO", "class": "logging.FileHandler", "filename": str(LOGS_DIR / "bulk_upload.log"), "formatter": "detailed", "encoding": "utf-8"},
+        "mail_admins": {"level": "ERROR", "class": "django.utils.log.AdminEmailHandler"},
     },
     "root": {"handlers": ["console"], "level": "WARNING"},
     "loggers": {
         "django": {"handlers": ["file"], "level": "INFO", "propagate": False},
         "django.request": {"handlers": ["console", "file", "mail_admins"], "level": "ERROR", "propagate": False},
         "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
-
-        # ✅ Catch-all for apps.*
         "apps": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},
-
-        "apps.users.permissions": {"handlers": ["permissions_file"] + (["console"] if DEBUG else []),"level": "DEBUG" if DEBUG else "INFO","propagate": False},
-        "apps.users.middleware": {"handlers": ["permissions_file"] + (["console"] if DEBUG else []),"level": "DEBUG" if DEBUG else "INFO","propagate": False},
-        "apps.tasks": {"handlers": ["tasks_file", "console"], "level": "DEBUG" if DEBUG else "INFO","propagate": False},
-        "apps.tasks.views": {"handlers": ["bulk_upload_file", "console"], "level": "INFO","propagate": False},
+        "apps.users.permissions": {"handlers": ["permissions_file"] + (["console"] if DEBUG else []), "level": "DEBUG" if DEBUG else "INFO", "propagate": False},
+        "apps.users.middleware": {"handlers": ["permissions_file"] + (["console"] if DEBUG else []), "level": "DEBUG" if DEBUG else "INFO", "propagate": False},
+        "apps.tasks": {"handlers": ["tasks_file", "console"], "level": "DEBUG" if DEBUG else "INFO", "propagate": False},
+        "apps.tasks.views": {"handlers": ["bulk_upload_file", "console"], "level": "INFO", "propagate": False},
         "apps.tasks.signals": {"handlers": ["tasks_file"], "level": "INFO", "propagate": False},
         "apps.leave": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},
         "apps.leave.services.notifications": {"handlers": ["file", "console"], "level": "INFO", "propagate": False},
@@ -455,7 +447,6 @@ STORAGES = {
 }
 
 MEDIA_URL = "/media/"
-# ✅ FINAL: on Render we store uploads on the mounted disk at /opt/render/project/src/db
 MEDIA_ROOT = MEDIA_ROOT_ENV or os.getenv("DISK_ROOT", DEFAULT_DISK_ROOT)
 Path(MEDIA_ROOT).mkdir(parents=True, exist_ok=True)
 
@@ -487,7 +478,6 @@ REIMBURSEMENT_EMAIL_FROM = os.getenv(
 )
 
 REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES = env_int("REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES", 20 * 1024 * 1024)
-# ✅ NEW: configure de-dup window for outgoing reimbursement emails
 REIMBURSEMENT_EMAIL_DUP_WINDOW_SECONDS = env_int("REIMBURSEMENT_EMAIL_DUP_WINDOW_SECONDS", 60)
 
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
@@ -506,10 +496,8 @@ ASSIGNER_CC_FOR_DELEGATION = {
     "usernames": env_list("DELEGATION_CC_ASSIGNER_USERNAMES", ""),
 }
 
-# ✅ Admin consolidated pending default target (overridable)
 ADMIN_PENDING_DIGEST_TO = os.getenv("ADMIN_PENDING_DIGEST_TO", "pankaj@blueoceansteels.com")
 
-# ✅ EMAIL GUARD CONFIG (ISSUE 18) — no hardcoded IDs
 PANKAJ_EMAILS = env_list("PANKAJ_EMAILS", "pankaj@blueoceansteels.com")
 PANKAJ_USERNAMES = env_list("PANKAJ_USERNAMES", "pankaj")
 PANKAJ_ALLOWED_CATEGORIES = env_list(
@@ -584,7 +572,7 @@ DASHBOARD_CACHE_TIMEOUT = env_int("DASHBOARD_CACHE_TIMEOUT", 300)
 TASK_LIST_PAGE_SIZE = env_int("TASK_LIST_PAGE_SIZE", 50)
 
 # -----------------------------------------------------------------------------
-# PERFORMANCE / CACHING  ✅ FIXED FOR CROSS-PROCESS LOCKING
+# PERFORMANCE / CACHING
 # -----------------------------------------------------------------------------
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
 SESSION_COOKIE_AGE = 60 * 60 * 24 * 7
@@ -609,9 +597,6 @@ if REDIS_URL:
     }
     SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 else:
-    # ✅ CRITICAL FIX:
-    # LocMemCache is per-process => locks & "already_done" keys DO NOT work across workers.
-    # On Render, prefer FileBasedCache on the mounted disk so all processes share one cache.
     if ON_RENDER:
         CACHE_DIR = Path(MEDIA_ROOT) / "django_cache"
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -623,10 +608,8 @@ else:
                 "OPTIONS": {"MAX_ENTRIES": env_int("CACHE_MAX_ENTRIES", 20000)},
             },
         }
-        # Keep DB sessions (file cache is fine for locks; sessions stable in DB)
         SESSION_ENGINE = "django.contrib.sessions.backends.db"
     else:
-        # Local/dev fallback
         CACHES = {
             "default": {
                 "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
@@ -728,7 +711,7 @@ PERMISSION_DEBUG_ENABLED = env_bool("PERMISSION_DEBUG_ENABLED", DEBUG and not ON
 # -----------------------------------------------------------------------------
 try:
     from celery.schedules import crontab  # type: ignore
-except Exception:  # pragma: no cover
+except Exception:
     def crontab(*args, **kwargs):  # type: ignore
         return {"__crontab__": True, "args": args, "kwargs": kwargs}
 
@@ -768,8 +751,6 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
-# ✅ FIX: run the 10:00 fanout ONCE (not 10:00/10:05/10:10).
-# Multiple triggers are a major source of duplicates if cache isn't shared.
 CELERY_BEAT_SCHEDULE = {
     "pre10am_unblock_and_generate_0955": {
         "task": "apps.tasks.tasks.run_pre10am_unblock_and_generate",
