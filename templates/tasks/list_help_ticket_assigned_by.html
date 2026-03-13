@@ -1,108 +1,202 @@
-<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\tasks\list_help_ticket_assigned_by.html -->
 {% extends "tasks/help_ticket_tasks_base.html" %}
 {% load static %}
 
-{% block title %}HELP TICKETS (ASSIGNED BY ME){% endblock %}
+{% block title %}Help Tickets — Assigned By Me{% endblock %}
 
 {% block help_ticket_content %}
-  <div class="mb-3">
-    <div class="bg-primary text-white px-3 py-2 rounded">
-      FILTER
-    </div>
+
+<!-- Filter card -->
+<div class="card mb-4">
+  <div
+    class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
+    data-bs-toggle="collapse"
+    href="#filterPanelAB"
+    role="button"
+    aria-expanded="true"
+    aria-controls="filterPanelAB"
+    style="cursor:pointer;"
+  >
+    <span class="fw-semibold">
+      <i class="fas fa-filter me-2" aria-hidden="true"></i> FILTER
+    </span>
+    <i class="fas fa-minus" id="filterToggleIconAB" aria-hidden="true"></i>
   </div>
 
-  <div class="card">
-    <div class="card-body p-0">
-      <form method="post" id="bulkHelpTicketForm" action="{% url 'tasks:assigned_by_me' %}">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="bulk_delete">
-        <div class="table-responsive">
-          <table class="table table-striped align-middle mb-0">
-            <thead>
-              <tr>
-                <th style="width:32px;"><input id="selectAllTickets" type="checkbox" onclick="toggleSelectAllTickets(this)"></th>
-                <th>Ticket ID</th>
-                <th>Problem Solver</th>
-                <th>Subject</th>
-                <th>Assigned Date</th>
-                <th>Planned Date</th>
-                <th>Resolved Date</th>
-                <th>Delay</th>
-                <th>Resolved By</th>
-                <th>Resolved Notes</th>
-                <th>Attachment</th>
-                <th>Status</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for ticket in items %}
-                <tr>
-                  <td><input class="row-check-ticket" type="checkbox" name="sel" value="{{ ticket.id }}"></td>
-                  <td>HT-{{ ticket.id }}</td>
-                  <td>{{ ticket.assign_to_display|default:"—" }}</td>
-                  <td>{{ ticket.title }}</td>
-                  <td>{{ ticket.created_at|date:"d M, Y h:i A"|default:"—" }}</td>
-                  <td>{{ ticket.planned_date|date:"d M, Y h:i A"|default:"—" }}</td>
-                  <td>{{ ticket.resolved_at|date:"d M, Y h:i A"|default:"—" }}</td>
-                  <td>{{ ticket.delay|default:"—" }}</td>
-                  <td>
-                    {% if ticket.resolved_by %}
-                      {{ ticket.resolved_by.get_full_name|default:ticket.resolved_by.username }}
-                    {% else %}
-                      —
-                    {% endif %}
-                  </td>
-                  <td class="text-wrap">{{ ticket.resolved_notes|default:"—" }}</td>
-                  <td>{% if ticket.media_upload %}<a href="{{ ticket.media_upload.url }}" download>Download</a>{% else %}—{% endif %}</td>
-                  <td>{{ ticket.status }}</td>
-                  <td>
-                    <a href="{% url 'tasks:delete_help_ticket' ticket.id %}" class="text-danger" onclick="return confirm('Delete this help ticket?');">
-                      <i class="fas fa-trash"></i>
-                    </a>
-                  </td>
-                </tr>
-              {% empty %}
-                <tr>
-                  <td colspan="13" class="text-center py-4 text-muted">
-                    No tickets assigned by you.
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+  <div id="filterPanelAB" class="collapse show">
+    <div class="card-body">
+      <form method="get" class="row g-3 align-items-end"
+            role="search" aria-label="Assigned-by-me Filters">
+
+        <div class="col-md-3">
+          <label for="fltStatus" class="form-label">Status</label>
+          <select id="fltStatus" name="status" class="form-select">
+            <option value="" {% if not request.GET.status %}selected{% endif %}>All</option>
+            {% for key, label in status_choices %}
+              <option value="{{ key }}"
+                {% if request.GET.status == key %}selected{% endif %}>
+                {{ label }}
+              </option>
+            {% endfor %}
+          </select>
         </div>
 
-        {% if items %}
-        <div class="d-flex justify-content-between align-items-center p-2">
-          <small class="text-muted"><span id="selectedTicketCount">0</span> selected</small>
-          <button id="bulkDeleteTicketBtn" type="submit" class="btn btn-danger btn-sm" disabled
-            onclick="return confirm('Delete selected help tickets?');">Delete Selected</button>
+        <div class="col-md-3">
+          <label for="fltAssignTo" class="form-label">Problem Solver</label>
+          <select id="fltAssignTo" name="assign_to" class="form-select">
+            <option value="">All</option>
+            {% for u in users %}
+              <option value="{{ u.id }}"
+                {% if request.GET.assign_to|default:'' == u.id|stringformat:"s" %}selected{% endif %}>
+                {{ u.get_full_name|default:u.username }}
+              </option>
+            {% endfor %}
+          </select>
         </div>
-        {% endif %}
+
+        <div class="col-md-3">
+          <label for="fltFrom" class="form-label">From</label>
+          <input id="fltFrom" type="date" name="from_date" class="form-control"
+                 value="{{ request.GET.from_date }}">
+        </div>
+
+        <div class="col-md-3">
+          <label for="fltTo" class="form-label">To</label>
+          <input id="fltTo" type="date" name="to_date" class="form-control"
+                 value="{{ request.GET.to_date }}">
+        </div>
+
+        <div class="col-12 text-end">
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-filter me-1" aria-hidden="true"></i> Apply
+          </button>
+          <a href="{% url 'tasks:assigned_by_me' %}" class="btn btn-warning ms-2">
+            <i class="fas fa-undo me-1" aria-hidden="true"></i> Reset
+          </a>
+        </div>
       </form>
     </div>
   </div>
+</div>
 
-<script>
-function toggleSelectAllTickets(source) {
-  document.querySelectorAll('.row-check-ticket').forEach(cb => cb.checked = source.checked);
-  updateTicketBulkState();
-}
-function updateTicketBulkState() {
-  const checks = [...document.querySelectorAll('.row-check-ticket')];
-  const selected = checks.filter(cb => cb.checked).length;
-  const btn = document.getElementById('bulkDeleteTicketBtn');
-  const count = document.getElementById('selectedTicketCount');
-  const selectAll = document.getElementById('selectAllTickets');
-  if (btn) btn.disabled = selected === 0;
-  if (count) count.textContent = selected;
-  if (selectAll) selectAll.checked = selected === checks.length && checks.length > 0;
-}
-document.addEventListener('change', (e) => {
-  if (e.target.classList.contains('row-check-ticket')) {
-    updateTicketBulkState();
-  }
-});
-</script>
+<!-- Table + bulk delete -->
+<div class="card">
+  <div class="card-body p-0">
+    <form method="post" action="{% url 'tasks:assigned_by_me' %}" data-bulk>
+      {% csrf_token %}
+      <input type="hidden" name="action" value="bulk_delete">
+      <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
+
+      <div class="table-responsive">
+        <table class="table table-striped align-middle mb-0">
+          <caption class="visually-hidden">Help tickets assigned by me</caption>
+          <thead class="table-light">
+            <tr>
+              <th scope="col" style="width:32px;">
+                <input type="checkbox" data-select-all aria-label="Select all">
+              </th>
+              <th scope="col">Ticket ID</th>
+              <th scope="col">Problem Solver</th>
+              <th scope="col">Subject</th>
+              <th scope="col">Assigned Date</th>
+              <th scope="col">Planned Date</th>
+              <th scope="col">Resolved Date</th>
+              <th scope="col">Delay</th>
+              <th scope="col">Resolved By</th>
+              <th scope="col">Resolved Notes</th>
+              <th scope="col">Attachment</th>
+              <th scope="col">Status</th>
+              <th scope="col">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for ticket in items %}
+              <tr>
+                <td>
+                  <input type="checkbox" name="sel" value="{{ ticket.id }}"
+                         class="form-check-input" data-row-check
+                         aria-label="Select HT-{{ ticket.id }}">
+                </td>
+                <td>HT-{{ ticket.id }}</td>
+                <td>{{ ticket.assign_to_display|default:"—" }}</td>
+                <td>{{ ticket.title }}</td>
+                <td>{{ ticket.created_at|date:"d M, Y h:i A"|default:"—" }}</td>
+                <td>{{ ticket.planned_date|date:"d M, Y h:i A"|default:"—" }}</td>
+                <td>{{ ticket.resolved_at|date:"d M, Y h:i A"|default:"—" }}</td>
+                <td>{{ ticket.delay|default:"—" }}</td>
+                <td>
+                  {% if ticket.resolved_by %}
+                    {{ ticket.resolved_by.get_full_name|default:ticket.resolved_by.username }}
+                  {% else %}—{% endif %}
+                </td>
+                <td class="text-wrap" style="max-width:200px;">
+                  {{ ticket.resolved_notes|default:"—"|truncatewords:15 }}
+                </td>
+                <td>
+                  {% if ticket.media_upload %}
+                    <a href="{{ ticket.media_upload.url }}" download class="btn btn-sm btn-outline-primary">
+                      <i class="fas fa-download" aria-hidden="true"></i>
+                    </a>
+                  {% else %}—{% endif %}
+                </td>
+                <td>
+                  <span class="badge
+                    {% if ticket.status == 'Open' %}bg-warning text-dark
+                    {% elif ticket.status == 'Closed' %}bg-success
+                    {% elif ticket.status == 'In Progress' %}bg-info text-dark
+                    {% else %}bg-secondary{% endif %}">
+                    {{ ticket.status }}
+                  </span>
+                </td>
+                <td>
+                  <a href="{% url 'tasks:delete_help_ticket' ticket.id %}"
+                     class="btn btn-sm btn-outline-danger"
+                     title="Delete HT-{{ ticket.id }}"
+                     aria-label="Delete HT-{{ ticket.id }}">
+                    <i class="fas fa-trash" aria-hidden="true"></i>
+                  </a>
+                </td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="13" class="text-center py-4 text-muted">
+                  <i class="fas fa-ticket-alt fa-2x mb-2 d-block text-secondary" aria-hidden="true"></i>
+                  No tickets assigned by you.
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if items %}
+      <div class="d-flex justify-content-between align-items-center p-3 border-top">
+        <small class="text-muted">
+          <span data-selected-count>0</span> selected
+        </small>
+        <button type="submit"
+                class="btn btn-danger btn-sm"
+                data-bulk-submit
+                data-confirm="Delete selected help tickets?"
+                disabled>
+          <i class="fas fa-trash-alt me-1" aria-hidden="true"></i> Delete Selected
+        </button>
+      </div>
+      {% endif %}
+    </form>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+  <script src="{% static 'js/tasks-bulk.js' %}" defer></script>
+  <script>
+    (function () {
+      const panel = document.getElementById('filterPanelAB');
+      const icon  = document.getElementById('filterToggleIconAB');
+      if (!panel || !icon) return;
+      panel.addEventListener('show.bs.collapse', () => icon.className = 'fas fa-minus');
+      panel.addEventListener('hide.bs.collapse', () => icon.className = 'fas fa-plus');
+    })();
+  </script>
 {% endblock %}

@@ -1,114 +1,242 @@
 {% extends "tasks/help_ticket_tasks_base.html" %}
 {% load static %}
 
-{% block title %}HELP TICKETS (ASSIGNED TO ME){% endblock %}
+{% block title %}Help Tickets — Assigned To Me{% endblock %}
 
 {% block help_ticket_content %}
-  <div class="mb-3">
-    <div class="bg-primary text-white px-3 py-2 rounded d-flex justify-content-between align-items-center">
-      <span>FILTER</span>
-      <i class="fas fa-plus"></i>
-    </div>
+
+<!-- Filter card -->
+<div class="card mb-4">
+  <div
+    class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
+    data-bs-toggle="collapse"
+    href="#filterPanelAT"
+    role="button"
+    aria-expanded="true"
+    aria-controls="filterPanelAT"
+    style="cursor:pointer;"
+  >
+    <span class="fw-semibold">
+      <i class="fas fa-filter me-2" aria-hidden="true"></i> FILTER
+    </span>
+    <i class="fas fa-minus" id="filterToggleIconAT" aria-hidden="true"></i>
   </div>
 
-  <div class="card">
-    <div class="card-body p-0">
-      <div class="table-responsive">
-        <table class="table table-striped align-middle mb-0">
-          <thead>
+  <div id="filterPanelAT" class="collapse show">
+    <div class="card-body">
+      <form method="get" class="row g-3 align-items-end"
+            role="search" aria-label="Assigned-to-me Filters">
+
+        <div class="col-md-3">
+          <label for="fltStatus" class="form-label">Status</label>
+          <select id="fltStatus" name="status" class="form-select">
+            <option value="" {% if not request.GET.status %}selected{% endif %}>All</option>
+            {% for key, label in status_choices %}
+              <option value="{{ key }}"
+                {% if request.GET.status == key %}selected{% endif %}>
+                {{ label }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-3">
+          <label for="fltPriority" class="form-label">Priority</label>
+          <select id="fltPriority" name="priority" class="form-select">
+            <option value="">All</option>
+            {% for p, _ in priority_choices %}
+              <option value="{{ p }}" {% if request.GET.priority == p %}selected{% endif %}>{{ p }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-3">
+          <label for="fltFrom" class="form-label">From</label>
+          <input id="fltFrom" type="date" name="from_date" class="form-control"
+                 value="{{ request.GET.from_date }}">
+        </div>
+
+        <div class="col-md-3">
+          <label for="fltTo" class="form-label">To</label>
+          <input id="fltTo" type="date" name="to_date" class="form-control"
+                 value="{{ request.GET.to_date }}">
+        </div>
+
+        <div class="col-12 text-end">
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-filter me-1" aria-hidden="true"></i> Apply
+          </button>
+          <a href="{% url 'tasks:assigned_to_me' %}" class="btn btn-warning ms-2">
+            <i class="fas fa-undo me-1" aria-hidden="true"></i> Reset
+          </a>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Table -->
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-striped align-middle mb-0">
+        <caption class="visually-hidden">Help tickets assigned to me</caption>
+        <thead class="table-light">
+          <tr>
+            <th scope="col">Ticket ID</th>
+            <th scope="col">Assigned By</th>
+            <th scope="col">Subject</th>
+            <th scope="col">Message</th>
+            <th scope="col">Assigned Date</th>
+            <th scope="col">Planned Date</th>
+            <th scope="col">Delay</th>
+            <th scope="col">Priority</th>
+            <th scope="col">Status</th>
+            <th scope="col">Attachment</th>
+            <th scope="col">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for ticket in items %}
             <tr>
-              <th>
-                Ticket ID
-                <i class="fas fa-arrow-up small text-danger"></i>
-                <i class="fas fa-arrow-down small text-primary"></i>
-              </th>
-              <th>Assigned By</th>
-              <th>Subject</th>
-              <th>Message</th>
-              <th>Assigned Date</th>
-              <th>Planned Date</th>
-              <th>Delay</th>
-              <th>Priority</th>
-              <th>Status</th>
-              <th>Attachment</th>
-              <th>Action / Note</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for ticket in items %}
-              <tr>
-                <td>HT-{{ ticket.id }}</td>
-                <td>{{ ticket.assign_by.get_full_name|default:ticket.assign_by.username }}</td>
-                <td>{{ ticket.title }}</td>
-                <td>{{ ticket.description|truncatewords:10 }}</td>
-                <td>{{ ticket.created_at|date:"d M, Y h:i A" }}</td>
-                <td>{{ ticket.planned_date|date:"d M, Y h:i A" }}</td>
-                <td>{{ ticket.delay }}</td>
-                <td>{{ ticket.priority }}</td>
-                <td>{{ ticket.status }}</td>
-                <td>
-                  {% if ticket.media_upload %}
-                    <a href="{{ ticket.media_upload.url }}" download>Download</a>
-                  {% else %}
-                    &ndash;
-                  {% endif %}
-                </td>
-                <td class="d-flex gap-2">
+              <td>HT-{{ ticket.id }}</td>
+              <td>{{ ticket.assign_by.get_full_name|default:ticket.assign_by.username }}</td>
+              <td>{{ ticket.title }}</td>
+              <td style="max-width:180px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
+                  title="{{ ticket.description }}">
+                {{ ticket.description|truncatewords:10 }}
+              </td>
+              <td>{{ ticket.created_at|date:"d M, Y h:i A" }}</td>
+              <td>{{ ticket.planned_date|date:"d M, Y h:i A" }}</td>
+              <td>{{ ticket.delay }}</td>
+              <td>
+                <span class="badge
+                  {% if ticket.priority == 'High' %}bg-danger
+                  {% elif ticket.priority == 'Medium' %}bg-warning text-dark
+                  {% else %}bg-success{% endif %}">
+                  {{ ticket.priority }}
+                </span>
+              </td>
+              <td>
+                <span class="badge
+                  {% if ticket.status == 'Open' %}bg-warning text-dark
+                  {% elif ticket.status == 'Closed' %}bg-success
+                  {% elif ticket.status == 'In Progress' %}bg-info text-dark
+                  {% else %}bg-secondary{% endif %}">
+                  {{ ticket.status }}
+                </span>
+              </td>
+              <td>
+                {% if ticket.media_upload %}
+                  <a href="{{ ticket.media_upload.url }}" download class="btn btn-sm btn-outline-primary">
+                    <i class="fas fa-download" aria-hidden="true"></i>
+                  </a>
+                {% else %}&ndash;{% endif %}
+              </td>
+              <td>
+                {% if ticket.status != 'Closed' %}
                   <button type="button"
                           class="btn btn-sm btn-success"
                           data-bs-toggle="modal"
-                          data-bs-target="#noteModal{{ ticket.id }}">
-                    COMPLETE
+                          data-bs-target="#completeModal{{ ticket.id }}"
+                          aria-label="Complete HT-{{ ticket.id }}">
+                    <i class="fas fa-check me-1" aria-hidden="true"></i> Complete
                   </button>
-                </td>
-              </tr>
-
-              <!-- NOTE / COMPLETE Modal -->
-              <div class="modal fade" id="noteModal{{ ticket.id }}" tabindex="-1" aria-hidden="true">
-                <div class="modal-dialog modal-dialog-centered">
-                  <form method="post"
-                        action="{% url 'tasks:complete_help_ticket' ticket.id %}?next={{ request.path }}"
-                        enctype="multipart/form-data">
-                    {% csrf_token %}
-                    <div class="modal-content">
-                      <div class="modal-header">
-                        <h5 class="modal-title">Complete HT-{{ ticket.id }}</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                      </div>
-                      <div class="modal-body">
-                        <div class="mb-3">
-                          <label class="form-label">Resolved Notes</label>
-                          <textarea name="resolved_notes"
-                                    class="form-control"
-                                    rows="4"
-                                    placeholder="Write your note…"
-                                    required>{{ ticket.resolved_notes }}</textarea>
-                        </div>
-                        <div class="mb-3">
-                          <label class="form-label">Attachment (optional)</label>
-                          <input type="file" name="media_upload" class="form-control">
-                        </div>
-                      </div>
-                      <div class="modal-footer">
-                        <button type="button"
-                                class="btn btn-secondary"
-                                data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-primary">Submit</button>
-                      </div>
-                    </div>
-                  </form>
-                </div>
-              </div>
-            {% empty %}
-              <tr>
-                <td colspan="11" class="text-center py-4 text-muted">
-                  No tickets assigned to you.
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+                {% else %}
+                  <span class="text-muted small">Closed</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="11" class="text-center py-4 text-muted">
+                <i class="fas fa-ticket-alt fa-2x mb-2 d-block text-secondary" aria-hidden="true"></i>
+                No tickets assigned to you.
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
   </div>
+</div>
+
+<!-- ============================================================
+     CRITICAL FIX: Complete modals rendered OUTSIDE the table.
+     Previously these were inside <tbody> rows — invalid HTML that
+     broke Bootstrap modal stacking and caused display bugs.
+     ============================================================ -->
+{% for ticket in items %}
+  {% if ticket.status != 'Closed' %}
+  <div class="modal fade"
+       id="completeModal{{ ticket.id }}"
+       tabindex="-1"
+       aria-labelledby="completeModalLabel{{ ticket.id }}"
+       aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <form method="post"
+            action="{% url 'tasks:complete_help_ticket' ticket.id %}?next={{ request.get_full_path|urlencode }}"
+            enctype="multipart/form-data">
+        {% csrf_token %}
+        <div class="modal-content">
+
+          <div class="modal-header">
+            <h5 class="modal-title" id="completeModalLabel{{ ticket.id }}">
+              <i class="fas fa-check-circle me-1 text-success" aria-hidden="true"></i>
+              Complete HT-{{ ticket.id }}: {{ ticket.title|truncatewords:8 }}
+            </h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"
+                    aria-label="Close dialog"></button>
+          </div>
+
+          <div class="modal-body">
+            <div class="mb-3">
+              <label for="resolved_notes_{{ ticket.id }}" class="form-label fw-semibold">
+                Resolved Notes <span class="text-danger">*</span>
+              </label>
+              <textarea id="resolved_notes_{{ ticket.id }}"
+                        name="resolved_notes"
+                        class="form-control"
+                        rows="4"
+                        placeholder="Describe what was done to resolve this ticket…"
+                        required>{{ ticket.resolved_notes }}</textarea>
+            </div>
+            <div class="mb-3">
+              <label for="media_upload_{{ ticket.id }}" class="form-label fw-semibold">
+                Attachment <span class="text-muted">(optional)</span>
+              </label>
+              <input id="media_upload_{{ ticket.id }}"
+                     type="file"
+                     name="media_upload"
+                     class="form-control">
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary"
+                    data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-success">
+              <i class="fas fa-check me-1" aria-hidden="true"></i> Submit &amp; Close Ticket
+            </button>
+          </div>
+
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+{% endfor %}
+
+{% endblock %}
+
+{% block extra_js %}
+  <script>
+    (function () {
+      const panel = document.getElementById('filterPanelAT');
+      const icon  = document.getElementById('filterToggleIconAT');
+      if (!panel || !icon) return;
+      panel.addEventListener('show.bs.collapse', () => icon.className = 'fas fa-minus');
+      panel.addEventListener('hide.bs.collapse', () => icon.className = 'fas fa-plus');
+    })();
+  </script>
 {% endblock %}

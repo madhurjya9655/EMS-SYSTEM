@@ -1,4 +1,4 @@
-#E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
+# FILE: apps/tasks/views.py
 from __future__ import annotations
 
 import csv
@@ -601,13 +601,15 @@ def ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 # -----------------------------------------------------------------------------
-# NEW: “void” helper to prevent recurring re-materialization
+# NEW: "void" helper to prevent recurring re-materialization
 # -----------------------------------------------------------------------------
 def _void_task_row(obj) -> None:
     """
     Soft-delete / tombstone:
       - excluded from dashboards/lists (filter is_skipped_due_to_leave=False)
-      - NOT recreated by recurring materializers (row still exists)
+      - NOT recreated by recurring materializers (row still exists as Pending +
+        is_skipped_due_to_leave=True, so the generator's pending-exists check
+        finds it and skips regeneration — see tasks.py fix for Issue 2)
     """
     if not obj:
         return
@@ -909,14 +911,14 @@ def _send_bulk_emails_by_ids(task_ids, *, task_type: str):
                     send_checklist_assignment_to_user(
                         task=task,
                         complete_url=complete_url,
-                        subject_prefix=f"Today’s Checklist – {task.task_name}",
+                        subject_prefix=f"Today's Checklist – {task.task_name}",
                     )
                 else:
                     complete_url = f"{site_url}{reverse('tasks:complete_delegation', args=[task.id])}"
                     send_delegation_assignment_to_user(
                         delegation=task,
                         complete_url=complete_url,
-                        subject_prefix=f"Today’s Delegation – {task.task_name} (due 7 PM)",
+                        subject_prefix=f"Today's Delegation – {task.task_name} (due 7 PM)",
                     )
             except Exception as e:
                 logger.error("Failed to send email for %s %s: %s", task_type, getattr(task, "id", "?"), e)
@@ -945,10 +947,13 @@ def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: O
 
 
 # -----------------------------------------------------------------------------
-# Checklist views (only changes: unified leave blocking + aware dt)
+# Checklist views
 # -----------------------------------------------------------------------------
 @has_permission("list_checklist")
 def list_checklist(request):
+    # ------------------------------------------------------------------
+    # POST: bulk / series delete actions
+    # ------------------------------------------------------------------
     if request.method == "POST":
         return_url = request.POST.get("return_url") or reverse("tasks:list_checklist")
 
@@ -1004,14 +1009,32 @@ def list_checklist(request):
             request.session["suppress_auto_recur"] = True
         return redirect(return_url)
 
-    qs = Checklist.objects.filter(status="Pending", is_skipped_due_to_leave=False).select_related("assign_by", "assign_to")
+    # ------------------------------------------------------------------
+    # GET: ISSUE 1 FIX — always show only the logged-in user's own tasks
+    # ------------------------------------------------------------------
+    base_qs = Checklist.objects.filter(
+        assign_to=request.user,
+        is_skipped_due_to_leave=False,
+    ).select_related("assign_by", "assign_to")
+
+    # Summary counts (computed before any additional filters so numbers
+    # always reflect the user's complete task picture)
+    total_assigned = base_qs.count()
+    pending_count = base_qs.filter(status="Pending").count()
+    completed_count = base_qs.filter(status="Completed").count()
+
+    qs = base_qs
+
+    # Optional status filter — default to "Pending" to preserve existing UX
+    status_filter = request.GET.get("status", "Pending").strip()
+    if status_filter and status_filter != "all":
+        qs = qs.filter(status=status_filter)
 
     kw = request.GET.get("keyword", "").strip()
     if kw:
         qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
 
-    if request.GET.get("assign_to", "").strip():
-        qs = qs.filter(assign_to_id=request.GET.get("assign_to").strip())
+    # NOTE: "assign_to" URL filter removed — users always see only their own tasks.
 
     if request.GET.get("priority", "").strip():
         qs = qs.filter(priority=request.GET.get("priority").strip())
@@ -1035,11 +1058,11 @@ def list_checklist(request):
         resp = HttpResponse(content_type="text/csv")
         resp["Content-Disposition"] = 'attachment; filename="checklist.csv"'
         w = csv.writer(resp)
-        w.writerow(["Task Name", "Assign To", "Planned Date", "Priority", "Group Name", "Status"])
+        w.writerow(["Task Name", "Assigned By", "Planned Date", "Priority", "Group Name", "Status"])
         for itm in items:
             w.writerow([
                 clean_unicode_string(itm.task_name),
-                itm.assign_to.get_full_name() or itm.assign_to.username,
+                itm.assign_by.get_full_name() or itm.assign_by.username if itm.assign_by else "",
                 itm.planned_date.strftime("%Y-%m-%d %H:%M") if itm.planned_date else "",
                 itm.priority,
                 itm.group_name,
@@ -1049,10 +1072,18 @@ def list_checklist(request):
 
     ctx = {
         "items": items,
-        "users": User.objects.filter(is_active=True).order_by("username"),
         "priority_choices": Checklist._meta.get_field("priority").choices,
-        "group_names": Checklist.objects.order_by("group_name").values_list("group_name", flat=True).distinct(),
+        # Group names scoped to current user only
+        "group_names": Checklist.objects.filter(
+            assign_to=request.user,
+            is_skipped_due_to_leave=False,
+        ).order_by("group_name").values_list("group_name", flat=True).distinct(),
         "current_tab": "checklist",
+        # ISSUE 1 FIX: summary counts exposed to template
+        "total_assigned": total_assigned,
+        "pending_count": pending_count,
+        "completed_count": completed_count,
+        "current_status": status_filter,
     }
     if request.GET.get("partial"):
         return render(request, "tasks/partial_list_checklist.html", ctx)
@@ -1445,7 +1476,7 @@ def add_help_ticket(request):
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "add", "can_create": can_create(request.user)})
 
             if assignee and planned_date and is_user_blocked_at(assignee, planned_date.astimezone(IST)):
-                messages.error(request, "Planned time falls within assignee’s leave window. Choose another time or reassign.")
+                messages.error(request, "Planned time falls within assignee's leave window. Choose another time or reassign.")
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "add", "can_create": can_create(request.user)})
 
             ticket = form.save(commit=False)
@@ -1486,7 +1517,7 @@ def edit_help_ticket(request, pk):
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "edit", "can_create": can_create(request.user)})
 
             if new_assignee and planned_date and is_user_blocked_at(new_assignee, planned_date.astimezone(IST)):
-                messages.error(request, "Planned time falls within assignee’s leave window. Choose another time or reassign.")
+                messages.error(request, "Planned time falls within assignee's leave window. Choose another time or reassign.")
                 return render(request, "tasks/add_help_ticket.html", {"form": form, "current_tab": "edit", "can_create": can_create(request.user)})
 
             ticket = form.save(commit=False)

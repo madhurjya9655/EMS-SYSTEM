@@ -212,12 +212,45 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
       - A Completed exists (base for stepping)
       - Next stepped date is > now
       - Next date is NOT today (today rows are materializer's job)
+
+    ISSUE 2 FIX: The golden-rule "pending exists" check now includes soft-deleted
+    pending tasks (is_skipped_due_to_leave=True, status=Pending).  When a user
+    soft-deletes a Pending occurrence via the Checklist page, that row retains
+    status="Pending" with is_skipped_due_to_leave=True.  The old code used
+    q_series (which filters is_skipped_due_to_leave=False) so it never counted
+    soft-deleted rows as "pending exists" — causing the generator to spawn a
+    fresh replacement the next morning.
+
+    Fix: build a separate pending-check Q without the is_skipped_due_to_leave
+    constraint so that soft-deleted pending rows correctly block regeneration.
     """
     now = timezone.now()
     now_ist = _now_ist()
     today_ist = now_ist.date()
 
     freq_norm = max(int(series.get("frequency") or 1), 1)
+
+    # ------------------------------------------------------------------
+    # ISSUE 2 FIX: Golden rule — check ALL pending rows in the series,
+    # INCLUDING those soft-deleted by the user (is_skipped_due_to_leave=True).
+    # This prevents the generator from recreating a task the user deleted.
+    # ------------------------------------------------------------------
+    _pending_check_q = Q(
+        assign_to_id=series["assign_to_id"],
+        task_name=series["task_name"],
+        mode=series["mode"],
+        frequency__in=[freq_norm, None],
+        status="Pending",
+    )
+    if series.get("group_name"):
+        _pending_check_q &= Q(group_name=series["group_name"])
+
+    if Checklist.objects.filter(_pending_check_q).exists():
+        return 0
+    # ------------------------------------------------------------------
+
+    # For everything else (finding the last completed, dupe-guard, etc.)
+    # keep using q_series which excludes soft-deleted rows.
     q_series = _series_q_for_frequency(
         assign_to_id=series["assign_to_id"],
         task_name=series["task_name"],
@@ -225,10 +258,6 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
         freq_norm=freq_norm,
         group_name=series.get("group_name"),
     )
-
-    # Golden rule: If ANY Pending exists (today/past/future), do not create another.
-    if Checklist.objects.filter(status="Pending").filter(q_series).exists():
-        return 0
 
     completed = (
         Checklist.objects.filter(status="Completed")
