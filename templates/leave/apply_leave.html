@@ -16,7 +16,6 @@
     </div>
   {% endif %}
 
-  <!-- Modern Header -->
   <div class="leave-hero mb-3">
     <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3">
       <div class="d-flex align-items-center gap-3">
@@ -58,7 +57,6 @@
   </div>
 
   <div class="row g-3">
-    <!-- Main form -->
     <div class="col-lg-8">
       <div class="card modern-card border-0 shadow-sm">
         <div class="card-body p-3 p-md-4">
@@ -72,22 +70,20 @@
               </div>
             {% endif %}
 
-            <!-- Step 1 -->
             <div class="step-head">
               <div class="step-badge">1</div>
               <div>
                 <div class="step-title">Leave details</div>
-                <div class="step-desc">Choose duration, leave type, and date range.</div>
+                <div class="step-desc">Choose duration, leave type, date range, and time if applicable.</div>
               </div>
               <div class="ms-auto d-none d-md-inline">
                 <span class="pill">
-                  <i class="fa-solid fa-calendar-check me-1"></i> Date-based processing
+                  <i class="fa-solid fa-calendar-check me-1"></i> Exact time supported for Casual Leave
                 </span>
               </div>
             </div>
 
             <div class="row g-3 align-items-end">
-              <!-- Duration -->
               <div class="col-md-6">
                 <label class="form-label">Duration</label>
                 <div class="segmented" id="durationRadios">
@@ -107,7 +103,6 @@
                 {% endif %}
               </div>
 
-              <!-- Leave Type -->
               <div class="col-md-6">
                 <label class="form-label" for="{{ form.leave_type.id_for_label }}">Leave Type</label>
                 <div class="modern-input">
@@ -120,7 +115,6 @@
               </div>
             </div>
 
-            <!-- Dates -->
             <div class="row g-3 mt-0">
               <div class="col-md-6">
                 <label class="form-label" for="{{ form.start_at.id_for_label }}">Start Date (IST)</label>
@@ -149,7 +143,6 @@
               </div>
             </div>
 
-            <!-- Half Day times -->
             <div id="half-day-slot" class="mt-3" style="display:none;">
               <div class="info-callout">
                 <div class="d-flex gap-2 align-items-start">
@@ -157,9 +150,10 @@
                     <i class="fa-solid fa-circle-info"></i>
                   </div>
                   <div>
-                    <div class="fw-semibold">Half-day time fields (optional)</div>
+                    <div class="fw-semibold">Leave time</div>
                     <div class="text-muted small">
-                      If you keep these fields, they are treated as informational. Leave approval is date-based.
+                      For Casual Leave or Half Day leave, the selected time is stored exactly.
+                      Allowed time range: <strong>10:00 AM to 06:30 PM</strong>.
                     </div>
                   </div>
                 </div>
@@ -176,7 +170,6 @@
 
             <hr class="my-4">
 
-            <!-- Step 2 -->
             <div class="step-head">
               <div class="step-badge">2</div>
               <div>
@@ -210,7 +203,6 @@
 
             <hr class="my-4">
 
-            <!-- Step 3 -->
             <div class="step-head">
               <div class="step-badge">3</div>
               <div>
@@ -282,7 +274,6 @@
               </div>
             {% endif %}
 
-            <!-- Actions -->
             <div class="d-flex flex-column flex-sm-row justify-content-end gap-2 mt-4">
               <button type="submit" class="btn btn-primary btn-lg px-4">
                 <i class="fa-solid fa-paper-plane me-2"></i> Submit Leave
@@ -294,7 +285,6 @@
       </div>
     </div>
 
-    <!-- Side panel -->
     <div class="col-lg-4">
       <div class="sticky-lg-top" style="top: 1rem;">
         <div class="card modern-card border-0 shadow-sm">
@@ -306,6 +296,10 @@
               <div class="side-item">
                 <div class="side-dot"></div>
                 <div>Pick the correct start and end dates.</div>
+              </div>
+              <div class="side-item">
+                <div class="side-dot"></div>
+                <div>For Casual Leave, enter exact leave time within office hours if needed.</div>
               </div>
               <div class="side-item">
                 <div class="side-dot"></div>
@@ -329,7 +323,7 @@
               <i class="fa-regular fa-clock me-2"></i> Timezone
             </div>
             <div class="text-muted small">
-              All leave dates are processed in <strong>Asia/Kolkata (IST)</strong>.
+              All leave dates and times are processed in <strong>Asia/Kolkata (IST)</strong>.
             </div>
           </div>
         </div>
@@ -349,6 +343,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   const startInput = document.getElementById("id_start_at");
   const endInput = document.getElementById("id_end_at");
+  const leaveTypeInput = document.getElementById("id_leave_type");
 
   let startPicker = null, endPicker = null;
 
@@ -363,25 +358,46 @@ document.addEventListener('DOMContentLoaded', function () {
     if (endIcon) endIcon.addEventListener("click", () => endPicker && endPicker.open());
   }
 
-  function updateUI() {
+  function selectedDuration() {
     var val = "FULL";
     for (var i = 0; i < radios.length; i++) {
-      if (radios[i].checked) { val = radios[i].value; break; }
+      if (radios[i].checked) {
+        val = radios[i].value;
+        break;
+      }
     }
-    var isHalf = (val === "HALF");
-    if (halfSlot) halfSlot.style.display = isHalf ? "" : "none";
+    return val;
+  }
+
+  function selectedLeaveTypeText() {
+    if (!leaveTypeInput) return "";
+    var option = leaveTypeInput.options[leaveTypeInput.selectedIndex];
+    return option ? (option.text || "").trim().toLowerCase() : "";
+  }
+
+  function updateUI() {
+    var isHalf = selectedDuration() === "HALF";
+    var isCasual = selectedLeaveTypeText() === "casual leave";
+    var showTimeFields = isHalf || isCasual;
+
+    if (halfSlot) {
+      halfSlot.style.display = showTimeFields ? "" : "none";
+    }
   }
 
   for (var j = 0; j < radios.length; j++) {
     radios[j].addEventListener("change", updateUI);
   }
+
+  if (leaveTypeInput) {
+    leaveTypeInput.addEventListener("change", updateUI);
+  }
+
   updateUI();
 });
 </script>
 
 <style>
-/* ===== Modern UI (Bootstrap-friendly) ===== */
-
 .leave-hero{
   border-radius: 18px;
   padding: 16px 18px;
@@ -536,7 +552,6 @@ document.addEventListener('DOMContentLoaded', function () {
   flex-shrink: 0;
 }
 
-/* Mobile spacing polish */
 @media (max-width: 576px){
   .hero-title{ font-size: 20px; }
   .leave-hero{ padding: 14px; }

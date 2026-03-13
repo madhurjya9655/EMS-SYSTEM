@@ -1,20 +1,11 @@
 # File: apps/leave/forms.py
-# PURPOSE: Date-only leave (remove time-based leave restrictions)
-# UPDATED: 2026-03-10
-# CHANGE:  Fixed half-day leave bug — from_time/to_time/duration_type were
-#          accepted by the form but silently discarded in clean().  When the
-#          employee selects "Half Day" and enters times the form now:
-#            • reads duration_type, from_time, to_time
-#            • sets _computed_start_at / _computed_end_at to the actual times
-#            • sets _computed_is_half_day = True
-#          Full-day leaves continue to use FULL_DAY_START / FULL_DAY_END.
 
 from __future__ import annotations
 
 from datetime import datetime, time as dtime
 from typing import List, Tuple
+from zoneinfo import ZoneInfo
 
-import pytz
 from django import forms
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -22,7 +13,7 @@ from django.utils import timezone
 
 from .models import LeaveRequest, LeaveType  # noqa
 
-IST = pytz.timezone("Asia/Kolkata")
+IST = ZoneInfo("Asia/Kolkata")
 
 DURATION_FULL = "FULL"
 DURATION_HALF = "HALF"
@@ -37,48 +28,103 @@ ALLOWED_LEAVE_TYPE_NAMES = {
     "Maternity Leave",
 }
 
-# Date-only normalization boundaries (IST) — used for full-day leaves only
-FULL_DAY_START = dtime(0, 0, 0)
-FULL_DAY_END   = dtime(23, 59, 59)
+CASUAL_LEAVE_NAME = "Casual Leave"
 
-# Sensible defaults when the user picks "Half Day" but forgets to enter times
-HALF_DAY_MORNING_START = dtime(9, 30, 0)
-HALF_DAY_MORNING_END   = dtime(13, 30, 0)
+# Full-day normalization boundaries (kept for real full-day leaves only)
+FULL_DAY_START = dtime(0, 0, 0)
+FULL_DAY_END = dtime(23, 59, 59)
+
+# Official office hours for time-based leave
+OFFICE_START = dtime(10, 0, 0)
+OFFICE_END = dtime(18, 30, 0)
 
 
 def _combine_ist(date_value, t: dtime) -> datetime:
     naive = datetime.combine(date_value, t)
-    return IST.localize(naive)
+    return naive.replace(tzinfo=IST)
 
 
 def _ist_local(dt: datetime) -> datetime:
     return timezone.localtime(dt, IST)
 
 
-# ---------------------------------------------------------------------------
-# Internal helper: resolve the (start_time, end_time, is_half_day) triple
-# from form data.  Lives outside clean() so it can be unit-tested.
-# ---------------------------------------------------------------------------
-def _resolve_times(
+def _is_casual_leave(leave_type) -> bool:
+    return bool(leave_type and getattr(leave_type, "name", "") == CASUAL_LEAVE_NAME)
+
+
+def _is_time_based_request(leave_type, duration_type: str, from_time: dtime | None, to_time: dtime | None) -> bool:
+    """
+    Exact-time leave should be honored when:
+    - duration_type is explicitly HALF, or
+    - leave type is Casual Leave and any time input was provided.
+
+    This makes the fix resilient even if the template/view fails to post
+    duration_type correctly but does post the selected times.
+    """
+    raw_duration = (duration_type or DURATION_FULL).strip().upper()
+    if raw_duration == DURATION_HALF:
+        return True
+    if _is_casual_leave(leave_type) and (from_time is not None or to_time is not None):
+        return True
+    return False
+
+
+def _validate_time_window(from_time: dtime, to_time: dtime) -> None:
+    if from_time < OFFICE_START:
+        raise ValidationError({"from_time": "Start time must be 10:00 AM or later."})
+    if to_time > OFFICE_END:
+        raise ValidationError({"to_time": "End time must be 06:30 PM or earlier."})
+    if to_time <= from_time:
+        raise ValidationError({"to_time": "End time must be after start time."})
+
+
+def _resolve_datetimes(
+    *,
+    leave_type,
+    start_date,
+    end_date,
     duration_type: str,
     from_time: dtime | None,
-    to_time:   dtime | None,
-) -> Tuple[dtime, dtime, bool]:
+    to_time: dtime | None,
+) -> Tuple[datetime, datetime, bool]:
     """
-    Returns (start_time, end_time, is_half_day).
+    Returns (computed_start_at, computed_end_at, is_half_day).
 
-    Full-day → (00:00:00, 23:59:59, False)
-    Half-day with times → (from_time, to_time, True)
-    Half-day without times → (09:30:00, 13:30:00, True)  [safe default]
+    Rules:
+    - Full-day leave uses 00:00:00 -> 23:59:59
+    - Time-based leave stores exact submitted times
+    - Time-based leave must be single-day and within office hours
     """
-    if duration_type == DURATION_HALF:
-        # Use the user-supplied times when both are present and logically ordered
-        if from_time and to_time and to_time > from_time:
-            return from_time, to_time, True
-        # Partial entry: only one time supplied — still mark as half-day with defaults
-        return HALF_DAY_MORNING_START, HALF_DAY_MORNING_END, True
-    # Full day (or unrecognised duration_type)
-    return FULL_DAY_START, FULL_DAY_END, False
+    is_time_based = _is_time_based_request(leave_type, duration_type, from_time, to_time)
+
+    if not is_time_based:
+        return (
+            _combine_ist(start_date, FULL_DAY_START),
+            _combine_ist(end_date, FULL_DAY_END),
+            False,
+        )
+
+    if from_time is None:
+        raise ValidationError({"from_time": "Please select a start time."})
+    if to_time is None:
+        raise ValidationError({"to_time": "Please select an end time."})
+    if end_date != start_date:
+        raise ValidationError(
+            {
+                "end_at": (
+                    "Time-based leave must start and end on the same day. "
+                    "Select 'Full Day' for multi-day leave."
+                )
+            }
+        )
+
+    _validate_time_window(from_time, to_time)
+
+    return (
+        _combine_ist(start_date, from_time),
+        _combine_ist(end_date, to_time),
+        True,
+    )
 
 
 class LeaveRequestForm(forms.ModelForm):
@@ -86,10 +132,10 @@ class LeaveRequestForm(forms.ModelForm):
     Employee-facing form used by /leave/apply/.
 
     RULES:
-      - Duration type: FULL (all-day) or HALF (employee enters from/to times).
-      - Validate only: end_date >= start_date; for half-day end_date == start_date.
+      - Full-day leave uses full-day bounds.
+      - Casual Leave with entered times stores those exact times.
+      - Half-day/time-based leave must be single-day and within office hours.
       - If end_date missing → treat as same as start_date.
-      - Convert to IST-aware datetimes.
     """
 
     duration_type = forms.ChoiceField(
@@ -99,11 +145,9 @@ class LeaveRequestForm(forms.ModelForm):
         required=False,
     )
 
-    # Date-only inputs
     start_at = forms.DateField(label="Start Date (IST)")
-    end_at   = forms.DateField(label="End Date (IST)", required=False)
+    end_at = forms.DateField(label="End Date (IST)", required=False)
 
-    # Half-day time range (now actively used)
     from_time = forms.TimeField(
         label="From Time (IST)",
         required=False,
@@ -128,31 +172,30 @@ class LeaveRequestForm(forms.ModelForm):
 
     attachment = forms.FileField(required=False)
 
-    # Optional handover
     delegate_to = forms.ModelChoiceField(
         queryset=get_user_model().objects.none(),
         required=False,
-        label="Delegate to"
+        label="Delegate to",
     )
     handover_checklist = forms.MultipleChoiceField(
         required=False,
         label="Checklist",
-        widget=forms.CheckboxSelectMultiple
+        widget=forms.CheckboxSelectMultiple,
     )
     handover_delegation = forms.MultipleChoiceField(
         required=False,
         label="Delegation",
-        widget=forms.CheckboxSelectMultiple
+        widget=forms.CheckboxSelectMultiple,
     )
     handover_help_ticket = forms.MultipleChoiceField(
         required=False,
         label="Help Tickets",
-        widget=forms.CheckboxSelectMultiple
+        widget=forms.CheckboxSelectMultiple,
     )
     handover_message = forms.CharField(
         required=False,
         widget=forms.Textarea(attrs={"rows": 2}),
-        label="Message to assignee"
+        label="Message to assignee",
     )
 
     class Meta:
@@ -213,11 +256,12 @@ class LeaveRequestForm(forms.ModelForm):
     def clean(self):
         cd = super().clean()
 
-        if not cd.get("leave_type"):
+        leave_type = cd.get("leave_type")
+        if not leave_type:
             self.add_error("leave_type", "Please select a leave type.")
 
         start_date = cd.get("start_at")
-        end_date   = cd.get("end_at")
+        end_date = cd.get("end_at")
 
         if not start_date:
             self.add_error("start_at", "Please select a start date.")
@@ -226,38 +270,35 @@ class LeaveRequestForm(forms.ModelForm):
         if not end_date:
             end_date = start_date
 
-        # ── FIX: read duration_type and times instead of hardcoding them ────────
-        raw_duration = (cd.get("duration_type") or DURATION_FULL).strip().upper()
-        from_time: dtime | None = cd.get("from_time")
-        to_time:   dtime | None = cd.get("to_time")
-
-        start_time, end_time, is_half_day = _resolve_times(raw_duration, from_time, to_time)
-
-        # Half-day leaves must be a single calendar day
-        if is_half_day and end_date != start_date:
-            self.add_error(
-                "end_at",
-                "Half-day leaves must start and end on the same day. "
-                "Select 'Full Day' for multi-day leaves.",
-            )
-            return cd
-
         if end_date < start_date:
             self.add_error("end_at", "End date must be on or after start date.")
             return cd
 
-        # Additional sanity check: to_time must be after from_time on same day
-        if is_half_day and from_time and to_time and to_time <= from_time:
-            self.add_error(
-                "to_time",
-                "End time must be after start time for a half-day leave.",
+        raw_duration = (cd.get("duration_type") or DURATION_FULL).strip().upper()
+        from_time: dtime | None = cd.get("from_time")
+        to_time: dtime | None = cd.get("to_time")
+
+        try:
+            computed_start, computed_end, is_half_day = _resolve_datetimes(
+                leave_type=leave_type,
+                start_date=start_date,
+                end_date=end_date,
+                duration_type=raw_duration,
+                from_time=from_time,
+                to_time=to_time,
             )
+        except ValidationError as exc:
+            if hasattr(exc, "error_dict"):
+                for field, errors in exc.error_dict.items():
+                    for err in errors:
+                        self.add_error(field, err)
+            else:
+                self.add_error(None, exc)
             return cd
 
-        cd["_computed_start_at"]    = _combine_ist(start_date, start_time)
-        cd["_computed_end_at"]      = _combine_ist(end_date,   end_time)
+        cd["_computed_start_at"] = computed_start
+        cd["_computed_end_at"] = computed_end
         cd["_computed_is_half_day"] = is_half_day
-        # ────────────────────────────────────────────────────────────────────────
 
         return cd
 
@@ -269,13 +310,13 @@ class LeaveRequestForm(forms.ModelForm):
 
         if "_computed_start_at" in cd and "_computed_end_at" in cd:
             aware_start = cd["_computed_start_at"]
-            aware_end   = cd["_computed_end_at"]
+            aware_end = cd["_computed_end_at"]
 
             self.cleaned_data["start_at"] = aware_start
-            self.cleaned_data["end_at"]   = aware_end
+            self.cleaned_data["end_at"] = aware_end
 
-            self.instance.start_at    = aware_start
-            self.instance.end_at      = aware_end
+            self.instance.start_at = aware_start
+            self.instance.end_at = aware_end
             self.instance.is_half_day = bool(cd.get("_computed_is_half_day", False))
 
         if self.user and not getattr(self.instance, "employee_id", None):
@@ -290,13 +331,13 @@ class LeaveRequestForm(forms.ModelForm):
         cd = self.cleaned_data
 
         instance = LeaveRequest(
-            employee      = self.user,
-            leave_type    = cd.get("leave_type"),
-            start_at      = cd["_computed_start_at"],
-            end_at        = cd["_computed_end_at"],
-            is_half_day   = cd.get("_computed_is_half_day", False),
-            reason        = cd.get("reason") or "",
-            attachment    = cd.get("attachment"),
+            employee=self.user,
+            leave_type=cd.get("leave_type"),
+            start_at=cd["_computed_start_at"],
+            end_at=cd["_computed_end_at"],
+            is_half_day=cd.get("_computed_is_half_day", False),
+            reason=cd.get("reason") or "",
+            attachment=cd.get("attachment"),
         )
 
         if commit:
@@ -306,17 +347,19 @@ class LeaveRequestForm(forms.ModelForm):
 
 class AdminLeaveEditForm(forms.ModelForm):
     """
-    Admin edit form (date-only, with half-day support).
+    Admin edit form with exact-time support for Casual Leave and time-based leave.
     """
 
     duration_type = forms.ChoiceField(
-        choices=DURATION_CHOICES, initial=DURATION_FULL, widget=forms.RadioSelect, required=False
+        choices=DURATION_CHOICES,
+        initial=DURATION_FULL,
+        widget=forms.RadioSelect,
+        required=False,
     )
 
     start_at = forms.DateField(label="Start Date (IST)")
-    end_at   = forms.DateField(label="End Date (IST)", required=False)
+    end_at = forms.DateField(label="End Date (IST)", required=False)
 
-    # Half-day time range (now actively used)
     from_time = forms.TimeField(
         label="From Time (IST)",
         required=False,
@@ -356,29 +399,27 @@ class AdminLeaveEditForm(forms.ModelForm):
 
         if self.instance and self.instance.pk:
             ist_start = _ist_local(self.instance.start_at)
-            ist_end   = _ist_local(self.instance.end_at)
+            ist_end = _ist_local(self.instance.end_at)
 
             self.fields["start_at"].initial = ist_start.date()
-            self.fields["end_at"].initial   = ist_end.date()
+            self.fields["end_at"].initial = ist_end.date()
 
-            # ── FIX: pre-populate duration_type, from_time, to_time from the
-            #         stored values so editing an existing half-day leave shows
-            #         the correct data.
             if self.instance.is_half_day:
                 self.fields["duration_type"].initial = DURATION_HALF
-                self.fields["from_time"].initial     = ist_start.time()
-                self.fields["to_time"].initial       = ist_end.time()
+                self.fields["from_time"].initial = ist_start.time().replace(second=0, microsecond=0)
+                self.fields["to_time"].initial = ist_end.time().replace(second=0, microsecond=0)
             else:
                 self.fields["duration_type"].initial = DURATION_FULL
 
     def clean(self):
         cd = super().clean()
 
-        if not cd.get("leave_type"):
+        leave_type = cd.get("leave_type")
+        if not leave_type:
             self.add_error("leave_type", "Please select a leave type.")
 
         start_date = cd.get("start_at")
-        end_date   = cd.get("end_at")
+        end_date = cd.get("end_at")
 
         if not start_date:
             self.add_error("start_at", "Please select a start date.")
@@ -387,32 +428,35 @@ class AdminLeaveEditForm(forms.ModelForm):
         if not end_date:
             end_date = start_date
 
-        # ── FIX: read duration_type and times instead of hardcoding them ────────
-        raw_duration = (cd.get("duration_type") or DURATION_FULL).strip().upper()
-        from_time: dtime | None = cd.get("from_time")
-        to_time:   dtime | None = cd.get("to_time")
-
-        start_time, end_time, is_half_day = _resolve_times(raw_duration, from_time, to_time)
-
-        if is_half_day and end_date != start_date:
-            self.add_error(
-                "end_at",
-                "Half-day leaves must start and end on the same day.",
-            )
-            return cd
-
         if end_date < start_date:
             self.add_error("end_at", "End date must be on or after start date.")
             return cd
 
-        if is_half_day and from_time and to_time and to_time <= from_time:
-            self.add_error("to_time", "End time must be after start time.")
+        raw_duration = (cd.get("duration_type") or DURATION_FULL).strip().upper()
+        from_time: dtime | None = cd.get("from_time")
+        to_time: dtime | None = cd.get("to_time")
+
+        try:
+            computed_start, computed_end, is_half_day = _resolve_datetimes(
+                leave_type=leave_type,
+                start_date=start_date,
+                end_date=end_date,
+                duration_type=raw_duration,
+                from_time=from_time,
+                to_time=to_time,
+            )
+        except ValidationError as exc:
+            if hasattr(exc, "error_dict"):
+                for field, errors in exc.error_dict.items():
+                    for err in errors:
+                        self.add_error(field, err)
+            else:
+                self.add_error(None, exc)
             return cd
 
-        cd["_computed_start_at"]    = _combine_ist(start_date, start_time)
-        cd["_computed_end_at"]      = _combine_ist(end_date,   end_time)
+        cd["_computed_start_at"] = computed_start
+        cd["_computed_end_at"] = computed_end
         cd["_computed_is_half_day"] = is_half_day
-        # ────────────────────────────────────────────────────────────────────────
 
         return cd
 
@@ -420,11 +464,11 @@ class AdminLeaveEditForm(forms.ModelForm):
         cd = getattr(self, "cleaned_data", {}) or {}
         if "_computed_start_at" in cd and "_computed_end_at" in cd:
             aware_start = cd["_computed_start_at"]
-            aware_end   = cd["_computed_end_at"]
+            aware_end = cd["_computed_end_at"]
             self.cleaned_data["start_at"] = aware_start
-            self.cleaned_data["end_at"]   = aware_end
-            self.instance.start_at    = aware_start
-            self.instance.end_at      = aware_end
+            self.cleaned_data["end_at"] = aware_end
+            self.instance.start_at = aware_start
+            self.instance.end_at = aware_end
             self.instance.is_half_day = bool(cd.get("_computed_is_half_day", False))
         super()._post_clean()
 
@@ -432,11 +476,11 @@ class AdminLeaveEditForm(forms.ModelForm):
         if not self.is_valid():
             raise ValidationError("Invalid form; cannot save.")
 
-        cd   = self.cleaned_data
+        cd = self.cleaned_data
         inst: LeaveRequest = super().save(commit=False)
-        inst.leave_type  = cd.get("leave_type")
-        inst.start_at    = cd["_computed_start_at"]
-        inst.end_at      = cd["_computed_end_at"]
+        inst.leave_type = cd.get("leave_type")
+        inst.start_at = cd["_computed_start_at"]
+        inst.end_at = cd["_computed_end_at"]
         inst.is_half_day = cd.get("_computed_is_half_day", False)
         if commit:
             inst.save()
