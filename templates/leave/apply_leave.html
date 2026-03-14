@@ -78,7 +78,7 @@
               </div>
               <div class="ms-auto d-none d-md-inline">
                 <span class="pill">
-                  <i class="fa-solid fa-calendar-check me-1"></i> Exact time supported for Casual Leave
+                  <i class="fa-solid fa-calendar-check me-1"></i> Exact time for Half Day leave
                 </span>
               </div>
             </div>
@@ -143,6 +143,7 @@
               </div>
             </div>
 
+            {# ── Time fields: shown ONLY when Half Day is selected ──────────── #}
             <div id="half-day-slot" class="mt-3" style="display:none;">
               <div class="info-callout">
                 <div class="d-flex gap-2 align-items-start">
@@ -152,7 +153,7 @@
                   <div>
                     <div class="fw-semibold">Leave time</div>
                     <div class="text-muted small">
-                      For Casual Leave or Half Day leave, the selected time is stored exactly.
+                      For Half Day leave, the selected time is stored exactly.
                       Allowed time range: <strong>10:00 AM to 06:30 PM</strong>.
                     </div>
                   </div>
@@ -299,7 +300,11 @@
               </div>
               <div class="side-item">
                 <div class="side-dot"></div>
-                <div>For Casual Leave, enter exact leave time within office hours if needed.</div>
+                <div>Full Day leave runs 10:00 AM – 06:30 PM (office hours) automatically.</div>
+              </div>
+              <div class="side-item">
+                <div class="side-dot"></div>
+                <div>Select Half Day to enter exact leave time within office hours.</div>
               </div>
               <div class="side-item">
                 <div class="side-dot"></div>
@@ -338,50 +343,38 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-  const radios = document.getElementsByName("duration_type");
-  const halfSlot = document.getElementById("half-day-slot");
+  var radios   = document.getElementsByName("duration_type");
+  var halfSlot = document.getElementById("half-day-slot");
+  var startInput = document.getElementById("id_start_at");
+  var endInput   = document.getElementById("id_end_at");
 
-  const startInput = document.getElementById("id_start_at");
-  const endInput = document.getElementById("id_end_at");
-  const leaveTypeInput = document.getElementById("id_leave_type");
-
-  let startPicker = null, endPicker = null;
+  var startPicker = null, endPicker = null;
 
   if (startInput) {
     startPicker = flatpickr("#id_start_at", { dateFormat: "Y-m-d" });
-    const startIcon = document.getElementById("start_date_icon");
-    if (startIcon) startIcon.addEventListener("click", () => startPicker && startPicker.open());
+    var startIcon = document.getElementById("start_date_icon");
+    if (startIcon) startIcon.addEventListener("click", function () { startPicker && startPicker.open(); });
   }
   if (endInput) {
     endPicker = flatpickr("#id_end_at", { dateFormat: "Y-m-d" });
-    const endIcon = document.getElementById("end_date_icon");
-    if (endIcon) endIcon.addEventListener("click", () => endPicker && endPicker.open());
+    var endIcon = document.getElementById("end_date_icon");
+    if (endIcon) endIcon.addEventListener("click", function () { endPicker && endPicker.open(); });
   }
 
   function selectedDuration() {
-    var val = "FULL";
     for (var i = 0; i < radios.length; i++) {
-      if (radios[i].checked) {
-        val = radios[i].value;
-        break;
-      }
+      if (radios[i].checked) return radios[i].value;
     }
-    return val;
-  }
-
-  function selectedLeaveTypeText() {
-    if (!leaveTypeInput) return "";
-    var option = leaveTypeInput.options[leaveTypeInput.selectedIndex];
-    return option ? (option.text || "").trim().toLowerCase() : "";
+    return "FULL";
   }
 
   function updateUI() {
+    /* Time fields are shown ONLY for Half Day.
+       Full Day always uses office hours (10:00–18:30) automatically —
+       no user input required, regardless of leave type. */
     var isHalf = selectedDuration() === "HALF";
-    var isCasual = selectedLeaveTypeText() === "casual leave";
-    var showTimeFields = isHalf || isCasual;
-
     if (halfSlot) {
-      halfSlot.style.display = showTimeFields ? "" : "none";
+      halfSlot.style.display = isHalf ? "" : "none";
     }
   }
 
@@ -389,10 +382,7 @@ document.addEventListener('DOMContentLoaded', function () {
     radios[j].addEventListener("change", updateUI);
   }
 
-  if (leaveTypeInput) {
-    leaveTypeInput.addEventListener("change", updateUI);
-  }
-
+  /* Run once on page load to restore correct state after form re-display */
   updateUI();
 });
 </script>

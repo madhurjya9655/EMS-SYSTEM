@@ -62,19 +62,15 @@ def _is_time_based_request(
     leave_type, duration_type: str, from_time: dtime | None, to_time: dtime | None
 ) -> bool:
     """
-    Exact-time leave should be honored when:
-    - duration_type is explicitly HALF, or
-    - leave type is Casual Leave and any time input was provided.
+    Exact-time leave is used ONLY when duration_type is explicitly HALF.
 
-    This makes the fix resilient even if the template/view fails to post
-    duration_type correctly but does post the selected times.
+    Full Day always uses office-hours bounds (OFFICE_START -> OFFICE_END)
+    regardless of leave type, including Casual Leave.
+    The template hides time fields for Full Day, so from_time/to_time will
+    always be None on a Full Day submission.
     """
     raw_duration = (duration_type or DURATION_FULL).strip().upper()
-    if raw_duration == DURATION_HALF:
-        return True
-    if _is_casual_leave(leave_type) and (from_time is not None or to_time is not None):
-        return True
-    return False
+    return raw_duration == DURATION_HALF
 
 
 def _validate_time_window(from_time: dtime, to_time: dtime) -> None:
