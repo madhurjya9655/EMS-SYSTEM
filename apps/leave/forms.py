@@ -1,4 +1,14 @@
-# File: apps/leave/forms.py
+# FILE: apps/leave/forms.py
+# PURPOSE: Leave module forms — employee apply + admin edit
+# UPDATED: 2026-03-14
+# CHANGE:  Added attrs={"type": "time"} to TimeInput widgets for from_time and
+#          to_time in BOTH LeaveRequestForm and AdminLeaveEditForm.
+#          Without this, some browser/Django combinations render the widget as
+#          type="text", allowing free-form strings (e.g. "2:00PM" without a
+#          space) that fail all input_formats → "Enter a valid time".
+#          With type="time" the browser always submits clean HH:MM (24-hour)
+#          which is unambiguously parsed by the "%H:%M" input_format.
+#          No business logic changed.
 
 from __future__ import annotations
 
@@ -52,7 +62,9 @@ def _is_casual_leave(leave_type) -> bool:
     return bool(leave_type and getattr(leave_type, "name", "") == CASUAL_LEAVE_NAME)
 
 
-def _is_time_based_request(leave_type, duration_type: str, from_time: dtime | None, to_time: dtime | None) -> bool:
+def _is_time_based_request(
+    leave_type, duration_type: str, from_time: dtime | None, to_time: dtime | None
+) -> bool:
     """
     Exact-time leave should be honored when:
     - duration_type is explicitly HALF, or
@@ -148,16 +160,20 @@ class LeaveRequestForm(forms.ModelForm):
     start_at = forms.DateField(label="Start Date (IST)")
     end_at = forms.DateField(label="End Date (IST)", required=False)
 
+    # ── FIX: attrs={"type": "time"} forces browser to submit clean HH:MM
+    #         (24-hour) regardless of browser locale.  Without this, some
+    #         builds render type="text", allowing free-form strings that fail
+    #         all input_formats → "Enter a valid time" errors. ──────────────
     from_time = forms.TimeField(
         label="From Time (IST)",
         required=False,
-        widget=forms.TimeInput(format="%H:%M"),
+        widget=forms.TimeInput(attrs={"type": "time"}, format="%H:%M"),
         input_formats=["%H:%M", "%I:%M %p"],
     )
     to_time = forms.TimeField(
         label="To Time (IST)",
         required=False,
-        widget=forms.TimeInput(format="%H:%M"),
+        widget=forms.TimeInput(attrs={"type": "time"}, format="%H:%M"),
         input_formats=["%H:%M", "%I:%M %p"],
     )
 
@@ -360,16 +376,17 @@ class AdminLeaveEditForm(forms.ModelForm):
     start_at = forms.DateField(label="Start Date (IST)")
     end_at = forms.DateField(label="End Date (IST)", required=False)
 
+    # ── FIX: same attrs={"type": "time"} fix applied here ─────────────────
     from_time = forms.TimeField(
         label="From Time (IST)",
         required=False,
-        widget=forms.TimeInput(format="%H:%M"),
+        widget=forms.TimeInput(attrs={"type": "time"}, format="%H:%M"),
         input_formats=["%H:%M", "%I:%M %p"],
     )
     to_time = forms.TimeField(
         label="To Time (IST)",
         required=False,
-        widget=forms.TimeInput(format="%H:%M"),
+        widget=forms.TimeInput(attrs={"type": "time"}, format="%H:%M"),
         input_formats=["%H:%M", "%I:%M %p"],
     )
 

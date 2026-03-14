@@ -1,11 +1,21 @@
-# File: apps/leave/signals.py
+# FILE: apps/leave/signals.py
+# PURPOSE: Leave module signals — workflow hooks, email dispatch, audit logging
+# UPDATED: 2026-03-14
+# CHANGE:  Replaced `import pytz` / `pytz.timezone("Asia/Kolkata")` with
+#          `from zoneinfo import ZoneInfo` / `ZoneInfo("Asia/Kolkata")`.
+#          pytz is not a stdlib package and may not be installed on Python 3.13
+#          hosts (e.g. Render).  zoneinfo is stdlib since Python 3.9 and is
+#          the canonical timezone library for Django 4+/Python 3.9+.
+#          No leave business logic changed.  All timezone behaviour identical.
+
 from __future__ import annotations
 
 import logging
 from datetime import date
 from typing import List
 
-import pytz
+from zoneinfo import ZoneInfo          # ← replaces: import pytz
+
 from django.db import transaction
 from django.db.models import Q
 from django.db.models.signals import post_save, pre_save
@@ -15,7 +25,9 @@ from django.utils import timezone
 from .models import LeaveRequest, LeaveStatus, ApproverMapping
 
 logger = logging.getLogger(__name__)
-IST = pytz.timezone("Asia/Kolkata")
+
+# ← replaces: IST = pytz.timezone("Asia/Kolkata")
+IST = ZoneInfo("Asia/Kolkata")
 
 # Re-entrancy guard (prevents duplicate bindings)
 if not hasattr(logging, "_leave_signals_bound"):
@@ -160,10 +172,17 @@ def _safe_send_handover_emails_and_create_reminders(leave: LeaveRequest) -> None
                             },
                         )
                     except Exception:
-                        logger.exception("Failed to create/get reminder for handover %s", getattr(ho, "id", None))
+                        logger.exception(
+                            "Failed to create/get reminder for handover %s",
+                            getattr(ho, "id", None),
+                        )
 
             except Exception:
-                logger.exception("Failed sending handover email for assignee %s (leave %s)", assignee_id, leave.id)
+                logger.exception(
+                    "Failed sending handover email for assignee %s (leave %s)",
+                    assignee_id,
+                    leave.id,
+                )
 
     except Exception:
         logger.exception("Failed to send handover emails (signals) for leave %s", getattr(leave, "id", None))
@@ -189,7 +208,8 @@ if not logging._leave_signals_bound:  # type: ignore[attr-defined]
 
     # ---------------------------------------------------------------------
     # Main workflow hooks
-    #   • On create: emit leave_blocked + log APPLIED + send request email + handover email (after commit)
+    #   • On create: emit leave_blocked + log APPLIED + send request email +
+    #                handover email (after commit)
     #   • On approve: re-apply handover (idempotent safety)
     #   • On reject: emit leave_unblocked
     # ---------------------------------------------------------------------
@@ -299,7 +319,9 @@ if not logging._leave_signals_bound:  # type: ignore[attr-defined]
 
                 logger.info(
                     "Rerouted & resent leave #%s to %s (cc=%s) after ApproverMapping change.",
-                    lr.id, getattr(new_rp, "email", "-"), getattr(new_cc, "email", "-"),
+                    lr.id,
+                    getattr(new_rp, "email", "-"),
+                    getattr(new_cc, "email", "-"),
                 )
         except Exception:
             logger.exception("Failed handling ApproverMapping change.")
