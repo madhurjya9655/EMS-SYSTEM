@@ -1,4 +1,14 @@
 # FILE: apps/tasks/views.py
+# PURPOSE: Task module views — Checklist, Delegation, Help Ticket, Dashboard
+# UPDATED: 2026-03-14
+# CHANGE:  Fixed list_checklist() only:
+#          1. base_qs now scoped by role: admins/managers see ALL tasks;
+#             regular employees see only their own.
+#          2. assign_to GET filter restored for admin/manager roles so the
+#             "Assign To" dropdown in the filter panel actually works.
+#          3. ctx now passes `users` (active user list) and `is_admin` so
+#             the template dropdown is populated correctly.
+#          No other function changed.
 from __future__ import annotations
 
 import csv
@@ -952,7 +962,7 @@ def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: O
 @has_permission("list_checklist")
 def list_checklist(request):
     # ------------------------------------------------------------------
-    # POST: bulk / series delete actions
+    # POST: bulk / series delete actions  (UNCHANGED)
     # ------------------------------------------------------------------
     if request.method == "POST":
         return_url = request.POST.get("return_url") or reverse("tasks:list_checklist")
@@ -1010,15 +1020,26 @@ def list_checklist(request):
         return redirect(return_url)
 
     # ------------------------------------------------------------------
-    # GET: ISSUE 1 FIX — always show only the logged-in user's own tasks
+    # GET
     # ------------------------------------------------------------------
-    base_qs = Checklist.objects.filter(
-        assign_to=request.user,
-        is_skipped_due_to_leave=False,
-    ).select_related("assign_by", "assign_to")
+    # FIX 1: Detect admin/manager role so they can view and filter all tasks.
+    #        Regular employees always see only their own tasks.
+    is_admin = can_create(request.user)
+
+    if is_admin:
+        # Admins and managers see all tasks and can filter by any employee.
+        base_qs = Checklist.objects.filter(
+            is_skipped_due_to_leave=False,
+        ).select_related("assign_by", "assign_to")
+    else:
+        # Regular employees see only tasks assigned to them.
+        base_qs = Checklist.objects.filter(
+            assign_to=request.user,
+            is_skipped_due_to_leave=False,
+        ).select_related("assign_by", "assign_to")
 
     # Summary counts (computed before any additional filters so numbers
-    # always reflect the user's complete task picture)
+    # always reflect the full task picture for this user/scope)
     total_assigned = base_qs.count()
     pending_count = base_qs.filter(status="Pending").count()
     completed_count = base_qs.filter(status="Completed").count()
@@ -1034,7 +1055,11 @@ def list_checklist(request):
     if kw:
         qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
 
-    # NOTE: "assign_to" URL filter removed — users always see only their own tasks.
+    # FIX 2: Restore assign_to filter — available only for admin/manager roles
+    #        so that the "Assign To" dropdown in the filter panel works correctly.
+    assign_to_id = request.GET.get("assign_to", "").strip()
+    if assign_to_id and is_admin:
+        qs = qs.filter(assign_to_id=assign_to_id)
 
     if request.GET.get("priority", "").strip():
         qs = qs.filter(priority=request.GET.get("priority").strip())
@@ -1073,17 +1098,22 @@ def list_checklist(request):
     ctx = {
         "items": items,
         "priority_choices": Checklist._meta.get_field("priority").choices,
-        # Group names scoped to current user only
-        "group_names": Checklist.objects.filter(
-            assign_to=request.user,
-            is_skipped_due_to_leave=False,
-        ).order_by("group_name").values_list("group_name", flat=True).distinct(),
+        # Group names scoped to the visible task set
+        "group_names": base_qs.order_by("group_name").values_list("group_name", flat=True).distinct(),
         "current_tab": "checklist",
-        # ISSUE 1 FIX: summary counts exposed to template
+        # Summary counts
         "total_assigned": total_assigned,
         "pending_count": pending_count,
         "completed_count": completed_count,
         "current_status": status_filter,
+        # FIX 3: Pass users list so the "Assign To" dropdown in the template is
+        #         populated.  Only admins/managers get the full user list;
+        #         regular employees get an empty list (filter hidden in template).
+        "users": (
+            User.objects.filter(is_active=True).order_by("first_name", "last_name", "username")
+            if is_admin else []
+        ),
+        "is_admin": is_admin,
     }
     if request.GET.get("partial"):
         return render(request, "tasks/partial_list_checklist.html", ctx)
