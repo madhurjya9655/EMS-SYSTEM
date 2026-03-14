@@ -40,13 +40,9 @@ ALLOWED_LEAVE_TYPE_NAMES = {
 
 CASUAL_LEAVE_NAME = "Casual Leave"
 
-# Full-day normalization boundaries (kept for real full-day leaves only)
-FULL_DAY_START = dtime(0, 0, 0)
-FULL_DAY_END = dtime(23, 59, 59)
-
-# Official office hours for time-based leave
-OFFICE_START = dtime(10, 0, 0)
-OFFICE_END = dtime(18, 30, 0)
+# Office hours used for BOTH full-day default bounds AND time-based validation
+OFFICE_START = dtime(10, 0, 0)   # 10:00 AM IST
+OFFICE_END   = dtime(18, 30, 0)  # 06:30 PM IST
 
 
 def _combine_ist(date_value, t: dtime) -> datetime:
@@ -111,8 +107,8 @@ def _resolve_datetimes(
 
     if not is_time_based:
         return (
-            _combine_ist(start_date, FULL_DAY_START),
-            _combine_ist(end_date, FULL_DAY_END),
+            _combine_ist(start_date, OFFICE_START),
+            _combine_ist(end_date, OFFICE_END),
             False,
         )
 
