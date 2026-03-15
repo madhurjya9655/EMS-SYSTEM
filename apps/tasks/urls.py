@@ -1,9 +1,8 @@
-# apps/tasks/urls.py
 from django.urls import path
 from . import views
 from .views_reports import recurring_report
 from .views_cron import weekly_congrats_hook, pre10am_unblock_and_generate_hook
-from . import cron_views  # <-- hardened cron endpoints
+from . import cron_views  # hardened cron endpoints
 
 app_name = "tasks"
 
@@ -17,7 +16,12 @@ urlpatterns = [
     path("checklist/delete/<int:pk>/",    views.delete_checklist,      name="delete_checklist"),
     path("checklist/complete/<int:pk>/",  views.complete_checklist,    name="complete_checklist"),
     path("checklist/reassign/<int:pk>/",  views.reassign_checklist,    name="reassign_checklist"),
+
+    # Existing canonical route
     path("checklist/<int:pk>/",           views.checklist_details,     name="checklist_detail"),
+
+    # Backward-compatible alias route
+    path("checklist/<int:pk>/details/",   views.checklist_details,     name="checklist_details"),
 
     # -----------------
     # Delegation
@@ -28,7 +32,12 @@ urlpatterns = [
     path("delegation/delete/<int:pk>/",   views.delete_delegation,     name="delete_delegation"),
     path("delegation/reassign/<int:pk>/", views.edit_delegation,       name="reassign_delegation"),
     path("delegation/complete/<int:pk>/", views.complete_delegation,   name="complete_delegation"),
+
+    # Existing canonical route
     path("delegation/<int:pk>/",          views.delegation_details,    name="delegation_detail"),
+
+    # Backward-compatible alias route
+    path("delegation/<int:pk>/details/",  views.delegation_details,    name="delegation_details"),
 
     # -----------------
     # FMS
@@ -68,17 +77,12 @@ urlpatterns = [
     path("internal/cron/weekly-congrats/<str:token>/", weekly_congrats_hook,      name="cron_weekly_congrats_with_token"),
     path("internal/cron/weekly-congrats/",             weekly_congrats_hook,      name="cron_weekly_congrats"),
 
-    # ✅ Route "due-today" to the hardened view (query OR header auth; JSON-200 on errors)
     path("internal/cron/due-today/<str:token>/",       cron_views.due_today,       name="cron_due_today_with_token"),
     path("internal/cron/due-today/",                   cron_views.due_today,       name="cron_due_today"),
 
-    # ✅ Consolidated 7PM digests
     path("internal/cron/pending-7pm/",                 cron_views.pending_summary_7pm,  name="cron_pending_7pm"),
-
-    # ✅ Manual per-employee digest
     path("internal/cron/employee-digest/",             cron_views.employee_digest,      name="cron_employee_digest"),
 
-    # 09:55 IST unblock + generate (as-is)
     path("internal/cron/pre10am-unblock/<str:token>/", pre10am_unblock_and_generate_hook, name="cron_pre10_with_token"),
     path("internal/cron/pre10am-unblock/",             pre10am_unblock_and_generate_hook, name="cron_pre10"),
 ]
