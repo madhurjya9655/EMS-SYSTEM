@@ -1,34 +1,54 @@
 from django.db import migrations
 
-SQL = """
-PRAGMA foreign_keys=ON;
-
--- add columns if missing
-CREATE TABLE IF NOT EXISTS __tmp_probe (id INTEGER);
-DROP TABLE __tmp_probe;
-
--- helper to check columns
-"""
 
 def forwards(apps, schema_editor):
-    c = schema_editor.connection.cursor()
+    connection = schema_editor.connection
+    vendor = connection.vendor
 
-    def has_col(table, col):
-        c.execute(f"PRAGMA table_info({table})")
-        return any(r[1] == col for r in c.fetchall())
+    with connection.cursor() as cursor:
+        def has_col(table, col):
+            if vendor == "sqlite":
+                cursor.execute(f"PRAGMA table_info({table})")
+                return any(r[1] == col for r in cursor.fetchall())
 
-    table = "leave_leavehandover"
+            if vendor == "postgresql":
+                cursor.execute(
+                    """
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = %s AND column_name = %s
+                    """,
+                    [table, col],
+                )
+                return cursor.fetchone() is not None
 
-    # created_at
-    if not has_col(table, "created_at"):
-        c.execute(f'ALTER TABLE {table} ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP')
+            raise NotImplementedError(f"Unsupported database vendor: {vendor}")
 
-    # updated_at
-    if not has_col(table, "updated_at"):
-        c.execute(f'ALTER TABLE {table} ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP')
+        table = "leave_leavehandover"
 
-    # optional index for updated_at lookups/sorts
-    c.execute(f'CREATE INDEX IF NOT EXISTS {table}_updated_at_idx ON {table} (updated_at)')
+        if not has_col(table, "created_at"):
+            if vendor == "sqlite":
+                cursor.execute(
+                    f"ALTER TABLE {table} ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP"
+                )
+            elif vendor == "postgresql":
+                cursor.execute(
+                    f"ALTER TABLE {table} ADD COLUMN created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP"
+                )
+
+        if not has_col(table, "updated_at"):
+            if vendor == "sqlite":
+                cursor.execute(
+                    f"ALTER TABLE {table} ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP"
+                )
+            elif vendor == "postgresql":
+                cursor.execute(
+                    f"ALTER TABLE {table} ADD COLUMN updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP"
+                )
+
+        cursor.execute(
+            f"CREATE INDEX IF NOT EXISTS {table}_updated_at_idx ON {table} (updated_at)"
+        )
 
 
 def backwards(apps, schema_editor):
