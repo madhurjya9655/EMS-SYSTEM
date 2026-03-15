@@ -931,7 +931,7 @@ def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: O
 @has_permission("list_checklist")
 def list_checklist(request):
     # ------------------------------------------------------------------
-    # POST: bulk / series delete actions  (UNCHANGED)
+    # POST: bulk / series delete actions
     # ------------------------------------------------------------------
     if request.method == "POST":
         return_url = request.POST.get("return_url") or reverse("tasks:list_checklist")
@@ -1815,7 +1815,10 @@ def list_fms(request):
 
 @login_required
 def checklist_details(request, pk: int):
-    obj = get_object_or_404(Checklist.objects.select_related("assign_by", "assign_to"), pk=pk)
+    obj = get_object_or_404(
+        Checklist.objects.select_related("assign_by", "assign_to", "assign_pc", "notify_to", "auditor"),
+        pk=pk,
+    )
     return render(request, "tasks/partials/checklist_detail.html", {"obj": obj})
 
 

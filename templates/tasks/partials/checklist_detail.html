@@ -1,25 +1,21 @@
-{% load static %}
-
-<div class="card shadow-sm">
+{% with return_url=request.META.HTTP_REFERER|default:'' %}
+<div class="card shadow-sm border-0">
   <div class="card-header d-flex justify-content-between align-items-center">
     <h5 class="card-title mb-0">
-      <i class="fas fa-clipboard-check me-2"></i>{{ obj.task_name }}
+      <i class="fas fa-clipboard-check me-2" aria-hidden="true"></i>{{ obj.task_name }}
       {% if obj.group_name %}
         <span class="badge bg-secondary ms-2">{{ obj.group_name }}</span>
       {% endif %}
     </h5>
+
     <div class="d-flex align-items-center gap-2">
       {% with p=obj.priority %}
-        <span class="badge
-          {% if p == 'High' %}bg-danger
-          {% elif p == 'Medium' %}bg-warning text-dark
-          {% else %}bg-success{% endif %}">
+        <span class="badge {% if p == 'High' %}bg-danger{% elif p == 'Medium' %}bg-warning text-dark{% else %}bg-success{% endif %}">
           {{ p|default:"Low" }}
         </span>
       {% endwith %}
-      <span class="badge
-        {% if obj.status == 'Pending' %}bg-warning text-dark
-        {% else %}bg-success{% endif %}">
+
+      <span class="badge {% if obj.status == 'Pending' %}bg-warning text-dark{% else %}bg-success{% endif %}">
         {{ obj.status }}
       </span>
     </div>
@@ -28,13 +24,29 @@
   <div class="card-body">
     <div class="row gy-2">
       <div class="col-md-6">
-        <p class="mb-1"><strong>Assigned To:</strong> {{ obj.assign_to.get_full_name|default:obj.assign_to.username }}</p>
-        <p class="mb-1"><strong>Assigned By:</strong> {{ obj.assign_by.get_full_name|default:obj.assign_by.username }}</p>
+        <p class="mb-1">
+          <strong>Assigned To:</strong>
+          {{ obj.assign_to.get_full_name|default:obj.assign_to.username }}
+        </p>
+
+        <p class="mb-1">
+          <strong>Assigned By:</strong>
+          {{ obj.assign_by.get_full_name|default:obj.assign_by.username }}
+        </p>
+
         <p class="mb-1">
           <strong>Planned Date:</strong>
-          {% if obj.planned_date %}{{ obj.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}
+          {% if obj.planned_date %}
+            {{ obj.planned_date|date:"d M, Y H:i" }}
+          {% else %}
+            —
+          {% endif %}
         </p>
-        <p class="mb-1"><strong>Status:</strong> {{ obj.status }}</p>
+
+        <p class="mb-1">
+          <strong>Status:</strong>
+          {{ obj.status }}
+        </p>
       </div>
 
       <div class="col-md-6">
@@ -48,11 +60,19 @@
             {% endif %}
           </p>
         {% endif %}
+
         {% if obj.time_per_task_minutes %}
-          <p class="mb-1"><strong>Estimated Time:</strong> {{ obj.time_per_task_minutes }} minutes</p>
+          <p class="mb-1">
+            <strong>Estimated Time:</strong>
+            {{ obj.time_per_task_minutes }} minutes
+          </p>
         {% endif %}
+
         {% if obj.remind_before_days %}
-          <p class="mb-1"><strong>Remind Before:</strong> {{ obj.remind_before_days }} day{{ obj.remind_before_days|pluralize }}</p>
+          <p class="mb-1">
+            <strong>Remind Before:</strong>
+            {{ obj.remind_before_days }} day{{ obj.remind_before_days|pluralize }}
+          </p>
         {% endif %}
       </div>
     </div>
@@ -63,20 +83,33 @@
       <div class="border rounded p-2 bg-light">{{ obj.message|linebreaks }}</div>
     {% endif %}
 
-    {% if obj.doer_file %}
+    {% if obj.media_upload %}
       <div class="mt-3">
-        <a href="{{ obj.doer_file.url }}" class="btn btn-sm btn-outline-primary" target="_blank">
-          <i class="fas fa-download"></i> Download Attachment
+        <a href="{{ obj.media_upload.url }}" class="btn btn-sm btn-outline-primary" target="_blank" rel="noopener">
+          <i class="fas fa-download me-1" aria-hidden="true"></i> Download Attachment
         </a>
       </div>
     {% endif %}
 
-    {% if obj.status == "Pending" and obj.assign_to_id == request.user.id %}
-      <div class="mt-3 d-flex gap-2">
-        <a href="{% url 'tasks:complete_checklist' obj.pk %}?next={{ request.get_full_path|urlencode }}" class="btn btn-success">
-          <i class="fas fa-check"></i> Complete Task
+    {% if obj.doer_file %}
+      <div class="mt-3">
+        <a href="{{ obj.doer_file.url }}" class="btn btn-sm btn-outline-success" target="_blank" rel="noopener">
+          <i class="fas fa-download me-1" aria-hidden="true"></i> Download Completion File
         </a>
       </div>
     {% endif %}
+
+    <div class="mt-3 d-flex gap-2 flex-wrap">
+      {% if obj.status == "Pending" and obj.assign_to_id == request.user.id %}
+        <a href="{% url 'tasks:complete_checklist' obj.pk %}{% if return_url %}?next={{ return_url|urlencode }}{% endif %}" class="btn btn-success">
+          <i class="fas fa-check me-1" aria-hidden="true"></i> Complete Task
+        </a>
+      {% endif %}
+
+      <a href="{% url 'tasks:edit_checklist' obj.pk %}{% if return_url %}?next={{ return_url|urlencode }}{% endif %}" class="btn btn-primary">
+        <i class="fas fa-edit me-1" aria-hidden="true"></i> Edit Task
+      </a>
+    </div>
   </div>
 </div>
+{% endwith %}
