@@ -1,14 +1,3 @@
-# FILE: apps/tasks/views.py
-# PURPOSE: Task module views — Checklist, Delegation, Help Ticket, Dashboard
-# UPDATED: 2026-03-14
-# CHANGE:  Fixed list_checklist() only:
-#          1. base_qs now scoped by role: admins/managers see ALL tasks;
-#             regular employees see only their own.
-#          2. assign_to GET filter restored for admin/manager roles so the
-#             "Assign To" dropdown in the filter panel actually works.
-#          3. ctx now passes `users` (active user list) and `is_admin` so
-#             the template dropdown is populated correctly.
-#          No other function changed.
 from __future__ import annotations
 
 import csv
@@ -126,9 +115,6 @@ def clean_unicode_string(text):
 
 
 def robust_db_operation(max_retries=3, base_delay=0.05):
-    """
-    Decorator to retry DB ops that can briefly fail with 'database is locked' (SQLite etc).
-    """
     def deco(fn):
         @wraps(fn)
         def inner(*args, **kwargs):
@@ -196,10 +182,6 @@ def _ist_date(dt: datetime) -> Optional[date]:
 
 
 def _as_ist_aware(dt: datetime) -> datetime:
-    """
-    Ensure dt is IST-aware.
-    If naive, assume project timezone then convert to IST.
-    """
     if timezone.is_aware(dt):
         return dt.astimezone(IST)
     try:
@@ -211,14 +193,9 @@ def _as_ist_aware(dt: datetime) -> datetime:
 
 
 # -----------------------------------------------------------------------------
-# Leave-aware working day shift (Checklist/Delegation only)
+# Leave-aware working day shift
 # -----------------------------------------------------------------------------
 def next_working_day_skip_leaves(assign_to: User, d: date) -> date:
-    """
-    Shift forward until:
-      - working day (not holiday + not Sunday)
-      - NOT blocked by leave at 10:00 IST for that date
-    """
     for _ in range(0, 120):
         if is_working_day(d):
             anchor = datetime.combine(d, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE))
@@ -361,7 +338,7 @@ def _get_handover_rows_for_user(user, today_date):
 
 
 # -----------------------------------------------------------------------------
-# Visibility gates (10 AM IST rule for CL/DL; HT immediate)
+# Visibility gates
 # -----------------------------------------------------------------------------
 def _should_show_checklist(task_dt: datetime, now_ist: datetime) -> bool:
     if not task_dt:
@@ -392,7 +369,7 @@ def _should_show_today_or_past(task_dt: datetime, now_ist: datetime) -> bool:
 
 
 # -----------------------------------------------------------------------------
-# Parsing helpers (unchanged)
+# Parsing helpers
 # -----------------------------------------------------------------------------
 def parse_datetime_flexible(value):
     if value is None or (isinstance(value, float) and pd.isna(value)):
@@ -598,7 +575,6 @@ can_create = lambda u: u.is_superuser or u.groups.filter(name__in=["Admin", "Man
 # NEW: enforce awareness at save boundaries
 # -----------------------------------------------------------------------------
 def ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
-    """Make naive datetime aware in the project timezone; leave aware/None untouched."""
     if not dt:
         return dt
     if timezone.is_aware(dt):
@@ -611,16 +587,9 @@ def ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 # -----------------------------------------------------------------------------
-# NEW: "void" helper to prevent recurring re-materialization
+# NEW: "void" helper
 # -----------------------------------------------------------------------------
 def _void_task_row(obj) -> None:
-    """
-    Soft-delete / tombstone:
-      - excluded from dashboards/lists (filter is_skipped_due_to_leave=False)
-      - NOT recreated by recurring materializers (row still exists as Pending +
-        is_skipped_due_to_leave=True, so the generator's pending-exists check
-        finds it and skips regeneration — see tasks.py fix for Issue 2)
-    """
     if not obj:
         return
     if hasattr(obj, "is_skipped_due_to_leave"):
@@ -658,7 +627,7 @@ def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, star
                 continue
             planned_dt = preserve_first_occurrence_time(planned_dt)
 
-            planned_ist_date = _as_ist_aware(ensure_aware(planned_dt)).date()  # type: ignore[arg-type]
+            planned_ist_date = _as_ist_aware(ensure_aware(planned_dt)).date()
             safe_date = next_working_day_skip_leaves(assign_to, planned_ist_date)
             if safe_date != planned_ist_date:
                 planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(
@@ -788,7 +757,7 @@ def process_delegation_batch_excel_ultra_optimized(batch_df, assign_by_user, sta
                 continue
             planned_dt = preserve_first_occurrence_time(planned_dt)
 
-            planned_ist_date = _as_ist_aware(ensure_aware(planned_dt)).date()  # type: ignore[arg-type]
+            planned_ist_date = _as_ist_aware(ensure_aware(planned_dt)).date()
             safe_date = next_working_day_skip_leaves(assign_to, planned_ist_date)
             if safe_date != planned_ist_date:
                 planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(
@@ -899,9 +868,6 @@ def process_delegation_bulk_upload_excel_friendly(file, assign_by_user):
 
 
 def _send_bulk_emails_by_ids(task_ids, *, task_type: str):
-    """
-    If SEND_RECUR_EMAILS_ONLY_AT_10AM is True (default), DO NOT send immediate assignee emails here.
-    """
     if SEND_RECUR_EMAILS_ONLY_AT_10AM:
         return
 
@@ -956,9 +922,10 @@ def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: O
     _background(_safe_call, thread_name="bulk-admin-summary")
 
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # Checklist views
-# -----------------------------------------------------------------------------
+# =============================================================================
+
 @has_permission("list_checklist")
 def list_checklist(request):
     # ------------------------------------------------------------------
@@ -1022,32 +989,30 @@ def list_checklist(request):
     # ------------------------------------------------------------------
     # GET
     # ------------------------------------------------------------------
-    # FIX 1: Detect admin/manager role so they can view and filter all tasks.
-    #        Regular employees always see only their own tasks.
     is_admin = can_create(request.user)
 
     if is_admin:
-        # Admins and managers see all tasks and can filter by any employee.
         base_qs = Checklist.objects.filter(
             is_skipped_due_to_leave=False,
         ).select_related("assign_by", "assign_to")
     else:
-        # Regular employees see only tasks assigned to them.
         base_qs = Checklist.objects.filter(
             assign_to=request.user,
             is_skipped_due_to_leave=False,
         ).select_related("assign_by", "assign_to")
 
-    # Summary counts (computed before any additional filters so numbers
-    # always reflect the full task picture for this user/scope)
+    # ----------------------------------------------------------------
+    # FIX: Compute ONLY the total count.
+    # pending_count and completed_count are intentionally NOT computed
+    # and NOT passed to the template — the Checklist window must show
+    # only the total number of tasks, never a pending-tasks count.
+    # ----------------------------------------------------------------
     total_assigned = base_qs.count()
-    pending_count = base_qs.filter(status="Pending").count()
-    completed_count = base_qs.filter(status="Completed").count()
 
     qs = base_qs
 
-    # Optional status filter — default to "Pending" to preserve existing UX
-    status_filter = request.GET.get("status", "Pending").strip()
+    # Optional status filter
+    status_filter = request.GET.get("status", "").strip()
     if status_filter and status_filter != "all":
         qs = qs.filter(status=status_filter)
 
@@ -1055,8 +1020,6 @@ def list_checklist(request):
     if kw:
         qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
 
-    # FIX 2: Restore assign_to filter — available only for admin/manager roles
-    #        so that the "Assign To" dropdown in the filter panel works correctly.
     assign_to_id = request.GET.get("assign_to", "").strip()
     if assign_to_id and is_admin:
         qs = qs.filter(assign_to_id=assign_to_id)
@@ -1098,17 +1061,16 @@ def list_checklist(request):
     ctx = {
         "items": items,
         "priority_choices": Checklist._meta.get_field("priority").choices,
-        # Group names scoped to the visible task set
         "group_names": base_qs.order_by("group_name").values_list("group_name", flat=True).distinct(),
         "current_tab": "checklist",
-        # Summary counts
+        # ----------------------------------------------------------------
+        # FIX: Only total_assigned is passed.
+        # pending_count and completed_count are deliberately excluded so
+        # no template (including the parent tasks_base.html) can render them
+        # inside the Checklist window.
+        # ----------------------------------------------------------------
         "total_assigned": total_assigned,
-        "pending_count": pending_count,
-        "completed_count": completed_count,
         "current_status": status_filter,
-        # FIX 3: Pass users list so the "Assign To" dropdown in the template is
-        #         populated.  Only admins/managers get the full user list;
-        #         regular employees get an empty list (filter hidden in template).
         "users": (
             User.objects.filter(is_active=True).order_by("first_name", "last_name", "username")
             if is_admin else []
@@ -1134,7 +1096,6 @@ def add_checklist(request):
                 messages.error(request, "This day is holiday")
                 return render(request, "tasks/add_checklist.html", {"form": form})
 
-            # ✅ Leave blocking: date-level anchor (10:00 IST) to match CL/DL rules
             if assignee and ist_day:
                 anchor_ist = IST.localize(datetime.combine(ist_day, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE)))
                 if is_user_blocked_at(assignee, anchor_ist):
@@ -1285,7 +1246,7 @@ def complete_checklist(request, pk):
 
 
 # -----------------------------------------------------------------------------
-# Delegation views (unified leave blocking)
+# Delegation views
 # -----------------------------------------------------------------------------
 @has_permission("add_delegation")
 def add_delegation(request):
@@ -1485,7 +1446,7 @@ def complete_delegation(request, pk):
 
 
 # -----------------------------------------------------------------------------
-# Help tickets: time-aware blocking
+# Help tickets
 # -----------------------------------------------------------------------------
 @login_required
 def add_help_ticket(request):
@@ -1639,8 +1600,6 @@ def assigned_to_me(request):
         .select_related("assign_by", "assign_to")
         .order_by("-planned_date")
     )
-
-    # Keep tickets visible even if user is on leave now.
     return render(request, "tasks/list_help_ticket_assigned_to.html", {"items": items, "current_tab": "assigned_to"})
 
 
@@ -1888,7 +1847,7 @@ def close_help_ticket(request, pk: int):
 
 
 # -----------------------------------------------------------------------------
-# DASHBOARD (visibility only; do NOT hide on leave/holiday)
+# DASHBOARD
 # -----------------------------------------------------------------------------
 @login_required
 def dashboard_home(request):
@@ -1932,7 +1891,6 @@ def dashboard_home(request):
     handed_over = _get_handover_rows_for_user(request.user, today_ist)
 
     try:
-        # -------------------- Checklists --------------------
         if today_only:
             base_checklists = list(
                 Checklist.objects
@@ -1974,7 +1932,6 @@ def dashboard_home(request):
                 if getattr(c, 'is_handover', False) or _should_show_checklist(c.planned_date, now_ist)
             ]
 
-        # ------------------- Delegations -------------------
         if today_only:
             base_delegations = list(
                 Delegation.objects.filter(
@@ -2020,7 +1977,6 @@ def dashboard_home(request):
                    (getattr(d, 'is_handover', False) or _should_show_today_or_past(d.planned_date, now_ist))
             ]
 
-        # ------------------- Help Tickets -------------------
         if today_only:
             base_help = list(
                 HelpTicket.objects.filter(

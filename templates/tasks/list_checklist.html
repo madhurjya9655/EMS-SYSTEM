@@ -1,9 +1,30 @@
-<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\tasks\list_checklist.html -->
+<!-- FILE: templates/tasks/list_checklist.html -->
+<!-- PURPOSE: Checklist task list page                                        -->
+<!-- UPDATED: 2026-03-15                                                      -->
+<!-- CHANGE:  Removed pending_count stat card.                                -->
+<!--          The summary bar now shows ONLY "Total Checklist Tasks".         -->
+<!--          No reference to pending_count anywhere in this template.        -->
 {% extends "tasks/tasks_base.html" %}
 {% load static %}
 {% block title %}Checklist Tasks{% endblock %}
 
 {% block tab_content %}
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SUMMARY BAR — shows ONLY the total task count.
+     pending_count is intentionally NOT displayed here.
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="row mb-3">
+  <div class="col-md-3">
+    <div class="card border-primary text-center shadow-sm">
+      <div class="card-body py-2 px-3">
+        <h3 class="mb-0 text-primary fw-bold">{{ total_assigned }}</h3>
+        <small class="text-muted">Total Checklist Tasks</small>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- ═══════════════════════════════════════════════════════════════════ -->
 
 <div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center border-0">
@@ -44,6 +65,7 @@
           <input id="fltKeyword" type="text" name="keyword" class="form-control" value="{{ request.GET.keyword }}">
         </div>
 
+        {% if is_admin %}
         <div class="col-md-2">
           <label for="fltAssignTo" class="form-label">Assign To</label>
           <select id="fltAssignTo" name="assign_to" class="form-select">
@@ -55,6 +77,7 @@
             {% endfor %}
           </select>
         </div>
+        {% endif %}
 
         <div class="col-md-2">
           <label for="fltPriority" class="form-label">Priority</label>

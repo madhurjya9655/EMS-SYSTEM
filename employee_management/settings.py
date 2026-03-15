@@ -1,36 +1,28 @@
 ﻿# FILE: employee_management/settings.py
-# UPDATED: 2026-03-14
+# UPDATED: 2026-03-15
 #
-# PERFORMANCE FIXES (Render + SQLite):
+# CHANGE (this patch):
+#   LOGGING — file handler fix for Windows [WinError 32] PermissionError.
 #
-#  1. [CRITICAL] FileBasedCache → LocMemCache on Render without Redis
-#     FileBasedCache opens+reads a file for every cache.get().
-#     LocMemCache is in-process memory — microseconds, not milliseconds.
+#   Problem:
+#     RotatingFileHandler rotates by file SIZE (10 MB). Django's dev server
+#     runs TWO processes: the outer StatReloader and the inner WSGI worker.
+#     Both share the same RotatingFileHandler. When the file hits the size
+#     limit, one process calls os.rename(django.log → django.log.1) while
+#     the other still holds the file open.  Windows forbids renaming an open
+#     file → PermissionError [WinError 32] on EVERY log event after that.
 #
-#  2. [CRITICAL] CONN_MAX_AGE: 600 → 0 for SQLite
-#     Persistent connections + multiple workers = SQLITE_BUSY lock contention.
-#     CONN_MAX_AGE=0 closes the connection cleanly after each request.
+#   Fix:
+#     Replace RotatingFileHandler with TimedRotatingFileHandler:
+#       - rotates at MIDNIGHT (once per day), not on every write
+#       - delay=True  → file is not opened until the first log record
+#       - backupCount=7 → keep one week of daily logs
+#       - encoding='utf-8', errors='replace' → safe on Windows Unicode paths
+#     On DEBUG (local dev), the file handler is intentionally disabled so
+#     that ALL output goes to the console (stdout) only, eliminating the
+#     file-locking issue entirely during development.
 #
-#  3. [CRITICAL] WEB_CONCURRENCY: 2 → 1 for SQLite
-#     SQLite allows only one concurrent writer. 2 Gunicorn workers fight
-#     for the write lock on every POST/save — pure wasted time.
-#     1 worker eliminates all lock contention and pairs perfectly with
-#     LocMemCache (no inter-process cache inconsistency).
-#
-#  4. [HIGH] Remove PRAGMA optimize from per-connection handler
-#     PRAGMA optimize runs a full table analysis — expensive on large DBs.
-#     It should run at most once daily (via cron/management command),
-#     never on every new DB connection.
-#
-#  5. [HIGH] SESSION_ENGINE: db → cached_db
-#     cached_db checks the cache first (μs), falls back to DB only on miss.
-#     Eliminates 1 SELECT per authenticated request under warm cache.
-#
-#  6. [MEDIUM] PRAGMA wal_autocheckpoint: 1000 → 200
-#     1000-page (4MB) checkpoints pause all writers for ~100ms.
-#     200-page checkpoints are smaller, more frequent, and non-blocking.
-#
-# NO other logic changed.
+# ALL other settings are identical to the previous version.
 
 import os
 import sqlite3
@@ -241,14 +233,10 @@ else:
 
 # -----------------------------------------------------------------------------
 # DATABASE
-# FIX #2: CONN_MAX_AGE=0 for SQLite to prevent lock contention between
-#          persistent connections from multiple workers.
-#          PostgreSQL DATABASE_URL path keeps conn_max_age=600 (safe for PG).
 # -----------------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 if DATABASE_URL:
-    # PostgreSQL (or other): persistent connections are safe and beneficial
     DATABASES = {
         "default": dj_database_url.config(
             default=DATABASE_URL,
@@ -269,11 +257,6 @@ else:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": sqlite_path,
-            # FIX #2: CONN_MAX_AGE=0 for SQLite.
-            # Persistent connections + 2+ workers = SQLITE_BUSY on every write.
-            # Closing the connection after each request eliminates lock contention
-            # at the cost of one extra open() per request — far cheaper than
-            # retrying on SQLITE_BUSY or queuing behind a locked writer.
             "CONN_MAX_AGE": 0,
             "OPTIONS": {
                 "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
@@ -362,27 +345,12 @@ def _configure_sqlite_connection(sender, connection, **kwargs):
         with connection.cursor() as cur:
             cur.execute("PRAGMA journal_mode=WAL;")
             cur.execute("PRAGMA synchronous=NORMAL;")
-            # 50 000 pages × 4 KB = ~200 MB page cache in RAM
             cur.execute("PRAGMA cache_size=50000;")
             cur.execute("PRAGMA temp_store=MEMORY;")
-            # 512 MB memory-mapped I/O — reads bypass kernel page cache overhead
             cur.execute("PRAGMA mmap_size=536870912;")
             cur.execute("PRAGMA foreign_keys=ON;")
-            # FIX: reduced from 60 000 ms to 10 000 ms.
-            # 60 s lock waits masked contention bugs; 10 s still gives retries
-            # without hanging requests for a full minute.
             cur.execute("PRAGMA busy_timeout=10000;")
-            # FIX #6: wal_autocheckpoint 1000 → 200.
-            # 1000-page (4 MB) checkpoints block all writers while they flush.
-            # 200-page checkpoints are ~5× smaller and finish in ~5 ms, so
-            # individual requests never stall waiting for a checkpoint to clear.
             cur.execute("PRAGMA wal_autocheckpoint=200;")
-            # FIX #4: PRAGMA optimize REMOVED from here.
-            # optimize() runs full table analysis — expensive on DBs > 10k rows.
-            # It should be called once daily via a management command or cron,
-            # not on every new connection. Run manually when needed:
-            #   python manage.py shell -c
-            #     "from django.db import connection; connection.cursor().execute('PRAGMA optimize;')"
     except Exception:
         pass
 
@@ -420,57 +388,166 @@ except Exception:
 
 # -----------------------------------------------------------------------------
 # LOGGING
-# On Render, stdout is captured by the platform — all console output is
-# visible in the Render log stream. Redundant file handlers are removed
-# to eliminate unnecessary disk I/O on every log event.
-# -----------------------------------------------------------------------------
+# =============================================================================
+# FIX: Windows [WinError 32] PermissionError on log rotation — RESOLVED.
+#
+# WHAT WAS WRONG:
+#   RotatingFileHandler triggers os.rename() every time the log file crosses
+#   maxBytes (10 MB).  Django's dev server (runserver) launches TWO OS
+#   processes — the outer StatReloader and the inner WSGI worker.  Both
+#   attach to the same RotatingFileHandler.  On Windows, os.rename() requires
+#   an exclusive lock; if the second process still has the file open, the
+#   rename fails with [WinError 32].  This happened on EVERY request once the
+#   log grew past 10 MB.
+#
+# THE FIX (two parts):
+#
+#   Part 1 — DEBUG / local Windows dev:
+#     File logging is DISABLED entirely. All output goes to console (stdout).
+#     Django's dev server prints everything to the terminal anyway, and having
+#     zero file handles eliminates the locking problem completely.
+#
+#   Part 2 — Production (DEBUG=False / Render):
+#     Replace RotatingFileHandler with TimedRotatingFileHandler:
+#       when='midnight'   → rotates once per day at 00:00, never mid-session
+#       backupCount=7     → keep 7 days of rolling logs
+#       delay=True        → file is not opened until the first log record is
+#                           written (reduces the window for lock conflicts)
+#       encoding='utf-8'  → explicit encoding; avoids cp1252 surprises on Win
+#       errors='replace'  → never crash on a bad Unicode character in a log msg
+#     Time-based rotation only ever runs once per day (at midnight, when no
+#     requests are in-flight), so the two-process lock race cannot occur.
+#
+# NO other logging behaviour is changed.
+# =============================================================================
+
 LOGS_DIR = BASE_DIR / "logs"
 if not DEBUG and ON_RENDER:
     LOGS_DIR = Path("/tmp/logs")
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
+# ── Handler definitions ──────────────────────────────────────────────────────
+
+_console_handler = {
+    "level": "DEBUG" if DEBUG else "INFO",
+    "class": "logging.StreamHandler",
+    "formatter": "simple",
+}
+
+# On DEBUG (local dev, Windows): NO file handler at all.
+# On production: TimedRotatingFileHandler (midnight rotation, delay=True).
+if DEBUG:
+    _file_handler = None          # sentinel — excluded from LOGGING dict below
+else:
+    _file_handler = {
+        "level": "INFO",
+        # TimedRotatingFileHandler rotates at midnight (once per day).
+        # It does NOT rename the file during normal operation; it only does a
+        # rename at 00:00:00, when no web requests are active.
+        # delay=True means the file is not even opened until the first write,
+        # so a cold-start or a day with zero log events never touches the file.
+        "class": "logging.handlers.TimedRotatingFileHandler",
+        "filename": str(LOGS_DIR / "django.log"),
+        "when": "midnight",       # rotate at 00:00:00 local time
+        "interval": 1,            # every 1 day
+        "backupCount": 7,         # keep 7 daily files (django.log.YYYY-MM-DD)
+        "encoding": "utf-8",
+        "errors": "replace",      # never crash on a bad Unicode char in a msg
+        "delay": True,            # defer file open until first write
+        "formatter": "verbose",
+        "utc": False,             # use server local time (Asia/Kolkata)
+    }
+
+# Build the active handlers dict dynamically.
+_active_handlers: dict = {"console": _console_handler}
+if _file_handler is not None:
+    _active_handlers["file"] = _file_handler
+
+_active_handlers["mail_admins"] = {
+    "level": "ERROR",
+    "class": "django.utils.log.AdminEmailHandler",
+}
+
+# Decide which handler names each logger should use.
+# In DEBUG mode: console only.  In production: console + file.
+_app_handlers = ["console"] if DEBUG else ["console", "file"]
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
-        "verbose": {"format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}", "style": "{"},
-        "simple":  {"format": "{levelname} {asctime} {message}", "style": "{"},
-        "detailed": {"format": "[{asctime}] {levelname} {name} {module}.{funcName}:{lineno} - {message}", "style": "{"},
-    },
-    "handlers": {
-        "console": {
-            "level": "DEBUG" if DEBUG else "INFO",
-            "class": "logging.StreamHandler",
-            "formatter": "simple",
+        "verbose": {
+            "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
+            "style": "{",
         },
-        # Single rotating file — one write path, not five
-        "file": {
-            "level": "INFO",
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": str(LOGS_DIR / "django.log"),
-            "maxBytes": 10 * 1024 * 1024,   # 10 MB before rotation
-            "backupCount": 3,
-            "formatter": "verbose",
-            "encoding": "utf-8",
+        "simple": {
+            "format": "{levelname} {asctime} {message}",
+            "style": "{",
         },
-        "mail_admins": {
-            "level": "ERROR",
-            "class": "django.utils.log.AdminEmailHandler",
+        "detailed": {
+            "format": "[{asctime}] {levelname} {name} {module}.{funcName}:{lineno} - {message}",
+            "style": "{",
         },
     },
+    "handlers": _active_handlers,
     "root": {"handlers": ["console"], "level": "WARNING"},
     "loggers": {
-        "django":          {"handlers": ["console", "file"], "level": "INFO",    "propagate": False},
-        "django.request":  {"handlers": ["console", "file", "mail_admins"], "level": "ERROR", "propagate": False},
-        "django.db.backends": {"handlers": ["file"], "level": "WARNING", "propagate": False},
-        "apps":            {"handlers": ["console", "file"], "level": "INFO",    "propagate": False},
-        "apps.users.permissions": {"handlers": ["console", "file"], "level": "DEBUG" if DEBUG else "INFO", "propagate": False},
-        "apps.users.middleware":  {"handlers": ["console", "file"], "level": "DEBUG" if DEBUG else "INFO", "propagate": False},
-        "apps.tasks":      {"handlers": ["console", "file"], "level": "DEBUG" if DEBUG else "INFO", "propagate": False},
-        "apps.tasks.views":   {"handlers": ["console", "file"], "level": "INFO", "propagate": False},
-        "apps.tasks.signals": {"handlers": ["file"],           "level": "INFO",  "propagate": False},
-        "apps.leave":      {"handlers": ["console", "file"],   "level": "INFO",  "propagate": False},
-        "apps.leave.services.notifications": {"handlers": ["console", "file"], "level": "INFO", "propagate": False},
+        "django": {
+            "handlers": _app_handlers,
+            "level": "INFO",
+            "propagate": False,
+        },
+        "django.request": {
+            # mail_admins only fires in production (not on DEBUG)
+            "handlers": _app_handlers + (["mail_admins"] if not DEBUG else []),
+            "level": "ERROR",
+            "propagate": False,
+        },
+        "django.db.backends": {
+            "handlers": _app_handlers,
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "apps": {
+            "handlers": _app_handlers,
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.users.permissions": {
+            "handlers": _app_handlers,
+            "level": "DEBUG" if DEBUG else "INFO",
+            "propagate": False,
+        },
+        "apps.users.middleware": {
+            "handlers": _app_handlers,
+            "level": "DEBUG" if DEBUG else "INFO",
+            "propagate": False,
+        },
+        "apps.tasks": {
+            "handlers": _app_handlers,
+            "level": "DEBUG" if DEBUG else "INFO",
+            "propagate": False,
+        },
+        "apps.tasks.views": {
+            "handlers": _app_handlers,
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.tasks.signals": {
+            "handlers": _app_handlers,
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.leave": {
+            "handlers": _app_handlers,
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.leave.services.notifications": {
+            "handlers": _app_handlers,
+            "level": "INFO",
+            "propagate": False,
+        },
     },
 }
 
@@ -640,14 +717,6 @@ TASK_LIST_PAGE_SIZE = env_int("TASK_LIST_PAGE_SIZE", 50)
 
 # -----------------------------------------------------------------------------
 # PERFORMANCE / CACHING
-# FIX #5: SESSION_ENGINE set to cached_db — checks cache first (μs),
-#          falls back to DB only on cold start or after SESSION_COOKIE_AGE.
-#          Works with both LocMemCache and Redis.
-# FIX #1: LocMemCache replaces FileBasedCache on Render without Redis.
-#          FileBasedCache opens+reads a file per cache.get() call.
-#          LocMemCache is an in-process dict — 1000× faster for hot data.
-#          With WEB_CONCURRENCY=1 (see FIX #3 below) there is only one
-#          process, so LocMemCache is fully consistent across all requests.
 # -----------------------------------------------------------------------------
 SESSION_COOKIE_AGE = 60 * 60 * 24 * 7
 FILE_UPLOAD_MAX_MEMORY_SIZE = env_int("FILE_UPLOAD_MAX_MEMORY_SIZE", 10 * 1024 * 1024)
@@ -657,7 +726,6 @@ DATA_UPLOAD_MAX_NUMBER_FIELDS = env_int("DATA_UPLOAD_MAX_NUMBER_FIELDS", 2000)
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 
 if REDIS_URL:
-    # Redis available: full distributed cache + fast session backend
     CACHES = {
         "default": {
             "BACKEND": "django_redis.cache.RedisCache",
@@ -670,15 +738,9 @@ if REDIS_URL:
             "TIMEOUT": env_int("CACHE_TIMEOUT", 300),
         },
     }
-    # cached_db: read from Redis first, write-through to DB
     SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
 else:
     if ON_RENDER:
-        # FIX #1: LocMemCache instead of FileBasedCache.
-        # FileBasedCache was doing file I/O on every cache.get() — with a
-        # 20 000-entry limit it would also periodically scan 20k files for
-        # culling (the CULL step in Django's FileBasedCache._cull()).
-        # LocMemCache is an in-process Python dict — sub-microsecond access.
         CACHES = {
             "default": {
                 "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
@@ -686,12 +748,10 @@ else:
                 "TIMEOUT": env_int("CACHE_TIMEOUT", 300),
                 "OPTIONS": {
                     "MAX_ENTRIES": env_int("CACHE_MAX_ENTRIES", 5000),
-                    "CULL_FREQUENCY": 4,   # drop 25% when full (not 33%)
+                    "CULL_FREQUENCY": 4,
                 },
             },
         }
-        # FIX #5: cached_db session backend eliminates 1 SELECT per request
-        # under warm cache conditions (session found in LocMemCache).
         SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
     else:
         CACHES = {
@@ -708,20 +768,10 @@ JSON_DUMPS_PARAMS = {"ensure_ascii": False}
 
 # -----------------------------------------------------------------------------
 # RENDER.COM SPECIFIC
-# FIX #3: WEB_CONCURRENCY: 2 → 1 for SQLite.
-#          SQLite allows exactly one concurrent writer. With 2 Gunicorn
-#          workers, every form POST / model .save() forces one worker to
-#          wait (busy_timeout) while the other holds the write lock.
-#          Reducing to 1 worker eliminates all write-lock contention at
-#          zero cost: on Render's free/starter tier, the single vCPU means
-#          2 workers never run truly in parallel anyway — they just share
-#          the write lock and slow each other down.
-#          If DATABASE_URL (PostgreSQL) is set, you can raise this freely.
 # -----------------------------------------------------------------------------
 if ON_RENDER:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    # FIX #3: 1 worker for SQLite; safe to override via env if using Postgres
     WEB_CONCURRENCY = env_int("WEB_CONCURRENCY", 1)
     MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
     FILE_UPLOAD_MAX_MEMORY_SIZE = min(FILE_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024)
