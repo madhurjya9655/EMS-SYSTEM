@@ -1,19 +1,9 @@
-<!-- FILE: templates/tasks/list_checklist.html -->
-<!-- PURPOSE: Checklist task list page                                        -->
-<!-- UPDATED: 2026-03-15                                                      -->
-<!-- CHANGE:  Removed pending_count stat card.                                -->
-<!--          The summary bar now shows ONLY "Total Checklist Tasks".         -->
-<!--          No reference to pending_count anywhere in this template.        -->
 {% extends "tasks/tasks_base.html" %}
 {% load static %}
 {% block title %}Checklist Tasks{% endblock %}
 
 {% block tab_content %}
 
-<!-- ═══════════════════════════════════════════════════════════════════
-     SUMMARY BAR — shows ONLY the total task count.
-     pending_count is intentionally NOT displayed here.
-     ═══════════════════════════════════════════════════════════════════ -->
 <div class="row mb-3">
   <div class="col-md-3">
     <div class="card border-primary text-center shadow-sm">
@@ -24,7 +14,6 @@
     </div>
   </div>
 </div>
-<!-- ═══════════════════════════════════════════════════════════════════ -->
 
 <div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center border-0">
@@ -39,7 +28,6 @@
     </div>
   </div>
 
-  <!-- Filter toggle -->
   <div
     class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
     data-bs-toggle="collapse"
@@ -56,7 +44,6 @@
     <i class="fas fa-minus" data-filter-toggle-icon aria-hidden="true"></i>
   </div>
 
-  <!-- Filters -->
   <div id="filterPanel" class="collapse show">
     <div class="card-body">
       <form method="get" class="row g-3 align-items-end" role="search" aria-label="Checklist Filters">
@@ -126,11 +113,9 @@
 </div>
 
 <div class="table-responsive">
-  <!-- Single BULK form for the page -->
   <form method="post" action="{% url 'tasks:list_checklist' %}" data-bulk>
     {% csrf_token %}
     <input type="hidden" name="action" value="bulk_delete">
-    <!-- preserve current filters for post-redirect -->
     <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
 
     <table class="table table-bordered table-hover align-middle">
@@ -193,12 +178,12 @@
               </td>
 
               <td class="text-nowrap">
-                <!-- Details Button -->
                 <button
                   type="button"
-                  class="btn btn-sm btn-outline-info"
+                  class="btn btn-sm btn-outline-info js-checklist-detail"
                   data-bs-toggle="modal"
-                  data-bs-target="#checklistDetailsModal{{ obj.id }}"
+                  data-bs-target="#checklistDetailsModal"
+                  data-detail-url="{% url 'tasks:checklist_details' obj.id %}"
                   title="View Details"
                   aria-label="View details for {{ obj.task_name }}"
                 >
@@ -216,7 +201,6 @@
                   <span class="visually-hidden">Delete</span>
                 </a>
 
-                <!-- Delete ENTIRE SERIES for this row -->
                 <button
                   type="submit"
                   class="btn btn-sm btn-danger"
@@ -237,7 +221,6 @@
       </tbody>
     </table>
 
-    <!-- Bulk footer -->
     <div class="d-flex flex-wrap justify-content-between align-items-center mt-2 gap-2">
       <div class="d-flex align-items-center gap-3">
         <div class="form-check m-0">
@@ -258,7 +241,6 @@
     </div>
   </form>
 
-  <!-- Hidden forms for per-row "Delete series" -->
   {% if items %}
     {% for obj in items %}
       <form id="series-form-{{ obj.id }}" method="post" action="{% url 'tasks:list_checklist' %}" class="d-none">
@@ -271,210 +253,120 @@
   {% endif %}
 </div>
 
-<!-- Details Modals for checklist tasks -->
-{% if items %}
-  {% for obj in items %}
-    <div
-      class="modal fade"
-      id="checklistDetailsModal{{ obj.id }}"
-      tabindex="-1"
-      aria-labelledby="checklistDetailsModalLabel{{ obj.id }}"
-      aria-hidden="true"
-    >
-      <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h5 class="modal-title" id="checklistDetailsModalLabel{{ obj.id }}">
-              <i class="fas fa-list-check me-1" aria-hidden="true"></i>
-              Checklist Task Details: {{ obj.task_name }}
-            </h5>
-            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close dialog"></button>
-          </div>
+{% if is_paginated %}
+<nav class="mt-4" aria-label="Checklist pagination">
+  <ul class="pagination justify-content-center flex-wrap">
+    {% if page_obj.has_previous %}
+      <li class="page-item">
+        <a class="page-link"
+           href="?page=1{% if request.GET.keyword %}&keyword={{ request.GET.keyword|urlencode }}{% endif %}{% if request.GET.assign_to %}&assign_to={{ request.GET.assign_to|urlencode }}{% endif %}{% if request.GET.priority %}&priority={{ request.GET.priority|urlencode }}{% endif %}{% if request.GET.group_name %}&group_name={{ request.GET.group_name|urlencode }}{% endif %}{% if request.GET.start_date %}&start_date={{ request.GET.start_date|urlencode }}{% endif %}{% if request.GET.end_date %}&end_date={{ request.GET.end_date|urlencode }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status|urlencode }}{% endif %}{% if request.GET.today_only %}&today_only={{ request.GET.today_only|urlencode }}{% endif %}">
+          First
+        </a>
+      </li>
+      <li class="page-item">
+        <a class="page-link"
+           href="?page={{ page_obj.previous_page_number }}{% if request.GET.keyword %}&keyword={{ request.GET.keyword|urlencode }}{% endif %}{% if request.GET.assign_to %}&assign_to={{ request.GET.assign_to|urlencode }}{% endif %}{% if request.GET.priority %}&priority={{ request.GET.priority|urlencode }}{% endif %}{% if request.GET.group_name %}&group_name={{ request.GET.group_name|urlencode }}{% endif %}{% if request.GET.start_date %}&start_date={{ request.GET.start_date|urlencode }}{% endif %}{% if request.GET.end_date %}&end_date={{ request.GET.end_date|urlencode }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status|urlencode }}{% endif %}{% if request.GET.today_only %}&today_only={{ request.GET.today_only|urlencode }}{% endif %}">
+          Previous
+        </a>
+      </li>
+    {% else %}
+      <li class="page-item disabled"><span class="page-link">First</span></li>
+      <li class="page-item disabled"><span class="page-link">Previous</span></li>
+    {% endif %}
 
-          <div class="modal-body">
-            <div class="row g-3">
-              <div class="col-md-6">
-                <label class="fw-bold">Task ID:</label>
-                <p>{{ obj.id }}</p>
-              </div>
+    <li class="page-item disabled">
+      <span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>
+    </li>
 
-              <div class="col-md-6">
-                <label class="fw-bold">Status:</label>
-                <p>
-                  <span class="badge bg-{% if obj.status == 'Pending' %}warning{% else %}success{% endif %}">
-                    {{ obj.status }}
-                  </span>
-                </p>
-              </div>
+    {% if page_obj.has_next %}
+      <li class="page-item">
+        <a class="page-link"
+           href="?page={{ page_obj.next_page_number }}{% if request.GET.keyword %}&keyword={{ request.GET.keyword|urlencode }}{% endif %}{% if request.GET.assign_to %}&assign_to={{ request.GET.assign_to|urlencode }}{% endif %}{% if request.GET.priority %}&priority={{ request.GET.priority|urlencode }}{% endif %}{% if request.GET.group_name %}&group_name={{ request.GET.group_name|urlencode }}{% endif %}{% if request.GET.start_date %}&start_date={{ request.GET.start_date|urlencode }}{% endif %}{% if request.GET.end_date %}&end_date={{ request.GET.end_date|urlencode }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status|urlencode }}{% endif %}{% if request.GET.today_only %}&today_only={{ request.GET.today_only|urlencode }}{% endif %}">
+          Next
+        </a>
+      </li>
+      <li class="page-item">
+        <a class="page-link"
+           href="?page={{ page_obj.paginator.num_pages }}{% if request.GET.keyword %}&keyword={{ request.GET.keyword|urlencode }}{% endif %}{% if request.GET.assign_to %}&assign_to={{ request.GET.assign_to|urlencode }}{% endif %}{% if request.GET.priority %}&priority={{ request.GET.priority|urlencode }}{% endif %}{% if request.GET.group_name %}&group_name={{ request.GET.group_name|urlencode }}{% endif %}{% if request.GET.start_date %}&start_date={{ request.GET.start_date|urlencode }}{% endif %}{% if request.GET.end_date %}&end_date={{ request.GET.end_date|urlencode }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status|urlencode }}{% endif %}{% if request.GET.today_only %}&today_only={{ request.GET.today_only|urlencode }}{% endif %}">
+          Last
+        </a>
+      </li>
+    {% else %}
+      <li class="page-item disabled"><span class="page-link">Next</span></li>
+      <li class="page-item disabled"><span class="page-link">Last</span></li>
+    {% endif %}
+  </ul>
+</nav>
+{% endif %}
 
-              <div class="col-12">
-                <label class="fw-bold">Task Name:</label>
-                <p>{{ obj.task_name }}</p>
-              </div>
-
-              <div class="col-12">
-                <label class="fw-bold">Message/Description:</label>
-                <p>{{ obj.message|default:"No description provided"|linebreaks }}</p>
-              </div>
-
-              <div class="col-md-6">
-                <label class="fw-bold">Assigned By:</label>
-                <p>{{ obj.assign_by.get_full_name|default:obj.assign_by.username }}</p>
-              </div>
-
-              <div class="col-md-6">
-                <label class="fw-bold">Assigned To:</label>
-                <p>{{ obj.assign_to.get_full_name|default:obj.assign_to.username }}</p>
-              </div>
-
-              <div class="col-md-6">
-                <label class="fw-bold">Planned Date:</label>
-                <p>{{ obj.planned_date|date:"d M, Y H:i" }}</p>
-              </div>
-
-              <div class="col-md-6">
-                <label class="fw-bold">Priority:</label>
-                <p>
-                  <span class="badge bg-{% if obj.priority == 'High' %}danger{% elif obj.priority == 'Medium' %}warning{% else %}success{% endif %}">
-                    {{ obj.priority }}
-                  </span>
-                </p>
-              </div>
-
-              {% if obj.frequency %}
-              <div class="col-md-6">
-                <label class="fw-bold">Recurrence:</label>
-                <p>{{ obj.mode }} (Every {{ obj.frequency }} {{ obj.mode|lower }}{{ obj.frequency|pluralize }})</p>
-              </div>
-              {% endif %}
-
-              {% if obj.group_name %}
-              <div class="col-md-6">
-                <label class="fw-bold">Group Name:</label>
-                <p>{{ obj.group_name }}</p>
-              </div>
-              {% endif %}
-
-              <div class="col-md-6">
-                <label class="fw-bold">Time per Task:</label>
-                <p>{{ obj.time_per_task_minutes|default:0 }} minutes</p>
-              </div>
-
-              <div class="col-md-6">
-                <label class="fw-bold">Remind Before Days:</label>
-                <p>{{ obj.remind_before_days|default:0 }} days</p>
-              </div>
-
-              {% if obj.actual_duration_minutes %}
-              <div class="col-md-6">
-                <label class="fw-bold">Actual Duration:</label>
-                <p>{{ obj.actual_duration_minutes }} minutes</p>
-              </div>
-              {% endif %}
-
-              {% if obj.attachment_mandatory %}
-              <div class="col-md-6">
-                <label class="fw-bold">Attachment:</label>
-                <p><span class="badge bg-warning">Required</span></p>
-              </div>
-              {% endif %}
-
-              {% if obj.assign_pc %}
-              <div class="col-md-6">
-                <label class="fw-bold">PC Assignee:</label>
-                <p>{{ obj.assign_pc.get_full_name|default:obj.assign_pc.username }}</p>
-              </div>
-              {% endif %}
-
-              {% if obj.notify_to %}
-              <div class="col-md-6">
-                <label class="fw-bold">Notify To:</label>
-                <p>{{ obj.notify_to.get_full_name|default:obj.notify_to.username }}</p>
-              </div>
-              {% endif %}
-
-              {% if obj.auditor %}
-              <div class="col-md-6">
-                <label class="fw-bold">Auditor:</label>
-                <p>{{ obj.auditor.get_full_name|default:obj.auditor.username }}</p>
-              </div>
-              {% endif %}
-
-              {% if obj.set_reminder %}
-              <div class="col-md-6">
-                <label class="fw-bold">Reminder Settings:</label>
-                <p>
-                  {{ obj.reminder_mode }}{% if obj.reminder_frequency %} ({{ obj.reminder_frequency }}){% endif %}
-                  {% if obj.reminder_starting_time %} @ {{ obj.reminder_starting_time|time:"h:i A" }}{% endif %}
-                </p>
-              </div>
-              {% endif %}
-
-              {% if obj.checklist_auto_close %}
-              <div class="col-md-6">
-                <label class="fw-bold">Auto Close:</label>
-                <p>After {{ obj.checklist_auto_close_days }} days</p>
-              </div>
-              {% endif %}
-
-              {% if obj.completed_at %}
-              <div class="col-md-6">
-                <label class="fw-bold">Completed At:</label>
-                <p>{{ obj.completed_at|date:"d M, Y H:i" }}</p>
-              </div>
-              {% endif %}
-
-              {% if obj.doer_notes %}
-              <div class="col-12">
-                <label class="fw-bold">Completion Notes:</label>
-                <p>{{ obj.doer_notes|linebreaks }}</p>
-              </div>
-              {% endif %}
-
-              {% if obj.media_upload %}
-              <div class="col-12">
-                <label class="fw-bold">Attachment:</label>
-                <p>
-                  <a href="{{ obj.media_upload.url }}" target="_blank" class="btn btn-sm btn-outline-primary">
-                    <i class="fas fa-download me-1" aria-hidden="true"></i> Download Attachment
-                  </a>
-                </p>
-              </div>
-              {% endif %}
-
-              {% if obj.doer_file %}
-              <div class="col-12">
-                <label class="fw-bold">Completion File:</label>
-                <p>
-                  <a href="{{ obj.doer_file.url }}" target="_blank" class="btn btn-sm btn-outline-success">
-                    <i class="fas fa-download me-1" aria-hidden="true"></i> Download Completion File
-                  </a>
-                </p>
-              </div>
-              {% endif %}
-            </div>
-          </div>
-
-          <div class="modal-footer">
-            {% if obj.status == 'Pending' %}
-            <a href="{% url 'tasks:complete_checklist' obj.id %}?next={{ request.get_full_path|urlencode }}" class="btn btn-success">
-              <i class="fas fa-check me-1" aria-hidden="true"></i> Complete Task
-            </a>
-            {% endif %}
-            <a href="{% url 'tasks:edit_checklist' obj.id %}?next={{ request.get_full_path|urlencode }}" class="btn btn-primary">
-              <i class="fas fa-edit me-1" aria-hidden="true"></i> Edit Task
-            </a>
-            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-          </div>
-
+<div
+  class="modal fade"
+  id="checklistDetailsModal"
+  tabindex="-1"
+  aria-labelledby="checklistDetailsModalLabel"
+  aria-hidden="true"
+>
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="checklistDetailsModalLabel">
+          <i class="fas fa-list-check me-1" aria-hidden="true"></i>
+          Checklist Task Details
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close dialog"></button>
+      </div>
+      <div class="modal-body" id="checklistDetailsModalBody">
+        <div class="text-center py-4 text-muted">
+          <div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
+          Loading details...
         </div>
       </div>
     </div>
-  {% endfor %}
-{% endif %}
+  </div>
+</div>
 
 {% endblock %}
 
 {% block extra_js %}
   <script src="{% static 'js/tasks-bulk.js' %}" defer></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      const modalBody = document.getElementById("checklistDetailsModalBody");
+      const detailButtons = document.querySelectorAll(".js-checklist-detail");
+
+      detailButtons.forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          const url = btn.getAttribute("data-detail-url");
+          modalBody.innerHTML = `
+            <div class="text-center py-4 text-muted">
+              <div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
+              Loading details...
+            </div>
+          `;
+
+          fetch(url, {
+            headers: {
+              "X-Requested-With": "XMLHttpRequest"
+            }
+          })
+            .then(function (response) {
+              if (!response.ok) {
+                throw new Error("Failed to load details");
+              }
+              return response.text();
+            })
+            .then(function (html) {
+              modalBody.innerHTML = html;
+            })
+            .catch(function () {
+              modalBody.innerHTML = `
+                <div class="alert alert-danger mb-0">
+                  Unable to load checklist details right now.
+                </div>
+              `;
+            });
+        });
+      });
+    });
+  </script>
 {% endblock %}

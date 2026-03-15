@@ -1,3 +1,4 @@
+#E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
 from __future__ import annotations
 
 import csv
@@ -20,6 +21,7 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.staticfiles import finders
+from django.core.paginator import Paginator
 from django.db import transaction, OperationalError, connection, close_old_connections
 from django.db.models import Q, Sum
 from django.http import FileResponse, Http404, HttpResponse
@@ -992,26 +994,23 @@ def list_checklist(request):
     is_admin = can_create(request.user)
 
     if is_admin:
-        base_qs = Checklist.objects.filter(
-            is_skipped_due_to_leave=False,
-        ).select_related("assign_by", "assign_to")
+        base_qs = (
+            Checklist.objects
+            .filter(is_skipped_due_to_leave=False)
+            .select_related("assign_by", "assign_to", "assign_pc", "notify_to", "auditor")
+            .defer("media_upload", "doer_file")
+        )
     else:
-        base_qs = Checklist.objects.filter(
-            assign_to=request.user,
-            is_skipped_due_to_leave=False,
-        ).select_related("assign_by", "assign_to")
+        base_qs = (
+            Checklist.objects
+            .filter(assign_to=request.user, is_skipped_due_to_leave=False)
+            .select_related("assign_by", "assign_to", "assign_pc", "notify_to", "auditor")
+            .defer("media_upload", "doer_file")
+        )
 
-    # ----------------------------------------------------------------
-    # FIX: Compute ONLY the total count.
-    # pending_count and completed_count are intentionally NOT computed
-    # and NOT passed to the template — the Checklist window must show
-    # only the total number of tasks, never a pending-tasks count.
-    # ----------------------------------------------------------------
     total_assigned = base_qs.count()
-
     qs = base_qs
 
-    # Optional status filter
     status_filter = request.GET.get("status", "").strip()
     if status_filter and status_filter != "all":
         qs = qs.filter(status=status_filter)
@@ -1024,33 +1023,38 @@ def list_checklist(request):
     if assign_to_id and is_admin:
         qs = qs.filter(assign_to_id=assign_to_id)
 
-    if request.GET.get("priority", "").strip():
-        qs = qs.filter(priority=request.GET.get("priority").strip())
+    priority_val = request.GET.get("priority", "").strip()
+    if priority_val:
+        qs = qs.filter(priority=priority_val)
 
-    if request.GET.get("group_name", "").strip():
-        qs = qs.filter(group_name__icontains=request.GET.get("group_name").strip())
+    group_name_val = request.GET.get("group_name", "").strip()
+    if group_name_val:
+        qs = qs.filter(group_name__icontains=group_name_val)
 
-    if request.GET.get("start_date", "").strip():
-        qs = qs.filter(planned_date__date__gte=request.GET.get("start_date").strip())
+    start_date_val = request.GET.get("start_date", "").strip()
+    if start_date_val:
+        qs = qs.filter(planned_date__date__gte=start_date_val)
 
-    if request.GET.get("end_date", "").strip():
-        qs = qs.filter(planned_date__date__lte=request.GET.get("end_date").strip())
+    end_date_val = request.GET.get("end_date", "").strip()
+    if end_date_val:
+        qs = qs.filter(planned_date__date__lte=end_date_val)
 
     if request.GET.get("today_only"):
         today = timezone.localdate()
         qs = qs.filter(planned_date__date=today)
 
-    items = qs.order_by("-planned_date", "-id")
+    ordered_qs = qs.order_by("-planned_date", "-id")
 
     if request.GET.get("download"):
         resp = HttpResponse(content_type="text/csv")
         resp["Content-Disposition"] = 'attachment; filename="checklist.csv"'
         w = csv.writer(resp)
-        w.writerow(["Task Name", "Assigned By", "Planned Date", "Priority", "Group Name", "Status"])
-        for itm in items:
+        w.writerow(["Task Name", "Assigned By", "Assigned To", "Planned Date", "Priority", "Group Name", "Status"])
+        for itm in ordered_qs.iterator(chunk_size=500):
             w.writerow([
                 clean_unicode_string(itm.task_name),
                 itm.assign_by.get_full_name() or itm.assign_by.username if itm.assign_by else "",
+                itm.assign_to.get_full_name() or itm.assign_to.username if itm.assign_to else "",
                 itm.planned_date.strftime("%Y-%m-%d %H:%M") if itm.planned_date else "",
                 itm.priority,
                 itm.group_name,
@@ -1058,17 +1062,24 @@ def list_checklist(request):
             ])
         return resp
 
+    paginator = Paginator(ordered_qs, 25)
+    page_number = request.GET.get("page")
+    page_obj = paginator.get_page(page_number)
+    items = page_obj.object_list
+
     ctx = {
         "items": items,
+        "page_obj": page_obj,
+        "is_paginated": page_obj.has_other_pages(),
         "priority_choices": Checklist._meta.get_field("priority").choices,
-        "group_names": base_qs.order_by("group_name").values_list("group_name", flat=True).distinct(),
+        "group_names": (
+            base_qs.exclude(group_name__isnull=True)
+            .exclude(group_name__exact="")
+            .order_by("group_name")
+            .values_list("group_name", flat=True)
+            .distinct()
+        ),
         "current_tab": "checklist",
-        # ----------------------------------------------------------------
-        # FIX: Only total_assigned is passed.
-        # pending_count and completed_count are deliberately excluded so
-        # no template (including the parent tasks_base.html) can render them
-        # inside the Checklist window.
-        # ----------------------------------------------------------------
         "total_assigned": total_assigned,
         "current_status": status_filter,
         "users": (
