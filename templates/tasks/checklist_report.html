@@ -1,0 +1,318 @@
+{% extends "tasks/tasks_base.html" %}
+{% load static %}
+{% block title %}Task Performance Report{% endblock %}
+
+{% block tab_content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">
+    <i class="fas fa-chart-bar me-2 text-primary" aria-hidden="true"></i>
+    Task Performance Report
+  </h4>
+  <span class="badge bg-secondary fs-6">{{ total_tasks }} task(s) found</span>
+</div>
+
+<div class="alert alert-info py-2 mb-3" role="note">
+  <i class="fas fa-info-circle me-1" aria-hidden="true"></i>
+  This report shows <strong>ALL tasks</strong> (Pending, Completed, and Deleted) for
+  performance tracking. It is separate from the Checklist view.
+</div>
+
+<div class="card mb-4">
+  <div
+    class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
+    data-bs-toggle="collapse"
+    href="#reportFilterPanel"
+    role="button"
+    aria-expanded="true"
+    aria-controls="reportFilterPanel"
+    style="cursor:pointer;"
+  >
+    <span class="fw-semibold"><i class="fas fa-filter me-2" aria-hidden="true"></i> FILTERS</span>
+    <i class="fas fa-minus" id="reportFilterIcon" aria-hidden="true"></i>
+  </div>
+
+  <div id="reportFilterPanel" class="collapse show">
+    <div class="card-body">
+      <form method="get" class="row g-3 align-items-end" role="search" aria-label="Report Filters">
+
+        <div class="col-md-3">
+          <label for="rptEmployee" class="form-label">Employee</label>
+          <select id="rptEmployee" name="employee" class="form-select">
+            <option value="">All Employees</option>
+            {% for emp in employees %}
+              <option value="{{ emp.id }}"
+                {% if selected_employee == emp.id|stringformat:"s" %}selected{% endif %}>
+                {{ emp.get_full_name|default:emp.username }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-2">
+          <label for="rptTaskType" class="form-label">Task Type</label>
+          <select id="rptTaskType" name="task_type" class="form-select">
+            <option value="checklist"   {% if task_type == "checklist"   %}selected{% endif %}>Checklist</option>
+            <option value="delegation"  {% if task_type == "delegation"  %}selected{% endif %}>Delegation</option>
+            <option value="all"         {% if task_type == "all"         %}selected{% endif %}>All Types</option>
+          </select>
+        </div>
+
+        <div class="col-md-2">
+          <label for="rptStatus" class="form-label">Status</label>
+          <select id="rptStatus" name="status" class="form-select">
+            <option value="all"       {% if status_param == "all"       %}selected{% endif %}>All</option>
+            <option value="Pending"   {% if status_param == "Pending"   %}selected{% endif %}>Pending</option>
+            <option value="Completed" {% if status_param == "Completed" %}selected{% endif %}>Completed</option>
+          </select>
+        </div>
+
+        <div class="col-md-2">
+          <label for="rptStart" class="form-label">Start Date</label>
+          <input id="rptStart" type="date" name="start_date" class="form-control"
+                 value="{{ start_date|default:'' }}">
+        </div>
+
+        <div class="col-md-2">
+          <label for="rptEnd" class="form-label">End Date</label>
+          <input id="rptEnd" type="date" name="end_date" class="form-control"
+                 value="{{ end_date|default:'' }}">
+        </div>
+
+        <div class="col-12 text-end">
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-filter me-1" aria-hidden="true"></i> FILTER
+          </button>
+          <a href="{% url 'tasks:checklist_report' %}" class="btn btn-warning">
+            <i class="fas fa-undo me-1" aria-hidden="true"></i> RESET
+          </a>
+          <button type="submit" name="download" value="1" class="btn btn-success">
+            <i class="fas fa-file-csv me-1" aria-hidden="true"></i> DOWNLOAD CSV
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% if summary_list %}
+<div class="card mb-4 border-0 shadow-sm">
+  <div class="card-header bg-light fw-semibold">
+    <i class="fas fa-users me-2 text-primary" aria-hidden="true"></i>
+    Employee Summary
+  </div>
+  <div class="table-responsive">
+    <table class="table table-bordered table-hover align-middle mb-0">
+      <thead class="table-primary">
+        <tr>
+          <th scope="col">Employee</th>
+          <th scope="col" class="text-center">Total</th>
+          <th scope="col" class="text-center">Pending</th>
+          <th scope="col" class="text-center">Completed</th>
+          <th scope="col" class="text-center text-danger">Overdue</th>
+          <th scope="col" class="text-center text-secondary">Deleted</th>
+          <th scope="col" class="text-center">Avg Delay</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in summary_list %}
+          <tr>
+            <td>
+              <strong>{{ s.employee.get_full_name|default:s.employee.username }}</strong>
+              <br><small class="text-muted">{{ s.employee.email|default:"" }}</small>
+            </td>
+            <td class="text-center fw-bold">{{ s.total }}</td>
+            <td class="text-center">
+              {% if s.pending %}
+                <span class="badge bg-warning text-dark">{{ s.pending }}</span>
+              {% else %}
+                <span class="text-muted">0</span>
+              {% endif %}
+            </td>
+            <td class="text-center">
+              {% if s.completed %}
+                <span class="badge bg-success">{{ s.completed }}</span>
+              {% else %}
+                <span class="text-muted">0</span>
+              {% endif %}
+            </td>
+            <td class="text-center">
+              {% if s.overdue %}
+                <span class="badge bg-danger">{{ s.overdue }}</span>
+              {% else %}
+                <span class="text-muted">0</span>
+              {% endif %}
+            </td>
+            <td class="text-center">
+              {% if s.deleted %}
+                <span class="badge bg-secondary">{{ s.deleted }}</span>
+              {% else %}
+                <span class="text-muted">0</span>
+              {% endif %}
+            </td>
+            <td class="text-center">
+              {% if s.avg_delay_minutes is not None %}
+                {% if s.avg_delay_minutes > 1440 %}
+                  <span class="text-danger fw-semibold">{{ s.avg_delay_display }}</span>
+                {% elif s.avg_delay_minutes > 0 %}
+                  <span class="text-warning fw-semibold">{{ s.avg_delay_display }}</span>
+                {% else %}
+                  <span class="text-success">{{ s.avg_delay_display }}</span>
+                {% endif %}
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card border-0 shadow-sm">
+  <div class="card-header bg-light fw-semibold">
+    <i class="fas fa-list me-2 text-primary" aria-hidden="true"></i>
+    All Tasks ({{ total_tasks }})
+  </div>
+  <div class="table-responsive">
+    <table class="table table-bordered table-hover align-middle mb-0">
+      <caption class="visually-hidden">Full task report</caption>
+      <thead class="table-light">
+        <tr>
+          <th scope="col">ID</th>
+          <th scope="col">Type</th>
+          <th scope="col">Task Name</th>
+          <th scope="col">Assigned By</th>
+          <th scope="col">Assigned To</th>
+          <th scope="col">Planned Date</th>
+          <th scope="col">Completed Date</th>
+          <th scope="col">Status</th>
+          <th scope="col">Priority</th>
+          <th scope="col">Delay</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if items %}
+          {% for row in items %}
+            <tr {% if row.is_deleted %}class="table-secondary text-muted"{% elif row.is_overdue %}class="table-danger"{% endif %}>
+
+              <td class="text-nowrap">
+                <small class="text-muted">{{ row.task_id }}</small>
+              </td>
+
+              <td>
+                {% if row.task_type == "Checklist" %}
+                  <span class="badge bg-primary">CL</span>
+                {% else %}
+                  <span class="badge bg-info text-dark">DL</span>
+                {% endif %}
+              </td>
+
+              <td>
+                {{ row.task_name }}
+                {% if row.is_deleted %}
+                  <span class="badge bg-secondary ms-1">Deleted</span>
+                {% endif %}
+              </td>
+
+              <td>
+                {% if row.assign_by %}
+                  {{ row.assign_by.get_full_name|default:row.assign_by.username }}
+                {% else %}—{% endif %}
+              </td>
+
+              <td>
+                {% if row.assign_to %}
+                  <strong>{{ row.assign_to.get_full_name|default:row.assign_to.username }}</strong>
+                {% else %}—{% endif %}
+              </td>
+
+              <td class="text-nowrap">
+                {% if row.planned_date %}
+                  {{ row.planned_date|date:"d M Y, h:i A" }}
+                {% else %}—{% endif %}
+              </td>
+
+              <td class="text-nowrap">
+                {% if row.completed_at %}
+                  {{ row.completed_at|date:"d M Y, h:i A" }}
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+
+              <td>
+                {% if row.is_deleted %}
+                  <span class="badge bg-secondary">Deleted</span>
+                {% elif row.status == "Completed" %}
+                  <span class="badge bg-success">Completed</span>
+                {% elif row.is_overdue %}
+                  <span class="badge bg-danger">Overdue</span>
+                {% else %}
+                  <span class="badge bg-warning text-dark">Pending</span>
+                {% endif %}
+              </td>
+
+              <td>
+                {% if row.priority == "High" %}
+                  <span class="badge bg-danger">High</span>
+                {% elif row.priority == "Medium" %}
+                  <span class="badge bg-warning text-dark">Medium</span>
+                {% else %}
+                  <span class="badge bg-secondary">Low</span>
+                {% endif %}
+              </td>
+
+              <td class="text-nowrap">
+                {% if row.delay_minutes is not None %}
+                  {% if row.delay_minutes > 1440 %}
+                    <span class="text-danger fw-semibold">{{ row.delay_display }}</span>
+                  {% elif row.delay_minutes > 60 %}
+                    <span class="text-warning">{{ row.delay_display }}</span>
+                  {% elif row.delay_minutes > 0 %}
+                    <span class="text-warning">{{ row.delay_display }}</span>
+                  {% elif row.delay_minutes < 0 %}
+                    <span class="text-success">{{ row.delay_display }}</span>
+                  {% else %}
+                    <span class="text-success">On time</span>
+                  {% endif %}
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+
+            </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="10" class="text-center py-4 text-muted">
+              <i class="fas fa-inbox fa-2x mb-2 d-block" aria-hidden="true"></i>
+              No tasks found for the selected filters.
+            </td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    var panel = document.getElementById("reportFilterPanel");
+    var icon  = document.getElementById("reportFilterIcon");
+    if (panel && icon) {
+      panel.addEventListener("show.bs.collapse", function () {
+        icon.classList.replace("fa-plus", "fa-minus");
+      });
+      panel.addEventListener("hide.bs.collapse", function () {
+        icon.classList.replace("fa-minus", "fa-plus");
+      });
+    }
+  });
+</script>
+{% endblock %}

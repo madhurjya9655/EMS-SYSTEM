@@ -1,6 +1,6 @@
 <!-- FILE: templates/base.html -->
-<!-- PURPOSE: Neo-Style Dashboard Layout — KAM sidebar labels updated -->
-<!-- UPDATED: 2026-03-05 -->
+<!-- PURPOSE: Neo-Style Dashboard Layout -->
+<!-- UPDATED: 2026-03-18 — Added Task Performance Report + Recurring Report to sidebar -->
 {% load static user_filters %}
 <!DOCTYPE html>
 <html lang="en" data-theme="light">
@@ -492,7 +492,6 @@
           </a>
           {% endif %}
 
-          {# Visit History (renamed from Visit Batches) #}
           {% if user|has_any_permission:"kam_plan,kam_manager" or user.is_superuser %}
           <a href="{% url 'kam:visit_batches' %}"
              class="nav-item {% if request.resolver_match.url_name == 'visit_batches' %}active{% endif %}">
@@ -501,7 +500,6 @@
           </a>
           {% endif %}
 
-          {# Visits & Calls — kept for KAM, but Manager View is the manager's page #}
           {% if user|has_any_permission:"kam_visits,kam_call_new,kam_collection_new" and not user|has_permission:"kam_manager" %}
           <a href="{% url 'kam:visits' %}"
              class="nav-item {% if request.resolver_match.url_name == 'visits' %}active{% endif %}">
@@ -510,7 +508,6 @@
           </a>
           {% endif %}
 
-          {# Manager View — analytics control panel for Manager/Admin #}
           {% if user|has_permission:"kam_manager" or user.is_superuser %}
           <a href="{% url 'kam:manager_view' %}"
              class="nav-item {% if request.resolver_match.url_name == 'manager_view' %}active{% endif %}">
@@ -535,7 +532,6 @@
           </a>
           {% endif %}
 
-          {# Today's Details (renamed from Manager Console) — Manager/Admin only #}
           {% if user|has_permission:"kam_manager" or user.is_superuser %}
           <a href="{% url 'kam:manager_dashboard' %}"
              class="nav-item {% if request.resolver_match.url_name == 'manager_dashboard' %}active{% endif %}">
@@ -698,8 +694,8 @@
         </div>
         {% endif %}
 
-        <!-- REPORTS -->
-        {% if user|has_any_permission:"doer_tasks,weekly_mis_score,performance_score" %}
+        <!-- ==================== REPORTS ==================== -->
+        {% if user|has_any_permission:"doer_tasks,weekly_mis_score,performance_score" or user.is_superuser or user|has_group:"Admin" or user|has_group:"Manager" or user|has_group:"EA" or user|has_group:"CEO" %}
         <span class="nav-section-label">Reports</span>
         <button type="button" class="nav-item" aria-expanded="false" aria-controls="reportsSubmenu" data-submenu-toggle data-submenu-key="reports">
           <span class="nav-icon"><i class="fas fa-chart-pie" aria-hidden="true"></i></span>
@@ -707,24 +703,41 @@
           <i class="fas fa-chevron-down nav-chevron" aria-hidden="true"></i>
         </button>
         <div class="submenu" id="reportsSubmenu" role="group">
+
           {% if user|has_permission:"doer_tasks" %}
           <a href="{% url 'reports:doer_tasks' %}" class="nav-item {% if request.resolver_match.url_name == 'doer_tasks' %}active{% endif %}">
             <span class="nav-icon"><i class="fas fa-tasks" aria-hidden="true"></i></span>
             <span class="nav-label">Doer Tasks</span>
           </a>
           {% endif %}
+
           {% if user|has_permission:"weekly_mis_score" %}
           <a href="{% url 'reports:weekly_mis_score' %}" class="nav-item {% if request.resolver_match.url_name == 'weekly_mis_score' %}active{% endif %}">
             <span class="nav-icon"><i class="fas fa-calendar-week" aria-hidden="true"></i></span>
             <span class="nav-label">BOS Weekly Pulse</span>
           </a>
           {% endif %}
+
           {% if user|has_permission:"performance_score" %}
           <a href="{% url 'reports:performance_score' %}" class="nav-item {% if request.resolver_match.url_name == 'performance_score' %}active{% endif %}">
             <span class="nav-icon"><i class="fas fa-percent" aria-hidden="true"></i></span>
             <span class="nav-label">Performance Score</span>
           </a>
           {% endif %}
+
+          {% if user.is_superuser or user|has_group:"Admin" or user|has_group:"Manager" or user|has_group:"EA" or user|has_group:"CEO" %}
+          <a href="{% url 'tasks:checklist_report' %}"
+             class="nav-item {% if request.resolver_match.url_name == 'checklist_report' and request.resolver_match.app_name == 'tasks' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-chart-bar" aria-hidden="true"></i></span>
+            <span class="nav-label">Task Performance Report</span>
+          </a>
+          <a href="{% url 'tasks:recurring_report' %}"
+             class="nav-item {% if request.resolver_match.url_name == 'recurring_report' and request.resolver_match.app_name == 'tasks' %}active{% endif %}">
+            <span class="nav-icon"><i class="fas fa-rotate" aria-hidden="true"></i></span>
+            <span class="nav-label">Recurring Tasks Report</span>
+          </a>
+          {% endif %}
+
         </div>
         {% endif %}
 
@@ -944,10 +957,8 @@
       if(active){const sub=active.closest('.submenu');if(sub){sub.style.display='block';const pb=sub.previousElementSibling;if(pb&&pb.hasAttribute('data-submenu-toggle')){openSub(pb,sub);setSub(pb.getAttribute('data-submenu-key')||pb.getAttribute('aria-controls'),true);}}}
       window.addEventListener('resize',()=>{if(!isMobile())mobileSidebarOpen=false;applyState();});
       document.querySelectorAll('form[method="post"]').forEach(form=>{if(!form.querySelector('input[name="csrfmiddlewaretoken"]')){const t=getCookie(CSRF_NAME);if(t){const inp=document.createElement('input');inp.type='hidden';inp.name='csrfmiddlewaretoken';inp.value=t;form.prepend(inp);}}});
-      // Profile dropdown
       const pb=document.getElementById('profileBtn'),pm=document.getElementById('profileDropdown');
       if(pb&&pm){pb.addEventListener('click',(e)=>{e.stopPropagation();const o=pm.classList.toggle('open');pb.setAttribute('aria-expanded',String(o));});document.addEventListener('click',()=>{pm.classList.remove('open');pb.setAttribute('aria-expanded','false');});document.addEventListener('keydown',(e)=>{if(e.key==='Escape'){pm.classList.remove('open');pb.setAttribute('aria-expanded','false');}});}
-      // Hero banner
       const banner=document.getElementById('heroBanner');
       if(banner){try{if(localStorage.getItem(HERO_KEY)!=='1'){banner.hidden=false;}const d=document.getElementById('heroBannerDismiss');if(d)d.addEventListener('click',()=>{banner.hidden=true;try{localStorage.setItem(HERO_KEY,'1');}catch(_){}});}catch(_){}}
     });

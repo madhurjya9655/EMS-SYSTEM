@@ -77,6 +77,34 @@ BULK_BATCH_SIZE = 500
 site_url = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 
 
+# =============================================================================
+# ROLE DEFINITIONS — single source of truth for access control
+# =============================================================================
+# ADMIN_GROUPS: users in these groups OR superusers see ALL employees' tasks.
+# Everyone else (doers) sees ONLY tasks assigned to themselves.
+# Never hardcode these group names anywhere else in this file.
+# =============================================================================
+ADMIN_GROUPS = ("Admin", "Manager", "EA", "CEO")
+
+
+def is_admin_user(user) -> bool:
+    """
+    Returns True if the user is a superuser OR belongs to any admin group.
+    This is the ONLY place to determine admin-level access throughout this module.
+    Admins see ALL employees' tasks.
+    Doers see ONLY their own tasks.
+    """
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    return user.groups.filter(name__in=ADMIN_GROUPS).exists()
+
+
+# Keep backward-compat alias used in many places below
+can_create = is_admin_user
+
+
 # -----------------------------------------------------------------------------
 # Threads / utilities
 # -----------------------------------------------------------------------------
@@ -570,7 +598,6 @@ class UserCache:
 
 
 user_cache = UserCache()
-can_create = lambda u: u.is_superuser or u.groups.filter(name__in=["Admin", "Manager", "EA", "CEO"]).exists()
 
 
 # -----------------------------------------------------------------------------
@@ -592,11 +619,26 @@ def ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
 # NEW: "void" helper
 # -----------------------------------------------------------------------------
 def _void_task_row(obj) -> None:
+    """
+    Soft-delete a task row by setting is_skipped_due_to_leave=True.
+
+    CRITICAL: uses queryset-level .update() instead of obj.save().
+    The Checklist/Delegation models override save() and call full_clean(),
+    which runs holiday and leave-window validation. If that validation raises
+    (e.g. task was on a holiday, or assignee's leave record changed),
+    the soft-delete silently fails and the row stays visible — AND the
+    recurrence generator cannot find it in _pending_check_q, so it
+    regenerates the "deleted" task next morning.
+
+    Using .update() writes directly to the DB, bypasses all model-level
+    hooks, and guarantees the row is marked. The row keeps status="Pending"
+    intentionally so _pending_check_q in tasks.py can find it and block
+    regeneration.
+    """
     if not obj:
         return
     if hasattr(obj, "is_skipped_due_to_leave"):
-        obj.is_skipped_due_to_leave = True
-        obj.save(update_fields=["is_skipped_due_to_leave"])
+        type(obj).objects.filter(pk=obj.pk).update(is_skipped_due_to_leave=True)
         return
     obj.delete()
 
@@ -930,6 +972,29 @@ def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: O
 
 @has_permission("list_checklist")
 def list_checklist(request):
+    """
+    ============================================================
+    ACCESS CONTROL RULES — READ BEFORE MODIFYING
+    ============================================================
+    ADMIN (superuser / Admin / Manager / EA / CEO):
+      - Sees ALL employees' tasks across the entire system.
+      - Can filter by assign_to (employee picker shown).
+      - Can see all statuses (Pending, Completed, etc).
+      - Default status filter: "Pending" (still filterable).
+
+    DOER (everyone else):
+      - Sees ONLY tasks where assign_to == request.user.
+      - NO cross-user data. The assign_to filter is MANDATORY
+        and enforced at the queryset level, not just the template.
+      - Employee picker is hidden.
+      - Default status filter: "Pending".
+      - total_assigned shows only their own pending count.
+
+    This is enforced at the QUERYSET level (not just the template)
+    so no template change or GET param can bypass it.
+    ============================================================
+    """
+
     # ------------------------------------------------------------------
     # POST: bulk / series delete actions
     # ------------------------------------------------------------------
@@ -942,6 +1007,12 @@ def list_checklist(request):
             except (Checklist.DoesNotExist, ValueError, TypeError):
                 messages.warning(request, "The selected series no longer exists.")
                 return redirect(return_url)
+
+            # Security: non-admins can only delete their own series
+            if not is_admin_user(request.user) and obj.assign_to_id != request.user.id:
+                messages.error(request, "You can only delete tasks assigned to you.")
+                return redirect(return_url)
+
             filters = dict(
                 assign_to_id=obj.assign_to_id,
                 task_name=obj.task_name,
@@ -958,6 +1029,12 @@ def list_checklist(request):
         with_series = bool(request.POST.get("with_series"))
         total_deleted = 0
         if ids:
+            # Security: non-admins can only bulk-delete their own tasks
+            if not is_admin_user(request.user):
+                ids = list(
+                    Checklist.objects.filter(pk__in=ids, assign_to=request.user).values_list("pk", flat=True)
+                )
+
             if with_series:
                 series_seen = set()
                 for sid in ids:
@@ -989,10 +1066,17 @@ def list_checklist(request):
         return redirect(return_url)
 
     # ------------------------------------------------------------------
-    # GET
+    # GET — determine role ONCE; all subsequent logic uses this boolean
     # ------------------------------------------------------------------
-    is_admin = can_create(request.user)
+    is_admin = is_admin_user(request.user)
 
+    # ------------------------------------------------------------------
+    # BASE QUERYSET — ROLE-SCOPED
+    # ADMIN    → all tasks (no assign_to restriction)
+    # DOER     → ONLY their own tasks (assign_to=request.user, always)
+    # The is_skipped_due_to_leave=False guard removes soft-deleted rows
+    # for both roles.
+    # ------------------------------------------------------------------
     if is_admin:
         base_qs = (
             Checklist.objects
@@ -1001,6 +1085,9 @@ def list_checklist(request):
             .defer("media_upload", "doer_file")
         )
     else:
+        # DOER: hard-locked to their own tasks. This cannot be overridden
+        # by any URL parameter because the queryset is built here, before
+        # any GET param handling below.
         base_qs = (
             Checklist.objects
             .filter(assign_to=request.user, is_skipped_due_to_leave=False)
@@ -1008,20 +1095,44 @@ def list_checklist(request):
             .defer("media_upload", "doer_file")
         )
 
-    total_assigned = base_qs.count()
+    # ------------------------------------------------------------------
+    # TOTAL COUNT — pending tasks only, scoped to the role
+    # Admin:  total pending across all employees
+    # Doer:   total pending for themselves only
+    # ------------------------------------------------------------------
+    total_assigned = base_qs.filter(status="Pending").count()
+
+    # ------------------------------------------------------------------
+    # FILTERS — applied on top of the already-scoped base_qs
+    # ------------------------------------------------------------------
     qs = base_qs
 
-    status_filter = request.GET.get("status", "").strip()
-    if status_filter and status_filter != "all":
+    # Status filter — DEFAULT to "Pending" so checklist never shows
+    # completed tasks on first load. Users must explicitly request "all"
+    # or "Completed" to see those. This keeps the checklist as a
+    # to-do view, not a history view.
+    status_filter = request.GET.get("status", "Pending").strip()
+    if status_filter == "all":
+        pass  # show everything (admin use-case)
+    elif status_filter:
         qs = qs.filter(status=status_filter)
+    else:
+        # Empty string edge case — still default to Pending
+        status_filter = "Pending"
+        qs = qs.filter(status="Pending")
 
     kw = request.GET.get("keyword", "").strip()
     if kw:
         qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
 
+    # assign_to filter: ONLY honoured for admins.
+    # A doer cannot pass assign_to=<other_user_id> to see someone else's data.
     assign_to_id = request.GET.get("assign_to", "").strip()
     if assign_to_id and is_admin:
-        qs = qs.filter(assign_to_id=assign_to_id)
+        try:
+            qs = qs.filter(assign_to_id=int(assign_to_id))
+        except (ValueError, TypeError):
+            pass  # ignore invalid values silently
 
     priority_val = request.GET.get("priority", "").strip()
     if priority_val:
@@ -1045,48 +1156,75 @@ def list_checklist(request):
 
     ordered_qs = qs.order_by("-planned_date", "-id")
 
+    # ------------------------------------------------------------------
+    # CSV DOWNLOAD — scoped to role (same base_qs, same filters)
+    # ------------------------------------------------------------------
     if request.GET.get("download"):
         resp = HttpResponse(content_type="text/csv")
         resp["Content-Disposition"] = 'attachment; filename="checklist.csv"'
         w = csv.writer(resp)
-        w.writerow(["Task Name", "Assigned By", "Assigned To", "Planned Date", "Priority", "Group Name", "Status"])
-        for itm in ordered_qs.iterator(chunk_size=500):
-            w.writerow([
-                clean_unicode_string(itm.task_name),
-                itm.assign_by.get_full_name() or itm.assign_by.username if itm.assign_by else "",
-                itm.assign_to.get_full_name() or itm.assign_to.username if itm.assign_to else "",
-                itm.planned_date.strftime("%Y-%m-%d %H:%M") if itm.planned_date else "",
-                itm.priority,
-                itm.group_name,
-                itm.status,
-            ])
+        if is_admin:
+            w.writerow(["Task Name", "Assigned By", "Assigned To", "Planned Date", "Priority", "Group Name", "Status"])
+            for itm in ordered_qs.iterator(chunk_size=500):
+                w.writerow([
+                    clean_unicode_string(itm.task_name),
+                    itm.assign_by.get_full_name() or itm.assign_by.username if itm.assign_by else "",
+                    itm.assign_to.get_full_name() or itm.assign_to.username if itm.assign_to else "",
+                    itm.planned_date.strftime("%Y-%m-%d %H:%M") if itm.planned_date else "",
+                    itm.priority,
+                    itm.group_name,
+                    itm.status,
+                ])
+        else:
+            # Doers get a simplified export of their own tasks
+            w.writerow(["Task Name", "Planned Date", "Status"])
+            for itm in ordered_qs.iterator(chunk_size=500):
+                w.writerow([
+                    clean_unicode_string(itm.task_name),
+                    itm.planned_date.strftime("%Y-%m-%d %H:%M") if itm.planned_date else "",
+                    itm.status,
+                ])
         return resp
 
+    # ------------------------------------------------------------------
+    # PAGINATION
+    # ------------------------------------------------------------------
     paginator = Paginator(ordered_qs, 25)
     page_number = request.GET.get("page")
     page_obj = paginator.get_page(page_number)
     items = page_obj.object_list
 
+    # ------------------------------------------------------------------
+    # GROUP NAMES — scoped to role (uses base_qs, not full table)
+    # ------------------------------------------------------------------
+    group_names = (
+        base_qs.exclude(group_name__isnull=True)
+        .exclude(group_name__exact="")
+        .order_by("group_name")
+        .values_list("group_name", flat=True)
+        .distinct()
+    )
+
+    # ------------------------------------------------------------------
+    # CONTEXT — only pass user list to admins (doers don't need it)
+    # ------------------------------------------------------------------
     ctx = {
         "items": items,
         "page_obj": page_obj,
         "is_paginated": page_obj.has_other_pages(),
         "priority_choices": Checklist._meta.get_field("priority").choices,
-        "group_names": (
-            base_qs.exclude(group_name__isnull=True)
-            .exclude(group_name__exact="")
-            .order_by("group_name")
-            .values_list("group_name", flat=True)
-            .distinct()
-        ),
+        "group_names": group_names,
         "current_tab": "checklist",
         "total_assigned": total_assigned,
         "current_status": status_filter,
+        "is_admin": is_admin,
+        # Only admins receive the full user list; passing [] to doers
+        # ensures the template employee picker never renders even if
+        # someone tampers with the template cache.
         "users": (
             User.objects.filter(is_active=True).order_by("first_name", "last_name", "username")
             if is_admin else []
         ),
-        "is_admin": is_admin,
     }
     if request.GET.get("partial"):
         return render(request, "tasks/partial_list_checklist.html", ctx)
@@ -1133,6 +1271,12 @@ def add_checklist(request):
 @has_permission("add_checklist")
 def edit_checklist(request, pk):
     obj = get_object_or_404(Checklist, pk=pk)
+
+    # Non-admins can only edit tasks assigned to themselves
+    if not is_admin_user(request.user) and obj.assign_to_id != request.user.id:
+        messages.error(request, "You can only edit tasks assigned to you.")
+        return redirect(reverse("tasks:list_checklist"))
+
     old_assignee = obj.assign_to
     if request.method == "POST":
         form = ChecklistForm(request.POST, request.FILES, instance=obj)
@@ -1176,16 +1320,28 @@ def edit_checklist(request, pk):
 @has_permission("list_checklist")
 def delete_checklist(request, pk):
     obj = get_object_or_404(Checklist, pk=pk)
+
+    # Non-admins can only delete their own tasks
+    if not is_admin_user(request.user) and obj.assign_to_id != request.user.id:
+        messages.error(request, "You can only delete tasks assigned to you.")
+        return redirect(reverse("tasks:list_checklist"))
+
     if request.method == "POST":
+        task_name = obj.task_name
         _void_task_row(obj)
         request.session["suppress_auto_recur"] = True
-        messages.success(request, f"Deleted checklist task '{obj.task_name}'.")
+        messages.success(request, f"Deleted checklist task '{task_name}'.")
         return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
     return render(request, "tasks/confirm_delete.html", {"object": obj, "type": "Checklist"})
 
 
 @has_permission("list_checklist")
 def reassign_checklist(request, pk):
+    # Only admins can reassign tasks to different employees
+    if not is_admin_user(request.user):
+        messages.error(request, "You do not have permission to reassign tasks.")
+        return redirect(reverse("tasks:list_checklist"))
+
     obj = get_object_or_404(Checklist, pk=pk)
     if request.method == "POST":
         old_assignee = obj.assign_to
@@ -1819,6 +1975,9 @@ def checklist_details(request, pk: int):
         Checklist.objects.select_related("assign_by", "assign_to", "assign_pc", "notify_to", "auditor"),
         pk=pk,
     )
+    # Non-admins can only view details of their own tasks
+    if not is_admin_user(request.user) and obj.assign_to_id != request.user.id:
+        raise Http404
     return render(request, "tasks/partials/checklist_detail.html", {"obj": obj})
 
 

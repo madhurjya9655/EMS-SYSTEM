@@ -1,30 +1,252 @@
-{% load tz %}
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Recurring Tasks Report</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 24px; }
-    table { border-collapse: collapse; margin-top: 12px; }
-    th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
-    th { background: #f7f7f7; }
-    .counts { font-size: 18px; margin-top: 8px; }
-    .btns a { margin-right: 12px; }
-  </style>
-</head>
-<body>
-  <h2>Recurring Tasks Report</h2>
-  <div>From: <strong>{{ from }}</strong> — To: <strong>{{ to }}</strong>{% if user_id %} — User: <strong>{{ user_id }}</strong>{% endif %}</div>
-  <div class="counts">
-    Completed: <strong>{{ stats.completed }}</strong> &nbsp;|&nbsp;
-    Missed: <strong>{{ stats.missed }}</strong> &nbsp;|&nbsp;
-    Pending: <strong>{{ stats.pending }}</strong> &nbsp;|&nbsp;
-    Total: <strong>{{ stats.total }}</strong>
+{% extends "tasks/tasks_base.html" %}
+{% load static %}
+{% block title %}Recurring Tasks Report{% endblock %}
+
+{% block tab_content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">
+    <i class="fas fa-rotate me-2 text-primary" aria-hidden="true"></i>
+    Recurring Tasks Report
+  </h4>
+  <span class="badge bg-secondary fs-6">{{ summary.total_series }} series found</span>
+</div>
+
+<div class="alert alert-info py-2 mb-3" role="note">
+  <i class="fas fa-info-circle me-1" aria-hidden="true"></i>
+  Shows all <strong>recurring checklist series</strong> with health status.
+  A series is <em>Healthy</em> when it has both completed and pending occurrences,
+  <em>Stuck</em> when all occurrences are completed but no new pending exists,
+  and <em>Empty</em> when no work has been recorded yet.
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="card border-0 shadow-sm text-center py-3">
+      <div class="fw-bold fs-3 text-primary">{{ summary.total_series }}</div>
+      <small class="text-muted">Total Series</small>
+    </div>
   </div>
-  <div class="btns" style="margin-top: 12px;">
-    <a href="?from={{ from }}&to={{ to }}{% if user_id %}&user_id={{ user_id }}{% endif %}&download=overall">Download CSV (Overall)</a>
-    <a href="?from={{ from }}&to={{ to }}&download=per_user">Download CSV (Per User)</a>
+  <div class="col-6 col-md-3">
+    <div class="card border-0 shadow-sm text-center py-3">
+      <div class="fw-bold fs-3 text-success">{{ summary.total_completed }}</div>
+      <small class="text-muted">Completed Occurrences</small>
+    </div>
   </div>
-</body>
-</html>
+  <div class="col-6 col-md-3">
+    <div class="card border-0 shadow-sm text-center py-3">
+      <div class="fw-bold fs-3 text-warning">{{ summary.total_pending }}</div>
+      <small class="text-muted">Pending Occurrences</small>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card border-0 shadow-sm text-center py-3">
+      <div class="fw-bold fs-3 text-danger">{{ summary.stuck_series }}</div>
+      <small class="text-muted">Stuck Series</small>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div
+    class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
+    data-bs-toggle="collapse"
+    href="#recurFilterPanel"
+    role="button"
+    aria-expanded="true"
+    aria-controls="recurFilterPanel"
+    style="cursor:pointer;"
+  >
+    <span class="fw-semibold"><i class="fas fa-filter me-2" aria-hidden="true"></i> FILTERS</span>
+    <i class="fas fa-minus" id="recurFilterIcon" aria-hidden="true"></i>
+  </div>
+  <div id="recurFilterPanel" class="collapse show">
+    <div class="card-body">
+      <form method="get" class="row g-3 align-items-end" role="search" aria-label="Recurring Report Filters">
+
+        <div class="col-md-3">
+          <label for="rfEmployee" class="form-label">Employee</label>
+          <select id="rfEmployee" name="employee" class="form-select">
+            <option value="">All Employees</option>
+            {% for emp in employees %}
+              <option value="{{ emp.id }}"
+                {% if request.GET.employee == emp.id|stringformat:"s" %}selected{% endif %}>
+                {{ emp.get_full_name|default:emp.username }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-2">
+          <label for="rfMode" class="form-label">Recurrence Mode</label>
+          <select id="rfMode" name="mode" class="form-select">
+            <option value="">All Modes</option>
+            <option value="Daily"   {% if request.GET.mode == "Daily"   %}selected{% endif %}>Daily</option>
+            <option value="Weekly"  {% if request.GET.mode == "Weekly"  %}selected{% endif %}>Weekly</option>
+            <option value="Monthly" {% if request.GET.mode == "Monthly" %}selected{% endif %}>Monthly</option>
+            <option value="Yearly"  {% if request.GET.mode == "Yearly"  %}selected{% endif %}>Yearly</option>
+          </select>
+        </div>
+
+        <div class="col-md-2">
+          <label for="rfHealth" class="form-label">Health Status</label>
+          <select id="rfHealth" name="health" class="form-select">
+            <option value="">All</option>
+            <option value="healthy" {% if request.GET.health == "healthy" %}selected{% endif %}>Healthy</option>
+            <option value="stuck"   {% if request.GET.health == "stuck"   %}selected{% endif %}>Stuck</option>
+            <option value="nowork"  {% if request.GET.health == "nowork"  %}selected{% endif %}>No Work Yet</option>
+          </select>
+        </div>
+
+        <div class="col-12 text-end">
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-filter me-1" aria-hidden="true"></i> FILTER
+          </button>
+          <a href="{% url 'tasks:recurring_report' %}" class="btn btn-warning">
+            <i class="fas fa-undo me-1" aria-hidden="true"></i> RESET
+          </a>
+          <a href="?{% if request.GET.employee %}employee={{ request.GET.employee }}&{% endif %}{% if request.GET.mode %}mode={{ request.GET.mode }}&{% endif %}{% if request.GET.health %}health={{ request.GET.health }}&{% endif %}download=csv"
+             class="btn btn-success">
+            <i class="fas fa-file-csv me-1" aria-hidden="true"></i> DOWNLOAD CSV
+          </a>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="card border-0 shadow-sm">
+  <div class="card-header bg-light fw-semibold">
+    <i class="fas fa-list me-2 text-primary" aria-hidden="true"></i>
+    Recurring Series ({{ summary.total_series }})
+  </div>
+  <div class="table-responsive">
+    <table class="table table-bordered table-hover align-middle mb-0">
+      <caption class="visually-hidden">Recurring task series report</caption>
+      <thead class="table-light">
+        <tr>
+          <th scope="col">Employee</th>
+          <th scope="col">Task Name</th>
+          <th scope="col">Mode</th>
+          <th scope="col" class="text-center">Frequency</th>
+          <th scope="col">Group</th>
+          <th scope="col" class="text-center">Total</th>
+          <th scope="col" class="text-center">Completed</th>
+          <th scope="col" class="text-center">Pending</th>
+          <th scope="col" class="text-center">Deleted</th>
+          <th scope="col" class="text-center">Health</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if series %}
+          {% for s in series %}
+            <tr>
+              <td>
+                {% if s.assign_to_user %}
+                  <strong>{{ s.assign_to_user.get_full_name|default:s.assign_to_user.username }}</strong>
+                  <br><small class="text-muted">{{ s.assign_to_user.email|default:"" }}</small>
+                {% else %}
+                  <span class="text-muted">User #{{ s.assign_to_id }}</span>
+                {% endif %}
+              </td>
+
+              <td>{{ s.task_name }}</td>
+
+              <td>
+                {% if s.mode == "Daily" %}
+                  <span class="badge bg-primary">Daily</span>
+                {% elif s.mode == "Weekly" %}
+                  <span class="badge bg-info text-dark">Weekly</span>
+                {% elif s.mode == "Monthly" %}
+                  <span class="badge bg-secondary">Monthly</span>
+                {% elif s.mode == "Yearly" %}
+                  <span class="badge bg-dark">Yearly</span>
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+
+              <td class="text-center">
+                {% if s.frequency %}Every {{ s.frequency }}{% else %}—{% endif %}
+              </td>
+
+              <td>{{ s.group_name|default:"—" }}</td>
+
+              <td class="text-center fw-bold">{{ s.total }}</td>
+
+              <td class="text-center">
+                {% if s.completed %}
+                  <span class="badge bg-success">{{ s.completed }}</span>
+                {% else %}
+                  <span class="text-muted">0</span>
+                {% endif %}
+              </td>
+
+              <td class="text-center">
+                {% if s.pending %}
+                  <span class="badge bg-warning text-dark">{{ s.pending }}</span>
+                {% else %}
+                  <span class="text-muted">0</span>
+                {% endif %}
+              </td>
+
+              <td class="text-center">
+                {% if s.deleted %}
+                  <span class="badge bg-secondary">{{ s.deleted }}</span>
+                {% else %}
+                  <span class="text-muted">0</span>
+                {% endif %}
+              </td>
+
+              <td class="text-center">
+                {% if s.pending > 0 and s.completed > 0 %}
+                  <span class="badge bg-success">
+                    <i class="fas fa-check-circle me-1" aria-hidden="true"></i>Healthy
+                  </span>
+                {% elif s.pending > 0 and s.completed == 0 %}
+                  <span class="badge bg-warning text-dark">
+                    <i class="fas fa-play-circle me-1" aria-hidden="true"></i>Not Started
+                  </span>
+                {% elif s.pending == 0 and s.completed > 0 %}
+                  <span class="badge bg-danger">
+                    <i class="fas fa-exclamation-circle me-1" aria-hidden="true"></i>Stuck
+                  </span>
+                {% else %}
+                  <span class="badge bg-secondary">
+                    <i class="fas fa-minus-circle me-1" aria-hidden="true"></i>Empty
+                  </span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="10" class="text-center py-4 text-muted">
+              <i class="fas fa-inbox fa-2x mb-2 d-block" aria-hidden="true"></i>
+              No recurring task series found for the selected filters.
+            </td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    var panel = document.getElementById("recurFilterPanel");
+    var icon  = document.getElementById("recurFilterIcon");
+    if (panel && icon) {
+      panel.addEventListener("show.bs.collapse", function () {
+        icon.classList.replace("fa-plus", "fa-minus");
+      });
+      panel.addEventListener("hide.bs.collapse", function () {
+        icon.classList.replace("fa-minus", "fa-plus");
+      });
+    }
+  });
+</script>
+{% endblock %}

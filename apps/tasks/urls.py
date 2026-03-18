@@ -1,8 +1,8 @@
 from django.urls import path
 from . import views
-from .views_reports import recurring_report
+from .views_reports import recurring_report, checklist_report
 from .views_cron import weekly_congrats_hook, pre10am_unblock_and_generate_hook
-from . import cron_views  # hardened cron endpoints
+from . import cron_views
 
 app_name = "tasks"
 
@@ -69,7 +69,9 @@ urlpatterns = [
     # -----------------
     # Reports
     # -----------------
-    path("reports/recurring/",              recurring_report,            name="recurring_report"),
+    path("reports/recurring/",   recurring_report,  name="recurring_report"),
+    # NEW: employee-wise performance and delay report (admin only)
+    path("reports/checklist/",   checklist_report,  name="checklist_report"),
 
     # -----------------
     # HTTP cron hooks (internal)
