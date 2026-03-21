@@ -39,6 +39,7 @@ GST_TYPE_CHOICES = [
     ("non_gst", "Non GST Bill"),
 ]
 
+
 # ---------------------------------------------------------------------------
 # File upload helpers + validation
 # ---------------------------------------------------------------------------
@@ -277,7 +278,9 @@ class ExpenseItem(models.Model):
             for req_id in touched_requests:
                 try:
                     req = ReimbursementRequest.objects.get(pk=req_id)
-                    req.apply_derived_status_from_bills(actor=actor, reason="Employee resubmitted corrected bill(s).")
+                    req.apply_derived_status_from_bills(
+                        actor=actor, reason="Employee resubmitted corrected bill(s)."
+                    )
                 except ReimbursementRequest.DoesNotExist:
                     continue
 
@@ -368,11 +371,22 @@ class ReimbursementRequest(models.Model):
         UserModel, on_delete=models.CASCADE, related_name="reimbursement_requests"
     )
     submitted_at = models.DateTimeField(null=True, blank=True)
-    status = models.CharField(max_length=32, choices=Status.choices, default=Status.PENDING_FINANCE_VERIFY, db_index=True)
+    status = models.CharField(
+        max_length=32,
+        choices=Status.choices,
+        default=Status.PENDING_FINANCE_VERIFY,
+        db_index=True,
+    )
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
 
-    manager = models.ForeignKey(UserModel, null=True, blank=True, on_delete=models.SET_NULL, related_name="reimbursements_as_manager")
-    management = models.ForeignKey(UserModel, null=True, blank=True, on_delete=models.SET_NULL, related_name="reimbursements_as_management")
+    manager = models.ForeignKey(
+        UserModel, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="reimbursements_as_manager",
+    )
+    management = models.ForeignKey(
+        UserModel, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="reimbursements_as_management",
+    )
 
     manager_decision = models.CharField(max_length=16, blank=True, default="")
     manager_comment = models.TextField(blank=True, default="")
@@ -382,7 +396,10 @@ class ReimbursementRequest(models.Model):
     management_comment = models.TextField(blank=True, default="")
     management_decided_at = models.DateTimeField(null=True, blank=True)
 
-    verified_by = models.ForeignKey(UserModel, on_delete=models.SET_NULL, null=True, blank=True, related_name="reimbursements_verified")
+    verified_by = models.ForeignKey(
+        UserModel, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="reimbursements_verified",
+    )
     verified_at = models.DateTimeField(null=True, blank=True)
     finance_note = models.TextField(blank=True, default="")
     finance_payment_reference = models.CharField(max_length=255, blank=True, default="")
@@ -401,7 +418,10 @@ class ReimbursementRequest(models.Model):
         constraints = [
             models.CheckConstraint(
                 name="rr_paid_requires_reference_and_timestamp",
-                check=(~Q(status="paid") | (Q(paid_at__isnull=False) & ~Q(finance_payment_reference=""))),
+                check=(
+                    ~Q(status="paid")
+                    | (Q(paid_at__isnull=False) & ~Q(finance_payment_reference=""))
+                ),
             ),
         ]
 
@@ -423,24 +443,38 @@ class ReimbursementRequest(models.Model):
     def get_display_status(self) -> str:
         """
         FIX (Issue #1): Single source-of-truth for status display.
-        Priority: Paid → Manager Approved (awaiting finance settlement) →
-        Finance Approved → current status label.
-        Templates should call this instead of deriving status from sub-fields.
+
+        Priority ladder:
+          1. If status == PAID or paid_at is stamped  → "Paid / Completed"
+          2. If awaiting Finance settlement after manager/management approval
+             → "Manager Approved – Awaiting Payment"
+          3. Otherwise fall back to the human-readable Status label.
+
+        Templates must call this method instead of reading the raw `status` field
+        directly.  That was the UI-layer root cause of paid requests still showing
+        "Finance Approved".
         """
+        # Guard 1: explicitly paid
         if self.status == self.Status.PAID or self.paid_at:
             return "Paid / Completed"
+
+        # Guard 2: awaiting Finance settlement (after manager/management sign-off)
         if self.status in {self.Status.PENDING_FINANCE, self.Status.APPROVED}:
-            if self.manager_decision.lower() == "approved":
+            if (self.manager_decision or "").lower() == "approved":
                 return "Manager Approved – Awaiting Payment"
             return "Finance Approved – Awaiting Payment"
+
+        # Default: use the verbose Status label
         return dict(self.Status.choices).get(self.status, self.status)
 
     def recalc_total(self, save: bool = True) -> Decimal:
         """
-        FIX (Issue #2, Fix 4): Dynamic total excludes rejected lines.
-        FINANCE_REJECTED and MANAGER_REJECTED lines are returned to the employee
-        and must NOT be counted in the forward total.
-        PAID lines are kept so the settled total stays accurate.
+        FIX (Issue #2 / Fix 4): Dynamic total excludes Finance-rejected and
+        Manager-rejected lines.
+
+        Rejected lines are returned to the employee and must NOT inflate the
+        reimbursable total.  PAID lines are kept so the settled amount stays
+        accurate after payment.
         """
         L = self.lines.model
 
@@ -469,7 +503,8 @@ class ReimbursementRequest(models.Model):
         PAID is an explicit, irreversible action that requires a payment reference
         and must only be set via mark_paid(). Auto-advancing to PAID here would
         bypass the finance_payment_reference validation in _validate_transition()
-        and leave requests permanently stuck at their pre-payment status.
+        and silently leave requests stuck at their pre-payment status — which was
+        the original root cause of Issue #1.
         """
         L = ReimbursementLine
         bill_statuses = list(
@@ -483,7 +518,11 @@ class ReimbursementRequest(models.Model):
         statuses = set(bill_statuses)
 
         # 1. Finance verification needed — blocks everything else.
-        if statuses & {L.BillStatus.SUBMITTED, L.BillStatus.EMPLOYEE_RESUBMITTED, L.BillStatus.MANAGER_REJECTED}:
+        if statuses & {
+            L.BillStatus.SUBMITTED,
+            L.BillStatus.EMPLOYEE_RESUBMITTED,
+            L.BillStatus.MANAGER_REJECTED,
+        }:
             return self.Status.PENDING_FINANCE_VERIFY
 
         # 2. Manager action needed on finance-approved or queued bills.
@@ -522,29 +561,40 @@ class ReimbursementRequest(models.Model):
     def _status_rank(self, status: str) -> int:
         return self._STATUS_ORDER.get(status, 0)
 
-    def apply_derived_status_from_bills(self, *, actor: Optional[models.Model] = None, reason: str = "") -> None:
+    def apply_derived_status_from_bills(
+        self, *, actor: Optional[models.Model] = None, reason: str = ""
+    ) -> None:
         """
         FIX (Issue #1): PAID status is NEVER auto-advanced here.
 
         Root cause of the "paid bill still shows Finance Approved" bug:
-        When derive_status_from_bills() returned PAID, this method called
-        self.save(update_fields=["status", ...]) which triggered _validate_transition().
-        That validation requires finance_payment_reference to be set, but it is NOT
-        set at the point this method fires (from ReimbursementLine.save()). The
-        DjangoCoreValidationError was silently swallowed, leaving the request in its
-        pre-payment status (APPROVED or PENDING_FINANCE) and it continued appearing
-        in Finance queues as "Finance Approved / Ready to Pay" indefinitely.
+          - derive_status_from_bills() used to return PAID when all bills were PAID.
+          - This method would call self.save() with status=PAID.
+          - _validate_transition() requires finance_payment_reference, which is NOT
+            set at this point (only mark_paid() sets it).
+          - The DjangoCoreValidationError was silently swallowed in ReimbursementLine.save().
+          - The request remained at PENDING_FINANCE / APPROVED permanently, showing as
+            "Finance Approved" in the UI.
 
-        Fix: derive_status_from_bills() no longer returns PAID, and we add an
-        explicit guard here as defence-in-depth. PAID is only set by mark_paid().
+        Fix (two layers):
+          1. derive_status_from_bills() no longer returns PAID.
+          2. Explicit guard below as defence-in-depth.
+
+        PAID is set exclusively by mark_paid() which sets finance_payment_reference
+        BEFORE calling save(), allowing _validate_transition() to pass cleanly.
         """
         if self.is_final:
             return
 
         new_status = self.derive_status_from_bills()
 
-        # Defence-in-depth guard: PAID must only be set via mark_paid().
+        # Defence-in-depth: PAID must only be set via mark_paid().
         if new_status == self.Status.PAID:
+            logger.warning(
+                "apply_derived_status_from_bills: derive returned PAID for req=%s — "
+                "ignoring (use mark_paid() instead).",
+                self.pk,
+            )
             return
 
         if new_status == self.status:
@@ -575,7 +625,9 @@ class ReimbursementRequest(models.Model):
         inc = self.lines.filter(status=L.Status.INCLUDED)
         return {
             "total": inc.count(),
-            "pending": inc.filter(bill_status__in=[L.BillStatus.SUBMITTED, L.BillStatus.EMPLOYEE_RESUBMITTED]).count(),
+            "pending": inc.filter(
+                bill_status__in=[L.BillStatus.SUBMITTED, L.BillStatus.EMPLOYEE_RESUBMITTED]
+            ).count(),
             "approved": inc.filter(bill_status=L.BillStatus.FINANCE_APPROVED).count(),
             "rejected": inc.filter(bill_status=L.BillStatus.FINANCE_REJECTED).count(),
             "paid": inc.filter(bill_status=L.BillStatus.PAID).count(),
@@ -596,24 +648,34 @@ class ReimbursementRequest(models.Model):
         if not inc.exists():
             return False, _("No included bills to pay.")
 
-        unsettled = inc.exclude(bill_status__in=[L.BillStatus.FINANCE_APPROVED, L.BillStatus.PAID])
+        unsettled = inc.exclude(
+            bill_status__in=[L.BillStatus.FINANCE_APPROVED, L.BillStatus.PAID]
+        )
         if unsettled.exists():
             return False, _("Some bills are not Finance-Approved or Paid yet.")
 
         return True, ""
 
     def _is_manager_approved(self) -> bool:
-        return (self.manager_decision or "").lower() == "approved" and bool(self.manager_decided_at)
+        return (
+            (self.manager_decision or "").lower() == "approved"
+            and bool(self.manager_decided_at)
+        )
 
     def _is_management_approved(self) -> bool:
-        return (self.management_decision or "").lower() == "approved" and bool(self.management_decided_at)
+        return (
+            (self.management_decision or "").lower() == "approved"
+            and bool(self.management_decided_at)
+        )
 
     def _validate_transition(self, old: str, new: str) -> None:
         if not old or old == new:
             return
 
         if old == self.Status.PAID and new != self.Status.PAID:
-            raise DjangoCoreValidationError(_("Paid reimbursements are immutable and cannot change status."))
+            raise DjangoCoreValidationError(
+                _("Paid reimbursements are immutable and cannot change status.")
+            )
 
         require_mgmt = ReimbursementSettings.get_solo().require_management_approval
 
@@ -621,31 +683,46 @@ class ReimbursementRequest(models.Model):
             pass  # verified_by set by calling view post-transition
 
         if new == self.Status.PENDING_MANAGEMENT and not self._is_manager_approved():
-            raise DjangoCoreValidationError(_("Cannot move to Management before Manager approval."))
+            raise DjangoCoreValidationError(
+                _("Cannot move to Management before Manager approval.")
+            )
 
         if new == self.Status.PENDING_FINANCE:
             if require_mgmt:
                 if not self._is_management_approved():
-                    raise DjangoCoreValidationError(_("Cannot move to Finance review before Management approval."))
+                    raise DjangoCoreValidationError(
+                        _("Cannot move to Finance review before Management approval.")
+                    )
             else:
                 if not self._is_manager_approved():
-                    raise DjangoCoreValidationError(_("Cannot move to Finance review before Manager approval."))
+                    raise DjangoCoreValidationError(
+                        _("Cannot move to Finance review before Manager approval.")
+                    )
 
         if new == self.Status.APPROVED and old != self.Status.PENDING_FINANCE:
-            raise DjangoCoreValidationError(_("Only Finance can set Approved after Finance review."))
+            raise DjangoCoreValidationError(
+                _("Only Finance can set Approved after Finance review.")
+            )
 
         if new == self.Status.PAID:
             if old not in {self.Status.APPROVED, self.Status.PENDING_FINANCE}:
-                raise DjangoCoreValidationError(_("Cannot mark Paid before Finance review stage after approvals."))
+                raise DjangoCoreValidationError(
+                    _("Cannot mark Paid before Finance review stage after approvals.")
+                )
             if not (self.finance_payment_reference or "").strip():
-                raise DjangoCoreValidationError(_("Payment reference is required to mark Paid."))
+                raise DjangoCoreValidationError(
+                    _("Payment reference is required to mark Paid.")
+                )
 
     def clean(self) -> None:
         super().clean()
         if self.status == self.Status.PAID:
             if not self.paid_at or not (self.finance_payment_reference or "").strip():
                 raise DjangoCoreValidationError(
-                    _("Cannot set status to Paid unless payment reference and paid timestamp are recorded.")
+                    _(
+                        "Cannot set status to Paid unless payment reference and "
+                        "paid timestamp are recorded."
+                    )
                 )
 
     def save(self, *args, **kwargs):
@@ -665,7 +742,9 @@ class ReimbursementRequest(models.Model):
 
         super().save(*args, **kwargs)
 
-    def mark_verified(self, *, actor: Optional[models.Model] = None, note: str = "") -> None:
+    def mark_verified(
+        self, *, actor: Optional[models.Model] = None, note: str = ""
+    ) -> None:
         if self.is_final:
             raise DjangoCoreValidationError(_("Cannot verify a finalized reimbursement."))
         from_status = self.status
@@ -673,18 +752,36 @@ class ReimbursementRequest(models.Model):
         self.verified_by = actor if isinstance(actor, models.Model) else None
         self.verified_at = timezone.now()
         if note:
-            self.finance_note = f"{self.finance_note}\n{note}" if self.finance_note else note
-        self.save(update_fields=["status", "verified_by", "verified_at", "finance_note", "updated_at"])
+            self.finance_note = (
+                f"{self.finance_note}\n{note}" if self.finance_note else note
+            )
+        self.save(
+            update_fields=[
+                "status", "verified_by", "verified_at", "finance_note", "updated_at"
+            ]
+        )
         ReimbursementLog.log(
-            self, ReimbursementLog.Action.VERIFIED, actor=actor,
+            self,
+            ReimbursementLog.Action.VERIFIED,
+            actor=actor,
             message="Finance verified the reimbursement.",
-            from_status=from_status, to_status=self.status,
+            from_status=from_status,
+            to_status=self.status,
         )
 
-    def mark_paid(self, reference: str, *, actor: Optional[models.Model] = None, note: str = "") -> None:
+    def mark_paid(
+        self,
+        reference: str,
+        *,
+        actor: Optional[models.Model] = None,
+        note: str = "",
+    ) -> None:
         """
         The ONLY method that may set status = PAID.
-        Sets finance_payment_reference BEFORE calling save() so _validate_transition() passes.
+
+        Sets finance_payment_reference BEFORE calling save() so that
+        _validate_transition() does not raise a ValidationError due to a missing
+        reference — which was the silent-failure root cause of Issue #1.
         """
         ok, msg = self.can_mark_paid(reference)
         if not ok:
@@ -697,8 +794,9 @@ class ReimbursementRequest(models.Model):
 
         L = self.lines.model
         now = timezone.now()
-        # Bulk-update all included lines to PAID (bypasses save() intentionally —
-        # parent is stamped PAID immediately after, making per-line re-derivation unnecessary).
+
+        # Bulk-update all included lines to PAID (bypasses per-line save() intentionally —
+        # parent is stamped PAID immediately after, making per-line re-derivation moot).
         self.lines.filter(status=L.Status.INCLUDED).update(
             bill_status=L.BillStatus.PAID,
             payment_reference=reference.strip(),
@@ -706,38 +804,62 @@ class ReimbursementRequest(models.Model):
             updated_at=now,
         )
 
-        # Set payment reference BEFORE save() so _validate_transition passes.
+        # Set reference BEFORE save() so _validate_transition() passes cleanly.
         self.status = self.Status.PAID
         self.finance_payment_reference = reference.strip()
         self.paid_at = now
         if note:
-            self.finance_note = f"{self.finance_note}\n{note}" if self.finance_note else note
-        self.save(update_fields=["status", "finance_payment_reference", "paid_at", "finance_note", "updated_at"])
-
-        ReimbursementLog.log(
-            self, ReimbursementLog.Action.PAID, actor=actor,
-            message=f"Marked paid with reference {reference!r}",
-            from_status=from_status, to_status=self.status,
+            self.finance_note = (
+                f"{self.finance_note}\n{note}" if self.finance_note else note
+            )
+        self.save(
+            update_fields=[
+                "status",
+                "finance_payment_reference",
+                "paid_at",
+                "finance_note",
+                "updated_at",
+            ]
         )
 
-    def employee_resubmit(self, *, actor: Optional[models.Model], note: str = "") -> None:
+        ReimbursementLog.log(
+            self,
+            ReimbursementLog.Action.PAID,
+            actor=actor,
+            message=f"Marked paid with reference {reference!r}",
+            from_status=from_status,
+            to_status=self.status,
+        )
+
+    def employee_resubmit(
+        self, *, actor: Optional[models.Model], note: str = ""
+    ) -> None:
         """
         FIX (Issue #2): Resubmission now resets ALL non-PAID included bill statuses
         back to SUBMITTED so Finance can re-review the updated request.
 
         Root cause of "updated reimbursement not visible to Finance":
-        The old implementation only reset the request-level approval chain
-        (status, manager_decision, etc.) but left ReimbursementLine.bill_status
-        unchanged (e.g., still FINANCE_APPROVED from the previous cycle).
-        FinanceQueueView filters has_pending_submitted=True which requires at least
-        one bill with bill_status in (SUBMITTED, EMPLOYEE_RESUBMITTED). Since all
-        bills remained FINANCE_APPROVED, has_pending_submitted was always False
-        and Finance never saw the resubmitted request.
+          - The old implementation only reset the request-level approval chain
+            (status, manager_decision, verified_by, etc.) but left every
+            ReimbursementLine.bill_status unchanged — e.g., still FINANCE_APPROVED
+            from the previous approval cycle.
+          - FinanceQueueView annotates has_pending_submitted=True which requires
+            at least one INCLUDED line with bill_status IN (SUBMITTED,
+            EMPLOYEE_RESUBMITTED).
+          - Since all bills remained FINANCE_APPROVED, has_pending_submitted was
+            always False and Finance never saw the resubmitted request.
+
+        Fix: bulk-update ALL non-PAID INCLUDED lines to SUBMITTED before saving
+        the request, so FinanceQueueView picks it up immediately.
         """
         if self.status == self.Status.PAID:
-            raise DjangoCoreValidationError(_("Paid reimbursements cannot be resubmitted."))
+            raise DjangoCoreValidationError(
+                _("Paid reimbursements cannot be resubmitted.")
+            )
         if self.status != self.Status.REJECTED:
-            raise DjangoCoreValidationError(_("Only rejected requests can be resubmitted."))
+            raise DjangoCoreValidationError(
+                _("Only rejected requests can be resubmitted.")
+            )
 
         from_status = self.status
 
@@ -746,7 +868,7 @@ class ReimbursementRequest(models.Model):
 
             # FIX: Reset all non-PAID included bills to SUBMITTED so Finance queue
             # picks them up via the has_pending_submitted annotation filter.
-            # We also clear rejection metadata so Finance starts with a clean slate.
+            # Clear rejection metadata so Finance starts with a clean slate.
             self.lines.filter(
                 status=ReimbursementLine.Status.INCLUDED,
             ).exclude(
@@ -773,32 +895,53 @@ class ReimbursementRequest(models.Model):
 
             if note:
                 tag = f"[RESUBMIT] {note.strip()}"
-                self.finance_note = (self.finance_note + ("\n" if self.finance_note else "") + tag).strip()
+                self.finance_note = (
+                    self.finance_note + ("\n" if self.finance_note else "") + tag
+                ).strip()
 
-            self.save(update_fields=[
-                "status", "submitted_at", "verified_by", "verified_at",
-                "manager_decision", "manager_comment", "manager_decided_at",
-                "management_decision", "management_comment", "management_decided_at",
-                "finance_note", "updated_at",
-            ])
+            self.save(
+                update_fields=[
+                    "status",
+                    "submitted_at",
+                    "verified_by",
+                    "verified_at",
+                    "manager_decision",
+                    "manager_comment",
+                    "manager_decided_at",
+                    "management_decision",
+                    "management_comment",
+                    "management_decided_at",
+                    "finance_note",
+                    "updated_at",
+                ]
+            )
 
-            # Recalculate total after bill status reset.
+            # Recalculate total after bill status reset (rejected lines now excluded).
             self.recalc_total(save=True)
 
             ReimbursementLog.log(
-                self, ReimbursementLog.Action.STATUS_CHANGED, actor=actor,
+                self,
+                ReimbursementLog.Action.STATUS_CHANGED,
+                actor=actor,
                 message="Employee corrected and resubmitted the reimbursement.",
-                from_status=from_status, to_status=self.status,
+                from_status=from_status,
+                to_status=self.status,
                 extra={"type": "employee_resubmit"},
             )
 
-    def reverse_to_finance_verification(self, *, actor: Optional[models.Model], reason: str) -> None:
+    def reverse_to_finance_verification(
+        self, *, actor: Optional[models.Model], reason: str
+    ) -> None:
         if self.status == self.Status.PAID:
-            raise DjangoCoreValidationError(_("Paid reimbursements cannot be reversed."))
+            raise DjangoCoreValidationError(
+                _("Paid reimbursements cannot be reversed.")
+            )
         if not reason or not reason.strip():
             raise DjangoCoreValidationError(_("Reversal reason is required."))
         if self.status == self.Status.PENDING_FINANCE_VERIFY:
-            raise DjangoCoreValidationError(_("The request is already pending Finance Verification."))
+            raise DjangoCoreValidationError(
+                _("The request is already pending Finance Verification.")
+            )
         if self.status == self.Status.REJECTED:
             raise DjangoCoreValidationError(_("Cannot reverse a Rejected request."))
 
@@ -807,7 +950,7 @@ class ReimbursementRequest(models.Model):
         with transaction.atomic():
             now_ts = timezone.now()
 
-            # Also reset bill statuses on admin reversal so Finance queue sees them.
+            # Reset bill statuses on admin reversal so Finance queue sees them.
             self.lines.filter(
                 status=ReimbursementLine.Status.INCLUDED,
             ).exclude(
@@ -830,54 +973,95 @@ class ReimbursementRequest(models.Model):
             self.management_comment = self.management_comment or ""
             self.management_decided_at = None
 
-            note_line = f"[REVERSAL] Sent back to Finance Verification. Reason: {reason.strip()}"
-            self.finance_note = (self.finance_note + ("\n" if self.finance_note else "") + note_line).strip()
+            note_line = (
+                f"[REVERSAL] Sent back to Finance Verification. Reason: {reason.strip()}"
+            )
+            self.finance_note = (
+                self.finance_note + ("\n" if self.finance_note else "") + note_line
+            ).strip()
 
-            self.save(update_fields=[
-                "status", "verified_by", "verified_at",
-                "manager_decision", "manager_comment", "manager_decided_at",
-                "management_decision", "management_comment", "management_decided_at",
-                "finance_note", "updated_at",
-            ])
+            self.save(
+                update_fields=[
+                    "status",
+                    "verified_by",
+                    "verified_at",
+                    "manager_decision",
+                    "manager_comment",
+                    "manager_decided_at",
+                    "management_decision",
+                    "management_comment",
+                    "management_decided_at",
+                    "finance_note",
+                    "updated_at",
+                ]
+            )
 
             ReimbursementLog.log(
-                self, ReimbursementLog.Action.REVERSED, actor=actor,
-                message=note_line, from_status=from_status, to_status=self.status,
+                self,
+                ReimbursementLog.Action.REVERSED,
+                actor=actor,
+                message=note_line,
+                from_status=from_status,
+                to_status=self.status,
                 extra={"type": "reverse_to_finance_verification"},
             )
 
-    def resend_to_finance(self, *, actor: Optional[models.Model], reason: str = "") -> None:
+    def resend_to_finance(
+        self, *, actor: Optional[models.Model], reason: str = ""
+    ) -> None:
         if self.status == self.Status.PAID:
-            raise DjangoCoreValidationError(_("Paid reimbursements cannot be resent to Finance."))
+            raise DjangoCoreValidationError(
+                _("Paid reimbursements cannot be resent to Finance.")
+            )
         from_status = self.status
         if self.status == self.Status.PENDING_FINANCE_VERIFY:
             ReimbursementLog.log(
-                self, ReimbursementLog.Action.STATUS_CHANGED, actor=actor,
+                self,
+                ReimbursementLog.Action.STATUS_CHANGED,
+                actor=actor,
                 message="Admin re-sent to Finance Verification (already there). " + (reason or ""),
-                from_status=from_status, to_status=self.status,
+                from_status=from_status,
+                to_status=self.status,
                 extra={"type": "resend_to_finance"},
             )
             return
-        self.reverse_to_finance_verification(actor=actor, reason=reason or "Admin resend to Finance Verification")
+        self.reverse_to_finance_verification(
+            actor=actor,
+            reason=reason or "Admin resend to Finance Verification",
+        )
 
-    def resend_to_manager(self, *, actor: Optional[models.Model], reason: str = "") -> None:
+    def resend_to_manager(
+        self, *, actor: Optional[models.Model], reason: str = ""
+    ) -> None:
         if self.status == self.Status.PAID:
-            raise DjangoCoreValidationError(_("Paid reimbursements cannot be resent to Manager."))
+            raise DjangoCoreValidationError(
+                _("Paid reimbursements cannot be resent to Manager.")
+            )
         if not self.verified_by_id:
-            raise DjangoCoreValidationError(_("Cannot resend to Manager before Finance verifies."))
+            raise DjangoCoreValidationError(
+                _("Cannot resend to Manager before Finance verifies.")
+            )
         from_status = self.status
         self.status = self.Status.PENDING_MANAGER
         note = f"Admin re-sent to Manager. {('Reason: ' + reason) if reason else ''}".strip()
         self.save(update_fields=["status", "updated_at"])
         ReimbursementLog.log(
-            self, ReimbursementLog.Action.STATUS_CHANGED, actor=actor,
-            message=note, from_status=from_status, to_status=self.status,
+            self,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
+            message=note,
+            from_status=from_status,
+            to_status=self.status,
             extra={"type": "resend_to_manager"},
         )
 
-    def admin_force_move(self, target_status: str, *, actor: Optional[models.Model], reason: str = "") -> None:
+    def admin_force_move(
+        self, target_status: str, *, actor: Optional[models.Model], reason: str = ""
+    ) -> None:
         if self.status == self.Status.PAID:
-            raise DjangoCoreValidationError(_("Paid reimbursements cannot be force-moved."))
+            raise DjangoCoreValidationError(
+                _("Paid reimbursements cannot be force-moved.")
+            )
         valid = {c[0] for c in self.Status.choices}
         if target_status not in valid:
             raise DjangoCoreValidationError(_("Invalid target status."))
@@ -887,9 +1071,15 @@ class ReimbursementRequest(models.Model):
         from_status = self.status
         if from_status == target_status:
             ReimbursementLog.log(
-                self, ReimbursementLog.Action.STATUS_CHANGED, actor=actor,
-                message=f"Admin attempted force move but status unchanged ({target_status}). {reason}".strip(),
-                from_status=from_status, to_status=self.status,
+                self,
+                ReimbursementLog.Action.STATUS_CHANGED,
+                actor=actor,
+                message=(
+                    f"Admin attempted force move but status unchanged ({target_status}). "
+                    + reason
+                ).strip(),
+                from_status=from_status,
+                to_status=self.status,
                 extra={"type": "admin_force_move_noop"},
             )
             return
@@ -897,9 +1087,12 @@ class ReimbursementRequest(models.Model):
         self.status = target_status
         self.save(update_fields=["status", "updated_at"])
         ReimbursementLog.log(
-            self, ReimbursementLog.Action.STATUS_CHANGED, actor=actor,
+            self,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
             message=f"Admin force-moved. {('Reason: ' + reason) if reason else ''}".strip(),
-            from_status=from_status, to_status=target_status,
+            from_status=from_status,
+            to_status=target_status,
             extra={"type": "admin_force_move"},
         )
 
@@ -920,20 +1113,46 @@ class ReimbursementLine(models.Model):
         MANAGER_APPROVED = "manager_approved", _("Manager Approved")
         PAID = "paid", _("Paid")
 
-    request = models.ForeignKey(ReimbursementRequest, on_delete=models.CASCADE, related_name="lines")
-    expense_item = models.ForeignKey(ExpenseItem, on_delete=models.PROTECT, related_name="request_lines")
+    request = models.ForeignKey(
+        ReimbursementRequest, on_delete=models.CASCADE, related_name="lines"
+    )
+    expense_item = models.ForeignKey(
+        ExpenseItem, on_delete=models.PROTECT, related_name="request_lines"
+    )
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.TextField(blank=True, default="")
-    receipt_file = models.FileField(upload_to=receipt_upload_path, validators=[validate_receipt_file], blank=True, null=True)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.INCLUDED, db_index=True)
+    receipt_file = models.FileField(
+        upload_to=receipt_upload_path,
+        validators=[validate_receipt_file],
+        blank=True,
+        null=True,
+    )
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.INCLUDED, db_index=True
+    )
 
     bill_status = models.CharField(
-        max_length=32, choices=BillStatus.choices, default=BillStatus.SUBMITTED, db_index=True,
+        max_length=32,
+        choices=BillStatus.choices,
+        default=BillStatus.SUBMITTED,
+        db_index=True,
     )
     finance_rejection_reason = models.TextField(blank=True, default="")
-    rejected_by = models.ForeignKey(UserModel, on_delete=models.SET_NULL, null=True, blank=True, related_name="finance_rejected_bills")
+    rejected_by = models.ForeignKey(
+        UserModel,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="finance_rejected_bills",
+    )
     rejected_at = models.DateTimeField(null=True, blank=True)
-    last_modified_by = models.ForeignKey(UserModel, on_delete=models.SET_NULL, null=True, blank=True, related_name="modified_reimbursement_lines")
+    last_modified_by = models.ForeignKey(
+        UserModel,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="modified_reimbursement_lines",
+    )
 
     payment_reference = models.CharField(max_length=255, blank=True, default="")
     paid_at = models.DateTimeField(null=True, blank=True)
@@ -951,7 +1170,10 @@ class ReimbursementLine(models.Model):
         ]
 
     def __str__(self) -> str:
-        return f"ReimbursementLine #{self.pk} – req={self.request_id} – item={self.expense_item_id}"
+        return (
+            f"ReimbursementLine #{self.pk} – req={self.request_id} "
+            f"– item={self.expense_item_id}"
+        )
 
     def clean(self) -> None:
         super().clean()
@@ -973,14 +1195,22 @@ class ReimbursementLine(models.Model):
                 qs = qs.exclude(pk=self.pk)
             if qs.exists():
                 raise DjangoCoreValidationError(
-                    {"expense_item": _("This expense is already used in another open reimbursement request.")}
+                    {
+                        "expense_item": _(
+                            "This expense is already used in another open reimbursement request."
+                        )
+                    }
                 )
 
         if self.status == self.Status.INCLUDED:
             desc = (self.description or "").strip()
-            exp_desc = (self.expense_item.description or "").strip() if self.expense_item_id else ""
+            exp_desc = (
+                (self.expense_item.description or "").strip() if self.expense_item_id else ""
+            )
             if not (desc or exp_desc):
-                raise DjangoCoreValidationError({"description": _("Bill description is required for every bill.")})
+                raise DjangoCoreValidationError(
+                    {"description": _("Bill description is required for every bill.")}
+                )
 
     def save(self, *args, **kwargs):
         updating_specific_fields = kwargs.get("update_fields") is not None
@@ -1006,7 +1236,9 @@ class ReimbursementLine(models.Model):
             old_line_status = None
             if not creating:
                 try:
-                    prev = type(self).objects.only("bill_status", "status").get(pk=self.pk)
+                    prev = (
+                        type(self).objects.only("bill_status", "status").get(pk=self.pk)
+                    )
                     old_bill_status = prev.bill_status
                     old_line_status = prev.status
                 except type(self).DoesNotExist:
@@ -1029,11 +1261,14 @@ class ReimbursementLine(models.Model):
                     )
         except Exception:
             logger.exception(
-                "Failed to auto-derive parent status on line save (line_id=%s, request_id=%s).",
-                self.pk, self.request_id,
+                "Failed to auto-derive parent status on line save "
+                "(line_id=%s, request_id=%s).",
+                self.pk,
+                self.request_id,
             )
 
     # ---- Finance actions ----
+
     def approve_by_finance(self, *, actor: Optional[models.Model]) -> None:
         if self.bill_status == self.BillStatus.FINANCE_APPROVED:
             return
@@ -1043,17 +1278,29 @@ class ReimbursementLine(models.Model):
         self.rejected_by = None
         self.rejected_at = None
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
-        self.save(update_fields=[
-            "bill_status", "finance_rejection_reason", "rejected_by", "rejected_at", "last_modified_by", "updated_at"
-        ])
+        self.save(
+            update_fields=[
+                "bill_status",
+                "finance_rejection_reason",
+                "rejected_by",
+                "rejected_at",
+                "last_modified_by",
+                "updated_at",
+            ]
+        )
         ReimbursementLog.log(
-            self.request, ReimbursementLog.Action.STATUS_CHANGED, actor=actor,
+            self.request,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
             message=f"Finance approved bill line #{self.pk}.",
-            from_status=prev, to_status=self.bill_status,
+            from_status=prev,
+            to_status=self.bill_status,
             extra={"line_id": self.pk, "type": "bill_finance_approved"},
         )
 
-    def reject_by_finance(self, *, actor: Optional[models.Model], reason: str) -> None:
+    def reject_by_finance(
+        self, *, actor: Optional[models.Model], reason: str
+    ) -> None:
         if not reason or not reason.strip():
             raise DjangoCoreValidationError(_("Rejection reason is required."))
         prev = self.bill_status
@@ -1062,9 +1309,16 @@ class ReimbursementLine(models.Model):
         self.rejected_by = actor if isinstance(actor, models.Model) else None
         self.rejected_at = timezone.now()
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
-        self.save(update_fields=[
-            "bill_status", "finance_rejection_reason", "rejected_by", "rejected_at", "last_modified_by", "updated_at"
-        ])
+        self.save(
+            update_fields=[
+                "bill_status",
+                "finance_rejection_reason",
+                "rejected_by",
+                "rejected_at",
+                "last_modified_by",
+                "updated_at",
+            ]
+        )
 
         exp = self.expense_item
         exp.status = ExpenseItem.Status.SAVED
@@ -1073,27 +1327,46 @@ class ReimbursementLine(models.Model):
         try:
             try:
                 from .services import notifications as _notif
+
                 if hasattr(_notif, "send_bill_rejected_by_finance"):
                     _notif.send_bill_rejected_by_finance(self.request, self)
                 else:
                     raise ImportError
             except Exception:
                 from .emails import send_bill_rejected_by_finance as _legacy
+
                 _legacy(self.request, self)
         except Exception:
-            logger.exception("Failed to send bill-rejected email for req=%s line=%s", self.request_id, self.pk)
+            logger.exception(
+                "Failed to send bill-rejected email for req=%s line=%s",
+                self.request_id,
+                self.pk,
+            )
 
         ReimbursementLog.log(
-            self.request, ReimbursementLog.Action.STATUS_CHANGED, actor=actor,
+            self.request,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
             message=f"Finance rejected bill line #{self.pk}.",
-            from_status=prev, to_status=self.bill_status,
-            extra={"line_id": self.pk, "reason": self.finance_rejection_reason, "type": "bill_finance_rejected"},
+            from_status=prev,
+            to_status=self.bill_status,
+            extra={
+                "line_id": self.pk,
+                "reason": self.finance_rejection_reason,
+                "type": "bill_finance_rejected",
+            },
         )
 
     # ---- Employee actions ----
+
     def employee_resubmit_bill(self, *, actor: Optional[models.Model]) -> None:
-        if self.bill_status not in (self.BillStatus.FINANCE_REJECTED, self.BillStatus.MANAGER_REJECTED):
-            raise DjangoCoreValidationError(_("Only rejected bills can be resubmitted by employee."))
+        if self.bill_status not in (
+            self.BillStatus.FINANCE_REJECTED,
+            self.BillStatus.MANAGER_REJECTED,
+        ):
+            raise DjangoCoreValidationError(
+                _("Only rejected bills can be resubmitted by employee.")
+            )
         prev = self.bill_status
 
         exp = self.expense_item
@@ -1106,7 +1379,9 @@ class ReimbursementLine(models.Model):
         self.bill_status = self.BillStatus.EMPLOYEE_RESUBMITTED
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
 
-        update_fields = ["bill_status", "last_modified_by", "updated_at", "amount", "description"]
+        update_fields = [
+            "bill_status", "last_modified_by", "updated_at", "amount", "description"
+        ]
         if exp and getattr(exp, "receipt_file", None):
             update_fields.append("receipt_file")
 
@@ -1122,40 +1397,58 @@ class ReimbursementLine(models.Model):
         try:
             try:
                 from .services import notifications as _notif
+
                 if hasattr(_notif, "send_bill_resubmitted"):
                     _notif.send_bill_resubmitted(self.request, self, actor=actor)
                 else:
                     raise ImportError
             except Exception:
                 from .emails import send_bill_resubmitted as _legacy
+
                 _legacy(self.request, self, actor=actor)
         except Exception:
-            logger.exception("Failed to send bill-resubmitted email for req=%s line=%s", self.request_id, self.pk)
+            logger.exception(
+                "Failed to send bill-resubmitted email for req=%s line=%s",
+                self.request_id,
+                self.pk,
+            )
 
         ReimbursementLog.log(
-            self.request, ReimbursementLog.Action.STATUS_CHANGED, actor=actor,
+            self.request,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
             message=f"Employee resubmitted bill line #{self.pk} after correction.",
-            from_status=prev, to_status=self.bill_status,
+            from_status=prev,
+            to_status=self.bill_status,
             extra={"line_id": self.pk, "type": "bill_employee_resubmitted"},
         )
 
     def manager_approve(self, *, actor: Optional[models.Model]) -> None:
         if self.bill_status != self.BillStatus.MANAGER_PENDING:
-            raise DjangoCoreValidationError(_("Only Manager-Pending bills can be approved by Manager."))
+            raise DjangoCoreValidationError(
+                _("Only Manager-Pending bills can be approved by Manager.")
+            )
         prev = self.bill_status
         self.bill_status = self.BillStatus.MANAGER_APPROVED
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
         self.save(update_fields=["bill_status", "last_modified_by", "updated_at"])
         ReimbursementLog.log(
-            self.request, ReimbursementLog.Action.MANAGER_APPROVED, actor=actor,
+            self.request,
+            ReimbursementLog.Action.MANAGER_APPROVED,
+            actor=actor,
             message=f"Manager approved bill line #{self.pk}.",
-            from_status=prev, to_status=self.bill_status,
+            from_status=prev,
+            to_status=self.bill_status,
             extra={"line_id": self.pk, "type": "bill_manager_approved"},
         )
 
-    def manager_reject(self, *, actor: Optional[models.Model], reason: str = "") -> None:
+    def manager_reject(
+        self, *, actor: Optional[models.Model], reason: str = ""
+    ) -> None:
         if self.bill_status != self.BillStatus.MANAGER_PENDING:
-            raise DjangoCoreValidationError(_("Only Manager-Pending bills can be rejected by Manager."))
+            raise DjangoCoreValidationError(
+                _("Only Manager-Pending bills can be rejected by Manager.")
+            )
         prev = self.bill_status
         self.bill_status = self.BillStatus.MANAGER_REJECTED
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
@@ -1170,40 +1463,76 @@ class ReimbursementLine(models.Model):
 
         try:
             from .emails import send_bill_rejected_by_manager
+
             send_bill_rejected_by_manager(self.request, self, reason=reason)
         except Exception:
-            logger.exception("Failed to send bill-rejected-by-manager email: req=%s line=%s", self.request_id, self.pk)
+            logger.exception(
+                "Failed to send bill-rejected-by-manager email: req=%s line=%s",
+                self.request_id,
+                self.pk,
+            )
 
         ReimbursementLog.log(
-            self.request, ReimbursementLog.Action.STATUS_CHANGED, actor=actor,
-            message=f"Manager rejected bill line #{self.pk}. {('Reason: ' + reason) if reason else ''}".strip(),
-            from_status=prev, to_status=self.bill_status,
+            self.request,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
+            message=(
+                f"Manager rejected bill line #{self.pk}. "
+                + (f"Reason: {reason}" if reason else "")
+            ).strip(),
+            from_status=prev,
+            to_status=self.bill_status,
             extra={"line_id": self.pk, "type": "bill_manager_rejected"},
         )
 
-    def mark_paid(self, reference: str, *, actor: Optional[models.Model] = None) -> None:
-        if self.bill_status not in (self.BillStatus.FINANCE_APPROVED, self.BillStatus.MANAGER_APPROVED):
-            raise DjangoCoreValidationError(_("Only Finance-Approved bills can be marked Paid."))
+    def mark_paid(
+        self, reference: str, *, actor: Optional[models.Model] = None
+    ) -> None:
+        if self.bill_status not in (
+            self.BillStatus.FINANCE_APPROVED,
+            self.BillStatus.MANAGER_APPROVED,
+        ):
+            raise DjangoCoreValidationError(
+                _("Only Finance-Approved bills can be marked Paid.")
+            )
         if not (reference or "").strip():
-            raise DjangoCoreValidationError(_("Payment reference is required to mark Paid."))
+            raise DjangoCoreValidationError(
+                _("Payment reference is required to mark Paid.")
+            )
 
         prev = self.bill_status
         self.bill_status = self.BillStatus.PAID
         self.payment_reference = reference.strip()
         self.paid_at = timezone.now()
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
-        self.save(update_fields=["bill_status", "payment_reference", "paid_at", "last_modified_by", "updated_at"])
+        self.save(
+            update_fields=[
+                "bill_status", "payment_reference", "paid_at",
+                "last_modified_by", "updated_at",
+            ]
+        )
 
         try:
             from .emails import send_bill_paid
+
             send_bill_paid(self.request, self)
         except Exception:
-            logger.exception("Failed to send bill-paid email: req=%s line=%s", self.request_id, self.pk)
+            logger.exception(
+                "Failed to send bill-paid email: req=%s line=%s",
+                self.request_id,
+                self.pk,
+            )
 
         ReimbursementLog.log(
-            self.request, ReimbursementLog.Action.PAID, actor=actor,
-            message=f"Bill line #{self.pk} marked Paid with reference {self.payment_reference!r}",
-            from_status=prev, to_status=self.bill_status,
+            self.request,
+            ReimbursementLog.Action.PAID,
+            actor=actor,
+            message=(
+                f"Bill line #{self.pk} marked Paid with reference "
+                f"{self.payment_reference!r}"
+            ),
+            from_status=prev,
+            to_status=self.bill_status,
             extra={"line_id": self.pk, "type": "bill_paid"},
         )
 
@@ -1226,8 +1555,16 @@ class ReimbursementLog(models.Model):
         EMAIL_SENT = "email_sent", _("Email Sent")
         REVERSED = "reversed", _("Reversed to Finance Verification")
 
-    request = models.ForeignKey(ReimbursementRequest, on_delete=models.CASCADE, related_name="logs")
-    actor = models.ForeignKey(UserModel, on_delete=models.SET_NULL, null=True, blank=True, related_name="reimbursement_logs")
+    request = models.ForeignKey(
+        ReimbursementRequest, on_delete=models.CASCADE, related_name="logs"
+    )
+    actor = models.ForeignKey(
+        UserModel,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reimbursement_logs",
+    )
     action = models.CharField(max_length=32, choices=Action.choices, db_index=True)
     from_status = models.CharField(max_length=32, blank=True, default="")
     to_status = models.CharField(max_length=32, blank=True, default="")
@@ -1244,20 +1581,32 @@ class ReimbursementLog(models.Model):
 
     @classmethod
     def log(
-        cls, request: "ReimbursementRequest", action: str, *,
-        actor: Optional[models.Model] = None, message: str = "",
-        from_status: str = "", to_status: str = "",
+        cls,
+        request: "ReimbursementRequest",
+        action: str,
+        *,
+        actor: Optional[models.Model] = None,
+        message: str = "",
+        from_status: str = "",
+        to_status: str = "",
         extra: Optional[Dict[str, Any]] = None,
     ) -> "ReimbursementLog":
         extra_data = extra or {}
         obj = cls.objects.create(
-            request=request, actor=actor, action=action,
-            from_status=from_status or "", to_status=to_status or "",
-            message=message or "", extra=extra_data,
+            request=request,
+            actor=actor,
+            action=action,
+            from_status=from_status or "",
+            to_status=to_status or "",
+            message=message or "",
+            extra=extra_data,
         )
         logger.info(
             "ReimbursementLog: req=%s action=%s from=%s to=%s actor=%s",
-            getattr(request, "id", None), action, from_status, to_status,
+            getattr(request, "id", None),
+            action,
+            from_status,
+            to_status,
             getattr(actor, "id", None) if actor else None,
         )
         return obj
