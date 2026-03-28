@@ -1,6 +1,3 @@
-{# FILE: templates/reimbursement/request_detail.html #}
-{# PURPOSE: Employee can see all lines; rejected lines are actionable (edit + resubmit) while approved move forward #}
-{# UPDATED: 2026-02-24 #}
 {% extends "base.html" %}
 {% load humanize %}
 
@@ -8,7 +5,7 @@
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h2>Reimbursement – Request #{{ request_obj.id }}</h2>
+  <h2>Reimbursement - Request #{{ request_obj.id }}</h2>
   <div class="d-flex gap-2">
     <a href="{% url 'reimbursement:my_reimbursements' %}" class="btn btn-outline-secondary btn-sm">Back to My Requests</a>
     {% if can_resubmit %}
@@ -109,9 +106,9 @@
     <div class="alert alert-secondary">
       <strong>How the workflow works:</strong>
       <div class="small mt-1">
-        Finance approves/rejects each bill separately.<br>
-        ✅ Approved bills move forward to Manager/Management/Finance settlement.<br>
-        ❌ Rejected bills come back to you — you edit and resubmit only those bills.
+        Finance approves or rejects each bill separately.<br>
+        Approved bills move forward to Manager, Management, and Finance settlement.<br>
+        Rejected bills come back to you. You can edit and resubmit only those rejected bills.
       </div>
     </div>
     {% endif %}
@@ -127,7 +124,6 @@
   </div>
 
   <div class="card-body p-0">
-    {# Bulk delete for owner when request not paid #}
     {% if request.user.id == request_obj.created_by_id and not request_obj.paid_at %}
       <form method="post" action="{% url 'reimbursement:request_lines_bulk_delete' request_obj.id %}">
         {% csrf_token %}
@@ -150,7 +146,7 @@
             <th>Description</th>
             <th class="text-end" style="width:120px;">Amount</th>
             <th style="width:90px;">Receipt</th>
-            <th style="width:210px;">Bill Status</th>
+            <th style="width:230px;">Bill Status</th>
             <th style="width:260px;">Actions</th>
           </tr>
         </thead>
@@ -194,9 +190,9 @@
                     {% endif %}
                   {% endif %}
                 {% elif line.bill_status == 'employee_resubmitted' %}
-                  <span class="badge bg-warning text-dark">Resubmitted (Waiting Finance)</span>
+                  <span class="badge bg-warning text-dark">Resubmitted - Waiting for Finance</span>
                 {% elif line.bill_status == 'submitted' %}
-                  <span class="badge bg-secondary">Submitted (Waiting Finance)</span>
+                  <span class="badge bg-secondary">Submitted - Waiting for Finance</span>
                 {% elif line.bill_status == 'finance_approved' %}
                   <span class="badge bg-success">Finance Approved</span>
                 {% elif line.bill_status == 'manager_pending' %}
@@ -213,31 +209,26 @@
               <td>
                 {% if request.user.id == request_obj.created_by_id and not request_obj.paid_at %}
                   <div class="d-flex flex-column gap-1">
-
-                    {# Delete single line -> RequestLineDeleteView (needs request pk + line_id in POST) #}
-                    {% if line.bill_status != 'paid' %}
+                    {% if line.bill_status == 'finance_rejected' %}
+                      <a class="btn btn-sm btn-outline-primary" href="{% url 'reimbursement:expense_edit' line.expense_item.id %}">
+                        Edit this Bill
+                      </a>
+                      <a class="btn btn-sm btn-outline-secondary" href="{% url 'reimbursement:expense_inbox' %}">
+                        Go to Expenses to Resubmit
+                      </a>
+                    {% elif line.bill_status != 'paid' %}
                       <form method="post" action="{% url 'reimbursement:request_line_delete' request_obj.id %}">
                         {% csrf_token %}
                         <input type="hidden" name="line_id" value="{{ line.id }}">
                         <input type="hidden" name="return" value="{% url 'reimbursement:request_detail' request_obj.id %}">
                         <button type="submit" class="btn btn-sm btn-outline-danger">Delete this Bill</button>
                       </form>
-                    {% endif %}
-
-                    {% if line.bill_status == 'finance_rejected' %}
-                      <a class="btn btn-sm btn-outline-primary" href="{% url 'reimbursement:expense_edit' line.expense_item.id %}">
-                        Edit this Bill
-                      </a>
-                      <a class="btn btn-sm btn-outline-secondary" href="{% url 'reimbursement:expense_inbox' %}">
-                        Go to Expenses (to Resubmit)
-                      </a>
-                      <div class="small text-muted">
-                        After editing, resubmit the rejected bill from your Expenses page.
-                      </div>
+                    {% else %}
+                      <span class="text-muted small">No actions available</span>
                     {% endif %}
                   </div>
                 {% else %}
-                  <span class="text-muted small">—</span>
+                  <span class="text-muted small">-</span>
                 {% endif %}
               </td>
             </tr>
@@ -273,8 +264,8 @@
 {% if show_partial_hold_hint and request.user.id == request_obj.created_by_id %}
   <div class="alert alert-warning mt-3">
     One or more bills were rejected by Finance.
-    Please edit the rejected bill(s) above, then resubmit those bill(s) from your Expenses page.
-    Approved bills (if any) can continue forward separately.
+    Please edit the rejected bill or bills above, then resubmit them from your Expenses page.
+    Approved bills, if any, will continue in their own workflow.
   </div>
 {% endif %}
 {% endblock %}
