@@ -1,10 +1,11 @@
 # FILE: apps/reimbursement/views.py
-# FIXED: 2026-03-21
+# FIXED: 2026-03-28
 # ISSUE 1 FIX: FinanceSettlementQueueView excludes PAID; FinanceBillPaymentView
 #              explicitly stamps PAID with reference before save(); ReimbursementDetailView
 #              passes display_status via get_display_status().
 # ISSUE 2 FIX: ReimbursementRequestUpdateView calls employee_resubmit() after edit
 #              so Finance queue picks up the updated request.
+# ISSUE 3 FIX: Employee can now edit/resubmit Finance-rejected locked expenses.
 from __future__ import annotations
 
 import os
@@ -165,6 +166,27 @@ def _has_finance_rejected_lines_for_expense(expense: ExpenseItem) -> bool:
         return False
 
 
+def _expense_has_returned_state(expense: ExpenseItem) -> bool:
+    return bool(
+        getattr(expense, "finance_returned", False)
+        or getattr(expense, "finance_return_flag", False)
+        or str(getattr(expense, "status", "")).upper() in {"FR", "FINANCE_RETURNED"}
+        or _has_finance_rejected_lines_for_expense(expense)
+    )
+
+
+def _expense_is_editable_by_employee(expense: ExpenseItem) -> bool:
+    """
+    Employee may edit:
+      - any unlocked expense, OR
+      - a locked expense that has Finance-rejected lines / returned state
+
+    This keeps normal submitted/attached bills protected while reopening only
+    the rejected-bill correction path.
+    """
+    return (not getattr(expense, "is_locked", False)) or _expense_has_returned_state(expense)
+
+
 def _eligible_manager_lines_qs(req: ReimbursementRequest):
     """
     Manager must NOT see Finance-rejected (or still-finance-pending) bills.
@@ -237,21 +259,24 @@ class ExpenseInboxView(LoginRequiredMixin, PermissionRequiredMixin, TemplateView
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        items = ExpenseItem.objects.filter(created_by=self.request.user).order_by(
-            "-date", "-created_at"
+        items = list(
+            ExpenseItem.objects.filter(created_by=self.request.user).order_by(
+                "-date", "-created_at"
+            )
         )
+        show_hint = False
+
+        for it in items:
+            has_returned_state = _expense_has_returned_state(it)
+            it.has_finance_rejected_lines = has_returned_state
+            it.can_employee_edit = _expense_is_editable_by_employee(it)
+            it.can_employee_delete = not getattr(it, "is_locked", False)
+
+            if has_returned_state:
+                show_hint = True
+
         ctx["items"] = items
         ctx["form"] = getattr(self, "form", self.get_form())
-        show_hint = False
-        for it in items:
-            if (
-                getattr(it, "finance_returned", False)
-                or getattr(it, "finance_return_flag", False)
-                or str(getattr(it, "status", "")).upper() in {"FR", "FINANCE_RETURNED"}
-                or _has_finance_rejected_lines_for_expense(it)
-            ):
-                show_hint = True
-                break
         ctx["show_finance_return_hint"] = show_hint
         return ctx
 
@@ -284,7 +309,7 @@ class ExpenseItemUpdateView(LoginRequiredMixin, PermissionRequiredMixin, UpdateV
 
     def dispatch(self, request, *args, **kwargs):
         obj = self.get_object()
-        if getattr(obj, "is_locked", False):
+        if not _expense_is_editable_by_employee(obj):
             messages.error(
                 request,
                 "This expense is already attached to a request and cannot be edited.",
@@ -377,10 +402,10 @@ class ExpenseItemResubmitView(LoginRequiredMixin, PermissionRequiredMixin, Templ
             pk=kwargs.get("pk"),
             created_by=request.user,
         )
-        if getattr(expense, "is_locked", False):
+        if not _expense_has_returned_state(expense):
             messages.error(
                 request,
-                "This expense is already attached and cannot be resubmitted.",
+                "Only Finance-rejected expenses can be resubmitted to Finance.",
             )
             return redirect("reimbursement:expense_inbox")
 
@@ -1640,9 +1665,6 @@ class FinanceSettlementQueueView(LoginRequiredMixin, PermissionRequiredMixin, Li
                 status__in=[R.Status.PENDING_FINANCE, R.Status.APPROVED],
                 paid_at__isnull=True,
             )
-            # FIX: Defence-in-depth — never show PAID requests in the settlement queue.
-            # Old records with silent payment failures could have paid_at=NULL but all
-            # bills already PAID; the status guard eliminates them cleanly.
             .exclude(status=R.Status.PAID)
             .annotate(
                 has_included=Exists(inc),
@@ -1803,7 +1825,6 @@ class FinanceBillPaymentView(LoginRequiredMixin, PermissionRequiredMixin, Templa
             try:
                 req = ReimbursementRequest.objects.get(pk=req_id)
 
-                # apply_derived_status_from_bills never auto-advances to PAID by design.
                 try:
                     req.apply_derived_status_from_bills(
                         actor=request.user, reason="Finance paid bill(s)."
@@ -1816,9 +1837,6 @@ class FinanceBillPaymentView(LoginRequiredMixin, PermissionRequiredMixin, Templa
                     )
                     req = ReimbursementRequest.objects.get(pk=req_id)
 
-                # Explicit PAID promotion: if ALL included bills are now PAID,
-                # stamp the request. Set finance_payment_reference FIRST so
-                # _validate_transition() passes cleanly.
                 included = req.lines.filter(status=ReimbursementLine.Status.INCLUDED)
                 all_paid = included.exists() and not included.exclude(
                     bill_status=ReimbursementLine.BillStatus.PAID

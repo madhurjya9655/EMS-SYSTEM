@@ -86,7 +86,7 @@
                 <th class="text-end">Amount</th>
                 <th>Status</th>
                 <th>Bill</th>
-                <th style="width:160px;">Actions</th>
+                <th style="width:220px;">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -110,14 +110,17 @@
                   {% endif %}
                 </td>
                 <td>
-                  {% if not item.is_locked %}
+                  {% if item.can_employee_edit %}
                     <div class="btn-group">
                       <a href="{% url 'reimbursement:expense_edit' item.id %}" class="btn btn-sm btn-outline-primary">Edit</a>
-                      <a href="{% url 'reimbursement:expense_delete' item.id %}" class="btn btn-sm btn-outline-danger">Delete</a>
+                      {% if item.can_employee_delete %}
+                        <a href="{% url 'reimbursement:expense_delete' item.id %}" class="btn btn-sm btn-outline-danger">Delete</a>
+                      {% endif %}
                     </div>
-                    {% if item.finance_returned or item.finance_return_flag or item.status == 'FINANCE_RETURNED' or item.status == 'FR' %}
+
+                    {% if item.has_finance_rejected_lines %}
                       <div class="mt-1">
-                        <small class="text-muted">Fix then click <em>Proceed to Finance</em> on the Edit page.</small>
+                        <small class="text-muted">Finance returned this bill. Edit it, save it, then click <em>Proceed to Finance</em> on the Edit page.</small>
                       </div>
                     {% endif %}
                   {% else %}
