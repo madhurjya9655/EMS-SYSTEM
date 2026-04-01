@@ -1,0 +1,8 @@
+{% load static %}
+<nav class="page-breadcrumb" aria-label="Breadcrumb">
+  <a href="{% url 'dashboard:home' %}" class="breadcrumb-home" title="Home">
+    <i class="fa-solid fa-house"></i>
+  </a>
+  <i class="fa-solid fa-angle-right breadcrumb-sep"></i>
+  <span class="breadcrumb-current">{% block breadcrumb %}Dashboard{% endblock %}</span>
+</nav>

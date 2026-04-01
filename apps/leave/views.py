@@ -1,19 +1,14 @@
-# FILE: apps/leave/views.py
-# PURPOSE: Leave module views
-# UPDATED: 2026-03-06
-# CHANGE:  Replaced `import pytz` / `pytz.timezone("Asia/Kolkata")` with
-#          `from zoneinfo import ZoneInfo` / `ZoneInfo("Asia/Kolkata")`.
-#          No leave business logic changed.  All timezone behaviour identical.
-
+#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\leave\views.py
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 from datetime import timedelta, date, time as dtime
-from zoneinfo import ZoneInfo          # ← replaces: import pytz
+from typing import Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
+from django import forms
 from django.apps import apps as django_apps
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -23,78 +18,69 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import ManyToManyField, Q
 from django.db.utils import OperationalError
-from django.http import (
-    HttpRequest,
-    HttpResponse,
-    HttpResponseForbidden,
-    HttpResponseBadRequest,
-)
+from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.views import View
 from django.views.decorators.http import require_GET, require_POST
-from django import forms
 
 from apps.users.permissions import has_permission
 from apps.users.routing import recipients_for_leave
 from .forms import LeaveRequestForm
 from .models import (
+    ApproverMapping,
+    CCConfiguration,
+    HandoverTaskType,
+    LeaveHandover,
     LeaveRequest,
     LeaveStatus,
     LeaveType,
-    ApproverMapping,
-    LeaveHandover,
-    HandoverTaskType,
-    CCConfiguration,
+)
+from .utils import (
+    get_admin_leave_balance_rows,
+    get_employee_leave_balance_summary,
 )
 
-# Notification services (import-safe)
 try:
     from .services.notifications import (
+        send_handover_email,
         send_leave_decision_email,
         send_leave_request_email,
-        send_handover_email,
     )
 except Exception:
+    send_handover_email = None
     send_leave_decision_email = None
     send_leave_request_email = None
-    send_handover_email = None
 
-# Audits (import-safe)
 try:
-    from .models import LeaveDecisionAudit, DecisionAction
+    from .models import DecisionAction, LeaveDecisionAudit
 except Exception:
     LeaveDecisionAudit = None
     DecisionAction = None
 
-# Celery tasks (kept import-safe; not used for initial dispatch anymore)
 try:
-    from .tasks import send_leave_emails_async, send_handover_emails_async
+    from .tasks import send_handover_emails_async, send_leave_emails_async
 except Exception:
     send_leave_emails_async = None
     send_handover_emails_async = None
 
 logger = logging.getLogger(__name__)
 
-# ← replaces: IST = pytz.timezone("Asia/Kolkata")
 IST = ZoneInfo("Asia/Kolkata")
 
 TOKEN_SALT = "leave-action-v1"
-TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 7  # 7 days
+TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
 
-# Keep allowed list in views too so summary widgets (balances etc.) stay in sync with the form.
 ALLOWED_LEAVE_TYPE_NAMES = {
     "Compensatory Off",
     "Casual Leave",
     "Maternity Leave",
 }
 
-# ---- Working window constants (USED FOR UI HINTS ONLY) ----------------------
 WORK_START_IST = dtime(9, 30)
 WORK_END_IST = dtime(18, 0)
 
-# ---- Profile photo field detection ------------------------------------------
 PROFILE_PHOTO_FIELD_CANDIDATES = (
     "photo",
     "profile_photo",
@@ -104,28 +90,18 @@ PROFILE_PHOTO_FIELD_CANDIDATES = (
     "picture",
 )
 
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 def now_ist():
-    """Return current time localized to IST."""
     return timezone.localtime(timezone.now(), IST)
 
 
 def _within_apply_window_ist(dt=None) -> bool:
-    """
-    Returns True iff current IST time is within [09:30, 18:00].
-
-    IMPORTANT:
-    This is kept ONLY for UI hints. It must NOT be used to block submitting leave.
-    """
     cur = timezone.localtime(dt or timezone.now(), IST).time()
     return (cur >= WORK_START_IST) and (cur <= WORK_END_IST)
 
 
-# -----------------------------------------------------------------------------#
-# Helpers                                                                      #
-# -----------------------------------------------------------------------------#
 def _model_has_field(model, name: str) -> bool:
     try:
         model._meta.get_field(name)
@@ -135,7 +111,6 @@ def _model_has_field(model, name: str) -> bool:
 
 
 def _detect_profile_photo_field(Profile) -> Optional[str]:
-    """Return the first configured photo-like field name on users.Profile, or None."""
     for fname in PROFILE_PHOTO_FIELD_CANDIDATES:
         if _model_has_field(Profile, fname):
             return fname
@@ -143,9 +118,6 @@ def _detect_profile_photo_field(Profile) -> Optional[str]:
 
 
 def _get_profile_photo_url_safe(user) -> Optional[str]:
-    """
-    Read the profile photo URL without assuming the exact field name.
-    """
     try:
         Profile = django_apps.get_model("users", "Profile")
         if not Profile:
@@ -163,10 +135,6 @@ def _get_profile_photo_url_safe(user) -> Optional[str]:
 
 
 def _employee_header(user) -> Dict[str, Optional[str]]:
-    """
-    Build employee header safely without assuming Profile fields exist.
-    Returns: name, email, designation, department, photo_url
-    """
     header = {
         "name": (getattr(user, "get_full_name", lambda: "")() or user.username or "").strip(),
         "email": (user.email or "").strip(),
@@ -202,7 +170,7 @@ def _employee_header(user) -> Dict[str, Optional[str]]:
 
 def _routing_for_leave(leave: LeaveRequest) -> Tuple[str, List[str]]:
     emp_email = (leave.employee_email or getattr(leave.employee, "email", "") or "").strip().lower()
-    r = recipients_for_leave(emp_email)  # {"to": manager, "cc": [..]}
+    r = recipients_for_leave(emp_email)
     manager_email = (r.get("to") or "").strip().lower()
     cc_list = [e.strip().lower() for e in (r.get("cc") or []) if e]
     return manager_email, cc_list
@@ -245,33 +213,25 @@ def _client_ip(request: HttpRequest) -> Optional[str]:
     return request.META.get("REMOTE_ADDR")
 
 
-# ---------------------- TASK AUTO-SKIP -------------------------------------- #
 def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = True) -> Dict[str, int]:
-    """
-    Immediately mark scheduled tasks as skipped for the leave window.
-    Runs on leave creation (before approval).
-    """
     counts = {"checklist": 0, "delegation": 0, "help_ticket": 0, "fms": 0}
     try:
         start_at = leave.start_at
         end_at = leave.end_at
 
-        # ← replaces: timezone.localtime(start_at, IST) — same call, IST is now ZoneInfo
         start_date = timezone.localtime(start_at, IST).date() if start_at else None
         end_date = timezone.localtime(end_at, IST).date() if end_at else None
 
         if not (start_date and end_date):
             return counts
 
-        from apps.tasks.models import Checklist, Delegation, HelpTicket, FMS
+        from apps.tasks.models import Checklist, Delegation, FMS, HelpTicket
 
         exclude_ids = {"checklist": [], "delegation": [], "help_ticket": []}
         if exclude_handover:
             try:
                 handovers = (
-                    LeaveHandover.objects
-                    .filter(leave_request=leave, is_active=True)
-                    .only("task_type", "original_task_id")
+                    LeaveHandover.objects.filter(leave_request=leave, is_active=True).only("task_type", "original_task_id")
                 )
                 for ho in handovers:
                     exclude_ids.get(ho.task_type, []).append(ho.original_task_id)
@@ -312,11 +272,9 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
     return counts
 
 
-# ---- blocked days math (IST, inclusive) -------------------------------------#
 def _datespan_ist(start_dt, end_dt) -> List[date]:
     if not (start_dt and end_dt):
         return []
-    # ← replaces: timezone.localtime(start_dt, IST) — same call, IST is now ZoneInfo
     s = timezone.localtime(start_dt, IST).date()
     e = timezone.localtime(end_dt, IST).date()
     if e < s:
@@ -389,21 +347,51 @@ def _leave_balances_for_user(user) -> Tuple[List[BalanceRow], float]:
     return rows, total_remaining
 
 
-# -----------------------------------------------------------------------------#
-# Views                                                                         #
-# -----------------------------------------------------------------------------#
 @has_permission("leave_list")
 @login_required
 def dashboard(request: HttpRequest) -> HttpResponse:
     header = _employee_header(request.user)
     now = now_ist()
 
+    is_admin_or_manager = (
+        getattr(request.user, "is_superuser", False)
+        or getattr(request.user, "is_staff", False)
+    )
+
+    # Admin / manager can view any active employee via ?user_id=N
+    viewed_user = request.user
+    all_users: List = []
+    selected_user_id: str = ""
+
+    if is_admin_or_manager:
+        User = get_user_model()
+        all_users = list(
+            User.objects.filter(is_active=True)
+            .only("id", "first_name", "last_name", "username", "email")
+            .order_by("first_name", "last_name", "username")
+        )
+        raw_uid = (request.GET.get("user_id") or "").strip()
+        selected_user_id = raw_uid
+        if raw_uid:
+            try:
+                viewed_user = get_object_or_404(
+                    User.objects.only("id", "first_name", "last_name", "username", "email"),
+                    pk=int(raw_uid),
+                    is_active=True,
+                )
+            except (ValueError, TypeError):
+                viewed_user = request.user
+                selected_user_id = ""
+
+    is_viewing_other = viewed_user.pk != request.user.pk
+
     leaves = (
-        LeaveRequest.objects.filter(employee=request.user)
+        LeaveRequest.objects.filter(employee=viewed_user)
         .select_related("leave_type", "approver", "reporting_person")
         .order_by("-applied_at", "-id")
     )
 
+    # Compute blocked_days for display
     for lr in leaves:
         try:
             if getattr(lr, "blocked_days", None) in (None, 0):
@@ -411,7 +399,18 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         except Exception:
             setattr(lr, "blocked_days", _blocked_days_total_ist(lr))
 
-    balances, _ = _leave_balances_for_user(request.user)
+    # Status counts (iterate once — no extra DB queries)
+    pending_count = approved_count = rejected_count = 0
+    for lr in leaves:
+        if lr.status == LeaveStatus.PENDING:
+            pending_count += 1
+        elif lr.status == LeaveStatus.APPROVED:
+            approved_count += 1
+        elif lr.status == LeaveStatus.REJECTED:
+            rejected_count += 1
+
+    balances, _ = _leave_balances_for_user(viewed_user)
+    annual_leave_balance = get_employee_leave_balance_summary(viewed_user)
 
     return render(
         request,
@@ -420,7 +419,16 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             "employee_header": header,
             "leaves": leaves,
             "balances": balances,
+            "annual_leave_balance": annual_leave_balance,
             "now_ist": now,
+            "is_admin_or_manager": is_admin_or_manager,
+            "is_viewing_other": is_viewing_other,
+            "viewed_user": viewed_user,
+            "all_users": all_users,
+            "selected_user_id": selected_user_id,
+            "pending_count": pending_count,
+            "approved_count": approved_count,
+            "rejected_count": rejected_count,
         },
     )
 
@@ -430,9 +438,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 def apply_leave(request: HttpRequest) -> HttpResponse:
     header = _employee_header(request.user)
     now = now_ist()
-
-    # ✅ DO NOT enforce any time window restriction server-side.
-    # Keep None so template does NOT disable submit.
     can_apply_now = None
 
     if request.method == "POST":
@@ -440,7 +445,7 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
         try:
             if form.is_valid():
                 max_attempts = 5
-                base_sleep = 0.25  # seconds
+                base_sleep = 0.25
                 handovers_created: List[LeaveHandover] = []
 
                 for attempt in range(1, max_attempts + 1):
@@ -472,7 +477,6 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
 
                             if delegate_to and (cl_ids or dg_ids or ht_ids):
                                 handovers = []
-                                # ← replaces: timezone.localtime(lr.start_at, IST) — same call
                                 ef_start = getattr(lr, "start_date", None) or timezone.localtime(lr.start_at, IST).date()
                                 ef_end = getattr(lr, "end_date", None) or timezone.localtime(lr.end_at, IST).date()
 
@@ -520,11 +524,8 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                                     )
 
                                 if handovers:
-                                    handovers_created = LeaveHandover.objects.bulk_create(
-                                        handovers, ignore_conflicts=True
-                                    )
+                                    handovers_created = LeaveHandover.objects.bulk_create(handovers, ignore_conflicts=True)
 
-                            # Auto-skip tasks immediately
                             skip_counts = _auto_skip_tasks_for_leave(lr, exclude_handover=True)
                             logger.info("Skip counts for leave %s: %s", lr.id, skip_counts)
 
@@ -598,7 +599,7 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
             "form": form,
             "employee_header": header,
             "now_ist": now,
-            "can_apply_now": can_apply_now,  # ✅ None => template will not disable submit
+            "can_apply_now": can_apply_now,
         },
     )
 
@@ -611,7 +612,15 @@ def my_leaves(request: HttpRequest) -> HttpResponse:
         .select_related("leave_type", "approver")
         .order_by("-applied_at", "-id")
     )
-    return render(request, "leave/my_leaves.html", {"leaves": leaves})
+    annual_leave_balance = get_employee_leave_balance_summary(request.user)
+    return render(
+        request,
+        "leave/my_leaves.html",
+        {
+            "leaves": leaves,
+            "annual_leave_balance": annual_leave_balance,
+        },
+    )
 
 
 @has_permission("leave_pending_manager")
@@ -622,11 +631,33 @@ def manager_pending(request: HttpRequest) -> HttpResponse:
         .select_related("employee", "leave_type")
         .order_by("start_at")
     )
+
+    # --- FIX: Get ALL employees managed by this user via ApproverMapping,
+    # not just those with currently pending leaves. When no pending leaves
+    # exist, employee_ids would be empty and the balance table would show
+    # nothing — which is the bug visible in the screenshot.
+    managed_user_ids = list(
+        ApproverMapping.objects.filter(reporting_person=request.user)
+        .values_list("employee_id", flat=True)
+    )
+
+    # Also union any employee IDs that appear in pending leaves but may not
+    # have an ApproverMapping row (edge case / legacy data).
+    pending_employee_ids = list({leave.employee_id for leave in leaves})
+    all_employee_ids = list(set(managed_user_ids) | set(pending_employee_ids))
+
+    User = get_user_model()
+    users = User.objects.filter(id__in=all_employee_ids).order_by(
+        "first_name", "last_name", "username"
+    )
+    employee_leave_balances = get_admin_leave_balance_rows(users=users)
+
     ctx = {
         "leaves": leaves,
+        "employee_leave_balances": employee_leave_balances,
         "next_url": reverse("leave:manager_pending"),
     }
-    return render(request, "leave/manager_pending.html", ctx)
+    return render(request, "leave/pending_leaves.html", ctx)
 
 
 def _build_approval_context(leave: LeaveRequest) -> Dict[str, object]:
@@ -647,12 +678,12 @@ def _build_approval_context(leave: LeaveRequest) -> Dict[str, object]:
         "employee_designation": designation,
         "employee_email": (emp.email or "").strip(),
         "leave_type_name": getattr(leave.leave_type, "name", str(leave.leave_type)),
-        # ← replaces: timezone.localtime(leave.start_at, IST) — same call, IST is now ZoneInfo
         "from_ist": timezone.localtime(leave.start_at, IST),
         "to_ist": timezone.localtime(leave.end_at, IST),
         "is_half_day": bool(leave.is_half_day),
         "reason": leave.reason or "",
         "attachment": getattr(leave, "attachment", None),
+        "annual_leave_balance": get_employee_leave_balance_summary(emp, leave.start_date),
     }
 
 
@@ -722,9 +753,6 @@ def manager_decide_reject(request: HttpRequest, pk: int) -> HttpResponse:
     return redirect(_safe_next_url(request, "leave:manager_pending"))
 
 
-# -----------------------------------------------------------------------------#
-# Delete functionality                                                          #
-# -----------------------------------------------------------------------------#
 @has_permission("leave_list")
 @login_required
 @require_POST
@@ -740,7 +768,6 @@ def delete_leave(request: HttpRequest, pk: int) -> HttpResponse:
         return redirect("leave:dashboard")
 
     leave_type = leave.leave_type.name
-    # ← replaces: timezone.localtime(leave.start_at, IST) — same call, IST is now ZoneInfo
     start_date = timezone.localtime(leave.start_at, IST).strftime("%B %d, %Y")
 
     try:
@@ -804,9 +831,6 @@ def bulk_delete_leaves(request: HttpRequest) -> HttpResponse:
     return redirect("leave:dashboard")
 
 
-# -----------------------------------------------------------------------------#
-# One-click Token Decision (CONFIRMATION + POST)                                #
-# -----------------------------------------------------------------------------#
 class TokenDecisionView(View):
     template_confirm = "leave/email_decision_confirm.html"
     template_done = "leave/email_decision_done.html"
@@ -868,11 +892,7 @@ class TokenDecisionView(View):
             if LeaveDecisionAudit:
                 LeaveDecisionAudit.objects.create(
                     leave=leave,
-                    action=(
-                        getattr(DecisionAction, "TOKEN_OPENED", "TOKEN_OPENED")
-                        if DecisionAction
-                        else "TOKEN_OPENED"
-                    ),
+                    action=(getattr(DecisionAction, "TOKEN_OPENED", "TOKEN_OPENED") if DecisionAction else "TOKEN_OPENED"),
                     decided_by=request.user if request.user.is_authenticated else None,
                     token_hash=token_hash,
                     token_manager_email=actor_email,
@@ -983,9 +1003,6 @@ class TokenDecisionView(View):
         return render(request, self.template_done, {"leave": leave})
 
 
-# -----------------------------------------------------------------------------#
-# Profile Photo Upload                                                          #
-# -----------------------------------------------------------------------------#
 @has_permission("leave_list")
 @login_required
 @require_POST
@@ -1037,9 +1054,6 @@ def upload_photo(request: HttpRequest) -> HttpResponse:
     return redirect("leave:dashboard")
 
 
-# -----------------------------------------------------------------------------#
-# Optional lightweight widget for manager dashboards                            #
-# -----------------------------------------------------------------------------#
 @has_permission("leave_pending_manager")
 @login_required
 def manager_widget(request: HttpRequest) -> HttpResponse:
@@ -1050,7 +1064,6 @@ def manager_widget(request: HttpRequest) -> HttpResponse:
     )
     rows = []
     for lr in leaves:
-        # ← replaces: timezone.localtime(lr.start_at, IST) — same call, IST is now ZoneInfo
         start = timezone.localtime(lr.start_at, IST).strftime("%b %d, %I:%M %p")
         rows.append(
             f"<tr><td>{lr.employee.get_full_name() or lr.employee.username}</td>"
@@ -1078,6 +1091,7 @@ def manager_widget(request: HttpRequest) -> HttpResponse:
 
 def _csrf_input(request: HttpRequest) -> str:
     from django.middleware.csrf import get_token
+
     try:
         token = get_token(request)
         return f"<input type='hidden' name='csrfmiddlewaretoken' value='{token}'>"
@@ -1085,9 +1099,6 @@ def _csrf_input(request: HttpRequest) -> str:
         return ""
 
 
-# -----------------------------------------------------------------------------#
-# Approver Mapping – editor (summary + dedicated field pages)                   #
-# -----------------------------------------------------------------------------#
 def _user_label(u) -> str:
     if not u:
         return "—"
@@ -1101,10 +1112,7 @@ def approver_mapping_edit(request: HttpRequest, user_id: int) -> HttpResponse:
     User = get_user_model()
     employee = get_object_or_404(User, pk=user_id)
     mapping = (
-        ApproverMapping.objects
-        .select_related("employee", "reporting_person", "cc_person")
-        .filter(employee=employee)
-        .first()
+        ApproverMapping.objects.select_related("employee", "reporting_person", "cc_person").filter(employee=employee).first()
     )
 
     ctx = {
@@ -1164,9 +1172,7 @@ def approver_mapping_edit_field(request: HttpRequest, user_id: int, field: str) 
     employee = get_object_or_404(User, pk=user_id)
 
     mapping = (
-        ApproverMapping.objects.select_related("employee", "reporting_person", "cc_person")
-        .filter(employee=employee)
-        .first()
+        ApproverMapping.objects.select_related("employee", "reporting_person", "cc_person").filter(employee=employee).first()
     )
 
     users_qs = (
@@ -1234,9 +1240,6 @@ def approver_mapping_edit_cc(request: HttpRequest, user_id: int) -> HttpResponse
     return approver_mapping_edit_field(request, user_id, "cc")
 
 
-# -----------------------------------------------------------------------------#
-# CC Config (admin-only) + per-employee CC assignment                           #
-# -----------------------------------------------------------------------------#
 class _CCAddForm(forms.Form):
     user = forms.ModelChoiceField(
         queryset=get_user_model().objects.filter(is_active=True).order_by("first_name", "last_name", "username")
@@ -1458,18 +1461,14 @@ def cc_assign(request: HttpRequest) -> HttpResponse:
     return render(request, "leave/cc_assign.html", ctx)
 
 
-# -----------------------------------------------------------------------------#
-# Delegate dashboard widget — tasks handed over to the current user             #
-# -----------------------------------------------------------------------------#
 @has_permission("leave_list")
 @login_required
 def my_handovers_widget(request: HttpRequest) -> HttpResponse:
-    from .models import LeaveHandover, LeaveStatus  # local import to avoid cycles
+    from .models import LeaveHandover, LeaveStatus
 
     today = timezone.localdate()
     handovers = (
-        LeaveHandover.objects
-        .select_related("leave_request", "original_assignee")
+        LeaveHandover.objects.select_related("leave_request", "original_assignee")
         .filter(
             new_assignee=request.user,
             is_active=True,

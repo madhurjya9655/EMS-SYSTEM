@@ -1,153 +1,160 @@
 {% extends "base.html" %}
-{% load tz humanize static permission_tags %}
+{% load tz static %}
 
 {% block title %}My Leaves{% endblock %}
+{% block navbar_title %}My Leaves{% endblock %}
+{% block breadcrumb %}Leave / My Leaves{% endblock %}
+{% block page_title %}My Leaves{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'leave:apply_leave' %}" class="btn btn-primary">
+    <i class="fa-solid fa-plus me-1"></i>Submit Leave
+  </a>
+  {% include "leave/_admin_edit_button.html" with leave=None next_url=request.get_full_path %}
+{% endblock %}
 
 {% block content %}
-<div class="container-fluid px-0">
 
-  <div class="d-flex align-items-center justify-content-between mb-3">
-    <h4 class="mb-0"><i class="fa-solid fa-file-alt me-2"></i>My Leaves</h4>
-    <div class="d-flex gap-2">
-      {# Admin Edit entry point for convenience (no specific leave) — optional #}
-      {% include "leave/_admin_edit_button.html" with leave=None next_url=request.get_full_path %}
+  <!-- Leave Balance card -->
+  {% include "leave/profile_leave_balance.html" with annual_leave_balance=annual_leave_balance %}
+
+  <!-- Leaves table -->
+  {% if leaves %}
+  <div class="dt-card">
+    <div class="dt-toolbar">
+      <div class="dt-toolbar-l">
+        <span class="dt-title"><i class="fa-solid fa-file-lines me-2"></i>Leave History</span>
+        <span class="dt-count">{{ leaves|length }}</span>
+      </div>
+    </div>
+
+    <div class="data-table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Start (IST)</th>
+            <th>End (IST)</th>
+            <th style="text-align:center;">Half Day</th>
+            <th>Status</th>
+            <th>Approver</th>
+            <th>Reason</th>
+            <th>Attachment</th>
+            <th>Applied</th>
+            <th style="text-align:right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for lr in leaves %}
+          <tr>
+            <td class="fw-semibold">{{ lr.leave_type.name }}</td>
+
+            <td style="white-space:nowrap;">
+              {% timezone "Asia/Kolkata" %}
+                {{ lr.start_at|date:"d M Y" }}<br>
+                <span style="color:var(--muted);font-size:12px;">{{ lr.start_at|date:"g:i A" }}</span>
+              {% endtimezone %}
+            </td>
+
+            <td style="white-space:nowrap;">
+              {% timezone "Asia/Kolkata" %}
+                {{ lr.end_at|date:"d M Y" }}<br>
+                <span style="color:var(--muted);font-size:12px;">{{ lr.end_at|date:"g:i A" }}</span>
+              {% endtimezone %}
+            </td>
+
+            <td style="text-align:center;">
+              {% if lr.is_half_day %}
+                <span class="status-badge in-progress">Half</span>
+              {% else %}
+                <span style="color:var(--subtle); font-size:12px;">Full</span>
+              {% endif %}
+            </td>
+
+            <td>
+              {% if lr.status == "PENDING" %}
+                <span class="status-badge pending">Pending</span>
+              {% elif lr.status == "APPROVED" %}
+                <span class="status-badge approved">Approved</span>
+              {% elif lr.status == "REJECTED" %}
+                <span class="status-badge rejected">Rejected</span>
+              {% else %}
+                <span class="status-badge draft">{{ lr.status }}</span>
+              {% endif %}
+            </td>
+
+            <td>
+              {% if lr.approver %}
+                <div class="fw-semibold" style="font-size:13px;">
+                  {{ lr.approver.get_full_name|default:lr.approver.username }}
+                </div>
+                {% if lr.decided_at %}
+                  <div class="table-meta">
+                    {% timezone "Asia/Kolkata" %}{{ lr.decided_at|date:"d M Y g:i A" }}{% endtimezone %}
+                  </div>
+                {% endif %}
+                {% if lr.decision_comment %}
+                  <div class="table-meta" style="font-style:italic;">{{ lr.decision_comment }}</div>
+                {% endif %}
+              {% else %}
+                <span style="color:var(--subtle);">—</span>
+              {% endif %}
+            </td>
+
+            <td>
+              <div class="truncate" style="max-width:220px;" title="{{ lr.reason|striptags }}">
+                {{ lr.reason|default:"—" }}
+              </div>
+            </td>
+
+            <td>
+              {% if lr.attachment %}
+                <a href="{{ lr.attachment.url }}" class="btn btn-sm btn-light" target="_blank" rel="noopener" title="View attachment">
+                  <i class="fa-solid fa-paperclip"></i>
+                </a>
+              {% else %}
+                <span style="color:var(--subtle);">—</span>
+              {% endif %}
+            </td>
+
+            <td style="white-space:nowrap; font-size:12px; color:var(--muted);">
+              {% timezone "Asia/Kolkata" %}{{ lr.applied_at|date:"d M Y" }}{% endtimezone %}
+            </td>
+
+            <td class="action-cell">
+              <div style="display:inline-flex; gap:6px; justify-content:flex-end;">
+                {% if lr.status == "PENDING" %}
+                  <form method="post"
+                        action="{% url 'leave:delete_leave' lr.id %}"
+                        onsubmit="return confirm('Delete this pending leave?');"
+                        style="margin:0;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-sm" style="background:var(--danger-soft);color:var(--danger);border:1px solid #fca5a5;" title="Delete">
+                      <i class="fa-solid fa-trash"></i>
+                    </button>
+                  </form>
+                {% endif %}
+                {% include "leave/_admin_edit_button.html" with leave=lr next_url=request.get_full_path %}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% else %}
+  <div class="dt-card">
+    <div class="empty-state" style="padding: 64px 24px;">
+      <div class="empty-state-icon"><i class="fa-regular fa-folder-open"></i></div>
+      <div style="font-weight:700; font-size:15px; color:var(--text); margin-bottom:8px;">No leave applications yet</div>
+      <div style="margin-bottom:20px;">You have not submitted any leave requests.</div>
       <a href="{% url 'leave:apply_leave' %}" class="btn btn-primary">
-        <i class="fa-solid fa-plus me-1"></i> Submit Leave
+        <i class="fa-solid fa-plus me-1"></i>Submit Leave
       </a>
     </div>
   </div>
-
-  {% if leaves %}
-  <div class="card shadow-sm">
-    <div class="card-body p-0">
-      <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
-          <thead class="table-light">
-            <tr>
-              <th>Type</th>
-              <th>Start (IST)</th>
-              <th>End (IST)</th>
-              <th>Half Day</th>
-              <th>Status</th>
-              <th>Approver</th>
-              <th>Reason</th>
-              <th>Attachment</th>
-              <th>Applied</th>
-              <th>Updated</th>
-              <th class="text-end">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for lr in leaves %}
-            <tr>
-              <td class="fw-medium">{{ lr.leave_type.name }}</td>
-
-              <td>
-                {% timezone "Asia/Kolkata" %}
-                  {{ lr.start_at|date:"M j, Y" }}<br>
-                  <small class="text-muted">{{ lr.start_at|date:"g:i A" }}</small>
-                {% endtimezone %}
-              </td>
-
-              <td>
-                {% timezone "Asia/Kolkata" %}
-                  {{ lr.end_at|date:"M j, Y" }}<br>
-                  <small class="text-muted">{{ lr.end_at|date:"g:i A" }}</small>
-                {% endtimezone %}
-              </td>
-
-              <td>
-                {% if lr.is_half_day %}
-                  <span class="badge text-bg-info">Yes</span>
-                {% else %}
-                  <span class="badge text-bg-secondary">No</span>
-                {% endif %}
-              </td>
-
-              <td>
-                {% if lr.status == "PENDING" %}
-                  <span class="badge text-bg-warning"><i class="fa-regular fa-hourglass-half me-1"></i>Pending</span>
-                {% elif lr.status == "APPROVED" %}
-                  <span class="badge text-bg-success"><i class="fa-solid fa-check me-1"></i>Approved</span>
-                {% elif lr.status == "REJECTED" %}
-                  <span class="badge text-bg-danger"><i class="fa-solid fa-times me-1"></i>Rejected</span>
-                {% else %}
-                  <span class="badge text-bg-light">{{ lr.status }}</span>
-                {% endif %}
-              </td>
-
-              <td>
-                {% if lr.approver %}
-                  {{ lr.approver.get_full_name|default:lr.approver.username }}
-                  {% if lr.decided_at %}
-                  <br>
-                  <small class="text-muted">
-                    {% timezone "Asia/Kolkata" %}{{ lr.decided_at|date:"M j, Y g:i A" }}{% endtimezone %}
-                  </small>
-                  {% endif %}
-                  {% if lr.decision_comment %}
-                    <div class="small text-muted mt-1"><em>{{ lr.decision_comment }}</em></div>
-                  {% endif %}
-                {% else %}
-                  <span class="text-muted">—</span>
-                {% endif %}
-              </td>
-
-              <td style="max-width: 280px;">
-                <div class="text-truncate" title="{{ lr.reason|striptags }}">
-                  {{ lr.reason }}
-                </div>
-              </td>
-
-              <td>
-                {% if lr.attachment %}
-                  <a href="{{ lr.attachment.url }}" class="btn btn-sm btn-outline-secondary" target="_blank" rel="noopener">
-                    <i class="fa-solid fa-paperclip"></i> View
-                  </a>
-                {% else %}
-                  <span class="text-muted">—</span>
-                {% endif %}
-              </td>
-
-              <td>
-                {% timezone "Asia/Kolkata" %}{{ lr.applied_at|date:"M j, Y g:i A" }}{% endtimezone %}
-              </td>
-
-              <td>
-                {% timezone "Asia/Kolkata" %}{{ lr.updated_at|date:"M j, Y g:i A" }}{% endtimezone %}
-              </td>
-
-              <td class="text-end">
-                <div class="d-inline-flex gap-1">
-                  {% if lr.status == "PENDING" %}
-                    <form method="post" action="{% url 'leave:delete_leave' lr.id %}" onsubmit="return confirm('Delete this pending leave?');">
-                      {% csrf_token %}
-                      <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete">
-                        <i class="fas fa-trash"></i>
-                      </button>
-                    </form>
-                  {% endif %}
-                  {# Admin Edit button (per-row) #}
-                  {% include "leave/_admin_edit_button.html" with leave=lr next_url=request.get_full_path %}
-                </div>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-  {% else %}
-    <div class="card shadow-sm">
-      <div class="card-body py-5 text-center text-muted">
-        <p class="mb-3"><i class="fa-regular fa-folder-open fa-2x"></i></p>
-        <p class="mb-3">No leave applications yet.</p>
-        <a href="{% url 'leave:apply_leave' %}" class="btn btn-primary">
-          <i class="fa-solid fa-plus me-1"></i> Submit Leave
-        </a>
-      </div>
-    </div>
   {% endif %}
-</div>
+
 {% endblock %}

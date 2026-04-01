@@ -1,45 +1,31 @@
-# FILE: apps/leave/models.py
-# PURPOSE: Date-only leave (remove time-based leave restrictions)
-# UPDATED: 2026-03-06
-# CHANGE:  Replaced `import pytz` / `pytz.timezone("Asia/Kolkata")` with
-#          `from zoneinfo import ZoneInfo` / `ZoneInfo("Asia/Kolkata")`.
-#          No leave business logic changed.  All timezone behaviour identical.
-
+#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\leave\models.py
 from __future__ import annotations
 
 import hashlib
 import logging
 import os
 from datetime import date, datetime, time, timedelta
-from typing import Iterable, Optional, List, Tuple
-from zoneinfo import ZoneInfo          # ← replaces: import pytz
+from typing import Dict, Iterable, Optional, List, Tuple
+from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from django.db.models.signals import post_delete, post_save, pre_save
+from django.dispatch import receiver
 from django.utils import timezone
 from django.utils.text import slugify
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
-# Typing-only alias (avoids Pylance: "Variable not allowed in type expression")
 UserType = AbstractUser
+IST = ZoneInfo("Asia/Kolkata")
 
-# Single source of truth for all time localization (IST)
-IST = ZoneInfo("Asia/Kolkata")         # ← replaces: pytz.timezone("Asia/Kolkata")
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def leave_attachment_upload_to(instance: "LeaveRequest", filename: str) -> str:
-    """
-    MEDIA path: leave_attachments/<user>/<YYYY>/<MM>/<slugified-filename.ext>
-    """
     base, ext = os.path.splitext(filename or "")
     try:
         user_part = instance.employee.username or (
@@ -54,14 +40,12 @@ def leave_attachment_upload_to(instance: "LeaveRequest", filename: str) -> str:
 
 
 def now_ist() -> datetime:
-    """Return timezone-aware current time in IST."""
     return timezone.localtime(timezone.now(), IST)
 
 
 def _ist_date(dt: datetime) -> date:
-    """Convert any aware/naive dt to its IST calendar date."""
     if timezone.is_naive(dt):
-        dt = dt.replace(tzinfo=IST)   # ← replaces: timezone.make_aware(dt, IST) / IST.localize(dt)
+        dt = dt.replace(tzinfo=IST)
     return dt.astimezone(IST).date()
 
 
@@ -80,7 +64,7 @@ def _to_ist(dt: Optional[datetime]) -> Optional[datetime]:
     except Exception:
         if timezone.is_naive(dt):
             try:
-                return dt.replace(tzinfo=IST)   # ← replaces: dt.replace(tzinfo=IST) was already correct
+                return dt.replace(tzinfo=IST)
             except Exception:
                 return dt
         return dt
@@ -98,35 +82,29 @@ def _dedupe_emails_preserve_order(emails: List[str]) -> List[str]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# Admin-controlled routing (used across modules)
-# ---------------------------------------------------------------------------
-
 class ApproverMapping(models.Model):
-    """
-    Only Admin should edit this table.
-
-    Defines the employee -> (reporting_person, cc_person/default_cc_users) mapping
-    reused in Leave approvals, Sales approvals, and other workflows.
-    """
     employee = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="approver_mapping"
     )
     reporting_person = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="reports_for_approval",
-        null=True, blank=True
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="reports_for_approval",
+        null=True,
+        blank=True,
     )
-    # Legacy single CC (kept for backward compatibility)
     cc_person = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="cc_for_approval",
-        null=True, blank=True
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="cc_for_approval",
+        null=True,
+        blank=True,
     )
-    # NEW: Multiple default CC users per employee (admin-managed)
     default_cc_users = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
         blank=True,
         related_name="default_cc_for",
-        help_text="Multiple default CC recipients (admin-managed)."
+        help_text="Multiple default CC recipients (admin-managed).",
     )
     updated_at = models.DateTimeField(auto_now=True)
     notes = models.TextField(blank=True)
@@ -144,14 +122,8 @@ class ApproverMapping(models.Model):
             cc_count = 0
         return f"{self.employee} -> RP:{self.reporting_person} CC:{self.cc_person or '-'} (+{cc_count} more)"
 
-    # Backward-compatible resolver
     @staticmethod
     def resolve_for(user: UserType) -> Tuple[Optional[UserType], Optional[UserType]]:
-        """
-        Returns (reporting_person, single_cc_person_for_legacy_use)
-
-        Robust against missing M2M table: falls back to cc_person only.
-        """
         try:
             m = ApproverMapping.objects.select_related("reporting_person", "cc_person").get(employee=user)
         except ApproverMapping.DoesNotExist:
@@ -171,19 +143,14 @@ class ApproverMapping(models.Model):
 
         return m.reporting_person, first_cc
 
-    # New resolver with multiple CCs
     @staticmethod
     def resolve_multi_for(user: UserType) -> Tuple[Optional[UserType], List[UserType]]:
-        """
-        Returns (reporting_person, list_of_cc_users)
-
-        Robust against missing M2M table: returns [] on failure.
-        """
         try:
-            m = (ApproverMapping.objects
-                 .select_related("reporting_person", "cc_person")
-                 .prefetch_related("default_cc_users")
-                 .get(employee=user))
+            m = (
+                ApproverMapping.objects.select_related("reporting_person", "cc_person")
+                .prefetch_related("default_cc_users")
+                .get(employee=user)
+            )
         except ApproverMapping.DoesNotExist:
             return None, []
         except Exception:
@@ -206,32 +173,28 @@ class ApproverMapping(models.Model):
 
 
 class CCConfiguration(models.Model):
-    """
-    Admin-controlled CC options for leave applications.
-    Only users in this list can be selected as CC recipients.
-    """
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        help_text="User who can be selected as CC recipient"
+        help_text="User who can be selected as CC recipient",
     )
     is_active = models.BooleanField(
         default=True,
-        help_text="Whether this user is available for CC selection"
+        help_text="Whether this user is available for CC selection",
     )
     display_name = models.CharField(
         max_length=200,
         blank=True,
-        help_text="Optional display name override"
+        help_text="Optional display name override",
     )
     department = models.CharField(
         max_length=100,
         blank=True,
-        help_text="Department or role for grouping"
+        help_text="Department or role for grouping",
     )
     sort_order = models.PositiveIntegerField(
         default=0,
-        help_text="Display order (lower numbers first)"
+        help_text="Display order (lower numbers first)",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -254,10 +217,6 @@ class CCConfiguration(models.Model):
         return self.user.get_full_name() or self.user.username
 
 
-# ---------------------------------------------------------------------------
-# Core models
-# ---------------------------------------------------------------------------
-
 class LeaveType(models.Model):
     name = models.CharField(max_length=50, unique=True)
     default_days = models.PositiveIntegerField(default=0)
@@ -275,19 +234,53 @@ class LeaveStatus(models.TextChoices):
     REJECTED = "REJECTED", "Rejected"
 
 
+class EmployeeLeaveBalance(models.Model):
+    employee = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="leave_balances",
+    )
+    leave_year_start = models.DateField()
+    leave_year_end = models.DateField()
+    total_paid_leaves = models.DecimalField(max_digits=5, decimal_places=1, default=24)
+    paid_leaves_taken = models.DecimalField(max_digits=6, decimal_places=1, default=0)
+    unpaid_leaves = models.DecimalField(max_digits=6, decimal_places=1, default=0)
+    remaining_paid_leaves = models.DecimalField(max_digits=6, decimal_places=1, default=24)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-leave_year_start", "employee__first_name", "employee__last_name", "employee__username"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["employee", "leave_year_start", "leave_year_end"],
+                name="uniq_employee_leave_balance_year",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["employee", "leave_year_start"]),
+            models.Index(fields=["leave_year_start", "leave_year_end"]),
+        ]
+        verbose_name = "Employee Leave Balance"
+        verbose_name_plural = "Employee Leave Balances"
+
+    def __str__(self) -> str:
+        employee_label = getattr(self.employee, "get_full_name", lambda: "")() or getattr(self.employee, "username", "")
+        return (
+            f"{employee_label} | "
+            f"{self.leave_year_start:%Y-%m-%d} → {self.leave_year_end:%Y-%m-%d} | "
+            f"Paid Used: {self.paid_leaves_taken} | Remaining: {self.remaining_paid_leaves} | Unpaid: {self.unpaid_leaves}"
+        )
+
+    @property
+    def leave_year_display(self) -> str:
+        return f"{self.leave_year_start.strftime('%b %Y')} – {self.leave_year_end.strftime('%b %Y')}"
+
+
 class LeaveRequestQuerySet(models.QuerySet):
     def active_for_blocking(self) -> "LeaveRequestQuerySet":
-        """
-        Leaves that should block task assignment even before approval.
-        Per workflow, both PENDING and APPROVED block; REJECTED does not.
-        """
         return self.filter(status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED])
 
     def covering_ist_date(self, d: date) -> "LeaveRequestQuerySet":
-        """
-        Filter leaves which cover the IST calendar date `d`.
-        Uses start_date/end_date snapshots kept in sync by the model.
-        """
         return self.filter(start_date__lte=d, end_date__gte=d)
 
     def active_today(self) -> "LeaveRequestQuerySet":
@@ -304,30 +297,29 @@ class LeaveRequest(models.Model):
 
     reporting_person = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        null=True, blank=True,
+        null=True,
+        blank=True,
         on_delete=models.SET_NULL,
         related_name="leave_requests_to_approve",
         help_text="Reporting Person (manager) who must approve.",
     )
 
-    # Legacy single CC snapshot (backward compatibility)
     cc_person = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        null=True, blank=True,
+        null=True,
+        blank=True,
         on_delete=models.SET_NULL,
         related_name="leave_requests_cc",
         help_text="HR (or other) observer.",
     )
 
-    # User-selected extra CC recipients
     cc_users = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
         related_name="leave_requests_cc_user",
         blank=True,
-        help_text="Additional CC recipients selected by the employee from admin-configured options."
+        help_text="Additional CC recipients selected by the employee from admin-configured options.",
     )
 
-    # Leave type required by form, nullable here for legacy data flexibility
     leave_type = models.ForeignKey(
         LeaveType,
         on_delete=models.PROTECT,
@@ -336,17 +328,20 @@ class LeaveRequest(models.Model):
         blank=True,
     )
 
-    # Period (tz-aware)
     start_at = models.DateTimeField()
     end_at = models.DateTimeField()
 
-    is_half_day = models.BooleanField(default=False)  # retained for legacy rows
+    is_half_day = models.BooleanField(default=False)
     reason = models.TextField(blank=True)
     attachment = models.FileField(upload_to=leave_attachment_upload_to, null=True, blank=True)
 
     status = models.CharField(max_length=16, choices=LeaveStatus.choices, default=LeaveStatus.PENDING)
     approver = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="approved_leaves"
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_leaves",
     )
     decided_at = models.DateTimeField(null=True, blank=True)
     decision_comment = models.TextField(blank=True)
@@ -362,7 +357,6 @@ class LeaveRequest(models.Model):
     applied_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    # Date-only snapshots (IST)
     start_date = models.DateField(null=True, blank=True, editable=False)
     end_date = models.DateField(null=True, blank=True, editable=False)
 
@@ -411,10 +405,6 @@ class LeaveRequest(models.Model):
         return self.includes_ist_date(today_ist)
 
     def ist_dates(self) -> List[date]:
-        """
-        Inclusive date span in IST.
-        end_at is treated as inclusive at the date-level by subtracting 1 microsecond.
-        """
         if not self.start_at or not self.end_at:
             return []
         s = _ist_date(self.start_at)
@@ -450,6 +440,7 @@ class LeaveRequest(models.Model):
         designation = ""
         try:
             from apps.users.models import Profile
+
             prof = (
                 Profile.objects.select_related("user")
                 .only("designation", "user_id")
@@ -462,7 +453,6 @@ class LeaveRequest(models.Model):
             pass
         self.employee_designation = designation
 
-        # Snapshot manager + legacy single cc
         rp, cc_single = self.resolve_routing_for(user)
         if rp:
             self.reporting_person = rp
@@ -470,9 +460,6 @@ class LeaveRequest(models.Model):
             self.cc_person = cc_single
 
     def _is_half_window_by_times(self) -> bool:
-        """
-        Legacy inference only; not used to enforce anything.
-        """
         try:
             same_date = _ist_date(self.start_at) == _ist_date(self.end_at)
             short_enough = (self.end_at - self.start_at) <= timedelta(hours=6)
@@ -481,15 +468,9 @@ class LeaveRequest(models.Model):
             return False
 
     def _validate_apply_rules(self) -> None:
-        """
-        NO-OP by design: date-only leave, no time gates.
-        """
         return
 
     def _validate_decision_cutoff(self, new_status: str) -> None:
-        """
-        NO-OP: managers can approve/reject anytime.
-        """
         return
 
     def _recompute_blocked_days(self) -> None:
@@ -497,7 +478,6 @@ class LeaveRequest(models.Model):
         if not days:
             self.blocked_days = 0.0
             return
-        # Keep 0.5 only for legacy half-day rows (single-day)
         if (self.is_half_day or self._is_half_window_by_times()) and len(days) == 1:
             self.blocked_days = 0.5
         else:
@@ -508,15 +488,10 @@ class LeaveRequest(models.Model):
         self.end_date = _ist_date(self.end_at - timedelta(microseconds=1)) if self.end_at else None
 
     def _validate_no_overlap(self) -> None:
-        """
-        Disallow overlaps against existing PENDING/APPROVED leaves for the same employee
-        using IST date snapshots.
-        """
         s_date = _ist_date(self.start_at)
         e_date = _ist_date(self.end_at - timedelta(microseconds=1))
         conflict = (
-            LeaveRequest.objects
-            .filter(employee=self.employee, status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED])
+            LeaveRequest.objects.filter(employee=self.employee, status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED])
             .exclude(pk=self.pk)
             .filter(start_date__lte=e_date, end_date__gte=s_date)
             .exists()
@@ -578,6 +553,7 @@ class LeaveRequest(models.Model):
             self.decision_comment = comment or self.decision_comment
             self.save(update_fields=["status", "approver", "decided_at", "decision_comment", "updated_at"])
             LeaveDecisionAudit.log(self, DecisionAction.APPROVED, decided_by=by_user)
+
         _safe_send_decision_email(self)
 
     def reject(self, by_user: Optional[UserType], comment: str = "") -> None:
@@ -594,25 +570,16 @@ class LeaveRequest(models.Model):
 
             self.save(update_fields=["status", "approver", "decided_at", "decision_comment", "updated_at"])
             LeaveDecisionAudit.log(self, DecisionAction.REJECTED, decided_by=by_user)
+
         _safe_send_decision_email(self)
 
-    # -----------------------------
-    # BLOCKING (TIME-AWARE, IST)
-    # -----------------------------
     @staticmethod
     def is_user_blocked_at(user: UserType, when_dt: datetime) -> bool:
-        """
-        TIME-AWARE check (IST).
-
-        - Blocks if any leave exists with status in {PENDING, APPROVED}
-        - HALF DAY (legacy): blocks only [start_at, end_at) in IST
-        - FULL DAY: blocks entire IST calendar day (00:00 -> next 00:00)
-        """
         if not getattr(user, "id", None) or when_dt is None:
             return False
 
         if timezone.is_naive(when_dt):
-            when_ist = when_dt.replace(tzinfo=IST)   # ← replaces: when_dt.replace(tzinfo=IST) already correct
+            when_ist = when_dt.replace(tzinfo=IST)
         else:
             try:
                 when_ist = when_dt.astimezone(IST)
@@ -621,7 +588,6 @@ class LeaveRequest(models.Model):
 
         try:
             target_day = when_ist.date()
-            # Use replace(tzinfo=IST) instead of IST.localize() — zoneinfo pattern
             day_start = datetime.combine(target_day, time.min).replace(tzinfo=IST)
             next_day_start = datetime.combine(target_day + timedelta(days=1), time.min).replace(tzinfo=IST)
 
@@ -653,12 +619,6 @@ class LeaveRequest(models.Model):
 
     @staticmethod
     def is_user_blocked_on(user: UserType, d: date) -> bool:
-        """
-        DATE-LEVEL API (legacy-safe):
-        - Full-day leaves block the day.
-        - Half-day leaves block only if they overlap the 10:00 IST anchor.
-        """
-        # Use replace(tzinfo=IST) instead of IST.localize() — zoneinfo pattern
         anchor = datetime.combine(d, time(10, 0)).replace(tzinfo=IST)
         return LeaveRequest.is_user_blocked_at(user, anchor)
 
@@ -666,10 +626,6 @@ class LeaveRequest(models.Model):
     def get_user_active_leaves(user: UserType) -> "LeaveRequestQuerySet":
         return LeaveRequest.objects.filter(employee=user).active_today()
 
-
-# ---------------------------------------------------------------------------
-# Handover model (temporary reassignment during leave)
-# ---------------------------------------------------------------------------
 
 class HandoverTaskType(models.TextChoices):
     CHECKLIST = "checklist", "Checklist"
@@ -684,7 +640,7 @@ class LeaveHandoverQuerySet(models.QuerySet):
             is_active=True,
             leave_request__status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED],
             effective_start_date__lte=today,
-            effective_end_date__gte=today
+            effective_end_date__gte=today,
         )
 
     def for_assignee(self, user: UserType) -> "LeaveHandoverQuerySet":
@@ -767,12 +723,15 @@ class LeaveHandover(models.Model):
         try:
             if self.task_type == HandoverTaskType.CHECKLIST:
                 from apps.tasks.models import Checklist
+
                 return Checklist.objects.get(id=self.original_task_id)
             if self.task_type == HandoverTaskType.DELEGATION:
                 from apps.tasks.models import Delegation
+
                 return Delegation.objects.get(id=self.original_task_id)
             if self.task_type == HandoverTaskType.HELP_TICKET:
                 from apps.tasks.models import HelpTicket
+
                 return HelpTicket.objects.get(id=self.original_task_id)
         except Exception:
             pass
@@ -786,6 +745,7 @@ class LeaveHandover(models.Model):
 
     def get_task_url(self):
         from django.urls import reverse
+
         try:
             if self.task_type == HandoverTaskType.CHECKLIST:
                 return reverse("tasks:edit_checklist", args=[self.original_task_id])
@@ -820,13 +780,7 @@ class LeaveHandover(models.Model):
         return False
 
 
-# ---------------------------------------------------------------------------
-# Task Dashboard Integration
-# ---------------------------------------------------------------------------
-
 class HandoverTaskMixin:
-    """Mixin to add handover functionality to task models"""
-
     @classmethod
     def get_tasks_for_user(cls, user: UserType):
         original_tasks = cls.objects.filter(assign_to=user)
@@ -850,7 +804,7 @@ class HandoverTaskMixin:
             is_active=True,
             effective_start_date__lte=today,
             effective_end_date__gte=today,
-            leave_request__status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED]
+            leave_request__status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED],
         ).first()
         if handover:
             return handover.new_assignee
@@ -864,7 +818,7 @@ class HandoverTaskMixin:
             is_active=True,
             effective_start_date__lte=today,
             effective_end_date__gte=today,
-            leave_request__status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED]
+            leave_request__status__in=[LeaveStatus.PENDING, LeaveStatus.APPROVED],
         ).select_related("leave_request", "original_assignee", "new_assignee").first()
 
         if handover:
@@ -891,14 +845,7 @@ class HandoverTaskMixin:
         return "unknown"
 
 
-# ---------------------------------------------------------------------------
-# Delegation Reminder System
-# ---------------------------------------------------------------------------
-
 class DelegationReminder(models.Model):
-    """
-    Tracks automatic reminders for delegated tasks until completion.
-    """
     leave_handover = models.ForeignKey(
         LeaveHandover, on_delete=models.CASCADE, related_name="reminders"
     )
@@ -952,10 +899,6 @@ class DelegationReminder(models.Model):
         self.save(update_fields=["is_active", "updated_at"])
 
 
-# ---------------------------------------------------------------------------
-# Audits & tokens
-# ---------------------------------------------------------------------------
-
 class DecisionAction(models.TextChoices):
     APPLIED = "APPLIED", "Applied"
     APPROVED = "APPROVED", "Approved"
@@ -1004,10 +947,6 @@ class LeaveDecisionAudit(models.Model):
         return cls.objects.create(leave=leave, action=action, decided_by=decided_by, extra=extra or {})
 
 
-# ---------------------------------------------------------------------------
-# Utility Functions for Dashboard Integration
-# ---------------------------------------------------------------------------
-
 def get_handed_over_tasks_for_user(user: UserType) -> dict:
     handovers = LeaveHandover.objects.currently_assigned_to(user).select_related(
         "leave_request", "original_assignee"
@@ -1031,17 +970,7 @@ def get_handed_over_tasks_for_user(user: UserType) -> dict:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Cleanup utility (for scheduler/management command)
-# ---------------------------------------------------------------------------
-
 def deactivate_expired_handovers() -> int:
-    """
-    Deactivate all expired LeaveHandover rows and stop their DelegationReminder rows.
-    A handover is considered expired when:
-      - effective_end_date is in the past (local date), or
-      - the linked leave is not in PENDING/APPROVED.
-    """
     try:
         count = LeaveHandover.objects.deactivate_expired()
         logger.info("Expired handovers deactivated: %s", count)
@@ -1050,10 +979,6 @@ def deactivate_expired_handovers() -> int:
         logger.exception("Failed during deactivate_expired_handovers()")
         return 0
 
-
-# ---------------------------------------------------------------------------
-# Signals (emails + audits)
-# ---------------------------------------------------------------------------
 
 def _collect_admin_cc_emails(employee: UserType) -> List[str]:
     emails: List[str] = []
@@ -1084,8 +1009,6 @@ def _safe_send_request_email(leave: LeaveRequest) -> None:
         all_cc = _dedupe_emails_preserve_order(admin_cc_list + extra_cc_emails)
 
         send_leave_request_email(leave, manager_email=manager_email, cc_list=all_cc)
-
-        # audit marker: kind="request"
         LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT, kind="request")
     except Exception:
         logger.exception("Failed to send leave request email")
@@ -1094,6 +1017,7 @@ def _safe_send_request_email(leave: LeaveRequest) -> None:
 def _safe_send_handover_emails(leave: LeaveRequest) -> None:
     try:
         from apps.leave.services.notifications import send_handover_email
+
         handovers = LeaveHandover.objects.filter(leave_request=leave).select_related("new_assignee")
 
         assignee_handovers = {}
@@ -1122,13 +1046,102 @@ def _safe_send_handover_emails(leave: LeaveRequest) -> None:
 def _safe_send_decision_email(leave: LeaveRequest) -> None:
     try:
         from apps.leave.services.notifications import send_leave_decision_email
+
         send_leave_decision_email(leave)
     except Exception:
         logger.exception("Failed to send leave decision email")
 
 
-from django.db.models.signals import post_save
-from django.dispatch import receiver
+def _balance_specs_for_leave_instance(leave: LeaveRequest) -> List[Tuple[int, date, date]]:
+    if (
+        not getattr(leave, "employee_id", None)
+        or getattr(leave, "status", None) != LeaveStatus.APPROVED
+        or not getattr(leave, "start_date", None)
+        or not getattr(leave, "end_date", None)
+    ):
+        return []
+    return [(leave.employee_id, leave.start_date, leave.end_date)]
+
+
+def _balance_specs_for_previous_state(instance: LeaveRequest) -> List[Tuple[int, date, date]]:
+    employee_id = getattr(instance, "_balance_prev_employee_id", None)
+    status = getattr(instance, "_balance_prev_status", None)
+    start_date = getattr(instance, "_balance_prev_start_date", None)
+    end_date = getattr(instance, "_balance_prev_end_date", None)
+    if not employee_id or status != LeaveStatus.APPROVED or not start_date or not end_date:
+        return []
+    return [(employee_id, start_date, end_date)]
+
+
+def _dedupe_balance_specs(specs: List[Tuple[int, date, date]]) -> List[Tuple[int, date, date]]:
+    seen = set()
+    out: List[Tuple[int, date, date]] = []
+    for employee_id, start_date, end_date in specs:
+        key = (employee_id, start_date, end_date)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((employee_id, start_date, end_date))
+    return out
+
+
+def _run_leave_balance_sync(specs: List[Tuple[int, date, date]]) -> None:
+    if not specs:
+        return
+
+    from .utils import sync_employee_leave_balance_for_range
+
+    grouped: Dict[int, Tuple[date, date]] = {}
+    user_ids = set()
+
+    for employee_id, start_date, end_date in specs:
+        user_ids.add(employee_id)
+        if employee_id not in grouped:
+            grouped[employee_id] = (start_date, end_date)
+            continue
+        current_start, current_end = grouped[employee_id]
+        grouped[employee_id] = (min(current_start, start_date), max(current_end, end_date))
+
+    users = {
+        user.id: user
+        for user in User.objects.filter(id__in=list(user_ids))
+    }
+
+    for employee_id, (range_start, range_end) in grouped.items():
+        employee = users.get(employee_id)
+        if not employee:
+            continue
+        try:
+            sync_employee_leave_balance_for_range(employee=employee, range_start=range_start, range_end=range_end)
+        except Exception:
+            logger.exception(
+                "Failed to sync leave balance for employee_id=%s range=%s..%s",
+                employee_id,
+                range_start,
+                range_end,
+            )
+
+
+@receiver(pre_save, sender=LeaveRequest)
+def _capture_previous_leave_state(sender, instance: LeaveRequest, **kwargs) -> None:
+    if not instance.pk:
+        return
+    try:
+        previous = (
+            LeaveRequest.objects.only("employee_id", "status", "start_date", "end_date")
+            .get(pk=instance.pk)
+        )
+        instance._balance_prev_employee_id = previous.employee_id
+        instance._balance_prev_status = previous.status
+        instance._balance_prev_start_date = previous.start_date
+        instance._balance_prev_end_date = previous.end_date
+    except LeaveRequest.DoesNotExist:
+        instance._balance_prev_employee_id = None
+        instance._balance_prev_status = None
+        instance._balance_prev_start_date = None
+        instance._balance_prev_end_date = None
+    except Exception:
+        logger.exception("Failed to capture previous leave state for leave %s", getattr(instance, "pk", None))
 
 
 @receiver(post_save, sender=LeaveRequest)
@@ -1152,6 +1165,38 @@ def _on_leave_created(sender, instance: LeaveRequest, created: bool, **kwargs) -
                 _safe_send_handover_emails(instance)
         except Exception:
             logger.exception("Failed to send handover emails for leave %s", getattr(instance, "id", None))
+
+    try:
+        transaction.on_commit(_after_commit)
+    except Exception:
+        _after_commit()
+
+
+@receiver(post_save, sender=LeaveRequest)
+def _sync_leave_balances_after_save(sender, instance: LeaveRequest, created: bool, **kwargs) -> None:
+    specs = _dedupe_balance_specs(
+        _balance_specs_for_previous_state(instance) + _balance_specs_for_leave_instance(instance)
+    )
+    if not specs:
+        return
+
+    def _after_commit():
+        _run_leave_balance_sync(specs)
+
+    try:
+        transaction.on_commit(_after_commit)
+    except Exception:
+        _after_commit()
+
+
+@receiver(post_delete, sender=LeaveRequest)
+def _sync_leave_balances_after_delete(sender, instance: LeaveRequest, **kwargs) -> None:
+    specs = _dedupe_balance_specs(_balance_specs_for_leave_instance(instance))
+    if not specs:
+        return
+
+    def _after_commit():
+        _run_leave_balance_sync(specs)
 
     try:
         transaction.on_commit(_after_commit)

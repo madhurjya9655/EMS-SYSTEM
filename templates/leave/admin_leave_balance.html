@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Leave Balance — All Employees{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-0">
+
+  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+    <h4 class="mb-0">
+      <i class="fa-solid fa-users me-2 text-primary"></i>Leave Balance — All Employees
+    </h4>
+
+    <!-- Year selector -->
+    <form method="get" class="d-flex align-items-center gap-2">
+      <label class="text-muted small mb-0" for="yearSelect">Leave Year:</label>
+      <select name="year" id="yearSelect"
+              class="form-select form-select-sm"
+              style="width: auto;"
+              onchange="this.form.submit()">
+        {% for yr in year_options %}
+          <option value="{{ yr }}" {% if yr == selected_year %}selected{% endif %}>
+            Apr {{ yr }} – Mar {{ yr|add:1 }}
+          </option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
+
+  <div class="card shadow-sm border-0">
+    <div class="card-header bg-light d-flex align-items-center justify-content-between py-3">
+      <span>
+        <i class="fa-solid fa-table me-2"></i>{{ leave_year_display }}
+      </span>
+      <span class="text-muted small">{{ rows|length }} employee(s)</span>
+    </div>
+
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>#</th>
+              <th>Employee</th>
+              <th>Email</th>
+              <th class="text-center">Total Paid</th>
+              <th class="text-center">Used (Paid)</th>
+              <th class="text-center">Remaining</th>
+              <th class="text-center">Unpaid</th>
+              <th>Leave Year</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+            <tr>
+              <td class="text-muted small">{{ forloop.counter }}</td>
+              <td class="fw-medium">
+                {{ row.employee.get_full_name|default:row.employee.username }}
+              </td>
+              <td class="text-muted small">{{ row.employee.email|default:"—" }}</td>
+
+              <!-- FIXED: was row.total → now row.total_paid_leaves -->
+              <td class="text-center">
+                <span class="badge text-bg-secondary">{{ row.total_paid_leaves }}</span>
+              </td>
+
+              <!-- FIXED: was row.paid_taken → now row.paid_leaves_taken -->
+              <td class="text-center">
+                <span class="badge {% if row.paid_leaves_taken >= row.total_paid_leaves %}text-bg-danger{% elif row.paid_leaves_taken > 0 %}text-bg-warning{% else %}text-bg-light text-dark border{% endif %}">
+                  {{ row.paid_leaves_taken }}
+                </span>
+              </td>
+
+              <!-- FIXED: was row.remaining → now row.remaining_paid_leaves -->
+              <td class="text-center">
+                <span class="badge {% if row.remaining_paid_leaves == 0 %}text-bg-danger{% elif row.remaining_paid_leaves <= 5 %}text-bg-warning{% else %}text-bg-success{% endif %}">
+                  {{ row.remaining_paid_leaves }}
+                </span>
+              </td>
+
+              <!-- FIXED: was row.unpaid → now row.unpaid_leaves -->
+              <td class="text-center">
+                {% if row.unpaid_leaves > 0 %}
+                  <span class="badge text-bg-danger">{{ row.unpaid_leaves }}</span>
+                {% else %}
+                  <span class="text-muted small">0</span>
+                {% endif %}
+              </td>
+
+              <td class="text-muted small">{{ row.leave_year_display }}</td>
+            </tr>
+            {% empty %}
+            <tr>
+              <td colspan="8" class="text-center text-muted py-5">
+                <i class="fa-regular fa-folder-open fa-2x mb-2 d-block"></i>
+                No employees found.
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card-footer bg-white text-muted small">
+      <i class="fa-solid fa-circle-info me-1"></i>
+      Balances are recalculated from approved leave records every time this page loads.
+      Cross-year leaves (e.g. Mar 30 – Apr 2) are split correctly across both leave years.
+    </div>
+  </div>
+
+</div>
+{% endblock %}

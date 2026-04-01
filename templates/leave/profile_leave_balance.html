@@ -1,0 +1,62 @@
+{% comment %}
+  Reusable partial — include with:
+    {% include "leave/profile_leave_balance.html" with annual_leave_balance=annual_leave_balance %}
+  Requires: annual_leave_balance — a LeaveBalanceSummary dataclass instance
+{% endcomment %}
+{% if annual_leave_balance %}
+<div class="card shadow-sm mb-4 border-0">
+  <div class="card-header bg-white py-3 d-flex align-items-center justify-content-between">
+    <h5 class="mb-0">
+      <i class="fa-solid fa-calendar-check me-2 text-primary"></i>Leave Balance
+    </h5>
+    <span class="text-muted small">{{ annual_leave_balance.leave_year_label }}</span>
+  </div>
+  <div class="card-body">
+    <div class="row g-3">
+
+      <div class="col-6 col-md-3">
+        <div class="border rounded-3 p-3 h-100 text-center">
+          <div class="text-muted small mb-1">Total Paid Leaves</div>
+          <div class="fs-3 fw-bold text-dark">{{ annual_leave_balance.total_paid_leaves }}</div>
+        </div>
+      </div>
+
+      <div class="col-6 col-md-3">
+        <div class="border rounded-3 p-3 h-100 text-center">
+          <div class="text-muted small mb-1">Used Paid Leaves</div>
+          <div class="fs-3 fw-bold {% if annual_leave_balance.paid_leaves_taken > 0 %}text-warning{% else %}text-dark{% endif %}">
+            {{ annual_leave_balance.paid_leaves_taken }}
+          </div>
+        </div>
+      </div>
+
+      <div class="col-6 col-md-3">
+        <div class="border rounded-3 p-3 h-100 text-center">
+          <div class="text-muted small mb-1">Remaining Paid Leaves</div>
+          <div class="fs-3 fw-bold {% if annual_leave_balance.remaining_paid_leaves == 0 %}text-danger{% elif annual_leave_balance.remaining_paid_leaves <= 5 %}text-warning{% else %}text-success{% endif %}">
+            {{ annual_leave_balance.remaining_paid_leaves }}
+          </div>
+        </div>
+      </div>
+
+      <div class="col-6 col-md-3">
+        <div class="border rounded-3 p-3 h-100 text-center">
+          <div class="text-muted small mb-1">Unpaid Leaves</div>
+          <div class="fs-3 fw-bold {% if annual_leave_balance.unpaid_leaves > 0 %}text-danger{% else %}text-dark{% endif %}">
+            {{ annual_leave_balance.unpaid_leaves }}
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    {% if annual_leave_balance.unpaid_leaves > 0 %}
+    <div class="alert alert-warning d-flex align-items-center gap-2 mt-3 mb-0 py-2 small">
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      You have {{ annual_leave_balance.unpaid_leaves }} unpaid leave(s) this year — your approved leaves exceeded the 24-day paid quota.
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+{% endif %}

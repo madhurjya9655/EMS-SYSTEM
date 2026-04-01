@@ -1,0 +1,244 @@
+{% extends 'base.html' %}
+{% load static user_filters %}
+
+{% block title %}Dashboard — BOS Lakshya{% endblock %}
+{% block navbar_title %}Dashboard{% endblock %}
+{% block breadcrumb %}Dashboard{% endblock %}
+{% block page_title %}{% endblock %}
+{% block page_header %}{% endblock %}
+
+{% block content %}
+<div class="dash-wrap">
+
+  <!-- Greeting (like reference: "Good Morning, Mallik!") -->
+  <div class="dash-greeting">
+    <h1 id="dashGreeting">{{ greeting|default:"Good Morning" }}, {{ user.get_full_name|default:user.username }}!</h1>
+    <p id="dashDate">See what is happening across your workspace today.</p>
+  </div>
+
+  <!-- 3-Column Card Grid (matches reference image exactly) -->
+  <div class="dash-grid">
+
+    <!-- Card 1: Dashboard — PRIMARY (teal like reference) -->
+    <a href="{% url 'dashboard:home' %}" class="dash-card primary">
+      <div class="dc-icon">
+        <i class="fa-solid fa-table-cells-large"></i>
+      </div>
+      <div class="dc-body">
+        <h3 class="dc-title">Dashboard</h3>
+        <p class="dc-desc">See what is happening at your company!</p>
+      </div>
+      <div class="dc-footer">
+        <span class="dc-arrow"><i class="fa-solid fa-arrow-right"></i></span>
+      </div>
+      <div class="dc-deco" style="background:rgba(255,255,255,.18);opacity:1"></div>
+    </a>
+
+    {% if user|has_permission:"list_users" or user|has_group:"HR" or user.is_superuser %}
+    <!-- Card 2: Employees -->
+    <a href="{% url 'recruitment:employee_list' %}" class="dash-card">
+      <div class="dc-icon amber"><i class="fa-solid fa-users"></i></div>
+      <div class="dc-body">
+        <h3 class="dc-title">Employees</h3>
+        <p class="dc-desc">Manage employee records and HR operations across the team.</p>
+      </div>
+      <div class="dc-footer">
+        <span class="dc-arrow"><i class="fa-solid fa-arrow-right"></i></span>
+      </div>
+      <div class="dc-deco amber"></div>
+    </a>
+    {% endif %}
+
+    {% if user|has_any_permission:"list_users,add_user" or user.is_superuser %}
+    <!-- Card 3: Users -->
+    <a href="{% url 'users:list_users' %}" class="dash-card">
+      <div class="dc-icon pink"><i class="fa-solid fa-users-gear"></i></div>
+      <div class="dc-body">
+        <h3 class="dc-title">Users</h3>
+        <p class="dc-desc">Manage users, view user reports across workspaces.</p>
+      </div>
+      <div class="dc-footer">
+        {% if total_users %}<span class="dc-stat">{{ total_users }} users</span>{% endif %}
+        <span class="dc-arrow"><i class="fa-solid fa-arrow-right"></i></span>
+      </div>
+      <div class="dc-deco pink"></div>
+    </a>
+    {% endif %}
+
+    {% if user|has_any_permission:"leave_list,leave_apply,leave_pending_manager" %}
+    <!-- Card 4: Leave -->
+    <a href="{% url 'leave:dashboard' %}" class="dash-card">
+      <div class="dc-icon violet"><i class="fa-regular fa-calendar-check"></i></div>
+      <div class="dc-body">
+        <h3 class="dc-title">Leave</h3>
+        <p class="dc-desc">Track leave balance, requests and approval status.</p>
+      </div>
+      <div class="dc-footer">
+        {% if leave_balance %}<span class="dc-stat">{{ leave_balance }} days</span>{% endif %}
+        <span class="dc-arrow"><i class="fa-solid fa-arrow-right"></i></span>
+      </div>
+      <div class="dc-deco violet"></div>
+    </a>
+    {% endif %}
+
+    {% if user|has_any_permission:"petty_cash_list,petty_cash_apply,reimbursement_apply,reimbursement_list" %}
+    <!-- Card 5: Reimbursement -->
+    <a href="{% url 'reimbursement:my_reimbursements' %}" class="dash-card">
+      <div class="dc-icon blue"><i class="fa-solid fa-file-invoice-dollar"></i></div>
+      <div class="dc-body">
+        <h3 class="dc-title">Reimbursement</h3>
+        <p class="dc-desc">Manage expenses, reimbursements and billing records.</p>
+      </div>
+      <div class="dc-footer">
+        {% if reimbursement_count %}<span class="dc-stat">{{ reimbursement_count }} requests</span>{% endif %}
+        <span class="dc-arrow"><i class="fa-solid fa-arrow-right"></i></span>
+      </div>
+      <div class="dc-deco"></div>
+    </a>
+    {% endif %}
+
+    {% if user|has_any_permission:"kam_dashboard,kam_plan,kam_manager" or user.is_superuser %}
+    <!-- Card 6: Sales -->
+    <a href="{% url 'kam:dashboard' %}" class="dash-card">
+      <div class="dc-icon orange"><i class="fa-solid fa-bullhorn"></i></div>
+      <div class="dc-body">
+        <h3 class="dc-title">Sales</h3>
+        <p class="dc-desc">Track targets, visits, customer movement and collections.</p>
+      </div>
+      <div class="dc-footer">
+        <span class="dc-arrow"><i class="fa-solid fa-arrow-right"></i></span>
+      </div>
+      <div class="dc-deco orange"></div>
+    </a>
+    {% endif %}
+
+    {% if user|has_any_permission:"add_checklist,list_checklist,add_delegation,list_delegation,add_ticket,list_all_tickets,assigned_to_me,assigned_by_me" %}
+    <!-- Card 7: Tasks -->
+    <a href="{% url 'tasks:list_checklist' %}" class="dash-card">
+      <div class="dc-icon teal"><i class="fa-solid fa-list-check"></i></div>
+      <div class="dc-body">
+        <h3 class="dc-title">Tasks</h3>
+        <p class="dc-desc">Checklists, delegations and help tickets management.</p>
+      </div>
+      <div class="dc-footer">
+        {% if pending_tasks %}<span class="dc-stat">{{ pending_tasks }} pending</span>{% endif %}
+        <span class="dc-arrow"><i class="fa-solid fa-arrow-right"></i></span>
+      </div>
+      <div class="dc-deco teal"></div>
+    </a>
+    {% endif %}
+
+    {% if user|has_any_permission:"petty_cash_list,petty_cash_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
+    <!-- Card 8: Petty Cash -->
+    <a href="{% url 'petty_cash:list_requests' %}" class="dash-card">
+      <div class="dc-icon green"><i class="fa-solid fa-money-check-dollar"></i></div>
+      <div class="dc-body">
+        <h3 class="dc-title">Petty Cash</h3>
+        <p class="dc-desc">Apply and manage petty cash requests for your team.</p>
+      </div>
+      <div class="dc-footer">
+        <span class="dc-arrow"><i class="fa-solid fa-arrow-right"></i></span>
+      </div>
+      <div class="dc-deco green"></div>
+    </a>
+    {% endif %}
+
+    {% if user|has_any_permission:"doer_tasks,weekly_mis_score,performance_score" or user.is_superuser or user|has_group:"Admin" or user|has_group:"Manager" %}
+    <!-- Card 9: Reports -->
+    <a href="{% url 'reports:doer_tasks' %}" class="dash-card">
+      <div class="dc-icon cyan"><i class="fa-solid fa-chart-pie"></i></div>
+      <div class="dc-body">
+        <h3 class="dc-title">Reports</h3>
+        <p class="dc-desc">Performance scores, MIS pulse and recurring task reports.</p>
+      </div>
+      <div class="dc-footer">
+        <span class="dc-arrow"><i class="fa-solid fa-arrow-right"></i></span>
+      </div>
+      <div class="dc-deco cyan"></div>
+    </a>
+    {% endif %}
+
+  </div><!-- /dash-grid -->
+
+  <!-- Recent Tasks table (only if data exists) -->
+  {% if recent_tasks %}
+  <div style="margin-top:36px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <h2 style="font-family:var(--font-display);font-size:18px;font-weight:700;color:var(--text);margin:0">Recent Tasks</h2>
+      <a href="{% url 'tasks:list_checklist' %}" style="font-size:13px;font-weight:600;color:var(--primary);display:flex;align-items:center;gap:5px">
+        View all <i class="fa-solid fa-arrow-right"></i>
+      </a>
+    </div>
+    <div class="dt-card">
+      <div class="data-table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Task</th>
+              <th class="col-hide-xs">Assigned To</th>
+              <th>Due Date</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for task in recent_tasks %}
+            <tr>
+              <td>
+                <a href="{% url 'tasks:list_checklist' %}" class="fw-semibold text-decoration-none" style="color:var(--text)">
+                  {{ task.title|truncatechars:42 }}
+                </a>
+                {% if task.description %}
+                  <div class="table-meta">{{ task.description|truncatechars:60 }}</div>
+                {% endif %}
+              </td>
+              <td class="col-hide-xs">
+                {% if task.assigned_to %}
+                <div class="cell-user">
+                  <div class="user-avatar-sm">{{ task.assigned_to.get_full_name|first|upper }}</div>
+                  <span style="font-size:13px;font-weight:600">{{ task.assigned_to.get_full_name|truncatechars:18 }}</span>
+                </div>
+                {% else %}—{% endif %}
+              </td>
+              <td>{% if task.due_date %}{{ task.due_date|date:"d M Y" }}{% else %}—{% endif %}</td>
+              <td>
+                <span class="status-badge
+                  {% if task.status == 'completed' or task.status == 'done' %}completed
+                  {% elif task.status == 'pending' %}pending
+                  {% elif task.status == 'in_progress' %}in-progress
+                  {% elif task.status == 'rejected' %}rejected
+                  {% elif task.status == 'approved' %}approved
+                  {% else %}draft{% endif %}">
+                  {{ task.get_status_display|default:task.status|capfirst }}
+                </span>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+  // Smart greeting based on time
+  var h = new Date().getHours();
+  var greet = h < 12 ? 'Good Morning' : h < 17 ? 'Good Afternoon' : 'Good Evening';
+  var el = document.getElementById('dashGreeting');
+  if (el) el.textContent = greet + ', {{ user.get_full_name|default:user.username }}!';
+
+  // Live date
+  var d = document.getElementById('dashDate');
+  if (d) {
+    d.textContent = 'Today is ' + new Date().toLocaleDateString('en-IN', {
+      weekday:'long', day:'numeric', month:'long', year:'numeric'
+    }) + '. Here\'s what\'s happening across your workspace.';
+  }
+})();
+</script>
+{% endblock %}

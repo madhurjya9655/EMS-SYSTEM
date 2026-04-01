@@ -1,6 +1,6 @@
 {% extends "tasks/tasks_base.html" %}
 {% load static %}
-{% block title %}Checklist Tasks{% endblock %}
+{% block title %}Checklist Base Tasks{% endblock %}
 
 {% block tab_content %}
 
@@ -10,9 +10,9 @@
       <div class="card-body py-2 px-3">
         <h3 class="mb-0 text-primary fw-bold">{{ total_assigned }}</h3>
         {% if is_admin %}
-          <small class="text-muted">Total Pending Tasks (All Employees)</small>
+          <small class="text-muted">Total Checklist Base Tasks</small>
         {% else %}
-          <small class="text-muted">My Pending Tasks</small>
+          <small class="text-muted">My Checklist Base Tasks</small>
         {% endif %}
       </div>
     </div>
@@ -22,7 +22,7 @@
 <div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center border-0">
     <h5 class="mb-0">
-      {% if is_admin %}Checklist Tasks — All Employees{% else %}My Checklist Tasks{% endif %}
+      {% if is_admin %}Checklist Base Tasks — All Employees{% else %}My Checklist Base Tasks{% endif %}
     </h5>
     <div class="d-flex gap-2">
       {% if is_admin %}
@@ -82,11 +82,9 @@
         <div class="col-md-2">
           <label for="fltStatus" class="form-label">Status</label>
           <select id="fltStatus" name="status" class="form-select">
+            <option value="all" {% if current_status == "all" %}selected{% endif %}>All</option>
             <option value="Pending" {% if current_status == "Pending" %}selected{% endif %}>Pending</option>
             <option value="Completed" {% if current_status == "Completed" %}selected{% endif %}>Completed</option>
-            {% if is_admin %}
-              <option value="all" {% if current_status == "all" %}selected{% endif %}>All</option>
-            {% endif %}
           </select>
         </div>
 
@@ -252,18 +250,9 @@
                     <i class="fas fa-edit" aria-hidden="true"></i>
                   </a>
                   <a href="{% url 'tasks:delete_checklist' obj.id %}?next={{ request.get_full_path|urlencode }}"
-                     class="btn btn-sm btn-outline-danger" title="Delete">
+                     class="btn btn-sm btn-outline-danger" title="Delete task or series">
                     <i class="fas fa-trash-alt" aria-hidden="true"></i>
                   </a>
-                  {% if obj.status == "Pending" %}
-                    <button type="submit"
-                            class="btn btn-sm btn-danger"
-                            form="series-form-{{ obj.id }}"
-                            title="Delete entire series"
-                            data-confirm="Delete ALL pending occurrences in this series?">
-                      <i class="fas fa-trash" aria-hidden="true"></i> Series
-                    </button>
-                  {% endif %}
                 </td>
 
               {% else %}
@@ -318,8 +307,8 @@
               <td colspan="6" class="text-center py-4 text-muted">
             {% endif %}
                 <i class="fas fa-inbox fa-2x mb-2 d-block" aria-hidden="true"></i>
-                {% if current_status == "Pending" %}No pending checklist tasks found.
-                {% else %}No checklist tasks found for the selected filters.{% endif %}
+                {% if current_status == "Pending" %}No pending checklist base tasks found.
+                {% else %}No checklist base tasks found for the selected filters.{% endif %}
               </td>
           </tr>
         {% endif %}
@@ -328,32 +317,14 @@
 
     <div class="d-flex flex-wrap justify-content-between align-items-center mt-2 gap-2">
       <div class="d-flex align-items-center gap-3">
-        {% if is_admin %}
-          <div class="form-check m-0">
-            <input class="form-check-input" type="checkbox" value="1" id="withSeries" name="with_series">
-            <label class="form-check-label" for="withSeries">Delete whole series for selected rows</label>
-          </div>
-        {% endif %}
         <small class="text-muted"><span data-selected-count>0</span> selected</small>
       </div>
       <button type="submit" class="btn btn-danger" data-bulk-submit
-              data-confirm="Are you sure you want to delete the selected item(s)?" disabled>
+              data-confirm="Are you sure you want to delete the selected checklist task(s)? Recurring rows will delete the full series." disabled>
         <i class="fas fa-trash me-1" aria-hidden="true"></i> Delete Selected
       </button>
     </div>
   </form>
-
-  {% if is_admin and items %}
-    {% for obj in items %}
-      <form id="series-form-{{ obj.id }}" method="post"
-            action="{% url 'tasks:list_checklist' %}" class="d-none">
-        {% csrf_token %}
-        <input type="hidden" name="action" value="delete_series">
-        <input type="hidden" name="pk" value="{{ obj.id }}">
-        <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
-      </form>
-    {% endfor %}
-  {% endif %}
 </div>
 
 {% if is_paginated %}

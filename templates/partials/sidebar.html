@@ -1,0 +1,94 @@
+{% load static user_filters %}
+
+<aside class="erp-sidebar" id="erpSidebar" role="navigation" aria-label="Main navigation">
+
+  <div class="sidebar-brand">
+    <a href="{% url 'dashboard:home' %}"
+       class="sidebar-brand-link"
+       aria-label="BOS Lakshya Home">
+      <span class="sidebar-brand-logo">
+        <img src="{% static 'images/bos_logo.png' %}" alt="BOS Lakshya">
+      </span>
+    </a>
+  </div>
+
+  <nav class="sidebar-nav" id="sidebarNav">
+
+    <a href="{% url 'dashboard:home' %}"
+       class="sidebar-icon-btn {% if request.resolver_match.app_name == 'dashboard' and request.resolver_match.url_name == 'home' %}active{% endif %}"
+       data-tooltip="Dashboard"
+       aria-label="Dashboard">
+      <i class="fa-solid fa-house"></i>
+    </a>
+
+    {% if user|has_permission:"list_users" or user|has_group:"HR" or user.is_superuser or user|has_any_permission:"leave_list,leave_apply,leave_pending_manager" %}
+    <a href="{% url 'leave:my_leaves' %}"
+       class="sidebar-icon-btn {% if request.resolver_match.app_name == 'leave' or request.resolver_match.app_name == 'recruitment' %}active{% endif %}"
+       data-tooltip="People & Leave"
+       aria-label="People & Leave">
+      <i class="fa-solid fa-users"></i>
+    </a>
+    {% endif %}
+
+    {% if user|has_any_permission:"add_checklist,list_checklist,add_delegation,list_delegation,add_ticket,list_all_tickets,assigned_to_me,assigned_by_me,mt_bulk_upload" %}
+    <a href="{% url 'tasks:list_checklist' %}"
+       class="sidebar-icon-btn {% if request.resolver_match.app_name == 'tasks' %}active{% endif %}"
+       data-tooltip="Tasks"
+       aria-label="Tasks">
+      <i class="fa-solid fa-list-check"></i>
+    </a>
+    {% endif %}
+
+    {% if user|has_any_permission:"kam_dashboard,kam_plan,kam_visits,kam_customers,kam_reports,kam_manager" or user.is_superuser %}
+    <a href="{% url 'kam:dashboard' %}"
+       class="sidebar-icon-btn {% if request.resolver_match.app_name == 'kam' %}active{% endif %}"
+       data-tooltip="Sales"
+       aria-label="Sales">
+      <i class="fa-solid fa-chart-line"></i>
+    </a>
+    {% endif %}
+
+    {% if user|has_any_permission:"petty_cash_list,petty_cash_apply,reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin" or user|has_group:"Manager" or user|has_group:"Finance" %}
+    <a href="{% url 'reimbursement:my_reimbursements' %}"
+       class="sidebar-icon-btn {% if request.resolver_match.app_name == 'reimbursement' or request.resolver_match.app_name == 'petty_cash' %}active{% endif %}"
+       data-tooltip="Finance"
+       aria-label="Finance">
+      <i class="fa-solid fa-wallet"></i>
+    </a>
+    {% endif %}
+
+    {% if user|has_any_permission:"doer_tasks,weekly_mis_score,performance_score" or user.is_superuser or user|has_group:"Admin" or user|has_group:"Manager" %}
+    <a href="{% url 'reports:doer_tasks' %}"
+       class="sidebar-icon-btn {% if request.resolver_match.app_name == 'reports' %}active{% endif %}"
+       data-tooltip="Reports"
+       aria-label="Reports">
+      <i class="fa-solid fa-chart-pie"></i>
+    </a>
+    {% endif %}
+
+    {% if user|has_any_permission:"list_users,add_user" or user.is_superuser %}
+    <a href="{% url 'users:list_users' %}"
+       class="sidebar-icon-btn {% if request.resolver_match.app_name == 'users' or request.resolver_match.app_name == 'settings' %}active{% endif %}"
+       data-tooltip="Settings"
+       aria-label="Settings">
+      <i class="fa-solid fa-gear"></i>
+    </a>
+    {% endif %}
+
+  </nav>
+
+  <div class="sidebar-footer">
+    <div class="sidebar-user-btn"
+         data-tooltip="{{ user.get_full_name|default:user.username }}"
+         aria-label="{{ user.get_full_name|default:user.username }}">
+      {% if user.profile.image %}
+        <img src="{{ user.profile.image.url }}" alt="{{ user.get_full_name|default:user.username }}">
+      {% elif user.avatar %}
+        <img src="{{ user.avatar.url }}" alt="{{ user.get_full_name|default:user.username }}">
+      {% else %}
+        <i class="fa-solid fa-user"></i>
+      {% endif %}
+    </div>
+  </div>
+
+</aside>

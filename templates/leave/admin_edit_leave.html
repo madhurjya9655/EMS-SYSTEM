@@ -1,44 +1,275 @@
 {% extends "base.html" %}
-{% load crispy_forms_tags %}
+{% load tz static %}
+
+{% block title %}Edit Leave #{{ leave.pk }} — Admin{% endblock %}
+{% block navbar_title %}Edit Leave{% endblock %}
+{% block breadcrumb %}Leave / Admin Edit{% endblock %}
+{% block page_title %}Edit Leave #{{ leave.pk }}{% endblock %}
+
+{% block page_actions %}
+  <a href="{{ next_url|default:'/' }}" class="btn btn-light">
+    <i class="fa-solid fa-arrow-left me-1"></i> Back
+  </a>
+{% endblock %}
 
 {% block content %}
-<div class="container py-3">
-  <h5 class="mb-3">Edit Leave</h5>
+<div style="max-width: 720px;">
 
+  <!-- Employee info strip -->
   <div class="card mb-3">
-    <div class="card-body">
-      <div class="mb-2">
-        <strong>Employee:</strong>
-        {{ leave.employee.get_full_name|default:leave.employee.username }}
+    <div class="card-body" style="display:flex; align-items:center; gap:20px; flex-wrap:wrap; padding:16px 20px;">
+      <div class="user-avatar-sm" style="width:44px;height:44px;font-size:16px;flex-shrink:0;">
+        {{ leave.employee.get_full_name|first|upper|default:"?" }}
       </div>
-      <div class="mb-2">
-        <strong>Reporting Person:</strong>
-        {{ leave.reporting_person.get_full_name|default:leave.reporting_person.username|default:"—" }}
+      <div style="flex:1; min-width:0;">
+        <div class="fw-semibold" style="font-size:15px;">
+          {{ leave.employee.get_full_name|default:leave.employee.username }}
+        </div>
+        <div class="table-meta">{{ leave.employee.email|default:"" }}</div>
+        <div class="table-meta mt-1">
+          Reporting Person:
+          <strong>{{ leave.reporting_person.get_full_name|default:leave.reporting_person.username|default:"—" }}</strong>
+          &nbsp;·&nbsp;
+          Days blocked: <strong>{{ leave.blocked_days|default:"0" }}</strong>
+          &nbsp;·&nbsp;
+          Window (IST):
+          <strong>
+            {% timezone "Asia/Kolkata" %}{{ leave.start_at|date:"d M Y H:i" }}{% endtimezone %}
+            →
+            {% timezone "Asia/Kolkata" %}{{ leave.end_at|date:"d M Y H:i" }}{% endtimezone %}
+          </strong>
+        </div>
       </div>
-      <div class="mb-2">
-        <strong>Current Status:</strong>
-        {{ leave.get_status_display }}
-      </div>
-      <div class="mb-2">
-        <strong>Window (IST):</strong>
-        {{ leave.start_at|date:"M d, Y H:i" }} → {{ leave.end_at|date:"M d, Y H:i" }}
-      </div>
-      <div class="mb-2">
-        <strong>Blocked Days:</strong>
-        {{ leave.blocked_days|default:"0" }}
+      <div>
+        {% if leave.status == "PENDING" %}
+          <span class="status-badge pending">Pending</span>
+        {% elif leave.status == "APPROVED" %}
+          <span class="status-badge approved">Approved</span>
+        {% elif leave.status == "REJECTED" %}
+          <span class="status-badge rejected">Rejected</span>
+        {% else %}
+          <span class="status-badge draft">{{ leave.get_status_display }}</span>
+        {% endif %}
       </div>
     </div>
   </div>
 
-  <form method="post" novalidate>
-    {% csrf_token %}
-    {{ form|crispy }}
-
-    <div class="d-flex gap-2 mt-3">
-      <button type="submit" class="btn btn-primary">Save</button>
-      <a href="{{ next_url|default:'/' }}" class="btn btn-secondary">Cancel</a>
-      <a href="{% url 'leave:admin_recalc_window' leave.id %}?next={{ next_url|urlencode }}" class="btn btn-outline-secondary">Recalculate</a>
+  <!-- Edit form -->
+  <div class="card">
+    <div class="card-header">
+      <span><i class="fa-solid fa-pen-to-square me-2 text-primary"></i>Edit Leave Details</span>
     </div>
-  </form>
+    <div class="card-body">
+
+      <form method="post" enctype="multipart/form-data" novalidate>
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ next_url|default:'/' }}">
+
+        {% if form.non_field_errors %}
+        <div class="alert alert-danger mb-3">
+          {% for err in form.non_field_errors %}
+            <div>{{ err }}</div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        <!-- Leave Type -->
+        <div class="mb-3">
+          <label class="form-label" for="{{ form.leave_type.id_for_label }}">
+            Leave Type <span style="color:var(--danger)">*</span>
+          </label>
+          <select name="{{ form.leave_type.html_name }}"
+                  id="{{ form.leave_type.id_for_label }}"
+                  class="form-select {% if form.leave_type.errors %}is-invalid{% endif %}">
+            <option value="">-- Select Type --</option>
+            {% for val, label in form.leave_type.field.choices %}
+              {% if val %}
+              <option value="{{ val }}"
+                {% if form.leave_type.value|stringformat:"s" == val|stringformat:"s" %}selected{% endif %}>
+                {{ label }}
+              </option>
+              {% endif %}
+            {% endfor %}
+          </select>
+          {% for err in form.leave_type.errors %}
+            <div class="invalid-feedback d-block">{{ err }}</div>
+          {% endfor %}
+        </div>
+
+        <!-- Duration -->
+        <div class="mb-3">
+          <label class="form-label">Duration Type <span style="color:var(--danger)">*</span></label>
+          <div class="d-flex gap-3">
+            {% for radio in form.duration_type %}
+            <div class="form-check">
+              {{ radio.tag }}
+              <label class="form-check-label" for="{{ radio.id_for_label }}">{{ radio.choice_label }}</label>
+            </div>
+            {% endfor %}
+          </div>
+          {% for err in form.duration_type.errors %}
+            <div style="color:var(--danger);font-size:12px;">{{ err }}</div>
+          {% endfor %}
+        </div>
+
+        <!-- Dates row -->
+        <div class="grid-2 mb-3">
+          <div>
+            <label class="form-label" for="{{ form.start_at.id_for_label }}">
+              Start Date (IST) <span style="color:var(--danger)">*</span>
+            </label>
+            <input type="date"
+                   name="{{ form.start_at.html_name }}"
+                   id="{{ form.start_at.id_for_label }}"
+                   value="{{ form.start_at.value|date:'Y-m-d'|default:'' }}"
+                   class="form-control {% if form.start_at.errors %}is-invalid{% endif %}">
+            {% for err in form.start_at.errors %}
+              <div class="invalid-feedback d-block">{{ err }}</div>
+            {% endfor %}
+          </div>
+          <div>
+            <label class="form-label" for="{{ form.end_at.id_for_label }}">
+              End Date (IST)
+            </label>
+            <input type="date"
+                   name="{{ form.end_at.html_name }}"
+                   id="{{ form.end_at.id_for_label }}"
+                   value="{{ form.end_at.value|date:'Y-m-d'|default:'' }}"
+                   class="form-control {% if form.end_at.errors %}is-invalid{% endif %}">
+            {% for err in form.end_at.errors %}
+              <div class="invalid-feedback d-block">{{ err }}</div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <!-- Times row (half-day) -->
+        <div class="grid-2 mb-3" id="timeFields">
+          <div>
+            <label class="form-label" for="{{ form.from_time.id_for_label }}">From Time (IST)</label>
+            <input type="time"
+                   name="{{ form.from_time.html_name }}"
+                   id="{{ form.from_time.id_for_label }}"
+                   value="{{ form.from_time.value|time:'H:i'|default:'' }}"
+                   class="form-control {% if form.from_time.errors %}is-invalid{% endif %}">
+            {% for err in form.from_time.errors %}
+              <div class="invalid-feedback d-block">{{ err }}</div>
+            {% endfor %}
+          </div>
+          <div>
+            <label class="form-label" for="{{ form.to_time.id_for_label }}">To Time (IST)</label>
+            <input type="time"
+                   name="{{ form.to_time.html_name }}"
+                   id="{{ form.to_time.id_for_label }}"
+                   value="{{ form.to_time.value|time:'H:i'|default:'' }}"
+                   class="form-control {% if form.to_time.errors %}is-invalid{% endif %}">
+            {% for err in form.to_time.errors %}
+              <div class="invalid-feedback d-block">{{ err }}</div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <!-- Status -->
+        <div class="mb-3">
+          <label class="form-label" for="{{ form.status.id_for_label }}">
+            Status <span style="color:var(--danger)">*</span>
+          </label>
+          <select name="{{ form.status.html_name }}"
+                  id="{{ form.status.id_for_label }}"
+                  class="form-select {% if form.status.errors %}is-invalid{% endif %}">
+            {% for val, label in form.status.field.choices %}
+              <option value="{{ val }}"
+                {% if form.status.value == val %}selected{% endif %}>
+                {{ label }}
+              </option>
+            {% endfor %}
+          </select>
+          {% for err in form.status.errors %}
+            <div class="invalid-feedback d-block">{{ err }}</div>
+          {% endfor %}
+        </div>
+
+        <!-- Reason -->
+        <div class="mb-3">
+          <label class="form-label" for="{{ form.reason.id_for_label }}">Reason</label>
+          <textarea name="{{ form.reason.html_name }}"
+                    id="{{ form.reason.id_for_label }}"
+                    rows="3"
+                    class="form-control {% if form.reason.errors %}is-invalid{% endif %}">{{ form.reason.value|default:'' }}</textarea>
+          {% for err in form.reason.errors %}
+            <div class="invalid-feedback d-block">{{ err }}</div>
+          {% endfor %}
+        </div>
+
+        <!-- Attachment -->
+        <div class="mb-4">
+          <label class="form-label" for="{{ form.attachment.id_for_label }}">Attachment</label>
+          <input type="file"
+                 name="{{ form.attachment.html_name }}"
+                 id="{{ form.attachment.id_for_label }}"
+                 class="form-control {% if form.attachment.errors %}is-invalid{% endif %}">
+          {% if leave.attachment %}
+            <div class="form-text">
+              Current:
+              <a href="{{ leave.attachment.url }}" target="_blank" rel="noopener">
+                <i class="fa-solid fa-paperclip me-1"></i>View attachment
+              </a>
+            </div>
+          {% endif %}
+          {% for err in form.attachment.errors %}
+            <div class="invalid-feedback d-block">{{ err }}</div>
+          {% endfor %}
+        </div>
+
+        <!-- Actions -->
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; border-top:1px solid var(--border); padding-top:18px;">
+          <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk me-1"></i>Save Changes
+          </button>
+          <a href="{{ next_url|default:'/' }}" class="btn btn-light">
+            Cancel
+          </a>
+
+          {% if leave.status == "APPROVED" or leave.status == "REJECTED" %}
+          <form method="post"
+                action="{% url 'leave:admin_recalc_window' leave.pk %}?next={{ next_url|urlencode }}"
+                style="margin:0; margin-left:auto;">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-outline-primary btn-sm">
+              <i class="fa-solid fa-rotate me-1"></i>Recalculate Balance
+            </button>
+          </form>
+          {% endif %}
+        </div>
+
+      </form>
+    </div>
+  </div>
+
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  // Toggle time fields based on duration type selection
+  var timeFields = document.getElementById('timeFields');
+  var radios = document.querySelectorAll('input[name="duration_type"]');
+
+  function toggleTimes() {
+    var isHalf = false;
+    radios.forEach(function (r) {
+      if (r.checked && r.value === 'HALF') isHalf = true;
+    });
+    if (timeFields) {
+      timeFields.style.display = isHalf ? '' : 'none';
+    }
+  }
+
+  radios.forEach(function (r) {
+    r.addEventListener('change', toggleTimes);
+  });
+
+  toggleTimes(); // run on load
+})();
+</script>
 {% endblock %}

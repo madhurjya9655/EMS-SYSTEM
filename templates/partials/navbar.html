@@ -1,0 +1,96 @@
+{% load static user_filters %}
+
+<header class="erp-topbar" id="erpTopbar">
+  <div class="topbar-left">
+    <button type="button" class="topbar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">
+      <i class="fa-solid fa-bars"></i>
+    </button>
+
+    <a href="{% url 'dashboard:home' %}" class="topbar-brand d-flex align-items-center text-decoration-none">
+      <span class="topbar-brand-logo">
+        <img src="{% static 'images/bos_logo.png' %}" alt="BOS Lakshya">
+      </span>
+    </a>
+
+    <div class="topbar-title-block">
+      <span class="topbar-title">{% block navbar_title %}BOS Lakshya{% endblock %}</span>
+      <span class="topbar-subtitle d-none d-md-block">{% block navbar_subtitle %}Employee Management System{% endblock %}</span>
+    </div>
+  </div>
+
+  <div class="topbar-right">
+    <div class="topbar-search d-none d-lg-flex">
+      <i class="fa-solid fa-magnifying-glass"></i>
+      <input type="search" placeholder="Search anything..." aria-label="Global search">
+    </div>
+
+    <div class="topbar-icon-group">
+      {% if user|has_permission:"reimbursement_finance_review" or user.is_superuser %}
+        <a href="{% url 'reimbursement:finance_rejected_bills_queue' %}"
+           class="topbar-icon-btn"
+           title="Rejected Bills Queue"
+           aria-label="Rejected Bills Queue">
+          <i class="fa-regular fa-bell"></i>
+        </a>
+      {% else %}
+        <button type="button" class="topbar-icon-btn" title="Notifications" aria-label="Notifications">
+          <i class="fa-regular fa-bell"></i>
+        </button>
+      {% endif %}
+    </div>
+
+    <div class="profile-dropdown-wrap" id="profileDropdownWrap">
+      <button type="button"
+              class="profile-btn"
+              id="profileBtn"
+              aria-haspopup="true"
+              aria-expanded="false">
+        <span class="profile-avatar">
+          {% if user.profile.image %}
+            <img src="{{ user.profile.image.url }}" alt="{{ user.get_full_name|default:user.username }}">
+          {% elif user.avatar %}
+            <img src="{{ user.avatar.url }}" alt="{{ user.get_full_name|default:user.username }}">
+          {% else %}
+            <i class="fa-solid fa-user"></i>
+          {% endif %}
+        </span>
+        <span class="profile-meta d-none d-md-flex">
+          <span class="profile-name">{{ user.get_full_name|default:user.username }}</span>
+          <span class="profile-role">{{ user.email|truncatechars:22 }}</span>
+        </span>
+        <i class="fa-solid fa-angle-down profile-caret"></i>
+      </button>
+
+      <div class="profile-dropdown-menu" id="profileDropdown" role="menu">
+        <div class="profile-dropdown-head">
+          <div class="profile-dropdown-name">{{ user.get_full_name|default:user.username }}</div>
+          <div class="profile-dropdown-email">{{ user.email }}</div>
+        </div>
+
+        <div class="profile-dropdown-divider"></div>
+
+        {% if user.is_superuser %}
+          <a href="{% url 'settings:system_settings' %}" class="profile-dropdown-item" role="menuitem">
+            <i class="fa-solid fa-sliders"></i>
+            <span>System Settings</span>
+          </a>
+        {% endif %}
+
+        <a href="{% url 'users:debug_permissions' %}" class="profile-dropdown-item" role="menuitem">
+          <i class="fa-solid fa-shield-halved"></i>
+          <span>Permissions</span>
+        </a>
+
+        <div class="profile-dropdown-divider"></div>
+
+        <form method="post" action="{% url 'logout' %}">
+          {% csrf_token %}
+          <button type="submit" class="profile-dropdown-item danger w-100" role="menuitem">
+            <i class="fa-solid fa-right-from-bracket"></i>
+            <span>Logout</span>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</header>

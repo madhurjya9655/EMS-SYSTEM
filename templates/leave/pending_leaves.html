@@ -1,90 +1,204 @@
 {% extends "base.html" %}
-{% load static %}
+{% load tz static %}
+
 {% block title %}Pending Leaves — Manager{% endblock %}
 
 {% block content %}
-<div class="container-fluid">
-  <div class="d-flex align-items-center justify-content-between mb-3">
-    <h3 class="mb-0">Pending Leaves Assigned to You</h3>
-    <div class="text-muted small">
-      IST now: {{ now|default:None|date:"d/m/Y H:i" }}{% if not now %}{% now "d/m/Y H:i" %}{% endif %}
+<div class="container-fluid px-0">
+
+  <!-- Page header -->
+  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+    <div>
+      <h4 class="mb-0">
+        <i class="fa-solid fa-hourglass-half me-2 text-warning"></i>Pending Leaves Assigned to You
+      </h4>
+      <p class="text-muted small mb-0 mt-1">Review pending requests and current annual leave balances.</p>
+    </div>
+    <span class="text-muted small">
+      IST now: {% now "d/m/Y H:i" %}
+    </span>
+  </div>
+
+  <!-- Pending Requests -->
+  <div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white d-flex align-items-center justify-content-between py-3">
+      <span class="fw-semibold">
+        <i class="fa-solid fa-triangle-exclamation text-warning me-2"></i>Pending Requests
+      </span>
+      <span class="badge text-bg-warning">{{ leaves|length }} pending leave(s)</span>
+    </div>
+
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Employee</th>
+              <th>Type</th>
+              <th>From</th>
+              <th>To</th>
+              <th class="text-center">Days</th>
+              <th>Reason</th>
+              <th class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for leave in leaves %}
+            <tr>
+              <td>
+                <div class="fw-medium">{{ leave.employee.get_full_name|default:leave.employee.username }}</div>
+                <div class="text-muted small">{{ leave.employee.email|default:"" }}</div>
+              </td>
+              <td>{{ leave.leave_type.name }}</td>
+              <td class="text-nowrap">
+                {% timezone "Asia/Kolkata" %}
+                  {{ leave.start_at|date:"d M Y" }}<br>
+                  <small class="text-muted">{{ leave.start_at|date:"g:i A" }}</small>
+                {% endtimezone %}
+              </td>
+              <td class="text-nowrap">
+                {% timezone "Asia/Kolkata" %}
+                  {{ leave.end_at|date:"d M Y" }}<br>
+                  <small class="text-muted">{{ leave.end_at|date:"g:i A" }}</small>
+                {% endtimezone %}
+              </td>
+              <td class="text-center">
+                <span class="badge text-bg-secondary">{{ leave.blocked_days }}</span>
+              </td>
+              <td style="max-width: 220px;">
+                <div class="text-truncate small" title="{{ leave.reason|striptags }}">
+                  {{ leave.reason|default:"—" }}
+                </div>
+              </td>
+              <td class="text-end text-nowrap">
+                <div class="d-inline-flex gap-1 align-items-center flex-wrap justify-content-end">
+                  <a href="{% url 'leave:approval_page' leave.pk %}?next={{ next_url }}"
+                     class="btn btn-sm btn-outline-primary">
+                    <i class="fa-solid fa-eye me-1"></i>View
+                  </a>
+
+                  <form method="post"
+                        action="{% url 'leave:manager_decide_approve' leave.pk %}?next={{ next_url }}"
+                        onsubmit="return confirm('Approve leave for {{ leave.employee.get_full_name|default:leave.employee.username }}?');">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-sm btn-success">
+                      <i class="fa-solid fa-check me-1"></i>Approve
+                    </button>
+                  </form>
+
+                  <form method="post"
+                        action="{% url 'leave:manager_decide_reject' leave.pk %}?next={{ next_url }}"
+                        onsubmit="return confirm('Reject leave for {{ leave.employee.get_full_name|default:leave.employee.username }}?');">
+                    {% csrf_token %}
+                    <input type="hidden" name="decision_comment" value="Rejected by manager.">
+                    <button type="submit" class="btn btn-sm btn-danger">
+                      <i class="fa-solid fa-times me-1"></i>Reject
+                    </button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% empty %}
+            <tr>
+              <td colspan="7" class="text-center text-muted py-5">
+                <i class="fa-regular fa-circle-check fa-2x mb-2 d-block text-success"></i>
+                No pending leaves assigned to you.
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
-  {% if messages %}
-    {% for message in messages %}
-      <div class="alert {% if message.tags %}alert-{{ message.tags }}{% else %}alert-info{% endif %} py-2">{{ message }}</div>
-    {% endfor %}
-  {% endif %}
-
-  {% if leaves %}
-    <div class="table-responsive">
-      <table class="table table-sm align-middle table-hover">
-        <thead class="table-light">
-          <tr>
-            <th class="text-nowrap">#</th>
-            <th>Employee</th>
-            <th>Type</th>
-            <th class="text-nowrap">Start (IST)</th>
-            <th class="text-nowrap">End (IST)</th>
-            <th class="text-nowrap">Half-day</th>
-            <th>Reason</th>
-            <th class="text-nowrap" style="min-width: 220px;">Comment (optional)</th>
-            <th class="text-nowrap">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-        {% for lr in leaves %}
-          {# One form per row. Buttons use `formaction` to hit approve/reject endpoints. #}
-          <tr>
-            <td class="text-muted">#{{ lr.id }}</td>
-            <td>
-              <div class="fw-semibold">{{ lr.employee.get_full_name|default:lr.employee.username }}</div>
-              <div class="small text-muted">{{ lr.employee.email }}</div>
-            </td>
-            <td class="text-nowrap">{{ lr.leave_type.name }}</td>
-            <td class="text-nowrap">{{ lr.start_at|date:"Y-m-d H:i" }}</td>
-            <td class="text-nowrap">{{ lr.end_at|date:"Y-m-d H:i" }}</td>
-            <td class="text-nowrap">
-              {% if lr.is_half_day %}<span class="badge bg-info text-dark">Yes</span>{% else %}<span class="badge bg-secondary">No</span>{% endif %}
-            </td>
-            <td style="max-width: 320px;">
-              <div class="small">{{ lr.reason|default:"—" }}</div>
-            </td>
-            <td>
-              <form method="post" id="row-form-{{ lr.id }}">
-                {% csrf_token %}
-                <input type="hidden" name="next" value="{% url 'leave:manager_pending' %}">
-                <input type="text" name="decision_comment" class="form-control form-control-sm" placeholder="Add a note for the employee (optional)">
-              </form>
-            </td>
-            <td class="text-nowrap">
-              <a class="btn btn-sm btn-outline-primary mb-1"
-                 href="{% url 'leave:approval_page' lr.id %}?next={% url 'leave:manager_pending' %}">
-                Open
-              </a>
-              <button type="submit"
-                      class="btn btn-sm btn-success mb-1"
-                      form="row-form-{{ lr.id }}"
-                      formaction="{% url 'leave:manager_decide_approve' lr.id %}?next={% url 'leave:manager_pending' %}"
-                      formmethod="post">
-                Approve
-              </button>
-              <button type="submit"
-                      class="btn btn-sm btn-danger mb-1"
-                      form="row-form-{{ lr.id }}"
-                      formaction="{% url 'leave:manager_decide_reject' lr.id %}?next={% url 'leave:manager_pending' %}"
-                      formmethod="post">
-                Reject
-              </button>
-            </td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
+  <!-- Leave Balance — Team -->
+  <div class="card shadow-sm border-0">
+    <div class="card-header bg-white d-flex align-items-center justify-content-between py-3">
+      <span class="fw-semibold">
+        <i class="fa-solid fa-users text-primary me-2"></i>Leave Balance — All Employees
+      </span>
+      {% if request.user.is_superuser or request.user.is_staff %}
+      <a href="{% url 'leave:admin_leave_balance' %}" class="btn btn-sm btn-outline-secondary">
+        <i class="fa-solid fa-arrow-up-right-from-square me-1"></i>Full View
+      </a>
+      {% endif %}
     </div>
-  {% else %}
-    <div class="alert alert-secondary">No pending leave requests for your approval.</div>
-  {% endif %}
+
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>#</th>
+              <th>Employee</th>
+              <th>Email</th>
+              <th class="text-center">Total Paid</th>
+              <th class="text-center">Used (Paid)</th>
+              <th class="text-center">Remaining</th>
+              <th class="text-center">Unpaid</th>
+              <th>Leave Year</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in employee_leave_balances %}
+            <tr>
+              <td class="text-muted small">{{ forloop.counter }}</td>
+              <td class="fw-medium">
+                {{ row.employee.get_full_name|default:row.employee.username }}
+              </td>
+              <td class="text-muted small">{{ row.employee.email|default:"—" }}</td>
+
+              <td class="text-center">
+                <span class="badge text-bg-secondary">{{ row.total_paid_leaves }}</span>
+              </td>
+
+              <td class="text-center">
+                <span class="badge {% if row.paid_leaves_taken >= row.total_paid_leaves %}text-bg-danger{% elif row.paid_leaves_taken > 0 %}text-bg-warning{% else %}text-bg-light text-dark border{% endif %}">
+                  {{ row.paid_leaves_taken }}
+                </span>
+              </td>
+
+              <td class="text-center">
+                <span class="badge {% if row.remaining_paid_leaves == 0 %}text-bg-danger{% elif row.remaining_paid_leaves <= 5 %}text-bg-warning{% else %}text-bg-success{% endif %}">
+                  {{ row.remaining_paid_leaves }}
+                </span>
+              </td>
+
+              <td class="text-center">
+                {% if row.unpaid_leaves > 0 %}
+                  <span class="badge text-bg-danger">{{ row.unpaid_leaves }}</span>
+                {% else %}
+                  <span class="text-muted small">0</span>
+                {% endif %}
+              </td>
+
+              <td class="text-muted small">{{ row.leave_year_display }}</td>
+            </tr>
+            {% empty %}
+            <tr>
+              <td colspan="8" class="text-center text-muted py-4">
+                <i class="fa-solid fa-circle-info me-1"></i>
+                No team members found.
+                {% if not request.user.is_superuser %}
+                  Assign employees to yourself via the Approver Mapping screen.
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% if employee_leave_balances %}
+    <div class="card-footer bg-white text-muted small">
+      <i class="fa-solid fa-circle-info me-1"></i>
+      Balances are recalculated from approved leaves every time this page loads.
+      Cross-year leaves are split correctly across the April–March boundary.
+    </div>
+    {% endif %}
+  </div>
+
 </div>
 {% endblock %}

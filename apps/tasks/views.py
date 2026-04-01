@@ -1,4 +1,4 @@
-#E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
+#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\views.py
 from __future__ import annotations
 
 import csv
@@ -55,7 +55,7 @@ from .utils import (
     send_help_ticket_unassigned_notice,
     send_admin_bulk_summary,
 )
-from .recurrence_utils import preserve_first_occurrence_time
+from .recurrence_utils import preserve_first_occurrence_time, normalize_mode
 
 # ✅ Single source of truth: leave blocking
 from apps.tasks.utils.blocking import (
@@ -266,6 +266,108 @@ def _normalize_task_type(val) -> Optional[str]:
     if s in ("checklist", "delegation", "helpticket"):
         return "help_ticket" if s == "helpticket" else s
     return None
+
+
+def _normalized_checklist_mode(value) -> str:
+    try:
+        return normalize_mode(value)
+    except Exception:
+        return (str(value or "").strip() or "")
+
+
+def _is_recurring_checklist_obj(obj) -> bool:
+    return _normalized_checklist_mode(getattr(obj, "mode", None)) in RECURRING_MODES
+
+
+def _checklist_series_filter_kwargs(obj) -> dict:
+    mode = _normalized_checklist_mode(getattr(obj, "mode", None))
+    freq = getattr(obj, "frequency", None)
+    try:
+        freq = max(int(freq or 1), 1) if mode in RECURRING_MODES else freq
+    except Exception:
+        freq = 1 if mode in RECURRING_MODES else freq
+
+    return {
+        "assign_to_id": getattr(obj, "assign_to_id", None),
+        "task_name": getattr(obj, "task_name", None),
+        "mode": mode,
+        "frequency": freq,
+        "group_name": getattr(obj, "group_name", None),
+    }
+
+
+def _checklist_series_queryset(obj, *, include_skipped: bool = True):
+    qs = Checklist.objects.all()
+    if not include_skipped and hasattr(Checklist, "is_skipped_due_to_leave"):
+        qs = qs.filter(is_skipped_due_to_leave=False)
+    return qs.filter(**_checklist_series_filter_kwargs(obj))
+
+
+def _void_checklist_entry(obj) -> int:
+    """
+    Checklist delete behaviour:
+      - recurring checklist row => void ENTIRE series (all statuses)
+      - one-time checklist row  => void only that row
+    """
+    if not obj:
+        return 0
+
+    if _is_recurring_checklist_obj(obj):
+        qs = _checklist_series_queryset(obj, include_skipped=False)
+        if hasattr(Checklist, "is_skipped_due_to_leave"):
+            return qs.update(is_skipped_due_to_leave=True)
+        deleted, _ = qs.delete()
+        return int(deleted or 0)
+
+    if hasattr(Checklist, "is_skipped_due_to_leave"):
+        return Checklist.objects.filter(pk=obj.pk, is_skipped_due_to_leave=False).update(is_skipped_due_to_leave=True)
+
+    obj.delete()
+    return 1
+
+
+def _build_checklist_base_queryset(base_qs):
+    """
+    Checklist list page must show BASE TASKS / SERIES only.
+
+    Since recurring instances currently live in the same Checklist table,
+    derive one visible row per recurring series using:
+      assign_to + task_name + mode + frequency + group_name
+
+    We keep the earliest surviving row in each recurring series.
+    One-time rows remain 1 row = 1 task.
+    """
+    recurring_qs = base_qs.filter(mode__in=RECURRING_MODES)
+    one_time_qs = base_qs.exclude(mode__in=RECURRING_MODES)
+
+    if connection.vendor == "postgresql":
+        recurring_ids = (
+            recurring_qs
+            .order_by("assign_to_id", "task_name", "mode", "frequency", "group_name", "planned_date", "id")
+            .distinct("assign_to_id", "task_name", "mode", "frequency", "group_name")
+            .values("pk")
+        )
+        one_time_ids = one_time_qs.values("pk")
+        return base_qs.filter(Q(pk__in=one_time_ids) | Q(pk__in=recurring_ids))
+
+    seen = set()
+    keep_ids = []
+    for obj in base_qs.order_by("planned_date", "id").iterator(chunk_size=1000):
+        if _is_recurring_checklist_obj(obj):
+            key = (
+                getattr(obj, "assign_to_id", None),
+                getattr(obj, "task_name", None),
+                _normalized_checklist_mode(getattr(obj, "mode", None)),
+                int(getattr(obj, "frequency", None) or 1),
+                getattr(obj, "group_name", None),
+            )
+        else:
+            key = ("single", getattr(obj, "pk", None))
+        if key in seen:
+            continue
+        seen.add(key)
+        keep_ids.append(obj.pk)
+    return base_qs.filter(pk__in=keep_ids)
 
 
 # -----------------------------------------------------------------------------
@@ -973,26 +1075,12 @@ def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: O
 @has_permission("list_checklist")
 def list_checklist(request):
     """
-    ============================================================
-    ACCESS CONTROL RULES — READ BEFORE MODIFYING
-    ============================================================
-    ADMIN (superuser / Admin / Manager / EA / CEO):
-      - Sees ALL employees' tasks across the entire system.
-      - Can filter by assign_to (employee picker shown).
-      - Can see all statuses (Pending, Completed, etc).
-      - Default status filter: "Pending" (still filterable).
+    CHECKLIST LIST PAGE = BASE TASKS ONLY
 
-    DOER (everyone else):
-      - Sees ONLY tasks where assign_to == request.user.
-      - NO cross-user data. The assign_to filter is MANDATORY
-        and enforced at the queryset level, not just the template.
-      - Employee picker is hidden.
-      - Default status filter: "Pending".
-      - total_assigned shows only their own pending count.
-
-    This is enforced at the QUERYSET level (not just the template)
-    so no template change or GET param can bypass it.
-    ============================================================
+    Current architecture stores recurring generated rows in the same Checklist
+    table. This view therefore collapses recurring rows into one visible base
+    row per series, while doer/dashboard views continue using the full instance
+    table.
     """
 
     # ------------------------------------------------------------------
@@ -1000,69 +1088,59 @@ def list_checklist(request):
     # ------------------------------------------------------------------
     if request.method == "POST":
         return_url = request.POST.get("return_url") or reverse("tasks:list_checklist")
+        action = (request.POST.get("action") or "").strip()
 
-        if request.POST.get("action") == "delete_series" and request.POST.get("pk"):
+        if action == "delete_series" and request.POST.get("pk"):
             try:
                 obj = Checklist.objects.get(pk=int(request.POST["pk"]))
             except (Checklist.DoesNotExist, ValueError, TypeError):
-                messages.warning(request, "The selected series no longer exists.")
+                messages.warning(request, "The selected checklist task no longer exists.")
                 return redirect(return_url)
 
-            # Security: non-admins can only delete their own series
             if not is_admin_user(request.user) and obj.assign_to_id != request.user.id:
                 messages.error(request, "You can only delete tasks assigned to you.")
                 return redirect(return_url)
 
-            filters = dict(
-                assign_to_id=obj.assign_to_id,
-                task_name=obj.task_name,
-                mode=obj.mode,
-                frequency=obj.frequency,
-                group_name=getattr(obj, "group_name", None),
-            )
-            deleted = Checklist.objects.filter(status="Pending", **filters).update(is_skipped_due_to_leave=True)
-            messages.success(request, f"Deleted {deleted} pending occurrence(s) from the series '{obj.task_name}'.")
+            deleted = _void_checklist_entry(obj)
+            if _is_recurring_checklist_obj(obj):
+                messages.success(request, f"Deleted checklist series '{obj.task_name}' ({deleted} row(s)).")
+            else:
+                messages.success(request, f"Deleted checklist task '{obj.task_name}'.")
             request.session["suppress_auto_recur"] = True
             return redirect(return_url)
 
         ids = request.POST.getlist("sel")
-        with_series = bool(request.POST.get("with_series"))
         total_deleted = 0
-        if ids:
-            # Security: non-admins can only bulk-delete their own tasks
-            if not is_admin_user(request.user):
-                ids = list(
-                    Checklist.objects.filter(pk__in=ids, assign_to=request.user).values_list("pk", flat=True)
-                )
+        series_deleted = 0
+        single_deleted = 0
 
-            if with_series:
-                series_seen = set()
-                for sid in ids:
-                    try:
-                        obj = Checklist.objects.get(pk=int(sid))
-                    except (Checklist.DoesNotExist, ValueError, TypeError):
-                        continue
-                    key = (obj.assign_to_id, obj.task_name, obj.mode, obj.frequency, obj.group_name)
-                    if key in series_seen:
-                        continue
-                    series_seen.add(key)
-                    deleted = Checklist.objects.filter(status="Pending", **{
-                        "assign_to_id": obj.assign_to_id,
-                        "task_name": obj.task_name,
-                        "mode": obj.mode,
-                        "frequency": obj.frequency,
-                        "group_name": obj.group_name,
-                    }).update(is_skipped_due_to_leave=True)
-                    total_deleted += deleted
-                messages.success(request, f"Deleted {total_deleted} pending occurrence(s) across selected series.")
-            else:
-                deleted = Checklist.objects.filter(pk__in=ids).update(is_skipped_due_to_leave=True)
+        if ids:
+            scoped_qs = Checklist.objects.filter(pk__in=ids)
+            if not is_admin_user(request.user):
+                scoped_qs = scoped_qs.filter(assign_to=request.user)
+
+            for obj in scoped_qs.select_related("assign_to"):
+                deleted = _void_checklist_entry(obj)
+                if not deleted:
+                    continue
                 total_deleted += deleted
-                if deleted:
-                    messages.success(request, f"Deleted {deleted} selected task(s).")
+                if _is_recurring_checklist_obj(obj):
+                    series_deleted += 1
                 else:
-                    messages.info(request, "Nothing was deleted.")
+                    single_deleted += 1
+
+            if total_deleted:
+                parts = []
+                if series_deleted:
+                    parts.append(f"{series_deleted} recurring series")
+                if single_deleted:
+                    parts.append(f"{single_deleted} one-time task(s)")
+                messages.success(request, f"Deleted {' and '.join(parts)} ({total_deleted} row(s) updated).")
+            else:
+                messages.info(request, "Nothing was deleted.")
+
             request.session["suppress_auto_recur"] = True
+
         return redirect(return_url)
 
     # ------------------------------------------------------------------
@@ -1072,33 +1150,27 @@ def list_checklist(request):
 
     # ------------------------------------------------------------------
     # BASE QUERYSET — ROLE-SCOPED
-    # ADMIN    → all tasks (no assign_to restriction)
-    # DOER     → ONLY their own tasks (assign_to=request.user, always)
-    # The is_skipped_due_to_leave=False guard removes soft-deleted rows
-    # for both roles.
     # ------------------------------------------------------------------
     if is_admin:
-        base_qs = (
+        scoped_qs = (
             Checklist.objects
             .filter(is_skipped_due_to_leave=False)
             .select_related("assign_by", "assign_to", "assign_pc", "notify_to", "auditor")
             .defer("media_upload", "doer_file")
         )
     else:
-        # DOER: hard-locked to their own tasks. This cannot be overridden
-        # by any URL parameter because the queryset is built here, before
-        # any GET param handling below.
-        base_qs = (
+        scoped_qs = (
             Checklist.objects
             .filter(assign_to=request.user, is_skipped_due_to_leave=False)
             .select_related("assign_by", "assign_to", "assign_pc", "notify_to", "auditor")
             .defer("media_upload", "doer_file")
         )
 
+    # Collapse recurring instances into base-task rows
+    base_qs = _build_checklist_base_queryset(scoped_qs)
+
     # ------------------------------------------------------------------
-    # TOTAL COUNT — pending tasks only, scoped to the role
-    # Admin:  total pending across all employees
-    # Doer:   total pending for themselves only
+    # TOTAL COUNT — pending base tasks only, scoped to role
     # ------------------------------------------------------------------
     total_assigned = base_qs.filter(status="Pending").count()
 
@@ -1107,17 +1179,12 @@ def list_checklist(request):
     # ------------------------------------------------------------------
     qs = base_qs
 
-    # Status filter — DEFAULT to "Pending" so checklist never shows
-    # completed tasks on first load. Users must explicitly request "all"
-    # or "Completed" to see those. This keeps the checklist as a
-    # to-do view, not a history view.
     status_filter = request.GET.get("status", "Pending").strip()
     if status_filter == "all":
-        pass  # show everything (admin use-case)
+        pass
     elif status_filter:
         qs = qs.filter(status=status_filter)
     else:
-        # Empty string edge case — still default to Pending
         status_filter = "Pending"
         qs = qs.filter(status="Pending")
 
@@ -1125,14 +1192,12 @@ def list_checklist(request):
     if kw:
         qs = qs.filter(Q(task_name__icontains=kw) | Q(message__icontains=kw))
 
-    # assign_to filter: ONLY honoured for admins.
-    # A doer cannot pass assign_to=<other_user_id> to see someone else's data.
     assign_to_id = request.GET.get("assign_to", "").strip()
     if assign_to_id and is_admin:
         try:
             qs = qs.filter(assign_to_id=int(assign_to_id))
         except (ValueError, TypeError):
-            pass  # ignore invalid values silently
+            pass
 
     priority_val = request.GET.get("priority", "").strip()
     if priority_val:
@@ -1154,17 +1219,17 @@ def list_checklist(request):
         today = timezone.localdate()
         qs = qs.filter(planned_date__date=today)
 
-    ordered_qs = qs.order_by("-planned_date", "-id")
+    ordered_qs = qs.order_by("task_name", "assign_to__first_name", "assign_to__last_name", "planned_date", "id")
 
     # ------------------------------------------------------------------
     # CSV DOWNLOAD — scoped to role (same base_qs, same filters)
     # ------------------------------------------------------------------
     if request.GET.get("download"):
         resp = HttpResponse(content_type="text/csv")
-        resp["Content-Disposition"] = 'attachment; filename="checklist.csv"'
+        resp["Content-Disposition"] = 'attachment; filename="checklist_base_tasks.csv"'
         w = csv.writer(resp)
         if is_admin:
-            w.writerow(["Task Name", "Assigned By", "Assigned To", "Planned Date", "Priority", "Group Name", "Status"])
+            w.writerow(["Task Name", "Assigned By", "Assigned To", "Planned Date", "Priority", "Group Name", "Status", "Mode", "Frequency"])
             for itm in ordered_qs.iterator(chunk_size=500):
                 w.writerow([
                     clean_unicode_string(itm.task_name),
@@ -1174,15 +1239,18 @@ def list_checklist(request):
                     itm.priority,
                     itm.group_name,
                     itm.status,
+                    itm.mode or "",
+                    itm.frequency or "",
                 ])
         else:
-            # Doers get a simplified export of their own tasks
-            w.writerow(["Task Name", "Planned Date", "Status"])
+            w.writerow(["Task Name", "Planned Date", "Status", "Mode", "Frequency"])
             for itm in ordered_qs.iterator(chunk_size=500):
                 w.writerow([
                     clean_unicode_string(itm.task_name),
                     itm.planned_date.strftime("%Y-%m-%d %H:%M") if itm.planned_date else "",
                     itm.status,
+                    itm.mode or "",
+                    itm.frequency or "",
                 ])
         return resp
 
@@ -1195,7 +1263,7 @@ def list_checklist(request):
     items = page_obj.object_list
 
     # ------------------------------------------------------------------
-    # GROUP NAMES — scoped to role (uses base_qs, not full table)
+    # GROUP NAMES — scoped to role
     # ------------------------------------------------------------------
     group_names = (
         base_qs.exclude(group_name__isnull=True)
@@ -1206,7 +1274,7 @@ def list_checklist(request):
     )
 
     # ------------------------------------------------------------------
-    # CONTEXT — only pass user list to admins (doers don't need it)
+    # CONTEXT
     # ------------------------------------------------------------------
     ctx = {
         "items": items,
@@ -1218,9 +1286,6 @@ def list_checklist(request):
         "total_assigned": total_assigned,
         "current_status": status_filter,
         "is_admin": is_admin,
-        # Only admins receive the full user list; passing [] to doers
-        # ensures the template employee picker never renders even if
-        # someone tampers with the template cache.
         "users": (
             User.objects.filter(is_active=True).order_by("first_name", "last_name", "username")
             if is_admin else []
@@ -1328,9 +1393,12 @@ def delete_checklist(request, pk):
 
     if request.method == "POST":
         task_name = obj.task_name
-        _void_task_row(obj)
+        deleted = _void_checklist_entry(obj)
         request.session["suppress_auto_recur"] = True
-        messages.success(request, f"Deleted checklist task '{task_name}'.")
+        if _is_recurring_checklist_obj(obj):
+            messages.success(request, f"Deleted checklist series '{task_name}' ({deleted} row(s)).")
+        else:
+            messages.success(request, f"Deleted checklist task '{task_name}'.")
         return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
     return render(request, "tasks/confirm_delete.html", {"object": obj, "type": "Checklist"})
 
