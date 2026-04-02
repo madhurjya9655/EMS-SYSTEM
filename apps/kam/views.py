@@ -1,6 +1,5 @@
 # FILE: apps/kam/views.py
 
-
 from __future__ import annotations
 
 import math
@@ -1621,9 +1620,23 @@ def visit_batch_reject(request: HttpRequest, batch_id: int) -> HttpResponse:
     return redirect(reverse("kam:visit_batches"))
 
 
+# =====================================================================
+# EMAIL APPROVAL LINKS
+# FIX 2026-04-02: Changed @require_kam_code("kam_manager") to
+# @require_any_kam_code("kam_manager", "kam_visit_approve") /
+# @require_any_kam_code("kam_manager", "kam_visit_reject")
+#
+# Root cause: Managers granted access via Django Group membership hold
+# profile permission codes kam_visit_approve / kam_visit_reject, NOT
+# kam_manager. The old single-code decorator blocked them after login
+# redirect, producing a 403. The internal _is_manager() guard (which
+# checks Group membership) remains in place to block non-managers.
+# =====================================================================
 @login_required
-@require_kam_code("kam_manager")
+@require_any_kam_code("kam_manager", "kam_visit_approve")
 def visit_batch_approve_link(request: HttpRequest, token: str) -> HttpResponse:
+    # Secondary guard: profile permission is not enough alone — user must
+    # also be in a Manager/Admin/Finance group (or be superuser).
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
     try:
@@ -1652,15 +1665,28 @@ def visit_batch_approve_link(request: HttpRequest, token: str) -> HttpResponse:
         batch.approved_by = request.user
         batch.approved_at = now_ts
         batch.save(update_fields=["approval_status", "approved_by", "approved_at", "updated_at"])
-        VisitPlan.objects.filter(batch=batch).update(approval_status=STATUS_APPROVED, approved_by=request.user, approved_at=now_ts, updated_at=now_ts)
-        VisitApprovalAudit.objects.create(batch=batch, actor=request.user, action=VisitApprovalAudit.ACTION_APPROVE, note="Approved via email link", actor_ip=_get_ip(request))
+        VisitPlan.objects.filter(batch=batch).update(
+            approval_status=STATUS_APPROVED,
+            approved_by=request.user,
+            approved_at=now_ts,
+            updated_at=now_ts,
+        )
+        VisitApprovalAudit.objects.create(
+            batch=batch,
+            actor=request.user,
+            action=VisitApprovalAudit.ACTION_APPROVE,
+            note="Approved via email link",
+            actor_ip=_get_ip(request),
+        )
     messages.success(request, f"Batch #{batch_id} approved.")
     return redirect(reverse("kam:visit_batches"))
 
 
 @login_required
-@require_kam_code("kam_manager")
+@require_any_kam_code("kam_manager", "kam_visit_reject")
 def visit_batch_reject_link(request: HttpRequest, token: str) -> HttpResponse:
+    # Secondary guard: profile permission is not enough alone — user must
+    # also be in a Manager/Admin/Finance group (or be superuser).
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
     try:
@@ -1689,10 +1715,22 @@ def visit_batch_reject_link(request: HttpRequest, token: str) -> HttpResponse:
         batch.approved_by = request.user
         batch.approved_at = now_ts
         batch.save(update_fields=["approval_status", "approved_by", "approved_at", "updated_at"])
-        VisitPlan.objects.filter(batch=batch).update(approval_status=STATUS_REJECTED, approved_by=request.user, approved_at=now_ts, updated_at=now_ts)
-        VisitApprovalAudit.objects.create(batch=batch, actor=request.user, action=VisitApprovalAudit.ACTION_REJECT, note="Rejected via email link"[:255], actor_ip=_get_ip(request))
+        VisitPlan.objects.filter(batch=batch).update(
+            approval_status=STATUS_REJECTED,
+            approved_by=request.user,
+            approved_at=now_ts,
+            updated_at=now_ts,
+        )
+        VisitApprovalAudit.objects.create(
+            batch=batch,
+            actor=request.user,
+            action=VisitApprovalAudit.ACTION_REJECT,
+            note="Rejected via email link"[:255],
+            actor_ip=_get_ip(request),
+        )
     messages.info(request, f"Batch #{batch_id} rejected.")
     return redirect(reverse("kam:visit_batches"))
+
 
 # =====================================================================
 # VISITS & CALLS
@@ -1805,15 +1843,8 @@ def visits(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # MANAGER VIEW
 # =====================================================================
-# FIX-7: Removed @require_kam_code("kam_manager") decorator.
-# Root cause of 403: Manager/Admin group users don't have 'kam_manager'
-# permission code explicitly assigned in DB — group membership alone
-# is not checked by require_kam_code(). The internal _is_manager() check
-# uses Django group membership (Manager/Admin/Finance) which is correct.
-# =====================================================================
 @login_required
 def manager_view(request: HttpRequest) -> HttpResponse:
-    # Gate: only Admin / Manager / Finance group members (or superusers)
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
 
