@@ -317,13 +317,6 @@ class TargetLine(TimeStamped):
         unique_together = ("header", "kam")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CollectionPlan
-# NEW FIELDS: actual_amount, collection_date, collection_status, collection_reference
-# These fields require a migration — run:
-#   python manage.py makemigrations kam
-#   python manage.py migrate
-# ─────────────────────────────────────────────────────────────────────────────
 class CollectionPlan(TimeStamped):
     PERIOD_WEEK = TargetHeader.PERIOD_WEEK
     PERIOD_MONTH = TargetHeader.PERIOD_MONTH
@@ -359,7 +352,6 @@ class CollectionPlan(TimeStamped):
     )
     notes = models.TextField(blank=True, null=True)
 
-    # ── NEW FIELDS (migration required) ──────────────────────────────────────
     actual_amount = models.DecimalField(
         max_digits=14, decimal_places=2,
         null=True, blank=True,
@@ -380,7 +372,6 @@ class CollectionPlan(TimeStamped):
         max_length=64, blank=True, null=True,
         help_text="Cheque / UTR / reference for the actual collection.",
     )
-    # ── END NEW FIELDS ────────────────────────────────────────────────────────
 
     class Meta:
         unique_together = ("period_type", "period_id", "customer")
@@ -391,7 +382,6 @@ class CollectionPlan(TimeStamped):
         ]
 
     def save(self, *args, **kwargs):
-        # Auto-derive status from amounts — never overwrites planned_amount
         if self.actual_amount is not None and self.planned_amount:
             if self.actual_amount >= self.planned_amount:
                 self.collection_status = self.STATUS_COLLECTED
@@ -547,7 +537,6 @@ class VisitActual(TimeStamped):
             ("OTHER", "Other"),
         ],
     )
-    confirmed_location = models.CharField(max_length=255, blank=True, null=True)
     actual_sales_mt = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
     actual_collection = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     next_action = models.CharField(max_length=255, blank=True, null=True)

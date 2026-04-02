@@ -9,6 +9,8 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.models import Permission
 from django.contrib.auth.views import LoginView
+from django.db import transaction
+from django.db.models.deletion import ProtectedError
 from django.http import HttpRequest, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import NoReverseMatch, reverse, reverse_lazy
@@ -42,7 +44,6 @@ def _set_kam_access(target_user: User, enabled: bool, *, actor: Optional[User]) 
     try:
         perm = Permission.objects.get(codename="access_kam_module", content_type__app_label="kam")
     except Permission.DoesNotExist:
-        # If you removed the KAM hard gate, permission might not exist anymore.
         return
     except Exception as e:
         logger.exception("Error fetching KAM permission: %s", e)
@@ -65,6 +66,46 @@ def _set_kam_access(target_user: User, enabled: bool, *, actor: Optional[User]) 
             )
     except Exception:
         logger.exception("Failed to update KAM access for user %s", getattr(target_user, "id", "?"))
+
+
+def _fallback_deactivate_user(user: User, *, actor: Optional[User] = None) -> None:
+    """
+    Production-safe fallback when soft_delete_user cannot complete due to
+    protected historical records or cleanup failures.
+
+    This function preserves all linked history and only deactivates access.
+    """
+    update_fields = []
+
+    if getattr(user, "is_active", True):
+        user.is_active = False
+        update_fields.append("is_active")
+
+    try:
+        user.set_unusable_password()
+        update_fields.append("password")
+    except Exception:
+        logger.exception("Failed to set unusable password for user_id=%s", getattr(user, "id", None))
+
+    if update_fields:
+        deduped_fields = []
+        for field in update_fields:
+            if field not in deduped_fields:
+                deduped_fields.append(field)
+        user.save(update_fields=deduped_fields)
+
+    try:
+        _set_kam_access(user, False, actor=actor)
+    except Exception:
+        logger.exception("Failed to revoke KAM access during fallback deactivate for user_id=%s", getattr(user, "id", None))
+
+    try:
+        profile = Profile.objects.filter(user=user).first()
+        if profile and hasattr(profile, "is_active") and getattr(profile, "is_active", True):
+            profile.is_active = False
+            profile.save(update_fields=["is_active"])
+    except Exception:
+        logger.exception("Failed to deactivate related profile for user_id=%s", getattr(user, "id", None))
 
 
 class CustomLoginView(LoginView):
@@ -125,10 +166,6 @@ def add_user(request: HttpRequest) -> HttpResponse:
             profile.permissions = pf.cleaned_data.get("permissions") or []
             profile.save()
 
-            # ---- KAM access strategy ----
-            # KAM now behaves like other modules via Profile.permissions.
-            # For backward compatibility: if a deployment still hard-gates /kam/
-            # using the Django perm, auto-enable it when user has ANY KAM code.
             perms = set((pf.cleaned_data.get("permissions") or []))
             has_any_kam = any(str(c).lower().startswith("kam_") for c in perms)
             _set_kam_access(user, has_any_kam, actor=request.user)
@@ -170,7 +207,6 @@ def edit_user(request: HttpRequest, pk: int) -> HttpResponse:
             profile.permissions = pf.cleaned_data.get("permissions") or []
             profile.save()
 
-            # ---- KAM access strategy (same as add_user) ----
             perms = set((pf.cleaned_data.get("permissions") or []))
             has_any_kam = any(str(c).lower().startswith("kam_") for c in perms)
             _set_kam_access(user, has_any_kam, actor=request.user)
@@ -197,6 +233,7 @@ def edit_user(request: HttpRequest, pk: int) -> HttpResponse:
 
 @login_required
 @user_passes_test(admin_only)
+@require_http_methods(["GET", "POST"])
 def delete_user(request: HttpRequest, pk: int) -> HttpResponse:
     try:
         user = User.objects.get(pk=pk)
@@ -216,13 +253,49 @@ def delete_user(request: HttpRequest, pk: int) -> HttpResponse:
             messages.info(request, "User is already inactive.")
             return redirect("users:list_users")
 
+        username = user.username
+
         try:
-            username = user.username
-            soft_delete_user(user, performed_by=request.user)
+            with transaction.atomic():
+                soft_delete_user(user, performed_by=request.user)
             messages.success(request, f"User '{username}' deleted (soft) and anonymized.")
+        except ProtectedError:
+            logger.warning(
+                "ProtectedError while deleting user_id=%s. Falling back to safe deactivation.",
+                user.pk,
+                exc_info=True,
+            )
+            try:
+                with transaction.atomic():
+                    _fallback_deactivate_user(user, actor=request.user)
+                messages.warning(
+                    request,
+                    f"User '{username}' could not be fully deleted because linked historical records exist. "
+                    f"The account has been deactivated instead.",
+                )
+            except Exception as fallback_error:
+                logger.exception(
+                    "Fallback deactivation failed for user_id=%s: %s",
+                    user.pk,
+                    fallback_error,
+                )
+                messages.error(
+                    request,
+                    "Could not delete this user because protected historical records exist, "
+                    "and automatic deactivation also failed. Please contact support.",
+                )
         except Exception as e:
-            logger.error("Soft-delete failed for user %s: %s", user.pk, e)
-            messages.error(request, f"Could not delete user: {e}")
+            logger.exception("Soft-delete failed for user %s: %s", user.pk, e)
+            try:
+                with transaction.atomic():
+                    _fallback_deactivate_user(user, actor=request.user)
+                messages.warning(
+                    request,
+                    f"User '{username}' could not be fully deleted. The account has been deactivated safely instead.",
+                )
+            except Exception:
+                logger.exception("Fallback deactivation failed after generic delete error for user_id=%s", user.pk)
+                messages.error(request, f"Could not delete user: {e}")
 
         return redirect("users:list_users")
 

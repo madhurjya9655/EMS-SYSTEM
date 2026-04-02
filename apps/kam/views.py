@@ -1,32 +1,5 @@
 # FILE: apps/kam/views.py
-# PURPOSE: KAM module views — all functional improvements per spec
-# UPDATED: 2026-03-06
-#
-# FIXES APPLIED IN THIS VERSION:
-#   FIX-1  Import CollectionPlanActualForm
-#   FIX-2  dashboard() — adds leads_total_count/converted count metrics,
-#           collection_planned/actual/ach_pct from CollectionPlan fields,
-#           lead_analysis_data + collection_analysis_data for Chart.js
-#   FIX-3  collections_plan() POST — use correct field names (actual_amount /
-#           collection_date / collection_reference) not wrong ones
-#   FIX-4  _build_collections_plan_ctx() — pass totals, plans QuerySet,
-#           cp_chart_data, scope_label, can_choose_kam etc. for new template
-#   FIX-5  _build_collections_rows() — correct field refs throughout
-#   FIX-6  collection_plan_record_actual() — uses CollectionPlanActualForm
-#   FIX-7  manager_view() — REMOVED @require_kam_code("kam_manager") decorator.
-#           Access is now controlled by _is_manager() group-based check only.
-#           This fixes 403 for Admin/Manager group users who don't have the
-#           'kam_manager' permission code explicitly assigned in the DB.
-#
-# NON-NEGOTIABLE BUSINESS RULES
-# - KAM sees only own data
-# - Manager sees only mapped KAM data
-# - Admin sees all
-# - No cross-data leakage
-# - No approval logic changes
-# - No leave logic changes
-# - No reimbursement logic changes
-# - No mail logic changes
+
 
 from __future__ import annotations
 
@@ -1761,15 +1734,21 @@ def visits(request: HttpRequest) -> HttpResponse:
                 actual: VisitActual = form.save(commit=False)
                 actual.plan = plan
                 actual.save()
+
+                update_fields = ["updated_at"]
+
                 if exp_sales is not None:
-                    plan.expected_sales_mt = exp_sales
+                   plan.expected_sales_mt = exp_sales
+                   update_fields.append("expected_sales_mt")
+
                 if exp_coll is not None:
-                    plan.expected_collection = exp_coll
-                if not (plan.location or "").strip():
-                    plan.location = actual.confirmed_location
-                plan.save(update_fields=["expected_sales_mt", "expected_collection", "location", "updated_at"])
-            messages.success(request, "Visit actual saved.")
-            return redirect(f"{reverse('kam:visits')}?plan_id={plan.id}")
+                   plan.expected_collection = exp_coll
+                   update_fields.append("expected_collection")
+
+                plan.save(update_fields=update_fields)
+
+                messages.success(request, "Visit actual saved.")
+                return redirect(f"{reverse('kam:visits')}?plan_id={plan.id}")
 
     selected_plan = None
     form = None

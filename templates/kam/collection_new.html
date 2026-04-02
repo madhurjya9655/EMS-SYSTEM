@@ -1,17 +1,112 @@
 {% extends "base.html" %}
-{% load crispy_forms_tags humanize %}
+
 {% block title %}Collection Entry{% endblock %}
+{% block breadcrumb %}Collection Entry{% endblock %}
 
 {% block content %}
-<h2 class="page-title">Collection Entry</h2>
-<div class="card p-3">
-  <form method="post" novalidate>
-    {% csrf_token %}
-    {{ form|crispy }}
-    <div class="d-flex gap-2">
-      <button class="btn btn-primary" type="submit">Save</button>
-      <a class="btn btn-outline-secondary" href="{% url 'kam:dashboard' %}">Back</a>
-    </div>
-  </form>
+<div class="page-header d-flex align-items-start justify-content-between flex-wrap gap-2 mb-3">
+  <div>
+    <h1 class="page-title mb-1">Collection Entry</h1>
+    <p class="text-muted small mb-0">Record a customer collection transaction.</p>
+  </div>
+  <div>
+    <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:dashboard' %}">
+      <i class="fas fa-arrow-left me-1"></i>Back to Dashboard
+    </a>
+  </div>
 </div>
+
+<div class="card border-0 shadow-sm">
+  <div class="card-header bg-white py-3">
+    <h6 class="mb-0 fw-semibold">
+      <i class="fas fa-indian-rupee-sign me-2 text-success"></i>New Collection Entry
+    </h6>
+  </div>
+  <div class="card-body p-4">
+    <form method="post" novalidate>
+      {% csrf_token %}
+
+      {% if form.non_field_errors %}
+        <div class="alert alert-danger">
+          {% for error in form.non_field_errors %}
+            <div>{{ error }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label for="{{ form.customer.id_for_label }}" class="form-label fw-semibold small">
+            Customer <span class="text-danger">*</span>
+          </label>
+          {{ form.customer }}
+          {% if form.customer.errors %}
+            <div class="text-danger small mt-1">{{ form.customer.errors.0 }}</div>
+          {% endif %}
+        </div>
+
+        <div class="col-md-6">
+          <label for="{{ form.txn_datetime.id_for_label }}" class="form-label fw-semibold small">
+            Transaction Date & Time <span class="text-danger">*</span>
+          </label>
+          {{ form.txn_datetime }}
+          {% if form.txn_datetime.errors %}
+            <div class="text-danger small mt-1">{{ form.txn_datetime.errors.0 }}</div>
+          {% endif %}
+        </div>
+
+        <div class="col-md-4">
+          <label for="{{ form.amount.id_for_label }}" class="form-label fw-semibold small">
+            Amount <span class="text-danger">*</span>
+          </label>
+          {{ form.amount }}
+          {% if form.amount.errors %}
+            <div class="text-danger small mt-1">{{ form.amount.errors.0 }}</div>
+          {% endif %}
+        </div>
+
+        <div class="col-md-4">
+          <label for="{{ form.mode.id_for_label }}" class="form-label fw-semibold small">
+            Mode
+          </label>
+          {{ form.mode }}
+          {% if form.mode.errors %}
+            <div class="text-danger small mt-1">{{ form.mode.errors.0 }}</div>
+          {% endif %}
+        </div>
+
+        <div class="col-md-4">
+          <label for="{{ form.reference.id_for_label }}" class="form-label fw-semibold small">
+            Reference
+          </label>
+          {{ form.reference }}
+          {% if form.reference.errors %}
+            <div class="text-danger small mt-1">{{ form.reference.errors.0 }}</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="d-flex gap-2 mt-4">
+        <button class="btn btn-primary" type="submit">
+          <i class="fas fa-save me-1"></i>Save
+        </button>
+        <a class="btn btn-outline-secondary" href="{% url 'kam:dashboard' %}">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  document.querySelectorAll("form input, form select, form textarea").forEach(function (el) {
+    if (el.type === "checkbox" || el.type === "radio") {
+      el.classList.add("form-check-input");
+    } else if (el.tagName === "SELECT") {
+      el.classList.add("form-select");
+    } else {
+      el.classList.add("form-control");
+    }
+  });
+}());
+</script>
 {% endblock %}

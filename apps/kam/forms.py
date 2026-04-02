@@ -1,7 +1,4 @@
 # FILE: apps/kam/forms.py
-# PURPOSE: All collection forms including CollectionPlanActualForm for recording actuals.
-# UPDATED: 2026-03-05
-
 from __future__ import annotations
 
 from decimal import Decimal
@@ -26,10 +23,6 @@ from .models import (
 User = get_user_model()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Small helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _safe_decimal(val) -> Decimal:
     try:
         return Decimal(val or 0)
@@ -50,10 +43,6 @@ def _clean_decimal_field(value, allow_blank: bool = True) -> Optional[Decimal]:
     except Exception:
         raise ValidationError("Enter a valid number.")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Visit: Single plan form
-# ─────────────────────────────────────────────────────────────────────────────
 
 class VisitPlanForm(forms.ModelForm):
     """
@@ -122,10 +111,6 @@ class VisitPlanForm(forms.ModelForm):
         return data
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Visit Actual form
-# ─────────────────────────────────────────────────────────────────────────────
-
 class VisitActualForm(forms.ModelForm):
     """
     meeting_notes is OPTIONAL — remarks can be left blank.
@@ -135,7 +120,6 @@ class VisitActualForm(forms.ModelForm):
         model = VisitActual
         fields = [
             "actual_datetime",
-            "confirmed_location",
             "successful",
             "not_success_reason",
             "meeting_notes",
@@ -157,7 +141,6 @@ class VisitActualForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["meeting_notes"].required = False
-        self.fields["confirmed_location"].required = False
 
         if self.instance and getattr(self.instance, "pk", None):
             if not (self.instance.meeting_notes or "").strip() and (self.instance.summary or "").strip():
@@ -194,10 +177,6 @@ class VisitActualForm(forms.ModelForm):
             inst.save()
         return inst
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Call & Collection forms
-# ─────────────────────────────────────────────────────────────────────────────
 
 class CallForm(forms.ModelForm):
     class Meta:
@@ -237,10 +216,6 @@ class CollectionForm(forms.ModelForm):
             raise ValidationError("Amount cannot be negative.")
         return amt
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Batch visit forms
-# ─────────────────────────────────────────────────────────────────────────────
 
 class VisitBatchForm(forms.ModelForm):
     customers = forms.ModelMultipleChoiceField(
@@ -300,10 +275,6 @@ class MultiVisitPlanLineForm(forms.Form):
             raise ValidationError("Name is required.")
         return s
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Target forms
-# ─────────────────────────────────────────────────────────────────────────────
 
 class TargetSettingForm(forms.ModelForm):
     class Meta:
@@ -383,10 +354,6 @@ class ManagerTargetForm(forms.Form):
         return data
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Collections plan — Create / Edit
-# ─────────────────────────────────────────────────────────────────────────────
-
 class CollectionPlanForm(forms.ModelForm):
     """
     FIX 2026-03-03: Removed strict mutual-exclusion error; view applies period-takes-priority logic.
@@ -452,10 +419,6 @@ class CollectionPlanForm(forms.ModelForm):
         return data
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Collection Plan — Record Actual Collection
-# ─────────────────────────────────────────────────────────────────────────────
-
 class CollectionPlanActualForm(forms.ModelForm):
     """
     Used to record actual collection against an existing CollectionPlan entry.
@@ -505,10 +468,6 @@ class CollectionPlanActualForm(forms.ModelForm):
             self.add_error("collection_date", "Collection date is required.")
         return data
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Target line inline / KAM-Manager mapping forms
-# ─────────────────────────────────────────────────────────────────────────────
 
 class TargetLineInlineForm(forms.Form):
     grade = forms.CharField(required=True, max_length=50)
