@@ -1,11 +1,4 @@
 # FILE: apps/reimbursement/views.py
-# FIXED: 2026-03-28
-# ISSUE 1 FIX: FinanceSettlementQueueView excludes PAID; FinanceBillPaymentView
-#              explicitly stamps PAID with reference before save(); ReimbursementDetailView
-#              passes display_status via get_display_status().
-# ISSUE 2 FIX: ReimbursementRequestUpdateView calls employee_resubmit() after edit
-#              so Finance queue picks up the updated request.
-# ISSUE 3 FIX: Employee can now edit/resubmit Finance-rejected locked expenses.
 from __future__ import annotations
 
 import os
@@ -15,6 +8,7 @@ from typing import Any, Dict, Iterable, Optional, Sequence, Set
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model
+from django.contrib.auth.views import redirect_to_login
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db import transaction
 from django.db.models import (
@@ -2247,9 +2241,36 @@ def download_receipt(
     line_id: Optional[int] = None,
     expense_id: Optional[int] = None,
 ):
+    """
+    FIX (Issue #4 — Receipt links from email return 404):
+
+    ROOT CAUSE:
+    The previous guard was:
+        if not user.is_authenticated:
+            raise Http404
+    When a manager or finance user clicked a receipt link from email they were
+    not yet logged in, so the view immediately raised Http404. Django had no
+    ?next= redirect information, so after login the user landed on the dashboard
+    instead of the receipt — and the email link appeared broken.
+
+    FIX:
+    Replace the Http404 with redirect_to_login(request.get_full_path()), which
+    is exactly what LoginRequiredMixin does. Django's login view stores the
+    full receipt URL in ?next= and redirects back to it after a successful login.
+
+    ACCESS CONTROL (unchanged — already correct):
+    - Owner (employee who submitted the expense) → allowed
+    - Admin (_user_is_admin) → allowed
+    - Finance (_user_is_finance) → allowed
+    - Manager (_user_is_manager) → allowed
+    - Anyone else → 403 Forbidden
+    """
     user = request.user
+
+    # FIX: redirect to login with ?next= instead of raising Http404.
+    # After login, Django redirects back to this URL automatically.
     if not user.is_authenticated:
-        raise Http404
+        return redirect_to_login(request.get_full_path())
 
     file_field = None
     if line_id is not None:
@@ -2273,11 +2294,13 @@ def download_receipt(
     if not file_field:
         raise Http404("No receipt file attached.")
 
+    # Role-based access control — unchanged from original.
     allowed = False
     if user == owner:
         allowed = True
     elif _user_is_admin(user) or _user_is_finance(user) or _user_is_manager(user):
         allowed = True
+
     if not allowed:
         return HttpResponseForbidden("You are not allowed to view this receipt.")
 
