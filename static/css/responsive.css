@@ -1,19 +1,13 @@
 /* ============================================================
    FILE: static/css/responsive.css
    BOS Lakshya ERP — Global Responsive & Mobile Fixes
-   UPDATED: Production-grade rewrite
+   FIXED: 2026-04-03
    Load order (in base.html <head>):
      1. bootstrap.min.css
      2. main.css
      3. sidebar.css
      4. custom.css / dashboard.css
      5. THIS FILE  ← must come last
-   Breakpoints (Bootstrap 5):
-     xs  < 576px
-     sm  ≥ 576px
-     md  ≥ 768px
-     lg  ≥ 992px   ← sidebar breakpoint
-     xl  ≥ 1200px
    ============================================================ */
 
 
@@ -40,91 +34,112 @@ html, body {
 
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   1. ICON RAIL + SIDEBAR — MOBILE (< 993px)
-   JS adds .mobile-open on #erpApp for the icon-rail path
-   JS adds .mobile-sidebar-open on #erpApp for partials path
+   1. ICON RAIL SYSTEM (base.html) — MOBILE (≤ 992px)
+   This is the PRIMARY navigation system.
+   JS adds .mobile-open to #erpApp when hamburger is clicked.
+   JS adds .panel-open to #erpApp when a sub-panel is open.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 @media (max-width: 992px) {
 
-  /* ── Icon rail (base.html path) ── */
+  /* ── 1a. CRITICAL: Main shell always full width on mobile ──
+     This overrides ALL states (.panel-open, .mobile-open, etc.)
+     with !important to prevent any JS class from restoring margin */
+  .erp-main-shell {
+    margin-left: 0 !important;
+    width: 100% !important;
+    max-width: 100vw !important;
+  }
+
+  /* ── 1b. Icon rail: hidden off-canvas by default ── */
   .icon-rail {
     transform: translateX(-100%) !important;
     transition: transform .26s cubic-bezier(.4,0,.2,1) !important;
     z-index: 1300;
-  }
-  .erp-app.mobile-open .icon-rail {
-    transform: translateX(0) !important;
-    box-shadow: 4px 0 24px rgba(0,0,0,.14);
+    box-shadow: none;
   }
 
-  /* ── Sub-panel only opens when rail is also open on mobile ── */
-  .erp-app.panel-open:not(.mobile-open) .sub-panel {
-    transform: translateX(calc(-1 * var(--panel-w, 240px))) !important;
+  /* ── 1c. Icon rail: slides in when .mobile-open ── */
+  .erp-app.mobile-open .icon-rail {
+    transform: translateX(0) !important;
+    box-shadow: 4px 0 24px rgba(0,0,0,.18);
   }
+
+  /* ── 1d. Sub-panel: also hidden by default on mobile ── */
+  .sub-panel {
+    transform: translateX(calc(-100% - var(--rail-w, 68px))) !important;
+  }
+
+  /* Sub-panel only visible when BOTH mobile rail AND panel are open */
   .erp-app.mobile-open.panel-open .sub-panel {
     transform: translateX(0) !important;
     left: var(--rail-w, 68px);
     width: min(248px, calc(100vw - var(--rail-w, 68px) - 8px));
   }
 
-  /* ── Legacy sidebar (partials/sidebar.html path) ── */
-  .erp-sidebar {
-    transform: translateX(-100%) !important;
-    transition: transform .26s cubic-bezier(.4,0,.2,1) !important;
-    z-index: 1300;
-    box-shadow: 4px 0 24px rgba(0,0,0,.12);
-  }
-  .erp-app.mobile-sidebar-open .erp-sidebar,
-  .erp-app.mobile-open .erp-sidebar {
-    transform: translateX(0) !important;
+  /* Sub-panel hidden if panel-open but rail NOT open */
+  .erp-app.panel-open:not(.mobile-open) .sub-panel {
+    transform: translateX(calc(-100% - var(--rail-w, 68px))) !important;
   }
 
-  /* ── Overlay ── */
+  /* ── 1e. Overlay: show when sidebar is open ── */
   .sidebar-overlay {
     display: none;
   }
-  .erp-app.mobile-open .sidebar-overlay,
-  .erp-app.mobile-sidebar-open .sidebar-overlay {
+  .erp-app.mobile-open .sidebar-overlay {
     display: block !important;
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
+    background: rgba(0,0,0,.4);
+    backdrop-filter: blur(1px);
   }
 
-  /* ── Main shell fills full width ── */
-  .erp-main-shell {
-    margin-left: 0 !important;
-  }
-  .erp-app.panel-open .erp-main-shell {
-    margin-left: 0 !important;
-  }
-
-  /* ── Show hamburger ── */
+  /* ── 1f. Show hamburger on mobile ── */
   .topbar-hamburger,
   .topbar-toggle {
     display: inline-flex !important;
   }
 
-  /* ── Hide desktop search ── */
+  /* ── 1g. Hide desktop-only search bar ── */
   .topbar-search {
     display: none !important;
   }
 
-  /* ── Suppress tooltips on touch (they block taps) ── */
+  /* ── 1h. Suppress tooltips on touch (block taps on mobile) ── */
   .rail-btn::after,
   .sidebar-icon-btn::after,
   .sidebar-user-btn::after {
     display: none !important;
   }
 
-  /* ── Larger touch targets ── */
+  /* ── 1i. Larger touch targets for rail buttons ── */
   .rail-btn,
   .sidebar-icon-btn {
     width: 46px !important;
     height: 46px !important;
   }
+
+  /* ── 1j. Larger touch targets for sub-panel links ── */
   .sub-link,
   .sub-group-btn {
     min-height: 44px;
     padding-top: 10px;
     padding-bottom: 10px;
+  }
+}
+
+/* ── Legacy sidebar (partials/sidebar.html) — also hidden on mobile ── */
+@media (max-width: 992px) {
+  .erp-sidebar {
+    transform: translateX(-100%) !important;
+    transition: transform .26s cubic-bezier(.4,0,.2,1) !important;
+    z-index: 1300;
+    box-shadow: none;
+  }
+  .erp-app.mobile-sidebar-open .erp-sidebar,
+  .erp-app.mobile-open .erp-sidebar {
+    transform: translateX(0) !important;
+    box-shadow: 4px 0 24px rgba(0,0,0,.14);
   }
 }
 
@@ -141,9 +156,14 @@ html, body {
   .topbar-right {
     gap: 8px !important;
   }
-  .profile-name,
-  .profile-meta { display: none !important; }
 
+  /* Hide name text, keep avatar */
+  .profile-name,
+  .profile-meta {
+    display: none !important;
+  }
+
+  /* Keep dropdown on screen */
   .profile-dropdown,
   .profile-dropdown-menu {
     right: 0 !important;
@@ -151,21 +171,22 @@ html, body {
     min-width: 200px;
     max-width: calc(100vw - 16px);
   }
+
   .topbar-icon-btn {
-    width: 36px;
-    height: 36px;
-    font-size: 14px;
+    width: 36px !important;
+    height: 36px !important;
+    font-size: 14px !important;
   }
   .profile-btn {
-    padding: 4px 8px 4px 4px;
+    padding: 4px 8px 4px 4px !important;
   }
 }
 
 @media (max-width: 400px) {
   .topbar-icon-btn {
-    width: 32px;
-    height: 32px;
-    font-size: 13px;
+    width: 32px !important;
+    height: 32px !important;
+    font-size: 13px !important;
   }
 }
 
@@ -217,9 +238,6 @@ html, body {
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    5. DASHBOARD CARDS — RESPONSIVE GRID
-   .dash-grid  → 3 col desktop / 2 col tablet / 1 col mobile
-   .summary-card-grid → same treatment
-   .dashboard-content-grid → stack on mobile
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 @media (max-width: 1024px) {
   .dash-grid,
@@ -237,7 +255,10 @@ html, body {
     grid-template-columns: 1fr !important;
     gap: 12px !important;
   }
-  .dash-card { min-height: 180px !important; padding: 18px 18px 16px !important; }
+  .dash-card {
+    min-height: 180px !important;
+    padding: 18px 18px 16px !important;
+  }
   .dash-greeting h1 { font-size: 22px !important; }
   .summary-card { min-height: unset !important; padding: 18px !important; }
   .summary-card-value { font-size: 32px !important; }
@@ -261,31 +282,13 @@ html, body {
   }
 }
 
-/* Dashboard hero banner */
-@media (max-width: 768px) {
-  .dashboard-hero {
-    flex-direction: column !important;
-    align-items: flex-start !important;
-    padding: 20px !important;
-    gap: 14px !important;
-  }
-  .dashboard-hero-title { font-size: 18px !important; }
-  .dashboard-hero-right { width: 100%; }
-  .hero-date-chip { justify-content: center; }
-}
-
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   6. TABLES — HORIZONTAL SCROLL ON ALL VIEWPORTS
+   6. TABLES — HORIZONTAL SCROLL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-
-/* Every table wrapper gets scroll */
 .table-responsive,
 .data-table-wrap,
-.dt-card .table-responsive,
-.reimbursement-table-wrap,
-.expense-table-wrap,
-.bills-table-wrap {
+.dt-card .table-responsive {
   width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
@@ -295,7 +298,6 @@ html, body {
 .table-responsive::-webkit-scrollbar { height: 5px; }
 .table-responsive::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 3px; }
 
-/* Catch-all: bare tables inside card-body without wrapper */
 .card-body > .table:not(.table-responsive > .table) {
   display: block;
   overflow-x: auto;
@@ -303,7 +305,6 @@ html, body {
   width: 100%;
   max-width: 100%;
 }
-/* Restore proper table display when properly wrapped */
 .table-responsive > .table,
 .data-table-wrap > .table {
   display: table !important;
@@ -328,7 +329,7 @@ html, body {
 
 @media (max-width: 576px) {
   .table thead th { font-size: 10px !important; padding: 8px 8px !important; }
-  .table tbody td { font-size: 12px !important;  padding: 8px 8px !important; }
+  .table tbody td { font-size: 12px !important; padding: 8px 8px !important; }
   .col-hide-xs { display: none !important; }
 }
 
@@ -415,7 +416,6 @@ html, body {
     flex: 0 0 100% !important;
     max-width: 100% !important;
   }
-  /* Prevent iOS auto-zoom: min 16px on inputs */
   .form-control,
   .form-select { font-size: 16px !important; }
   .form-label { margin-bottom: 4px; font-size: 12px; }
@@ -447,8 +447,6 @@ html, body {
 .page-hd-actions {
   flex-wrap: wrap;
 }
-
-/* Minimum touch target */
 .btn { min-height: 38px; }
 .btn-sm { min-height: 32px; }
 
@@ -542,7 +540,6 @@ html, body {
   .card-body   { padding: 14px !important; }
   .card-header { padding: 12px 14px !important; font-size: 13px; flex-wrap: wrap; gap: 8px; }
   .card-footer { padding: 10px 14px !important; }
-  .card-header-actions { flex-wrap: wrap; }
 }
 @media (max-width: 576px) {
   .card-body   { padding: 12px !important; }
@@ -588,136 +585,50 @@ html, body {
   .sub-link { font-size: 13px; }
   .alert { font-size: 13px; }
 }
-
 @media (max-width: 480px) {
   body { font-size: 13px; }
-  /* Keep 16px to prevent iOS zoom — do not reduce */
   .form-control,
   .form-select { font-size: 16px !important; }
 }
 
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   17. KAM / VISIT PLAN PAGE
+   17. MODULE-SPECIFIC: KAM / REIMBURSEMENT / LEAVE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 @media (max-width: 768px) {
-  .visit-plan-grid,
-  .plan-grid {
-    grid-template-columns: 1fr !important;
-    gap: 10px;
-  }
-  .kam-filters,
-  .visit-filters {
-    flex-direction: column !important;
-    gap: 8px;
-  }
-  .kam-filters > *,
-  .visit-filters > * {
-    width: 100%;
-  }
-}
+  .visit-plan-grid, .plan-grid { grid-template-columns: 1fr !important; gap: 10px; }
+  .kam-filters, .visit-filters { flex-direction: column !important; gap: 8px; }
+  .kam-filters > *, .visit-filters > * { width: 100%; }
 
-
-/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   18. COLLECTION PLAN
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-@media (max-width: 992px) {
-  .collection-filters,
-  .collections-filter-row {
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .collection-filters > *,
-  .collections-filter-row > * {
-    flex: 1 1 calc(50% - 8px);
-    min-width: 140px;
-  }
-}
-@media (max-width: 576px) {
-  .collection-filters > *,
-  .collections-filter-row > * {
-    flex: 1 1 100%;
-  }
-}
-
-
-/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   19. REIMBURSEMENT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-@media (max-width: 768px) {
-  .reimb-summary-cards {
-    grid-template-columns: repeat(2, 1fr) !important;
-    gap: 10px;
-  }
+  .reimb-summary-cards { grid-template-columns: repeat(2, 1fr) !important; gap: 10px; }
   .bill-upload-zone { width: 100%; }
-}
-@media (max-width: 480px) {
-  .reimb-summary-cards {
-    grid-template-columns: 1fr !important;
-  }
-}
 
+  .leave-balance-grid, .leave-type-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 10px; }
+  .leave-form .row > [class*="col-"] { flex: 0 0 100% !important; max-width: 100% !important; }
 
-/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   20. LEAVE PAGE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-@media (max-width: 768px) {
-  .leave-balance-grid,
-  .leave-type-grid {
-    grid-template-columns: repeat(2, 1fr) !important;
-    gap: 10px;
-  }
-  .leave-form .row > [class*="col-"] {
-    flex: 0 0 100% !important;
-    max-width: 100% !important;
-  }
-}
-@media (max-width: 480px) {
-  .leave-balance-grid,
-  .leave-type-grid {
-    grid-template-columns: 1fr !important;
-  }
-}
+  .collection-filters, .collections-filter-row { flex-wrap: wrap; gap: 8px; }
+  .collection-filters > *, .collections-filter-row > * { flex: 1 1 calc(50% - 8px); min-width: 140px; }
 
-
-/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   21. STAT / KPI CARDS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-@media (max-width: 768px) {
   .stat-card { padding: 14px !important; gap: 10px !important; }
   .stat-card-value { font-size: 1.5rem !important; }
   .stat-card-icon  { width: 38px !important; height: 38px !important; font-size: 16px !important; }
+
+  .settings-layout, .settings-grid { grid-template-columns: 1fr !important; gap: 12px; }
+  .settings-sidebar { width: 100% !important; position: static !important; }
+  .settings-form .row > [class*="col-"] { flex: 0 0 100% !important; max-width: 100% !important; }
 }
+
 @media (max-width: 480px) {
+  .reimb-summary-cards { grid-template-columns: 1fr !important; }
+  .leave-balance-grid, .leave-type-grid { grid-template-columns: 1fr !important; }
+  .collection-filters > *, .collections-filter-row > * { flex: 1 1 100%; }
   .stat-card-value { font-size: 1.3rem !important; }
   .stat-card-icon  { width: 34px !important; height: 34px !important; font-size: 15px !important; }
 }
 
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   22. SETTINGS PANEL — RESPONSIVE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-@media (max-width: 768px) {
-  /* Settings-style content panels stack */
-  .settings-layout,
-  .settings-grid {
-    grid-template-columns: 1fr !important;
-    gap: 12px;
-  }
-  .settings-sidebar {
-    width: 100% !important;
-    position: static !important;
-  }
-  /* System settings form rows stack */
-  .settings-form .row > [class*="col-"] {
-    flex: 0 0 100% !important;
-    max-width: 100% !important;
-  }
-}
-
-
-/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   23. CONTENT-AREA SAFETY NET
+   18. CONTENT-AREA SAFETY NET
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 .content-area {
   min-width: 0;
@@ -732,28 +643,20 @@ html, body {
 
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   24. UTILITY CLASSES
+   19. UTILITY CLASSES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 @media (max-width: 480px) {
-  .col-hide-xs,
-  .hide-xs { display: none !important; }
+  .col-hide-xs, .hide-xs { display: none !important; }
 }
 @media (max-width: 576px) {
-  .col-hide-sm,
-  .hide-sm { display: none !important; }
+  .col-hide-sm, .hide-sm { display: none !important; }
 }
-
-/* w-md-auto helper: full width on mobile, auto on md+ */
-@media (max-width: 767px) {
-  .w-md-auto { width: 100% !important; }
-}
-@media (min-width: 768px) {
-  .w-md-auto { width: auto !important; }
-}
+@media (max-width: 767px) { .w-md-auto { width: 100% !important; } }
+@media (min-width: 768px) { .w-md-auto { width: auto !important; } }
 
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   25. PRINT
+   20. PRINT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 @media print {
   .icon-rail,
@@ -776,7 +679,7 @@ html, body {
 
 
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   26. REDUCED MOTION
+   21. REDUCED MOTION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

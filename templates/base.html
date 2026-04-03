@@ -69,7 +69,6 @@
   img { max-width: 100%; display: block; }
   button, input, select, textarea { font: inherit; }
 
-  /* ── Skip link ── */
   .skip-link { position: absolute; left: -9999px; top: auto; }
   .skip-link:focus {
     left: 12px; top: 12px; z-index: 9999;
@@ -78,13 +77,9 @@
     box-shadow: var(--shadow-md); font-weight: 600;
   }
 
-  /* ── App shell ── */
   .erp-body { background: var(--bg); }
   .erp-app  { min-height: 100vh; display: flex; }
 
-  /* ═══════════════════════════════════════
-     ICON RAIL
-  ═══════════════════════════════════════ */
   .icon-rail {
     position: fixed; top: 0; left: 0;
     width: var(--rail-w); height: 100vh;
@@ -93,8 +88,6 @@
     display: flex; flex-direction: column; align-items: center;
     z-index: 1300;
     box-shadow: var(--shadow-xs);
-    /* Desktop: always visible */
-    transform: none;
     transition: transform .26s cubic-bezier(.4,0,.2,1), box-shadow .26s ease;
   }
 
@@ -172,9 +165,6 @@
   .rail-avatar img { width: 100%; height: 100%; object-fit: cover; }
   .rail-avatar:hover { transform: scale(1.06); }
 
-  /* ═══════════════════════════════════════
-     SUB PANEL
-  ═══════════════════════════════════════ */
   .sub-panel {
     position: fixed; top: 0; left: var(--rail-w);
     width: var(--panel-w); height: 100vh;
@@ -248,29 +238,22 @@
   .sub-panel-section { display: none; }
   .sub-panel-section.active { display: flex; flex-direction: column; height: 100%; }
 
-  /* ═══════════════════════════════════════
-     SIDEBAR OVERLAY
-  ═══════════════════════════════════════ */
   .sidebar-overlay {
-    position: fixed; inset: 0; background: rgba(0,0,0,.22);
+    position: fixed; inset: 0; background: rgba(0,0,0,.40);
     z-index: 1100; display: none; backdrop-filter: blur(1px);
   }
 
-  /* ═══════════════════════════════════════
-     MAIN SHELL
-  ═══════════════════════════════════════ */
   .erp-main-shell {
     margin-left: var(--rail-w); flex: 1; min-height: 100vh;
     display: flex; flex-direction: column;
     transition: margin-left .24s cubic-bezier(.4,0,.2,1); min-width: 0;
   }
   @media (min-width: 993px) {
-    .erp-app.panel-open .erp-main-shell { margin-left: calc(var(--rail-w) + var(--panel-w)); }
+    .erp-app.panel-open .erp-main-shell {
+      margin-left: calc(var(--rail-w) + var(--panel-w));
+    }
   }
 
-  /* ═══════════════════════════════════════
-     TOPBAR
-  ═══════════════════════════════════════ */
   .erp-topbar {
     position: sticky; top: 0; z-index: 900;
     height: var(--topbar-h); background: rgba(255,255,255,.96);
@@ -345,9 +328,6 @@
   .pd-item:hover { background: var(--surface-alt); color: var(--text); }
   .pd-item.danger:hover { background: var(--danger-soft); color: var(--danger); }
 
-  /* ═══════════════════════════════════════
-     MAIN CONTENT
-  ═══════════════════════════════════════ */
   .erp-main { flex: 1; min-width: 0; }
   .page-messages { padding: 20px 28px 0; }
   .page-container { padding: 28px 28px 36px; }
@@ -363,9 +343,6 @@
   .page-breadcrumb a:hover { color: var(--primary); }
   .page-breadcrumb .sep { font-size: 9px; color: var(--subtle); }
 
-  /* ═══════════════════════════════════════
-     DASHBOARD CARDS
-  ═══════════════════════════════════════ */
   .dash-wrap { max-width: 1400px; }
   .dash-greeting { margin-bottom: 36px; }
   .dash-greeting h1 { font-family: var(--font-display); font-size: 34px; font-weight: 800; color: var(--text); margin: 0 0 6px; letter-spacing: -.4px; }
@@ -410,9 +387,6 @@
   .dash-card.primary .dc-deco { background: rgba(255,255,255,.15); opacity: 1; }
   .dash-card.primary:hover { box-shadow: 0 18px 50px rgba(14,138,158,.34); }
 
-  /* ═══════════════════════════════════════
-     DATA TABLE
-  ═══════════════════════════════════════ */
   .dt-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-sm); }
   .dt-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border-light); flex-wrap: wrap; }
   .dt-toolbar-l, .dt-toolbar-r { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -426,9 +400,6 @@
   .data-table tbody tr:hover td { background: #f5f9ff; }
   .data-table tbody tr:last-child td { border-bottom: none; }
 
-  /* ═══════════════════════════════════════
-     STATUS BADGES
-  ═══════════════════════════════════════ */
   .status-badge { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; padding: 0 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; border: 1px solid transparent; white-space: nowrap; }
   .status-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
   .status-badge.pending         { background: #fff7ed; color: #9a3412; border-color: #fdba74; }
@@ -444,9 +415,6 @@
   .status-badge.in-progress     { background: #f5f3ff; color: #6d28d9; border-color: #c4b5fd; }
   .status-badge.in-progress::before { background: #7c3aed; }
 
-  /* ═══════════════════════════════════════
-     BUTTONS
-  ═══════════════════════════════════════ */
   .btn { border-radius: var(--radius-sm); font-weight: 600; font-size: 13.5px; font-family: var(--font-body); padding: 8px 18px; transition: all var(--transition); white-space: nowrap; min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; -webkit-tap-highlight-color: transparent; }
   .btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; box-shadow: 0 4px 12px rgba(79,140,255,.25); }
   .btn-primary:hover { background: var(--primary-dark); border-color: var(--primary-dark); box-shadow: 0 6px 18px rgba(79,140,255,.32); transform: translateY(-1px); color: #fff; }
@@ -458,57 +426,36 @@
   .btn-lg { padding: 10px 24px; font-size: 15px; min-height: 44px; }
   .btn-icon { width: 34px; height: 34px; padding: 0; display: inline-grid; place-items: center; border-radius: var(--radius-sm); min-height: unset; }
 
-  /* ═══════════════════════════════════════
-     FORMS
-  ═══════════════════════════════════════ */
   .form-label { font-weight: 600; font-size: 12.5px; color: var(--text-2); margin-bottom: 5px; }
   .form-control, .form-select { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13.5px; color: var(--text); padding: 8px 12px; transition: border-color var(--transition), box-shadow var(--transition); width: 100%; }
   .form-control:focus, .form-select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79,140,255,.10); outline: none; }
   .form-control::placeholder { color: var(--subtle); }
   .form-text { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
 
-  /* ═══════════════════════════════════════
-     CARDS
-  ═══════════════════════════════════════ */
   .card { border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); background: var(--surface); overflow: hidden; min-width: 0; }
   .card-header { background: var(--surface); border-bottom: 1px solid var(--border-light); padding: 14px 18px; font-weight: 700; font-size: 13.5px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
   .card-body { padding: 18px; }
   .card-footer { background: var(--surface-alt); border-top: 1px solid var(--border-light); padding: 12px 18px; }
 
-  /* ═══════════════════════════════════════
-     ALERTS
-  ═══════════════════════════════════════ */
   .alert { border-radius: var(--radius-sm); font-size: 13.5px; padding: 12px 16px; border: 1px solid; }
   .alert-info    { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
   .alert-success { background: #f0fdf4; color: #065f46; border-color: #a7f3d0; }
   .alert-warning { background: #fffbeb; color: #92400e; border-color: #fde68a; }
   .alert-danger  { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
 
-  /* ═══════════════════════════════════════
-     BADGES
-  ═══════════════════════════════════════ */
   .badge { font-family: var(--font-body) !important; font-weight: 700; font-size: 11px; border-radius: 999px; padding: 3px 8px; white-space: nowrap; }
 
-  /* ═══════════════════════════════════════
-     NAV TABS
-  ═══════════════════════════════════════ */
   .nav-tabs { border-bottom: 1px solid var(--border); gap: 2px; flex-wrap: nowrap; overflow-x: auto; }
   .nav-tabs::-webkit-scrollbar { display: none; }
   .nav-tabs .nav-link { color: var(--muted); font-weight: 600; font-size: 13.5px; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 16px; white-space: nowrap; transition: color var(--transition); }
   .nav-tabs .nav-link:hover { color: var(--text); }
   .nav-tabs .nav-link.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 700; }
 
-  /* ═══════════════════════════════════════
-     PAGINATION
-  ═══════════════════════════════════════ */
   .pagination { flex-wrap: wrap; gap: 4px; }
   .page-link { color: var(--primary); border-color: var(--border); font-size: 13px; padding: 6px 12px; border-radius: var(--radius-xs) !important; min-height: 36px; display: flex; align-items: center; }
   .page-link:hover { background: var(--primary-soft); border-color: var(--primary-border); color: var(--primary); }
   .page-item.active .page-link { background: var(--primary); border-color: var(--primary); }
 
-  /* ═══════════════════════════════════════
-     MODAL
-  ═══════════════════════════════════════ */
   .modal-content { border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg); overflow: hidden; }
   .modal-header { border-bottom: 1px solid var(--border-light); padding: 16px 20px; }
   .modal-title { font-family: var(--font-display); font-size: 17px; font-weight: 700; color: var(--text); }
@@ -516,16 +463,10 @@
   .modal-footer { border-top: 1px solid var(--border-light); padding: 14px 20px; }
   .modal-dialog { max-width: min(860px, calc(100vw - 2rem)); }
 
-  /* ═══════════════════════════════════════
-     DROPDOWN
-  ═══════════════════════════════════════ */
   .dropdown-menu { border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 6px; font-size: 13.5px; }
   .dropdown-item { border-radius: var(--radius-xs); padding: 7px 12px; color: var(--text-2); font-weight: 500; min-height: 36px; display: flex; align-items: center; }
   .dropdown-item:hover { background: var(--surface-alt); color: var(--text); }
 
-  /* ═══════════════════════════════════════
-     UTILS
-  ═══════════════════════════════════════ */
   .avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; background: var(--primary-soft); color: var(--primary); display: inline-grid; place-items: center; font-size: 12px; font-weight: 700; flex-shrink: 0; overflow: hidden; }
   .avatar img { width: 100%; height: 100%; object-fit: cover; }
   .empty-state { text-align: center; padding: 48px 24px; color: var(--muted); }
@@ -548,50 +489,52 @@
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--subtle); }
 
-  /* ═══════════════════════════════════════
-     FOOTER
-  ═══════════════════════════════════════ */
   .erp-footer { border-top: 1px solid var(--border); padding: 14px 28px; background: var(--surface); color: var(--muted); font-size: 12px; text-align: center; }
 
-  /* ═══════════════════════════════════════
-     MOBILE — < 993px
-     Icon rail slides in from left on mobile.
-     JS adds .mobile-open to #erpApp.
-  ═══════════════════════════════════════ */
   @media (max-width: 992px) {
+    .erp-main-shell {
+      margin-left: 0 !important;
+      width: 100% !important;
+      max-width: 100vw !important;
+    }
+
     .icon-rail {
       transform: translateX(-100%);
+      box-shadow: none;
     }
+
     .erp-app.mobile-open .icon-rail {
       transform: translateX(0);
-      box-shadow: 4px 0 24px rgba(0,0,0,.14);
+      box-shadow: 4px 0 24px rgba(0,0,0,.18);
     }
-    /* Sub-panel only when rail also open */
-    .erp-app.panel-open:not(.mobile-open) .sub-panel {
-      transform: translateX(calc(-1 * var(--panel-w)));
+
+    .sub-panel {
+      transform: translateX(calc(-1 * var(--panel-w))) !important;
+      left: var(--rail-w);
     }
     .erp-app.mobile-open.panel-open .sub-panel {
-      transform: translateX(0);
-      left: var(--rail-w);
+      transform: translateX(0) !important;
       width: min(248px, calc(100vw - var(--rail-w) - 8px));
     }
-    /* Overlay */
-    .erp-app.mobile-open .sidebar-overlay,
-    .erp-app.mobile-sidebar-open .sidebar-overlay {
+
+    .erp-app.mobile-open .sidebar-overlay {
       display: block;
     }
-    /* Main shell full width */
-    .erp-main-shell { margin-left: 0 !important; }
-    .erp-app.panel-open .erp-main-shell { margin-left: 0 !important; }
-    /* Hamburger visible */
-    .topbar-hamburger { display: inline-flex !important; }
-    /* Search hidden */
-    .topbar-search { display: none !important; }
-    /* Suppress tooltips */
+
+    .topbar-hamburger {
+      display: inline-flex !important;
+    }
+
+    .topbar-search {
+      display: none !important;
+    }
+
     .rail-btn::after,
     .sidebar-icon-btn::after,
-    .sidebar-user-btn::after { display: none !important; }
-    /* Touch targets */
+    .sidebar-user-btn::after {
+      display: none !important;
+    }
+
     .rail-btn { width: 46px !important; height: 46px !important; }
     .sub-link, .sub-group-btn { min-height: 44px; padding-top: 10px; padding-bottom: 10px; }
   }
@@ -683,9 +626,7 @@
 {% if user.is_authenticated %}
 <div class="erp-app" id="erpApp">
 
-  <!-- ICON RAIL -->
   <aside class="icon-rail" id="iconRail" aria-label="Primary navigation">
-
     <div class="rail-brand">
       <a href="{% url 'dashboard:home' %}" class="rail-brand-logo" title="BOS Lakshya">
         <img
@@ -703,7 +644,6 @@
     </div>
 
     <div class="rail-nav" id="railNav">
-
       <a href="{% url 'dashboard:home' %}"
          class="rail-btn {% if request.resolver_match.app_name == 'dashboard' %}active{% endif %}"
          data-tip="Dashboard" title="Dashboard">
@@ -759,12 +699,10 @@
         <i class="fa-solid fa-gear"></i>
       </button>
       {% endif %}
-
     </div>
 
     <div class="rail-footer">
-      <div class="rail-avatar" id="railAvatar"
-           title="{{ user.get_full_name|default:user.username }}">
+      <div class="rail-avatar" id="railAvatar" title="{{ user.get_full_name|default:user.username }}">
         {% if user.profile.image %}
           <img src="{{ user.profile.image.url }}" alt="{{ user.get_full_name }}">
         {% elif user.avatar %}
@@ -774,13 +712,10 @@
         {% endif %}
       </div>
     </div>
+  </aside>
 
-  </aside><!-- /icon-rail -->
-
-  <!-- FLY-OUT SUBMENU PANEL -->
   <div class="sub-panel" id="subPanel" aria-label="Module navigation">
 
-    <!-- PEOPLE -->
     <div class="sub-panel-section" id="panel-people">
       <div class="sub-panel-header">
         <div class="sub-panel-icon"><i class="fa-solid fa-users"></i></div>
@@ -819,7 +754,6 @@
       </div>
     </div>
 
-    <!-- TASKS -->
     <div class="sub-panel-section" id="panel-tasks">
       <div class="sub-panel-header">
         <div class="sub-panel-icon" style="background:#f5f3ff;color:#7c3aed"><i class="fa-solid fa-list-check"></i></div>
@@ -836,10 +770,12 @@
         <a href="{% url 'tasks:list_checklist' %}" class="sub-link {% if request.resolver_match.url_name == 'list_checklist' %}active{% endif %}"><i class="fa-solid fa-table-list"></i> List Checklist</a>
         {% endif %}
         {% endif %}
+
         {% if user|has_permission:"mt_bulk_upload" %}
         <span class="sub-section-label">Upload</span>
         <a href="{% url 'tasks:bulk_upload' %}" class="sub-link {% if request.resolver_match.url_name == 'bulk_upload' %}active{% endif %}"><i class="fa-solid fa-upload"></i> Bulk Upload</a>
         {% endif %}
+
         {% if user|has_any_permission:"add_delegation,list_delegation" %}
         <span class="sub-section-label">Delegation</span>
         {% if user|has_permission:"add_delegation" %}
@@ -849,6 +785,7 @@
         <a href="{% url 'tasks:list_delegation' %}" class="sub-link {% if request.resolver_match.url_name == 'list_delegation' %}active{% endif %}"><i class="fa-solid fa-users-line"></i> List Delegation</a>
         {% endif %}
         {% endif %}
+
         {% if user|has_any_permission:"add_ticket,list_all_tickets,assigned_to_me,assigned_by_me" %}
         <span class="sub-section-label">Help Tickets</span>
         {% if user|has_permission:"add_ticket" %}
@@ -867,7 +804,6 @@
       </div>
     </div>
 
-    <!-- SALES -->
     <div class="sub-panel-section" id="panel-sales">
       <div class="sub-panel-header">
         <div class="sub-panel-icon" style="background:#fff7ed;color:#ea580c"><i class="fa-solid fa-chart-line"></i></div>
@@ -892,7 +828,6 @@
       </div>
     </div>
 
-    <!-- FINANCE -->
     <div class="sub-panel-section" id="panel-finance">
       <div class="sub-panel-header">
         <div class="sub-panel-icon" style="background:#f0fdf4;color:#22c55e"><i class="fa-solid fa-wallet"></i></div>
@@ -907,6 +842,7 @@
         {% if user|has_group:"Manager" %}<a href="{% url 'petty_cash:manager_requests' %}" class="sub-link {% if request.resolver_match.url_name == 'manager_requests' %}active{% endif %}"><i class="fa-solid fa-check"></i> Manager Approvals</a>{% endif %}
         {% if user|has_group:"Finance" %}<a href="{% url 'petty_cash:finance_requests' %}" class="sub-link {% if request.resolver_match.url_name == 'finance_requests' %}active{% endif %}"><i class="fa-solid fa-coins"></i> Finance Approvals</a>{% endif %}
         {% endif %}
+
         {% if user|has_any_permission:"reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin,reimbursement_analytics" %}
         <span class="sub-section-label">Reimbursement</span>
         {% if user|has_permission:"reimbursement_apply" %}<a href="{% url 'reimbursement:expense_inbox' %}" class="sub-link {% if request.resolver_match.url_name == 'expense_inbox' %}active{% endif %}"><i class="fa-solid fa-receipt"></i> Upload Expenses</a>{% endif %}
@@ -933,7 +869,6 @@
       </div>
     </div>
 
-    <!-- REPORTS -->
     <div class="sub-panel-section" id="panel-reports">
       <div class="sub-panel-header">
         <div class="sub-panel-icon" style="background:#ecfeff;color:#0891b2"><i class="fa-solid fa-chart-pie"></i></div>
@@ -951,7 +886,6 @@
       </div>
     </div>
 
-    <!-- SETTINGS -->
     <div class="sub-panel-section" id="panel-settings">
       <div class="sub-panel-header">
         <div class="sub-panel-icon" style="background:#f9fafb;color:#6b7280"><i class="fa-solid fa-gear"></i></div>
@@ -972,13 +906,11 @@
       </div>
     </div>
 
-  </div><!-- /sub-panel -->
+  </div>
 
   <div class="sidebar-overlay" id="sidebarOverlay" aria-hidden="true"></div>
 
-  <!-- MAIN SHELL -->
   <div class="erp-main-shell" id="erpMainShell">
-
     <header class="erp-topbar" id="erpTopbar">
       <div class="topbar-left">
         <button type="button" class="topbar-hamburger" id="mobileToggle" aria-label="Toggle sidebar">
@@ -1078,10 +1010,8 @@
     <footer class="erp-footer">
       &copy; {% now "Y" %} BOS Lakshya &mdash; Employee Management System
     </footer>
-
-  </div><!-- /erp-main-shell -->
-
-</div><!-- /erp-app -->
+  </div>
+</div>
 
 {% else %}
 <main class="container py-5" id="mainContent" role="main">
@@ -1104,8 +1034,8 @@
 
   var app     = document.getElementById('erpApp');
   var overlay = document.getElementById('sidebarOverlay');
+  var isMobile = function() { return window.innerWidth <= 992; };
 
-  /* ── CSRF fetch patch ── */
   (function() {
     function getCookie(n) {
       var m = document.cookie.match('(^|;)\\s*' + n + '\\s*=\\s*([^;]+)');
@@ -1127,7 +1057,6 @@
     };
   })();
 
-  /* ── Sub-panel management ── */
   var currentPanel = null;
 
   function openPanel(panelId) {
@@ -1138,7 +1067,6 @@
     if (sec) sec.classList.add('active');
     currentPanel = panelId;
     if (app) app.classList.add('panel-open');
-    if (overlay) overlay.setAttribute('aria-hidden', 'false');
     document.querySelectorAll('.rail-btn[data-panel]').forEach(function(b) {
       b.classList.toggle('active', b.getAttribute('data-panel') === panelId);
     });
@@ -1147,7 +1075,6 @@
   function closePanel() {
     currentPanel = null;
     if (app) app.classList.remove('panel-open');
-    if (overlay) overlay.setAttribute('aria-hidden', 'true');
     document.querySelectorAll('.rail-btn[data-panel]').forEach(function(b) {
       b.classList.toggle('active', b.dataset.wasActive === '1');
     });
@@ -1163,23 +1090,30 @@
 
   document.querySelectorAll('.rail-btn[data-panel]').forEach(function(b) {
     b.dataset.wasActive = b.classList.contains('active') ? '1' : '0';
-    b.addEventListener('click', function() { togglePanel(b.getAttribute('data-panel')); });
+    b.addEventListener('click', function() {
+      if (isMobile() && app && !app.classList.contains('mobile-open')) {
+        app.classList.add('mobile-open');
+      }
+      togglePanel(b.getAttribute('data-panel'));
+    });
   });
 
-  /* Close panel via X button */
   document.addEventListener('click', function(e) {
-    if (e.target.closest('.sub-panel-close')) closePanel();
+    if (e.target.closest('.sub-panel-close')) {
+      closePanel();
+      if (isMobile()) {
+        closeMobileSidebar();
+      }
+    }
   });
 
-  /* Click overlay: close both mobile sidebar and panel */
   if (overlay) {
     overlay.addEventListener('click', function() {
-      closeMobileSidebar();
       closePanel();
+      closeMobileSidebar();
     });
   }
 
-  /* Escape key */
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
       closePanel();
@@ -1188,8 +1122,8 @@
     }
   });
 
-  /* Auto-open panel for active sub-link */
   (function() {
+    if (isMobile()) return;
     var activeLink = document.querySelector('.sub-panel-section .sub-link.active');
     if (activeLink) {
       var sec = activeLink.closest('.sub-panel-section');
@@ -1197,20 +1131,33 @@
     }
   })();
 
-  /* ── Mobile hamburger ── */
   var mobileToggle = document.getElementById('mobileToggle');
 
   function closeMobileSidebar() {
     if (app) app.classList.remove('mobile-open');
   }
 
+  function openMobileSidebar() {
+    if (app) app.classList.add('mobile-open');
+  }
+
   if (mobileToggle) {
     mobileToggle.addEventListener('click', function() {
-      if (app) app.classList.toggle('mobile-open');
+      if (app && app.classList.contains('mobile-open')) {
+        closeMobileSidebar();
+        closePanel();
+      } else {
+        openMobileSidebar();
+      }
     });
   }
 
-  /* ── Profile dropdown ── */
+  window.addEventListener('resize', function() {
+    if (!isMobile()) {
+      if (app) app.classList.remove('mobile-open');
+    }
+  });
+
   var profileBtn  = document.getElementById('profileBtn');
   var profileWrap = document.getElementById('profileWrap');
 
@@ -1232,7 +1179,6 @@
     });
   }
 
-  /* ── Auto-dismiss alerts after 5s ── */
   document.querySelectorAll('.alert.fade.show').forEach(function(el) {
     setTimeout(function() {
       if (window.bootstrap && bootstrap.Alert) {

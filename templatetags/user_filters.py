@@ -3,29 +3,26 @@ from django import template
 register = template.Library()
 
 
-@register.filter(name="has_group")
-def has_group(user, group_name):
-    """
-    Usage:
-        {% if user|has_group:"HR" %}
-    """
-    if not user or not getattr(user, "is_authenticated", False):
-        return False
-
-    if not group_name:
-        return False
-
-    return user.groups.filter(name=group_name).exists()
+def _is_authenticated(user):
+    return bool(user and getattr(user, "is_authenticated", False))
 
 
-@register.filter(name="has_permission")
-def has_permission(user, perm_name):
-    """
-    Usage:
-        {% if user|has_permission:"add_user" %}
-        {% if user|has_permission:"app_label.codename" %}
-    """
-    if not user or not getattr(user, "is_authenticated", False):
+def _normalize_permissions(perm_list):
+    if not perm_list:
+        return []
+
+    return [p.strip() for p in str(perm_list).split(",") if p.strip()]
+
+
+def _user_all_permissions(user):
+    try:
+        return user.get_all_permissions()
+    except Exception:
+        return set()
+
+
+def _has_single_permission(user, perm_name, all_perms=None):
+    if not _is_authenticated(user):
         return False
 
     if getattr(user, "is_superuser", False):
@@ -38,13 +35,43 @@ def has_permission(user, perm_name):
     if not perm_name:
         return False
 
-    # If full permission name is passed, use it directly
+    # Full permission format: app_label.codename
     if "." in perm_name:
-        return user.has_perm(perm_name)
+        try:
+            return user.has_perm(perm_name)
+        except Exception:
+            return False
 
-    # If only codename is passed, check against all user permissions
-    all_perms = user.get_all_permissions()
+    # Codename-only format: add_user
+    if all_perms is None:
+        all_perms = _user_all_permissions(user)
+
     return any(p.split(".")[-1] == perm_name for p in all_perms)
+
+
+@register.filter(name="has_group")
+def has_group(user, group_name):
+    """
+    Usage:
+        {% if user|has_group:"HR" %}
+    """
+    if not _is_authenticated(user):
+        return False
+
+    if not group_name:
+        return False
+
+    return user.groups.filter(name=str(group_name).strip()).exists()
+
+
+@register.filter(name="has_permission")
+def has_permission(user, perm_name):
+    """
+    Usage:
+        {% if user|has_permission:"add_user" %}
+        {% if user|has_permission:"app_label.codename" %}
+    """
+    return _has_single_permission(user, perm_name)
 
 
 @register.filter(name="has_any_permission")
@@ -54,30 +81,18 @@ def has_any_permission(user, perm_list):
         {% if user|has_any_permission:"add_user,list_users,delete_user" %}
     Returns True if user has ANY ONE of the listed permissions.
     """
-    if not user or not getattr(user, "is_authenticated", False):
+    if not _is_authenticated(user):
         return False
 
     if getattr(user, "is_superuser", False):
         return True
 
-    if not perm_list:
-        return False
-
-    perms = [p.strip() for p in str(perm_list).split(",") if p.strip()]
+    perms = _normalize_permissions(perm_list)
     if not perms:
         return False
 
-    all_perms = user.get_all_permissions()
-
-    for perm in perms:
-        if "." in perm:
-            if user.has_perm(perm):
-                return True
-        else:
-            if any(p.split(".")[-1] == perm for p in all_perms):
-                return True
-
-    return False
+    all_perms = _user_all_permissions(user)
+    return any(_has_single_permission(user, perm, all_perms=all_perms) for perm in perms)
 
 
 @register.filter(name="has_any_permissions")
@@ -97,27 +112,15 @@ def has_all_permissions(user, perm_list):
         {% if user|has_all_permissions:"add_user,list_users" %}
     Returns True only if user has ALL listed permissions.
     """
-    if not user or not getattr(user, "is_authenticated", False):
+    if not _is_authenticated(user):
         return False
 
     if getattr(user, "is_superuser", False):
         return True
 
-    if not perm_list:
-        return False
-
-    perms = [p.strip() for p in str(perm_list).split(",") if p.strip()]
+    perms = _normalize_permissions(perm_list)
     if not perms:
         return False
 
-    all_perms = user.get_all_permissions()
-
-    for perm in perms:
-        if "." in perm:
-            if not user.has_perm(perm):
-                return False
-        else:
-            if not any(p.split(".")[-1] == perm for p in all_perms):
-                return False
-
-    return True
+    all_perms = _user_all_permissions(user)
+    return all(_has_single_permission(user, perm, all_perms=all_perms) for perm in perms)
