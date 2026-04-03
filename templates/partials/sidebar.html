@@ -1,94 +1,285 @@
 {% load static user_filters %}
 
-<aside class="erp-sidebar" id="erpSidebar" role="navigation" aria-label="Main navigation">
+<aside class="icon-rail" id="iconRail" aria-label="Primary navigation">
 
-  <div class="sidebar-brand">
-    <a href="{% url 'dashboard:home' %}"
-       class="sidebar-brand-link"
-       aria-label="BOS Lakshya Home">
-      <span class="sidebar-brand-logo">
-        <img src="{% static 'images/bos_logo.png' %}" alt="BOS Lakshya">
+  <div class="rail-brand">
+    <a href="{% url 'dashboard:home' %}" class="rail-brand-logo" title="BOS Lakshya">
+      <img
+        src="{% static 'images/bos_logo.png' %}"
+        alt="BOS Lakshya"
+        width="36" height="36"
+        onerror="this.style.display='none';document.getElementById('railLogoFallback').style.display='flex';"
+      >
+      <span id="railLogoFallback"
+            style="display:none; width:36px; height:36px; align-items:center; justify-content:center;
+                   font-family:var(--font-display); font-size:20px; font-weight:800; color:var(--primary);">
+        B
       </span>
     </a>
   </div>
 
-  <nav class="sidebar-nav" id="sidebarNav">
+  <div class="rail-nav" id="railNav">
 
     <a href="{% url 'dashboard:home' %}"
-       class="sidebar-icon-btn {% if request.resolver_match.app_name == 'dashboard' and request.resolver_match.url_name == 'home' %}active{% endif %}"
-       data-tooltip="Dashboard"
-       aria-label="Dashboard">
+       class="rail-btn {% if request.resolver_match.app_name == 'dashboard' %}active{% endif %}"
+       data-tip="Dashboard" title="Dashboard">
       <i class="fa-solid fa-house"></i>
     </a>
 
     {% if user|has_permission:"list_users" or user|has_group:"HR" or user.is_superuser or user|has_any_permission:"leave_list,leave_apply,leave_pending_manager" %}
-    <a href="{% url 'leave:my_leaves' %}"
-       class="sidebar-icon-btn {% if request.resolver_match.app_name == 'leave' or request.resolver_match.app_name == 'recruitment' %}active{% endif %}"
-       data-tooltip="People & Leave"
-       aria-label="People & Leave">
+    <button type="button"
+            class="rail-btn {% if request.resolver_match.app_name == 'recruitment' or request.resolver_match.app_name == 'leave' %}active{% endif %}"
+            data-panel="people" data-tip="People" title="People">
       <i class="fa-solid fa-users"></i>
-    </a>
+    </button>
     {% endif %}
 
     {% if user|has_any_permission:"add_checklist,list_checklist,add_delegation,list_delegation,add_ticket,list_all_tickets,assigned_to_me,assigned_by_me,mt_bulk_upload" %}
-    <a href="{% url 'tasks:list_checklist' %}"
-       class="sidebar-icon-btn {% if request.resolver_match.app_name == 'tasks' %}active{% endif %}"
-       data-tooltip="Tasks"
-       aria-label="Tasks">
+    <button type="button"
+            class="rail-btn {% if request.resolver_match.app_name == 'tasks' %}active{% endif %}"
+            data-panel="tasks" data-tip="Tasks" title="Tasks">
       <i class="fa-solid fa-list-check"></i>
-    </a>
+    </button>
     {% endif %}
 
     {% if user|has_any_permission:"kam_dashboard,kam_plan,kam_visits,kam_customers,kam_reports,kam_manager" or user.is_superuser %}
-    <a href="{% url 'kam:dashboard' %}"
-       class="sidebar-icon-btn {% if request.resolver_match.app_name == 'kam' %}active{% endif %}"
-       data-tooltip="Sales"
-       aria-label="Sales">
+    <button type="button"
+            class="rail-btn {% if request.resolver_match.app_name == 'kam' %}active{% endif %}"
+            data-panel="sales" data-tip="Sales" title="Sales">
       <i class="fa-solid fa-chart-line"></i>
-    </a>
+    </button>
     {% endif %}
 
     {% if user|has_any_permission:"petty_cash_list,petty_cash_apply,reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin" or user|has_group:"Manager" or user|has_group:"Finance" %}
-    <a href="{% url 'reimbursement:my_reimbursements' %}"
-       class="sidebar-icon-btn {% if request.resolver_match.app_name == 'reimbursement' or request.resolver_match.app_name == 'petty_cash' %}active{% endif %}"
-       data-tooltip="Finance"
-       aria-label="Finance">
+    <button type="button"
+            class="rail-btn {% if request.resolver_match.app_name == 'reimbursement' or request.resolver_match.app_name == 'petty_cash' %}active{% endif %}"
+            data-panel="finance" data-tip="Finance" title="Finance">
       <i class="fa-solid fa-wallet"></i>
-    </a>
+    </button>
     {% endif %}
 
     {% if user|has_any_permission:"doer_tasks,weekly_mis_score,performance_score" or user.is_superuser or user|has_group:"Admin" or user|has_group:"Manager" %}
-    <a href="{% url 'reports:doer_tasks' %}"
-       class="sidebar-icon-btn {% if request.resolver_match.app_name == 'reports' %}active{% endif %}"
-       data-tooltip="Reports"
-       aria-label="Reports">
+    <button type="button"
+            class="rail-btn {% if request.resolver_match.app_name == 'reports' %}active{% endif %}"
+            data-panel="reports" data-tip="Reports" title="Reports">
       <i class="fa-solid fa-chart-pie"></i>
-    </a>
+    </button>
     {% endif %}
+
+    <div class="rail-divider"></div>
 
     {% if user|has_any_permission:"list_users,add_user" or user.is_superuser %}
-    <a href="{% url 'users:list_users' %}"
-       class="sidebar-icon-btn {% if request.resolver_match.app_name == 'users' or request.resolver_match.app_name == 'settings' %}active{% endif %}"
-       data-tooltip="Settings"
-       aria-label="Settings">
+    <button type="button"
+            class="rail-btn {% if request.resolver_match.app_name == 'users' or request.resolver_match.app_name == 'settings' %}active{% endif %}"
+            data-panel="settings" data-tip="Settings" title="Settings">
       <i class="fa-solid fa-gear"></i>
-    </a>
+    </button>
     {% endif %}
+  </div>
 
-  </nav>
-
-  <div class="sidebar-footer">
-    <div class="sidebar-user-btn"
-         data-tooltip="{{ user.get_full_name|default:user.username }}"
-         aria-label="{{ user.get_full_name|default:user.username }}">
+  <div class="rail-footer">
+    <div class="rail-avatar" id="railAvatar" title="{{ user.get_full_name|default:user.username }}">
       {% if user.profile.image %}
-        <img src="{{ user.profile.image.url }}" alt="{{ user.get_full_name|default:user.username }}">
+        <img src="{{ user.profile.image.url }}" alt="{{ user.get_full_name }}">
       {% elif user.avatar %}
-        <img src="{{ user.avatar.url }}" alt="{{ user.get_full_name|default:user.username }}">
+        <img src="{{ user.avatar.url }}" alt="{{ user.get_full_name }}">
       {% else %}
         <i class="fa-solid fa-user"></i>
       {% endif %}
     </div>
   </div>
-
 </aside>
+
+<div class="sub-panel" id="subPanel" aria-label="Module navigation">
+
+  <div class="sub-panel-section" id="panel-people">
+    <div class="sub-panel-header">
+      <div class="sub-panel-icon"><i class="fa-solid fa-users"></i></div>
+      <span class="sub-panel-title">People</span>
+      <button type="button" class="sub-panel-close" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="sub-panel-nav">
+      {% if user|has_permission:"list_users" or user|has_group:"HR" or user.is_superuser %}
+      <span class="sub-section-label">Employees</span>
+      <a href="{% url 'recruitment:employee_list' %}" class="sub-link {% if request.resolver_match.url_name == 'employee_list' %}active{% endif %}">
+        <i class="fa-solid fa-id-badge"></i> Employees
+      </a>
+      {% endif %}
+
+      {% if user|has_any_permission:"leave_list,leave_apply,leave_pending_manager" or user|has_group:"Manager" or user|has_group:"HR" or user.is_superuser %}
+      <span class="sub-section-label">Leave</span>
+      {% if user|has_any_permission:"leave_list,leave_apply" %}
+      <a href="{% url 'leave:dashboard' %}" class="sub-link {% if request.resolver_match.app_name == 'leave' and request.resolver_match.url_name == 'dashboard' %}active{% endif %}">
+        <i class="fa-solid fa-gauge"></i> My Leave Dashboard
+      </a>
+      <a href="{% url 'leave:apply_leave' %}" class="sub-link {% if request.resolver_match.url_name == 'apply_leave' %}active{% endif %}">
+        <i class="fa-solid fa-calendar-plus"></i> Apply Leave
+      </a>
+      {% endif %}
+      {% if user|has_permission:"leave_pending_manager" or user.is_superuser %}
+      <a href="{% url 'leave:manager_pending' %}" class="sub-link {% if request.resolver_match.url_name == 'manager_pending' and request.resolver_match.app_name == 'leave' %}active{% endif %}">
+        <i class="fa-solid fa-check-circle"></i> Manager Approvals
+      </a>
+      {% if user.is_superuser or user.is_staff %}
+      <a href="{% url 'leave:admin_leave_balance' %}" class="sub-link {% if request.resolver_match.url_name == 'admin_leave_balance' %}active{% endif %}">
+        <i class="fa-solid fa-table"></i> All Leave Balances
+      </a>
+      {% endif %}
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="sub-panel-section" id="panel-tasks">
+    <div class="sub-panel-header">
+      <div class="sub-panel-icon" style="background:#f5f3ff;color:#7c3aed"><i class="fa-solid fa-list-check"></i></div>
+      <span class="sub-panel-title">Tasks</span>
+      <button type="button" class="sub-panel-close" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="sub-panel-nav">
+      {% if user|has_any_permission:"add_checklist,list_checklist" %}
+      <span class="sub-section-label">Checklist</span>
+      {% if user|has_permission:"add_checklist" %}
+      <a href="{% url 'tasks:add_checklist' %}" class="sub-link {% if request.resolver_match.url_name == 'add_checklist' %}active{% endif %}"><i class="fa-solid fa-clipboard-list"></i> Add Checklist</a>
+      {% endif %}
+      {% if user|has_permission:"list_checklist" %}
+      <a href="{% url 'tasks:list_checklist' %}" class="sub-link {% if request.resolver_match.url_name == 'list_checklist' %}active{% endif %}"><i class="fa-solid fa-table-list"></i> List Checklist</a>
+      {% endif %}
+      {% endif %}
+
+      {% if user|has_permission:"mt_bulk_upload" %}
+      <span class="sub-section-label">Upload</span>
+      <a href="{% url 'tasks:bulk_upload' %}" class="sub-link {% if request.resolver_match.url_name == 'bulk_upload' %}active{% endif %}"><i class="fa-solid fa-upload"></i> Bulk Upload</a>
+      {% endif %}
+
+      {% if user|has_any_permission:"add_delegation,list_delegation" %}
+      <span class="sub-section-label">Delegation</span>
+      {% if user|has_permission:"add_delegation" %}
+      <a href="{% url 'tasks:add_delegation' %}" class="sub-link {% if request.resolver_match.url_name == 'add_delegation' %}active{% endif %}"><i class="fa-solid fa-user-plus"></i> Add Delegation</a>
+      {% endif %}
+      {% if user|has_permission:"list_delegation" %}
+      <a href="{% url 'tasks:list_delegation' %}" class="sub-link {% if request.resolver_match.url_name == 'list_delegation' %}active{% endif %}"><i class="fa-solid fa-users-line"></i> List Delegation</a>
+      {% endif %}
+      {% endif %}
+
+      {% if user|has_any_permission:"add_ticket,list_all_tickets,assigned_to_me,assigned_by_me" %}
+      <span class="sub-section-label">Help Tickets</span>
+      {% if user|has_permission:"add_ticket" %}
+      <a href="{% url 'tasks:add_help_ticket' %}" class="sub-link {% if request.resolver_match.url_name == 'add_help_ticket' %}active{% endif %}"><i class="fa-solid fa-ticket"></i> Add Help Ticket</a>
+      {% endif %}
+      {% if user|has_permission:"list_all_tickets" %}
+      <a href="{% url 'tasks:list_help_ticket' %}" class="sub-link {% if request.resolver_match.url_name == 'list_help_ticket' %}active{% endif %}"><i class="fa-solid fa-list"></i> All Help Tickets</a>
+      {% endif %}
+      {% if user|has_permission:"assigned_to_me" %}
+      <a href="{% url 'tasks:assigned_to_me' %}" class="sub-link {% if request.resolver_match.url_name == 'assigned_to_me' %}active{% endif %}"><i class="fa-solid fa-inbox"></i> Assigned to Me</a>
+      {% endif %}
+      {% if user|has_permission:"assigned_by_me" %}
+      <a href="{% url 'tasks:assigned_by_me' %}" class="sub-link {% if request.resolver_match.url_name == 'assigned_by_me' %}active{% endif %}"><i class="fa-solid fa-share-from-square"></i> Assigned by Me</a>
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="sub-panel-section" id="panel-sales">
+    <div class="sub-panel-header">
+      <div class="sub-panel-icon" style="background:#fff7ed;color:#ea580c"><i class="fa-solid fa-chart-line"></i></div>
+      <span class="sub-panel-title">Sales / KAM</span>
+      <button type="button" class="sub-panel-close" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="sub-panel-nav">
+      {% if user|has_permission:"kam_dashboard" %}<a href="{% url 'kam:dashboard' %}" class="sub-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'dashboard' %}active{% endif %}"><i class="fa-solid fa-gauge-high"></i> KAM Dashboard</a>{% endif %}
+      {% if user|has_permission:"kam_plan" %}<a href="{% url 'kam:plan' %}" class="sub-link {% if request.resolver_match.url_name == 'plan' %}active{% endif %}"><i class="fa-solid fa-calendar-plus"></i> Plan Visit</a>{% endif %}
+      {% if user|has_any_permission:"kam_plan,kam_manager" or user.is_superuser %}<a href="{% url 'kam:visit_batches' %}" class="sub-link {% if request.resolver_match.url_name == 'visit_batches' %}active{% endif %}"><i class="fa-solid fa-clock-rotate-left"></i> Visit History</a>{% endif %}
+      {% if user|has_any_permission:"kam_visits,kam_call_new,kam_collection_new" %}<a href="{% url 'kam:visits' %}" class="sub-link {% if request.resolver_match.url_name == 'visits' %}active{% endif %}"><i class="fa-solid fa-phone-volume"></i> Visits &amp; Calls</a>{% endif %}
+      {% if user|has_permission:"kam_manager" or user.is_superuser %}
+      <a href="{% url 'kam:manager_view' %}" class="sub-link {% if request.resolver_match.url_name == 'manager_view' %}active{% endif %}"><i class="fa-solid fa-chart-column"></i> Manager View</a>
+      <a href="{% url 'kam:manager_dashboard' %}" class="sub-link {% if request.resolver_match.url_name == 'manager_dashboard' %}active{% endif %}"><i class="fa-solid fa-calendar-day"></i> Today's Details</a>
+      {% endif %}
+      {% if user|has_permission:"kam_customers" %}<a href="{% url 'kam:customers' %}" class="sub-link {% if request.resolver_match.url_name == 'customers' %}active{% endif %}"><i class="fa-solid fa-address-book"></i> Customer 360</a>{% endif %}
+      {% if user|has_any_permission:"kam_targets,kam_targets_lines" %}<a href="{% url 'kam:targets' %}" class="sub-link {% if request.resolver_match.url_name == 'targets' %}active{% endif %}"><i class="fa-solid fa-bullseye"></i> Targets</a>{% endif %}
+      {% if user|has_permission:"kam_reports" %}<a href="{% url 'kam:reports' %}?metric=sales" class="sub-link {% if request.resolver_match.url_name == 'reports' and request.resolver_match.app_name == 'kam' %}active{% endif %}"><i class="fa-solid fa-file-lines"></i> KAM Reports</a>{% endif %}
+      {% if user|has_permission:"kam_collections_plan" %}<a href="{% url 'kam:collections_plan' %}" class="sub-link {% if request.resolver_match.url_name == 'collections_plan' %}active{% endif %}"><i class="fa-solid fa-money-bill-wave"></i> Collections Plan</a>{% endif %}
+      {% if user|has_any_permission:"kam_sync_now,kam_sync_trigger,kam_sync_step" %}<a href="{% url 'kam:sync_now' %}" class="sub-link"><i class="fa-solid fa-rotate"></i> Sync Now</a>{% endif %}
+      {% if user.is_superuser %}<a href="{% url 'kam:admin_kam_manager_mapping' %}" class="sub-link {% if request.resolver_match.url_name == 'admin_kam_manager_mapping' %}active{% endif %}"><i class="fa-solid fa-user-shield"></i> KAM → Manager</a>{% endif %}
+    </div>
+  </div>
+
+  <div class="sub-panel-section" id="panel-finance">
+    <div class="sub-panel-header">
+      <div class="sub-panel-icon" style="background:#f0fdf4;color:#22c55e"><i class="fa-solid fa-wallet"></i></div>
+      <span class="sub-panel-title">Finance</span>
+      <button type="button" class="sub-panel-close" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="sub-panel-nav">
+      {% if user|has_any_permission:"petty_cash_list,petty_cash_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
+      <span class="sub-section-label">Petty Cash</span>
+      {% if user|has_permission:"petty_cash_list" %}<a href="{% url 'petty_cash:list_requests' %}" class="sub-link {% if request.resolver_match.url_name == 'list_requests' %}active{% endif %}"><i class="fa-solid fa-file-invoice-dollar"></i> My Requests</a>{% endif %}
+      {% if user|has_permission:"petty_cash_apply" or user|has_group:"EA" %}<a href="{% url 'petty_cash:apply_request' %}" class="sub-link {% if request.resolver_match.url_name == 'apply_request' %}active{% endif %}"><i class="fa-solid fa-plus-circle"></i> New Request</a>{% endif %}
+      {% if user|has_group:"Manager" %}<a href="{% url 'petty_cash:manager_requests' %}" class="sub-link {% if request.resolver_match.url_name == 'manager_requests' %}active{% endif %}"><i class="fa-solid fa-check"></i> Manager Approvals</a>{% endif %}
+      {% if user|has_group:"Finance" %}<a href="{% url 'petty_cash:finance_requests' %}" class="sub-link {% if request.resolver_match.url_name == 'finance_requests' %}active{% endif %}"><i class="fa-solid fa-coins"></i> Finance Approvals</a>{% endif %}
+      {% endif %}
+
+      {% if user|has_any_permission:"reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin,reimbursement_analytics" %}
+      <span class="sub-section-label">Reimbursement</span>
+      {% if user|has_permission:"reimbursement_apply" %}<a href="{% url 'reimbursement:expense_inbox' %}" class="sub-link {% if request.resolver_match.url_name == 'expense_inbox' %}active{% endif %}"><i class="fa-solid fa-receipt"></i> Upload Expenses</a>{% endif %}
+      {% if user|has_any_permission:"reimbursement_apply,reimbursement_list" %}<a href="{% url 'reimbursement:my_reimbursements' %}" class="sub-link {% if request.resolver_match.url_name == 'my_reimbursements' %}active{% endif %}"><i class="fa-solid fa-file-medical"></i> My Requests</a>{% endif %}
+      {% if user|has_permission:"reimbursement_manager_pending" %}<a href="{% url 'reimbursement:manager_pending' %}" class="sub-link {% if request.resolver_match.url_name == 'manager_pending' and request.resolver_match.app_name == 'reimbursement' %}active{% endif %}"><i class="fa-solid fa-check-square"></i> Manager Approvals</a>{% endif %}
+      {% if user|has_permission:"reimbursement_finance_pending" %}<a href="{% url 'reimbursement:finance_pending' %}" class="sub-link {% if request.resolver_match.url_name == 'finance_pending' %}active{% endif %}"><i class="fa-solid fa-wallet"></i> Finance Approvals</a>{% endif %}
+      {% if user|has_any_permission:"reimbursement_finance_review,reimbursement_review_finance" or user.is_superuser %}
+      <a href="{% url 'reimbursement:finance_settlement' %}" class="sub-link {% if request.resolver_match.url_name == 'finance_settlement' %}active{% endif %}"><i class="fa-solid fa-hand-holding-dollar"></i> Settlement</a>
+      <a href="{% url 'reimbursement:finance_rejected_bills_queue' %}" class="sub-link {% if request.resolver_match.url_name == 'finance_rejected_bills_queue' %}active{% endif %}"><i class="fa-solid fa-rotate-left"></i> Rejected Bills</a>
+      {% endif %}
+      {% if user|has_permission:"reimbursement_admin" %}
+      <span class="sub-section-label">Admin</span>
+      <a href="{% url 'reimbursement:admin_requests' %}" class="sub-link {% if request.resolver_match.url_name == 'admin_requests' %}active{% endif %}"><i class="fa-solid fa-list-alt"></i> All Requests</a>
+      <a href="{% url 'reimbursement:admin_bills_summary' %}" class="sub-link {% if request.resolver_match.url_name == 'admin_bills_summary' %}active{% endif %}"><i class="fa-solid fa-table"></i> Bills Summary</a>
+      <a href="{% url 'reimbursement:admin_status_summary' %}" class="sub-link {% if request.resolver_match.url_name == 'admin_status_summary' %}active{% endif %}"><i class="fa-solid fa-signal"></i> Status Summary</a>
+      <a href="{% url 'reimbursement:admin_employee_summary' %}" class="sub-link {% if request.resolver_match.url_name == 'admin_employee_summary' %}active{% endif %}"><i class="fa-solid fa-user-tie"></i> Employee Summary</a>
+      <a href="{% url 'reimbursement:approver_mapping_admin' %}" class="sub-link {% if request.resolver_match.url_name == 'approver_mapping_admin' %}active{% endif %}"><i class="fa-solid fa-user-shield"></i> Approver Mapping</a>
+      <a href="{% url 'reimbursement:admin_export_csv' %}" class="sub-link"><i class="fa-solid fa-file-csv"></i> Export CSV</a>
+      {% endif %}
+      {% if user|has_permission:"reimbursement_analytics" or user.is_superuser %}
+      <a href="{% url 'reimbursement:analytics_dashboard' %}" class="sub-link {% if request.resolver_match.url_name == 'analytics_dashboard' %}active{% endif %}"><i class="fa-solid fa-chart-line"></i> Analytics</a>
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="sub-panel-section" id="panel-reports">
+    <div class="sub-panel-header">
+      <div class="sub-panel-icon" style="background:#ecfeff;color:#0891b2"><i class="fa-solid fa-chart-pie"></i></div>
+      <span class="sub-panel-title">Reports</span>
+      <button type="button" class="sub-panel-close" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="sub-panel-nav">
+      {% if user|has_permission:"doer_tasks" %}<a href="{% url 'reports:doer_tasks' %}" class="sub-link {% if request.resolver_match.url_name == 'doer_tasks' %}active{% endif %}"><i class="fa-solid fa-list-check"></i> Doer Tasks</a>{% endif %}
+      {% if user|has_permission:"weekly_mis_score" %}<a href="{% url 'reports:weekly_mis_score' %}" class="sub-link {% if request.resolver_match.url_name == 'weekly_mis_score' %}active{% endif %}"><i class="fa-solid fa-calendar-week"></i> BOS Weekly Pulse</a>{% endif %}
+      {% if user|has_permission:"performance_score" %}<a href="{% url 'reports:performance_score' %}" class="sub-link {% if request.resolver_match.url_name == 'performance_score' %}active{% endif %}"><i class="fa-solid fa-percent"></i> Performance Score</a>{% endif %}
+      {% if user.is_superuser or user|has_group:"Admin" or user|has_group:"Manager" or user|has_group:"EA" or user|has_group:"CEO" %}
+      <a href="{% url 'tasks:checklist_report' %}" class="sub-link {% if request.resolver_match.url_name == 'checklist_report' %}active{% endif %}"><i class="fa-solid fa-chart-bar"></i> Task Performance</a>
+      <a href="{% url 'tasks:recurring_report' %}" class="sub-link {% if request.resolver_match.url_name == 'recurring_report' %}active{% endif %}"><i class="fa-solid fa-arrows-rotate"></i> Recurring Tasks</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="sub-panel-section" id="panel-settings">
+    <div class="sub-panel-header">
+      <div class="sub-panel-icon" style="background:#f9fafb;color:#6b7280"><i class="fa-solid fa-gear"></i></div>
+      <span class="sub-panel-title">Settings</span>
+      <button type="button" class="sub-panel-close" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div class="sub-panel-nav">
+      <span class="sub-section-label">Users</span>
+      {% if user|has_permission:"list_users" or user.is_superuser %}<a href="{% url 'users:list_users' %}" class="sub-link {% if request.resolver_match.url_name == 'list_users' %}active{% endif %}"><i class="fa-solid fa-list"></i> List Users</a>{% endif %}
+      {% if user|has_permission:"add_user" or user.is_superuser %}<a href="{% url 'users:add_user' %}" class="sub-link {% if request.resolver_match.url_name == 'add_user' %}active{% endif %}"><i class="fa-solid fa-user-plus"></i> Add User</a>{% endif %}
+      {% if user.is_superuser %}
+      <span class="sub-section-label">System</span>
+      <a href="{% url 'users:debug_permissions' %}" class="sub-link {% if request.resolver_match.url_name == 'debug_permissions' %}active{% endif %}"><i class="fa-solid fa-bug"></i> Debug Permissions</a>
+      <a href="{% url 'settings:authorized_list' %}" class="sub-link {% if request.resolver_match.url_name == 'authorized_list' %}active{% endif %}"><i class="fa-solid fa-phone"></i> Authorized Numbers</a>
+      <a href="{% url 'settings:holiday_list' %}" class="sub-link {% if request.resolver_match.url_name == 'holiday_list' %}active{% endif %}"><i class="fa-solid fa-calendar-days"></i> Holiday List</a>
+      <a href="{% url 'settings:system_settings' %}" class="sub-link {% if request.resolver_match.url_name == 'system_settings' %}active{% endif %}"><i class="fa-solid fa-sliders"></i> System Settings</a>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
