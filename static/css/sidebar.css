@@ -1,7 +1,7 @@
 /* ============================================================
    FILE: static/css/sidebar.css
-   BOS Lakshya ERP — Icon-Only Sidebar
-   Clean light SaaS sidebar with proper brand logo handling
+   BOS Lakshya ERP — Icon-Only Sidebar (partials/sidebar.html path)
+   Mobile: uses .mobile-open on #erpApp (matches base.html JS)
    ============================================================ */
 
 :root {
@@ -18,215 +18,131 @@
   --sidebar-logo-ring: #e5e7eb;
 }
 
-/* ── Sidebar shell ───────────────────────────────────────── */
+/* ── Sidebar shell ── */
 .erp-sidebar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: var(--sidebar-w);
-  height: 100vh;
+  position: fixed; top: 0; left: 0;
+  width: var(--sidebar-w); height: 100vh;
   background: var(--sidebar-bg);
   border-right: 1px solid var(--sidebar-border);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  z-index: 1200;
-  overflow: visible;
-  box-shadow: 2px 0 16px rgba(0, 0, 0, 0.04);
+  display: flex; flex-direction: column; align-items: center;
+  z-index: 1200; overflow: visible;
+  box-shadow: 2px 0 16px rgba(0,0,0,.04);
+  /* Desktop: always visible */
+  transform: none;
+  transition: transform .26s cubic-bezier(.4,0,.2,1);
 }
 
-/* ── Brand ──────────────────────────────────────────────── */
+/* ── Brand ── */
 .sidebar-brand {
-  width: 100%;
-  height: 68px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 100%; height: 68px;
+  display: flex; align-items: center; justify-content: center;
   border-bottom: 1px solid var(--sidebar-border);
-  flex-shrink: 0;
-  background: #fff;
+  flex-shrink: 0; background: #fff;
 }
-
 .sidebar-brand-link {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  text-decoration: none;
-  border-radius: 16px;
-  outline: none;
+  display: flex; align-items: center; justify-content: center;
+  width: 48px; height: 48px; text-decoration: none;
+  border-radius: 16px; outline: none;
 }
-
 .sidebar-brand-link:focus-visible {
-  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.22);
+  box-shadow: 0 0 0 3px rgba(79,140,255,.22);
 }
-
 .sidebar-brand-logo {
-  width: 44px;
-  height: 44px;
-  border-radius: 14px;
+  width: 44px; height: 44px; border-radius: 14px;
   background: var(--sidebar-logo-bg);
-  display: grid;
-  place-items: center;
-  overflow: hidden;
+  display: grid; place-items: center; overflow: hidden;
   border: 1px solid var(--sidebar-logo-ring);
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 4px 12px rgba(15,23,42,.08);
 }
-
 .sidebar-brand-logo img {
-  width: 30px;
-  height: 30px;
-  object-fit: contain;
-  display: block;
-  filter: none;
+  width: 30px; height: 30px; object-fit: contain; display: block; filter: none;
 }
 
-/* ── Nav ────────────────────────────────────────────────── */
+/* ── Nav ── */
 .sidebar-nav {
-  flex: 1;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 14px 0;
-  overflow-y: auto;
-  overflow-x: visible;
-  scrollbar-width: none;
+  flex: 1; width: 100%;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 4px; padding: 14px 0;
+  overflow-y: auto; overflow-x: visible; scrollbar-width: none;
 }
+.sidebar-nav::-webkit-scrollbar { display: none; }
 
-.sidebar-nav::-webkit-scrollbar {
-  display: none;
-}
-
-/* ── Icon buttons ───────────────────────────────────────── */
+/* ── Icon buttons ── */
 .sidebar-icon-btn {
   position: relative;
-  width: 48px;
-  height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 14px;
-  color: var(--sidebar-icon-color);
-  text-decoration: none;
-  font-size: 18px;
-  transition: background .18s ease, color .18s ease, transform .18s ease, border-color .18s ease, box-shadow .18s ease;
-  flex-shrink: 0;
-  border: 1.5px solid transparent;
+  width: 48px; height: 48px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 14px; color: var(--sidebar-icon-color);
+  text-decoration: none; font-size: 18px;
+  transition: background .18s ease, color .18s ease, transform .18s ease, border-color .18s ease;
+  flex-shrink: 0; border: 1.5px solid transparent;
+  -webkit-tap-highlight-color: transparent;
 }
-
 .sidebar-icon-btn:hover {
-  background: #f5f7fb;
-  color: var(--sidebar-icon-hover);
-  transform: translateY(-1px);
+  background: #f5f7fb; color: var(--sidebar-icon-hover); transform: translateY(-1px);
 }
-
 .sidebar-icon-btn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.18);
+  outline: none; box-shadow: 0 0 0 3px rgba(79,140,255,.18);
 }
-
 .sidebar-icon-btn.active {
-  background: var(--sidebar-active-bg);
-  color: var(--sidebar-active-color);
+  background: var(--sidebar-active-bg); color: var(--sidebar-active-color);
   border-color: #c3d9ff;
-  box-shadow: inset 0 0 0 1px rgba(79, 140, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(79,140,255,.05);
 }
 
-/* ── Tooltip ────────────────────────────────────────────── */
+/* ── Tooltips ── */
 .sidebar-icon-btn::after,
 .sidebar-user-btn::after {
   content: attr(data-tooltip);
-  position: absolute;
-  left: calc(100% + 12px);
-  top: 50%;
-  transform: translateY(-50%);
-  background: var(--sidebar-tooltip-bg);
-  color: var(--sidebar-tooltip-color);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.2;
-  padding: 7px 10px;
-  border-radius: 8px;
-  white-space: nowrap;
-  pointer-events: none;
-  opacity: 0;
-  visibility: hidden;
-  z-index: 9999;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  position: absolute; left: calc(100% + 12px); top: 50%; transform: translateY(-50%);
+  background: var(--sidebar-tooltip-bg); color: var(--sidebar-tooltip-color);
+  font-size: 12px; font-weight: 600; line-height: 1.2;
+  padding: 7px 10px; border-radius: 8px;
+  white-space: nowrap; pointer-events: none;
+  opacity: 0; visibility: hidden; z-index: 9999;
+  box-shadow: 0 4px 16px rgba(0,0,0,.16);
   transition: opacity .15s ease, visibility .15s ease;
   font-family: var(--font-body, 'DM Sans', sans-serif);
 }
-
 .sidebar-icon-btn:hover::after,
 .sidebar-user-btn:hover::after,
 .sidebar-icon-btn:focus-visible::after,
-.sidebar-user-btn:focus-visible::after {
-  opacity: 1;
-  visibility: visible;
-}
+.sidebar-user-btn:focus-visible::after { opacity: 1; visibility: visible; }
 
-/* ── Footer / user ─────────────────────────────────────── */
+/* ── Footer / user ── */
 .sidebar-footer {
-  width: 100%;
-  padding: 12px 0;
+  width: 100%; padding: 12px 0;
   border-top: 1px solid var(--sidebar-border);
-  display: flex;
-  justify-content: center;
-  flex-shrink: 0;
-  background: #fff;
+  display: flex; justify-content: center; flex-shrink: 0; background: #fff;
 }
-
 .sidebar-user-btn {
   position: relative;
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  background: #eaf2ff;
-  color: #4f8cff;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-  font-size: 16px;
-  cursor: pointer;
+  width: 42px; height: 42px; border-radius: 50%;
+  background: #eaf2ff; color: #4f8cff;
+  display: grid; place-items: center; overflow: hidden;
+  font-size: 16px; cursor: pointer;
   border: 2px solid #c3d9ff;
   transition: transform .18s ease, box-shadow .18s ease;
 }
+.sidebar-user-btn img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sidebar-user-btn:hover { transform: scale(1.06); box-shadow: 0 4px 12px rgba(79,140,255,.22); }
+.sidebar-user-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(79,140,255,.18); }
 
-.sidebar-user-btn img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.sidebar-user-btn:hover {
-  transform: scale(1.06);
-  box-shadow: 0 4px 12px rgba(79, 140, 255, 0.22);
-}
-
-.sidebar-user-btn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.18);
-}
-
-/* ── Mobile state ──────────────────────────────────────── */
+/* ── Mobile (< 993px) ── */
 @media (max-width: 992px) {
   .erp-sidebar {
     transform: translateX(-100%);
-    transition: transform .25s cubic-bezier(.4, 0, .2, 1);
     z-index: 1300;
-    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.12);
+    box-shadow: 4px 0 24px rgba(0,0,0,.12);
   }
-
+  /* JS adds .mobile-open to #erpApp — same class used by base.html rail logic */
+  .erp-app.mobile-open .erp-sidebar,
   .erp-app.mobile-sidebar-open .erp-sidebar {
     transform: translateX(0);
   }
-
+  /* Hide tooltips on touch — they block taps */
   .sidebar-icon-btn::after,
-  .sidebar-user-btn::after {
-    display: none;
-  }
+  .sidebar-user-btn::after { display: none !important; }
+  /* Larger touch targets */
+  .sidebar-icon-btn { width: 46px !important; height: 46px !important; }
 }

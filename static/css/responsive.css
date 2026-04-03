@@ -1,110 +1,786 @@
 /* ============================================================
    FILE: static/css/responsive.css
-   BOS Lakshya ERP — Responsive Breakpoints
+   BOS Lakshya ERP — Global Responsive & Mobile Fixes
+   UPDATED: Production-grade rewrite
+   Load order (in base.html <head>):
+     1. bootstrap.min.css
+     2. main.css
+     3. sidebar.css
+     4. custom.css / dashboard.css
+     5. THIS FILE  ← must come last
+   Breakpoints (Bootstrap 5):
+     xs  < 576px
+     sm  ≥ 576px
+     md  ≥ 768px
+     lg  ≥ 992px   ← sidebar breakpoint
+     xl  ≥ 1200px
    ============================================================ */
 
-/* ── 1200px ── */
-@media (max-width: 1200px) {
-  .dash-cards-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .grid-3, .grid-4 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   0. GLOBAL OVERFLOW GUARD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
 }
 
-/* ── 992px — sidebar off-canvas ── */
+.erp-main-shell,
+.erp-main,
+.page-container,
+.page-messages {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.page-container > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   1. ICON RAIL + SIDEBAR — MOBILE (< 993px)
+   JS adds .mobile-open on #erpApp for the icon-rail path
+   JS adds .mobile-sidebar-open on #erpApp for partials path
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 @media (max-width: 992px) {
-  :root { --sidebar-w: 0px; }
 
-  .erp-main-shell { margin-left: 0; }
-
-  .topbar-toggle { display: inline-flex; }
-
-  .dash-cards-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* ── Icon rail (base.html path) ── */
+  .icon-rail {
+    transform: translateX(-100%) !important;
+    transition: transform .26s cubic-bezier(.4,0,.2,1) !important;
+    z-index: 1300;
+  }
+  .erp-app.mobile-open .icon-rail {
+    transform: translateX(0) !important;
+    box-shadow: 4px 0 24px rgba(0,0,0,.14);
   }
 
-  .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* ── Sub-panel only opens when rail is also open on mobile ── */
+  .erp-app.panel-open:not(.mobile-open) .sub-panel {
+    transform: translateX(calc(-1 * var(--panel-w, 240px))) !important;
+  }
+  .erp-app.mobile-open.panel-open .sub-panel {
+    transform: translateX(0) !important;
+    left: var(--rail-w, 68px);
+    width: min(248px, calc(100vw - var(--rail-w, 68px) - 8px));
+  }
 
-  .topbar-subtitle { display: none !important; }
+  /* ── Legacy sidebar (partials/sidebar.html path) ── */
+  .erp-sidebar {
+    transform: translateX(-100%) !important;
+    transition: transform .26s cubic-bezier(.4,0,.2,1) !important;
+    z-index: 1300;
+    box-shadow: 4px 0 24px rgba(0,0,0,.12);
+  }
+  .erp-app.mobile-sidebar-open .erp-sidebar,
+  .erp-app.mobile-open .erp-sidebar {
+    transform: translateX(0) !important;
+  }
 
-  /* Sidebar overlay */
-  .sidebar-overlay { display: none; }
-  .erp-app.mobile-sidebar-open .sidebar-overlay { display: block; }
+  /* ── Overlay ── */
+  .sidebar-overlay {
+    display: none;
+  }
+  .erp-app.mobile-open .sidebar-overlay,
+  .erp-app.mobile-sidebar-open .sidebar-overlay {
+    display: block !important;
+  }
+
+  /* ── Main shell fills full width ── */
+  .erp-main-shell {
+    margin-left: 0 !important;
+  }
+  .erp-app.panel-open .erp-main-shell {
+    margin-left: 0 !important;
+  }
+
+  /* ── Show hamburger ── */
+  .topbar-hamburger,
+  .topbar-toggle {
+    display: inline-flex !important;
+  }
+
+  /* ── Hide desktop search ── */
+  .topbar-search {
+    display: none !important;
+  }
+
+  /* ── Suppress tooltips on touch (they block taps) ── */
+  .rail-btn::after,
+  .sidebar-icon-btn::after,
+  .sidebar-user-btn::after {
+    display: none !important;
+  }
+
+  /* ── Larger touch targets ── */
+  .rail-btn,
+  .sidebar-icon-btn {
+    width: 46px !important;
+    height: 46px !important;
+  }
+  .sub-link,
+  .sub-group-btn {
+    min-height: 44px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
 }
 
-/* ── 768px ── */
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   2. TOPBAR — MOBILE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 @media (max-width: 768px) {
-  .page-container { padding: 16px 16px 24px; }
-  .page-messages  { padding: 16px 16px 0; }
-
-  .erp-topbar { padding: 0 16px; height: 60px; }
-
-  .dash-greeting-title { font-size: 24px; }
-
-  .dash-cards-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
+  .erp-topbar {
+    padding: 0 12px !important;
+    height: 56px !important;
   }
+  .topbar-left,
+  .topbar-right {
+    gap: 8px !important;
+  }
+  .profile-name,
+  .profile-meta { display: none !important; }
 
-  .dash-card { min-height: 190px; padding: 18px 18px 16px; }
-  .dash-card-title { font-size: 15px; }
-
-  .page-header { flex-direction: column; align-items: flex-start; gap: 10px; }
-  .page-header-right { width: 100%; }
-  .page-title { font-size: 19px; }
-
-  .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
-
-  .dt-toolbar { flex-direction: column; align-items: flex-start; }
-  .dt-toolbar-right { width: 100%; }
-  .dt-search { width: 100%; }
-
-  .table-toolbar { flex-direction: column; align-items: flex-start; }
-  .table-toolbar-right { width: 100%; }
-
-  .card-body  { padding: 14px; }
-  .card-header { padding: 12px 14px; }
-
-  .modal-dialog { margin: .5rem; max-width: calc(100vw - 1rem); }
-
-  .data-table { min-width: 560px; }
+  .profile-dropdown,
+  .profile-dropdown-menu {
+    right: 0 !important;
+    left: auto !important;
+    min-width: 200px;
+    max-width: calc(100vw - 16px);
+  }
+  .topbar-icon-btn {
+    width: 36px;
+    height: 36px;
+    font-size: 14px;
+  }
+  .profile-btn {
+    padding: 4px 8px 4px 4px;
+  }
 }
 
-/* ── 576px ── */
-@media (max-width: 576px) {
-  .dash-cards-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .quick-actions-grid { grid-template-columns: 1fr 1fr; }
-
-  .col-hide-sm { display: none !important; }
-
-  .topbar-search { display: none !important; }
-
-  .dash-greeting-title { font-size: 20px; }
-
-  .btn-sm { padding: 4px 10px; font-size: 11.5px; min-height: 30px; }
-
-  .data-table { min-width: 480px; }
-  .data-table thead th { font-size: 10px; padding: 9px 10px; }
-  .data-table tbody td { font-size: 12.5px; padding: 10px 10px; }
-
-  .page-title { font-size: 17px; }
-}
-
-/* ── 400px ── */
 @media (max-width: 400px) {
-  .page-container { padding: 12px 12px 20px; }
+  .topbar-icon-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 13px;
+  }
+}
 
-  .dash-card { padding: 16px 16px 14px; min-height: 170px; }
-  .dash-card-title { font-size: 14px; }
 
-  .btn { font-size: 12.5px; padding: 6px 12px; }
-  .btn-sm { font-size: 11px; padding: 3px 8px; }
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   3. PAGE CONTAINER — PADDING SCALE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 992px) {
+  .page-container { padding: 18px 18px 28px !important; }
+  .page-messages  { padding: 18px 18px 0 !important; }
+}
+@media (max-width: 768px) {
+  .page-container { padding: 14px 14px 22px !important; }
+  .page-messages  { padding: 14px 14px 0 !important; }
+}
+@media (max-width: 576px) {
+  .page-container { padding: 12px 12px 18px !important; }
+  .page-messages  { padding: 12px 12px 0 !important; }
+}
 
-  .modal-dialog { margin: 0; max-width: 100vw; }
-  .modal-content { border-radius: 0; }
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   4. PAGE HEADER — STACK ON MOBILE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 768px) {
+  .page-header,
+  .page-hd {
+    flex-direction: column !important;
+    gap: 12px !important;
+    margin-bottom: 18px !important;
+  }
+  .page-header-right,
+  .page-hd-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .page-title,
+  .page-hd-left h1 {
+    font-size: 20px !important;
+    letter-spacing: -.2px;
+  }
+}
+@media (max-width: 576px) {
+  .page-title,
+  .page-hd-left h1 { font-size: 18px !important; }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   5. DASHBOARD CARDS — RESPONSIVE GRID
+   .dash-grid  → 3 col desktop / 2 col tablet / 1 col mobile
+   .summary-card-grid → same treatment
+   .dashboard-content-grid → stack on mobile
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 1024px) {
+  .dash-grid,
+  .summary-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 14px !important;
+  }
+  .dashboard-content-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+@media (max-width: 576px) {
+  .dash-grid,
+  .summary-card-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+  .dash-card { min-height: 180px !important; padding: 18px 18px 16px !important; }
+  .dash-greeting h1 { font-size: 22px !important; }
+  .summary-card { min-height: unset !important; padding: 18px !important; }
+  .summary-card-value { font-size: 32px !important; }
+}
+
+/* Generic grid helpers */
+@media (max-width: 768px) {
+  .grid-2,
+  .grid-3,
+  .grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 12px !important;
+  }
+}
+@media (max-width: 576px) {
+  .grid-2,
+  .grid-3,
+  .grid-4 {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+}
+
+/* Dashboard hero banner */
+@media (max-width: 768px) {
+  .dashboard-hero {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    padding: 20px !important;
+    gap: 14px !important;
+  }
+  .dashboard-hero-title { font-size: 18px !important; }
+  .dashboard-hero-right { width: 100%; }
+  .hero-date-chip { justify-content: center; }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   6. TABLES — HORIZONTAL SCROLL ON ALL VIEWPORTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+/* Every table wrapper gets scroll */
+.table-responsive,
+.data-table-wrap,
+.dt-card .table-responsive,
+.reimbursement-table-wrap,
+.expense-table-wrap,
+.bills-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: #e5e7eb transparent;
+}
+.table-responsive::-webkit-scrollbar { height: 5px; }
+.table-responsive::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 3px; }
+
+/* Catch-all: bare tables inside card-body without wrapper */
+.card-body > .table:not(.table-responsive > .table) {
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
+  max-width: 100%;
+}
+/* Restore proper table display when properly wrapped */
+.table-responsive > .table,
+.data-table-wrap > .table {
+  display: table !important;
+  width: 100%;
+  min-width: 540px;
+}
+.data-table { min-width: 600px; }
+
+@media (max-width: 768px) {
+  .table thead th {
+    font-size: 10.5px !important;
+    padding: 9px 10px !important;
+    white-space: nowrap;
+  }
+  .table tbody td {
+    font-size: 12.5px !important;
+    padding: 9px 10px !important;
+  }
+  .action-cell { text-align: right; white-space: nowrap; }
+  .action-cell .btn-sm { padding: 3px 8px; font-size: 11.5px; }
+}
+
+@media (max-width: 576px) {
+  .table thead th { font-size: 10px !important; padding: 8px 8px !important; }
+  .table tbody td { font-size: 12px !important;  padding: 8px 8px !important; }
+  .col-hide-xs { display: none !important; }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   7. TABLE TOOLBAR — STACK ON MOBILE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 768px) {
+  .dt-toolbar,
+  .table-toolbar {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 10px !important;
+    padding: 12px 14px !important;
+  }
+  .dt-toolbar-l,
+  .dt-toolbar-r,
+  .table-toolbar-left,
+  .table-toolbar-right {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .dt-toolbar-r .btn,
+  .table-toolbar-right .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .toolbar-search { width: 100%; }
+  .toolbar-search input { width: 100%; min-width: 0; }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   8. FILTER ROWS — WRAP ON MOBILE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.filter-row,
+.filter-bar,
+.filters-wrap,
+.filters-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+@media (max-width: 768px) {
+  .filter-row > *,
+  .filter-bar > *,
+  .filters-wrap > *,
+  .filters-row > * {
+    flex: 1 1 calc(50% - 8px);
+    min-width: 140px;
+  }
+  .filter-row .btn[type="submit"],
+  .filter-row .btn-primary,
+  .filter-bar .btn[type="submit"],
+  .filter-bar .btn-primary,
+  .filters-row .btn[type="submit"],
+  .filters-row .btn-primary {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .filter-row > *,
+  .filter-bar > *,
+  .filters-wrap > *,
+  .filters-row > * {
+    flex: 1 1 100%;
+  }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   9. FORMS — SINGLE COLUMN ON MOBILE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 768px) {
+  .card-body .row > [class*="col-md-"],
+  .card-body .row > [class*="col-lg-"],
+  .modal-body .row > [class*="col-md-"],
+  .modal-body .row > [class*="col-lg-"] {
+    flex: 0 0 100% !important;
+    max-width: 100% !important;
+  }
+  /* Prevent iOS auto-zoom: min 16px on inputs */
+  .form-control,
+  .form-select { font-size: 16px !important; }
+  .form-label { margin-bottom: 4px; font-size: 12px; }
+  .mb-3, .mb-4 { margin-bottom: 12px !important; }
+}
+
+@media (max-width: 576px) {
+  form .row > [class*="col-"] {
+    flex: 0 0 100% !important;
+    max-width: 100% !important;
+  }
+  .form-inline,
+  form.d-flex {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .form-inline .btn,
+  form.d-flex .btn { width: 100%; }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   10. BUTTONS — NO OVERFLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.btn-group,
+.btn-toolbar,
+.page-header-right,
+.page-hd-actions {
+  flex-wrap: wrap;
+}
+
+/* Minimum touch target */
+.btn { min-height: 38px; }
+.btn-sm { min-height: 32px; }
+
+@media (max-width: 576px) {
+  .page-header-right .btn,
+  .page-hd-actions .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .btn { padding: 7px 14px; font-size: 13px; }
+  .btn-sm { padding: 5px 10px; font-size: 12px; }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   11. MODALS — MOBILE FRIENDLY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 768px) {
+  .modal-dialog {
+    margin: 8px auto !important;
+    max-width: calc(100vw - 16px) !important;
+    width: calc(100vw - 16px) !important;
+  }
+  .modal-content {
+    border-radius: 14px;
+    max-height: calc(100dvh - 40px);
+    overflow-y: auto;
+  }
+  .modal-header { padding: 14px 16px !important; }
+  .modal-body   { padding: 16px !important; overflow-x: hidden; }
+  .modal-footer {
+    padding: 12px 16px !important;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .modal-footer .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .modal-body .table-responsive,
+  .modal-body .table-wrap { max-height: 300px; overflow-y: auto; }
+  .modal-body .row > [class*="col-"] {
+    flex: 0 0 100% !important;
+    max-width: 100% !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .modal-dialog {
+    margin: 0 !important;
+    max-width: 100vw !important;
+    width: 100vw !important;
+    min-height: 100dvh;
+  }
+  .modal-content { border-radius: 0; min-height: 100dvh; }
+  .modal-dialog-scrollable .modal-body {
+    max-height: calc(100dvh - 120px);
+  }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   12. DROPDOWNS — STAY IN VIEWPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 768px) {
+  .dropdown-menu {
+    max-width: calc(100vw - 24px);
+    white-space: normal;
+    word-break: break-word;
+  }
+  .dropdown-menu-end {
+    right: 0 !important;
+    left: auto !important;
+  }
+  .dropdown-menu-start {
+    left: 0 !important;
+    right: auto !important;
+  }
+  .dropdown-item {
+    font-size: 13px;
+    padding: 8px 12px;
+    min-height: 40px;
+  }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   13. CARDS — MOBILE PADDING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 768px) {
+  .card-body   { padding: 14px !important; }
+  .card-header { padding: 12px 14px !important; font-size: 13px; flex-wrap: wrap; gap: 8px; }
+  .card-footer { padding: 10px 14px !important; }
+  .card-header-actions { flex-wrap: wrap; }
+}
+@media (max-width: 576px) {
+  .card-body   { padding: 12px !important; }
+  .card-header { padding: 10px 12px !important; }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   14. NAV TABS — HORIZONTAL SCROLL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.nav-tabs {
+  flex-wrap: nowrap !important;
+  overflow-x: auto !important;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.nav-tabs::-webkit-scrollbar { display: none; }
+
+@media (max-width: 576px) {
+  .nav-tabs .nav-link { padding: 8px 12px !important; font-size: 13px !important; }
+  .module-tabs { padding: 3px !important; }
+  .module-tab  { padding: 7px 11px !important; font-size: 12.5px !important; }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   15. PAGINATION — WRAP ON MOBILE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 576px) {
+  .pagination { flex-wrap: wrap !important; justify-content: center; gap: 4px; }
+  .page-link  { padding: 5px 10px !important; font-size: 12px !important; min-height: 34px !important; }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   16. FONT SCALING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 768px) {
+  body { font-size: 13.5px; }
+  .badge { font-size: 10.5px !important; }
+  .status-badge { font-size: 11px !important; }
+  .sub-link { font-size: 13px; }
+  .alert { font-size: 13px; }
+}
+
+@media (max-width: 480px) {
+  body { font-size: 13px; }
+  /* Keep 16px to prevent iOS zoom — do not reduce */
+  .form-control,
+  .form-select { font-size: 16px !important; }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   17. KAM / VISIT PLAN PAGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 768px) {
+  .visit-plan-grid,
+  .plan-grid {
+    grid-template-columns: 1fr !important;
+    gap: 10px;
+  }
+  .kam-filters,
+  .visit-filters {
+    flex-direction: column !important;
+    gap: 8px;
+  }
+  .kam-filters > *,
+  .visit-filters > * {
+    width: 100%;
+  }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   18. COLLECTION PLAN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 992px) {
+  .collection-filters,
+  .collections-filter-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .collection-filters > *,
+  .collections-filter-row > * {
+    flex: 1 1 calc(50% - 8px);
+    min-width: 140px;
+  }
+}
+@media (max-width: 576px) {
+  .collection-filters > *,
+  .collections-filter-row > * {
+    flex: 1 1 100%;
+  }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   19. REIMBURSEMENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 768px) {
+  .reimb-summary-cards {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 10px;
+  }
+  .bill-upload-zone { width: 100%; }
+}
+@media (max-width: 480px) {
+  .reimb-summary-cards {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   20. LEAVE PAGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 768px) {
+  .leave-balance-grid,
+  .leave-type-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 10px;
+  }
+  .leave-form .row > [class*="col-"] {
+    flex: 0 0 100% !important;
+    max-width: 100% !important;
+  }
+}
+@media (max-width: 480px) {
+  .leave-balance-grid,
+  .leave-type-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   21. STAT / KPI CARDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 768px) {
+  .stat-card { padding: 14px !important; gap: 10px !important; }
+  .stat-card-value { font-size: 1.5rem !important; }
+  .stat-card-icon  { width: 38px !important; height: 38px !important; font-size: 16px !important; }
+}
+@media (max-width: 480px) {
+  .stat-card-value { font-size: 1.3rem !important; }
+  .stat-card-icon  { width: 34px !important; height: 34px !important; font-size: 15px !important; }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   22. SETTINGS PANEL — RESPONSIVE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 768px) {
+  /* Settings-style content panels stack */
+  .settings-layout,
+  .settings-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px;
+  }
+  .settings-sidebar {
+    width: 100% !important;
+    position: static !important;
+  }
+  /* System settings form rows stack */
+  .settings-form .row > [class*="col-"] {
+    flex: 0 0 100% !important;
+    max-width: 100% !important;
+  }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   23. CONTENT-AREA SAFETY NET
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.content-area {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  width: 100%;
+}
+@media (max-width: 992px) { .content-area { padding: 18px !important; } }
+@media (max-width: 768px) { .content-area { padding: 14px !important; } }
+@media (max-width: 576px) { .content-area { padding: 12px !important; } }
+@media (max-width: 400px) { .content-area { padding: 10px !important; } }
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   24. UTILITY CLASSES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (max-width: 480px) {
+  .col-hide-xs,
+  .hide-xs { display: none !important; }
+}
+@media (max-width: 576px) {
+  .col-hide-sm,
+  .hide-sm { display: none !important; }
+}
+
+/* w-md-auto helper: full width on mobile, auto on md+ */
+@media (max-width: 767px) {
+  .w-md-auto { width: 100% !important; }
+}
+@media (min-width: 768px) {
+  .w-md-auto { width: auto !important; }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   25. PRINT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media print {
+  .icon-rail,
+  .erp-sidebar,
+  .sub-panel,
+  .sidebar-overlay,
+  .erp-topbar,
+  .erp-footer,
+  .page-header-right,
+  .page-hd-actions,
+  .topbar-hamburger,
+  .topbar-toggle { display: none !important; }
+
+  .erp-main-shell { margin-left: 0 !important; }
+  .page-container { padding: 0 !important; }
+  .card { box-shadow: none !important; border: 1px solid #ccc !important; overflow: visible !important; }
+  .table-responsive { overflow: visible !important; }
+  .table { font-size: 11px; }
+}
+
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   26. REDUCED MOTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition: none !important;
+    animation: none !important;
+  }
 }
