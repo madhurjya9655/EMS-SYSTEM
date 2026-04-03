@@ -1,35 +1,4 @@
 # apps/users/permission_urls.py
-# Central map from our app-level permission codes → URL names.
-#
-# Used by:
-#   1. CustomLoginView.get_success_url() — post-login navigation fallback
-#      (wraps reverse() in try/except NoReverseMatch, so token-arg URLs are safe)
-#   2. PermissionEnforcementMiddleware — builds reverse map: url_name → [codes]
-#      grants access if user holds ANY of the mapped codes for that URL
-#   3. PermissionDebugMiddleware — logs required permissions on 403s
-#
-# RULES:
-#   • Dict keys must be unique (one permission code per entry)
-#   • Multiple codes may map to the same URL name — enforcement middleware
-#     grants access if user holds ANY of them
-#   • URLs that require path arguments (e.g. <str:token>) are safe to include;
-#     CustomLoginView.get_success_url() skips them silently via NoReverseMatch
-#
-# CHANGELOG:
-#   2026-04-02  kam_visit_approve → kam:visit_batch_approve_link  (was kam:visit_approve)
-#               kam_visit_reject  → kam:visit_batch_reject_link   (was kam:visit_reject)
-#               Added kam_visit_approve_legacy → kam:visit_approve  (retains legacy mapping)
-#               Added kam_visit_reject_legacy  → kam:visit_reject   (retains legacy mapping)
-#
-#               Root cause of 403 on email approval links: the enforcement
-#               middleware had no entry for kam:visit_batch_approve_link /
-#               kam:visit_batch_reject_link, so PermissionDebugMiddleware logged
-#               "Could not determine required permissions for URL" and the view
-#               decorator @require_kam_code("kam_manager") blocked managers who
-#               hold kam_visit_approve/kam_visit_reject instead of kam_manager.
-#               Fix: point primary mapping to the batch link views (the ones
-#               actually used in the email approval flow), and retain legacy
-#               view mappings under separate keys for backward compatibility.
 
 PERMISSION_URLS: dict[str, str] = {
 
@@ -69,30 +38,15 @@ PERMISSION_URLS: dict[str, str] = {
     "kam_plan":                 "kam:plan",
     "kam_visits":               "kam:visits",
 
-    # ── KAM: Visit approval — email link views (PRIMARY mapping) ──────
-    #
-    # These are the URLs embedded in approval emails sent to managers.
-    # The permission codes kam_visit_approve / kam_visit_reject are what
-    # managers are granted in their Profile.permissions JSON.
-    #
-    # Mapping these codes to the batch-link URL names ensures:
-    #   • PermissionEnforcementMiddleware correctly resolves the required
-    #     permission when a manager hits /kam/visit-history/approve-link/<token>/
-    #   • PermissionDebugMiddleware no longer logs "Could not determine
-    #     required permissions for URL: kam:visit_batch_approve_link"
-    #
-    # NOTE: These URLs require a <str:token> path argument.
-    # CustomLoginView.get_success_url() skips them safely via NoReverseMatch.
+
     "kam_visit_approve":        "kam:visit_batch_approve_link",
     "kam_visit_reject":         "kam:visit_batch_reject_link",
 
-    # ── KAM: Visit approval — legacy plan-level views ─────────────────
-    #
-    # Legacy POST-only views (visit_approve / visit_reject) still exist
-    # and are protected by their own @require_kam_code decorators.
-    # Retained here so PermissionDebugMiddleware can report them correctly
-    # if a 403 occurs on those URLs, and so the enforcement middleware
-    # correctly identifies their required permissions.
+    # Alias codes — in case some manager profiles store these variants
+    "kam_visit_approve_link":   "kam:visit_batch_approve_link",
+    "kam_visit_reject_link":    "kam:visit_batch_reject_link",
+
+
     "kam_visit_approve_legacy": "kam:visit_approve",
     "kam_visit_reject_legacy":  "kam:visit_reject",
 
@@ -113,18 +67,31 @@ PERMISSION_URLS: dict[str, str] = {
     "kam_sync_trigger":         "kam:sync_trigger",
     "kam_sync_step":            "kam:sync_step",
 
-    # ── Reimbursement ──────────────────────────────────────────────────
+    # ── Reimbursement: Queue / list pages ──────────────────────────────
+    #
+    # These are the PRIMARY landing pages and are the safe CTA targets for
+    # all reimbursement notification emails.
     "reimbursement_apply":              "reimbursement:my_reimbursements",
     "reimbursement_list":               "reimbursement:my_reimbursements",
     "reimbursement_manager_pending":    "reimbursement:manager_pending",
-    "reimbursement_manager_review":     "reimbursement:manager_pending",
     "reimbursement_management_pending": "reimbursement:management_pending",
-    "reimbursement_management_review":  "reimbursement:management_pending",
     "reimbursement_finance_pending":    "reimbursement:finance_pending",
-    "reimbursement_finance_review":     "reimbursement:finance_pending",
-    "reimbursement_review_finance":     "reimbursement:finance_pending",
     "reimbursement_admin":              "reimbursement:admin_requests",
     "reimbursement_analytics":          "reimbursement:analytics_dashboard",
+
+   
+    "reimbursement_manager_review":     "reimbursement:manager_review",
+    "reimbursement_management_review":  "reimbursement:management_review",
+    "reimbursement_finance_review":     "reimbursement:finance_review",
+    "reimbursement_review_finance":     "reimbursement:finance_pending",
+
+    # Finance verification page (separate from settlement review)
+    # reimbursement_finance_review_verify is an alias used by some email CTAs
+    "reimbursement_finance_verify":     "reimbursement:finance_verify",
+
+    # Request detail — employees, managers, and finance all navigate here
+    # after clicking "View Details" in notification emails.
+    "reimbursement_request_detail":     "reimbursement:request_detail",
 
     # ── Reports ────────────────────────────────────────────────────────
     "doer_tasks":               "reports:doer_tasks",

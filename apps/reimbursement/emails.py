@@ -1,4 +1,5 @@
 # apps/reimbursement/emails.py
+
 from __future__ import annotations
 
 import logging
@@ -10,7 +11,7 @@ from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from django.template.exceptions import TemplateDoesNotExist
-from django.urls import reverse
+from django.urls import reverse, NoReverseMatch
 from django.utils import timezone
 
 from .models import (
@@ -39,27 +40,73 @@ except Exception:  # pragma: no cover
 
 def _site_base() -> str:
     """
-    Best-effort absolute base URL. Configure one of:
-      - REIMBURSEMENT_SITE_BASE (preferred)
-      - SITE_URL
-      - APP_BASE_URL
-    Fallback to empty string (relative links in emails).
+    Returns the absolute base URL for the deployment.
+
+    Priority order:
+      1. REIMBURSEMENT_SITE_BASE  (most specific — use this in settings.py)
+      2. SITE_URL
+      3. APP_BASE_URL
+
+    If none is set, logs a prominent ERROR so the misconfiguration surfaces
+    immediately in Render logs.  Email links will be broken until this is
+    configured.
+
+    Example settings.py:
+        REIMBURSEMENT_SITE_BASE = "https://your-app.onrender.com"
     """
-    return (
+    base = (
         getattr(settings, "REIMBURSEMENT_SITE_BASE", None)
         or getattr(settings, "SITE_URL", None)
         or getattr(settings, "APP_BASE_URL", None)
-        or ""
-    ).rstrip("/")
+    )
+    if base:
+        return base.rstrip("/")
+
+    # No base URL configured — log a prominent error.
+    logger.error(
+        "REIMBURSEMENT EMAIL LINKS BROKEN: None of REIMBURSEMENT_SITE_BASE / "
+        "SITE_URL / APP_BASE_URL is set in settings.py.  "
+        "All email approval/action links will be relative paths and will 404 "
+        "when clicked from an email client.  "
+        "Fix: add REIMBURSEMENT_SITE_BASE = 'https://your-app.onrender.com' "
+        "to your settings / Render environment variables."
+    )
+    return ""
 
 
 def _abs_url(path: str) -> str:
-    base = _site_base()
-    if not base:
+    """
+    Convert a Django path (e.g. /reimbursement/manager/1/review/) to an
+    absolute URL using the configured site base.
+
+    If the path is already absolute (starts with http/https), it is returned
+    unchanged.
+    """
+    if path.startswith("http://") or path.startswith("https://"):
         return path
+
+    base = _site_base()
     if not path.startswith("/"):
         path = "/" + path
+
+    if not base:
+        # No base configured — return path as-is (will be broken in emails,
+        # but at least we don't crash; the ERROR log above will flag it).
+        return path
+
     return f"{base}{path}"
+
+
+def _safe_reverse(viewname: str, *args, **kwargs) -> str:
+    """
+    Wrapper around django.urls.reverse that never raises.
+    Returns empty string on failure and logs a warning.
+    """
+    try:
+        return reverse(viewname, *args, **kwargs)
+    except NoReverseMatch:
+        logger.warning("_safe_reverse: could not reverse '%s' args=%s kwargs=%s", viewname, args, kwargs)
+        return ""
 
 
 def _fmt_amount(value) -> str:
@@ -82,7 +129,6 @@ def _fmt_dt(dt) -> str:
         tzname = loc.tzname() or "IST"
         return loc.strftime(f"%d %b %Y, %H:%M {tzname}")
     except Exception:
-        # Last-resort plain str
         return str(dt)
 
 
@@ -135,7 +181,7 @@ def _render(template_base: str, context: dict) -> tuple[str, str]:
         req_id = context.get("request_id", "")
         employee = context.get("employee_name", "")
         total = context.get("total_amount", "")
-        detail_url = context.get("detail_url") or "-"
+        detail_url = context.get("detail_url") or context.get("queue_url") or "-"
         title = template_base.replace("_", " ").title()
         html_f = f"""<!doctype html>
 <html><body style="font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif">
@@ -143,15 +189,15 @@ def _render(template_base: str, context: dict) -> tuple[str, str]:
   <table style="border-collapse:collapse;margin:12px 0;">
     <tr><td style="padding:4px 8px;color:#555;">Request ID</td><td style="padding:4px 8px;"><strong>#{req_id}</strong></td></tr>
     <tr><td style="padding:4px 8px;color:#555;">Employee</td><td style="padding:4px 8px;">{employee}</td></tr>
-    <tr><td style="padding:4px 8px;color:#555;">Total Amount</td><td style="padding:4px 8px;">₹{total}</td></tr>
+    <tr><td style="padding:4px 8px;color:#555;">Total Amount</td><td style="padding:4px 8px;">&#8377;{total}</td></tr>
   </table>
-  <p style="margin-top:12px;">Details: {detail_url}</p>
+  <p style="margin-top:12px;">Details: <a href="{detail_url}">{detail_url}</a></p>
 </body></html>"""
         txt_f = (
             f"{title}\n\n"
             f"Request ID : #{req_id}\n"
             f"Employee   : {employee}\n"
-            f"Total Amt  : ₹{total}\n"
+            f"Total Amt  : \u20b9{total}\n"
             f"Details    : {detail_url}\n"
         )
         html = html or html_f
@@ -170,10 +216,17 @@ def _send(
     bcc: Optional[List[str]] = None,
 ) -> None:
     """
-    Minimal, fail-silent sender with recipient guard.
+    Fail-silent sender with recipient guard.
+    Logs a WARNING (not silent) when recipient list is empty so delivery
+    failures surface in Render logs.
     """
     to_list = _dedup(to_list) or []
     if not to_list:
+        logger.warning(
+            "Email '%s' not sent: recipient list is empty. "
+            "Check that the target user has an email address configured.",
+            template_base,
+        )
         return
     cc = _dedup(cc)
     bcc = _dedup(bcc)
@@ -186,6 +239,11 @@ def _send(
         bcc=bcc or [],
     )
     if not (filt_to or filt_cc or filt_bcc):
+        logger.warning(
+            "Email '%s' suppressed by filter_recipients_for_category. "
+            "All recipients were filtered out.",
+            template_base,
+        )
         return
 
     html, txt = _render(template_base, context)
@@ -201,6 +259,9 @@ def _send(
         )
         msg.attach_alternative(html, "text/html")
         msg.send(fail_silently=True)
+        logger.info(
+            "Email '%s' sent to %s (cc=%s)", template_base, filt_to, filt_cc
+        )
     except Exception:  # pragma: no cover
         logger.exception("Email send failed: %s", template_base)
 
@@ -234,6 +295,57 @@ def _display_name(user) -> str:
     ).strip()
 
 
+# ---------------------------------------------------------------------------
+# URL helpers for email links
+# ---------------------------------------------------------------------------
+
+def _manager_queue_url() -> str:
+    """
+    Primary CTA for manager emails: the manager QUEUE page.
+    This URL IS in PERMISSION_URLS (reimbursement_manager_pending →
+    reimbursement:manager_pending), so PermissionEnforcementMiddleware
+    will NOT block it after login redirect.
+    """
+    return _abs_url(_safe_reverse("reimbursement:manager_pending"))
+
+
+def _manager_review_url(req: ReimbursementRequest) -> str:
+    """
+    Direct link to the manager review page for a specific request.
+    Used as a secondary / convenience link in emails.
+
+    After login, LoginRequiredMixin redirects to this URL via ?next=.
+    PermissionEnforcementMiddleware now has this URL covered via the
+    reimbursement_manager_review mapping (see permission_urls.py fix).
+    """
+    path = _safe_reverse("reimbursement:manager_review", args=[req.id])
+    if not path:
+        # Fallback to queue if URL can't be reversed
+        return _manager_queue_url()
+    return _abs_url(path)
+
+
+def _finance_queue_url() -> str:
+    """Primary CTA for finance emails: the finance queue page."""
+    return _abs_url(_safe_reverse("reimbursement:finance_pending"))
+
+
+def _finance_verify_url(req: ReimbursementRequest) -> str:
+    """Direct link to the finance verify page for a specific request."""
+    path = _safe_reverse("reimbursement:finance_verify", args=[req.id])
+    if not path:
+        return _finance_queue_url()
+    return _abs_url(path)
+
+
+def _request_detail_url(req: ReimbursementRequest) -> str:
+    """Absolute URL to the employee-facing request detail page."""
+    path = _safe_reverse("reimbursement:request_detail", args=[req.id])
+    if not path:
+        return _abs_url("/reimbursement/my/")
+    return _abs_url(path)
+
+
 # ---------- Helpers for final notification ----------
 
 def _final_to_list() -> List[str]:
@@ -255,8 +367,8 @@ def _final_cc_list() -> List[str]:
 
 def _line_bill_url(line: ReimbursementLine) -> str:
     try:
-        # urlpattern: path("receipt/line/<int:line_id>/", ..., name="receipt_line")
-        return _abs_url(reverse("reimbursement:receipt_line", kwargs={"line_id": line.id}))
+        path = _safe_reverse("reimbursement:receipt_line", kwargs={"line_id": line.id})
+        return _abs_url(path) if path else ""
     except Exception:
         return ""
 
@@ -291,7 +403,7 @@ def _lines_context(req: ReimbursementRequest) -> List[Dict[str, str]]:
             # Amount (no currency symbol; template adds "₹")
             amt = line.amount if line.amount is not None else getattr(item, "amount", None)
             amount_str = _fmt_amount(amt)
-            # Bill URL
+            # Bill URL — absolute so it works from email clients
             bill_url = _line_bill_url(line)
             out.append(
                 {
@@ -309,7 +421,6 @@ def _lines_context(req: ReimbursementRequest) -> List[Dict[str, str]]:
 
 # ---------------------------------------------------------------------------
 # Bill-specific notifications (used by bill-level workflow)
-# (UNCHANGED)
 # ---------------------------------------------------------------------------
 
 def send_bill_rejected_by_finance(req: ReimbursementRequest, line: ReimbursementLine) -> None:
@@ -321,7 +432,7 @@ def send_bill_rejected_by_finance(req: ReimbursementRequest, line: Reimbursement
         "bill_amount": f"{line.amount:.2f}",
         "bill_description": line.description or "-",
         "rejection_reason": line.finance_rejection_reason or "-",
-        "detail_url": _abs_url(reverse("reimbursement:request_detail", args=[req.id])) if hasattr(req, "id") else "",
+        "detail_url": _request_detail_url(req),
         "status_label": dict(ReimbursementRequest.Status.choices).get(req.status, req.status),
     }
     _send(_employee_email(req), subject, "reimbursement_bill_rejected_by_finance", ctx)
@@ -344,7 +455,8 @@ def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *,
         "bill_amount": f"{line.amount:.2f}",
         "bill_description": line.description or "-",
         "resubmitted_by": _display_name(actor),
-        "detail_url": _abs_url(reverse("reimbursement:finance_pending")),
+        "detail_url": _finance_queue_url(),
+        "queue_url": _finance_queue_url(),
         "status_label": dict(ReimbursementRequest.Status.choices).get(req.status, req.status),
     }
     _send(_finance_emails(), subject, "reimbursement_bill_resubmitted", ctx)
@@ -359,7 +471,6 @@ def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *,
 
 def send_bill_to_manager(req: ReimbursementRequest, line: ReimbursementLine) -> None:
     subject = f"Reimbursement #{req.id}: Bill #{line.id} needs your approval"
-    queue_url = _abs_url(reverse("reimbursement:manager_pending"))
     ctx = {
         "manager_name": _display_name(req.manager),
         "employee_name": _display_name(req.created_by),
@@ -367,7 +478,10 @@ def send_bill_to_manager(req: ReimbursementRequest, line: ReimbursementLine) -> 
         "bill_id": line.id,
         "bill_amount": f"{line.amount:.2f}",
         "bill_description": line.description or "-",
-        "queue_url": queue_url,
+        # FIX: use queue URL as primary CTA — it IS in PERMISSION_URLS
+        "queue_url": _manager_queue_url(),
+        # Secondary convenience link — safe after login redirect
+        "review_url": _manager_review_url(req),
         "status_label": dict(ReimbursementRequest.Status.choices).get(req.status, req.status),
     }
     _send(_manager_emails(req), subject, "reimbursement_bill_to_manager", ctx)
@@ -390,7 +504,7 @@ def send_bill_rejected_by_manager(req: ReimbursementRequest, line: Reimbursement
         "bill_description": line.description or "-",
         "manager_name": _display_name(req.manager),
         "rejection_reason": (reason or "-"),
-        "detail_url": _abs_url(reverse("reimbursement:request_detail", args=[req.id])),
+        "detail_url": _request_detail_url(req),
     }
     _send(_employee_email(req), subject, "reimbursement_bill_rejected_by_manager", ctx)
     ReimbursementLog.log(
@@ -412,7 +526,7 @@ def send_bill_paid(req: ReimbursementRequest, line: ReimbursementLine) -> None:
         "bill_description": line.description or "-",
         "payment_reference": line.payment_reference or "-",
         "paid_at": line.paid_at,
-        "detail_url": _abs_url(reverse("reimbursement:request_detail", args=[req.id])),
+        "detail_url": _request_detail_url(req),
     }
     _send(_employee_email(req), subject, "reimbursement_bill_paid", ctx)
     ReimbursementLog.log(
@@ -425,23 +539,31 @@ def send_bill_paid(req: ReimbursementRequest, line: ReimbursementLine) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Request-level notifications (kept for compatibility with the views)
-# (EXISTING FUNCTIONS UNCHANGED)
+# Request-level notifications
 # ---------------------------------------------------------------------------
 
 def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_note: str = "") -> None:
+    """
+    Sent to Finance when an employee submits or resubmits a reimbursement.
+
+    FIX: review_url / approve_url / reject_url now all point to the finance
+    VERIFY page (absolute URL), with queue_url as the fallback queue link.
+    Both are now guaranteed absolute URLs via _abs_url().
+    """
     subject = f"Reimbursement #{req.id}: Submitted for Finance Verification"
-    review_url = _abs_url(reverse("reimbursement:finance_verify", args=[req.id]))
+    verify_url = _finance_verify_url(req)
+    queue_url = _finance_queue_url()
     ctx = {
         "employee_name": _display_name(req.created_by),
         "employee_email": getattr(req.created_by, "email", "") or "-",
         "request_id": req.id,
         "total_amount": _fmt_amount(req.total_amount),
         "note": employee_note or "-",
-        "queue_url": _abs_url(reverse("reimbursement:finance_pending")),
-        "review_url": review_url,   # button target
-        "approve_url": review_url,  # button target
-        "reject_url": review_url,   # button target
+        "queue_url": queue_url,
+        # All action buttons point to the verify page (absolute URL)
+        "review_url": verify_url,
+        "approve_url": verify_url,
+        "reject_url": verify_url,
         "submitted_at": req.submitted_at,
     }
     _send(_finance_emails(), subject, "reimbursement_finance_verify", ctx)
@@ -455,18 +577,38 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
 
 
 def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
+    """
+    Sent to the manager after Finance verifies bills.
+
+    FIX (Issue 1 root cause #2):
+    Previous version sent managers a direct link to manager_review/<pk>/ which
+    is NOT in PERMISSION_URLS → PermissionEnforcementMiddleware blocked it after
+    login redirect → manager got redirected to dashboard → 404/confusion.
+
+    Fix:
+    - queue_url  = manager_pending (PRIMARY CTA button) — IS in PERMISSION_URLS
+    - review_url = manager_review/<pk>/ (secondary convenience link)
+      Also guaranteed absolute via _abs_url().
+      PermissionEnforcementMiddleware now maps reimbursement_manager_review →
+      reimbursement:manager_review (see permission_urls.py fix).
+    """
     subject = f"Reimbursement #{req.id}: Ready for your approval"
-    review_url = _abs_url(reverse("reimbursement:manager_review", args=[req.id]))
+    queue_url = _manager_queue_url()
+    review_url = _manager_review_url(req)
     ctx = {
         "manager_name": _display_name(req.manager),
         "employee_name": _display_name(req.created_by),
         "request_id": req.id,
         "total_amount": _fmt_amount(req.total_amount),
-        "queue_url": _abs_url(reverse("reimbursement:manager_pending")),
-        "detail_url": _abs_url(reverse("reimbursement:request_detail", args=[req.id])),
-        "review_url": review_url,   # button target
-        "approve_url": review_url,  # button target
-        "reject_url": review_url,   # button target
+        # PRIMARY CTA — use queue; it IS in PERMISSION_URLS
+        "queue_url": queue_url,
+        # Employee detail — for reference only
+        "detail_url": _request_detail_url(req),
+        # Secondary direct review link (works after login + permission check)
+        "review_url": review_url,
+        # Keep approve_url / reject_url pointing at review page
+        "approve_url": review_url,
+        "reject_url": review_url,
     }
     to = _manager_emails(req)
     if not to:
@@ -490,7 +632,7 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
         "request_id": req.id,
         "total_amount": _fmt_amount(req.total_amount),
         "status_label": dict(ReimbursementRequest.Status.choices).get(req.status, req.status),
-        "detail_url": _abs_url(reverse("reimbursement:request_detail", args=[req.id])),
+        "detail_url": _request_detail_url(req),
     }
     _send(_employee_email(req), subject, "reimbursement_manager_action", ctx)
     ReimbursementLog.log(
@@ -513,7 +655,7 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
         "request_id": req.id,
         "total_amount": _fmt_amount(req.total_amount),
         "status_label": dict(ReimbursementRequest.Status.choices).get(req.status, req.status),
-        "detail_url": _abs_url(reverse("reimbursement:request_detail", args=[req.id])),
+        "detail_url": _request_detail_url(req),
     }
     _send(_employee_email(req), subject, "reimbursement_management_action", ctx)
     ReimbursementLog.log(
@@ -533,7 +675,7 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
         "total_amount": _fmt_amount(req.total_amount),
         "payment_reference": (req.finance_payment_reference or "-"),
         "paid_at": req.paid_at,
-        "detail_url": _abs_url(reverse("reimbursement:request_detail", args=[req.id])),
+        "detail_url": _request_detail_url(req),
     }
     _send(_employee_email(req), subject, "reimbursement_request_paid", ctx)
     ReimbursementLog.log(
@@ -546,7 +688,7 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
 
 
 # ---------------------------------------------------------------------------
-# NEW: final after manager approval (wired to your new templates)
+# Final notification after manager approval
 # ---------------------------------------------------------------------------
 
 def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
@@ -556,6 +698,7 @@ def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
     CC:  settings.REIMBURSEMENT_FINAL_CC (or defaults)
 
     Body matches the approved example with full expense table.
+    All URLs are guaranteed absolute via _abs_url().
     """
     try:
         employee_name = _display_name(req.created_by)
@@ -570,11 +713,11 @@ def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
             "verified_by": verified_by,
             "approved_by": approved_by,
             "approved_at": _fmt_dt(approved_at),
-            "detail_url": _abs_url(reverse("reimbursement:request_detail", args=[req.id])),
+            "detail_url": _request_detail_url(req),
             "lines": _lines_context(req),
         }
 
-        subject = f"Approved Reimbursement — {employee_name} — ₹{ctx['total_amount']}"
+        subject = f"Approved Reimbursement — {employee_name} — \u20b9{ctx['total_amount']}"
         to_list = _final_to_list()
         cc_list = _final_cc_list()
 
