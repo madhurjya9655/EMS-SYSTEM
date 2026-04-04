@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title }}{% endblock %}
+{% block breadcrumb %}KAM / Single Visits / Edit{% endblock %}
+
+{% block head_extra %}
+<style>
+  .edit-card {
+    border: 1px solid rgba(0,0,0,.08);
+    border-radius: 12px;
+    background: #fff;
+  }
+  .field-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 700;
+    color: #475569;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .status-draft { background: #f3f4f6; color: #6b7280; }
+  .status-rejected { background: #fef2f2; color: #dc2626; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-start justify-content-between flex-wrap gap-2 mb-4">
+  <div>
+    <h1 class="page-title mb-1">{{ page_title }}</h1>
+    <div class="d-flex gap-2 flex-wrap mt-2">
+      <span class="status-pill {% if plan.approval_status == 'REJECTED' %}status-rejected{% else %}status-draft{% endif %}">
+        {{ plan.get_approval_status_display }}
+      </span>
+      <span class="text-muted small">{{ visit_category_label }}</span>
+    </div>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{% url 'kam:single_visit_detail' plan.id %}" class="btn btn-sm btn-outline-secondary">Back</a>
+  </div>
+</div>
+
+{% if messages %}
+  <div class="mb-3">
+    {% for message in messages %}
+      <div class="alert alert-{{ message.tags|default:'info' }} mb-2">{{ message }}</div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+<div class="edit-card card">
+  <div class="card-body">
+    {% if plan.approval_status == "REJECTED" and plan.rejection_reason %}
+      <div class="alert alert-danger">
+        <div class="fw-semibold mb-1">Manager Rejection Reason</div>
+        <div>{{ plan.rejection_reason }}</div>
+      </div>
+    {% endif %}
+
+    {% if form.non_field_errors %}
+      <div class="alert alert-danger">
+        {% for err in form.non_field_errors %}
+          <div>{{ err }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    <form method="post" novalidate id="singleVisitEditForm">
+      {% csrf_token %}
+
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="field-label" for="{{ form.visit_category.id_for_label }}">Visit Category</label>
+          {{ form.visit_category }}
+          {% if form.visit_category.errors %}
+            <div class="text-danger small mt-1">{{ form.visit_category.errors|join:", " }}</div>
+          {% endif %}
+        </div>
+
+        <div class="col-md-6">
+          <label class="field-label" for="{{ form.visit_date.id_for_label }}">Visit Date</label>
+          {{ form.visit_date }}
+          {% if form.visit_date.errors %}
+            <div class="text-danger small mt-1">{{ form.visit_date.errors|join:", " }}</div>
+          {% endif %}
+        </div>
+
+        <div class="col-md-6" id="customerFieldWrap">
+          <label class="field-label" for="{{ form.customer.id_for_label }}">Customer</label>
+          {{ form.customer }}
+          {% if form.customer.errors %}
+            <div class="text-danger small mt-1">{{ form.customer.errors|join:", " }}</div>
+          {% endif %}
+        </div>
+
+        <div class="col-md-6" id="counterpartyFieldWrap">
+          <label class="field-label" for="{{ form.counterparty_name.id_for_label }}">
+            Customer / Vendor / Supplier / Warehouse Name
+          </label>
+          {{ form.counterparty_name }}
+          {% if form.counterparty_name.errors %}
+            <div class="text-danger small mt-1">{{ form.counterparty_name.errors|join:", " }}</div>
+          {% endif %}
+        </div>
+
+        <div class="col-12">
+          <label class="field-label" for="{{ form.location.id_for_label }}">Location</label>
+          {{ form.location }}
+          {% if form.location.errors %}
+            <div class="text-danger small mt-1">{{ form.location.errors|join:", " }}</div>
+          {% endif %}
+        </div>
+
+        <div class="col-12">
+          <label class="field-label" for="{{ form.purpose.id_for_label }}">Purpose / Remarks</label>
+          {{ form.purpose }}
+          {% if form.purpose.errors %}
+            <div class="text-danger small mt-1">{{ form.purpose.errors|join:", " }}</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="d-flex gap-2 flex-wrap mt-4">
+        <button type="submit" name="submit_action" value="save_draft" class="btn btn-outline-secondary">
+          Save Draft
+        </button>
+        <button type="submit" name="submit_action" value="submit_to_manager" class="btn btn-primary">
+          {% if is_resubmit %}Resubmit to Manager{% else %}Submit to Manager{% endif %}
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  const categoryField = document.getElementById("{{ form.visit_category.id_for_label }}");
+  const customerWrap = document.getElementById("customerFieldWrap");
+  const counterpartyWrap = document.getElementById("counterpartyFieldWrap");
+
+  function syncFields() {
+    if (!categoryField) return;
+    const isCustomer = (categoryField.value || "") === "CUSTOMER";
+    if (customerWrap) customerWrap.style.display = isCustomer ? "" : "none";
+    if (counterpartyWrap) counterpartyWrap.style.display = isCustomer ? "none" : "";
+  }
+
+  if (categoryField) {
+    categoryField.addEventListener("change", syncFields);
+    syncFields();
+  }
+})();
+</script>
+{% endblock %}

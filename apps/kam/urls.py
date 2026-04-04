@@ -1,7 +1,4 @@
 # FILE: apps/kam/urls.py
-# PURPOSE: KAM module URL configuration
-# UPDATED: 2026-03-05
-
 from django.urls import path
 from . import views
 
@@ -24,7 +21,16 @@ urlpatterns = [
     path("plan/", views.weekly_plan, name="plan"),
     path("visits/", views.visits, name="visits"),
 
-    # Visit History
+    # ── Single Visit Workflow ──────────────────────────────────────────
+    path("single-visits/", views.single_visit_list, name="single_visit_list"),
+    path("single-visits/<int:plan_id>/", views.single_visit_detail, name="single_visit_detail"),
+    path("single-visits/<int:plan_id>/edit/", views.single_visit_edit, name="single_visit_edit"),
+    path("single-visits/<int:plan_id>/approve/", views.single_visit_approve, name="single_visit_approve"),
+    path("single-visits/<int:plan_id>/reject/", views.single_visit_reject, name="single_visit_reject"),
+    path("single-visit/approve/<str:token>/", views.single_visit_approve_link, name="single_visit_approve_link"),
+    path("single-visit/reject/<str:token>/", views.single_visit_reject_link, name="single_visit_reject_link"),
+
+    # Visit History / Batch Workflow
     path("visit-history/", views.visit_batches_page, name="visit_batches"),
     path("visit-history/api/", views.visit_batches_api, name="visit_batches_api"),
     path("visit-history/<int:batch_id>/", views.visit_batch_detail, name="visit_batch_detail"),

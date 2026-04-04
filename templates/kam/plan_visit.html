@@ -1,11 +1,7 @@
-{# FILE: templates/kam/plan_visit.html #}
-{# PURPOSE: Remove Location column from Batch (Primary) customer table — UI + JS render #}
-{# UPDATED: 2026-03-02 #}
-{# CHANGE: Removed "Location" <th> and per-row location <input> from renderCustomers(). #}
-{#         colspan updated from 7 → 6 wherever used. #}
-{#         No DB field deleted; customer address is used silently by backend. #}
 {% extends "base.html" %}
 {% load static %}
+
+{% block title %}Plan Visit{% endblock %}
 
 {% block content %}
 <style>
@@ -98,13 +94,23 @@
   <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
     <div>
       <h3 class="mb-0">{{ page_title|default:"Plan Visit" }}</h3>
-      <div class="kam-muted-note mt-1">Use one global date range for the full customer batch.</div>
+      <div class="kam-muted-note mt-1">
+        Create Batch Visits or Single Visits from one place.
+      </div>
     </div>
-    <div class="d-flex align-items-center gap-2">
-      <span class="small text-muted d-none d-md-inline">Single Draft + Batch Submission</span>
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+      <a class="btn btn-sm btn-outline-primary" href="{% url 'kam:single_visit_list' %}">Single Visits</a>
       <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:visit_batches' %}">View Batches</a>
     </div>
   </div>
+
+  {% if messages %}
+    <div class="mb-3">
+      {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} mb-2">{{ message }}</div>
+      {% endfor %}
+    </div>
+  {% endif %}
 
   <ul class="nav nav-tabs" id="planTabs" role="tablist">
     <li class="nav-item" role="presentation">
@@ -126,16 +132,13 @@
          role="tab"
          aria-controls="single"
          aria-selected="false">
-        Single (Draft only)
+        Single Visit
       </a>
     </li>
   </ul>
 
   <div class="tab-content border border-top-0 p-3 bg-white" id="planTabsContent">
 
-    {# ================================================================= #}
-    {# BATCH TAB (Primary) — Location column REMOVED from customer table #}
-    {# ================================================================= #}
     <div class="tab-pane fade show active" id="batch" role="tabpanel" aria-labelledby="batch-tab">
       <form method="post" id="batchForm" novalidate>
         {% csrf_token %}
@@ -167,7 +170,7 @@
           </div>
 
           <div class="col-12 col-lg-3">
-            <label class="form-label mb-1">Remarks (required for Proceed)</label>
+            <label class="form-label mb-1">Remarks</label>
             {{ batch_form.purpose }}
             {% if batch_form.purpose.errors %}
               <div class="text-danger small mt-1">{{ batch_form.purpose.errors }}</div>
@@ -182,13 +185,12 @@
           </div>
         </div>
 
-        <hr class="my-3"/>
+        <hr class="my-3" />
 
         <div id="categoryHint" class="kam-hint" style="display:none;">
           Select a <b>Visit Category</b> to continue.
         </div>
 
-        {# ─── CUSTOMER BATCH SECTION ─────────────────────────────────── #}
         <div id="customerBatchSection" style="display:none;">
           <div class="kam-section-card">
             <div class="card-body">
@@ -228,8 +230,6 @@
                       <th style="width:190px;">Expected Collection (₹)</th>
                       <th style="width:90px;">Source</th>
                     </tr>
-                    {# NOTE: Location column intentionally removed per ISSUE 1.               #}
-                    {# Location is auto-populated from customer.address by the backend.       #}
                   </thead>
                   <tbody id="custTbody">
                     <tr><td colspan="6" class="text-muted">Select category to load customers…</td></tr>
@@ -247,20 +247,16 @@
                   Proceed to Manager
                 </button>
               </div>
-              <div class="small text-muted mt-2">
-                Proceed to Manager is allowed only for Customer Visit batches and requires Remarks + at least one customer.
-              </div>
             </div>
           </div>
         </div>
 
-        {# ─── NON-CUSTOMER SECTION ───────────────────────────────────── #}
         <div id="nonCustomerSection" style="display:none;">
           <div class="kam-section-card">
             <div class="card-body">
               <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
                 <div class="text-muted small">
-                  Add one or more lines (supplier/warehouse/vendor). These will be saved as a DRAFT batch.
+                  Add one or more lines for supplier / warehouse / vendor batch planning.
                 </div>
                 <button type="button" class="btn btn-sm btn-outline-primary" id="addNonCustomerLine">+ Add line</button>
               </div>
@@ -279,7 +275,7 @@
                 </table>
               </div>
 
-              <div class="d-flex gap-2 mt-3">
+              <div class="d-flex gap-2 mt-3 flex-wrap">
                 <button type="submit" name="action" value="save_draft" class="btn btn-outline-secondary">
                   Save Draft Batch
                 </button>
@@ -287,83 +283,88 @@
                   Proceed to Manager
                 </button>
               </div>
-              <div class="small text-muted mt-2">
-                Proceed to Manager sends the batch for approval and locks it from editing.
-              </div>
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
 
-    {# ================================================================= #}
-    {# SINGLE TAB (Draft only)                                           #}
-    {# ================================================================= #}
     <div class="tab-pane fade" id="single" role="tabpanel" aria-labelledby="single-tab">
       <form method="post" id="singleForm" novalidate>
         {% csrf_token %}
         <input type="hidden" name="mode" value="single" />
 
+        {% if single_form.non_field_errors %}
+          <div class="alert alert-danger">
+            {% for err in single_form.non_field_errors %}
+              <div>{{ err }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+
         <div class="row g-3 align-items-end">
-          <div class="col-12 col-md-3">
+          <div class="col-12 col-md-4">
             <label class="form-label mb-1">Visit Category</label>
             {{ single_form.visit_category }}
-            {% if single_form.visit_category.errors %}<div class="text-danger small mt-1">{{ single_form.visit_category.errors }}</div>{% endif %}
+            {% if single_form.visit_category.errors %}
+              <div class="text-danger small mt-1">{{ single_form.visit_category.errors }}</div>
+            {% endif %}
           </div>
 
-          <div class="col-12 col-md-3">
+          <div class="col-12 col-md-4">
             <label class="form-label mb-1">Visit Date</label>
             {{ single_form.visit_date }}
-            {% if single_form.visit_date.errors %}<div class="text-danger small mt-1">{{ single_form.visit_date.errors }}</div>{% endif %}
-          </div>
-
-          <div class="col-12 col-md-3">
-            <label class="form-label mb-1">Visit Date To</label>
-            {{ single_form.visit_date_to }}
-            {% if single_form.visit_date_to.errors %}<div class="text-danger small mt-1">{{ single_form.visit_date_to.errors }}</div>{% endif %}
+            {% if single_form.visit_date.errors %}
+              <div class="text-danger small mt-1">{{ single_form.visit_date.errors }}</div>
+            {% endif %}
           </div>
 
           <div class="col-12 col-md-6" id="singleCustomerWrap">
             <label class="form-label mb-1">Customer</label>
             {{ single_form.customer }}
-            {% if single_form.customer.errors %}<div class="text-danger small mt-1">{{ single_form.customer.errors }}</div>{% endif %}
+            {% if single_form.customer.errors %}
+              <div class="text-danger small mt-1">{{ single_form.customer.errors }}</div>
+            {% endif %}
           </div>
 
           <div class="col-12 col-md-6" id="singleCounterpartyWrap">
-            <label class="form-label mb-1">Counterparty Name (non-customer)</label>
+            <label class="form-label mb-1">Customer / Vendor / Supplier / Warehouse Name</label>
             {{ single_form.counterparty_name }}
-            {% if single_form.counterparty_name.errors %}<div class="text-danger small mt-1">{{ single_form.counterparty_name.errors }}</div>{% endif %}
+            {% if single_form.counterparty_name.errors %}
+              <div class="text-danger small mt-1">{{ single_form.counterparty_name.errors }}</div>
+            {% endif %}
           </div>
 
           <div class="col-12 col-md-6">
             <label class="form-label mb-1">Location</label>
             {{ single_form.location }}
-            {% if single_form.location.errors %}<div class="text-danger small mt-1">{{ single_form.location.errors }}</div>{% endif %}
+            {% if single_form.location.errors %}
+              <div class="text-danger small mt-1">{{ single_form.location.errors }}</div>
+            {% endif %}
           </div>
 
           <div class="col-12 col-md-6">
-            <label class="form-label mb-1">Purpose</label>
+            <label class="form-label mb-1">Purpose / Remarks</label>
             {{ single_form.purpose }}
-            {% if single_form.purpose.errors %}<div class="text-danger small mt-1">{{ single_form.purpose.errors }}</div>{% endif %}
-          </div>
-
-          <div class="col-12 col-md-3">
-            <label class="form-label mb-1">Expected Sales (MT)</label>
-            {{ single_form.expected_sales_mt }}
-            {% if single_form.expected_sales_mt.errors %}<div class="text-danger small mt-1">{{ single_form.expected_sales_mt.errors }}</div>{% endif %}
-          </div>
-
-          <div class="col-12 col-md-3">
-            <label class="form-label mb-1">Expected Collection (₹)</label>
-            {{ single_form.expected_collection }}
-            {% if single_form.expected_collection.errors %}<div class="text-danger small mt-1">{{ single_form.expected_collection.errors }}</div>{% endif %}
+            {% if single_form.purpose.errors %}
+              <div class="text-danger small mt-1">{{ single_form.purpose.errors }}</div>
+            {% endif %}
           </div>
         </div>
 
-        <div class="mt-3">
-          <button type="submit" class="btn btn-outline-secondary" name="action" value="save_single_draft">Save Draft</button>
+        <div class="d-flex gap-2 mt-3 flex-wrap">
+          <button type="submit" class="btn btn-outline-secondary" name="submit_action" value="save_draft">
+            Save Draft
+          </button>
+          <button type="submit" class="btn btn-primary" name="submit_action" value="submit_to_manager">
+            Submit to Manager
+          </button>
         </div>
-        <div class="small text-muted mt-2">Single visits are saved as Draft only.</div>
       </form>
     </div>
   </div>
 
-  <hr class="my-4"/>
+  <hr class="my-4" />
 
   <h5 class="mb-2">This Week Plans</h5>
   <div class="table-responsive">
@@ -392,7 +393,6 @@
   </div>
 </div>
 
-{# Manual Customer Modal #}
 <div class="modal fade" id="manualCustomerModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
@@ -445,13 +445,16 @@
     document.querySelectorAll("#batchForm select, #singleForm select").forEach(el => {
       el.classList.add("form-select", "form-select-sm");
     });
+
     document.querySelectorAll("#batchForm input, #singleForm input").forEach(el => {
       if (el.type === "checkbox" || el.type === "hidden") return;
       el.classList.add("form-control", "form-control-sm");
     });
+
     document.querySelectorAll("#batchForm textarea, #singleForm textarea").forEach(el => {
       el.classList.add("form-control", "form-control-sm");
     });
+
     const purpose = document.querySelector('#batchForm textarea[name$="purpose"]');
     if (purpose) purpose.classList.add("kam-remarks-compact");
   }
@@ -471,8 +474,27 @@
     return cookieValue;
   }
 
-  const csrftoken = getCookie("csrftoken");
+  function esc(s) {
+    return (s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
 
+  function qs(sel) {
+    return document.querySelector(sel);
+  }
+
+  function isCustomerCat(v) {
+    return String(v || "").toUpperCase() === "CUSTOMER";
+  }
+
+  function hasCat(v) {
+    return String(v || "").trim() !== "";
+  }
+
+  const csrftoken          = getCookie("csrftoken");
   const batchForm          = document.getElementById("batchForm");
   const customerSection    = document.getElementById("customerBatchSection");
   const nonCustomerSection = document.getElementById("nonCustomerSection");
@@ -488,66 +510,73 @@
   const addLineBtn         = document.getElementById("addNonCustomerLine");
   const globalDateInfoText = document.getElementById("globalDateInfoText");
 
-  const apiUrl = "{% url 'kam:customers_api' %}";
-
-  function qs(sel) { return document.querySelector(sel); }
-
   const batchCategoryEl    = qs('#batchForm select[name$="visit_category"]');
   const batchFromEl        = qs('#batchForm input[type="date"][name$="from_date"]');
   const batchToEl          = qs('#batchForm input[type="date"][name$="to_date"]');
+
   const singleCategoryEl   = qs('#singleForm select[name$="visit_category"]');
   const singleCustomerWrap = document.getElementById("singleCustomerWrap");
   const singleCpWrap       = document.getElementById("singleCounterpartyWrap");
 
-  function esc(s) {
-    return (s || "")
-      .replace(/&/g,"&amp;").replace(/</g,"&lt;")
-      .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-  }
-
-  function isCustomerCat(v) { return String(v || "").toUpperCase() === "CUSTOMER"; }
-  function hasCat(v)        { return String(v || "").trim() !== ""; }
+  const apiUrl = "{% url 'kam:customers_api' %}";
 
   function updateGlobalDateInfo() {
     if (!globalDateInfoText) return;
     const f = batchFromEl ? (batchFromEl.value || "") : "";
-    const t = batchToEl   ? (batchToEl.value   || "") : "";
-    if (f && t)       globalDateInfoText.textContent = f + " → " + t;
-    else if (f)       globalDateInfoText.textContent = f + " → Select To Date";
-    else if (t)       globalDateInfoText.textContent = "Select From Date → " + t;
-    else              globalDateInfoText.textContent = "Select From Date and To Date above.";
+    const t = batchToEl ? (batchToEl.value || "") : "";
+
+    if (f && t) {
+      globalDateInfoText.textContent = f + " → " + t;
+    } else if (f) {
+      globalDateInfoText.textContent = f + " → Select To Date";
+    } else if (t) {
+      globalDateInfoText.textContent = "Select From Date → " + t;
+    } else {
+      globalDateInfoText.textContent = "Select From Date and To Date above.";
+    }
   }
 
-  let selectedSet   = new Set();
+  let selectedSet = new Set();
   let customerCache = [];
 
   function updateSelectedCount() {
     const checks = document.querySelectorAll(".cust-check");
-    let cnt = 0, total = checks.length;
-    checks.forEach(ch => { if (ch.checked) cnt++; });
+    let cnt = 0;
+    let total = checks.length;
+
+    checks.forEach(ch => {
+      if (ch.checked) cnt++;
+    });
+
     if (selCount) selCount.textContent = `${cnt} selected`;
+
     if (selectAllCust) {
-      selectAllCust.checked       = total > 0 && cnt === total;
+      selectAllCust.checked = total > 0 && cnt === total;
       selectAllCust.indeterminate = cnt > 0 && cnt < total;
     }
   }
 
   function toggleSections() {
     const v = batchCategoryEl ? batchCategoryEl.value : "";
+
     if (!hasCat(v)) {
-      if (categoryHint)       categoryHint.style.display = "";
-      if (customerSection)    customerSection.style.display = "none";
+      if (categoryHint) categoryHint.style.display = "";
+      if (customerSection) customerSection.style.display = "none";
       if (nonCustomerSection) nonCustomerSection.style.display = "none";
-      if (custTbody)          custTbody.innerHTML = `<tr><td colspan="6" class="text-muted">Select category to load customers…</td></tr>`;
+      if (custTbody) {
+        custTbody.innerHTML = `<tr><td colspan="6" class="text-muted">Select category to load customers…</td></tr>`;
+      }
       return;
     }
+
     if (categoryHint) categoryHint.style.display = "none";
+
     if (isCustomerCat(v)) {
-      if (customerSection)    customerSection.style.display = "";
+      if (customerSection) customerSection.style.display = "";
       if (nonCustomerSection) nonCustomerSection.style.display = "none";
       loadCustomers();
     } else {
-      if (customerSection)    customerSection.style.display = "none";
+      if (customerSection) customerSection.style.display = "none";
       if (nonCustomerSection) nonCustomerSection.style.display = "";
       if (nonCustomerTbody && !nonCustomerTbody.children.length) addLine();
     }
@@ -556,21 +585,26 @@
   function toggleSingleFields() {
     const v = singleCategoryEl ? singleCategoryEl.value : "";
     const isCust = isCustomerCat(v);
+
     if (singleCustomerWrap) singleCustomerWrap.style.display = isCust ? "" : "none";
-    if (singleCpWrap)       singleCpWrap.style.display       = isCust ? "none" : "";
+    if (singleCpWrap) singleCpWrap.style.display = isCust ? "none" : "";
   }
 
   function loadCustomers() {
     if (!custTbody) return;
+
     document.querySelectorAll(".cust-check").forEach(ch => {
       if (ch.checked) selectedSet.add(String(ch.getAttribute("data-cid")));
     });
+
     custTbody.innerHTML = `<tr><td colspan="6" class="text-muted">Loading…</td></tr>`;
 
-    const q   = encodeURIComponent((custSearch && custSearch.value) ? custSearch.value : "");
+    const q = encodeURIComponent((custSearch && custSearch.value) ? custSearch.value : "");
     const src = encodeURIComponent((custSource && custSource.value) ? custSource.value : "");
 
-    fetch(`${apiUrl}?q=${q}&source=${src}`, {headers: {"Accept":"application/json"}})
+    fetch(`${apiUrl}?q=${q}&source=${src}`, {
+      headers: { "Accept": "application/json" }
+    })
       .then(r => r.json())
       .then(data => {
         if (!data.ok) throw new Error(data.error || "Failed");
@@ -584,32 +618,30 @@
 
   function renderCustomers() {
     if (!custTbody) return;
+
     if (!customerCache.length) {
       custTbody.innerHTML = `<tr><td colspan="6" class="text-muted">No customers found.</td></tr>`;
       updateSelectedCount();
       return;
     }
 
-    /*
-     * FIX ISSUE 1: Location column REMOVED from each row.
-     * The backend now auto-uses customer.address — no per-row input needed.
-     * Columns: checkbox | customer | purpose | expected_sales | expected_coll | source
-     */
     const rows = customerCache.map(c => {
-      const cid     = String(c.id);
+      const cid = String(c.id);
       const checked = selectedSet.has(cid) ? "checked" : "";
+
       return `
         <tr>
           <td><input class="form-check-input cust-check" type="checkbox" data-cid="${esc(cid)}" ${checked}></td>
           <td>
             <div class="fw-semibold">${esc(c.name)}</div>
-            <div class="small text-muted">${esc(c.code||"")}${c.mobile ? " • "+esc(c.mobile) : ""}</div>
+            <div class="small text-muted">${esc(c.code || "")}${c.mobile ? " • " + esc(c.mobile) : ""}</div>
           </td>
           <td><input class="form-control form-control-sm kam-table-input-wide" type="text" name="purpose_${esc(cid)}" placeholder="Optional"></td>
-          <td><input class="form-control form-control-sm kam-table-input-num"  type="text" name="expected_sales_mt_${esc(cid)}" placeholder="e.g. 12.5"></td>
-          <td><input class="form-control form-control-sm kam-table-input-num"  type="text" name="expected_collection_${esc(cid)}" placeholder="e.g. 250000"></td>
-          <td><span class="badge bg-light text-dark">${esc((c.source||"").toUpperCase())}</span></td>
-        </tr>`;
+          <td><input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_sales_mt_${esc(cid)}" placeholder="e.g. 12.5"></td>
+          <td><input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_collection_${esc(cid)}" placeholder="e.g. 250000"></td>
+          <td><span class="badge bg-light text-dark">${esc((c.source || "").toUpperCase())}</span></td>
+        </tr>
+      `;
     }).join("");
 
     custTbody.innerHTML = rows;
@@ -618,10 +650,11 @@
       ch.addEventListener("change", () => {
         const cid = String(ch.getAttribute("data-cid"));
         if (ch.checked) selectedSet.add(cid);
-        else             selectedSet.delete(cid);
+        else selectedSet.delete(cid);
         updateSelectedCount();
       });
     });
+
     updateSelectedCount();
   }
 
@@ -631,25 +664,33 @@
         ch.checked = selectAllCust.checked;
         const cid = String(ch.getAttribute("data-cid"));
         if (ch.checked) selectedSet.add(cid);
-        else             selectedSet.delete(cid);
+        else selectedSet.delete(cid);
       });
       updateSelectedCount();
     });
   }
 
-  if (btnRefresh)   btnRefresh.addEventListener("click", loadCustomers);
-  if (custSource)   custSource.addEventListener("change", loadCustomers);
-  if (custSearch)   custSearch.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); loadCustomers(); } });
+  if (btnRefresh) btnRefresh.addEventListener("click", loadCustomers);
+  if (custSource) custSource.addEventListener("change", loadCustomers);
+  if (custSearch) {
+    custSearch.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        loadCustomers();
+      }
+    });
+  }
 
   if (batchForm) {
     batchForm.addEventListener("submit", () => {
       if (!selectedHidden) return;
       selectedHidden.innerHTML = "";
+
       document.querySelectorAll(".cust-check").forEach(ch => {
         if (!ch.checked) return;
         const inp = document.createElement("input");
-        inp.type  = "hidden";
-        inp.name  = "customers_selected[]";
+        inp.type = "hidden";
+        inp.name = "customers_selected[]";
         inp.value = ch.getAttribute("data-cid");
         selectedHidden.appendChild(inp);
       });
@@ -658,23 +699,19 @@
 
   function addLine() {
     if (!nonCustomerTbody) return;
+
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td><input class="form-control form-control-sm" name="counterparty_name[]"     placeholder="Name"></td>
-      <td><input class="form-control form-control-sm" name="counterparty_location[]"  placeholder="Location"></td>
-      <td><input class="form-control form-control-sm" name="counterparty_purpose[]"   placeholder="Purpose"></td>
-      <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger">Remove</button></td>`;
+      <td><input class="form-control form-control-sm" name="counterparty_name[]" placeholder="Name"></td>
+      <td><input class="form-control form-control-sm" name="counterparty_location[]" placeholder="Location"></td>
+      <td><input class="form-control form-control-sm" name="counterparty_purpose[]" placeholder="Purpose"></td>
+      <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger">Remove</button></td>
+    `;
+
     tr.querySelector("button").addEventListener("click", () => tr.remove());
     nonCustomerTbody.appendChild(tr);
   }
 
-  if (addLineBtn)      addLineBtn.addEventListener("click", addLine);
-  if (batchCategoryEl) batchCategoryEl.addEventListener("change", toggleSections);
-  if (singleCategoryEl) singleCategoryEl.addEventListener("change", toggleSingleFields);
-  if (batchFromEl)     batchFromEl.addEventListener("change", updateGlobalDateInfo);
-  if (batchToEl)       batchToEl.addEventListener("change", updateGlobalDateInfo);
-
-  /* Manual customer save */
   const mcSave = document.getElementById("mc_save");
   const mcErr  = document.getElementById("mc_err");
   const mcOk   = document.getElementById("mc_ok");
@@ -682,28 +719,47 @@
   if (mcSave) {
     mcSave.addEventListener("click", () => {
       const payload = new URLSearchParams();
-      ["name","mobile","address","email","gst_number","pincode"].forEach(k => {
+
+      ["name", "mobile", "address", "email", "gst_number", "pincode"].forEach(k => {
         const el = document.getElementById("mc_" + (k === "gst_number" ? "gst" : k));
         payload.append(k, (el && el.value) || "");
       });
+
       fetch("{% url 'kam:customer_create_manual' %}", {
         method: "POST",
-        headers: {"X-CSRFToken": csrftoken, "Accept": "application/json"},
+        headers: {
+          "X-CSRFToken": csrftoken,
+          "Accept": "application/json"
+        },
         body: payload,
       })
-      .then(r => r.json().then(j => ({ok: r.ok, json: j})))
-      .then(({ok, json}) => {
+      .then(r => r.json().then(j => ({ ok: r.ok, json: j })))
+      .then(({ ok, json }) => {
         if (!ok || !json.ok) throw new Error(json.error || "Failed");
+
         if (mcErr) mcErr.style.display = "none";
-        if (mcOk)  { mcOk.style.display = ""; mcOk.textContent = "Saved. Refreshing list…"; }
+        if (mcOk) {
+          mcOk.style.display = "";
+          mcOk.textContent = "Saved. Refreshing list…";
+        }
+
         loadCustomers();
       })
       .catch(err => {
-        if (mcOk)  mcOk.style.display = "none";
-        if (mcErr) { mcErr.style.display = ""; mcErr.textContent = err.message; }
+        if (mcOk) mcOk.style.display = "none";
+        if (mcErr) {
+          mcErr.style.display = "";
+          mcErr.textContent = err.message;
+        }
       });
     });
   }
+
+  if (addLineBtn) addLineBtn.addEventListener("click", addLine);
+  if (batchCategoryEl) batchCategoryEl.addEventListener("change", toggleSections);
+  if (singleCategoryEl) singleCategoryEl.addEventListener("change", toggleSingleFields);
+  if (batchFromEl) batchFromEl.addEventListener("change", updateGlobalDateInfo);
+  if (batchToEl) batchToEl.addEventListener("change", updateGlobalDateInfo);
 
   applyBootstrap();
   updateGlobalDateInfo();

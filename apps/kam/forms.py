@@ -46,7 +46,7 @@ def _clean_decimal_field(value, allow_blank: bool = True) -> Optional[Decimal]:
 
 class VisitPlanForm(forms.ModelForm):
     """
-    Used for SINGLE visit pane.
+    Used for legacy SINGLE visit pane.
     NOTE: View enforces that this always saves as DRAFT; do not put approval logic here.
     purpose / location / remarks are all optional — validation removed.
     """
@@ -109,6 +109,145 @@ class VisitPlanForm(forms.ModelForm):
             self.add_error("expected_collection", e)
 
         return data
+
+
+class SingleVisitForm(forms.ModelForm):
+    """
+    Dedicated form for the Single Visit approval workflow.
+
+    Workflow handled by views:
+    - Save Draft        -> DRAFT
+    - Submit to Manager -> PENDING_APPROVAL
+
+    This form only validates the business data.
+    """
+
+    class Meta:
+        model = VisitPlan
+        fields = [
+            "visit_category",
+            "visit_date",
+            "customer",
+            "counterparty_name",
+            "location",
+            "purpose",
+        ]
+        widgets = {
+            "visit_date": forms.DateInput(attrs={"type": "date", "class": "form-control"}),
+            "location": forms.TextInput(
+                attrs={
+                    "class": "form-control",
+                    "placeholder": "Enter visit location",
+                }
+            ),
+            "purpose": forms.Textarea(
+                attrs={
+                    "class": "form-control",
+                    "rows": 3,
+                    "placeholder": "Purpose / remarks",
+                }
+            ),
+            "counterparty_name": forms.TextInput(
+                attrs={
+                    "class": "form-control",
+                    "placeholder": "Customer / Vendor / Supplier / Warehouse Name",
+                }
+            ),
+        }
+        labels = {
+            "visit_category": "Visit Category",
+            "visit_date": "Visit Date",
+            "customer": "Customer Name",
+            "counterparty_name": "Customer / Vendor / Supplier / Warehouse Name",
+            "location": "Location",
+            "purpose": "Purpose / Remarks",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.fields["visit_category"].required = True
+        self.fields["visit_date"].required = True
+        self.fields["customer"].required = False
+        self.fields["counterparty_name"].required = False
+        self.fields["location"].required = True
+        self.fields["purpose"].required = True
+
+        self.fields["visit_category"].widget.attrs.update({"class": "form-select"})
+        self.fields["customer"].widget.attrs.update({"class": "form-select"})
+
+        if "customer" in self.fields:
+            self.fields["customer"].queryset = Customer.objects.all().order_by("name")
+            self.fields["customer"].empty_label = "— Select customer —"
+
+        if self.instance and getattr(self.instance, "pk", None):
+            if self.instance.visit_category == VisitPlan.CAT_CUSTOMER and self.instance.customer_id:
+                self.fields["counterparty_name"].required = False
+
+    def clean(self):
+        data = super().clean()
+        visit_category = data.get("visit_category")
+        visit_date = data.get("visit_date")
+        customer = data.get("customer")
+        counterparty_name = (data.get("counterparty_name") or "").strip()
+        location = (data.get("location") or "").strip()
+        purpose = (data.get("purpose") or "").strip()
+
+        if not visit_category:
+            self.add_error("visit_category", "Visit Category is required.")
+
+        if not visit_date:
+            self.add_error("visit_date", "Visit Date is required.")
+
+        if not location:
+            self.add_error("location", "Location is required.")
+        elif len(location) > 1000:
+            self.add_error("location", "Location is too long (max 1000 characters).")
+
+        if not purpose:
+            self.add_error("purpose", "Purpose / Remarks is required.")
+        elif len(purpose) > 2000:
+            self.add_error("purpose", "Purpose / Remarks is too long (max 2000 characters).")
+
+        if visit_category == VisitPlan.CAT_CUSTOMER:
+            if not customer:
+                self.add_error("customer", "Customer is required for Customer Visit.")
+            if counterparty_name:
+                self.add_error(
+                    "counterparty_name",
+                    "Manual name must be empty for Customer Visit. Select a customer instead.",
+                )
+        else:
+            if customer:
+                self.add_error("customer", "Customer must be empty for non-customer visits.")
+            if not counterparty_name:
+                self.add_error(
+                    "counterparty_name",
+                    "Name is required for Vendor / Supplier / Warehouse visit.",
+                )
+            elif len(counterparty_name) > 255:
+                self.add_error("counterparty_name", "Name is too long (max 255 characters).")
+
+        return data
+
+    def save(self, commit=True):
+        inst: VisitPlan = super().save(commit=False)
+        inst.visit_type = VisitPlan.PLANNED
+
+        if inst.visit_category == VisitPlan.CAT_CUSTOMER:
+            inst.counterparty_name = None
+            if not (inst.location or "").strip() and inst.customer and inst.customer.address:
+                inst.location = inst.customer.address
+        else:
+            inst.customer = None
+            inst.counterparty_name = (inst.counterparty_name or "").strip() or None
+
+        inst.location = (inst.location or "").strip() or None
+        inst.purpose = (inst.purpose or "").strip() or None
+
+        if commit:
+            inst.save()
+        return inst
 
 
 class VisitActualForm(forms.ModelForm):
@@ -261,11 +400,13 @@ class VisitBatchForm(forms.ModelForm):
 class MultiVisitPlanLineForm(forms.Form):
     counterparty_name = forms.CharField(required=True, max_length=255)
     counterparty_location = forms.CharField(
-        required=False, max_length=255,
+        required=False,
+        max_length=255,
         widget=forms.TextInput(attrs={"placeholder": "Location (optional)"}),
     )
     counterparty_purpose = forms.CharField(
-        required=False, max_length=500,
+        required=False,
+        max_length=500,
         widget=forms.TextInput(attrs={"placeholder": "Purpose / remarks (optional)"}),
     )
 
@@ -304,7 +445,8 @@ class ManagerTargetForm(forms.Form):
     to_date = forms.DateField(required=False, widget=forms.DateInput(attrs={"type": "date"}))
     fixed_for_next_3_months = forms.BooleanField(required=False, initial=False)
     kam_username = forms.ChoiceField(
-        required=False, choices=[],
+        required=False,
+        choices=[],
         widget=forms.Select(attrs={"class": "form-select"}),
     )
     bulk_all_kams = forms.BooleanField(required=False, initial=False)

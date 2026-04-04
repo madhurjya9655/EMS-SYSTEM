@@ -458,13 +458,43 @@ class VisitBatch(TimeStamped):
 
 
 class VisitPlan(TimeStamped):
+    """
+    Represents a single planned visit.
+
+    STATUS STATE MACHINE:
+    ┌─────────────────────────────────────────────────────────┐
+    │  draft ──► pending_manager_approval ──► approved        │
+    │                        │                                │
+    │                        └──────────────► rejected        │
+    │                                            │            │
+    │  (rejected → editable → resubmit)          │            │
+    │  approved ──► completed (post-visit done)  │            │
+    └─────────────────────────────────────────────────────────┘
+
+    LOCK RULE:
+    - draft:                    EDITABLE by KAM
+    - pending_manager_approval: LOCKED (not editable)
+    - approved:                 LOCKED (post-visit allowed)
+    - rejected:                 EDITABLE again (KAM can fix & resubmit)
+    - completed:                LOCKED (visit fully done)
+
+    APPROVAL AUDIT:
+    - submitted_at: when KAM clicked "Submit to Manager"
+    - approved_at / approved_by: manager approval details
+    - rejected_at / rejected_by: manager rejection details
+    - rejection_reason: required text when manager rejects
+    """
+
     PLANNED = "PLANNED"
     UNPLANNED = "UNPLANNED"
-    DRAFT = VisitBatch.DRAFT
-    PENDING_APPROVAL = VisitBatch.PENDING_APPROVAL
-    PENDING = VisitBatch.PENDING
-    APPROVED = VisitBatch.APPROVED
-    REJECTED = VisitBatch.REJECTED
+
+    # Status constants — aligned with VisitBatch for consistency
+    DRAFT = "DRAFT"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    COMPLETED = "COMPLETED"
 
     CAT_VENDOR = VisitBatch.CAT_VENDOR
     CAT_CUSTOMER = VisitBatch.CAT_CUSTOMER
@@ -473,10 +503,11 @@ class VisitPlan(TimeStamped):
 
     APPROVAL_STATUS_CHOICES = [
         (DRAFT, "Draft"),
-        (PENDING_APPROVAL, "Pending Approval"),
+        (PENDING_APPROVAL, "Pending Manager Approval"),
         (PENDING, "Pending (Legacy)"),
         (APPROVED, "Approved"),
         (REJECTED, "Rejected"),
+        (COMPLETED, "Completed"),
     ]
 
     batch = models.ForeignKey(
@@ -506,13 +537,37 @@ class VisitPlan(TimeStamped):
     expected_sales_mt = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
     expected_collection = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     location = models.TextField(blank=True, null=True)
+
+    # ── Approval workflow fields ─────────────────────────────────────────
     approval_status = models.CharField(
-        max_length=20, default=PENDING_APPROVAL, choices=APPROVAL_STATUS_CHOICES, db_index=True,
+        max_length=20, default=DRAFT, choices=APPROVAL_STATUS_CHOICES, db_index=True,
+    )
+    submitted_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Timestamp when KAM submitted this visit to manager for approval.",
     )
     approved_by = models.ForeignKey(
-        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="approved_visits",
+        User, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="approved_visits",
+        help_text="Manager who approved this visit.",
     )
-    approved_at = models.DateTimeField(null=True, blank=True)
+    approved_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Timestamp when manager approved.",
+    )
+    rejected_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="rejected_visits",
+        help_text="Manager who rejected this visit.",
+    )
+    rejected_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Timestamp when manager rejected.",
+    )
+    rejection_reason = models.TextField(
+        blank=True, null=True,
+        help_text="Reason provided by manager when rejecting. Required on rejection.",
+    )
 
     class Meta:
         indexes = [
@@ -525,6 +580,16 @@ class VisitPlan(TimeStamped):
     def __str__(self):
         base = self.customer.name if self.customer_id else (self.counterparty_name or "N/A")
         return f"{self.visit_date} • {base} • {self.visit_category}"
+
+    @property
+    def is_locked(self) -> bool:
+        """Returns True if KAM cannot edit this visit."""
+        return self.approval_status in (self.PENDING_APPROVAL, self.APPROVED, self.COMPLETED)
+
+    @property
+    def can_submit(self) -> bool:
+        """Returns True if KAM can submit this visit to manager."""
+        return self.approval_status in (self.DRAFT, self.REJECTED)
 
 
 class VisitActual(TimeStamped):
@@ -622,6 +687,7 @@ class VisitApprovalAudit(TimeStamped):
     ACTION_APPROVE = "APPROVE"
     ACTION_REJECT = "REJECT"
     ACTION_DELETE = "DELETE"
+    ACTION_SUBMIT = "SUBMIT"
 
     plan = models.ForeignKey(
         VisitPlan, on_delete=models.CASCADE, related_name="approval_audits", null=True, blank=True,
@@ -636,6 +702,7 @@ class VisitApprovalAudit(TimeStamped):
             (ACTION_APPROVE, "Approve"),
             (ACTION_REJECT, "Reject"),
             (ACTION_DELETE, "Delete"),
+            (ACTION_SUBMIT, "Submit"),
         ],
     )
     note = models.CharField(max_length=255, blank=True, null=True)

@@ -1,0 +1,243 @@
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block title %}{{ page_title }}{% endblock %}
+{% block breadcrumb %}KAM / Single Visits / Detail{% endblock %}
+
+{% block head_extra %}
+<style>
+  .info-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid #e5e7eb;
+    background: #fff;
+    border-radius: 999px;
+    padding: 5px 12px;
+    font-size: 12px;
+    color: #475569;
+  }
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .status-draft { background: #f3f4f6; color: #6b7280; }
+  .status-pending { background: #fffbeb; color: #d97706; }
+  .status-approved { background: #ecfdf5; color: #059669; }
+  .status-rejected { background: #fef2f2; color: #dc2626; }
+  .status-completed { background: #eff6ff; color: #2563eb; }
+  .meta-table th {
+    width: 220px;
+    font-size: 12px;
+    text-transform: uppercase;
+    color: #64748b;
+    letter-spacing: .04em;
+    white-space: nowrap;
+  }
+  .meta-table td {
+    font-size: 13px;
+    color: #111827;
+  }
+  .audit-item {
+    border-left: 3px solid #cbd5e1;
+    padding-left: 12px;
+    margin-bottom: 14px;
+  }
+  .audit-item:last-child {
+    margin-bottom: 0;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-start justify-content-between flex-wrap gap-2 mb-4">
+  <div>
+    <h1 class="page-title mb-1">Single Visit #{{ plan.id }}</h1>
+    <div class="d-flex flex-wrap gap-2 mt-2">
+      <span class="info-chip"><i class="fas fa-calendar-alt"></i>{{ plan.visit_date|date:"d M Y" }}</span>
+      <span class="info-chip"><i class="fas fa-tag"></i>{{ visit_category_label }}</span>
+      <span class="info-chip"><i class="fas fa-user"></i>{{ plan.kam.get_full_name|default:plan.kam.username }}</span>
+
+      {% if plan.approval_status == "DRAFT" %}
+        <span class="status-pill status-draft">Draft</span>
+      {% elif plan.approval_status == "PENDING_APPROVAL" %}
+        <span class="status-pill status-pending">Pending Manager Approval</span>
+      {% elif plan.approval_status == "APPROVED" %}
+        <span class="status-pill status-approved">Approved</span>
+      {% elif plan.approval_status == "REJECTED" %}
+        <span class="status-pill status-rejected">Rejected</span>
+      {% elif plan.approval_status == "COMPLETED" %}
+        <span class="status-pill status-completed">Completed</span>
+      {% else %}
+        <span class="status-pill status-draft">{{ plan.approval_status }}</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="d-flex gap-2 flex-wrap">
+    <a href="{% url 'kam:single_visit_list' %}" class="btn btn-sm btn-outline-secondary">
+      <i class="fas fa-arrow-left me-1"></i>Back
+    </a>
+    {% if can_edit %}
+      <a href="{% url 'kam:single_visit_edit' plan.id %}" class="btn btn-sm btn-primary">
+        <i class="fas fa-pen-to-square me-1"></i>Edit
+      </a>
+    {% endif %}
+  </div>
+</div>
+
+{% if messages %}
+  <div class="mb-3">
+    {% for message in messages %}
+      <div class="alert alert-{{ message.tags|default:'info' }} mb-2">{{ message }}</div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-header fw-semibold">Visit Details</div>
+      <div class="card-body">
+        {% if plan.approval_status == "REJECTED" and plan.rejection_reason %}
+          <div class="alert alert-danger">
+            <div class="fw-semibold mb-1">Rejected by Manager</div>
+            <div>{{ plan.rejection_reason }}</div>
+          </div>
+        {% endif %}
+
+        <table class="table table-sm align-middle meta-table mb-0">
+          <tr>
+            <th>Visit Category</th>
+            <td>{{ visit_category_label }}</td>
+          </tr>
+          <tr>
+            <th>Visit Date</th>
+            <td>{{ plan.visit_date|date:"d M Y" }}</td>
+          </tr>
+          <tr>
+            <th>Customer / Vendor / Supplier / Warehouse Name</th>
+            <td>
+              {% if plan.customer %}
+                {{ plan.customer.name }}
+              {% else %}
+                {{ plan.counterparty_name|default:"—" }}
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th>Location</th>
+            <td>{{ plan.location|default:"—" }}</td>
+          </tr>
+          <tr>
+            <th>Purpose / Remarks</th>
+            <td>{{ plan.purpose|default:"—"|linebreaksbr }}</td>
+          </tr>
+          <tr>
+            <th>Submitted At</th>
+            <td>{{ plan.submitted_at|default:"—" }}</td>
+          </tr>
+          <tr>
+            <th>Approved At</th>
+            <td>{{ plan.approved_at|default:"—" }}</td>
+          </tr>
+          <tr>
+            <th>Approved By</th>
+            <td>
+              {% if plan.approved_by %}
+                {{ plan.approved_by.get_full_name|default:plan.approved_by.username }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th>Rejected At</th>
+            <td>{{ plan.rejected_at|default:"—" }}</td>
+          </tr>
+          <tr>
+            <th>Rejected By</th>
+            <td>
+              {% if plan.rejected_by %}
+                {{ plan.rejected_by.get_full_name|default:plan.rejected_by.username }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+          </tr>
+        </table>
+
+        {% if plan.approval_status == "APPROVED" or plan.approval_status == "COMPLETED" %}
+          <div class="alert alert-success mt-3 mb-0">
+            Post-visit update is now allowed.
+            <a href="{% url 'kam:visits' %}?plan_id={{ plan.id }}" class="alert-link">Open post-visit form</a>
+          </div>
+        {% else %}
+          <div class="alert alert-secondary mt-3 mb-0">
+            Post-visit update becomes available only after manager approval.
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if can_approve %}
+      <div class="card mt-3">
+        <div class="card-header fw-semibold">Manager Decision</div>
+        <div class="card-body">
+          <div class="d-flex gap-2 flex-wrap mb-3">
+            <form method="post" action="{% url 'kam:single_visit_approve' plan.id %}">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-success">
+                <i class="fas fa-check me-1"></i>Approve
+              </button>
+            </form>
+          </div>
+
+          <form method="post" action="{% url 'kam:single_visit_reject' plan.id %}">
+            {% csrf_token %}
+            <label class="form-label fw-semibold">Rejection Reason</label>
+            <textarea name="reason" class="form-control" rows="4" placeholder="Reason is required for rejection..." required></textarea>
+            <div class="mt-2">
+              <button type="submit" class="btn btn-danger">
+                <i class="fas fa-xmark me-1"></i>Reject
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header fw-semibold">Audit Log</div>
+      <div class="card-body">
+        {% if audit_log %}
+          {% for log in audit_log %}
+            <div class="audit-item">
+              <div class="fw-semibold text-uppercase" style="font-size:12px;">
+                {{ log.action }}
+              </div>
+              <div class="small text-muted">
+                {{ log.created_at }} by {{ log.actor.get_full_name|default:log.actor.username }}
+              </div>
+              {% if log.note %}
+                <div class="small mt-1">{{ log.note }}</div>
+              {% endif %}
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="text-muted small">No audit entries found.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

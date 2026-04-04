@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block title %}Single Visits{% endblock %}
+{% block breadcrumb %}KAM / Single Visits{% endblock %}
+
+{% block head_extra %}
+<style>
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .status-draft { background: #f3f4f6; color: #6b7280; }
+  .status-pending { background: #fffbeb; color: #d97706; }
+  .status-approved { background: #ecfdf5; color: #059669; }
+  .status-rejected { background: #fef2f2; color: #dc2626; }
+  .status-completed { background: #eff6ff; color: #2563eb; }
+
+  .single-table th {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: #64748b;
+    letter-spacing: .04em;
+    white-space: nowrap;
+  }
+  .single-table td {
+    font-size: 13px;
+    vertical-align: middle;
+  }
+  .filter-box {
+    border: 1px solid rgba(0,0,0,.08);
+    background: #fff;
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-start justify-content-between flex-wrap gap-2 mb-4">
+  <div>
+    <h1 class="page-title mb-1">{{ page_title|default:"Single Visits" }}</h1>
+    <div class="text-muted small">
+      {% if can_approve %}
+        Approval queue and full lifecycle of single visits for your managed KAMs.
+      {% else %}
+        Your single-visit drafts, submitted visits, approvals, and completed visits.
+      {% endif %}
+    </div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a href="{% url 'kam:plan' %}" class="btn btn-sm btn-primary">
+      <i class="fas fa-plus me-1"></i>Create Single Visit
+    </a>
+    <a href="{% url 'kam:visit_batches' %}" class="btn btn-sm btn-outline-secondary">
+      <i class="fas fa-clock-rotate-left me-1"></i>Visit History
+    </a>
+  </div>
+</div>
+
+{% if messages %}
+  <div class="mb-3">
+    {% for message in messages %}
+      <div class="alert alert-{{ message.tags|default:'info' }} mb-2">{{ message }}</div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+<form method="get" class="filter-box">
+  <div class="row g-3 align-items-end">
+    <div class="col-md-4 col-lg-3">
+      <label class="form-label small fw-semibold">Status</label>
+      <select name="status" class="form-select form-select-sm">
+        <option value="">All Statuses</option>
+        {% for value, label in status_choices %}
+          <option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-auto">
+      <button type="submit" class="btn btn-sm btn-primary">Apply</button>
+      <a href="{% url 'kam:single_visit_list' %}" class="btn btn-sm btn-outline-secondary">Reset</a>
+    </div>
+  </div>
+</form>
+
+<div class="card">
+  <div class="card-header d-flex align-items-center justify-content-between">
+    <span class="fw-semibold">Single Visit Records</span>
+    <span class="badge bg-primary">{{ rows|length }}</span>
+  </div>
+  <div class="card-body p-0">
+    {% if rows %}
+      <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0 single-table">
+          <thead class="table-light">
+            <tr>
+              <th>ID</th>
+              <th>Date</th>
+              <th>Entity</th>
+              <th>Category</th>
+              <th>Location</th>
+              <th>Status</th>
+              <th>KAM</th>
+              <th class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for plan in rows %}
+              <tr>
+                <td class="text-muted">#{{ plan.id }}</td>
+                <td>{{ plan.visit_date|date:"d M Y" }}</td>
+                <td>
+                  <div class="fw-semibold">
+                    {% if plan.customer %}
+                      {{ plan.customer.name }}
+                    {% else %}
+                      {{ plan.counterparty_name|default:"—" }}
+                    {% endif %}
+                  </div>
+                  {% if plan.purpose %}
+                    <div class="text-muted small">{{ plan.purpose|truncatechars:60 }}</div>
+                  {% endif %}
+                </td>
+                <td>{{ plan.get_visit_category_display }}</td>
+                <td>{{ plan.location|default:"—"|truncatechars:40 }}</td>
+                <td>
+                  {% if plan.approval_status == "DRAFT" %}
+                    <span class="status-pill status-draft">Draft</span>
+                  {% elif plan.approval_status == "PENDING_APPROVAL" %}
+                    <span class="status-pill status-pending">Pending</span>
+                  {% elif plan.approval_status == "APPROVED" %}
+                    <span class="status-pill status-approved">Approved</span>
+                  {% elif plan.approval_status == "REJECTED" %}
+                    <span class="status-pill status-rejected">Rejected</span>
+                  {% elif plan.approval_status == "COMPLETED" %}
+                    <span class="status-pill status-completed">Completed</span>
+                  {% else %}
+                    <span class="status-pill status-draft">{{ plan.approval_status }}</span>
+                  {% endif %}
+                </td>
+                <td>{{ plan.kam.get_full_name|default:plan.kam.username }}</td>
+                <td class="text-end">
+                  <div class="d-flex gap-1 justify-content-end flex-wrap">
+                    <a href="{% url 'kam:single_visit_detail' plan.id %}" class="btn btn-sm btn-outline-secondary">
+                      View
+                    </a>
+                    {% if plan.can_submit and request.user == plan.kam %}
+                      <a href="{% url 'kam:single_visit_edit' plan.id %}" class="btn btn-sm btn-outline-primary">
+                        Edit
+                      </a>
+                    {% endif %}
+                    {% if can_approve and plan.approval_status == "PENDING_APPROVAL" %}
+                      <form method="post" action="{% url 'kam:single_visit_approve' plan.id %}" class="d-inline">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-sm btn-success">Approve</button>
+                      </form>
+                    {% endif %}
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="p-4 text-center text-muted">
+        No single visits found for the selected filter.
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

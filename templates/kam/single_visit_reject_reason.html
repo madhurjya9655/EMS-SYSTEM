@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title }}{% endblock %}
+{% block breadcrumb %}KAM / Single Visit / Reject{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 640px; margin-top: 40px;">
+  <div class="card">
+    <div class="card-header" style="background:#fef2f2;border-bottom:1px solid #fecaca;">
+      <h5 class="mb-0" style="color:#b91c1c;">
+        &#10007; Reject Single Visit #{{ plan.id }}
+      </h5>
+    </div>
+
+    <div class="card-body">
+      <div class="mb-3 p-3 rounded" style="background:#f8f9fa;font-size:13px;">
+        <div><strong>KAM:</strong> {{ plan.kam.get_full_name|default:plan.kam.username }}</div>
+        <div><strong>Category:</strong> {{ visit_category_label }}</div>
+        <div><strong>Date:</strong> {{ plan.visit_date }}</div>
+        <div>
+          <strong>Entity:</strong>
+          {% if plan.customer %}
+            {{ plan.customer.name }}
+          {% else %}
+            {{ plan.counterparty_name|default:"—" }}
+          {% endif %}
+        </div>
+        <div><strong>Location:</strong> {{ plan.location|default:"—" }}</div>
+        <div><strong>Purpose:</strong> {{ plan.purpose|default:"—" }}</div>
+      </div>
+
+      {% if error %}
+        <div class="alert alert-danger">{{ error }}</div>
+      {% endif %}
+
+      <form method="post">
+        {% csrf_token %}
+        <div class="mb-3">
+          <label class="form-label fw-semibold">
+            Rejection Reason <span class="text-danger">*</span>
+          </label>
+          <textarea name="reason"
+                    class="form-control"
+                    rows="4"
+                    placeholder="Please provide a clear rejection reason..."
+                    required>{{ request.POST.reason|default:"" }}</textarea>
+          <div class="form-text">
+            This reason will be stored in audit and sent back to the KAM.
+          </div>
+        </div>
+
+        <div class="d-flex gap-2">
+          <button type="submit" class="btn btn-danger fw-semibold">
+            &#10007; Confirm Rejection
+          </button>
+          <a href="{% url 'kam:single_visit_detail' plan.id %}" class="btn btn-outline-secondary">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

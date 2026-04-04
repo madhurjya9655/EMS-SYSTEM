@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Single Visit Approval Required</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 20px; }
+  .container { max-width: 640px; margin: 0 auto; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+  .header { background: #1d4ed8; color: #fff; padding: 24px 28px; }
+  .header h1 { margin: 0; font-size: 20px; font-weight: 700; }
+  .header p { margin: 6px 0 0; font-size: 13px; opacity: .9; }
+  .body { padding: 24px 28px; }
+  .info-table { width: 100%; border-collapse: collapse; margin: 18px 0 20px; }
+  .info-table th { text-align: left; padding: 8px 12px; background: #f8f9fa; font-size: 12px; font-weight: 700; color: #6b7280; width: 180px; border: 1px solid #e5e7eb; text-transform: uppercase; }
+  .info-table td { padding: 8px 12px; font-size: 13px; color: #111827; border: 1px solid #e5e7eb; }
+  .btn-row { display: flex; gap: 12px; margin: 24px 0; }
+  .btn { display: inline-block; padding: 12px 26px; border-radius: 6px; font-size: 14px; font-weight: 700; text-decoration: none; }
+  .btn-approve { background: #10b981; color: #fff; }
+  .btn-reject { background: #ef4444; color: #fff; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; background: #fef3c7; color: #d97706; }
+  .note { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 12px 16px; font-size: 12px; color: #1e40af; margin-top: 16px; }
+  .footer { padding: 14px 28px; background: #f8f9fa; font-size: 11px; color: #9ca3af; border-top: 1px solid #e5e7eb; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>&#128203; Single Visit Approval Required</h1>
+    <p>Visit #{{ plan.id }} submitted by {{ kam_user.get_full_name|default:kam_user.username }}</p>
+  </div>
+
+  <div class="body">
+    <p style="color:#374151;font-size:14px;margin-top:0;">
+      Hello <strong>{{ manager_user.get_full_name|default:manager_user.username|default:"Manager" }}</strong>,
+    </p>
+    <p style="color:#6b7280;font-size:13px;">
+      A single visit has been submitted and requires your approval.
+    </p>
+
+    <table class="info-table">
+      <tr>
+        <th>Visit ID</th>
+        <td><strong>#{{ plan.id }}</strong></td>
+      </tr>
+      <tr>
+        <th>KAM</th>
+        <td>{{ kam_user.get_full_name|default:kam_user.username }} ({{ kam_user.username }})</td>
+      </tr>
+      <tr>
+        <th>Visit Category</th>
+        <td>{{ visit_category_label }}</td>
+      </tr>
+      <tr>
+        <th>Visit Date</th>
+        <td>{{ plan.visit_date }}{% if plan.visit_date_to %} → {{ plan.visit_date_to }}{% endif %}</td>
+      </tr>
+      <tr>
+        <th>Entity</th>
+        <td>{{ counterparty }}</td>
+      </tr>
+      <tr>
+        <th>Location</th>
+        <td>{{ plan.location|default:"—" }}</td>
+      </tr>
+      <tr>
+        <th>Purpose / Remarks</th>
+        <td>{{ plan.purpose|default:"—" }}</td>
+      </tr>
+      <tr>
+        <th>Status</th>
+        <td><span class="badge">PENDING APPROVAL</span></td>
+      </tr>
+      {% if plan.submitted_at %}
+      <tr>
+        <th>Submitted At</th>
+        <td>{{ plan.submitted_at }}</td>
+      </tr>
+      {% endif %}
+    </table>
+
+    <p style="color:#6b7280;font-size:13px;">
+      Click one of the buttons below to approve or reject this visit.
+    </p>
+
+    <div class="btn-row">
+      <a href="{{ approve_url }}" class="btn btn-approve">&#10003; Approve Visit</a>
+      <a href="{{ reject_url }}" class="btn btn-reject">&#10007; Reject Visit</a>
+    </div>
+
+    <div class="note">
+      <strong>Note:</strong> You must be logged in to BOS Lakshya ERP to complete this action.
+      If you are not logged in, the system will redirect you to the login page first.
+      Rejection requires a reason. Links expire after <strong>7 days</strong>.
+    </div>
+
+    <p style="margin-top:20px;font-size:11px;color:#9ca3af;">
+      Approve URL: {{ approve_url }}<br>
+      Reject URL: {{ reject_url }}
+    </p>
+  </div>
+
+  <div class="footer">
+    BOS Lakshya ERP — KAM Module — Automated approval email.
+  </div>
+</div>
+</body>
+</html>
