@@ -32,6 +32,17 @@
     {% elif batch.approval_status == "REJECTED" %}
       <span class="badge bg-danger">REJECTED</span>
     {% elif batch.approval_status == "DRAFT" %}
+    {% if batch.approval_status == "REJECTED" and batch.rejection_reason %}
+  <div class="alert alert-danger mt-3">
+    <strong>Rejection Reason:</strong> {{ batch.rejection_reason }}
+    {% if can_edit %}
+      <hr>
+      <a href="{% url 'kam:plan' %}" class="btn btn-sm btn-outline-danger">
+        Create New Batch (Resubmit)
+      </a>
+    {% endif %}
+  </div>
+{% endif %}
       <span class="badge bg-secondary">DRAFT</span>
     {% else %}
       <span class="badge bg-warning text-dark">{{ batch.approval_status }}</span>

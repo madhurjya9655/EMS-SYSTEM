@@ -436,10 +436,16 @@ class VisitBatch(TimeStamped):
     approval_status = models.CharField(
         max_length=20, default=PENDING_APPROVAL, choices=APPROVAL_STATUS_CHOICES, db_index=True,
     )
+    submitted_at = models.DateTimeField(null=True, blank=True)
     approved_by = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="approved_batches",
     )
     approved_at = models.DateTimeField(null=True, blank=True)
+    rejected_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name="rejected_batches",
+    )
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True, null=True)
 
     class Meta:
         indexes = [

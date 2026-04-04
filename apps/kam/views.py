@@ -185,7 +185,60 @@ def _send_safe_mail(subject: str, body: str, to_users: List[User], cc_users: Lis
         email.send(fail_silently=True)
     except Exception:
         pass
+def _notify_kam_batch_decision(
+    *,
+    request: HttpRequest,
+    batch: VisitBatch,
+    actor: User,
+    status: str,
+    rejection_reason: str = "",
+) -> None:
+    """Send email to KAM when their batch is approved or rejected."""
+    try:
+        kam_user = batch.kam
+        if not kam_user or not getattr(kam_user, "email", None):
+            return
 
+        visit_category_label = _VISIT_CATEGORY_LABELS.get(
+            batch.visit_category, batch.visit_category
+        )
+        batch_url = request.build_absolute_uri(
+            reverse("kam:visit_batch_detail", args=[batch.id])
+        )
+
+        subject = (
+            f"[KAM] Batch #{batch.id} {status}: "
+            f"{batch.from_date}..{batch.to_date} — {visit_category_label}"
+        )
+
+        try:
+            body = render_to_string(
+                "kam/emails/visit_batch_status.html",
+                {
+                    "batch": batch,
+                    "kam_user": kam_user,
+                    "actor": actor,
+                    "status": status,
+                    "visit_category_label": visit_category_label,
+                    "rejection_reason": rejection_reason,
+                    "batch_url": batch_url,
+                },
+            )
+        except Exception:
+            # Plain text fallback
+            body = (
+                f"Batch #{batch.id} has been {status}.\n"
+                f"Category: {visit_category_label}\n"
+                f"Date Range: {batch.from_date} to {batch.to_date}\n"
+                f"Decided by: {actor.get_full_name() or actor.username}\n"
+            )
+            if rejection_reason:
+                body += f"\nRejection Reason:\n{rejection_reason}\n"
+            body += f"\nView batch: {batch_url}\n"
+
+        _send_safe_mail(subject, body, [kam_user])
+    except Exception:
+        pass  # Never block workflow on notification failure
 
 def _active_manager_for_kam(kam_user: User) -> Optional[User]:
     if not kam_user or not getattr(kam_user, "id", None):
@@ -1394,6 +1447,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                         batch.to_date = to_date
                         batch.purpose = remarks or ""
                         batch.approval_status = STATUS_PENDING_APPROVAL
+                        batch.submitted_at = timezone.now()
                         batch.save()
 
                         for r in line_rows:
@@ -1820,8 +1874,18 @@ def visit_batch_approve(request: HttpRequest, batch_id: int) -> HttpResponse:
         batch.approved_by = request.user
         batch.approved_at = now_ts
         batch.save(update_fields=["approval_status", "approved_by", "approved_at", "updated_at"])
-        VisitPlan.objects.filter(batch=batch).update(approval_status=STATUS_APPROVED, approved_by=request.user, approved_at=now_ts, updated_at=now_ts)
-        VisitApprovalAudit.objects.create(batch=batch, actor=request.user, action=VisitApprovalAudit.ACTION_APPROVE, note="Approved batch", actor_ip=_get_ip(request))
+        VisitPlan.objects.filter(batch=batch).update(
+            approval_status=STATUS_APPROVED,
+            approved_by=request.user,
+            approved_at=now_ts,
+            updated_at=now_ts,
+        )
+        VisitApprovalAudit.objects.create(
+            batch=batch, actor=request.user,
+            action=VisitApprovalAudit.ACTION_APPROVE,
+            note="Approved batch", actor_ip=_get_ip(request),
+        )
+    _notify_kam_batch_decision(request=request, batch=batch, actor=request.user, status="APPROVED")
     messages.success(request, f"Batch #{batch.id} approved.")
     return redirect(reverse("kam:visit_batches"))
 
@@ -1834,7 +1898,7 @@ def visit_batch_reject(request: HttpRequest, batch_id: int) -> HttpResponse:
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
     batch = get_object_or_404(_visitbatch_qs_for_user(request.user), id=batch_id)
-    reason = (request.POST.get("reason") or "").strip() or "Rejected"
+    reason = (request.POST.get("reason") or "").strip() or "Rejected by manager"
     with transaction.atomic():
         batch = VisitBatch.objects.select_for_update().get(id=batch_id)
         if not _is_admin(request.user) and batch.kam_id not in set(_kams_managed_by_manager(request.user)):
@@ -1847,11 +1911,25 @@ def visit_batch_reject(request: HttpRequest, batch_id: int) -> HttpResponse:
             return redirect(reverse("kam:visit_batches"))
         now_ts = timezone.now()
         batch.approval_status = STATUS_REJECTED
-        batch.approved_by = request.user
-        batch.approved_at = now_ts
-        batch.save(update_fields=["approval_status", "approved_by", "approved_at", "updated_at"])
-        VisitPlan.objects.filter(batch=batch).update(approval_status=STATUS_REJECTED, approved_by=request.user, approved_at=now_ts, updated_at=now_ts)
-        VisitApprovalAudit.objects.create(batch=batch, actor=request.user, action=VisitApprovalAudit.ACTION_REJECT, note=reason[:255], actor_ip=_get_ip(request))
+        batch.rejected_by = request.user
+        batch.rejected_at = now_ts
+        batch.rejection_reason = reason
+        # Keep approved_by/approved_at blank on rejection
+        batch.save(update_fields=[
+            "approval_status", "rejected_by", "rejected_at", "rejection_reason", "updated_at"
+        ])
+        VisitPlan.objects.filter(batch=batch).update(
+            approval_status=STATUS_REJECTED,
+            updated_at=now_ts,
+        )
+        VisitApprovalAudit.objects.create(
+            batch=batch, actor=request.user,
+            action=VisitApprovalAudit.ACTION_REJECT,
+            note=reason[:255], actor_ip=_get_ip(request),
+        )
+    # Notify KAM
+    _notify_kam_batch_decision(request=request, batch=batch, actor=request.user,
+                                status="REJECTED", rejection_reason=reason)
     messages.info(request, f"Batch #{batch.id} rejected.")
     return redirect(reverse("kam:visit_batches"))
 
@@ -1897,12 +1975,11 @@ def visit_batch_approve_link(request: HttpRequest, token: str) -> HttpResponse:
             updated_at=now_ts,
         )
         VisitApprovalAudit.objects.create(
-            batch=batch,
-            actor=request.user,
+            batch=batch, actor=request.user,
             action=VisitApprovalAudit.ACTION_APPROVE,
-            note="Approved via email link",
-            actor_ip=_get_ip(request),
+            note="Approved via email link", actor_ip=_get_ip(request),
         )
+    _notify_kam_batch_decision(request=request, batch=batch, actor=request.user, status="APPROVED")
     messages.success(request, f"Batch #{batch_id} approved.")
     return redirect(reverse("kam:visit_batches"))
 
@@ -1923,6 +2000,23 @@ def visit_batch_reject_link(request: HttpRequest, token: str) -> HttpResponse:
     if action != "REJECT":
         messages.error(request, "Invalid action for this link.")
         return redirect(reverse("kam:visit_batches"))
+
+    # For reject-via-link: if GET, show a rejection reason form; if POST, process it
+    if request.method == "GET":
+        with transaction.atomic():
+            batch = get_object_or_404(VisitBatch, id=batch_id)
+        if batch.approval_status == STATUS_REJECTED:
+            messages.info(request, f"Batch #{batch.id} is already rejected.")
+            return redirect(reverse("kam:visit_batches"))
+        # Show simple rejection reason page
+        return render(request, "kam/visit_batch_reject_reason.html", {
+            "batch": batch,
+            "token": token,
+            "page_title": f"Reject Batch #{batch_id}",
+        })
+
+    # POST: process rejection
+    reason = (request.POST.get("reason") or "").strip() or "Rejected via email link"
     with transaction.atomic():
         batch = get_object_or_404(VisitBatch.objects.select_for_update(), id=batch_id)
         if not _is_admin(request.user) and batch.kam_id not in set(_kams_managed_by_manager(request.user)):
@@ -1935,22 +2029,23 @@ def visit_batch_reject_link(request: HttpRequest, token: str) -> HttpResponse:
             return redirect(reverse("kam:visit_batches"))
         now_ts = timezone.now()
         batch.approval_status = STATUS_REJECTED
-        batch.approved_by = request.user
-        batch.approved_at = now_ts
-        batch.save(update_fields=["approval_status", "approved_by", "approved_at", "updated_at"])
+        batch.rejected_by = request.user
+        batch.rejected_at = now_ts
+        batch.rejection_reason = reason
+        batch.save(update_fields=[
+            "approval_status", "rejected_by", "rejected_at", "rejection_reason", "updated_at"
+        ])
         VisitPlan.objects.filter(batch=batch).update(
             approval_status=STATUS_REJECTED,
-            approved_by=request.user,
-            approved_at=now_ts,
             updated_at=now_ts,
         )
         VisitApprovalAudit.objects.create(
-            batch=batch,
-            actor=request.user,
+            batch=batch, actor=request.user,
             action=VisitApprovalAudit.ACTION_REJECT,
-            note="Rejected via email link"[:255],
-            actor_ip=_get_ip(request),
+            note=reason[:255], actor_ip=_get_ip(request),
         )
+    _notify_kam_batch_decision(request=request, batch=batch, actor=request.user,
+                                status="REJECTED", rejection_reason=reason)
     messages.info(request, f"Batch #{batch_id} rejected.")
     return redirect(reverse("kam:visit_batches"))
 

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Visit Batch Approval Request</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 20px; }
+  .container { max-width: 600px; margin: 0 auto; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.1); }
+  .header { background: #1a56db; color: #fff; padding: 24px 28px; }
+  .header h1 { margin: 0; font-size: 20px; font-weight: 700; }
+  .header p { margin: 6px 0 0; opacity: .85; font-size: 13px; }
+  .body { padding: 24px 28px; }
+  .info-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+  .info-table th { text-align: left; padding: 8px 12px; background: #f8f9fa; font-size: 12px; font-weight: 700; text-transform: uppercase; color: #6b7280; width: 160px; border: 1px solid #e5e7eb; }
+  .info-table td { padding: 8px 12px; font-size: 13px; color: #111827; border: 1px solid #e5e7eb; }
+  .visit-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
+  .visit-table thead tr { background: #f8f9fa; }
+  .visit-table th { padding: 8px 10px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; color: #6b7280; border: 1px solid #e5e7eb; }
+  .visit-table td { padding: 8px 10px; border: 1px solid #e5e7eb; color: #374151; }
+  .visit-table tr:nth-child(even) { background: #f9fafb; }
+  .section-title { font-size: 14px; font-weight: 700; color: #374151; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #e5e7eb; }
+  .btn-row { display: flex; gap: 12px; margin: 24px 0; }
+  .btn { display: inline-block; padding: 12px 28px; border-radius: 6px; font-size: 15px; font-weight: 700; text-decoration: none; text-align: center; }
+  .btn-approve { background: #10b981; color: #fff; }
+  .btn-reject  { background: #ef4444; color: #fff; }
+  .btn:hover   { opacity: .9; }
+  .footer { padding: 14px 28px; background: #f8f9fa; font-size: 11px; color: #9ca3af; border-top: 1px solid #e5e7eb; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; background: #fef3c7; color: #d97706; }
+  .note { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 12px 16px; font-size: 12px; color: #1e40af; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <h1>&#128203; Visit Plan — Approval Required</h1>
+    <p>Batch #{{ batch.id }} submitted by {{ kam_user.get_full_name|default:kam_user.username }}</p>
+  </div>
+
+  <div class="body">
+
+    <p style="color:#374151;font-size:14px;margin-top:0;">
+      Hello <strong>{{ manager_user.get_full_name|default:manager_user.username|default:"Manager" }}</strong>,
+    </p>
+    <p style="color:#6b7280;font-size:13px;">
+      A visit plan batch has been submitted and requires your approval.
+    </p>
+
+    <div class="section-title">Batch Details</div>
+    <table class="info-table">
+      <tr>
+        <th>Batch ID</th>
+        <td><strong>#{{ batch.id }}</strong></td>
+      </tr>
+      <tr>
+        <th>KAM</th>
+        <td>{{ kam_user.get_full_name|default:kam_user.username }} ({{ kam_user.username }})</td>
+      </tr>
+      <tr>
+        <th>Visit Category</th>
+        <td>{{ visit_category_label }}</td>
+      </tr>
+      <tr>
+        <th>Date Range</th>
+        <td>{{ date_range }}</td>
+      </tr>
+      <tr>
+        <th>Status</th>
+        <td><span class="badge">PENDING APPROVAL</span></td>
+      </tr>
+      <tr>
+        <th>Remarks</th>
+        <td>{{ remarks|default:"—" }}</td>
+      </tr>
+      {% if batch.submitted_at %}
+      <tr>
+        <th>Submitted At</th>
+        <td>{{ batch.submitted_at }}</td>
+      </tr>
+      {% endif %}
+    </table>
+
+    {% if customers %}
+      <div class="section-title">Customer Visits ({{ customers|length }})</div>
+      <table class="visit-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Customer Name</th>
+            <th>Code</th>
+            <th>Address</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in customers %}
+          <tr>
+            <td>{{ forloop.counter }}</td>
+            <td><strong>{{ c.name }}</strong></td>
+            <td>{{ c.code|default:"—" }}</td>
+            <td>{{ c.address|default:"—"|truncatechars:60 }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    {% if counterparty_names %}
+      <div class="section-title">Visit Lines ({{ counterparty_names|length }})</div>
+      <table class="visit-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Name / Counterparty</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for name in counterparty_names %}
+          <tr>
+            <td>{{ forloop.counter }}</td>
+            <td>{{ name }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    <div class="section-title">Your Decision</div>
+    <p style="color:#6b7280;font-size:13px;">Click one of the buttons below to approve or reject this batch.</p>
+
+    <div class="btn-row">
+      <a href="{{ approve_url }}" class="btn btn-approve">&#10003; Approve Batch</a>
+      <a href="{{ reject_url }}"  class="btn btn-reject">&#10007; Reject Batch</a>
+    </div>
+
+    <div class="note">
+      <strong>Note:</strong> You must be logged in to the system to complete this action.
+      If you are not logged in, you will be redirected to the login page first.<br><br>
+      Links expire after <strong>7 days</strong>.
+    </div>
+
+    <p style="margin-top:20px;font-size:11px;color:#9ca3af;">
+      Approve URL: {{ approve_url }}<br>
+      Reject URL:  {{ reject_url }}
+    </p>
+
+  </div>
+
+  <div class="footer">
+    BOS Lakshya ERP &mdash; KAM Module &mdash; This is an automated email. Do not reply.
+  </div>
+
+</div>
+</body>
+</html>
