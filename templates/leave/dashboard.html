@@ -230,6 +230,7 @@
     flex-shrink: 0;
   }
 
+  /* ✅ FIXED: Employee strip with proper profile photo rendering */
   .emp-strip {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     border-radius: var(--radius);
@@ -248,26 +249,44 @@
     gap: 14px;
     min-width: 0;
   }
+
+  /* ✅ FIXED: Avatar container - proper sizing and overflow */
   .emp-avatar-lg {
     width: 58px;
     height: 58px;
     border-radius: 50%;
-    object-fit: cover;
     border: 3px solid rgba(255,255,255,.35);
     flex-shrink: 0;
     background: rgba(255,255,255,.2);
-    display: grid;
-    place-items: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     font-size: 1.4rem;
     font-weight: 800;
     color: #fff;
     overflow: hidden;
+    position: relative;
   }
+
+  /* ✅ FIXED: Image inside avatar fills the circle correctly */
   .emp-avatar-lg img {
     width: 100%;
     height: 100%;
     object-fit: cover;
+    object-position: center;
+    display: block;
+    border-radius: 50%;
   }
+
+  /* ✅ FIXED: Fallback initial letter when no photo or photo fails */
+  .emp-avatar-lg .avatar-initial {
+    font-size: 1.4rem;
+    font-weight: 800;
+    color: #fff;
+    line-height: 1;
+    user-select: none;
+  }
+
   .emp-strip-name {
     font-family: var(--font-display);
     font-size: 1.15rem;
@@ -283,6 +302,21 @@
   .emp-strip-time {
     margin-top: 4px;
     opacity: .76;
+  }
+
+  /* Carry-forward info badge */
+  .cf-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: #fef3c7;
+    border: 1px solid #fde68a;
+    color: #92400e;
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    margin-top: 6px;
   }
 
   .section-card {
@@ -334,13 +368,32 @@
   {% if not is_viewing_other %}
   <div class="emp-strip">
     <div class="emp-strip-left">
-      <div class="emp-avatar-lg">
+
+      {# ✅ FIXED: Profile photo with proper fallback chain #}
+      <div class="emp-avatar-lg" id="empAvatarContainer">
         {% if employee_header.photo_url %}
-          <img src="{{ employee_header.photo_url }}" alt="Photo">
+          <img
+            src="{{ employee_header.photo_url }}"
+            alt="{{ employee_header.name|default:user.username }}"
+            id="empProfileImg"
+            onload="this.style.display='block';"
+            onerror="
+              this.style.display='none';
+              document.getElementById('empAvatarInitial').style.display='flex';
+            "
+          >
+          <span
+            class="avatar-initial"
+            id="empAvatarInitial"
+            style="display:none;"
+          >{{ employee_header.name|default:user.username|slice:":1"|upper }}</span>
         {% else %}
-          {{ employee_header.name|default:user.username|slice:":1"|upper }}
+          <span class="avatar-initial">
+            {{ employee_header.name|default:user.username|slice:":1"|upper }}
+          </span>
         {% endif %}
       </div>
+
       <div>
         <div class="emp-strip-name">{{ employee_header.name|default:user.username }}</div>
         <div class="emp-strip-meta">
@@ -352,6 +405,14 @@
         <div class="emp-strip-meta emp-strip-time">
           IST: {% timezone "Asia/Kolkata" %}{{ now_ist|date:"d M Y, H:i" }}{% endtimezone %}
         </div>
+        {# Show carry-forward penalty if applicable #}
+        {% if annual_leave_balance.carry_forward_adjustment and annual_leave_balance.carry_forward_adjustment != 0 %}
+          <div class="cf-badge">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            Carry-forward: {{ annual_leave_balance.carry_forward_adjustment }} days
+            &nbsp;|&nbsp; Effective quota: {{ annual_leave_balance.total_paid_leaves }} days
+          </div>
+        {% endif %}
       </div>
     </div>
     <a href="{% url 'leave:apply_leave' %}" class="btn btn-light fw-semibold">
@@ -786,12 +847,24 @@
         <span><i class="fa-solid fa-camera me-2"></i>Profile Photo</span>
       </div>
       <div class="card-body">
+        {# ✅ FIXED: Show current photo preview before upload form #}
+        {% if employee_header.photo_url %}
+        <div style="text-align:center; margin-bottom:12px;">
+          <img
+            src="{{ employee_header.photo_url }}"
+            alt="Current profile photo"
+            style="width:80px; height:80px; border-radius:50%; object-fit:cover; border:3px solid var(--primary-border);"
+            onerror="this.parentElement.style.display='none';"
+          >
+          <div style="font-size:11px;color:var(--muted);margin-top:6px;">Current photo</div>
+        </div>
+        {% endif %}
         <form method="post" action="{% url 'leave:upload_photo' %}" enctype="multipart/form-data">
           {% csrf_token %}
           <div class="photo-drop">
             <i class="fa-solid fa-cloud-arrow-up"
                style="font-size:1.8rem;color:var(--muted);margin-bottom:8px;display:block;"></i>
-            <input type="file" name="photo" accept="image/*" required class="form-control mb-2">
+            <input type="file" name="photo" accept="image/*" required class="form-control mb-2" id="photoFileInput">
             <div style="font-size:12px;color:var(--muted);">JPG, PNG, WebP · Square works best · Max 10 MB</div>
           </div>
           <button type="submit" class="btn btn-primary" style="width:100%;">
@@ -812,6 +885,14 @@
             <div><strong>Annual Quota:</strong> 24 paid leaves per year (Apr 1 – Mar 31). Days beyond 24 are counted as <em>unpaid leave</em>.</div>
           </li>
           <li>
+            <i class="fa-solid fa-money-bill-wave"></i>
+            <div><strong>Deduction on Apply:</strong> Leave balance is deducted as soon as you apply (pending status). Rejected leaves restore your balance.</div>
+          </li>
+          <li>
+            <i class="fa-solid fa-circle-half-stroke"></i>
+            <div><strong>Half-day:</strong> Half-day leaves do <em>NOT</em> deduct from your 24-leave quota.</div>
+          </li>
+          <li>
             <i class="fa-solid fa-rectangle-list"></i>
             <div><strong>Types:</strong> Casual Leave, Maternity Leave, Compensatory Off.</div>
           </li>
@@ -820,16 +901,12 @@
             <div><strong>Approval:</strong> Your reporting person must approve or reject. Email token links are also supported.</div>
           </li>
           <li>
-            <i class="fa-solid fa-circle-half-stroke"></i>
-            <div><strong>Half-day:</strong> Same date, 10:00 AM – 6:30 PM IST, up to 6 hours.</div>
-          </li>
-          <li>
             <i class="fa-solid fa-ban"></i>
             <div><strong>Overlap:</strong> Overlapping requests are blocked automatically.</div>
           </li>
           <li>
             <i class="fa-solid fa-list-check"></i>
-            <div><strong>Tasks:</strong> Approved leaves auto-skip your planned tasks. Handed-over tasks are excluded.</div>
+            <div><strong>Tasks:</strong> Approved &amp; pending leaves auto-skip your planned tasks. No tasks on holidays or Sundays.</div>
           </li>
           <li>
             <i class="fa-solid fa-shield-halved"></i>
@@ -870,6 +947,7 @@
   var bulkExecuteBtn = document.getElementById('bulkExecuteBtn');
   var bulkPendingBtn = document.getElementById('bulkDeletePendingBtn');
 
+  // Employee search filter
   if (empSearch && empSelect) {
     empSearch.addEventListener('input', function () {
       var q = this.value.toLowerCase().trim();
@@ -884,6 +962,7 @@
     });
   }
 
+  // Status filter for main table
   if (statusFilter && leavesTable) {
     statusFilter.addEventListener('change', function () {
       var val = this.value;
@@ -999,6 +1078,36 @@
 
   if (bulkPendingBtn) {
     bulkPendingBtn.addEventListener('click', executeBulkDelete);
+  }
+
+  // ✅ FIXED: Photo preview before upload
+  var photoInput = document.getElementById('photoFileInput');
+  if (photoInput) {
+    photoInput.addEventListener('change', function() {
+      var file = this.files[0];
+      if (file && file.type.startsWith('image/')) {
+        var reader = new FileReader();
+        reader.onload = function(e) {
+          // Show preview of new photo
+          var preview = document.createElement('img');
+          preview.src = e.target.result;
+          preview.style.cssText = 'width:60px;height:60px;border-radius:50%;object-fit:cover;border:2px solid var(--primary);margin:8px auto;display:block;';
+          var drop = photoInput.closest('.photo-drop');
+          var existing = drop.querySelector('.photo-preview');
+          if (existing) existing.remove();
+          var wrapper = document.createElement('div');
+          wrapper.className = 'photo-preview';
+          wrapper.style.marginTop = '8px';
+          var label = document.createElement('div');
+          label.style.cssText = 'font-size:11px;color:var(--muted);text-align:center;margin-top:4px;';
+          label.textContent = 'Preview (new photo)';
+          wrapper.appendChild(preview);
+          wrapper.appendChild(label);
+          drop.appendChild(wrapper);
+        };
+        reader.readAsDataURL(file);
+      }
+    });
   }
 
   updateBulkUI();

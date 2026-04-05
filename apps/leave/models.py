@@ -1,4 +1,11 @@
-#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\leave\models.py
+# apps/leave/models.py
+# UPDATED: 2026-04-05
+# CHANGES:
+#   1. EmployeeLeaveBalance: added carry_forward_adjustment field
+#   2. Balance sync signals now trigger on PENDING status too (not just APPROVED)
+#   3. _balance_specs_for_leave_instance now includes PENDING status
+#   4. No other business logic changed
+
 from __future__ import annotations
 
 import hashlib
@@ -242,10 +249,37 @@ class EmployeeLeaveBalance(models.Model):
     )
     leave_year_start = models.DateField()
     leave_year_end = models.DateField()
+
+    # Effective quota after carry-forward adjustment (may be less than 24)
     total_paid_leaves = models.DecimalField(max_digits=5, decimal_places=1, default=24)
+
+    # Full-day leaves taken (pending + approved). Half-day = 0 deduction.
     paid_leaves_taken = models.DecimalField(max_digits=6, decimal_places=1, default=0)
+
+    # Days beyond the effective quota
     unpaid_leaves = models.DecimalField(max_digits=6, decimal_places=1, default=0)
+
+    # Remaining paid leaves
     remaining_paid_leaves = models.DecimalField(max_digits=6, decimal_places=1, default=24)
+
+    # ✅ NEW FIELD: Carry-forward adjustment from previous year excess.
+    # This is set MANUALLY via Render PostgreSQL shell or Django admin.
+    # Negative value = employee took excess leaves last year (penalty).
+    # Example: -4 means employee took 28 leaves last year.
+    #          This year effective quota = 24 + (-4) = 20.
+    # Zero (default) = no adjustment, full 24 leaves.
+    carry_forward_adjustment = models.DecimalField(
+        max_digits=5,
+        decimal_places=1,
+        default=0,
+        help_text=(
+            "Carry-forward penalty from previous year. "
+            "Negative = excess leaves taken. "
+            "e.g. -4 means this year quota = 24 - 4 = 20. "
+            "Set this manually via Render shell or Django admin."
+        ),
+    )
+
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -267,13 +301,14 @@ class EmployeeLeaveBalance(models.Model):
         employee_label = getattr(self.employee, "get_full_name", lambda: "")() or getattr(self.employee, "username", "")
         return (
             f"{employee_label} | "
-            f"{self.leave_year_start:%Y-%m-%d} → {self.leave_year_end:%Y-%m-%d} | "
-            f"Paid Used: {self.paid_leaves_taken} | Remaining: {self.remaining_paid_leaves} | Unpaid: {self.unpaid_leaves}"
+            f"{self.leave_year_start:%Y-%m-%d} \u2192 {self.leave_year_end:%Y-%m-%d} | "
+            f"Quota: {self.total_paid_leaves} | Used: {self.paid_leaves_taken} | "
+            f"Remaining: {self.remaining_paid_leaves} | CF: {self.carry_forward_adjustment}"
         )
 
     @property
     def leave_year_display(self) -> str:
-        return f"{self.leave_year_start.strftime('%b %Y')} – {self.leave_year_end.strftime('%b %Y')}"
+        return f"{self.leave_year_start.strftime('%b %Y')} \u2013 {self.leave_year_end.strftime('%b %Y')}"
 
 
 class LeaveRequestQuerySet(models.QuerySet):
@@ -723,15 +758,12 @@ class LeaveHandover(models.Model):
         try:
             if self.task_type == HandoverTaskType.CHECKLIST:
                 from apps.tasks.models import Checklist
-
                 return Checklist.objects.get(id=self.original_task_id)
             if self.task_type == HandoverTaskType.DELEGATION:
                 from apps.tasks.models import Delegation
-
                 return Delegation.objects.get(id=self.original_task_id)
             if self.task_type == HandoverTaskType.HELP_TICKET:
                 from apps.tasks.models import HelpTicket
-
                 return HelpTicket.objects.get(id=self.original_task_id)
         except Exception:
             pass
@@ -745,7 +777,6 @@ class LeaveHandover(models.Model):
 
     def get_task_url(self):
         from django.urls import reverse
-
         try:
             if self.task_type == HandoverTaskType.CHECKLIST:
                 return reverse("tasks:edit_checklist", args=[self.original_task_id])
@@ -784,16 +815,13 @@ class HandoverTaskMixin:
     @classmethod
     def get_tasks_for_user(cls, user: UserType):
         original_tasks = cls.objects.filter(assign_to=user)
-
         handovers = LeaveHandover.objects.currently_assigned_to(user).filter(
             task_type=cls._get_task_type_name()
         )
         handed_over_task_ids = [h.original_task_id for h in handovers]
-
         if handed_over_task_ids:
             handed_over_tasks = cls.objects.filter(id__in=handed_over_task_ids)
             return original_tasks.union(handed_over_tasks).order_by("-id")
-
         return original_tasks
 
     def get_current_assignee(self):
@@ -880,12 +908,10 @@ class DelegationReminder(models.Model):
             return False
         if not self.leave_handover.is_currently_active:
             return False
-
         task_obj = self.leave_handover.get_task_object()
         if task_obj and hasattr(task_obj, "status"):
             if task_obj.status in ["Completed", "Closed", "Done"]:
                 return False
-
         return True
 
     def mark_sent(self):
@@ -951,9 +977,7 @@ def get_handed_over_tasks_for_user(user: UserType) -> dict:
     handovers = LeaveHandover.objects.currently_assigned_to(user).select_related(
         "leave_request", "original_assignee"
     )
-
     result = {"checklist": [], "delegation": [], "help_ticket": []}
-
     for handover in handovers:
         task_obj = handover.get_task_object()
         if task_obj:
@@ -966,7 +990,6 @@ def get_handed_over_tasks_for_user(user: UserType) -> dict:
                 "task_url": handover.get_task_url(),
             }
             result[handover.task_type].append(task_data)
-
     return result
 
 
@@ -1002,12 +1025,9 @@ def _safe_send_request_email(leave: LeaveRequest) -> None:
             if (leave.reporting_person and leave.reporting_person.email)
             else None
         )
-
         admin_cc_list = _collect_admin_cc_emails(leave.employee)
         extra_cc_emails = [u.email for u in leave.cc_users.all() if getattr(u, "email", None)]
-
         all_cc = _dedupe_emails_preserve_order(admin_cc_list + extra_cc_emails)
-
         send_leave_request_email(leave, manager_email=manager_email, cc_list=all_cc)
         LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT, kind="request")
     except Exception:
@@ -1017,19 +1037,15 @@ def _safe_send_request_email(leave: LeaveRequest) -> None:
 def _safe_send_handover_emails(leave: LeaveRequest) -> None:
     try:
         from apps.leave.services.notifications import send_handover_email
-
         handovers = LeaveHandover.objects.filter(leave_request=leave).select_related("new_assignee")
-
         assignee_handovers = {}
         for handover in handovers:
             assignee_id = handover.new_assignee.id
             assignee_handovers.setdefault(assignee_id, []).append(handover)
-
         for assignee_id, user_handovers in assignee_handovers.items():
             assignee = user_handovers[0].new_assignee
             send_handover_email(leave, assignee, user_handovers)
             LeaveDecisionAudit.log(leave, DecisionAction.HANDOVER_EMAIL_SENT, assignee_id=assignee_id)
-
             for handover in user_handovers:
                 reminder_interval = 2
                 next_run = timezone.now() + timedelta(days=reminder_interval)
@@ -1046,16 +1062,19 @@ def _safe_send_handover_emails(leave: LeaveRequest) -> None:
 def _safe_send_decision_email(leave: LeaveRequest) -> None:
     try:
         from apps.leave.services.notifications import send_leave_decision_email
-
         send_leave_decision_email(leave)
     except Exception:
         logger.exception("Failed to send leave decision email")
 
 
 def _balance_specs_for_leave_instance(leave: LeaveRequest) -> List[Tuple[int, date, date]]:
+    """
+    ✅ CHANGED: Now includes PENDING status too (not just APPROVED).
+    This ensures balance is deducted as soon as leave is applied.
+    """
     if (
         not getattr(leave, "employee_id", None)
-        or getattr(leave, "status", None) != LeaveStatus.APPROVED
+        or getattr(leave, "status", None) not in [LeaveStatus.APPROVED, LeaveStatus.PENDING]
         or not getattr(leave, "start_date", None)
         or not getattr(leave, "end_date", None)
     ):
@@ -1068,7 +1087,8 @@ def _balance_specs_for_previous_state(instance: LeaveRequest) -> List[Tuple[int,
     status = getattr(instance, "_balance_prev_status", None)
     start_date = getattr(instance, "_balance_prev_start_date", None)
     end_date = getattr(instance, "_balance_prev_end_date", None)
-    if not employee_id or status != LeaveStatus.APPROVED or not start_date or not end_date:
+    # ✅ CHANGED: Include previous PENDING state too
+    if not employee_id or status not in [LeaveStatus.APPROVED, LeaveStatus.PENDING] or not start_date or not end_date:
         return []
     return [(employee_id, start_date, end_date)]
 
@@ -1174,6 +1194,11 @@ def _on_leave_created(sender, instance: LeaveRequest, created: bool, **kwargs) -
 
 @receiver(post_save, sender=LeaveRequest)
 def _sync_leave_balances_after_save(sender, instance: LeaveRequest, created: bool, **kwargs) -> None:
+    """
+    ✅ CHANGED: Now syncs balance for PENDING status too.
+    Balance is deducted as soon as leave is applied (not just on approval).
+    On rejection, previous state was PENDING, so balance is added back.
+    """
     specs = _dedupe_balance_specs(
         _balance_specs_for_previous_state(instance) + _balance_specs_for_leave_instance(instance)
     )
