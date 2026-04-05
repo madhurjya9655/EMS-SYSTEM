@@ -1,19 +1,20 @@
 # apps/leave/utils.py
 # UPDATED: 2026-04-05
 # CHANGES:
-#   1. Leave balance now counts PENDING + APPROVED leaves (not just APPROVED)
-#   2. Half-day leaves do NOT deduct from the 24-leave quota
-#   3. carry_forward_adjustment field support added
-#   4. is_employee_on_leave() helper added for task engine
-#   5. should_skip_task_generation() added - Holiday > Sunday > Leave priority
-#   6. is_holiday() and is_sunday() helpers added
+#   1. Leave deduction happens on apply (PENDING + APPROVED deduct)
+#   2. Half-day leave does NOT deduct from yearly paid leave quota
+#   3. Rejected / Cancelled leave adds balance back automatically
+#   4. Carry-forward adjustment supported and preserved from DB
+#   5. Leave year remains April -> March
+#   6. Task blocking helpers aligned with PENDING + APPROVED logic
+#   7. Holiday > Sunday > Leave priority preserved
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Tuple
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
@@ -25,7 +26,9 @@ User = get_user_model()
 
 ANNUAL_PAID_LEAVE_QUOTA = Decimal("24.0")
 
-# ✅ CHANGED: Both PENDING and APPROVED leaves deduct from balance
+# Applied leave should deduct immediately.
+# Approved keeps deduction.
+# Rejected / Cancelled automatically stop deducting because they are excluded here.
 ACTIVE_LEAVE_STATUSES = [LeaveStatus.PENDING, LeaveStatus.APPROVED]
 
 
@@ -34,22 +37,22 @@ class LeaveBalanceSummary:
     employee: object
     leave_year_start: date
     leave_year_end: date
-    total_paid_leaves: Decimal          # Effective quota after carry-forward
-    paid_leaves_taken: Decimal          # Full-day leaves only (pending + approved)
+    total_paid_leaves: Decimal
+    paid_leaves_taken: Decimal
     unpaid_leaves: Decimal
     remaining_paid_leaves: Decimal
-    carry_forward_adjustment: Decimal   # Negative = penalty from last year excess
-    base_quota: Decimal                 # Always 24
+    carry_forward_adjustment: Decimal
+    base_quota: Decimal
 
     @property
     def leave_year_label(self) -> str:
-        return f"{self.leave_year_start.strftime('%b %Y')} \u2013 {self.leave_year_end.strftime('%b %Y')}"
+        return f"{self.leave_year_start.strftime('%b %Y')} – {self.leave_year_end.strftime('%b %Y')}"
 
 
 def get_leave_year_bounds(target_date: date | None = None) -> Tuple[date, date]:
     """
-    Return the April\u2013March leave year that contains target_date.
-    April 1, YYYY \u2192 March 31, YYYY+1
+    Return the April–March leave year that contains target_date.
+    April 1, YYYY -> March 31, YYYY+1
     """
     target_date = target_date or timezone.localdate()
     if target_date.month >= 4:
@@ -63,7 +66,7 @@ def get_leave_year_bounds(target_date: date | None = None) -> Tuple[date, date]:
 
 def get_leave_year_label(target_date: date | None = None) -> str:
     start, end = get_leave_year_bounds(target_date)
-    return f"{start.strftime('%b %Y')} \u2013 {end.strftime('%b %Y')}"
+    return f"{start.strftime('%b %Y')} – {end.strftime('%b %Y')}"
 
 
 def iter_leave_year_periods(range_start: date, range_end: date) -> Iterable[Tuple[date, date]]:
@@ -87,14 +90,13 @@ def _leave_days_within_period(
     leave: LeaveRequest, period_start: date, period_end: date
 ) -> Decimal:
     """
-    Return the number of leave days that fall inside the given period.
+    Return the number of deductible leave days that fall inside the given period.
 
-    RULES:
-    - Half-day leaves do NOT deduct from quota (returns 0.0 always)
-    - Full-day leaves count each overlapping calendar day
-    - Cross-year leaves are split at year boundary
+    BUSINESS RULES:
+    - Half-day leave does NOT deduct from yearly paid leave balance
+    - Full-day leave deducts each overlapping calendar day
+    - Cross-year leave is split correctly at leave-year boundary
     """
-    # ✅ NEW RULE: Half day does NOT deduct leave balance at all
     if leave.is_half_day:
         return Decimal("0.0")
 
@@ -118,9 +120,8 @@ def _get_carry_forward_from_db(
     employee, leave_year_start: date, leave_year_end: date
 ) -> Decimal:
     """
-    Safely read carry_forward_adjustment from an existing EmployeeLeaveBalance row.
-    Returns 0 if row doesn't exist or field is missing.
-    This is safe to call even before the balance row is created.
+    Read carry_forward_adjustment from the existing yearly balance row.
+    Returns 0 if the row does not exist yet.
     """
     try:
         balance = EmployeeLeaveBalance.objects.get(
@@ -139,15 +140,14 @@ def calculate_leave_balance_for_period(
     employee, leave_year_start: date, leave_year_end: date
 ) -> "LeaveBalanceSummary":
     """
-    Compute the leave balance summary for one employee for one leave year.
+    Compute one employee's leave balance for one leave year.
 
-    KEY CHANGES FROM ORIGINAL:
-    - Counts PENDING + APPROVED leaves (not just APPROVED)
-    - Half-day leaves do NOT count toward the 24-leave quota (return 0 days)
-    - carry_forward_adjustment (set separately in DB) reduces effective quota
-      e.g. carry_forward = -4 means effective quota = 24 - 4 = 20
+    RULES:
+    - Deduct on apply: PENDING + APPROVED count
+    - Half-day does not deduct from yearly paid leave
+    - Rejected / Cancelled do not count
+    - Carry-forward adjustment changes effective yearly quota
     """
-    # ✅ CHANGED: Count PENDING + APPROVED (not just APPROVED)
     active_leaves = (
         LeaveRequest.objects.filter(
             employee=employee,
@@ -163,13 +163,9 @@ def calculate_leave_balance_for_period(
     for leave in active_leaves:
         total_taken += _leave_days_within_period(leave, leave_year_start, leave_year_end)
 
-    # Read carry-forward from DB (set via Render shell or management command)
     carry_forward = _get_carry_forward_from_db(employee, leave_year_start, leave_year_end)
 
-    # Effective quota = 24 + carry_forward
-    # carry_forward is negative for excess (penalty), so quota reduces
     effective_quota = ANNUAL_PAID_LEAVE_QUOTA + carry_forward
-    # Quota cannot go below 0
     effective_quota = max(effective_quota, Decimal("0.0"))
 
     paid_taken = min(total_taken, effective_quota)
@@ -194,11 +190,10 @@ def sync_employee_leave_balance(
     employee, leave_year_start: date, leave_year_end: date
 ) -> EmployeeLeaveBalance:
     """
-    Persist / update the EmployeeLeaveBalance row for one employee + one leave year.
+    Create or update the yearly balance row for one employee.
 
-    NOTE: carry_forward_adjustment is preserved from the existing row.
-    It must be set separately via Render shell (see README/docs).
-    We never overwrite it here to prevent accidental loss of manual adjustments.
+    IMPORTANT:
+    carry_forward_adjustment is preserved from DB and never overwritten here.
     """
     summary = calculate_leave_balance_for_period(employee, leave_year_start, leave_year_end)
 
@@ -216,7 +211,6 @@ def sync_employee_leave_balance(
     )
 
     if not created:
-        # Update calculated fields but NEVER overwrite carry_forward_adjustment
         balance.total_paid_leaves = summary.total_paid_leaves
         balance.paid_leaves_taken = summary.paid_leaves_taken
         balance.unpaid_leaves = summary.unpaid_leaves
@@ -240,8 +234,7 @@ def sync_employee_leave_balance_for_range(
     range_end: date | None,
 ) -> List[EmployeeLeaveBalance]:
     """
-    Sync balance for every leave year that the given date range touches.
-    Safe to call with None dates \u2014 falls back to current leave year.
+    Sync leave balance for every leave year touched by the given date range.
     """
     if not range_start or not range_end:
         current_start, current_end = get_leave_year_bounds()
@@ -261,7 +254,9 @@ def sync_employee_leave_balance_for_range(
 def get_or_sync_employee_leave_balance(
     employee, target_date: date | None = None
 ) -> EmployeeLeaveBalance:
-    """Return (and sync) the EmployeeLeaveBalance row for the leave year containing target_date."""
+    """
+    Return the synced yearly balance row for the leave year containing target_date.
+    """
     leave_year_start, leave_year_end = get_leave_year_bounds(target_date)
     return sync_employee_leave_balance(employee, leave_year_start, leave_year_end)
 
@@ -270,9 +265,7 @@ def get_employee_leave_balance_summary(
     employee, target_date: date | None = None
 ) -> "LeaveBalanceSummary":
     """
-    Return a LeaveBalanceSummary for the employee for the leave year containing target_date.
-    Always recalculates from active leave records (pending + approved).
-    Never returns stale zero rows.
+    Return a fresh LeaveBalanceSummary for the employee for the leave year containing target_date.
     """
     leave_year_start, leave_year_end = get_leave_year_bounds(target_date)
     balance = sync_employee_leave_balance(employee, leave_year_start, leave_year_end)
@@ -293,11 +286,7 @@ def get_admin_leave_balance_rows(
     users=None, target_date: date | None = None
 ) -> List[EmployeeLeaveBalance]:
     """
-    Return a list of EmployeeLeaveBalance rows \u2014 one per active user \u2014 for the
-    leave year that contains target_date (defaults to current leave year).
-
-    Each row is synced from real active leave data (pending + approved),
-    so it is always accurate.
+    Return one synced leave balance row per active user for the leave year containing target_date.
     """
     if users is None:
         users = User.objects.filter(is_active=True).order_by(
@@ -315,14 +304,12 @@ def get_admin_leave_balance_rows(
 # =============================================================================
 
 def is_sunday(check_date: date) -> bool:
-    """Return True if the date is a Sunday (weekday 6)."""
     return check_date.weekday() == 6
 
 
 def is_holiday(check_date: date) -> bool:
     """
     Return True if the given date is a configured holiday in the database.
-    Does NOT check Sunday here \u2014 use is_non_working_day() for combined check.
     """
     try:
         from apps.settings.models import Holiday
@@ -333,9 +320,7 @@ def is_holiday(check_date: date) -> bool:
 
 def is_non_working_day(check_date: date) -> bool:
     """
-    Return True if the date is non-working.
     Non-working = Holiday OR Sunday.
-    Priority: Holiday first, then Sunday.
     """
     if is_holiday(check_date):
         return True
@@ -346,10 +331,8 @@ def is_non_working_day(check_date: date) -> bool:
 
 def is_employee_on_leave(employee, check_date: date) -> bool:
     """
-    Return True if employee has PENDING or APPROVED leave on the given date.
-    Used by the recurring task engine to skip task generation.
-
-    Both PENDING and APPROVED leaves block task generation.
+    Full-day or half-day applied leave blocks work on that date.
+    Pending and approved both block task generation.
     """
     if employee is None:
         return False
@@ -368,25 +351,12 @@ def should_skip_task_generation(
     check_date: date, employee=None
 ) -> Tuple[bool, str]:
     """
-    Master check for task generation blocking.
-
-    Priority order (highest to lowest):
-    1. Holiday (database configured) \u2192 skip
-    2. Sunday (automatic)            \u2192 skip
-    3. Employee on leave             \u2192 skip
-    4. Normal workday                \u2192 generate task
-
-    Returns:
-        (should_skip: bool, reason: str)
-        reason is one of: "holiday", "sunday", "leave", "" (empty = generate)
-
-    Usage in recurring task engine:
-        skip, reason = should_skip_task_generation(task_date, employee)
-        if skip:
-            logger.info("Skipping task for %s on %s: %s", employee, task_date, reason)
-            return
+    Priority order:
+    1. Holiday
+    2. Sunday
+    3. Employee on leave
+    4. Otherwise generate tasks
     """
-    # Priority 1: Check if it's a holiday
     try:
         from apps.settings.models import Holiday
         if Holiday.objects.filter(date=check_date).exists():
@@ -394,23 +364,19 @@ def should_skip_task_generation(
     except Exception:
         pass
 
-    # Priority 2: Check if it's Sunday
     if check_date.weekday() == 6:
         return True, "sunday"
 
-    # Priority 3: Check if employee is on leave (pending or approved)
     if employee is not None:
         if is_employee_on_leave(employee, check_date):
             return True, "leave"
 
-    # All checks passed \u2014 generate the task
     return False, ""
 
 
 def get_employees_on_leave_for_date(check_date: date) -> list:
     """
-    Return list of employees who have active leave (PENDING or APPROVED) on check_date.
-    Useful for dashboard filtering and task engine bulk checks.
+    Return employee IDs who are on active leave for the given date.
     """
     try:
         leave_qs = LeaveRequest.objects.filter(

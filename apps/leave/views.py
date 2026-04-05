@@ -1,4 +1,4 @@
-#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\leave\views.py
+# D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\leave\views.py
 from __future__ import annotations
 
 import logging
@@ -76,6 +76,12 @@ ALLOWED_LEAVE_TYPE_NAMES = {
     "Compensatory Off",
     "Casual Leave",
     "Maternity Leave",
+}
+
+# Leave counts as active for deduction/blocking as soon as it is applied.
+ACTIVE_DEDUCTION_STATUSES = {
+    LeaveStatus.PENDING,
+    LeaveStatus.APPROVED,
 }
 
 WORK_START_IST = dtime(9, 30)
@@ -288,16 +294,37 @@ def _datespan_ist(start_dt, end_dt) -> List[date]:
 
 
 def _blocked_days_in_year_ist(leave: LeaveRequest, year: int) -> float:
+    """
+    Deduction helper for leave-type balance rows.
+
+    BUSINESS RULE:
+    - Full-day leave deducts from balance
+    - Half-day leave does NOT deduct from yearly 24 balance
+    - Deduct on apply, so PENDING + APPROVED count
+    - REJECTED / deleted should not count
+    """
+    if leave.status not in ACTIVE_DEDUCTION_STATUSES:
+        return 0.0
+
     span = _datespan_ist(leave.start_at, leave.end_at)
     days_in_year = [d for d in span if d.year == year]
     if not days_in_year:
         return 0.0
-    if leave.is_half_day and len(set(days_in_year)) == 1:
-        return 0.5
+
+    if leave.is_half_day:
+        return 0.0
+
     return float(len(set(days_in_year)))
 
 
 def _blocked_days_total_ist(leave: LeaveRequest) -> float:
+    """
+    Display helper only.
+
+    This shows how many calendar days are blocked by the leave entry itself.
+    Half-day is displayed as 0.5 for user clarity, even though it does NOT
+    deduct from yearly paid leave quota.
+    """
     span = _datespan_ist(leave.start_at, leave.end_at)
     if not span:
         return 0.0
@@ -315,17 +342,32 @@ class BalanceRow:
 
 
 def _leave_balances_for_user(user) -> Tuple[List[BalanceRow], float]:
+    """
+    Per-leave-type display rows used on dashboard.
+
+    MATCHED TO NEW BUSINESS RULE:
+    - Deduct on apply
+    - Count PENDING + APPROVED
+    - Half-day does NOT deduct from yearly quota
+    - Rejected leave automatically does not count
+    """
     year = now_ist().year
     rows: List[BalanceRow] = []
     types = list(LeaveType.objects.filter(name__in=ALLOWED_LEAVE_TYPE_NAMES).order_by("name"))
 
-    approved = (
-        LeaveRequest.objects.filter(employee=user, status=LeaveStatus.APPROVED)
+    active_leaves = (
+        LeaveRequest.objects.filter(
+            employee=user,
+            status__in=ACTIVE_DEDUCTION_STATUSES,
+        )
         .select_related("leave_type")
-        .only("start_at", "end_at", "is_half_day", "leave_type_id")
+        .only("start_at", "end_at", "is_half_day", "leave_type_id", "status")
     )
+
     used_by_type: Dict[int, float] = {}
-    for lr in approved:
+    for lr in active_leaves:
+        if not lr.leave_type_id:
+            continue
         used = _blocked_days_in_year_ist(lr, year)
         if used <= 0:
             continue
@@ -358,7 +400,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         or getattr(request.user, "is_staff", False)
     )
 
-    # Admin / manager can view any active employee via ?user_id=N
     viewed_user = request.user
     all_users: List = []
     selected_user_id: str = ""
@@ -391,7 +432,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         .order_by("-applied_at", "-id")
     )
 
-    # Compute blocked_days for display
     for lr in leaves:
         try:
             if getattr(lr, "blocked_days", None) in (None, 0):
@@ -399,7 +439,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         except Exception:
             setattr(lr, "blocked_days", _blocked_days_total_ist(lr))
 
-    # Status counts (iterate once — no extra DB queries)
     pending_count = approved_count = rejected_count = 0
     for lr in leaves:
         if lr.status == LeaveStatus.PENDING:
@@ -632,17 +671,11 @@ def manager_pending(request: HttpRequest) -> HttpResponse:
         .order_by("start_at")
     )
 
-    # --- FIX: Get ALL employees managed by this user via ApproverMapping,
-    # not just those with currently pending leaves. When no pending leaves
-    # exist, employee_ids would be empty and the balance table would show
-    # nothing — which is the bug visible in the screenshot.
     managed_user_ids = list(
         ApproverMapping.objects.filter(reporting_person=request.user)
         .values_list("employee_id", flat=True)
     )
 
-    # Also union any employee IDs that appear in pending leaves but may not
-    # have an ApproverMapping row (edge case / legacy data).
     pending_employee_ids = list({leave.employee_id for leave in leaves})
     all_employee_ids = list(set(managed_user_ids) | set(pending_employee_ids))
 

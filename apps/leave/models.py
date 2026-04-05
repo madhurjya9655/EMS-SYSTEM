@@ -1,10 +1,13 @@
 # apps/leave/models.py
 # UPDATED: 2026-04-05
 # CHANGES:
-#   1. EmployeeLeaveBalance: added carry_forward_adjustment field
-#   2. Balance sync signals now trigger on PENDING status too (not just APPROVED)
-#   3. _balance_specs_for_leave_instance now includes PENDING status
-#   4. No other business logic changed
+#   1. Leave deduction happens on apply (PENDING + APPROVED deduct)
+#   2. Half-day leave does NOT deduct from yearly paid leave quota
+#   3. Rejected / Cancelled leave adds balance back automatically
+#   4. Carry-forward adjustment preserved and used in annual balance
+#   5. Task blocking remains active for PENDING + APPROVED leaves
+#   6. Added CANCELLED status and cancel() method
+#   7. Balance sync signals support apply / approve / reject / cancel / delete
 
 from __future__ import annotations
 
@@ -30,6 +33,8 @@ User = get_user_model()
 
 UserType = AbstractUser
 IST = ZoneInfo("Asia/Kolkata")
+
+ACTIVE_LEAVE_STATUSES = ["PENDING", "APPROVED"]
 
 
 def leave_attachment_upload_to(instance: "LeaveRequest", filename: str) -> str:
@@ -239,6 +244,7 @@ class LeaveStatus(models.TextChoices):
     PENDING = "PENDING", "Pending"
     APPROVED = "APPROVED", "Approved"
     REJECTED = "REJECTED", "Rejected"
+    CANCELLED = "CANCELLED", "Cancelled"
 
 
 class EmployeeLeaveBalance(models.Model):
@@ -250,24 +256,11 @@ class EmployeeLeaveBalance(models.Model):
     leave_year_start = models.DateField()
     leave_year_end = models.DateField()
 
-    # Effective quota after carry-forward adjustment (may be less than 24)
     total_paid_leaves = models.DecimalField(max_digits=5, decimal_places=1, default=24)
-
-    # Full-day leaves taken (pending + approved). Half-day = 0 deduction.
     paid_leaves_taken = models.DecimalField(max_digits=6, decimal_places=1, default=0)
-
-    # Days beyond the effective quota
     unpaid_leaves = models.DecimalField(max_digits=6, decimal_places=1, default=0)
-
-    # Remaining paid leaves
     remaining_paid_leaves = models.DecimalField(max_digits=6, decimal_places=1, default=24)
 
-    # ✅ NEW FIELD: Carry-forward adjustment from previous year excess.
-    # This is set MANUALLY via Render PostgreSQL shell or Django admin.
-    # Negative value = employee took excess leaves last year (penalty).
-    # Example: -4 means employee took 28 leaves last year.
-    #          This year effective quota = 24 + (-4) = 20.
-    # Zero (default) = no adjustment, full 24 leaves.
     carry_forward_adjustment = models.DecimalField(
         max_digits=5,
         decimal_places=1,
@@ -301,14 +294,14 @@ class EmployeeLeaveBalance(models.Model):
         employee_label = getattr(self.employee, "get_full_name", lambda: "")() or getattr(self.employee, "username", "")
         return (
             f"{employee_label} | "
-            f"{self.leave_year_start:%Y-%m-%d} \u2192 {self.leave_year_end:%Y-%m-%d} | "
+            f"{self.leave_year_start:%Y-%m-%d} → {self.leave_year_end:%Y-%m-%d} | "
             f"Quota: {self.total_paid_leaves} | Used: {self.paid_leaves_taken} | "
             f"Remaining: {self.remaining_paid_leaves} | CF: {self.carry_forward_adjustment}"
         )
 
     @property
     def leave_year_display(self) -> str:
-        return f"{self.leave_year_start.strftime('%b %Y')} \u2013 {self.leave_year_end.strftime('%b %Y')}"
+        return f"{self.leave_year_start.strftime('%b %Y')} – {self.leave_year_end.strftime('%b %Y')}"
 
 
 class LeaveRequestQuerySet(models.QuerySet):
@@ -336,7 +329,7 @@ class LeaveRequest(models.Model):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="leave_requests_to_approve",
-        help_text="Reporting Person (manager) who must approve.",
+        help_text="Reporting Person (manager) who may approve, but approval does not control deduction.",
     )
 
     cc_person = models.ForeignKey(
@@ -422,7 +415,7 @@ class LeaveRequest(models.Model):
 
     @property
     def is_decided(self) -> bool:
-        return self.status in (LeaveStatus.APPROVED, LeaveStatus.REJECTED)
+        return self.status in (LeaveStatus.APPROVED, LeaveStatus.REJECTED, LeaveStatus.CANCELLED)
 
     @property
     def approved_at(self) -> Optional[datetime]:
@@ -549,7 +542,7 @@ class LeaveRequest(models.Model):
 
         self._validate_no_overlap()
 
-        if self.status in (LeaveStatus.APPROVED, LeaveStatus.REJECTED):
+        if self.status in (LeaveStatus.APPROVED, LeaveStatus.REJECTED, LeaveStatus.CANCELLED):
             self._validate_decision_cutoff(self.status)
 
     def save(self, *args, **kwargs) -> None:
@@ -607,6 +600,27 @@ class LeaveRequest(models.Model):
             LeaveDecisionAudit.log(self, DecisionAction.REJECTED, decided_by=by_user)
 
         _safe_send_decision_email(self)
+
+    def cancel(self, by_user: Optional[UserType] = None, comment: str = "") -> None:
+        """
+        Cancel an already applied leave.
+        Cancelled leave should add back balance automatically because it is no
+        longer counted in ACTIVE_LEAVE_STATUSES and balance sync signals re-run.
+        """
+        if self.status not in (LeaveStatus.PENDING, LeaveStatus.APPROVED):
+            raise ValidationError("Only pending or approved requests can be cancelled.")
+
+        with transaction.atomic():
+            self.status = LeaveStatus.CANCELLED
+            self.approver = by_user or self.approver
+            self.decided_at = timezone.now()
+            self.decision_comment = comment or self.decision_comment or "Cancelled."
+
+            LeaveHandover.objects.filter(leave_request=self).update(is_active=False)
+            DelegationReminder.objects.filter(leave_handover__leave_request=self).update(is_active=False)
+
+            self.save(update_fields=["status", "approver", "decided_at", "decision_comment", "updated_at"])
+            LeaveDecisionAudit.log(self, DecisionAction.CANCELLED, decided_by=by_user)
 
     @staticmethod
     def is_user_blocked_at(user: UserType, when_dt: datetime) -> bool:
@@ -929,6 +943,7 @@ class DecisionAction(models.TextChoices):
     APPLIED = "APPLIED", "Applied"
     APPROVED = "APPROVED", "Approved"
     REJECTED = "REJECTED", "Rejected"
+    CANCELLED = "CANCELLED", "Cancelled"
     TOKEN_OPENED = "TOKEN_OPENED", "Token Link Opened"
     TOKEN_APPROVE = "TOKEN_APPROVE", "Token Approve"
     TOKEN_REJECT = "TOKEN_REJECT", "Token Reject"
@@ -1069,8 +1084,9 @@ def _safe_send_decision_email(leave: LeaveRequest) -> None:
 
 def _balance_specs_for_leave_instance(leave: LeaveRequest) -> List[Tuple[int, date, date]]:
     """
-    ✅ CHANGED: Now includes PENDING status too (not just APPROVED).
-    This ensures balance is deducted as soon as leave is applied.
+    Deduct on apply:
+    - PENDING and APPROVED are active and deduct balance
+    - REJECTED / CANCELLED do not deduct
     """
     if (
         not getattr(leave, "employee_id", None)
@@ -1087,7 +1103,6 @@ def _balance_specs_for_previous_state(instance: LeaveRequest) -> List[Tuple[int,
     status = getattr(instance, "_balance_prev_status", None)
     start_date = getattr(instance, "_balance_prev_start_date", None)
     end_date = getattr(instance, "_balance_prev_end_date", None)
-    # ✅ CHANGED: Include previous PENDING state too
     if not employee_id or status not in [LeaveStatus.APPROVED, LeaveStatus.PENDING] or not start_date or not end_date:
         return []
     return [(employee_id, start_date, end_date)]
@@ -1195,9 +1210,11 @@ def _on_leave_created(sender, instance: LeaveRequest, created: bool, **kwargs) -
 @receiver(post_save, sender=LeaveRequest)
 def _sync_leave_balances_after_save(sender, instance: LeaveRequest, created: bool, **kwargs) -> None:
     """
-    ✅ CHANGED: Now syncs balance for PENDING status too.
-    Balance is deducted as soon as leave is applied (not just on approval).
-    On rejection, previous state was PENDING, so balance is added back.
+    Balance rules:
+    - Apply leave -> deduct
+    - Approve leave -> keep deducted
+    - Reject leave -> add back
+    - Cancel leave -> add back
     """
     specs = _dedupe_balance_specs(
         _balance_specs_for_previous_state(instance) + _balance_specs_for_leave_instance(instance)
