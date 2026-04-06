@@ -1,28 +1,6 @@
 ﻿# FILE: employee_management/settings.py
-# UPDATED: 2026-03-15
-#
-# CHANGE (this patch):
-#   LOGGING — file handler fix for Windows [WinError 32] PermissionError.
-#
-#   Problem:
-#     RotatingFileHandler rotates by file SIZE (10 MB). Django's dev server
-#     runs TWO processes: the outer StatReloader and the inner WSGI worker.
-#     Both share the same RotatingFileHandler. When the file hits the size
-#     limit, one process calls os.rename(django.log → django.log.1) while
-#     the other still holds the file open.  Windows forbids renaming an open
-#     file → PermissionError [WinError 32] on EVERY log event after that.
-#
-#   Fix:
-#     Replace RotatingFileHandler with TimedRotatingFileHandler:
-#       - rotates at MIDNIGHT (once per day), not on every write
-#       - delay=True  → file is not opened until the first log record
-#       - backupCount=7 → keep one week of daily logs
-#       - encoding='utf-8', errors='replace' → safe on Windows Unicode paths
-#     On DEBUG (local dev), the file handler is intentionally disabled so
-#     that ALL output goes to the console (stdout) only, eliminating the
-#     file-locking issue entirely during development.
-#
-# ALL other settings are identical to the previous version.
+# UPDATED: 2026-04-06
+# CHANGE: Added KAM Google Sheet sync to CELERY_BEAT_SCHEDULE
 
 import os
 import sqlite3
@@ -388,45 +366,11 @@ except Exception:
 
 # -----------------------------------------------------------------------------
 # LOGGING
-# =============================================================================
-# FIX: Windows [WinError 32] PermissionError on log rotation — RESOLVED.
-#
-# WHAT WAS WRONG:
-#   RotatingFileHandler triggers os.rename() every time the log file crosses
-#   maxBytes (10 MB).  Django's dev server (runserver) launches TWO OS
-#   processes — the outer StatReloader and the inner WSGI worker.  Both
-#   attach to the same RotatingFileHandler.  On Windows, os.rename() requires
-#   an exclusive lock; if the second process still has the file open, the
-#   rename fails with [WinError 32].  This happened on EVERY request once the
-#   log grew past 10 MB.
-#
-# THE FIX (two parts):
-#
-#   Part 1 — DEBUG / local Windows dev:
-#     File logging is DISABLED entirely. All output goes to console (stdout).
-#     Django's dev server prints everything to the terminal anyway, and having
-#     zero file handles eliminates the locking problem completely.
-#
-#   Part 2 — Production (DEBUG=False / Render):
-#     Replace RotatingFileHandler with TimedRotatingFileHandler:
-#       when='midnight'   → rotates once per day at 00:00, never mid-session
-#       backupCount=7     → keep 7 days of rolling logs
-#       delay=True        → file is not opened until the first log record is
-#                           written (reduces the window for lock conflicts)
-#       encoding='utf-8'  → explicit encoding; avoids cp1252 surprises on Win
-#       errors='replace'  → never crash on a bad Unicode character in a log msg
-#     Time-based rotation only ever runs once per day (at midnight, when no
-#     requests are in-flight), so the two-process lock race cannot occur.
-#
-# NO other logging behaviour is changed.
-# =============================================================================
-
+# -----------------------------------------------------------------------------
 LOGS_DIR = BASE_DIR / "logs"
 if not DEBUG and ON_RENDER:
     LOGS_DIR = Path("/tmp/logs")
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
-
-# ── Handler definitions ──────────────────────────────────────────────────────
 
 _console_handler = {
     "level": "DEBUG" if DEBUG else "INFO",
@@ -434,31 +378,23 @@ _console_handler = {
     "formatter": "simple",
 }
 
-# On DEBUG (local dev, Windows): NO file handler at all.
-# On production: TimedRotatingFileHandler (midnight rotation, delay=True).
 if DEBUG:
-    _file_handler = None          # sentinel — excluded from LOGGING dict below
+    _file_handler = None
 else:
     _file_handler = {
         "level": "INFO",
-        # TimedRotatingFileHandler rotates at midnight (once per day).
-        # It does NOT rename the file during normal operation; it only does a
-        # rename at 00:00:00, when no web requests are active.
-        # delay=True means the file is not even opened until the first write,
-        # so a cold-start or a day with zero log events never touches the file.
         "class": "logging.handlers.TimedRotatingFileHandler",
         "filename": str(LOGS_DIR / "django.log"),
-        "when": "midnight",       # rotate at 00:00:00 local time
-        "interval": 1,            # every 1 day
-        "backupCount": 7,         # keep 7 daily files (django.log.YYYY-MM-DD)
+        "when": "midnight",
+        "interval": 1,
+        "backupCount": 7,
         "encoding": "utf-8",
-        "errors": "replace",      # never crash on a bad Unicode char in a msg
-        "delay": True,            # defer file open until first write
+        "errors": "replace",
+        "delay": True,
         "formatter": "verbose",
-        "utc": False,             # use server local time (Asia/Kolkata)
+        "utc": False,
     }
 
-# Build the active handlers dict dynamically.
 _active_handlers: dict = {"console": _console_handler}
 if _file_handler is not None:
     _active_handlers["file"] = _file_handler
@@ -468,8 +404,6 @@ _active_handlers["mail_admins"] = {
     "class": "django.utils.log.AdminEmailHandler",
 }
 
-# Decide which handler names each logger should use.
-# In DEBUG mode: console only.  In production: console + file.
 _app_handlers = ["console"] if DEBUG else ["console", "file"]
 
 LOGGING = {
@@ -498,7 +432,6 @@ LOGGING = {
             "propagate": False,
         },
         "django.request": {
-            # mail_admins only fires in production (not on DEBUG)
             "handlers": _app_handlers + (["mail_admins"] if not DEBUG else []),
             "level": "ERROR",
             "propagate": False,
@@ -544,6 +477,22 @@ LOGGING = {
             "propagate": False,
         },
         "apps.leave.services.notifications": {
+            "handlers": _app_handlers,
+            "level": "INFO",
+            "propagate": False,
+        },
+        # ── KAM sync logger ─────────────────────────────────────────────
+        "apps.kam": {
+            "handlers": _app_handlers,
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.kam.sheets_adapter": {
+            "handlers": _app_handlers,
+            "level": "INFO",
+            "propagate": False,
+        },
+        "apps.kam.tasks": {
             "handlers": _app_handlers,
             "level": "INFO",
             "propagate": False,
@@ -848,6 +797,15 @@ PERMISSION_DEBUG_ENABLED = env_bool("PERMISSION_DEBUG_ENABLED", DEBUG and not ON
 
 # -----------------------------------------------------------------------------
 # CELERY
+# ─────────────────────────────────────────────────────────────────────────────
+# Broker:  Redis (required for Celery)
+# Beat:    django_celery_beat DatabaseScheduler
+# Tasks:   all apps auto-discovered via autodiscover_tasks()
+#
+# KAM sync schedule:
+#   - Full sync: every 30 minutes (KAM_SYNC_INTERVAL_MINUTES env var, default 30)
+#   - Runs as: apps.kam.tasks.sync_google_sheet_to_db
+#   - Only runs if KAM_SALES_SHEET_ID and KAM_SA_JSON_CONTENT are set
 # -----------------------------------------------------------------------------
 try:
     from celery.schedules import crontab  # type: ignore
@@ -891,7 +849,12 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
+# ── KAM sync interval (configurable via env var) ──────────────────────────────
+# Default: every 30 minutes. Set KAM_SYNC_INTERVAL_MINUTES=60 for hourly.
+_KAM_SYNC_INTERVAL = env_int("KAM_SYNC_INTERVAL_MINUTES", 30) * 60  # convert to seconds
+
 CELERY_BEAT_SCHEDULE = {
+    # ── Existing task schedules (unchanged) ─────────────────────────────────
     "pre10am_unblock_and_generate_0955": {
         "task": "apps.tasks.tasks.run_pre10am_unblock_and_generate",
         "schedule": crontab(hour=9, minute=55),
@@ -921,7 +884,22 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.tasks.pending_digest.send_admin_all_pending_digest",
         "schedule": crontab(hour=19, minute=0, day_of_week="1-6"),
     },
+
+    # ── KAM Google Sheet → PostgreSQL sync ──────────────────────────────────
+    # Runs every KAM_SYNC_INTERVAL_MINUTES (default: 30 min).
+    # Safe to run even if KAM_SALES_SHEET_ID is not set — task exits cleanly.
+    # To disable: set KAM_SYNC_ENABLED=0 in Render env vars.
+    "kam-sync-google-sheet-to-db": {
+        "task": "apps.kam.tasks.sync_google_sheet_to_db",
+        "schedule": _KAM_SYNC_INTERVAL,
+        # Optional: restrict to business hours (8am–8pm IST, Mon–Sat)
+        # "schedule": crontab(minute="*/30", hour="8-20", day_of_week="1-6"),
+    },
 }
+
+# Disable KAM sync entirely if env var says so (safety valve)
+if not env_bool("KAM_SYNC_ENABLED", True):
+    CELERY_BEAT_SCHEDULE.pop("kam-sync-google-sheet-to-db", None)
 
 # -----------------------------------------------------------------------------
 # REIMBURSEMENT CONTENT RULES

@@ -1,3 +1,4 @@
+#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\kam\services\sync.py
 # This is the controlled ONE-WAY import entry.
 # Hook into your existing Google Sheets client here; we stay idempotent via row_uuid.
 from django.db import transaction

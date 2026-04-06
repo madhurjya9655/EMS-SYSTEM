@@ -1,14 +1,22 @@
+# FILE: render.yaml
+# UPDATED: 2026-04-06
+# ADDED: Redis, Celery Worker, Celery Beat services for KAM sync and existing tasks
+
 services:
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # 1. MAIN WEB APP
+  # ══════════════════════════════════════════════════════════════════════════
   - type: web
     name: bos-ems
     env: python
+    region: singapore   # or your preferred region
 
     buildCommand: |
       pip install --upgrade pip
       pip install -r requirements.txt
       python manage.py collectstatic --noinput
 
-    # CRITICAL: Use only 1 worker to prevent SQLite locks
     startCommand: >
       gunicorn employee_management.wsgi:application
       --workers=1
@@ -17,49 +25,208 @@ services:
       --max-requests-jitter=100
       --bind 0.0.0.0:$PORT
 
-    # Runs after each deploy finishes successfully
     postDeployCommand: |
       python manage.py migrate --noinput
 
     envVars:
       - key: DJANGO_SETTINGS_MODULE
         value: employee_management.settings
-
       - key: PYTHON_VERSION
         value: 3.12.6
-
-      # IMPORTANT: keep this path aligned with your Disk mount path
+      - key: RENDER
+        value: "true"
       - key: SQLITE_PATH
         value: /opt/render/project/src/db/db.sqlite3
-
       - key: MEDIA_ROOT
         value: /opt/render/project/src/db/media
-
-      # Force single worker to prevent SQLite database locks
       - key: WEB_CONCURRENCY
         value: "1"
-
-      # Recommended explicit hosts/CSRF (optional if you keep wildcards)
       - key: ALLOWED_HOSTS
         value: bos-ems.onrender.com,.onrender.com,localhost,127.0.0.1
-
       - key: CSRF_TRUSTED_ORIGINS
         value: https://bos-ems.onrender.com,https://*.onrender.com
+      - key: DEBUG
+        value: "False"
 
-      # Put these in Render > Environment as secrets (values not in repo)
+      # ── Secrets: set values in Render dashboard, NOT here ──────────────
+      - key: SECRET_KEY
+        sync: false
       - key: EMAIL_HOST_USER
         sync: false
       - key: EMAIL_HOST_PASSWORD
         sync: false
       - key: DEFAULT_FROM_EMAIL
         sync: false
-      - key: SECRET_KEY
-        sync: false
-      - key: DEBUG
-        value: "False"
 
-    # Persisted disk. Do NOT change mountPath if you already have data.
+      # ── Redis URL: auto-populated from the Redis service below ──────────
+      - key: REDIS_URL
+        fromService:
+          name: bos-ems-redis
+          type: redis
+          property: connectionString
+
+      # ── KAM Google Sheet sync secrets (set in Render dashboard) ────────
+      - key: KAM_SALES_SHEET_ID
+        sync: false
+      - key: KAM_SA_JSON_CONTENT
+        sync: false
+      - key: KAM_TAB_SALES
+        value: "Sales (F)"
+      - key: KAM_TAB_SHEET1
+        value: "Sheet1"
+      - key: KAM_TAB_KAM_NAMES
+        value: "KAM names"
+      - key: KAM_TAB_CUSTOMERS
+        value: "Customer Details"
+      - key: KAM_TAB_OVERDUES
+        value: "Overdues"
+      - key: KAM_TAB_FRONTEND
+        value: "Front End"
+      - key: KAM_TAB_ENQUIRY
+        value: "Enquiry (F)"
+      - key: KAM_USERMAP_JSON
+        sync: false  # set value in Render: {"KAM Name":"email@company.com"}
+      - key: KAM_SYNC_INTERVAL_MINUTES
+        value: "30"
+      - key: KAM_SYNC_ENABLED
+        value: "1"
+
     disk:
       name: ems-disk
       mountPath: /opt/render/project/src/db
       sizeGB: 10
+
+    healthCheckPath: /dashboard/
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # 2. REDIS (message broker for Celery)
+  #    Free plan: 25MB RAM, no persistence.
+  #    Upgrade to Starter ($10/mo) for 100MB + persistence if needed.
+  # ══════════════════════════════════════════════════════════════════════════
+  - type: redis
+    name: bos-ems-redis
+    region: singapore   # must match web service region
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []     # allow all — Render internal network only
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # 3. CELERY WORKER
+  #    Executes tasks: KAM sync, emails, delegation reminders, etc.
+  #    concurrency=2: handles 2 tasks simultaneously.
+  #    Increase to 4 if tasks start queuing up.
+  # ══════════════════════════════════════════════════════════════════════════
+  - type: worker
+    name: bos-ems-celery-worker
+    env: python
+    region: singapore
+
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+
+    startCommand: >
+      celery -A employee_management worker
+      --loglevel=info
+      --concurrency=2
+      --max-tasks-per-child=1000
+      --queues=celery,kam_sync
+
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: employee_management.settings
+      - key: PYTHON_VERSION
+        value: 3.12.6
+      - key: RENDER
+        value: "true"
+      - key: SQLITE_PATH
+        value: /opt/render/project/src/db/db.sqlite3
+      - key: MEDIA_ROOT
+        value: /opt/render/project/src/db/media
+      - key: DEBUG
+        value: "False"
+      - key: REDIS_URL
+        fromService:
+          name: bos-ems-redis
+          type: redis
+          property: connectionString
+      # KAM sync env vars (same as web service)
+      - key: KAM_SALES_SHEET_ID
+        sync: false
+      - key: KAM_SA_JSON_CONTENT
+        sync: false
+      - key: KAM_TAB_SALES
+        value: "Sales (F)"
+      - key: KAM_TAB_SHEET1
+        value: "Sheet1"
+      - key: KAM_TAB_KAM_NAMES
+        value: "KAM names"
+      - key: KAM_TAB_CUSTOMERS
+        value: "Customer Details"
+      - key: KAM_TAB_OVERDUES
+        value: "Overdues"
+      - key: KAM_TAB_FRONTEND
+        value: "Front End"
+      - key: KAM_TAB_ENQUIRY
+        value: "Enquiry (F)"
+      - key: KAM_USERMAP_JSON
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: DEFAULT_FROM_EMAIL
+        sync: false
+
+    disk:
+      name: ems-disk
+      mountPath: /opt/render/project/src/db
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # 4. CELERY BEAT (task scheduler)
+  #    Sends tasks to the worker queue on schedule.
+  #    IMPORTANT: Only ONE beat instance must run at a time.
+  #    Never scale this service above 1 instance.
+  # ══════════════════════════════════════════════════════════════════════════
+  - type: worker
+    name: bos-ems-celery-beat
+    env: python
+    region: singapore
+
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+
+    startCommand: >
+      celery -A employee_management beat
+      --loglevel=info
+      --scheduler django_celery_beat.schedulers:DatabaseScheduler
+
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: employee_management.settings
+      - key: PYTHON_VERSION
+        value: 3.12.6
+      - key: RENDER
+        value: "true"
+      - key: SQLITE_PATH
+        value: /opt/render/project/src/db/db.sqlite3
+      - key: DEBUG
+        value: "False"
+      - key: REDIS_URL
+        fromService:
+          name: bos-ems-redis
+          type: redis
+          property: connectionString
+      - key: SECRET_KEY
+        sync: false
+      - key: KAM_SYNC_INTERVAL_MINUTES
+        value: "30"
+      - key: KAM_SYNC_ENABLED
+        value: "1"
+
+    disk:
+      name: ems-disk
+      mountPath: /opt/render/project/src/db
