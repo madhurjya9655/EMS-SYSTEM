@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 
 from django.utils import timezone
 
-# FIX: Soft import — if apps.common.google_auth doesn't exist, define locally.
+# Soft import — if apps.common.google_auth doesn't exist, define locally.
 # This prevents the entire KAM app from failing to load on import.
 try:
     from apps.common.google_auth import GoogleCredentialError
@@ -39,15 +39,15 @@ def run_sync_now(*, worksheet_name: Optional[str] = None) -> Dict[str, Any]:
     """
     Sync entrypoint called by:
     - views.sync_now (manual manager trigger)
-    - tasks.sync_google_sheet_to_db (Celery beat — every 30 min)
+    - tasks.sync_google_sheet_to_db (Celery beat or Render cron)
     - Management command: python manage.py sync_kam_sheets
 
     Returns a dict with summary info for UI banners.
-    Never raises — callers handle GoogleCredentialError and RuntimeError.
+    Never swallows GoogleCredentialError or RuntimeError — callers handle those.
     """
     sheet_id = _require_env(SHEET_ID_ENV)
 
-    # Allow explicit tab name override (backwards compat)
+    # Allow explicit tab name override (backwards compat with old callers)
     if worksheet_name:
         os.environ["KAM_TAB_SALES"] = worksheet_name
         os.environ["KAM_SALES_TAB"] = worksheet_name  # legacy key

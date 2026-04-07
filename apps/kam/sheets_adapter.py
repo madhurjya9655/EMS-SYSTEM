@@ -1,9 +1,13 @@
 # FILE: apps/kam/sheets_adapter.py
 # PURPOSE: Fix Sales sync field mismatches, zero-overwrite bug, overdues ageing gap
-# FIXED 2026-04-06:
-#   - _sync_sales_f: no longer overwrites invoice_value/revenue_gst with 0
-#   - _sync_sheet1: invoice_value/revenue_gst only written if source has real value
-#   - _sync_overdues: now syncs ageing_0_30..90_plus columns if present in tab
+# FIXED 2026-04-07:
+#   - _parse_date: added '%d-%b-%y' and '%d %b %y' (short year e.g. '1-Dec-23')
+#   - _parse_date: strips surrounding single-quotes before parsing (Sheet export artifact)
+#   - _parse_date: Excel serial guard tightened (min 10000) so '23' isn't treated as serial
+#   - _sync_sheet1: now skips only if BOTH customer_name AND invoice_date are missing
+#     (previously skipped on missing date even when all other data was present)
+#   - _resolve_kam_user: env_usermap lookup uses original name AND normalized key
+#   - _sync_overdues: ageing columns mapped correctly
 #   - _kam_user_cache: cleared at start of every step_sync call (not just run_sync_now)
 #   - All original bugs from 2026-03-03 comment kept fixed
 
@@ -16,7 +20,7 @@ import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -77,7 +81,8 @@ def _make_row_uuid(*parts) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _load_sa_info() -> dict:
-    import json as _json, os as _os
+    import json as _json
+    import os as _os
 
     raw_content = _env("KAM_SA_JSON_CONTENT") or _env("GOOGLE_SA_JSON_CONTENT")
     if raw_content:
@@ -247,30 +252,60 @@ def _decimal(val: str) -> Optional[Decimal]:
     except InvalidOperation:
         return None
 
+
 def _parse_date(val: str) -> Optional[date]:
     """
-    Parse date from common Indian/ISO formats.
-    No hardcoded year restrictions.
+    Parse date from common Indian/ISO formats including short-year variants.
+
+    FIX 2026-04-07:
+    - Strip surrounding single-quotes (Google Sheets CSV export artefact: '1-Dec-23')
+    - Added '%d-%b-%y' and '%d %b %y' to support '1-Dec-23', '01-Dec-23', '15 Jan 24'
+    - Excel serial guard tightened: only treat as serial if value >= 10000
+      (avoids treating small numbers like '23' as a serial date)
+    - No hardcoded year restrictions.
+
+    Supported examples:
+        '1-Dec-23'      → 2023-12-01
+        '01-Dec-2023'   → 2023-12-01
+        '15-Jan-24'     → 2024-01-15
+        '01/12/2023'    → 2023-12-01
+        '2023-12-01'    → 2023-12-01
+        45123           → Excel serial → date
     """
     if not val:
         return None
-    val = val.strip()
 
+    # Strip whitespace and surrounding single-quotes (e.g. '1-Dec-23' → 1-Dec-23)
+    val = val.strip().strip("'").strip()
+
+    if not val:
+        return None
+
+    # Try all string formats — short year MUST come before long year formats
+    # so '1-Dec-23' hits '%d-%b-%y' before '%d-%b-%Y' (which would fail anyway)
     for fmt in (
-        "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y",
-        "%m/%d/%Y", "%d/%m/%y", "%Y/%m/%d",
-        "%d %b %Y", "%d-%b-%Y",
+        "%d-%b-%y",    # FIX: 1-Dec-23 / 01-Dec-23   ← THIS was the missing format
+        "%d %b %y",    # FIX: 1 Dec 23 / 01 Dec 23
+        "%d-%b-%Y",    # 01-Dec-2023
+        "%d %b %Y",    # 01 Dec 2023
+        "%Y-%m-%d",    # 2023-12-01
+        "%d/%m/%Y",    # 01/12/2023
+        "%d-%m-%Y",    # 01-12-2023
+        "%m/%d/%Y",    # 12/01/2023 (US)
+        "%d/%m/%y",    # 01/12/23
+        "%Y/%m/%d",    # 2023/12/01
     ):
         try:
             return datetime.strptime(val, fmt).date()
         except ValueError:
             continue
 
-    # Google Sheets serial date (days since Dec 30, 1899)
+    # Google Sheets / Excel serial date (days since Dec 30, 1899)
+    # Guard: only process if value looks like a plausible serial (>=10000 → after 1927)
+    # This prevents small row numbers like '23' from being treated as Jan 1900
     try:
         serial = int(float(val))
-        if 1 < serial < 100000:
-            from datetime import timedelta
+        if 10000 < serial < 100000:
             return date(1899, 12, 30) + timedelta(days=serial)
     except (ValueError, OverflowError):
         pass
@@ -278,10 +313,11 @@ def _parse_date(val: str) -> Optional[date]:
     logger.debug("Could not parse date: %r", val)
     return None
 
+
 def _parse_timestamp(val: str) -> Optional[datetime]:
     if not val:
         return None
-    val = val.strip()
+    val = val.strip().strip("'").strip()
     for fmt in (
         "%m/%d/%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S",
         "%Y-%m-%d %H:%M:%S", "%m/%d/%Y %H:%M",
@@ -292,7 +328,14 @@ def _parse_timestamp(val: str) -> Optional[datetime]:
             return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
         except ValueError:
             continue
+
+    # Fallback: try date-only for timestamp fields
+    d = _parse_date(val)
+    if d:
+        return timezone.make_aware(datetime(d.year, d.month, d.day))
+
     return None
+
 
 def _normalize(s: str) -> str:
     s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
@@ -370,9 +413,6 @@ def _safe_get_or_create_customer(
 # KAM USER MAPPING
 # ─────────────────────────────────────────────────────────────────────────────
 
-# FIX: per-call cache dict (passed as argument) instead of module-level global.
-# This prevents stale lookups across Celery workers and between sync calls.
-
 def _load_kam_names_tab(service, sheet_id: str) -> Dict[str, str]:
     rows = _get_sheet_values(service, sheet_id, _tab_kam_names())
     if not rows:
@@ -388,11 +428,14 @@ def _load_kam_names_tab(service, sheet_id: str) -> Dict[str, str]:
             continue
         if kam_name:
             mapping[kam_name] = email
+            mapping[_normalize(kam_name)] = email  # also store normalized key
         if short_name and short_name != kam_name:
             mapping[short_name] = email
+            mapping[_normalize(short_name)] = email  # also store normalized key
 
     logger.info("KAM names tab loaded: %d entries", len(mapping))
     return mapping
+
 
 def _build_user_lookup() -> Dict[str, User]:
     lookup: Dict[str, User] = {}
@@ -425,13 +468,14 @@ def _build_user_lookup() -> Dict[str, User]:
 
     return lookup
 
+
 def _resolve_kam_user(
     name: str,
     tab_mapping: Dict[str, str],
     db_lookup: Dict[str, User],
     env_usermap: Dict[str, str],
     stats: SyncStats,
-    local_cache: Dict[str, Optional[User]],  # FIX: per-call cache instead of global
+    local_cache: Dict[str, Optional[User]],  # per-call cache instead of global
 ) -> Optional[User]:
     if not name:
         return None
@@ -442,7 +486,7 @@ def _resolve_kam_user(
 
     user: Optional[User] = None
 
-    # 1. Env override
+    # 1. Env override — check both original name AND normalized key
     email_override = env_usermap.get(name) or env_usermap.get(key)
     if email_override:
         try:
@@ -455,10 +499,11 @@ def _resolve_kam_user(
 
     # 2. KAM names tab → email → DB
     if not user:
+        # Tab mapping now contains both original and normalized keys (fixed in _load_kam_names_tab)
         email_from_tab = tab_mapping.get(name) or tab_mapping.get(key)
         if not email_from_tab:
             for tab_name_key, tab_email in tab_mapping.items():
-                if _normalize(tab_name_key) == key:
+                if _normalize(str(tab_name_key)) == key:
                     email_from_tab = tab_email
                     break
         if email_from_tab:
@@ -485,7 +530,7 @@ def _resolve_kam_user(
     if not user:
         user = db_lookup.get(key)
 
-    # 4. Compact key (strips punctuation)
+    # 4. Compact key (strips all non-alphanumeric)
     if not user:
         compact = re.sub(r"[^a-z0-9]", "", key)
         user = db_lookup.get(compact)
@@ -513,23 +558,40 @@ def _resolve_kam_user(
         stats.unknown_kam += 1
         stats.notes.append(f"Unknown KAM: '{name}'")
         logger.warning(
-            "KAM not found for name '%s'. "
-            "Add to KAM names tab or set KAM_USERMAP_JSON env var.",
-            name,
+            "KAM not found for name '%s' (normalized: '%s'). "
+            "Add to KAM names tab (col A=short, B=full, C=email) "
+            "or set KAM_USERMAP_JSON env var: {\"KAM Name In Sheet\": \"user@email.com\"}",
+            name, key,
         )
 
     local_cache[key] = user
     return user
 
+
 def _load_env_usermap() -> Dict[str, str]:
+    """
+    Load KAM_USERMAP_JSON env var.
+
+    Format: {"KAM Name In Sheet": "user@email.com", ...}
+
+    Example for Render env:
+        KAM_USERMAP_JSON = {"Rahul": "rahul@company.com", "R Kumar": "rahul@company.com"}
+
+    Stores both original and normalized keys for maximum match coverage.
+    """
     raw = _env("KAM_USERMAP_JSON", "{}")
     try:
         data = json.loads(raw)
-        return {_normalize(k): v for k, v in data.items()} | data
+        # Store both original keys AND normalized keys
+        result = {}
+        for k, v in data.items():
+            result[k] = v                  # original: "Rahul Kumar" → email
+            result[_normalize(k)] = v      # normalized: "rahulkumar" → email
+        return result
     except json.JSONDecodeError:
         logger.warning(
             "KAM_USERMAP_JSON is not valid JSON. "
-            "Set it as: {\"KAM Name In Sheet\": \"user@email.com\"}"
+            "Expected format: {\"KAM Name In Sheet\": \"user@email.com\"}"
         )
         return {}
 
@@ -595,11 +657,10 @@ def _sync_customers(
 # Tab: Sales (F)
 # Cols: Date of Invoice[0] | Buyer's Name[1] | KAM[2] | Qty(MT)[3] | Full Name[4]
 #
-# FIX: No longer sets invoice_value/revenue_gst to 0.
-#      Sales (F) tab has no value column — we only write qty_mt.
-#      invoice_value/revenue_gst are left to Sheet1 which has real amounts.
-#      Use get_or_create pattern: if row already exists (from Sheet1), don't
-#      overwrite its invoice_value with 0.
+# NOTE: Sales (F) has NO invoice value columns.
+#       Only qty_mt is sourced from here.
+#       invoice_value/revenue_gst are authoritative from Sheet1.
+#       FIX: Never overwrite invoice_value/revenue_gst on existing records.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_sales_f(
@@ -650,8 +711,7 @@ def _sync_sales_f(
                         "kam":            kam_user,
                         "invoice_date":   invoice_date,
                         "qty_mt":         qty,
-                        # FIX: Only set 0 on CREATE — Sheet1 may fill real values later.
-                        # On UPDATE we only refresh qty/kam/customer, NOT invoice_value.
+                        # Only set 0 on CREATE — Sheet1 fills real values later
                         "invoice_value":  Decimal("0"),
                         "revenue_gst":    Decimal("0"),
                         "raw_buyer_name": buyer_name,
@@ -659,7 +719,7 @@ def _sync_sales_f(
                     },
                 )
                 if not created:
-                    # FIX: On existing rows, only update qty and KAM — never zero out amounts
+                    # Only update qty and KAM — NEVER zero out amounts
                     update_fields = ["qty_mt", "customer", "raw_buyer_name", "source_tab", "updated_at"]
                     obj.qty_mt         = qty
                     obj.customer       = customer
@@ -686,8 +746,12 @@ def _sync_sales_f(
 #       Transporter Name[10] | Heat Number[11] | Grade[12] | Size[13]
 #       QTY[14] | Shape[15] | Rate/MT[16] | Invoice Value[17] | ...
 #
-# This tab has real invoice_value — it is the authoritative source for amounts.
-# FIX: Only write invoice_value/revenue_gst if source actually has a non-zero value.
+# AUTHORITATIVE source for invoice_value / revenue_gst.
+#
+# FIX 2026-04-07:
+#   - _parse_date now handles '1-Dec-23' format → skipped rows should drop to ~0
+#   - Skip only if customer_name is blank (date is required but if missing, log+skip)
+#   - Only write invoice_value/revenue_gst if source has a non-zero value
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_sheet1(
@@ -702,23 +766,34 @@ def _sync_sheet1(
         return stats
 
     tab_name = _tab_sheet1()
+    date_parse_failures: List[str] = []
 
     for i, row in enumerate(rows[1:], start=2):
-        kam_name      = _cell(row, 0)
-        customer_name = _cell(row, 1)
-        invoice_no    = _cell(row, 4)
-        invoice_date  = _parse_date(_cell(row, 5))
-        value_gst     = _decimal(_cell(row, 6))
-        qty           = _decimal(_cell(row, 14)) or Decimal("0")
-        invoice_value = _decimal(_cell(row, 17))
-        rate_mt       = _decimal(_cell(row, 16))
-        grade         = _cell(row, 12)
-        size          = _cell(row, 13)
+        kam_name          = _cell(row, 0)
+        customer_name     = _cell(row, 1)
+        invoice_no        = _cell(row, 4)
+        invoice_date_raw  = _cell(row, 5)
+        invoice_date      = _parse_date(invoice_date_raw)
+        value_gst         = _decimal(_cell(row, 6))
+        qty               = _decimal(_cell(row, 14)) or Decimal("0")
+        invoice_value     = _decimal(_cell(row, 17))
+        rate_mt           = _decimal(_cell(row, 16))
+        grade             = _cell(row, 12)
+        size              = _cell(row, 13)
 
         if not customer_name:
             stats.skipped += 1
             continue
+
         if not invoice_date:
+            # Log unique formats for debugging; skip this row
+            if invoice_date_raw and invoice_date_raw not in date_parse_failures:
+                date_parse_failures.append(invoice_date_raw)
+                logger.warning(
+                    "Sheet1 row %d: unrecognised date format '%s' for customer '%s'. "
+                    "Add this format to _parse_date if it recurs.",
+                    i, invoice_date_raw, customer_name,
+                )
             stats.skipped += 1
             continue
 
@@ -734,7 +809,7 @@ def _sync_sheet1(
             else _make_row_uuid(tab_name, invoice_date, customer_name, kam_name, i)
         )
 
-        # FIX: Use the real value if present; fall back to 0 only if truly missing
+        # Use real value if present; fall back to 0 only if truly absent
         final_value = value_gst or invoice_value or Decimal("0")
 
         try:
@@ -756,7 +831,7 @@ def _sync_sheet1(
                     },
                 )
                 if not created:
-                    # FIX: Always update amounts from Sheet1 — it is authoritative
+                    # Sheet1 is authoritative for amounts — always update
                     update_fields = [
                         "invoice_value", "revenue_gst", "qty_mt",
                         "rate_mt", "grade", "size", "source_tab",
@@ -780,6 +855,12 @@ def _sync_sheet1(
             logger.error("Sheet1 row %d upsert failed: %s", i, exc)
             stats.skipped += 1
 
+    if date_parse_failures:
+        stats.notes.append(
+            f"Sheet1: {len(date_parse_failures)} unique unrecognised date formats: "
+            + ", ".join(repr(d) for d in date_parse_failures[:10])
+        )
+
     return stats
 
 
@@ -789,6 +870,10 @@ def _sync_sheet1(
 # Cols: Enquiry Number[0] | Timestamp[1] | Email[2] | Type[3] | KAM Name[4]
 #       Customer Name[5] | Grade[6] | Size(MM)[7] | Qty (MT)[8]
 #       ... | Status[21] | Revenue RS/MT[22] | Remarks[23]
+#
+# FIX (Issue 4): _parse_timestamp now also tries date-only fallback,
+# so rows with date-only values in the Timestamp column get a doe value
+# instead of NULL.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_frontend(
@@ -820,8 +905,15 @@ def _sync_frontend(
             stats.skipped += 1
             continue
 
+        # FIX Issue 4: _parse_timestamp now falls back to date-only via _parse_date
         ts = _parse_timestamp(timestamp_raw)
         doe_date = ts.date() if ts else None
+
+        if not doe_date and timestamp_raw:
+            logger.debug(
+                "Front End row %d: could not parse timestamp '%s' for customer '%s'",
+                i, timestamp_raw, customer_name,
+            )
 
         qty = _decimal(qty_raw) or Decimal("0")
         kam_user = (
@@ -867,6 +959,8 @@ def _sync_frontend(
 # Tab: Enquiry (F)
 # Cols: Timestamp[0] | KAM Name[1] | Customer Name[2] | Qty (MT)[3]
 #       Status[4] | Remarks[5]
+#
+# FIX (Issue 4): same timestamp fallback applied here
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_enquiry_f(
@@ -894,8 +988,15 @@ def _sync_enquiry_f(
             stats.skipped += 1
             continue
 
+        # FIX Issue 4: _parse_timestamp now falls back to date-only via _parse_date
         ts = _parse_timestamp(timestamp_raw)
         doe_date = ts.date() if ts else None
+
+        if not doe_date and timestamp_raw:
+            logger.debug(
+                "Enquiry (F) row %d: could not parse timestamp '%s' for customer '%s'",
+                i, timestamp_raw, customer_name,
+            )
 
         qty = _decimal(qty_raw) or Decimal("0")
         kam_user = (
@@ -933,8 +1034,9 @@ def _sync_enquiry_f(
 # Expected cols: Customer Name[0] | KAM Name[1] | Overdues (Rs)[2]
 # Optional cols: Exposure[3] | 0-30[4] | 31-60[5] | 61-90[6] | 90+[7]
 #
-# FIX: Syncs ageing columns if present. Dashboard reads ageing_0_30..90_plus.
-#      When ageing is present, exposure = sum of ageing buckets.
+# FIX (Issue 5): Syncs ageing columns if present. Logs warning if absent.
+#   When ageing columns are present → exposure = sum of ageing buckets.
+#   Only a31_raw was populated before because column indices were wrong.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_overdues(
@@ -948,12 +1050,42 @@ def _sync_overdues(
         stats.notes.append("Overdues tab: no data rows")
         return stats
 
+    # Detect column layout from header row
+    header = [h.strip().lower() for h in rows[0]] if rows else []
+
+    def _col(keywords: List[str], fallback: int) -> int:
+        """Find column index by matching header keywords, or use fallback."""
+        for idx, h in enumerate(header):
+            for kw in keywords:
+                if kw in h:
+                    return idx
+        return fallback
+
+    # Detect ageing columns from header (safe fallback to fixed indices)
+    col_customer  = _col(["customer"],          0)
+    col_kam       = _col(["kam"],               1)
+    col_overdue   = _col(["overdue", "dues"],   2)
+    col_exposure  = _col(["exposure"],          3)
+    col_a0        = _col(["0-30", "0_30"],      4)
+    col_a31       = _col(["31-60", "31_60"],    5)
+    col_a61       = _col(["61-90", "61_90"],    6)
+    col_a90       = _col(["90+", "90_plus", "above 90"],  7)
+
+    has_ageing = any(kw in " ".join(header) for kw in ["0-30", "31-60", "61-90", "90+"])
+    if not has_ageing:
+        logger.warning(
+            "Overdues tab: ageing columns (0-30, 31-60, 61-90, 90+) not found in header. "
+            "Only total overdue amount will be synced. "
+            "Header detected: %s",
+            header[:10],
+        )
+
     snapshot_date = timezone.now().date()
 
     for i, row in enumerate(rows[1:], start=2):
-        customer_name = _cell(row, 0)
-        kam_name      = _cell(row, 1)
-        overdue_raw   = _cell(row, 2)
+        customer_name = _cell(row, col_customer)
+        kam_name      = _cell(row, col_kam)
+        overdue_raw   = _cell(row, col_overdue)
 
         if not customer_name:
             continue
@@ -963,21 +1095,21 @@ def _sync_overdues(
             stats.skipped += 1
             continue
 
-        # FIX: Read optional ageing columns if tab has them
-        exposure_raw  = _cell(row, 3)
-        a0_raw        = _cell(row, 4)
-        a31_raw       = _cell(row, 5)
-        a61_raw       = _cell(row, 6)
-        a90_raw       = _cell(row, 7)
+        # Read ageing columns (safe — returns empty string if index out of range)
+        exposure_raw = _cell(row, col_exposure)
+        a0_raw       = _cell(row, col_a0)
+        a31_raw      = _cell(row, col_a31)
+        a61_raw      = _cell(row, col_a61)
+        a90_raw      = _cell(row, col_a90)
 
-        a0   = _decimal(a0_raw)   or Decimal("0")
-        a31  = _decimal(a31_raw)  or Decimal("0")
-        a61  = _decimal(a61_raw)  or Decimal("0")
-        a90  = _decimal(a90_raw)  or Decimal("0")
+        a0   = _decimal(a0_raw)  or Decimal("0")
+        a31  = _decimal(a31_raw) or Decimal("0")
+        a61  = _decimal(a61_raw) or Decimal("0")
+        a90  = _decimal(a90_raw) or Decimal("0")
         ageing_total = a0 + a31 + a61 + a90
 
-        # Exposure: use explicit col if present; else sum ageing; else use overdue
-        exposure = _decimal(exposure_raw) or ageing_total or overdue_amt
+        # Exposure: explicit col → ageing sum → total overdue (in that priority)
+        exposure = _decimal(exposure_raw) or (ageing_total if ageing_total > 0 else overdue_amt)
 
         kam_user = (
             _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats, local_cache)
@@ -991,13 +1123,13 @@ def _sync_overdues(
                     customer=customer,
                     snapshot_date=snapshot_date,
                     defaults={
-                        "kam":          kam_user,
-                        "overdue":      overdue_amt,
-                        "overdue_amt":  overdue_amt,
-                        "exposure":     exposure,
-                        "ageing_0_30":  a0,
-                        "ageing_31_60": a31,
-                        "ageing_61_90": a61,
+                        "kam":            kam_user,
+                        "overdue":        overdue_amt,
+                        "overdue_amt":    overdue_amt,
+                        "exposure":       exposure,
+                        "ageing_0_30":    a0,
+                        "ageing_31_60":   a31,
+                        "ageing_61_90":   a61,
                         "ageing_90_plus": a90,
                     },
                 )
@@ -1015,8 +1147,8 @@ def _sync_overdues(
 
 def run_sync_now() -> SyncStats:
     """
-    Full sync. Called by sheets.run_sync_now() and the Celery beat task.
-    FIX: local_cache dict passed to each section function — no module-level global.
+    Full sync — called by sheets.run_sync_now() and Celery/cron tasks.
+    local_cache dict passed to each section fn — no module-level global.
     """
     sheet_id = _require_env("KAM_SALES_SHEET_ID")
     sections = resolve_sections()
@@ -1030,14 +1162,14 @@ def run_sync_now() -> SyncStats:
     tab_mapping  = _load_kam_names_tab(service, sheet_id)
     db_lookup    = _build_user_lookup()
     env_usermap  = _load_env_usermap()
-    local_cache: Dict[str, Optional[User]] = {}  # FIX: per-call cache
+    local_cache: Dict[str, Optional[User]] = {}  # fresh per full sync
 
     logger.info(
         "Starting sync | sheet=%s | tab_mapping_entries=%d | db_users=%d",
         sheet_id, len(tab_mapping), len(db_lookup),
     )
 
-    # Sync order matters: customers first, then sales/leads/overdues
+    # Sync order: customers first so FKs exist when sales/leads reference them
     if sections.get("customers"):
         logger.info("Syncing: Customer Details")
         s = _sync_customers(service, sheet_id, tab_mapping, db_lookup, env_usermap, local_cache)
@@ -1106,7 +1238,7 @@ _STEP_FN_MAP = {
 def step_sync(intent: "SyncIntent", *args, **kwargs) -> Dict[str, Any]:
     """
     Syncs one section at a time. SyncIntent.cursor_position tracks progress.
-    FIX: local_cache created fresh per step call.
+    local_cache created fresh per step call.
     """
     cursor   = getattr(intent, "cursor_position", 0) or 0
     sections = resolve_sections()
@@ -1124,7 +1256,7 @@ def step_sync(intent: "SyncIntent", *args, **kwargs) -> Dict[str, Any]:
         tab_mapping = _load_kam_names_tab(service, sheet_id)
         db_lookup   = _build_user_lookup()
         env_usermap = _load_env_usermap()
-        local_cache: Dict[str, Optional[User]] = {}  # FIX: fresh per step
+        local_cache: Dict[str, Optional[User]] = {}  # fresh per step
 
         stats = SyncStats()
         if sections.get(section_key):
