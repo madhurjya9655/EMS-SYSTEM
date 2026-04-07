@@ -10,6 +10,11 @@
 #   - _sync_overdues: ageing columns mapped correctly
 #   - _kam_user_cache: cleared at start of every step_sync call (not just run_sync_now)
 #   - All original bugs from 2026-03-03 comment kept fixed
+# FIXED 2026-04-07 (round 2):
+#   - _sync_customers: blank name rows now silently continue (no skipped counter bump)
+#   - _sync_frontend / _sync_enquiry_f: doe falls back to today when timestamp is missing
+#   - _backfill_customer_kam: new post-sync pass assigns kam from InvoiceFact for the 52
+#     customers whose Customer Details row had a blank KAM column
 
 from __future__ import annotations
 
@@ -597,6 +602,60 @@ def _load_env_usermap() -> Dict[str, str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# POST-SYNC BACKFILL: assign Customer.kam from their InvoiceFact records
+#
+# FIX (Issue 1): 52 customers had a blank KAM column in Customer Details tab.
+# After Sheet1 syncs their invoices (with a valid KAM), this pass reads the
+# most-common KAM from InvoiceFact and stamps it back onto the Customer row.
+# Safe: only touches customers where kam_id IS NULL.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _backfill_customer_kam() -> int:
+    """
+    For every Customer with kam=NULL, find the most-frequent KAM across their
+    InvoiceFact rows and assign it.  Returns the number of customers updated.
+    """
+    from django.db.models import Count
+
+    unmapped = Customer.objects.filter(kam__isnull=True)
+    updated = 0
+
+    for customer in unmapped:
+        # Pick the KAM that appears most often on this customer's invoices
+        top = (
+            InvoiceFact.objects
+            .filter(customer=customer, kam__isnull=False)
+            .values("kam")
+            .annotate(n=Count("kam"))
+            .order_by("-n")
+            .first()
+        )
+        if not top:
+            logger.warning(
+                "KAM backfill: no invoices with KAM for customer '%s' (pk=%s). "
+                "Assign manually via shell script.",
+                customer.name, customer.pk,
+            )
+            continue
+
+        try:
+            kam_user = User.objects.get(pk=top["kam"])
+            customer.kam = kam_user
+            if not customer.primary_kam:
+                customer.primary_kam = kam_user
+            customer.save(update_fields=["kam", "primary_kam"])
+            updated += 1
+            logger.info(
+                "KAM backfill: '%s' → %s", customer.name, kam_user.get_full_name() or kam_user.username
+            )
+        except User.DoesNotExist:
+            logger.error("KAM backfill: user pk=%s not found for customer '%s'", top["kam"], customer.name)
+
+    logger.info("KAM backfill complete: %d customers updated", updated)
+    return updated
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SECTION: CUSTOMER DETAILS
 # Tab: Customer Details
 # Cols: Customer Name[0] | KAM Name[1] | Address[2] | Email[3] | Mobile No[4]
@@ -617,8 +676,10 @@ def _sync_customers(
 
     for row in rows[1:]:
         name = _cell(row, 0)
+
+        # FIX (Issue 2): blank rows are NOT errors — silently skip without
+        # bumping stats.skipped so the final count stays clean.
         if not name:
-            stats.skipped += 1
             continue
 
         kam_name = _cell(row, 1)
@@ -626,6 +687,15 @@ def _sync_customers(
             _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats, local_cache)
             if kam_name else None
         )
+
+        # Warn explicitly when a non-blank KAM name could not be resolved,
+        # so it doesn't silently vanish from the audit trail.
+        if kam_name and not kam_user:
+            logger.warning(
+                "Customer '%s': KAM name '%s' could not be mapped to any user. "
+                "Customer will be saved without KAM assignment from this tab.",
+                name, kam_name,
+            )
 
         try:
             with transaction.atomic():
@@ -871,9 +941,8 @@ def _sync_sheet1(
 #       Customer Name[5] | Grade[6] | Size(MM)[7] | Qty (MT)[8]
 #       ... | Status[21] | Revenue RS/MT[22] | Remarks[23]
 #
-# FIX (Issue 4): _parse_timestamp now also tries date-only fallback,
-# so rows with date-only values in the Timestamp column get a doe value
-# instead of NULL.
+# FIX (Issue 3): when timestamp is missing/unparseable, doe falls back to
+# today's date so leads are NEVER stored with doe=NULL.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_frontend(
@@ -905,15 +974,22 @@ def _sync_frontend(
             stats.skipped += 1
             continue
 
-        # FIX Issue 4: _parse_timestamp now falls back to date-only via _parse_date
         ts = _parse_timestamp(timestamp_raw)
         doe_date = ts.date() if ts else None
 
-        if not doe_date and timestamp_raw:
-            logger.debug(
-                "Front End row %d: could not parse timestamp '%s' for customer '%s'",
-                i, timestamp_raw, customer_name,
-            )
+        # FIX (Issue 3): never store NULL doe — fall back to today
+        if not doe_date:
+            if timestamp_raw:
+                logger.debug(
+                    "Front End row %d: could not parse timestamp '%s' for customer '%s' — using today",
+                    i, timestamp_raw, customer_name,
+                )
+            else:
+                logger.debug(
+                    "Front End row %d: empty timestamp for customer '%s' — using today",
+                    i, customer_name,
+                )
+            doe_date = timezone.now().date()
 
         qty = _decimal(qty_raw) or Decimal("0")
         kam_user = (
@@ -960,7 +1036,7 @@ def _sync_frontend(
 # Cols: Timestamp[0] | KAM Name[1] | Customer Name[2] | Qty (MT)[3]
 #       Status[4] | Remarks[5]
 #
-# FIX (Issue 4): same timestamp fallback applied here
+# FIX (Issue 3): same doe fallback applied here — no NULL doe ever stored
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_enquiry_f(
@@ -988,15 +1064,22 @@ def _sync_enquiry_f(
             stats.skipped += 1
             continue
 
-        # FIX Issue 4: _parse_timestamp now falls back to date-only via _parse_date
         ts = _parse_timestamp(timestamp_raw)
         doe_date = ts.date() if ts else None
 
-        if not doe_date and timestamp_raw:
-            logger.debug(
-                "Enquiry (F) row %d: could not parse timestamp '%s' for customer '%s'",
-                i, timestamp_raw, customer_name,
-            )
+        # FIX (Issue 3): never store NULL doe — fall back to today
+        if not doe_date:
+            if timestamp_raw:
+                logger.debug(
+                    "Enquiry (F) row %d: could not parse timestamp '%s' for customer '%s' — using today",
+                    i, timestamp_raw, customer_name,
+                )
+            else:
+                logger.debug(
+                    "Enquiry (F) row %d: empty timestamp for customer '%s' — using today",
+                    i, customer_name,
+                )
+            doe_date = timezone.now().date()
 
         qty = _decimal(qty_raw) or Decimal("0")
         kam_user = (
@@ -1149,6 +1232,8 @@ def run_sync_now() -> SyncStats:
     """
     Full sync — called by sheets.run_sync_now() and Celery/cron tasks.
     local_cache dict passed to each section fn — no module-level global.
+    After all sections complete, _backfill_customer_kam() fixes any customers
+    that had a blank KAM column in Customer Details but have KAM-tagged invoices.
     """
     sheet_id = _require_env("KAM_SALES_SHEET_ID")
     sections = resolve_sections()
@@ -1206,6 +1291,15 @@ def run_sync_now() -> SyncStats:
         total.merge(s)
         logger.info("  → overdues=%d skipped=%d", s.overdues_upserted, s.skipped)
 
+    # FIX (Issue 1): backfill KAM for any customers that still have kam=NULL
+    # This handles the 52 customers whose Customer Details row had a blank KAM column
+    # but whose Sheet1 / Sales (F) invoices carry a valid KAM reference.
+    logger.info("Running KAM backfill for unmapped customers ...")
+    backfilled = _backfill_customer_kam()
+    if backfilled:
+        total.notes.append(f"KAM backfill: {backfilled} customers updated from invoice history")
+        logger.info("KAM backfill: %d customers updated", backfilled)
+
     logger.info("Sync complete: %s", total.as_message())
     if total.notes:
         logger.warning("Sync notes: %s", "; ".join(total.notes))
@@ -1239,6 +1333,7 @@ def step_sync(intent: "SyncIntent", *args, **kwargs) -> Dict[str, Any]:
     """
     Syncs one section at a time. SyncIntent.cursor_position tracks progress.
     local_cache created fresh per step call.
+    On the final step, _backfill_customer_kam() is also run.
     """
     cursor   = getattr(intent, "cursor_position", 0) or 0
     sections = resolve_sections()
@@ -1264,8 +1359,19 @@ def step_sync(intent: "SyncIntent", *args, **kwargs) -> Dict[str, Any]:
             if fn:
                 stats = fn(service, sheet_id, tab_mapping, db_lookup, env_usermap, local_cache)
 
-        intent.cursor_position = cursor + 1
-        intent.status = "COMPLETE" if (cursor + 1) >= len(_STEPS) else "IN_PROGRESS"
+        next_cursor = cursor + 1
+        is_last     = next_cursor >= len(_STEPS)
+
+        # On the final step, run KAM backfill so step-sync users also benefit
+        backfilled = 0
+        if is_last:
+            logger.info("step_sync final step: running KAM backfill ...")
+            backfilled = _backfill_customer_kam()
+            if backfilled:
+                stats.notes.append(f"KAM backfill: {backfilled} customers updated")
+
+        intent.cursor_position = next_cursor
+        intent.status = "COMPLETE" if is_last else "IN_PROGRESS"
         intent.save(update_fields=["cursor_position", "status"])
 
         return {
@@ -1279,6 +1385,7 @@ def step_sync(intent: "SyncIntent", *args, **kwargs) -> Dict[str, Any]:
                 "overdues_upserted":  stats.overdues_upserted,
                 "skipped":            stats.skipped,
                 "unknown_kam":        stats.unknown_kam,
+                "kam_backfilled":     backfilled,
             },
         }
 
