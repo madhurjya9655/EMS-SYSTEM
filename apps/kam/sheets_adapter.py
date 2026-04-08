@@ -1,20 +1,22 @@
 # FILE: apps/kam/sheets_adapter.py
 # PURPOSE: Fix Sales sync field mismatches, zero-overwrite bug, overdues ageing gap
-# FIXED 2026-04-07:
-#   - _parse_date: added '%d-%b-%y' and '%d %b %y' (short year e.g. '1-Dec-23')
-#   - _parse_date: strips surrounding single-quotes before parsing (Sheet export artifact)
-#   - _parse_date: Excel serial guard tightened (min 10000) so '23' isn't treated as serial
-#   - _sync_sheet1: now skips only if BOTH customer_name AND invoice_date are missing
-#     (previously skipped on missing date even when all other data was present)
-#   - _resolve_kam_user: env_usermap lookup uses original name AND normalized key
-#   - _sync_overdues: ageing columns mapped correctly
-#   - _kam_user_cache: cleared at start of every step_sync call (not just run_sync_now)
-#   - All original bugs from 2026-03-03 comment kept fixed
-# FIXED 2026-04-07 (round 2):
-#   - _sync_customers: blank name rows now silently continue (no skipped counter bump)
-#   - _sync_frontend / _sync_enquiry_f: doe falls back to today when timestamp is missing
-#   - _backfill_customer_kam: new post-sync pass assigns kam from InvoiceFact for the 52
-#     customers whose Customer Details row had a blank KAM column
+# FIXED 2026-04-08 (ISSUE 1 — LEADS):
+#   - _sync_frontend: CORRECTED column indices from screenshot analysis
+#     Col[0]=Enquiry No, Col[1]=Timestamp, Col[2]=Email, Col[3]=Type,
+#     Col[4]=KAM Name, Col[5]=Customer Name, Col[6]=Grade, Col[7]=Size(MM),
+#     Col[8]=Qty(MT), Col[9]=Supply Condition, Col[10]=Shape, Col[11]=Status,
+#     Col[12]=Revenue RS/MT, Col[13]=Remarks  ← WAS using 21,22,23 (WRONG)
+#   - _sync_frontend: doe NEVER NULL — falls back to today()
+#   - _sync_enquiry_f: doe NEVER NULL — falls back to today()
+#   - LeadFact.objects.update_or_create() used everywhere (idempotent)
+#   - KAM mapping applied on every lead row
+# FIXED 2026-04-08 (ISSUE 2 — COLLECTION MERGE):
+#   - CollectionTxn.source field stamped as 'GOOGLE_SHEET' on sheet sync
+#   - System entries keep source='ERP' (set in views/forms, not changed here)
+#   - Sheet collections NEVER overwrite ERP entries (different source key)
+#   - _sync_collections: new section reads Collection tab from sheet
+#   - Dashboard aggregation queries SUM of BOTH sources (views.py fix separate)
+# All previous fixes from 2026-04-07 preserved.
 
 from __future__ import annotations
 
@@ -44,6 +46,7 @@ from .models import (
     InvoiceFact,
     LeadFact,
     OverdueSnapshot,
+    CollectionTxn,
     SyncIntent,
 )
 
@@ -156,33 +159,36 @@ def build_sheets_service():
 # TAB NAME RESOLUTION (from env vars with sane defaults)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _tab_sales_f()    -> str: return _env("KAM_TAB_SALES",     "Sales (F)")
-def _tab_sheet1()     -> str: return _env("KAM_TAB_SHEET1",    "Sheet1")
-def _tab_kam_names()  -> str: return _env("KAM_TAB_KAM_NAMES", "KAM names")
-def _tab_frontend()   -> str: return _env("KAM_TAB_FRONTEND",  "Front End")
-def _tab_enquiry_f()  -> str: return _env("KAM_TAB_ENQUIRY",   "Enquiry (F)")
-def _tab_customers()  -> str: return _env("KAM_TAB_CUSTOMERS", "Customer Details")
-def _tab_overdues()   -> str: return _env("KAM_TAB_OVERDUES",  "Overdues")
+def _tab_sales_f()      -> str: return _env("KAM_TAB_SALES",       "Sales (F)")
+def _tab_sheet1()       -> str: return _env("KAM_TAB_SHEET1",      "Sheet1")
+def _tab_kam_names()    -> str: return _env("KAM_TAB_KAM_NAMES",   "KAM names")
+def _tab_frontend()     -> str: return _env("KAM_TAB_FRONTEND",    "Front End")
+def _tab_enquiry_f()    -> str: return _env("KAM_TAB_ENQUIRY",     "Enquiry (F)")
+def _tab_customers()    -> str: return _env("KAM_TAB_CUSTOMERS",   "Customer Details")
+def _tab_overdues()     -> str: return _env("KAM_TAB_OVERDUES",    "Overdues")
+def _tab_collection()   -> str: return _env("KAM_TAB_COLLECTION",  "Collection")
 
 def resolve_sections() -> Dict[str, bool]:
     return {
-        "sales_f":   _env_flag("KAM_SYNC_SALES",     True),
-        "sheet1":    _env_flag("KAM_SYNC_SHEET1",    True),
-        "frontend":  _env_flag("KAM_SYNC_FRONTEND",  True),
-        "enquiry_f": _env_flag("KAM_SYNC_ENQUIRY",   True),
-        "customers": _env_flag("KAM_SYNC_CUSTOMERS", True),
-        "overdues":  _env_flag("KAM_SYNC_OVERDUES",  True),
+        "sales_f":    _env_flag("KAM_SYNC_SALES",       True),
+        "sheet1":     _env_flag("KAM_SYNC_SHEET1",      True),
+        "frontend":   _env_flag("KAM_SYNC_FRONTEND",    True),
+        "enquiry_f":  _env_flag("KAM_SYNC_ENQUIRY",     True),
+        "customers":  _env_flag("KAM_SYNC_CUSTOMERS",   True),
+        "overdues":   _env_flag("KAM_SYNC_OVERDUES",    True),
+        "collection": _env_flag("KAM_SYNC_COLLECTION",  True),
     }
 
 def resolve_tabs_for_logging() -> Dict[str, str]:
     return {
-        "sales_f":   _tab_sales_f(),
-        "sheet1":    _tab_sheet1(),
-        "kam_names": _tab_kam_names(),
-        "frontend":  _tab_frontend(),
-        "enquiry_f": _tab_enquiry_f(),
-        "customers": _tab_customers(),
-        "overdues":  _tab_overdues(),
+        "sales_f":    _tab_sales_f(),
+        "sheet1":     _tab_sheet1(),
+        "kam_names":  _tab_kam_names(),
+        "frontend":   _tab_frontend(),
+        "enquiry_f":  _tab_enquiry_f(),
+        "customers":  _tab_customers(),
+        "overdues":   _tab_overdues(),
+        "collection": _tab_collection(),
     }
 
 
@@ -192,31 +198,34 @@ def resolve_tabs_for_logging() -> Dict[str, str]:
 
 @dataclass
 class SyncStats:
-    customers_upserted: int = 0
-    sales_upserted:     int = 0
-    leads_upserted:     int = 0
-    overdues_upserted:  int = 0
-    skipped:            int = 0
-    unknown_kam:        int = 0
-    notes: List[str]        = field(default_factory=list)
+    customers_upserted:   int = 0
+    sales_upserted:       int = 0
+    leads_upserted:       int = 0
+    overdues_upserted:    int = 0
+    collections_upserted: int = 0
+    skipped:              int = 0
+    unknown_kam:          int = 0
+    notes: List[str]          = field(default_factory=list)
 
     def merge(self, other: "SyncStats") -> None:
-        self.customers_upserted += other.customers_upserted
-        self.sales_upserted     += other.sales_upserted
-        self.leads_upserted     += other.leads_upserted
-        self.overdues_upserted  += other.overdues_upserted
-        self.skipped            += other.skipped
-        self.unknown_kam        += other.unknown_kam
+        self.customers_upserted   += other.customers_upserted
+        self.sales_upserted       += other.sales_upserted
+        self.leads_upserted       += other.leads_upserted
+        self.overdues_upserted    += other.overdues_upserted
+        self.collections_upserted += other.collections_upserted
+        self.skipped              += other.skipped
+        self.unknown_kam          += other.unknown_kam
         self.notes.extend(other.notes)
 
     def as_message(self) -> str:
         parts = []
-        if self.customers_upserted: parts.append(f"Customers: {self.customers_upserted}")
-        if self.sales_upserted:     parts.append(f"Sales: {self.sales_upserted}")
-        if self.leads_upserted:     parts.append(f"Leads: {self.leads_upserted}")
-        if self.overdues_upserted:  parts.append(f"Overdues: {self.overdues_upserted}")
-        if self.skipped:            parts.append(f"Skipped: {self.skipped}")
-        if self.unknown_kam:        parts.append(f"Unknown KAM: {self.unknown_kam}")
+        if self.customers_upserted:   parts.append(f"Customers: {self.customers_upserted}")
+        if self.sales_upserted:       parts.append(f"Sales: {self.sales_upserted}")
+        if self.leads_upserted:       parts.append(f"Leads: {self.leads_upserted}")
+        if self.overdues_upserted:    parts.append(f"Overdues: {self.overdues_upserted}")
+        if self.collections_upserted: parts.append(f"Collections: {self.collections_upserted}")
+        if self.skipped:              parts.append(f"Skipped: {self.skipped}")
+        if self.unknown_kam:          parts.append(f"Unknown KAM: {self.unknown_kam}")
         return " | ".join(parts) if parts else "No changes"
 
 
@@ -268,29 +277,17 @@ def _parse_date(val: str) -> Optional[date]:
     - Excel serial guard tightened: only treat as serial if value >= 10000
       (avoids treating small numbers like '23' as a serial date)
     - No hardcoded year restrictions.
-
-    Supported examples:
-        '1-Dec-23'      → 2023-12-01
-        '01-Dec-2023'   → 2023-12-01
-        '15-Jan-24'     → 2024-01-15
-        '01/12/2023'    → 2023-12-01
-        '2023-12-01'    → 2023-12-01
-        45123           → Excel serial → date
     """
     if not val:
         return None
 
-    # Strip whitespace and surrounding single-quotes (e.g. '1-Dec-23' → 1-Dec-23)
     val = val.strip().strip("'").strip()
-
     if not val:
         return None
 
-    # Try all string formats — short year MUST come before long year formats
-    # so '1-Dec-23' hits '%d-%b-%y' before '%d-%b-%Y' (which would fail anyway)
     for fmt in (
-        "%d-%b-%y",    # FIX: 1-Dec-23 / 01-Dec-23   ← THIS was the missing format
-        "%d %b %y",    # FIX: 1 Dec 23 / 01 Dec 23
+        "%d-%b-%y",    # 1-Dec-23 / 01-Dec-23
+        "%d %b %y",    # 1 Dec 23 / 01 Dec 23
         "%d-%b-%Y",    # 01-Dec-2023
         "%d %b %Y",    # 01 Dec 2023
         "%Y-%m-%d",    # 2023-12-01
@@ -305,9 +302,7 @@ def _parse_date(val: str) -> Optional[date]:
         except ValueError:
             continue
 
-    # Google Sheets / Excel serial date (days since Dec 30, 1899)
-    # Guard: only process if value looks like a plausible serial (>=10000 → after 1927)
-    # This prevents small row numbers like '23' from being treated as Jan 1900
+    # Excel serial date
     try:
         serial = int(float(val))
         if 10000 < serial < 100000:
@@ -334,7 +329,6 @@ def _parse_timestamp(val: str) -> Optional[datetime]:
         except ValueError:
             continue
 
-    # Fallback: try date-only for timestamp fields
     d = _parse_date(val)
     if d:
         return timezone.make_aware(datetime(d.year, d.month, d.day))
@@ -395,7 +389,6 @@ def _safe_get_or_create_customer(
                 pass
         return customer
 
-    # Merge duplicates — keep first, re-point all FKs
     survivor = matches[0]
     for dup in matches[1:]:
         try:
@@ -433,10 +426,10 @@ def _load_kam_names_tab(service, sheet_id: str) -> Dict[str, str]:
             continue
         if kam_name:
             mapping[kam_name] = email
-            mapping[_normalize(kam_name)] = email  # also store normalized key
+            mapping[_normalize(kam_name)] = email
         if short_name and short_name != kam_name:
             mapping[short_name] = email
-            mapping[_normalize(short_name)] = email  # also store normalized key
+            mapping[_normalize(short_name)] = email
 
     logger.info("KAM names tab loaded: %d entries", len(mapping))
     return mapping
@@ -480,7 +473,7 @@ def _resolve_kam_user(
     db_lookup: Dict[str, User],
     env_usermap: Dict[str, str],
     stats: SyncStats,
-    local_cache: Dict[str, Optional[User]],  # per-call cache instead of global
+    local_cache: Dict[str, Optional[User]],
 ) -> Optional[User]:
     if not name:
         return None
@@ -491,7 +484,7 @@ def _resolve_kam_user(
 
     user: Optional[User] = None
 
-    # 1. Env override — check both original name AND normalized key
+    # 1. Env override
     email_override = env_usermap.get(name) or env_usermap.get(key)
     if email_override:
         try:
@@ -504,7 +497,6 @@ def _resolve_kam_user(
 
     # 2. KAM names tab → email → DB
     if not user:
-        # Tab mapping now contains both original and normalized keys (fixed in _load_kam_names_tab)
         email_from_tab = tab_mapping.get(name) or tab_mapping.get(key)
         if not email_from_tab:
             for tab_name_key, tab_email in tab_mapping.items():
@@ -531,11 +523,11 @@ def _resolve_kam_user(
                         if created:
                             logger.info("Auto-created user for KAM '%s' → %s", name, email_from_tab)
 
-    # 3. DB lookup dict (normalized name/email/username match)
+    # 3. DB lookup dict
     if not user:
         user = db_lookup.get(key)
 
-    # 4. Compact key (strips all non-alphanumeric)
+    # 4. Compact key
     if not user:
         compact = re.sub(r"[^a-z0-9]", "", key)
         user = db_lookup.get(compact)
@@ -565,7 +557,7 @@ def _resolve_kam_user(
         logger.warning(
             "KAM not found for name '%s' (normalized: '%s'). "
             "Add to KAM names tab (col A=short, B=full, C=email) "
-            "or set KAM_USERMAP_JSON env var: {\"KAM Name In Sheet\": \"user@email.com\"}",
+            "or set KAM_USERMAP_JSON env var.",
             name, key,
         )
 
@@ -574,54 +566,30 @@ def _resolve_kam_user(
 
 
 def _load_env_usermap() -> Dict[str, str]:
-    """
-    Load KAM_USERMAP_JSON env var.
-
-    Format: {"KAM Name In Sheet": "user@email.com", ...}
-
-    Example for Render env:
-        KAM_USERMAP_JSON = {"Rahul": "rahul@company.com", "R Kumar": "rahul@company.com"}
-
-    Stores both original and normalized keys for maximum match coverage.
-    """
     raw = _env("KAM_USERMAP_JSON", "{}")
     try:
         data = json.loads(raw)
-        # Store both original keys AND normalized keys
         result = {}
         for k, v in data.items():
-            result[k] = v                  # original: "Rahul Kumar" → email
-            result[_normalize(k)] = v      # normalized: "rahulkumar" → email
+            result[k] = v
+            result[_normalize(k)] = v
         return result
     except json.JSONDecodeError:
-        logger.warning(
-            "KAM_USERMAP_JSON is not valid JSON. "
-            "Expected format: {\"KAM Name In Sheet\": \"user@email.com\"}"
-        )
+        logger.warning("KAM_USERMAP_JSON is not valid JSON.")
         return {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST-SYNC BACKFILL: assign Customer.kam from their InvoiceFact records
-#
-# FIX (Issue 1): 52 customers had a blank KAM column in Customer Details tab.
-# After Sheet1 syncs their invoices (with a valid KAM), this pass reads the
-# most-common KAM from InvoiceFact and stamps it back onto the Customer row.
-# Safe: only touches customers where kam_id IS NULL.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _backfill_customer_kam() -> int:
-    """
-    For every Customer with kam=NULL, find the most-frequent KAM across their
-    InvoiceFact rows and assign it.  Returns the number of customers updated.
-    """
     from django.db.models import Count
 
     unmapped = Customer.objects.filter(kam__isnull=True)
     updated = 0
 
     for customer in unmapped:
-        # Pick the KAM that appears most often on this customer's invoices
         top = (
             InvoiceFact.objects
             .filter(customer=customer, kam__isnull=False)
@@ -632,8 +600,7 @@ def _backfill_customer_kam() -> int:
         )
         if not top:
             logger.warning(
-                "KAM backfill: no invoices with KAM for customer '%s' (pk=%s). "
-                "Assign manually via shell script.",
+                "KAM backfill: no invoices with KAM for customer '%s' (pk=%s).",
                 customer.name, customer.pk,
             )
             continue
@@ -657,10 +624,6 @@ def _backfill_customer_kam() -> int:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION: CUSTOMER DETAILS
-# Tab: Customer Details
-# Cols: Customer Name[0] | KAM Name[1] | Address[2] | Email[3] | Mobile No[4]
-#       Person Name[5] | Credit Limit[6] | Agreed Credit Period[7]
-#       Total Exposure (Rs)[8] | Overdues (Rs)[9] | Current Credit Limit[10]
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_customers(
@@ -676,9 +639,6 @@ def _sync_customers(
 
     for row in rows[1:]:
         name = _cell(row, 0)
-
-        # FIX (Issue 2): blank rows are NOT errors — silently skip without
-        # bumping stats.skipped so the final count stays clean.
         if not name:
             continue
 
@@ -688,19 +648,15 @@ def _sync_customers(
             if kam_name else None
         )
 
-        # Warn explicitly when a non-blank KAM name could not be resolved,
-        # so it doesn't silently vanish from the audit trail.
         if kam_name and not kam_user:
             logger.warning(
-                "Customer '%s': KAM name '%s' could not be mapped to any user. "
-                "Customer will be saved without KAM assignment from this tab.",
+                "Customer '%s': KAM name '%s' could not be mapped to any user.",
                 name, kam_name,
             )
 
         try:
             with transaction.atomic():
                 obj = _safe_get_or_create_customer(name, kam_user=kam_user)
-                # Authoritative update from Customer Details tab
                 obj.address              = _cell(row, 2) or obj.address
                 obj.email                = _cell(row, 3) or obj.email
                 obj.mobile               = _cell(row, 4) or obj.mobile
@@ -724,13 +680,6 @@ def _sync_customers(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION: SALES — Sales (F)
-# Tab: Sales (F)
-# Cols: Date of Invoice[0] | Buyer's Name[1] | KAM[2] | Qty(MT)[3] | Full Name[4]
-#
-# NOTE: Sales (F) has NO invoice value columns.
-#       Only qty_mt is sourced from here.
-#       invoice_value/revenue_gst are authoritative from Sheet1.
-#       FIX: Never overwrite invoice_value/revenue_gst on existing records.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_sales_f(
@@ -781,7 +730,6 @@ def _sync_sales_f(
                         "kam":            kam_user,
                         "invoice_date":   invoice_date,
                         "qty_mt":         qty,
-                        # Only set 0 on CREATE — Sheet1 fills real values later
                         "invoice_value":  Decimal("0"),
                         "revenue_gst":    Decimal("0"),
                         "raw_buyer_name": buyer_name,
@@ -789,7 +737,6 @@ def _sync_sales_f(
                     },
                 )
                 if not created:
-                    # Only update qty and KAM — NEVER zero out amounts
                     update_fields = ["qty_mt", "customer", "raw_buyer_name", "source_tab", "updated_at"]
                     obj.qty_mt         = qty
                     obj.customer       = customer
@@ -809,19 +756,6 @@ def _sync_sales_f(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION: SALES — Sheet1 (historical invoices with full amounts)
-# Tab: Sheet1
-# Cols: KAM Name[0] | Customer Name[1] | Consignee Name[2] | Vehicle Number[3]
-#       Invoice Number[4] | Invoice Date[5] | Invoice Value With GST[6]
-#       Business Vertical[7] | Dispatch From[8] | Dispatch To[9]
-#       Transporter Name[10] | Heat Number[11] | Grade[12] | Size[13]
-#       QTY[14] | Shape[15] | Rate/MT[16] | Invoice Value[17] | ...
-#
-# AUTHORITATIVE source for invoice_value / revenue_gst.
-#
-# FIX 2026-04-07:
-#   - _parse_date now handles '1-Dec-23' format → skipped rows should drop to ~0
-#   - Skip only if customer_name is blank (date is required but if missing, log+skip)
-#   - Only write invoice_value/revenue_gst if source has a non-zero value
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_sheet1(
@@ -856,12 +790,10 @@ def _sync_sheet1(
             continue
 
         if not invoice_date:
-            # Log unique formats for debugging; skip this row
             if invoice_date_raw and invoice_date_raw not in date_parse_failures:
                 date_parse_failures.append(invoice_date_raw)
                 logger.warning(
-                    "Sheet1 row %d: unrecognised date format '%s' for customer '%s'. "
-                    "Add this format to _parse_date if it recurs.",
+                    "Sheet1 row %d: unrecognised date format '%s' for customer '%s'.",
                     i, invoice_date_raw, customer_name,
                 )
             stats.skipped += 1
@@ -879,7 +811,6 @@ def _sync_sheet1(
             else _make_row_uuid(tab_name, invoice_date, customer_name, kam_name, i)
         )
 
-        # Use real value if present; fall back to 0 only if truly absent
         final_value = value_gst or invoice_value or Decimal("0")
 
         try:
@@ -901,7 +832,6 @@ def _sync_sheet1(
                     },
                 )
                 if not created:
-                    # Sheet1 is authoritative for amounts — always update
                     update_fields = [
                         "invoice_value", "revenue_gst", "qty_mt",
                         "rate_mt", "grade", "size", "source_tab",
@@ -936,13 +866,31 @@ def _sync_sheet1(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION: LEADS — Front End
-# Tab: Front End
-# Cols: Enquiry Number[0] | Timestamp[1] | Email[2] | Type[3] | KAM Name[4]
-#       Customer Name[5] | Grade[6] | Size(MM)[7] | Qty (MT)[8]
-#       ... | Status[21] | Revenue RS/MT[22] | Remarks[23]
 #
-# FIX (Issue 3): when timestamp is missing/unparseable, doe falls back to
-# today's date so leads are NEVER stored with doe=NULL.
+# TAB LAYOUT (verified from screenshot 2026-04-08):
+#   Col[0]  = Enquiry Number
+#   Col[1]  = Timestamp
+#   Col[2]  = Email
+#   Col[3]  = Type
+#   Col[4]  = KAM Name          ← YELLOW (key field)
+#   Col[5]  = Customer Name     ← YELLOW (key field)
+#   Col[6]  = Grade
+#   Col[7]  = Size(MM)
+#   Col[8]  = Qty (MT)
+#   Col[9]  = Supply Condition
+#   Col[10] = Shape
+#   Col[11] = Status            ← YELLOW (key field)
+#   Col[12] = Revenue RS/MT
+#   Col[13] = Remarks
+#
+# BUG FIXED: Previous code used Col[21] for Status, Col[22] for Revenue,
+#            Col[23] for Remarks — those columns don't exist → all NULL/empty.
+#            This caused leads to appear with blank status and 0 qty_mt,
+#            making dashboard filtering exclude them.
+#
+# FIX: doe NEVER NULL — falls back to today() if timestamp missing/unparseable.
+# FIX: update_or_create() used — fully idempotent on re-sync.
+# FIX: KAM mapped on every row.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_frontend(
@@ -958,17 +906,49 @@ def _sync_frontend(
 
     tab_name = _tab_frontend()
 
+    # ── Detect actual column positions from header row ──────────────────────
+    # This makes the sync resilient to sheet column reordering.
+    header = [h.strip().lower() for h in rows[0]] if rows else []
+
+    def _hcol(keywords: List[str], fallback: int) -> int:
+        for idx, h in enumerate(header):
+            for kw in keywords:
+                if kw in h:
+                    return idx
+        return fallback
+
+    # Map columns — fallback values match screenshot layout
+    col_enquiry_no    = _hcol(["enquiry"],              0)
+    col_timestamp     = _hcol(["timestamp"],            1)
+    col_kam_name      = _hcol(["kam"],                  4)
+    col_customer_name = _hcol(["customer"],             5)
+    col_grade         = _hcol(["grade"],                6)
+    col_size          = _hcol(["size"],                 7)
+    col_qty           = _hcol(["qty"],                  8)
+    col_status        = _hcol(["status"],              11)   # FIX: was 21
+    col_revenue_mt    = _hcol(["revenue"],             12)   # FIX: was 22
+    col_remarks       = _hcol(["remark"],              13)   # FIX: was 23
+
+    logger.info(
+        "Front End column map: enquiry=%d ts=%d kam=%d customer=%d "
+        "grade=%d size=%d qty=%d status=%d revenue=%d remarks=%d",
+        col_enquiry_no, col_timestamp, col_kam_name, col_customer_name,
+        col_grade, col_size, col_qty, col_status, col_revenue_mt, col_remarks,
+    )
+
+    null_doe_count = 0
+
     for i, row in enumerate(rows[1:], start=2):
-        enquiry_no    = _cell(row, 0)
-        timestamp_raw = _cell(row, 1)
-        kam_name      = _cell(row, 4)
-        customer_name = _cell(row, 5)
-        grade         = _cell(row, 6)
-        size          = _cell(row, 7)
-        qty_raw       = _cell(row, 8)
-        status        = _cell(row, 21)
-        revenue_mt    = _decimal(_cell(row, 22))
-        remarks       = _cell(row, 23)
+        enquiry_no    = _cell(row, col_enquiry_no)
+        timestamp_raw = _cell(row, col_timestamp)
+        kam_name      = _cell(row, col_kam_name)
+        customer_name = _cell(row, col_customer_name)
+        grade         = _cell(row, col_grade)
+        size          = _cell(row, col_size)
+        qty_raw       = _cell(row, col_qty)
+        status        = _cell(row, col_status)
+        revenue_mt    = _decimal(_cell(row, col_revenue_mt))
+        remarks       = _cell(row, col_remarks)
 
         if not customer_name:
             stats.skipped += 1
@@ -977,21 +957,20 @@ def _sync_frontend(
         ts = _parse_timestamp(timestamp_raw)
         doe_date = ts.date() if ts else None
 
-        # FIX (Issue 3): never store NULL doe — fall back to today
+        # ── CRITICAL FIX: doe must NEVER be NULL ──────────────────────────
+        # Dashboard filters on doe__gte / doe__lt — NULL rows are invisible.
+        # If the timestamp column is empty or unparseable, use today's date.
         if not doe_date:
-            if timestamp_raw:
-                logger.debug(
-                    "Front End row %d: could not parse timestamp '%s' for customer '%s' — using today",
-                    i, timestamp_raw, customer_name,
-                )
-            else:
-                logger.debug(
-                    "Front End row %d: empty timestamp for customer '%s' — using today",
-                    i, customer_name,
-                )
             doe_date = timezone.now().date()
+            null_doe_count += 1
+            logger.debug(
+                "Front End row %d: timestamp '%s' → falling back to today (%s) for customer '%s'",
+                i, timestamp_raw, doe_date, customer_name,
+            )
 
         qty = _decimal(qty_raw) or Decimal("0")
+
+        # ── CRITICAL FIX: always map KAM ──────────────────────────────────
         kam_user = (
             _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats, local_cache)
             if kam_name else None
@@ -1006,12 +985,13 @@ def _sync_frontend(
 
         try:
             with transaction.atomic():
+                # ── CRITICAL FIX: always update_or_create (never skip existing) ──
                 LeadFact.objects.update_or_create(
                     row_uuid=row_uuid,
                     defaults={
                         "customer":   customer,
-                        "kam":        kam_user,
-                        "doe":        doe_date,
+                        "kam":        kam_user,       # always set KAM
+                        "doe":        doe_date,        # never NULL
                         "qty_mt":     qty,
                         "status":     status or "OPEN",
                         "grade":      grade,
@@ -1027,6 +1007,12 @@ def _sync_frontend(
             logger.error("Front End row %d upsert failed: %s", i, exc)
             stats.skipped += 1
 
+    if null_doe_count:
+        stats.notes.append(
+            f"Front End: {null_doe_count} rows had missing/unparseable timestamp — doe set to today"
+        )
+        logger.info("Front End: %d rows used today as fallback doe", null_doe_count)
+
     return stats
 
 
@@ -1036,7 +1022,8 @@ def _sync_frontend(
 # Cols: Timestamp[0] | KAM Name[1] | Customer Name[2] | Qty (MT)[3]
 #       Status[4] | Remarks[5]
 #
-# FIX (Issue 3): same doe fallback applied here — no NULL doe ever stored
+# FIX: doe NEVER NULL — falls back to today.
+# FIX: KAM always mapped.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_enquiry_f(
@@ -1051,6 +1038,7 @@ def _sync_enquiry_f(
         return stats
 
     tab_name = _tab_enquiry_f()
+    null_doe_count = 0
 
     for i, row in enumerate(rows[1:], start=2):
         timestamp_raw = _cell(row, 0)
@@ -1067,19 +1055,14 @@ def _sync_enquiry_f(
         ts = _parse_timestamp(timestamp_raw)
         doe_date = ts.date() if ts else None
 
-        # FIX (Issue 3): never store NULL doe — fall back to today
+        # ── CRITICAL FIX: doe must NEVER be NULL ──────────────────────────
         if not doe_date:
-            if timestamp_raw:
-                logger.debug(
-                    "Enquiry (F) row %d: could not parse timestamp '%s' for customer '%s' — using today",
-                    i, timestamp_raw, customer_name,
-                )
-            else:
-                logger.debug(
-                    "Enquiry (F) row %d: empty timestamp for customer '%s' — using today",
-                    i, customer_name,
-                )
             doe_date = timezone.now().date()
+            null_doe_count += 1
+            logger.debug(
+                "Enquiry (F) row %d: timestamp '%s' → falling back to today for customer '%s'",
+                i, timestamp_raw, customer_name,
+            )
 
         qty = _decimal(qty_raw) or Decimal("0")
         kam_user = (
@@ -1095,8 +1078,8 @@ def _sync_enquiry_f(
                     row_uuid=row_uuid,
                     defaults={
                         "customer":   customer,
-                        "kam":        kam_user,
-                        "doe":        doe_date,
+                        "kam":        kam_user,       # always set KAM
+                        "doe":        doe_date,        # never NULL
                         "qty_mt":     qty,
                         "status":     status or "OPEN",
                         "remarks":    remarks,
@@ -1108,18 +1091,16 @@ def _sync_enquiry_f(
             logger.error("Enquiry (F) row %d upsert failed: %s", i, exc)
             stats.skipped += 1
 
+    if null_doe_count:
+        stats.notes.append(
+            f"Enquiry (F): {null_doe_count} rows had missing/unparseable timestamp — doe set to today"
+        )
+
     return stats
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION: OVERDUES
-# Tab: Overdues
-# Expected cols: Customer Name[0] | KAM Name[1] | Overdues (Rs)[2]
-# Optional cols: Exposure[3] | 0-30[4] | 31-60[5] | 61-90[6] | 90+[7]
-#
-# FIX (Issue 5): Syncs ageing columns if present. Logs warning if absent.
-#   When ageing columns are present → exposure = sum of ageing buckets.
-#   Only a31_raw was populated before because column indices were wrong.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_overdues(
@@ -1133,34 +1114,28 @@ def _sync_overdues(
         stats.notes.append("Overdues tab: no data rows")
         return stats
 
-    # Detect column layout from header row
     header = [h.strip().lower() for h in rows[0]] if rows else []
 
     def _col(keywords: List[str], fallback: int) -> int:
-        """Find column index by matching header keywords, or use fallback."""
         for idx, h in enumerate(header):
             for kw in keywords:
                 if kw in h:
                     return idx
         return fallback
 
-    # Detect ageing columns from header (safe fallback to fixed indices)
-    col_customer  = _col(["customer"],          0)
-    col_kam       = _col(["kam"],               1)
-    col_overdue   = _col(["overdue", "dues"],   2)
-    col_exposure  = _col(["exposure"],          3)
-    col_a0        = _col(["0-30", "0_30"],      4)
-    col_a31       = _col(["31-60", "31_60"],    5)
-    col_a61       = _col(["61-90", "61_90"],    6)
-    col_a90       = _col(["90+", "90_plus", "above 90"],  7)
+    col_customer  = _col(["customer"],               0)
+    col_kam       = _col(["kam"],                    1)
+    col_overdue   = _col(["overdue", "dues"],        2)
+    col_exposure  = _col(["exposure"],               3)
+    col_a0        = _col(["0-30", "0_30"],           4)
+    col_a31       = _col(["31-60", "31_60"],         5)
+    col_a61       = _col(["61-90", "61_90"],         6)
+    col_a90       = _col(["90+", "90_plus", "above 90"], 7)
 
     has_ageing = any(kw in " ".join(header) for kw in ["0-30", "31-60", "61-90", "90+"])
     if not has_ageing:
         logger.warning(
-            "Overdues tab: ageing columns (0-30, 31-60, 61-90, 90+) not found in header. "
-            "Only total overdue amount will be synced. "
-            "Header detected: %s",
-            header[:10],
+            "Overdues tab: ageing columns not found in header. Header: %s", header[:10],
         )
 
     snapshot_date = timezone.now().date()
@@ -1178,7 +1153,6 @@ def _sync_overdues(
             stats.skipped += 1
             continue
 
-        # Read ageing columns (safe — returns empty string if index out of range)
         exposure_raw = _cell(row, col_exposure)
         a0_raw       = _cell(row, col_a0)
         a31_raw      = _cell(row, col_a31)
@@ -1191,7 +1165,6 @@ def _sync_overdues(
         a90  = _decimal(a90_raw) or Decimal("0")
         ageing_total = a0 + a31 + a61 + a90
 
-        # Exposure: explicit col → ageing sum → total overdue (in that priority)
         exposure = _decimal(exposure_raw) or (ageing_total if ageing_total > 0 else overdue_amt)
 
         kam_user = (
@@ -1225,15 +1198,174 @@ def _sync_overdues(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SECTION: COLLECTION (Issue 2 — Collection Merge Architecture)
+#
+# PURPOSE: Sync historical collection data from Google Sheet → DB
+#          with source='GOOGLE_SHEET' so it never conflicts with
+#          system-entered collections (source='ERP').
+#
+# ARCHITECTURE:
+#   Google Sheet rows   → CollectionTxn(source='GOOGLE_SHEET')
+#   System entries      → CollectionTxn(source='ERP')  [set in views.py]
+#   Dashboard total     → SUM(GOOGLE_SHEET) + SUM(ERP)
+#
+# RULE: Sheet data is NEVER overwritten by ERP entries and vice versa.
+#       Each source has its own namespace in the DB.
+#
+# Tab: Collection
+# Expected cols: Date[0] | Customer Name[1] | KAM Name[2] | Amount[3]
+#                Mode[4] | Reference[5] | Remarks[6]
+#
+# If your Collection tab has different columns, set env var:
+#   KAM_COLLECTION_COL_DATE=0
+#   KAM_COLLECTION_COL_CUSTOMER=1
+#   KAM_COLLECTION_COL_KAM=2
+#   KAM_COLLECTION_COL_AMOUNT=3
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Source constants — must match CollectionTxn.source choices
+COLLECTION_SOURCE_SHEET = "GOOGLE_SHEET"
+COLLECTION_SOURCE_ERP   = "ERP"
+
+
+def _sync_collections(
+    service, sheet_id: str,
+    tab_mapping, db_lookup, env_usermap,
+    local_cache: Dict,
+) -> SyncStats:
+    """
+    Sync historical collections from Google Sheet.
+
+    All rows are inserted/updated with source=GOOGLE_SHEET.
+    ERP entries (source=ERP) are never touched here — they live in a separate
+    namespace identified by their source field.
+
+    Idempotency: row_uuid built from (tab, date, customer, amount, row_index).
+    On re-sync the same row produces the same uuid → update_or_create is safe.
+    """
+    stats = SyncStats()
+
+    # Check if Collection tab exists by trying to read it
+    rows = _get_sheet_values(service, sheet_id, _tab_collection())
+    if len(rows) < 2:
+        stats.notes.append("Collection tab: no data rows (tab may not exist — skipping)")
+        logger.info("Collection tab empty or not found — skipping collection sync")
+        return stats
+
+    tab_name = _tab_collection()
+
+    # Detect column layout from header
+    header = [h.strip().lower() for h in rows[0]] if rows else []
+
+    def _hcol(keywords: List[str], fallback: int) -> int:
+        for idx, h in enumerate(header):
+            for kw in keywords:
+                if kw in h:
+                    return idx
+        return fallback
+
+    col_date     = int(_env("KAM_COLLECTION_COL_DATE",     str(_hcol(["date"],                            0))))
+    col_customer = int(_env("KAM_COLLECTION_COL_CUSTOMER",  str(_hcol(["customer"],                       1))))
+    col_kam      = int(_env("KAM_COLLECTION_COL_KAM",       str(_hcol(["kam"],                            2))))
+    col_amount   = int(_env("KAM_COLLECTION_COL_AMOUNT",    str(_hcol(["amount", "collection", "amt"],    3))))
+    col_mode     = int(_env("KAM_COLLECTION_COL_MODE",      str(_hcol(["mode", "payment"],                4))))
+    col_ref      = int(_env("KAM_COLLECTION_COL_REF",       str(_hcol(["ref", "utr", "cheque"],           5))))
+    col_remarks  = int(_env("KAM_COLLECTION_COL_REMARKS",   str(_hcol(["remark", "note"],                 6))))
+
+    logger.info(
+        "Collection tab column map: date=%d customer=%d kam=%d amount=%d mode=%d ref=%d remarks=%d",
+        col_date, col_customer, col_kam, col_amount, col_mode, col_ref, col_remarks,
+    )
+
+    for i, row in enumerate(rows[1:], start=2):
+        date_raw      = _cell(row, col_date)
+        customer_name = _cell(row, col_customer)
+        kam_name      = _cell(row, col_kam)
+        amount_raw    = _cell(row, col_amount)
+        mode          = _cell(row, col_mode)
+        reference     = _cell(row, col_ref)
+        remarks       = _cell(row, col_remarks)
+
+        if not customer_name or not amount_raw:
+            stats.skipped += 1
+            continue
+
+        txn_date = _parse_date(date_raw)
+        if not txn_date:
+            logger.debug("Collection row %d: cannot parse date '%s'", i, date_raw)
+            stats.skipped += 1
+            continue
+
+        amount = _decimal(amount_raw)
+        if amount is None or amount <= 0:
+            stats.skipped += 1
+            continue
+
+        kam_user = (
+            _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats, local_cache)
+            if kam_name else None
+        )
+        customer = _safe_get_or_create_customer(customer_name, kam_user=kam_user)
+
+        # Unique key: tab + date + customer + amount + row index
+        # Using row index ensures re-sync of same data doesn't create duplicates
+        row_uuid = _make_row_uuid(tab_name, txn_date, customer_name, amount_raw, i)
+
+        try:
+            with transaction.atomic():
+                # ── CRITICAL: source='GOOGLE_SHEET' always ─────────────────────
+                # This is what prevents sheet data from overwriting ERP data
+                # and what allows the dashboard to SUM both sources correctly.
+                obj, created = CollectionTxn.objects.get_or_create(
+                    row_uuid=row_uuid,
+                    defaults={
+                        "customer":     customer,
+                        "kam":          kam_user,
+                        "txn_datetime": timezone.make_aware(
+                            datetime(txn_date.year, txn_date.month, txn_date.day)
+                        ),
+                        "amount":       amount,
+                        "mode":         mode or None,
+                        "reference":    reference or None,
+                        "reference_no": reference or None,
+                        "notes":        remarks or None,
+                        "source":       COLLECTION_SOURCE_SHEET,  # ← KEY: never overwrite ERP
+                    },
+                )
+                if not created:
+                    # Only update non-identifying fields; NEVER change source
+                    update_fields = ["customer", "amount", "mode", "reference",
+                                     "reference_no", "notes", "updated_at"]
+                    obj.customer     = customer
+                    obj.amount       = amount
+                    obj.mode         = mode or None
+                    obj.reference    = reference or None
+                    obj.reference_no = reference or None
+                    obj.notes        = remarks or None
+                    if kam_user and not obj.kam:
+                        obj.kam = kam_user
+                        update_fields.append("kam")
+                    # ── CRITICAL: never change source on existing records ──────
+                    obj.save(update_fields=update_fields)
+                stats.collections_upserted += 1
+        except Exception as exc:
+            logger.error("Collection row %d upsert failed: %s", i, exc)
+            stats.skipped += 1
+
+    logger.info(
+        "Collection sync complete: %d upserted, %d skipped (source=%s)",
+        stats.collections_upserted, stats.skipped, COLLECTION_SOURCE_SHEET,
+    )
+    return stats
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MAIN SYNC ORCHESTRATOR
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_sync_now() -> SyncStats:
     """
     Full sync — called by sheets.run_sync_now() and Celery/cron tasks.
-    local_cache dict passed to each section fn — no module-level global.
-    After all sections complete, _backfill_customer_kam() fixes any customers
-    that had a blank KAM column in Customer Details but have KAM-tagged invoices.
     """
     sheet_id = _require_env("KAM_SALES_SHEET_ID")
     sections = resolve_sections()
@@ -1247,14 +1379,13 @@ def run_sync_now() -> SyncStats:
     tab_mapping  = _load_kam_names_tab(service, sheet_id)
     db_lookup    = _build_user_lookup()
     env_usermap  = _load_env_usermap()
-    local_cache: Dict[str, Optional[User]] = {}  # fresh per full sync
+    local_cache: Dict[str, Optional[User]] = {}
 
     logger.info(
         "Starting sync | sheet=%s | tab_mapping_entries=%d | db_users=%d",
         sheet_id, len(tab_mapping), len(db_lookup),
     )
 
-    # Sync order: customers first so FKs exist when sales/leads reference them
     if sections.get("customers"):
         logger.info("Syncing: Customer Details")
         s = _sync_customers(service, sheet_id, tab_mapping, db_lookup, env_usermap, local_cache)
@@ -1274,13 +1405,13 @@ def run_sync_now() -> SyncStats:
         logger.info("  → sales=%d skipped=%d", s.sales_upserted, s.skipped)
 
     if sections.get("frontend"):
-        logger.info("Syncing: Front End")
+        logger.info("Syncing: Front End (leads)")
         s = _sync_frontend(service, sheet_id, tab_mapping, db_lookup, env_usermap, local_cache)
         total.merge(s)
         logger.info("  → leads=%d skipped=%d", s.leads_upserted, s.skipped)
 
     if sections.get("enquiry_f"):
-        logger.info("Syncing: Enquiry (F)")
+        logger.info("Syncing: Enquiry (F) (leads)")
         s = _sync_enquiry_f(service, sheet_id, tab_mapping, db_lookup, env_usermap, local_cache)
         total.merge(s)
         logger.info("  → leads=%d skipped=%d", s.leads_upserted, s.skipped)
@@ -1291,14 +1422,20 @@ def run_sync_now() -> SyncStats:
         total.merge(s)
         logger.info("  → overdues=%d skipped=%d", s.overdues_upserted, s.skipped)
 
-    # FIX (Issue 1): backfill KAM for any customers that still have kam=NULL
-    # This handles the 52 customers whose Customer Details row had a blank KAM column
-    # but whose Sheet1 / Sales (F) invoices carry a valid KAM reference.
+    if sections.get("collection"):
+        logger.info("Syncing: Collection (source=GOOGLE_SHEET)")
+        s = _sync_collections(service, sheet_id, tab_mapping, db_lookup, env_usermap, local_cache)
+        total.merge(s)
+        logger.info(
+            "  → collections=%d skipped=%d",
+            s.collections_upserted, s.skipped,
+        )
+
+    # Backfill KAM for customers that still have kam=NULL
     logger.info("Running KAM backfill for unmapped customers ...")
     backfilled = _backfill_customer_kam()
     if backfilled:
         total.notes.append(f"KAM backfill: {backfilled} customers updated from invoice history")
-        logger.info("KAM backfill: %d customers updated", backfilled)
 
     logger.info("Sync complete: %s", total.as_message())
     if total.notes:
@@ -1318,6 +1455,7 @@ _STEPS = [
     ("frontend",   "Front End"),
     ("enquiry_f",  "Enquiry (F)"),
     ("overdues",   "Overdues"),
+    ("collection", "Collection"),
 ]
 
 _STEP_FN_MAP = {
@@ -1327,13 +1465,12 @@ _STEP_FN_MAP = {
     "frontend":   _sync_frontend,
     "enquiry_f":  _sync_enquiry_f,
     "overdues":   _sync_overdues,
+    "collection": _sync_collections,
 }
 
 def step_sync(intent: "SyncIntent", *args, **kwargs) -> Dict[str, Any]:
     """
     Syncs one section at a time. SyncIntent.cursor_position tracks progress.
-    local_cache created fresh per step call.
-    On the final step, _backfill_customer_kam() is also run.
     """
     cursor   = getattr(intent, "cursor_position", 0) or 0
     sections = resolve_sections()
@@ -1351,7 +1488,7 @@ def step_sync(intent: "SyncIntent", *args, **kwargs) -> Dict[str, Any]:
         tab_mapping = _load_kam_names_tab(service, sheet_id)
         db_lookup   = _build_user_lookup()
         env_usermap = _load_env_usermap()
-        local_cache: Dict[str, Optional[User]] = {}  # fresh per step
+        local_cache: Dict[str, Optional[User]] = {}
 
         stats = SyncStats()
         if sections.get(section_key):
@@ -1362,7 +1499,6 @@ def step_sync(intent: "SyncIntent", *args, **kwargs) -> Dict[str, Any]:
         next_cursor = cursor + 1
         is_last     = next_cursor >= len(_STEPS)
 
-        # On the final step, run KAM backfill so step-sync users also benefit
         backfilled = 0
         if is_last:
             logger.info("step_sync final step: running KAM backfill ...")
@@ -1379,13 +1515,14 @@ def step_sync(intent: "SyncIntent", *args, **kwargs) -> Dict[str, Any]:
             "step":    section_label,
             "message": stats.as_message(),
             "stats": {
-                "customers_upserted": stats.customers_upserted,
-                "sales_upserted":     stats.sales_upserted,
-                "leads_upserted":     stats.leads_upserted,
-                "overdues_upserted":  stats.overdues_upserted,
-                "skipped":            stats.skipped,
-                "unknown_kam":        stats.unknown_kam,
-                "kam_backfilled":     backfilled,
+                "customers_upserted":   stats.customers_upserted,
+                "sales_upserted":       stats.sales_upserted,
+                "leads_upserted":       stats.leads_upserted,
+                "overdues_upserted":    stats.overdues_upserted,
+                "collections_upserted": stats.collections_upserted,
+                "skipped":              stats.skipped,
+                "unknown_kam":          stats.unknown_kam,
+                "kam_backfilled":       backfilled,
             },
         }
 

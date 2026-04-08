@@ -644,6 +644,15 @@ class CallLog(TimeStamped):
 
 
 class CollectionTxn(TimeStamped):
+    # ── Source constants ───────────────────────────────────────────────────
+    SOURCE_SHEET = "GOOGLE_SHEET"
+    SOURCE_ERP   = "ERP"
+    SOURCE_CHOICES = [
+        (SOURCE_SHEET, "Google Sheet (Historical)"),
+        (SOURCE_ERP,   "ERP System Entry"),
+    ]
+    # ───────────────────────────────────────────────────────────────────────
+ 
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT)
     kam = models.ForeignKey(User, on_delete=models.PROTECT)
     txn_datetime = models.DateTimeField(default=timezone.now)
@@ -652,16 +661,38 @@ class CollectionTxn(TimeStamped):
     reference = models.CharField(max_length=64, blank=True, null=True)
     reference_no = models.CharField(max_length=64, blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
-
+ 
+    # ── NEW FIELDS (Issue 2 fix) ───────────────────────────────────────────
+    source = models.CharField(
+        max_length=16,
+        choices=SOURCE_CHOICES,
+        default=SOURCE_ERP,       # all existing entries are ERP by default
+        db_index=True,
+        help_text="GOOGLE_SHEET = synced from sheet; ERP = entered in system",
+    )
+    row_uuid = models.CharField(
+        max_length=64,
+        unique=True,
+        db_index=True,
+        null=True,
+        blank=True,
+        help_text="Deterministic hash for idempotent sheet sync. NULL for ERP entries.",
+    )
+    # ───────────────────────────────────────────────────────────────────────
+ 
     def save(self, *args, **kwargs):
         if (self.reference_no or "").strip() and not (self.reference or "").strip():
             self.reference = self.reference_no
         elif (self.reference or "").strip() and not (self.reference_no or "").strip():
             self.reference_no = self.reference
         super().save(*args, **kwargs)
-
+ 
     class Meta:
-        indexes = [models.Index(fields=["kam", "txn_datetime"])]
+        indexes = [
+            models.Index(fields=["kam", "txn_datetime"]),
+            models.Index(fields=["source"]),               # NEW: fast filter by source
+            models.Index(fields=["source", "txn_datetime"]),  # NEW: dashboard aggregate
+        ]
 
 
 class KpiSnapshotDaily(TimeStamped):

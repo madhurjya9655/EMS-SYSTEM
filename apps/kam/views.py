@@ -66,6 +66,8 @@ from .models import (
 )
 
 from . import sheets
+from django.db.models import Sum, Q
+from decimal import Decimal
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -2618,6 +2620,7 @@ def call_new(request: HttpRequest) -> HttpResponse:
         if form.is_valid():
             obj: CallLog = form.save(commit=False)
             obj.kam = request.user
+            obj.source = CollectionTxn.SOURCE_ERP
             obj.save()
             messages.success(request, "Call saved.")
             return redirect(reverse("kam:dashboard"))
