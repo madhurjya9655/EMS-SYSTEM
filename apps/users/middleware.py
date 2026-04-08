@@ -1,6 +1,4 @@
-# apps/users/middleware.py
-
-
+#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\users\middleware.py
 import logging
 
 from django.shortcuts import redirect
@@ -14,22 +12,54 @@ logger = logging.getLogger(__name__)
 
 TOKEN_APPROVAL_URL_PATTERNS = [
     # KAM visit approval/rejection email links
-    ("visit_batch_approve_link",    ["kam_visit_approve", "kam_visit_approve_link", "kam_manager"]),
-    ("visit_batch_reject_link",     ["kam_visit_reject",  "kam_visit_reject_link",  "kam_manager"]),
+    # Token itself is the trust mechanism; middleware must allow these through.
+    ("kam:visit_batch_approve_link", []),
+    ("visit_batch_approve_link", []),
+    ("kam:visit_batch_reject_link", []),
+    ("visit_batch_reject_link", []),
+
     # Reimbursement email action link (magic token — no permission required; view handles it)
-    ("reimbursement:email_action",  []),   # empty list = always allow through middleware
-    ("email_action",                []),   # namespace-stripped fallback
+    ("reimbursement:email_action", []),
+    ("email_action", []),
+
     # Reimbursement manager review (after login redirect from email)
-    ("manager_review",              ["reimbursement_manager_review", "reimbursement_manager_pending"]),
-    ("management_review",           ["reimbursement_management_review", "reimbursement_management_pending"]),
-    ("finance_verify",              ["reimbursement_finance_verify", "reimbursement_finance_review", "reimbursement_finance_pending"]),
-    ("finance_review",              ["reimbursement_finance_review", "reimbursement_review_finance", "reimbursement_finance_pending"]),
-    ("request_detail",              ["reimbursement_request_detail", "reimbursement_list", "reimbursement_apply",
-                                     "reimbursement_manager_pending", "reimbursement_finance_pending", "reimbursement_admin"]),
+    ("manager_review", ["reimbursement_manager_review", "reimbursement_manager_pending"]),
+    ("management_review", ["reimbursement_management_review", "reimbursement_management_pending"]),
+    ("finance_verify", ["reimbursement_finance_verify", "reimbursement_finance_review", "reimbursement_finance_pending"]),
+    ("finance_review", ["reimbursement_finance_review", "reimbursement_review_finance", "reimbursement_finance_pending"]),
+    (
+        "request_detail",
+        [
+            "reimbursement_request_detail",
+            "reimbursement_list",
+            "reimbursement_apply",
+            "reimbursement_manager_pending",
+            "reimbursement_finance_pending",
+            "reimbursement_admin",
+        ],
+    ),
 ]
 
 
-def _check_token_url_permission(url_name: str, user_perms: set) -> tuple[bool, bool]:
+def _normalize_url_name(resolved) -> str | None:
+    """
+    Safely normalize a resolved URL match into namespace:url_name form.
+    Returns None when url_name is missing.
+    """
+    if not resolved:
+        return None
+
+    raw_url_name = getattr(resolved, "url_name", None)
+    if not raw_url_name:
+        return None
+
+    namespace = getattr(resolved, "namespace", None)
+    if namespace:
+        return f"{namespace}:{raw_url_name}"
+    return raw_url_name
+
+
+def _check_token_url_permission(url_name: str | None, user_perms: set) -> tuple[bool, bool]:
     """
     Check if a URL matches a token/approval link pattern and whether the user
     is allowed through at middleware level.
@@ -39,18 +69,30 @@ def _check_token_url_permission(url_name: str, user_perms: set) -> tuple[bool, b
         - is_token_url: True if this URL matches a token pattern
         - is_allowed: True if user has sufficient permission for this URL
     """
+    if not url_name:
+        return False, False
+
+    # Explicit hard allow for secure KAM token approval URLs.
+    # View must perform signed token validation.
+    if url_name == "kam:visit_batch_approve_link":
+        return True, True
+
+    if url_name == "kam:visit_batch_reject_link":
+        return True, True
+
     for pattern, allowed_codes in TOKEN_APPROVAL_URL_PATTERNS:
         if pattern in url_name:
             if not allowed_codes:
                 # Empty allowed list = always allow at middleware level
-                # (view handles its own auth/permission)
+                # (view handles its own token/auth rules)
                 return True, True
-            # Check if user has any of the allowed codes
+
             allowed_lower = {c.lower() for c in allowed_codes}
             if user_perms & allowed_lower:
                 return True, True
-            # URL matched the pattern but user lacks all codes
+
             return True, False
+
     return False, False
 
 
@@ -62,8 +104,8 @@ class PermissionDebugMiddleware:
     - Middleware-level denials (PermissionEnforcementMiddleware)
     - View-level denials (@require_kam_code, PermissionRequiredMixin, etc.)
 
-    The log line now includes "MIDDLEWARE DENIED" or "VIEW DENIED" to make
-    it immediately clear where in the stack the denial occurred.
+    The log line now includes enough context to identify whether the denial
+    likely happened in middleware or inside the view/decorator stack.
     """
 
     def __init__(self, get_response):
@@ -84,11 +126,16 @@ class PermissionDebugMiddleware:
 
         try:
             resolved = resolve(path)
-            url_name = (
-                f"{resolved.namespace}:{resolved.url_name}"
-                if resolved.namespace
-                else resolved.url_name
-            )
+            url_name = _normalize_url_name(resolved)
+
+            if not url_name:
+                logger.warning(
+                    "Permission denied to %s but resolver returned no url_name | user=%s",
+                    path,
+                    getattr(user, "username", ""),
+                )
+                logger.warning("User permissions (all): %s", sorted(user_perms))
+                return
 
             required_perms = [code for code, url in PERMISSION_URLS.items() if url == url_name]
 
@@ -101,16 +148,18 @@ class PermissionDebugMiddleware:
                 getattr(user, "is_superuser", False),
             )
             logger.warning("Required permissions: %s", required_perms)
-            logger.warning("Missing permissions: %s", [p for p in required_perms if p.lower() not in user_perms])
+            logger.warning(
+                "Missing permissions: %s",
+                [p for p in required_perms if p.lower() not in user_perms],
+            )
             logger.warning("User permissions (all): %s", sorted(user_perms))
 
-            # Check token URL patterns
             is_token, would_allow = _check_token_url_permission(url_name, user_perms)
             if is_token:
                 logger.warning(
                     "TOKEN/APPROVAL URL detected. Middleware would %s this user. "
-                    "If 403 came from view, check the view-level @require_kam_code or "
-                    "PermissionRequiredMixin decorator on the view for url_name=%s.",
+                    "If 403 came from view, remove view-level permission enforcement and rely on token validation "
+                    "for url_name=%s.",
                     "ALLOW" if would_allow else "DENY",
                     url_name,
                 )
@@ -141,24 +190,8 @@ class PermissionEnforcementMiddleware:
       • Enforce app-level permissions via PERMISSION_URLS mapping
         (any one of the mapped codes suffices)
       • Token/approval link URLs get special treatment via TOKEN_APPROVAL_URL_PATTERNS:
-        - If the URL matches a token pattern and the user has ANY of the allowed
-          codes, they are passed through regardless of PERMISSION_URLS mapping.
-        - This prevents middleware from blocking email approval link flows.
+        - Token approval URLs are allowed through middleware and validated in the view.
       • On denial: redirect to dashboard:home
-
-    IMPORTANT — KAM VISIT APPROVAL LINKS:
-      After the 2026-04-02 permission_urls.py fix, this middleware correctly
-      maps kam_visit_approve → kam:visit_batch_approve_link and lets managers
-      through at the middleware level.
-      The remaining 403s after that fix were caused by the VIEW DECORATOR
-      @require_kam_code("kam_manager") on the batch link views.
-      Fix: change those decorators to @require_kam_code("kam_visit_approve")
-      and @require_kam_code("kam_visit_reject") in views_visit_history.py.
-
-    IMPORTANT — REIMBURSEMENT EMAIL LINKS:
-      The reimbursement:email_action view uses @csrf_exempt and handles its
-      own token validation — no permission check needed at middleware level.
-      Added to TOKEN_APPROVAL_URL_PATTERNS with empty allowed list (always pass).
     """
 
     def __init__(self, get_response):
@@ -200,35 +233,29 @@ class PermissionEnforcementMiddleware:
         if path in ("/dashboard/", "/dashboard", "/") or path.startswith("/login"):
             return self.get_response(request)
 
-        # Resolve the current path to a URL name
         try:
             resolved = resolve(path)
-            url_name = (
-                f"{resolved.namespace}:{resolved.url_name}"
-                if resolved.namespace
-                else resolved.url_name
-            )
+            url_name = _normalize_url_name(resolved)
 
-            # ── Step 1: Token/approval link check (defence-in-depth) ──────────
-            # Check before the PERMISSION_URLS lookup.  This ensures that
-            # approval-link URLs (email token flows) are never blocked by
-            # middleware even if they're temporarily missing from PERMISSION_URLS.
+            # Step 1: Token/approval link check
             is_token_url, token_allowed = _check_token_url_permission(url_name, user_perms)
             if is_token_url:
                 if token_allowed:
-                    # Middleware allows through; view handles precise permission
                     return self.get_response(request)
-                else:
-                    # Token URL but user lacks all relevant permissions
-                    logger.warning(
-                        "Token URL access denied at middleware: user=%s url=%s user_perms=%s",
-                        getattr(request.user, "username", ""),
-                        url_name,
-                        sorted(user_perms),
-                    )
-                    return redirect(reverse("dashboard:home"))
 
-            # ── Step 2: Normal PERMISSION_URLS enforcement ────────────────────
+                logger.warning(
+                    "Token URL access denied at middleware: user=%s url=%s user_perms=%s",
+                    getattr(request.user, "username", ""),
+                    url_name,
+                    sorted(user_perms),
+                )
+                return redirect(reverse("dashboard:home"))
+
+            # Null-safe fallback: if resolver has no url_name, do not enforce here
+            if not url_name:
+                return self.get_response(request)
+
+            # Step 2: Normal PERMISSION_URLS enforcement
             if url_name in self.url_to_perm:
                 required_perms = self.url_to_perm[url_name]
                 has_any = any(perm.lower() in user_perms for perm in required_perms)
