@@ -115,11 +115,18 @@ class SingleVisitForm(forms.ModelForm):
     """
     Dedicated form for the Single Visit approval workflow.
 
-    Workflow handled by views:
+    Workflow:
     - Save Draft        -> DRAFT
     - Submit to Manager -> PENDING_APPROVAL
 
-    This form only validates the business data.
+    MANUAL CUSTOMER FIX:
+    When the user types a new customer name ("Enter New Customer" toggle),
+    JS disables the dropdown so no customer_id is POSTed.
+    The view sets customer.required = False before calling is_valid(), but
+    this form's clean() also performed an explicit self.add_error() on
+    customer — which ran regardless of the required flag.
+    Fix: read self.data.get("manual_customer") inside clean() so the check
+    is skipped when a manual customer name has been typed.
     """
 
     class Meta:
@@ -155,23 +162,24 @@ class SingleVisitForm(forms.ModelForm):
             ),
         }
         labels = {
-            "visit_category": "Visit Category",
-            "visit_date": "Visit Date",
-            "customer": "Customer Name",
+            "visit_category":    "Visit Category",
+            "visit_date":        "Visit Date",
+            "customer":          "Customer Name",
             "counterparty_name": "Customer / Vendor / Supplier / Warehouse Name",
-            "location": "Location",
-            "purpose": "Purpose / Remarks",
+            "location":          "Location",
+            "purpose":           "Purpose / Remarks",
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.fields["visit_category"].required = True
-        self.fields["visit_date"].required = True
-        self.fields["customer"].required = False
+        self.fields["visit_category"].required    = True
+        self.fields["visit_date"].required        = True
+        # customer required-ness is handled by clean() + view relaxation
+        self.fields["customer"].required          = False
         self.fields["counterparty_name"].required = False
-        self.fields["location"].required = True
-        self.fields["purpose"].required = True
+        self.fields["location"].required          = True
+        self.fields["purpose"].required           = True
 
         self.fields["visit_category"].widget.attrs.update({"class": "form-select"})
         self.fields["customer"].widget.attrs.update({"class": "form-select"})
@@ -186,12 +194,20 @@ class SingleVisitForm(forms.ModelForm):
 
     def clean(self):
         data = super().clean()
-        visit_category = data.get("visit_category")
-        visit_date = data.get("visit_date")
-        customer = data.get("customer")
+        visit_category    = data.get("visit_category")
+        visit_date        = data.get("visit_date")
+        customer          = data.get("customer")
         counterparty_name = (data.get("counterparty_name") or "").strip()
-        location = (data.get("location") or "").strip()
-        purpose = (data.get("purpose") or "").strip()
+        location          = (data.get("location") or "").strip()
+        purpose           = (data.get("purpose") or "").strip()
+
+        # ── MANUAL CUSTOMER FIX ─────────────────────────────────────────
+        # self.data is the raw QueryDict (POST data). When the JS disables
+        # the customer dropdown, no customer_id is submitted, but
+        # "manual_customer" IS submitted. We read it here so that we do NOT
+        # raise a customer validation error in that case.
+        manual_customer = (self.data.get("manual_customer") or "").strip()
+        # ────────────────────────────────────────────────────────────────
 
         if not visit_category:
             self.add_error("visit_category", "Visit Category is required.")
@@ -210,14 +226,19 @@ class SingleVisitForm(forms.ModelForm):
             self.add_error("purpose", "Purpose / Remarks is too long (max 2000 characters).")
 
         if visit_category == VisitPlan.CAT_CUSTOMER:
-            if not customer:
-                self.add_error("customer", "Customer is required for Customer Visit.")
+            # Error only when BOTH dropdown customer AND manual name are absent
+            if not customer and not manual_customer:
+                self.add_error(
+                    "customer",
+                    "Customer is required. Select an existing customer or enter a new one.",
+                )
             if counterparty_name:
                 self.add_error(
                     "counterparty_name",
                     "Manual name must be empty for Customer Visit. Select a customer instead.",
                 )
         else:
+            # Non-customer visit: customer dropdown must be empty
             if customer:
                 self.add_error("customer", "Customer must be empty for non-customer visits.")
             if not counterparty_name:
@@ -243,7 +264,7 @@ class SingleVisitForm(forms.ModelForm):
             inst.counterparty_name = (inst.counterparty_name or "").strip() or None
 
         inst.location = (inst.location or "").strip() or None
-        inst.purpose = (inst.purpose or "").strip() or None
+        inst.purpose  = (inst.purpose or "").strip() or None
 
         if commit:
             inst.save()
@@ -288,7 +309,7 @@ class VisitActualForm(forms.ModelForm):
     def clean(self):
         data = super().clean()
         successful = data.get("successful")
-        reason = data.get("not_success_reason")
+        reason     = data.get("not_success_reason")
 
         if successful is False and not reason:
             self.add_error("not_success_reason", "Please select a reason when visit is not successful.")
@@ -381,8 +402,8 @@ class VisitBatchForm(forms.ModelForm):
 
     def clean(self):
         data = super().clean()
-        fd = data.get("from_date")
-        td = data.get("to_date")
+        fd  = data.get("from_date")
+        td  = data.get("to_date")
         pur = (data.get("purpose") or "").strip()
 
         if not fd:
@@ -481,7 +502,7 @@ class ManagerTargetForm(forms.Form):
         for field, label in [
             ("sales_target_mt", "Sales target"),
             ("leads_target_mt", "Leads target"),
-            ("calls_target", "Calls target"),
+            ("calls_target",    "Calls target"),
         ]:
             val = data.get(field)
             if val is not None and val < 0:
@@ -518,11 +539,11 @@ class CollectionPlanForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["notes"].required = False
+        self.fields["notes"].required      = False
         self.fields["period_type"].required = False
-        self.fields["period_id"].required = False
-        self.fields["from_date"].required = False
-        self.fields["to_date"].required = False
+        self.fields["period_id"].required   = False
+        self.fields["from_date"].required   = False
+        self.fields["to_date"].required     = False
 
     def clean_planned_amount(self):
         amt = self.cleaned_data.get("planned_amount")
@@ -532,14 +553,14 @@ class CollectionPlanForm(forms.ModelForm):
         return amt
 
     def clean(self):
-        data = super().clean()
-        fd = data.get("from_date")
-        td = data.get("to_date")
+        data  = super().clean()
+        fd    = data.get("from_date")
+        td    = data.get("to_date")
         ptype = data.get("period_type")
-        pid = (data.get("period_id") or "").strip()
+        pid   = (data.get("period_id") or "").strip()
 
         has_period = bool(ptype) and bool(pid)
-        has_range = bool(fd) and bool(td)
+        has_range  = bool(fd) and bool(td)
 
         if fd and td and td < fd:
             self.add_error("to_date", "To date cannot be earlier than From date.")
@@ -565,13 +586,6 @@ class CollectionPlanActualForm(forms.ModelForm):
     """
     Used to record actual collection against an existing CollectionPlan entry.
     Only exposes actual_amount, collection_date, and collection_reference.
-    The view links this to an existing CollectionPlan instance (by pk).
-
-    Rules:
-    - planned_amount is NEVER modified by this form.
-    - actual_amount is EDITABLE (can be updated to correct entry).
-    - collection_date is REQUIRED when recording actual.
-    - collection_status is AUTO-DERIVED by CollectionPlan.save().
     """
 
     class Meta:
@@ -585,17 +599,17 @@ class CollectionPlanActualForm(forms.ModelForm):
             ),
         }
         labels = {
-            "actual_amount": "Amount Collected (₹)",
-            "collection_date": "Date of Collection",
+            "actual_amount":        "Amount Collected (₹)",
+            "collection_date":      "Date of Collection",
             "collection_reference": "Reference / UTR",
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["notes"].required = False
+        self.fields["notes"].required               = False
         self.fields["collection_reference"].required = False
-        self.fields["collection_date"].required = True
-        self.fields["actual_amount"].required = True
+        self.fields["collection_date"].required      = True
+        self.fields["actual_amount"].required        = True
 
     def clean_actual_amount(self):
         amt = self.cleaned_data.get("actual_amount")
@@ -612,15 +626,15 @@ class CollectionPlanActualForm(forms.ModelForm):
 
 
 class TargetLineInlineForm(forms.Form):
-    grade = forms.CharField(required=True, max_length=50)
-    size = forms.CharField(required=False, max_length=50)
+    grade     = forms.CharField(required=True, max_length=50)
+    size      = forms.CharField(required=False, max_length=50)
     target_mt = forms.DecimalField(required=True, max_digits=12, decimal_places=2)
 
 
 class KamManagerMappingForm(forms.Form):
-    kam_username = forms.CharField(required=True)
+    kam_username     = forms.CharField(required=True)
     manager_username = forms.CharField(required=True)
-    active = forms.BooleanField(required=False, initial=True)
+    active           = forms.BooleanField(required=False, initial=True)
 
     def clean_kam_username(self):
         uname = (self.cleaned_data.get("kam_username") or "").strip()
