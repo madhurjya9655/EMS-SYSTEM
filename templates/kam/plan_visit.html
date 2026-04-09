@@ -116,11 +116,7 @@
     </div>
   </div>
 
-  {#
-    NOTE: Flash messages are already rendered by base.html inside .page-messages.
-    Do NOT add another {% if messages %} block here — it causes every message
-    to appear twice on the page.
-  #}
+ <!-- Flash messages are rendered by base.html (.page-messages). No duplicate block here. -->
 
   <!-- ── Migration warning ────────────────────────────────────────── -->
   {% if not visitplan_schema_ready %}
