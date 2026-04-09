@@ -465,6 +465,7 @@ def _single_visit_qs_for_user(user: User):
         return qs
     if _is_manager(user):
         # Collect employee IDs via ApproverMapping (authoritative)
+        approver_mapped_ids = []
         try:
             from apps.leave.models import ApproverMapping
             approver_mapped_ids = list(
@@ -472,18 +473,46 @@ def _single_visit_qs_for_user(user: User):
                     reporting_person=user
                 ).values_list("employee_id", flat=True)
             )
+            logger.debug(
+                "_single_visit_qs_for_user: ApproverMapping gave %d employee IDs for manager %s",
+                len(approver_mapped_ids), user.username,
+            )
         except Exception:
-            approver_mapped_ids = []
+            logger.exception(
+                "_single_visit_qs_for_user: ApproverMapping lookup failed for manager %s", user.username
+            )
+
         # Also collect via KamManagerMapping (legacy)
         kam_manager_ids = _kams_managed_by_manager(user)
+
         # Also collect via profile.reporting_officer (last resort)
         profile_ro_ids = list(
             User.objects.filter(
                 profile__reporting_officer=user, is_active=True
             ).values_list("id", flat=True)
         )
+
         kam_ids = list(set(kam_manager_ids) | set(approver_mapped_ids) | set(profile_ro_ids))
+
+        logger.debug(
+            "_single_visit_qs_for_user: manager=%s total_kam_ids=%s "
+            "(approver_mapped=%s kam_manager=%s profile_ro=%s)",
+            user.username, len(kam_ids),
+            len(approver_mapped_ids), len(kam_manager_ids), len(profile_ro_ids),
+        )
+
+        if not kam_ids:
+            # Manager has no mapped KAMs at all — return empty rather than crash
+            logger.warning(
+                "_single_visit_qs_for_user: manager=%s has NO mapped KAM IDs via any source. "
+                "Check ApproverMapping, KamManagerMapping, and Profile.reporting_officer.",
+                user.username,
+            )
+            return qs.none()
+
         return qs.filter(kam_id__in=kam_ids)
+
+    # KAM sees their own single visits regardless of approval status
     return qs.filter(kam=user)
 
 
@@ -1978,9 +2007,13 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
     week_start, week_end, _ = _iso_week_bounds(timezone.now())
 
     if schema_ready:
+        # Show current week + next 7 days so freshly submitted visits are visible
+        today = timezone.localtime(timezone.now()).date()
+        plan_from = min(week_start.date(), today)
+        plan_to   = max(week_end.date(), today + timezone.timedelta(days=7))
         my_plans = _visitplan_qs_for_user(user).filter(
-            visit_date__gte=week_start.date(),
-            visit_date__lt=week_end.date(),
+            visit_date__gte=plan_from,
+            visit_date__lte=plan_to,
         ).order_by("visit_date", "customer__name")
     else:
         my_plans = []
@@ -2106,7 +2139,6 @@ def single_visit_edit(request: HttpRequest, plan_id: int) -> HttpResponse:
 # SINGLE VISIT APPROVE LINK
 # =====================================================================
 @login_required
-@require_any_kam_code("kam_manager", "kam_visit_approve")
 def single_visit_approve_link(request: HttpRequest, token: str) -> HttpResponse:
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
@@ -2148,7 +2180,6 @@ def single_visit_approve_link(request: HttpRequest, token: str) -> HttpResponse:
 # SINGLE VISIT REJECT LINK
 # =====================================================================
 @login_required
-@require_any_kam_code("kam_manager", "kam_visit_reject")
 def single_visit_reject_link(request: HttpRequest, token: str) -> HttpResponse:
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
