@@ -1484,6 +1484,20 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
         if "customer" in single_form.fields:
             single_form.fields["customer"].queryset = customer_qs
 
+        # ── FIX: Relax customer field requirement ────────────────────────
+        # When the user picks "Enter New Customer", the dropdown is disabled
+        # by JS so no customer_id is POSTed. Django would fail validation.
+        # Also relax for non-customer categories (vendor/supplier/warehouse).
+        _manual_name = (request.POST.get("manual_customer") or "").strip()
+        _raw_cat = (
+            request.POST.get(f"{SINGLE_PREFIX}-visit_category") or
+            request.POST.get("visit_category") or ""
+        ).strip().upper()
+        if "customer" in single_form.fields:
+            if _manual_name or _raw_cat != "CUSTOMER":
+                single_form.fields["customer"].required = False
+        # ─────────────────────────────────────────────────────────────────
+
         if single_form.is_valid():
             submit_action = (request.POST.get("submit_action") or "save_draft").strip().lower()
             plan: VisitPlan = single_form.save(commit=False)
