@@ -2007,13 +2007,15 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
     week_start, week_end, _ = _iso_week_bounds(timezone.now())
 
     if schema_ready:
-        # Show current week + next 7 days so freshly submitted visits are visible
-        today = timezone.localtime(timezone.now()).date()
-        plan_from = min(week_start.date(), today)
-        plan_to   = max(week_end.date(), today + timezone.timedelta(days=7))
+        # Show a 14-day window: 7 days back + 7 days forward from today
+        # so that visits on any day this week AND next are always visible
+        # regardless of ISO week boundary edge cases.
+        today_local = timezone.localtime(timezone.now()).date()
+        plan_window_start = today_local - timezone.timedelta(days=7)
+        plan_window_end   = today_local + timezone.timedelta(days=7)
         my_plans = _visitplan_qs_for_user(user).filter(
-            visit_date__gte=plan_from,
-            visit_date__lte=plan_to,
+            visit_date__gte=plan_window_start,
+            visit_date__lte=plan_window_end,
         ).order_by("visit_date", "customer__name")
     else:
         my_plans = []
