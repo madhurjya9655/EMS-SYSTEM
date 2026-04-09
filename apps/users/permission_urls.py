@@ -52,13 +52,14 @@ PERMISSION_URLS: dict[str, str] = {
     "kam_dashboard":            "kam:dashboard",
 
     # ── KAM: Manager-only landing pages ───────────────────────────────
-    # BUG FIX: was "kam:manager" (URL does not exist).
-    # Actual view name is manager_dashboard.
     "kam_manager":              "kam:manager_dashboard",
 
-    # Second manager view mapped with its own code.
-    # Both codes require kam_manager in practice (view enforces _is_manager).
-    "kam_manager_view_page":    "kam:manager_view",
+    # FIX: kam:manager_view is NOT listed here intentionally.
+    # The view already enforces _is_manager() internally.
+    # Removing it from this map means middleware skips it (step 8: URL not
+    # in map → allow through), and the view's own security check applies.
+    # Previously "kam_manager_view_page" blocked users who only have
+    # "kam_manager" code, causing the redirect-to-dashboard bug in logs.
 
     "kam_manager_kpis":         "kam:manager_kpis",
 
