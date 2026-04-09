@@ -306,13 +306,47 @@ def _parse_batch_token(token: str) -> Tuple[int, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 def _active_manager_for_kam(kam_user: User) -> Optional[User]:
     """
-    Fetch reporting officer from Profile first (new universal flow).
+    Fetch reporting officer from ApproverMapping (authoritative business hierarchy).
     Falls back to KamManagerMapping for backward compatibility.
+
+    Priority order:
+    1. ApproverMapping.reporting_person  (leave/approval hierarchy — source of truth)
+    2. KamManagerMapping                 (legacy KAM-specific mapping)
+    3. Profile.reporting_officer         (last-resort profile field)
     """
     if not kam_user or not getattr(kam_user, "id", None):
         return None
 
-    # PRIMARY: use profile.reporting_officer (universal employee hierarchy)
+    # PRIMARY: ApproverMapping — the authoritative employee hierarchy table
+    try:
+        from apps.leave.models import ApproverMapping
+        mapping = (
+            ApproverMapping.objects
+            .select_related("reporting_person")
+            .filter(employee=kam_user)
+            .first()
+        )
+        if mapping and mapping.reporting_person_id:
+            rp = mapping.reporting_person
+            if rp and getattr(rp, "is_active", False):
+                return rp
+    except Exception:
+        logger.exception("_active_manager_for_kam: ApproverMapping lookup failed for user_id=%s", kam_user.id)
+
+    # FALLBACK 1: KamManagerMapping (legacy KAM-specific mapping)
+    try:
+        m = (
+            KamManagerMapping.objects.select_related("manager")
+            .filter(kam=kam_user, active=True)
+            .order_by("-assigned_at", "-created_at")
+            .first()
+        )
+        if m and m.manager and getattr(m.manager, "is_active", False):
+            return m.manager
+    except Exception:
+        logger.exception("_active_manager_for_kam: KamManagerMapping lookup failed for user_id=%s", kam_user.id)
+
+    # FALLBACK 2: Profile.reporting_officer
     try:
         profile = getattr(kam_user, "profile", None)
         if profile and getattr(profile, "reporting_officer_id", None):
@@ -322,15 +356,7 @@ def _active_manager_for_kam(kam_user: User) -> Optional[User]:
     except Exception:
         pass
 
-    # FALLBACK: KamManagerMapping (legacy KAM-specific mapping)
-    m = (
-        KamManagerMapping.objects.select_related("manager")
-        .filter(kam=kam_user, active=True)
-        .order_by("-assigned_at", "-created_at")
-        .first()
-    )
-    return m.manager if m else None
-
+    return None
 
 def _kams_managed_by_manager(manager_user: User) -> List[int]:
     if not manager_user or not getattr(manager_user, "id", None):
@@ -344,13 +370,26 @@ def _kams_managed_by_manager(manager_user: User) -> List[int]:
     )
 
 def _can_manager_approve_visit(manager_user: User, plan: "VisitPlan") -> bool:
-    """Check if manager can approve this visit — via KamManagerMapping OR reporting_officer."""
+    """
+    Check if manager_user can approve this visit.
+    Checks ApproverMapping first, then KamManagerMapping, then profile fallback.
+    """
     if _is_admin(manager_user):
         return True
     # Check KamManagerMapping (legacy)
     if plan.kam_id in set(_kams_managed_by_manager(manager_user)):
         return True
-    # Check profile.reporting_officer (universal)
+    # Check ApproverMapping — authoritative hierarchy
+    try:
+        from apps.leave.models import ApproverMapping
+        if ApproverMapping.objects.filter(
+            employee_id=plan.kam_id,
+            reporting_person=manager_user
+        ).exists():
+            return True
+    except Exception:
+        pass
+    # Check profile.reporting_officer (last resort)
     try:
         profile = getattr(plan.kam, "profile", None)
         if profile and getattr(profile, "reporting_officer_id", None) == manager_user.id:
@@ -425,17 +464,26 @@ def _single_visit_qs_for_user(user: User):
     if _is_admin(user):
         return qs
     if _is_manager(user):
-        # Managers see visits where they are the reporting officer
-        # Also fall back to KamManagerMapping for legacy data
-        from django.db.models import Q as _Q
-        reporting_to_me = list(
+        # Collect employee IDs via ApproverMapping (authoritative)
+        try:
+            from apps.leave.models import ApproverMapping
+            approver_mapped_ids = list(
+                ApproverMapping.objects.filter(
+                    reporting_person=user
+                ).values_list("employee_id", flat=True)
+            )
+        except Exception:
+            approver_mapped_ids = []
+        # Also collect via KamManagerMapping (legacy)
+        kam_manager_ids = _kams_managed_by_manager(user)
+        # Also collect via profile.reporting_officer (last resort)
+        profile_ro_ids = list(
             User.objects.filter(
                 profile__reporting_officer=user, is_active=True
             ).values_list("id", flat=True)
         )
-        kam_ids = list(set(_kams_managed_by_manager(user)) | set(reporting_to_me))
+        kam_ids = list(set(kam_manager_ids) | set(approver_mapped_ids) | set(profile_ro_ids))
         return qs.filter(kam_id__in=kam_ids)
-    # Any employee sees their own visits
     return qs.filter(kam=user)
 
 
