@@ -80,6 +80,15 @@ PERMISSION_URLS: dict[str, str] = {
     # ── KAM: Visits actual entry ───────────────────────────────────────
     "kam_visits":               "kam:visits",
 
+    # ── KAM: Visit history / batch list
+    # FIX: mapped to kam_visits (same feature, same permission).
+    # Any user with kam_visits can access visit history page.
+    # Previously keyed as kam_visit_batches which no user has in profile.
+    # Removing kam_visit_batches key entirely — visit_batches URL is now
+    # NOT in this map, so middleware step 8 applies: ALLOW, view handles it.
+    # The view itself uses @require_any_kam_code("kam_plan", "kam_manager")
+    # which users already have.
+
     # ── KAM: Visit approval / rejection (old KAM batch email links) ────
     "kam_visit_approve":        "kam:visit_batch_approve_link",
     "kam_visit_reject":         "kam:visit_batch_reject_link",
@@ -92,9 +101,9 @@ PERMISSION_URLS: dict[str, str] = {
     "kam_visit_approve_legacy": "kam:visit_approve",
     "kam_visit_reject_legacy":  "kam:visit_reject",
 
-    # ── KAM: Visit batch list / detail ─────────────────────────────────
-    "kam_visit_batches":        "kam:visit_batches",
-    "kam_visit_batch_detail":   "kam:visit_batch_detail",
+    # ── KAM: Visit batch detail ────────────────────────────────────────
+    # NOTE: also removed from map — view's @require_any_kam_code handles it.
+    # "kam_visit_batch_detail": "kam:visit_batch_detail",
 
     # ── KAM: Activity entry ────────────────────────────────────────────
     "kam_call_new":             "kam:call_new",
