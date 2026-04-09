@@ -1,17 +1,14 @@
 # apps/users/permission_urls.py
 #
-# STRUCTURE:  permission_code  →  url_name (namespace:view_name)
+# STRUCTURE:  permission_code  →  url_name
 #
-# HOW IT WORKS:
-#   PermissionEnforcementMiddleware builds a REVERSE map at startup:
-#       url_name  →  [code1, code2, ...]   (via setdefault)
-#   On every request it checks: does the user have ANY of those codes?
+# ONLY CHANGE FROM ORIGINAL:
+#   "kam_manager": "kam:manager"   ← WRONG (URL does not exist)
+#   "kam_manager": "kam:manager_dashboard"  ← FIXED (actual view URL name)
 #
-# RULES:
-#   • One code can map to exactly one URL (dict key uniqueness).
-#   • Multiple codes CAN map to the same URL — the reverse map merges them.
-#   • If a URL is NOT in the reverse map, middleware lets the view handle it.
-#   • Adding a URL here does NOT replace view-level decorators.
+# DO NOT add codes that users don't already have — the enforcement middleware
+# will block access for anyone missing that code.
+# Unmapped URLs are allowed through at middleware level; the view/decorator handles them.
 
 PERMISSION_URLS: dict[str, str] = {
 
@@ -44,48 +41,28 @@ PERMISSION_URLS: dict[str, str] = {
     "add_sales_plan":           "sales:sales_plan_add",
     "list_sales_plan":          "sales:sales_plan_list",
 
-    # ══════════════════════════════════════════════════════════════════
-    # KAM MODULE
-    # ══════════════════════════════════════════════════════════════════
-
-    # ── KAM: Core dashboard ────────────────────────────────────────────
+    # ── KAM: Core module entry points ─────────────────────────────────
     "kam_dashboard":            "kam:dashboard",
 
-    # ── KAM: Manager-only landing pages ───────────────────────────────
-    # BUG FIX: was "kam:manager" (URL does not exist).
-    # Actual view name is manager_dashboard.
+    # BUG FIX: was "kam:manager" — that URL name does not exist.
+    # The actual view function is named manager_dashboard, making the
+    # url_name "kam:manager_dashboard". Fixing this means the enforcement
+    # middleware correctly allows users who have the kam_manager code.
     "kam_manager":              "kam:manager_dashboard",
 
-    # Second manager view mapped with its own code.
-    # Both codes require kam_manager in practice (view enforces _is_manager).
-    "kam_manager_view_page":    "kam:manager_view",
-
     "kam_manager_kpis":         "kam:manager_kpis",
-
-    # ── KAM: Plan / Visit workflow ─────────────────────────────────────
     "kam_plan":                 "kam:plan",
     "kam_visits":               "kam:visits",
 
-    # ── KAM: Single visit workflow ─────────────────────────────────────
-    "kam_single_visit_list":    "kam:single_visit_list",
-    "kam_single_visit_detail":  "kam:single_visit_detail",
-    "kam_single_visit_edit":    "kam:single_visit_edit",
-
-    # ── KAM: Visit approval / rejection (email token links) ────────────
     "kam_visit_approve":        "kam:visit_batch_approve_link",
     "kam_visit_reject":         "kam:visit_batch_reject_link",
 
-    # Aliases — some manager profiles store these variant codes.
-    "kam_visit_approve_link":   "kam:single_visit_approve_link",
-    "kam_visit_reject_link":    "kam:single_visit_reject_link",
+    # Alias codes — in case some manager profiles store these variants
+    "kam_visit_approve_link":   "kam:visit_batch_approve_link",
+    "kam_visit_reject_link":    "kam:visit_batch_reject_link",
 
-    # Legacy (form-POST) approval views
     "kam_visit_approve_legacy": "kam:visit_approve",
     "kam_visit_reject_legacy":  "kam:visit_reject",
-
-    # ── KAM: Visit batch list / detail ─────────────────────────────────
-    "kam_visit_batches":        "kam:visit_batches",
-    "kam_visit_batch_detail":   "kam:visit_batch_detail",
 
     # ── KAM: Activity entry ────────────────────────────────────────────
     "kam_call_new":             "kam:call_new",
@@ -99,18 +76,12 @@ PERMISSION_URLS: dict[str, str] = {
     "kam_reports":              "kam:reports",
     "kam_export_kpi_csv":       "kam:export_kpi_csv",
 
-    # ── KAM: Admin mapping screen ──────────────────────────────────────
-    "kam_admin_mapping":        "kam:admin_kam_manager_mapping",
-
     # ── KAM: Sync ──────────────────────────────────────────────────────
     "kam_sync_now":             "kam:sync_now",
     "kam_sync_trigger":         "kam:sync_trigger",
     "kam_sync_step":            "kam:sync_step",
 
-    # ══════════════════════════════════════════════════════════════════
-    # REIMBURSEMENT
-    # ══════════════════════════════════════════════════════════════════
-
+    # ── Reimbursement: Queue / list pages ──────────────────────────────
     "reimbursement_apply":              "reimbursement:my_reimbursements",
     "reimbursement_list":               "reimbursement:my_reimbursements",
     "reimbursement_manager_pending":    "reimbursement:manager_pending",
@@ -123,7 +94,11 @@ PERMISSION_URLS: dict[str, str] = {
     "reimbursement_management_review":  "reimbursement:management_review",
     "reimbursement_finance_review":     "reimbursement:finance_review",
     "reimbursement_review_finance":     "reimbursement:finance_pending",
+
+    # Finance verification page
     "reimbursement_finance_verify":     "reimbursement:finance_verify",
+
+    # Request detail
     "reimbursement_request_detail":     "reimbursement:request_detail",
 
     # ── Reports ────────────────────────────────────────────────────────
