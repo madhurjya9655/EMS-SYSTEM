@@ -123,8 +123,19 @@ def _is_admin(user) -> bool:
 
 
 def _is_manager(user) -> bool:
-    return bool(_in_group(user, ("Manager", "Admin", "Finance")))
-
+    if not getattr(user, "is_authenticated", False):
+        return False
+    if getattr(user, "is_superuser", False):
+        return True
+    if _in_group(user, ("Manager", "Admin", "Finance")):
+        return True
+    # Also allow users with the kam_manager permission code
+    try:
+        from apps.users.permissions import _user_permission_codes
+        codes = _user_permission_codes(user)
+        return "kam_manager" in codes
+    except Exception:
+        return False
 
 def _is_kam(user) -> bool:
     return bool(getattr(user, "is_authenticated", False) and not _is_manager(user))
