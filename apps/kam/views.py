@@ -305,8 +305,24 @@ def _parse_batch_token(token: str) -> Tuple[int, str]:
 # Manager / KAM lookup helpers
 # ─────────────────────────────────────────────────────────────────────────────
 def _active_manager_for_kam(kam_user: User) -> Optional[User]:
+    """
+    Fetch reporting officer from Profile first (new universal flow).
+    Falls back to KamManagerMapping for backward compatibility.
+    """
     if not kam_user or not getattr(kam_user, "id", None):
         return None
+
+    # PRIMARY: use profile.reporting_officer (universal employee hierarchy)
+    try:
+        profile = getattr(kam_user, "profile", None)
+        if profile and getattr(profile, "reporting_officer_id", None):
+            officer = profile.reporting_officer
+            if officer and getattr(officer, "is_active", False):
+                return officer
+    except Exception:
+        pass
+
+    # FALLBACK: KamManagerMapping (legacy KAM-specific mapping)
     m = (
         KamManagerMapping.objects.select_related("manager")
         .filter(kam=kam_user, active=True)
@@ -326,6 +342,22 @@ def _kams_managed_by_manager(manager_user: User) -> List[int]:
         .values_list("kam_id", flat=True)
         .distinct()
     )
+
+def _can_manager_approve_visit(manager_user: User, plan: "VisitPlan") -> bool:
+    """Check if manager can approve this visit — via KamManagerMapping OR reporting_officer."""
+    if _is_admin(manager_user):
+        return True
+    # Check KamManagerMapping (legacy)
+    if plan.kam_id in set(_kams_managed_by_manager(manager_user)):
+        return True
+    # Check profile.reporting_officer (universal)
+    try:
+        profile = getattr(plan.kam, "profile", None)
+        if profile and getattr(profile, "reporting_officer_id", None) == manager_user.id:
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _safe_user_codes(u: User) -> set:
@@ -393,8 +425,17 @@ def _single_visit_qs_for_user(user: User):
     if _is_admin(user):
         return qs
     if _is_manager(user):
-        kam_ids = _kams_managed_by_manager(user)
+        # Managers see visits where they are the reporting officer
+        # Also fall back to KamManagerMapping for legacy data
+        from django.db.models import Q as _Q
+        reporting_to_me = list(
+            User.objects.filter(
+                profile__reporting_officer=user, is_active=True
+            ).values_list("id", flat=True)
+        )
+        kam_ids = list(set(_kams_managed_by_manager(user)) | set(reporting_to_me))
         return qs.filter(kam_id__in=kam_ids)
+    # Any employee sees their own visits
     return qs.filter(kam=user)
 
 
@@ -1404,11 +1445,12 @@ def manager_kpis(request: HttpRequest) -> HttpResponse:
 # PLAN VISIT — Single + Batch
 # =====================================================================
 @login_required
-@require_kam_code("kam_plan")
 def weekly_plan(request: HttpRequest) -> HttpResponse:
     user = request.user
-    customer_qs = _customer_qs_for_user(user).order_by("name")
-    schema_ready = _visitplan_workflow_schema_ready()
+    try:
+        customer_qs = _customer_qs_for_user(user).order_by("name")
+    except Exception:
+       customer_qs = Customer.objects.none()
 
     single_form = SingleVisitForm(prefix=SINGLE_PREFIX)
     batch_form = VisitBatchForm(prefix=BATCH_PREFIX)
@@ -1434,6 +1476,13 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             plan: VisitPlan = single_form.save(commit=False)
             plan.kam = user
             plan.batch = None
+            # Auto-assign reporting officer at save time
+            try:
+                profile = getattr(user, "profile", None)
+                if profile and getattr(profile, "reporting_officer_id", None):
+                    plan.reporting_officer = profile.reporting_officer
+            except Exception:
+                pass
 
             if plan.visit_category == VisitPlan.CAT_CUSTOMER:
                 if plan.customer_id and not customer_qs.filter(id=plan.customer_id).exists():
@@ -1456,8 +1505,12 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             if submit_action == "submit_to_manager":
                 mgr_user = _active_manager_for_kam(user)
                 if not mgr_user or not getattr(mgr_user, "email", None):
-                    messages.error(request, "No manager assigned or manager email is missing. Contact admin to set KAM → Manager mapping.")
-                    return redirect(reverse("kam:plan"))
+                   messages.error(
+                       request,
+                    "No reporting officer assigned to your profile. "
+                    "Contact admin to set your Reporting Officer in your profile."
+                )
+                   return redirect(reverse("kam:plan"))
 
                 with transaction.atomic():
                     plan.approval_status = VisitPlan.PENDING_APPROVAL
@@ -1751,7 +1804,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 # SINGLE VISIT DETAIL
 # =====================================================================
 @login_required
-@require_any_kam_code("kam_plan", "kam_manager")
 def single_visit_detail(request: HttpRequest, plan_id: int) -> HttpResponse:
     plan = get_object_or_404(_single_visit_qs_for_user(request.user), id=plan_id)
     audit_log = list(VisitApprovalAudit.objects.filter(plan=plan).select_related("actor").order_by("created_at"))
@@ -1768,7 +1820,6 @@ def single_visit_detail(request: HttpRequest, plan_id: int) -> HttpResponse:
 # SINGLE VISIT EDIT
 # =====================================================================
 @login_required
-@require_kam_code("kam_plan")
 def single_visit_edit(request: HttpRequest, plan_id: int) -> HttpResponse:
     plan = get_object_or_404(_single_visit_qs_for_user(request.user).filter(kam=request.user), id=plan_id)
     if plan.is_locked:
@@ -1868,7 +1919,7 @@ def single_visit_approve_link(request: HttpRequest, token: str) -> HttpResponse:
 
     with transaction.atomic():
         plan = get_object_or_404(VisitPlan.objects.select_for_update(), id=plan_id, batch__isnull=True)
-        if not _is_admin(request.user) and plan.kam_id not in set(_kams_managed_by_manager(request.user)):
+        if not _can_manager_approve_visit(request.user, plan):
             return HttpResponseForbidden("403 Forbidden: This visit is not in your approval scope.")
         if plan.approval_status == VisitPlan.APPROVED:
             messages.info(request, f"Single Visit #{plan.id} is already approved.")
@@ -1932,7 +1983,7 @@ def single_visit_reject_link(request: HttpRequest, token: str) -> HttpResponse:
 
     with transaction.atomic():
         plan = get_object_or_404(VisitPlan.objects.select_for_update(), id=plan_id, batch__isnull=True)
-        if not _is_admin(request.user) and plan.kam_id not in set(_kams_managed_by_manager(request.user)):
+        if not _can_manager_approve_visit(request.user, plan):
             return HttpResponseForbidden("403 Forbidden: This visit is not in your approval scope.")
         if plan.approval_status == VisitPlan.REJECTED:
             messages.info(request, f"Single Visit #{plan.id} is already rejected.")
@@ -1957,7 +2008,6 @@ def single_visit_reject_link(request: HttpRequest, token: str) -> HttpResponse:
 # SINGLE VISIT LIST
 # =====================================================================
 @login_required
-@require_any_kam_code("kam_manager", "kam_plan")
 def single_visit_list(request: HttpRequest) -> HttpResponse:
     if not _visitplan_workflow_schema_ready():
         messages.error(request, "Single Visit workflow DB fields are not migrated yet. Run migrations before using this page.")
@@ -1994,8 +2044,8 @@ def single_visit_approve(request: HttpRequest, plan_id: int) -> HttpResponse:
 
     with transaction.atomic():
         plan = get_object_or_404(VisitPlan.objects.select_for_update(), id=plan_id, batch__isnull=True)
-        if not _is_admin(request.user) and plan.kam_id not in set(_kams_managed_by_manager(request.user)):
-            return HttpResponseForbidden("403 Forbidden: Not in your approval scope.")
+        if not _can_manager_approve_visit(request.user, plan):
+            return HttpResponseForbidden("403 Forbidden: This visit is not in your approval scope.")
         if plan.approval_status == VisitPlan.APPROVED:
             messages.info(request, f"Visit #{plan.id} already approved.")
             return redirect(reverse("kam:single_visit_detail", args=[plan.id]))
@@ -2026,8 +2076,8 @@ def single_visit_reject(request: HttpRequest, plan_id: int) -> HttpResponse:
 
     with transaction.atomic():
         plan = get_object_or_404(VisitPlan.objects.select_for_update(), id=plan_id, batch__isnull=True)
-        if not _is_admin(request.user) and plan.kam_id not in set(_kams_managed_by_manager(request.user)):
-            return HttpResponseForbidden("403 Forbidden: Not in your approval scope.")
+        if not _can_manager_approve_visit(request.user, plan):
+            return HttpResponseForbidden("403 Forbidden: This visit is not in your approval scope.")
         if plan.approval_status == VisitPlan.REJECTED:
             messages.info(request, f"Visit #{plan.id} already rejected.")
             return redirect(reverse("kam:single_visit_detail", args=[plan.id]))
@@ -2587,8 +2637,8 @@ def visit_approve(request: HttpRequest, plan_id: int) -> HttpResponse:
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
     plan = get_object_or_404(VisitPlan, id=plan_id)
-    if not _is_admin(request.user) and plan.kam_id not in set(_kams_managed_by_manager(request.user)):
-        return HttpResponseForbidden("403 Forbidden: Not in your approval scope.")
+    if not _can_manager_approve_visit(request.user, plan):
+            return HttpResponseForbidden("403 Forbidden: This visit is not in your approval scope.")
     plan.approval_status = STATUS_APPROVED
     plan.approved_by = request.user
     plan.approved_at = timezone.now()
@@ -2606,8 +2656,8 @@ def visit_reject(request: HttpRequest, plan_id: int) -> HttpResponse:
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
     plan = get_object_or_404(VisitPlan, id=plan_id)
-    if not _is_admin(request.user) and plan.kam_id not in set(_kams_managed_by_manager(request.user)):
-        return HttpResponseForbidden("403 Forbidden: Not in your approval scope.")
+    if not _can_manager_approve_visit(request.user, plan):
+            return HttpResponseForbidden("403 Forbidden: This visit is not in your approval scope.")
     plan.approval_status = STATUS_REJECTED
     plan.approved_by = request.user
     plan.approved_at = timezone.now()

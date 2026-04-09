@@ -1,3 +1,4 @@
+#D:\CLIENT PROJECT\employee management system bos\employee_management_system\employee_management\urls.py
 from __future__ import annotations
 
 from django.conf import settings
@@ -15,7 +16,7 @@ from apps.users.views import CustomLoginView
 from apps.tasks import cron_views as legacy_cron_views
 from apps.tasks import views_cron as new_cron_views
 
-# ✅ ADD: import KAM views for compatibility alias routes
+# KAM views for compatibility alias routes
 from apps.kam import views as kam_views
 
 # Admin titles
@@ -63,13 +64,12 @@ urlpatterns = [
     # Recruitment
     path("recruitment/",   include(("apps.recruitment.urls",   "recruitment"),   namespace="recruitment")),
 
-    # ✅ KAM (Performance) module (namespaced)
-    path("kam/",           include(("apps.kam.urls",           "kam"),           namespace="kam")),
+    # KAM (Performance) module
+    path("kam/", include(("apps.kam.urls", "kam"), namespace="kam")),
 
-    # ✅ COMPATIBILITY ALIAS (non-namespaced reverse)
-    # Fixes templates that call: {% url 'visit_batches' %}
-    # Keeps the canonical URL the same: /kam/batches/
-    path("kam/batches/", kam_views.visit_batches, name="visit_batches"),
+    # Compatibility alias (non-namespaced reverse)
+    # NOTE: use visit_batches_page because that is what apps/kam/urls.py exposes
+    path("kam/batches/", kam_views.visit_batches_page, name="visit_batches"),
 
     # Root → dashboard
     path("", RedirectView.as_view(pattern_name="dashboard:home", permanent=False), name="site-root"),

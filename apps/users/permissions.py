@@ -271,15 +271,10 @@ def _codes_from_mapping(user) -> Set[str]:
 
 
 def _baseline_dynamic_grants(user) -> Set[str]:
-    """
-    Baseline employee-level grants for every authenticated user.
-    Ensures all employees can see and use:
-      - Expenses Inbox / Apply (reimbursement_apply)
-      - My Requests (reimbursement_list)
-    """
     if not getattr(user, "is_authenticated", False):
         return set()
-    return {"reimbursement_apply", "reimbursement_list"}
+    # All employees get reimbursement access AND visit plan access
+    return {"reimbursement_apply", "reimbursement_list", "kam_plan", "kam_visits"}
 
 
 def _user_permission_codes(user) -> Set[str]:

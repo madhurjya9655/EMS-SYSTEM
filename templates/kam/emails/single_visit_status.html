@@ -2,73 +2,191 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Single Visit {{ status }}</title>
 <style>
-  body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 20px; }
-  .container { max-width: 620px; margin: 0 auto; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
-  .header-approved { background: #10b981; color: #fff; padding: 24px 28px; }
-  .header-rejected { background: #ef4444; color: #fff; padding: 24px 28px; }
-  .body { padding: 24px 28px; }
-  .header h1 { margin: 0; font-size: 20px; font-weight: 700; }
-  .header p { margin: 6px 0 0; opacity: .9; font-size: 13px; }
-  .info-table { width: 100%; border-collapse: collapse; margin: 18px 0 20px; }
-  .info-table th { text-align: left; padding: 8px 12px; background: #f8f9fa; font-size: 12px; font-weight: 700; color: #6b7280; width: 180px; border: 1px solid #e5e7eb; text-transform: uppercase; }
-  .info-table td { padding: 8px 12px; font-size: 13px; color: #111827; border: 1px solid #e5e7eb; }
-  .rejection-box { background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: 14px 16px; color: #b91c1c; font-size: 13px; margin: 16px 0; }
-  .action-note { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 12px 16px; font-size: 12px; color: #1e40af; margin-top: 16px; }
-  .btn { display: inline-block; padding: 11px 24px; border-radius: 6px; font-size: 14px; font-weight: 700; text-decoration: none; background: #1a56db; color: #fff; margin-top: 16px; }
-  .footer { padding: 14px 28px; background: #f8f9fa; font-size: 11px; color: #9ca3af; border-top: 1px solid #e5e7eb; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; padding: 24px 16px; }
+  .wrapper { max-width: 640px; margin: 0 auto; }
+  .container { background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,.10); }
+  .header-approved { background: linear-gradient(135deg, #059669 0%, #047857 100%); color: #fff; padding: 28px 32px; }
+  .header-rejected { background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); color: #fff; padding: 28px 32px; }
+  .header-icon { font-size: 32px; margin-bottom: 10px; }
+  .header h1 { font-size: 20px; font-weight: 700; margin-bottom: 6px; line-height: 1.3; }
+  .header p { font-size: 13px; opacity: .85; }
+  .body { padding: 28px 32px; }
+  .greeting { font-size: 15px; color: #1a1a2e; margin-bottom: 6px; }
+  .subtext { font-size: 13px; color: #64748b; margin-bottom: 20px; }
+  .status-highlight-approved {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    background: #dcfce7;
+    color: #15803d;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .status-highlight-rejected {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    background: #fee2e2;
+    color: #b91c1c;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .info-table { width: 100%; border-collapse: collapse; margin: 0 0 20px; border-radius: 8px; overflow: hidden; border: 1px solid #e2e8f0; }
+  .info-table th {
+    text-align: left;
+    padding: 10px 14px;
+    background: #f8fafc;
+    font-size: 11px;
+    font-weight: 700;
+    color: #64748b;
+    width: 180px;
+    border-bottom: 1px solid #e2e8f0;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+  }
+  .info-table td {
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #1e293b;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .info-table tr:last-child th,
+  .info-table tr:last-child td { border-bottom: none; }
+  .rejection-box {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-left: 4px solid #dc2626;
+    border-radius: 8px;
+    padding: 16px 18px;
+    color: #7f1d1d;
+    font-size: 13px;
+    margin: 0 0 16px;
+    line-height: 1.6;
+  }
+  .rejection-box strong { display: block; font-weight: 700; color: #b91c1c; margin-bottom: 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  .action-note {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 12px;
+    color: #1e40af;
+    margin-bottom: 20px;
+    line-height: 1.6;
+  }
+  .action-note strong { font-weight: 700; }
+  .btn {
+    display: inline-block;
+    padding: 12px 26px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    text-decoration: none;
+    background: #1d4ed8;
+    color: #fff;
+    margin-top: 8px;
+  }
+  .footer { padding: 16px 32px; background: #f8fafc; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; }
 </style>
 </head>
 <body>
-<div class="container">
-  <div class="{% if status == 'APPROVED' %}header-approved{% else %}header-rejected{% endif %} header">
-    <h1>
-      {% if status == "APPROVED" %}
-        &#10003; Single Visit Approved
-      {% else %}
-        &#10007; Single Visit Rejected
+<div class="wrapper">
+  <div class="container">
+
+    <div class="{% if status == 'APPROVED' %}header-approved{% else %}header-rejected{% endif %}">
+      <div class="header-icon">
+        {% if status == "APPROVED" %}✅{% else %}❌{% endif %}
+      </div>
+      <h1>
+        {% if status == "APPROVED" %}
+          Single Visit Approved
+        {% else %}
+          Single Visit Rejected
+        {% endif %}
+      </h1>
+      <p>Visit #{{ plan.id }} &mdash; Decision by {{ actor.get_full_name|default:actor.username }}</p>
+    </div>
+
+    <div class="body">
+      <p class="greeting">
+        Hello <strong>{{ kam_user.get_full_name|default:kam_user.username }}</strong>,
+      </p>
+      <p class="subtext">
+        Your visit plan has been
+        <span class="{% if status == 'APPROVED' %}status-highlight-approved{% else %}status-highlight-rejected{% endif %}">
+          {{ status }}
+        </span>
+        by your reporting manager.
+      </p>
+
+      <table class="info-table">
+        <tr>
+          <th>Visit ID</th>
+          <td><strong>#{{ plan.id }}</strong></td>
+        </tr>
+        <tr>
+          <th>Visit Category</th>
+          <td>{{ visit_category_label|default:"&mdash;" }}</td>
+        </tr>
+        <tr>
+          <th>Visit Date</th>
+          <td>{{ plan.visit_date }}{% if plan.visit_date_to %} &rarr; {{ plan.visit_date_to }}{% endif %}</td>
+        </tr>
+        <tr>
+          <th>Entity / Customer</th>
+          <td>{{ counterparty|default:"&mdash;" }}</td>
+        </tr>
+        <tr>
+          <th>Location</th>
+          <td>{{ plan.location|default:"&mdash;" }}</td>
+        </tr>
+        <tr>
+          <th>Decided By</th>
+          <td>{{ actor.get_full_name|default:actor.username }}</td>
+        </tr>
+        <tr>
+          <th>Decision</th>
+          <td>
+            <span class="{% if status == 'APPROVED' %}status-highlight-approved{% else %}status-highlight-rejected{% endif %}">
+              {{ status }}
+            </span>
+          </td>
+        </tr>
+      </table>
+
+      {% if status == "REJECTED" and rejection_reason %}
+        <div class="rejection-box">
+          <strong>Rejection Reason</strong>
+          {{ rejection_reason }}
+        </div>
+        <div class="action-note">
+          <strong>Next Step:</strong> You can edit this visit plan and resubmit it for approval after addressing the reason mentioned above.
+        </div>
       {% endif %}
-    </h1>
-    <p>Visit #{{ plan.id }} — Decision by {{ actor.get_full_name|default:actor.username }}</p>
-  </div>
 
-  <div class="body">
-    <p style="color:#374151;font-size:14px;margin-top:0;">
-      Hello <strong>{{ kam_user.get_full_name|default:kam_user.username }}</strong>,
-    </p>
-    <p style="color:#6b7280;font-size:13px;">
-      Your single visit has been
-      <strong>{% if status == "APPROVED" %}APPROVED{% else %}REJECTED{% endif %}</strong>
-      by your manager.
-    </p>
+      {% if status == "APPROVED" %}
+        <div class="action-note">
+          <strong>Next Step:</strong> Your visit is approved. You can now proceed with the visit and update the actual details (meeting notes, outcome) after completion.
+        </div>
+      {% endif %}
 
-    <table class="info-table">
-      <tr><th>Visit ID</th><td><strong>#{{ plan.id }}</strong></td></tr>
-      <tr><th>Visit Category</th><td>{{ visit_category_label|default:"—" }}</td></tr>
-      <tr><th>Visit Date</th><td>{{ plan.visit_date }}{% if plan.visit_date_to %} → {{ plan.visit_date_to }}{% endif %}</td></tr>
-      <tr><th>Entity</th><td>{{ counterparty|default:"—" }}</td></tr>
-      <tr><th>Decided By</th><td>{{ actor.get_full_name|default:actor.username }}</td></tr>
-      <tr><th>Decision</th><td><strong>{{ status }}</strong></td></tr>
-    </table>
+      {% if plan_url %}
+        <a href="{{ plan_url }}" class="btn">View Visit #{{ plan.id }}</a>
+      {% endif %}
+    </div>
 
-    {% if status == "REJECTED" and rejection_reason %}
-      <div class="rejection-box">
-        <strong>Rejection Reason:</strong>
-        {{ rejection_reason }}
-      </div>
-      <div class="action-note">
-        <strong>Next Step:</strong> You can edit this single visit and resubmit it for approval after addressing the reason above.
-      </div>
-    {% endif %}
+    <div class="footer">
+      BOS Lakshya ERP &mdash; Visit Plan Module &mdash; Automated status notification.
+    </div>
 
-    {% if plan_url %}
-      <a href="{{ plan_url }}" class="btn">View Single Visit #{{ plan.id }}</a>
-    {% endif %}
-  </div>
-
-  <div class="footer">
-    BOS Lakshya ERP — KAM Module — Automated status notification.
   </div>
 </div>
 </body>

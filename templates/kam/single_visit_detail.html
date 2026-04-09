@@ -2,7 +2,7 @@
 {% load humanize %}
 
 {% block title %}{{ page_title }}{% endblock %}
-{% block breadcrumb %}KAM / Single Visits / Detail{% endblock %}
+{% block breadcrumb %}KAM / My Visits / Detail{% endblock %}
 
 {% block head_extra %}
 <style>
@@ -22,37 +22,62 @@
     align-items: center;
     gap: 6px;
     border-radius: 999px;
-    padding: 5px 12px;
+    padding: 5px 14px;
     font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .04em;
   }
-  .status-draft { background: #f3f4f6; color: #6b7280; }
-  .status-pending { background: #fffbeb; color: #d97706; }
-  .status-approved { background: #ecfdf5; color: #059669; }
-  .status-rejected { background: #fef2f2; color: #dc2626; }
-  .status-completed { background: #eff6ff; color: #2563eb; }
+  .status-draft     { background: #f3f4f6; color: #6b7280; }
+  .status-pending   { background: #fffbeb; color: #d97706; border: 1px solid #fde68a; }
+  .status-approved  { background: #ecfdf5; color: #059669; border: 1px solid #6ee7b7; }
+  .status-rejected  { background: #fef2f2; color: #dc2626; border: 1px solid #fca5a5; }
+  .status-completed { background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; }
+
   .meta-table th {
-    width: 220px;
+    width: 200px;
     font-size: 12px;
     text-transform: uppercase;
     color: #64748b;
     letter-spacing: .04em;
     white-space: nowrap;
+    font-weight: 600;
+    vertical-align: top;
+    padding-top: 10px;
   }
   .meta-table td {
     font-size: 13px;
     color: #111827;
+    padding-top: 10px;
+    padding-bottom: 10px;
   }
-  .audit-item {
-    border-left: 3px solid #cbd5e1;
-    padding-left: 12px;
-    margin-bottom: 14px;
+
+  .audit-timeline { list-style: none; padding: 0; margin: 0; }
+  .audit-timeline li {
+    position: relative;
+    padding: 0 0 16px 28px;
+    border-left: 2px solid #e2e8f0;
+    margin-left: 8px;
   }
-  .audit-item:last-child {
-    margin-bottom: 0;
+  .audit-timeline li:last-child { border-left: 2px solid transparent; padding-bottom: 0; }
+  .audit-dot {
+    position: absolute;
+    left: -7px;
+    top: 4px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #94a3b8;
+    border: 2px solid #fff;
   }
+  .audit-dot-submit   { background: #3b82f6; }
+  .audit-dot-approve  { background: #22c55e; }
+  .audit-dot-reject   { background: #ef4444; }
+  .audit-dot-delete   { background: #f97316; }
+
+  .audit-action { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #475569; }
+  .audit-meta   { font-size: 11px; color: #94a3b8; margin-top: 2px; }
+  .audit-note   { font-size: 12px; color: #374151; margin-top: 4px; }
 </style>
 {% endblock %}
 
@@ -61,20 +86,34 @@
   <div>
     <h1 class="page-title mb-1">Single Visit #{{ plan.id }}</h1>
     <div class="d-flex flex-wrap gap-2 mt-2">
-      <span class="info-chip"><i class="fas fa-calendar-alt"></i>{{ plan.visit_date|date:"d M Y" }}</span>
-      <span class="info-chip"><i class="fas fa-tag"></i>{{ visit_category_label }}</span>
-      <span class="info-chip"><i class="fas fa-user"></i>{{ plan.kam.get_full_name|default:plan.kam.username }}</span>
+      <span class="info-chip">
+        <i class="fas fa-calendar-alt"></i>{{ plan.visit_date|date:"d M Y" }}
+      </span>
+      <span class="info-chip">
+        <i class="fas fa-tag"></i>{{ visit_category_label }}
+      </span>
+      <span class="info-chip">
+        <i class="fas fa-user"></i>{{ plan.kam.get_full_name|default:plan.kam.username }}
+      </span>
 
       {% if plan.approval_status == "DRAFT" %}
         <span class="status-pill status-draft">Draft</span>
       {% elif plan.approval_status == "PENDING_APPROVAL" %}
-        <span class="status-pill status-pending">Pending Manager Approval</span>
+        <span class="status-pill status-pending">
+          <i class="fas fa-clock"></i>Pending Manager Approval
+        </span>
       {% elif plan.approval_status == "APPROVED" %}
-        <span class="status-pill status-approved">Approved</span>
+        <span class="status-pill status-approved">
+          <i class="fas fa-check-circle"></i>Approved
+        </span>
       {% elif plan.approval_status == "REJECTED" %}
-        <span class="status-pill status-rejected">Rejected</span>
+        <span class="status-pill status-rejected">
+          <i class="fas fa-times-circle"></i>Rejected
+        </span>
       {% elif plan.approval_status == "COMPLETED" %}
-        <span class="status-pill status-completed">Completed</span>
+        <span class="status-pill status-completed">
+          <i class="fas fa-flag-checkered"></i>Completed
+        </span>
       {% else %}
         <span class="status-pill status-draft">{{ plan.approval_status }}</span>
       {% endif %}
@@ -87,7 +126,7 @@
     </a>
     {% if can_edit %}
       <a href="{% url 'kam:single_visit_edit' plan.id %}" class="btn btn-sm btn-primary">
-        <i class="fas fa-pen-to-square me-1"></i>Edit
+        <i class="fas fa-pen me-1"></i>Edit
       </a>
     {% endif %}
   </div>
@@ -96,105 +135,152 @@
 {% if messages %}
   <div class="mb-3">
     {% for message in messages %}
-      <div class="alert alert-{{ message.tags|default:'info' }} mb-2">{{ message }}</div>
+      <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show mb-2" role="alert">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      </div>
     {% endfor %}
   </div>
 {% endif %}
 
 <div class="row g-3">
+
+  <!-- ══════════════ LEFT: DETAIL CARD ══════════════ -->
   <div class="col-lg-8">
-    <div class="card">
+    <div class="card mb-3">
       <div class="card-header fw-semibold">Visit Details</div>
       <div class="card-body">
+
         {% if plan.approval_status == "REJECTED" and plan.rejection_reason %}
-          <div class="alert alert-danger">
-            <div class="fw-semibold mb-1">Rejected by Manager</div>
+          <div class="alert alert-danger mb-3">
+            <div class="fw-semibold mb-1">
+              <i class="fas fa-times-circle me-1"></i>Rejected by Manager
+            </div>
             <div>{{ plan.rejection_reason }}</div>
           </div>
         {% endif %}
 
         <table class="table table-sm align-middle meta-table mb-0">
-          <tr>
-            <th>Visit Category</th>
-            <td>{{ visit_category_label }}</td>
-          </tr>
-          <tr>
-            <th>Visit Date</th>
-            <td>{{ plan.visit_date|date:"d M Y" }}</td>
-          </tr>
-          <tr>
-            <th>Customer / Vendor / Supplier / Warehouse Name</th>
-            <td>
-              {% if plan.customer %}
-                {{ plan.customer.name }}
-              {% else %}
-                {{ plan.counterparty_name|default:"—" }}
-              {% endif %}
-            </td>
-          </tr>
-          <tr>
-            <th>Location</th>
-            <td>{{ plan.location|default:"—" }}</td>
-          </tr>
-          <tr>
-            <th>Purpose / Remarks</th>
-            <td>{{ plan.purpose|default:"—"|linebreaksbr }}</td>
-          </tr>
-          <tr>
-            <th>Submitted At</th>
-            <td>{{ plan.submitted_at|default:"—" }}</td>
-          </tr>
-          <tr>
-            <th>Approved At</th>
-            <td>{{ plan.approved_at|default:"—" }}</td>
-          </tr>
-          <tr>
-            <th>Approved By</th>
-            <td>
-              {% if plan.approved_by %}
-                {{ plan.approved_by.get_full_name|default:plan.approved_by.username }}
-              {% else %}
-                —
-              {% endif %}
-            </td>
-          </tr>
-          <tr>
-            <th>Rejected At</th>
-            <td>{{ plan.rejected_at|default:"—" }}</td>
-          </tr>
-          <tr>
-            <th>Rejected By</th>
-            <td>
-              {% if plan.rejected_by %}
-                {{ plan.rejected_by.get_full_name|default:plan.rejected_by.username }}
-              {% else %}
-                —
-              {% endif %}
-            </td>
-          </tr>
+          <tbody>
+            <tr>
+              <th>Visit Category</th>
+              <td>{{ visit_category_label }}</td>
+            </tr>
+            <tr>
+              <th>Visit Date</th>
+              <td>{{ plan.visit_date|date:"d M Y" }}{% if plan.visit_date_to %} &rarr; {{ plan.visit_date_to|date:"d M Y" }}{% endif %}</td>
+            </tr>
+            <tr>
+              <th>Customer / Entity</th>
+              <td>
+                {% if plan.customer %}
+                  <strong>{{ plan.customer.name }}</strong>
+                  {% if plan.customer.address %}
+                    <div class="small text-muted">{{ plan.customer.address }}</div>
+                  {% endif %}
+                {% else %}
+                  {{ plan.counterparty_name|default:"&mdash;" }}
+                {% endif %}
+              </td>
+            </tr>
+            <tr>
+              <th>Location</th>
+              <td>{{ plan.location|default:"&mdash;" }}</td>
+            </tr>
+            <tr>
+              <th>Purpose / Remarks</th>
+              <td>{{ plan.purpose|default:"&mdash;"|linebreaksbr }}</td>
+            </tr>
+            <tr>
+              <th>Applied By</th>
+              <td>{{ plan.kam.get_full_name|default:plan.kam.username }}</td>
+            </tr>
+            <tr>
+              <th>Submitted At</th>
+              <td>{{ plan.submitted_at|default:"&mdash;" }}</td>
+            </tr>
+            <tr>
+              <th>Approved At</th>
+              <td>{{ plan.approved_at|default:"&mdash;" }}</td>
+            </tr>
+            <tr>
+              <th>Approved By</th>
+              <td>
+                {% if plan.approved_by %}
+                  {{ plan.approved_by.get_full_name|default:plan.approved_by.username }}
+                {% else %}
+                  &mdash;
+                {% endif %}
+              </td>
+            </tr>
+            <tr>
+              <th>Rejected At</th>
+              <td>{{ plan.rejected_at|default:"&mdash;" }}</td>
+            </tr>
+            <tr>
+              <th>Rejected By</th>
+              <td>
+                {% if plan.rejected_by %}
+                  {{ plan.rejected_by.get_full_name|default:plan.rejected_by.username }}
+                {% else %}
+                  &mdash;
+                {% endif %}
+              </td>
+            </tr>
+          </tbody>
         </table>
-
-        {% if plan.approval_status == "APPROVED" or plan.approval_status == "COMPLETED" %}
-          <div class="alert alert-success mt-3 mb-0">
-            Post-visit update is now allowed.
-            <a href="{% url 'kam:visits' %}?plan_id={{ plan.id }}" class="alert-link">Open post-visit form</a>
-          </div>
-        {% else %}
-          <div class="alert alert-secondary mt-3 mb-0">
-            Post-visit update becomes available only after manager approval.
-          </div>
-        {% endif %}
       </div>
     </div>
 
+    <!-- Post-Visit Update Banner -->
+    {% if plan.approval_status == "APPROVED" or plan.approval_status == "COMPLETED" %}
+      <div class="alert alert-success d-flex align-items-center gap-2 mb-3">
+        <i class="fas fa-check-circle fs-5"></i>
+        <div>
+          Visit is approved. You can now record post-visit details.
+          <a href="{% url 'kam:visits' %}?plan_id={{ plan.id }}" class="alert-link ms-1">
+            Open post-visit form &rarr;
+          </a>
+        </div>
+      </div>
+    {% elif plan.approval_status == "DRAFT" %}
+      <div class="alert alert-secondary d-flex align-items-center gap-2 mb-3">
+        <i class="fas fa-info-circle fs-5"></i>
+        <div>
+          This visit is a draft. Submit it to your manager to begin the approval process.
+          {% if can_edit %}
+            <a href="{% url 'kam:single_visit_edit' plan.id %}" class="alert-link ms-1">Edit &amp; Submit &rarr;</a>
+          {% endif %}
+        </div>
+      </div>
+    {% elif plan.approval_status == "PENDING_APPROVAL" %}
+      <div class="alert alert-warning d-flex align-items-center gap-2 mb-3">
+        <i class="fas fa-clock fs-5"></i>
+        <div>Awaiting manager approval. You will be notified by email once a decision is made.</div>
+      </div>
+    {% elif plan.approval_status == "REJECTED" %}
+      <div class="alert alert-danger d-flex align-items-center gap-2 mb-3">
+        <i class="fas fa-times-circle fs-5"></i>
+        <div>
+          Your visit was rejected. Please address the reason above and resubmit.
+          {% if can_edit %}
+            <a href="{% url 'kam:single_visit_edit' plan.id %}" class="alert-link ms-1">Edit &amp; Resubmit &rarr;</a>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+
+    <!-- Manager Decision Panel -->
     {% if can_approve %}
-      <div class="card mt-3">
-        <div class="card-header fw-semibold">Manager Decision</div>
+      <div class="card">
+        <div class="card-header fw-semibold text-dark">
+          <i class="fas fa-gavel me-1"></i>Manager Decision
+        </div>
         <div class="card-body">
-          <div class="d-flex gap-2 flex-wrap mb-3">
-            <form method="post" action="{% url 'kam:single_visit_approve' plan.id %}">
+          <div class="d-flex gap-3 flex-wrap mb-3">
+            <form method="post" action="{% url 'kam:single_visit_approve' plan.id %}" style="display:inline;">
               {% csrf_token %}
-              <button type="submit" class="btn btn-success">
+              <button type="submit" class="btn btn-success px-4">
                 <i class="fas fa-check me-1"></i>Approve
               </button>
             </form>
@@ -202,11 +288,15 @@
 
           <form method="post" action="{% url 'kam:single_visit_reject' plan.id %}">
             {% csrf_token %}
-            <label class="form-label fw-semibold">Rejection Reason</label>
-            <textarea name="reason" class="form-control" rows="4" placeholder="Reason is required for rejection..." required></textarea>
+            <label class="form-label fw-semibold small text-uppercase text-muted">
+              Rejection Reason <span class="text-danger">*</span>
+            </label>
+            <textarea name="reason" class="form-control" rows="3"
+              placeholder="Provide a reason so the employee can address it and resubmit…"
+              required></textarea>
             <div class="mt-2">
               <button type="submit" class="btn btn-danger">
-                <i class="fas fa-xmark me-1"></i>Reject
+                <i class="fas fa-times me-1"></i>Reject
               </button>
             </div>
           </form>
@@ -215,29 +305,43 @@
     {% endif %}
   </div>
 
+  <!-- ══════════════ RIGHT: AUDIT LOG ══════════════ -->
   <div class="col-lg-4">
-    <div class="card">
-      <div class="card-header fw-semibold">Audit Log</div>
+    <div class="card h-100">
+      <div class="card-header fw-semibold">
+        <i class="fas fa-history me-1"></i>Audit Log
+      </div>
       <div class="card-body">
         {% if audit_log %}
-          {% for log in audit_log %}
-            <div class="audit-item">
-              <div class="fw-semibold text-uppercase" style="font-size:12px;">
-                {{ log.action }}
-              </div>
-              <div class="small text-muted">
-                {{ log.created_at }} by {{ log.actor.get_full_name|default:log.actor.username }}
-              </div>
-              {% if log.note %}
-                <div class="small mt-1">{{ log.note }}</div>
-              {% endif %}
-            </div>
-          {% endfor %}
+          <ul class="audit-timeline">
+            {% for log in audit_log %}
+              <li>
+                <div class="audit-dot
+                  {% if log.action == 'APPROVE' %}audit-dot-approve
+                  {% elif log.action == 'REJECT' %}audit-dot-reject
+                  {% elif log.action == 'SUBMIT' %}audit-dot-submit
+                  {% elif log.action == 'DELETE' %}audit-dot-delete
+                  {% endif %}
+                "></div>
+                <div class="audit-action">{{ log.action }}</div>
+                <div class="audit-meta">
+                  {{ log.created_at }} &mdash; {{ log.actor.get_full_name|default:log.actor.username }}
+                </div>
+                {% if log.note %}
+                  <div class="audit-note">{{ log.note }}</div>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
         {% else %}
-          <div class="text-muted small">No audit entries found.</div>
+          <div class="text-muted small text-center py-3">
+            <i class="fas fa-inbox d-block mb-2 fs-4 opacity-25"></i>
+            No audit entries found.
+          </div>
         {% endif %}
       </div>
     </div>
   </div>
+
 </div>
 {% endblock %}

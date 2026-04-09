@@ -5,7 +5,7 @@ from . import views
 app_name = "kam"
 
 urlpatterns = [
-    # ── Dashboard ──────────────────────────────────────────────────────
+    # ── KAM Dashboard ──────────────────────────────────────────────────
     path("", views.dashboard, name="dashboard"),
     path("manager/", views.manager_dashboard, name="manager_dashboard"),
     path("manager/", views.manager_dashboard, name="manager"),  # backward-compatible alias
@@ -17,20 +17,61 @@ urlpatterns = [
     # ── Admin ──────────────────────────────────────────────────────────
     path("admin/kam-manager-mapping/", views.admin_kam_manager_mapping, name="admin_kam_manager_mapping"),
 
-    # ── Visits ─────────────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════
+    # EMPLOYEE VISIT PLAN FLOW
+    # Uses existing single-visit views already present in views.py
+    # ══════════════════════════════════════════════════════════════════
+
+    # Employee: apply / list / detail / edit
     path("plan/", views.weekly_plan, name="plan"),
+    path("my-visits/", views.single_visit_list, name="employee_visit_list"),
+    path("my-visits/<int:plan_id>/", views.single_visit_detail, name="single_visit_detail"),
+    path("my-visits/<int:plan_id>/edit/", views.single_visit_edit, name="single_visit_edit"),
+
+    # Manager: email token approve / reject links
+    path(
+        "visit/approve-link/<str:token>/",
+        views.single_visit_approve_link,
+        name="employee_visit_approve_link",
+    ),
+    path(
+        "visit/reject-link/<str:token>/",
+        views.single_visit_reject_link,
+        name="employee_visit_reject_link",
+    ),
+
+    # Manager: inline form-POST approve / reject (from manager dashboard)
+    path(
+        "my-visits/<int:plan_id>/approve/",
+        views.single_visit_approve,
+        name="single_visit_approve",
+    ),
+    path(
+        "my-visits/<int:plan_id>/reject/",
+        views.single_visit_reject,
+        name="single_visit_reject",
+    ),
+
+    # Manager: team visit list
+    path("team-visits/", views.single_visit_list, name="manager_visit_list"),
+
+    # ── Backward-compat aliases for old single_visit_* names ──────────
+    path("single-visits/", views.single_visit_list, name="single_visit_list"),
+    path(
+        "single-visit/approve/<str:token>/",
+        views.single_visit_approve_link,
+        name="single_visit_approve_link",
+    ),
+    path(
+        "single-visit/reject/<str:token>/",
+        views.single_visit_reject_link,
+        name="single_visit_reject_link",
+    ),
+
+    # ── Visits (actual entry — kept for KAM actuals) ───────────────────
     path("visits/", views.visits, name="visits"),
 
-    # ── Single Visit Workflow ──────────────────────────────────────────
-    path("single-visits/", views.single_visit_list, name="single_visit_list"),
-    path("single-visits/<int:plan_id>/", views.single_visit_detail, name="single_visit_detail"),
-    path("single-visits/<int:plan_id>/edit/", views.single_visit_edit, name="single_visit_edit"),
-    path("single-visits/<int:plan_id>/approve/", views.single_visit_approve, name="single_visit_approve"),
-    path("single-visits/<int:plan_id>/reject/", views.single_visit_reject, name="single_visit_reject"),
-    path("single-visit/approve/<str:token>/", views.single_visit_approve_link, name="single_visit_approve_link"),
-    path("single-visit/reject/<str:token>/", views.single_visit_reject_link, name="single_visit_reject_link"),
-
-    # Visit History / Batch Workflow
+    # ── Visit History / Batch (KAM batch flow — kept for existing data) ─
     path("visit-history/", views.visit_batches_page, name="visit_batches"),
     path("visit-history/api/", views.visit_batches_api, name="visit_batches_api"),
     path("visit-history/<int:batch_id>/", views.visit_batch_detail, name="visit_batch_detail"),

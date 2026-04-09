@@ -12,6 +12,16 @@
 #   • Multiple codes CAN map to the same URL — the reverse map merges them.
 #   • If a URL is NOT in the reverse map, middleware lets the view handle it.
 #   • Adding a URL here does NOT replace view-level decorators.
+#
+# KEY CHANGE (Employee Visit Flow):
+#   kam:plan, kam:employee_visit_list, kam:single_visit_detail,
+#   kam:single_visit_edit, kam:employee_visit_approve_link,
+#   kam:employee_visit_reject_link, kam:manager_visit_list
+#   are ALL removed from this map.
+#
+#   Why: These views use @login_required only (no KAM permission needed).
+#   Middleware step 8 = "URL not in map → ALLOW". The views themselves
+#   enforce role-based scoping (employee sees own, manager sees team).
 
 PERMISSION_URLS: dict[str, str] = {
 
@@ -51,36 +61,34 @@ PERMISSION_URLS: dict[str, str] = {
     # ── KAM: Core dashboard ────────────────────────────────────────────
     "kam_dashboard":            "kam:dashboard",
 
-    # ── KAM: Manager-only landing pages ───────────────────────────────
+    # ── KAM: Manager-only pages ────────────────────────────────────────
     "kam_manager":              "kam:manager_dashboard",
-
-    # FIX: kam:manager_view is NOT listed here intentionally.
-    # The view already enforces _is_manager() internally.
-    # Removing it from this map means middleware skips it (step 8: URL not
-    # in map → allow through), and the view's own security check applies.
-    # Previously "kam_manager_view_page" blocked users who only have
-    # "kam_manager" code, causing the redirect-to-dashboard bug in logs.
+    # NOTE: kam:manager_view intentionally NOT listed — view enforces
+    # _is_manager() internally; removing from map avoids false 403s.
 
     "kam_manager_kpis":         "kam:manager_kpis",
 
-    # ── KAM: Plan / Visit workflow ─────────────────────────────────────
-    "kam_plan":                 "kam:plan",
+    # ── KAM: Visit flow — NOT listed here (open to all logged-in users)─
+    # kam:plan                  → @login_required only, no perm needed
+    # kam:employee_visit_list   → @login_required only
+    # kam:single_visit_detail   → @login_required only, scoped in view
+    # kam:single_visit_edit     → @login_required only, scoped in view
+    # kam:manager_visit_list    → @login_required only, view checks role
+    # kam:employee_visit_*_link → @login_required only, token validates
+    # Middleware step 8 applies: URL not in map → ALLOW through to view.
+
+    # ── KAM: Visits actual entry ───────────────────────────────────────
     "kam_visits":               "kam:visits",
 
-    # ── KAM: Single visit workflow ─────────────────────────────────────
-    "kam_single_visit_list":    "kam:single_visit_list",
-    "kam_single_visit_detail":  "kam:single_visit_detail",
-    "kam_single_visit_edit":    "kam:single_visit_edit",
-
-    # ── KAM: Visit approval / rejection (email token links) ────────────
+    # ── KAM: Visit approval / rejection (old KAM batch email links) ────
     "kam_visit_approve":        "kam:visit_batch_approve_link",
     "kam_visit_reject":         "kam:visit_batch_reject_link",
 
-    # Aliases — some manager profiles store these variant codes.
+    # Aliases
     "kam_visit_approve_link":   "kam:single_visit_approve_link",
     "kam_visit_reject_link":    "kam:single_visit_reject_link",
 
-    # Legacy (form-POST) approval views
+    # Legacy form-POST approval views
     "kam_visit_approve_legacy": "kam:visit_approve",
     "kam_visit_reject_legacy":  "kam:visit_reject",
 

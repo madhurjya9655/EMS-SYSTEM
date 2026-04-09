@@ -515,6 +515,23 @@ class VisitPlan(TimeStamped):
     )
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT, null=True, blank=True)
     kam = models.ForeignKey(User, on_delete=models.PROTECT)
+    employee = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="employee_visits",
+        help_text="Employee who applied this visit (universal flow). "
+                  "Null = old KAM-batch visit.",
+    )
+    manager = models.ForeignKey(
+        User,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="managed_visits",
+        help_text="Auto-assigned approving manager (from profile.team_leader).",
+    )
     visit_date = models.DateField()
     visit_date_to = models.DateField(null=True, blank=True)
     visit_type = models.CharField(

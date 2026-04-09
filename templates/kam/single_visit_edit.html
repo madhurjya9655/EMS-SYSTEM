@@ -1,7 +1,8 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% block title %}{{ page_title }}{% endblock %}
-{% block breadcrumb %}KAM / Single Visits / Edit{% endblock %}
+{% block breadcrumb %}KAM / My Visits / Edit{% endblock %}
 
 {% block head_extra %}
 <style>
@@ -24,13 +25,25 @@
     align-items: center;
     gap: 6px;
     border-radius: 999px;
-    padding: 4px 10px;
+    padding: 4px 12px;
     font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
+    letter-spacing: .04em;
   }
-  .status-draft { background: #f3f4f6; color: #6b7280; }
-  .status-rejected { background: #fef2f2; color: #dc2626; }
+  .status-draft     { background: #f3f4f6; color: #6b7280; }
+  .status-rejected  { background: #fef2f2; color: #dc2626; }
+  .status-pending   { background: #fef3c7; color: #d97706; }
+  .status-approved  { background: #dcfce7; color: #16a34a; }
+  .manager-info-box {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+    color: #1e40af;
+  }
+  .manager-info-box .label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #3b82f6; margin-bottom: 4px; }
 </style>
 {% endblock %}
 
@@ -39,119 +52,215 @@
   <div>
     <h1 class="page-title mb-1">{{ page_title }}</h1>
     <div class="d-flex gap-2 flex-wrap mt-2">
-      <span class="status-pill {% if plan.approval_status == 'REJECTED' %}status-rejected{% else %}status-draft{% endif %}">
+      <span class="status-pill {% if plan.approval_status == 'REJECTED' %}status-rejected{% elif plan.approval_status == 'DRAFT' %}status-draft{% elif plan.approval_status == 'PENDING_APPROVAL' %}status-pending{% else %}status-draft{% endif %}">
         {{ plan.get_approval_status_display }}
       </span>
       <span class="text-muted small">{{ visit_category_label }}</span>
     </div>
   </div>
   <div class="d-flex gap-2">
-    <a href="{% url 'kam:single_visit_detail' plan.id %}" class="btn btn-sm btn-outline-secondary">Back</a>
+    <a href="{% url 'kam:single_visit_detail' plan.id %}" class="btn btn-sm btn-outline-secondary">
+      <i class="fas fa-arrow-left me-1"></i>Back to Detail
+    </a>
   </div>
 </div>
 
 {% if messages %}
   <div class="mb-3">
     {% for message in messages %}
-      <div class="alert alert-{{ message.tags|default:'info' }} mb-2">{{ message }}</div>
+      <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show mb-2" role="alert">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      </div>
     {% endfor %}
   </div>
 {% endif %}
 
-<div class="edit-card card">
-  <div class="card-body">
-    {% if plan.approval_status == "REJECTED" and plan.rejection_reason %}
-      <div class="alert alert-danger">
-        <div class="fw-semibold mb-1">Manager Rejection Reason</div>
-        <div>{{ plan.rejection_reason }}</div>
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="edit-card card">
+      <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
+        <span>Edit Visit Details</span>
+        <span class="text-muted small">Visit #{{ plan.id }}</span>
       </div>
+      <div class="card-body p-4">
+
+        {% if plan.approval_status == "REJECTED" and plan.rejection_reason %}
+          <div class="alert alert-danger mb-4">
+            <div class="fw-semibold mb-1">
+              <i class="fas fa-times-circle me-1"></i>Manager Rejection Reason
+            </div>
+            <div>{{ plan.rejection_reason }}</div>
+            {% if is_resubmit %}
+              <div class="mt-2 small">Please address this reason before resubmitting.</div>
+            {% endif %}
+          </div>
+        {% endif %}
+
+        {% if form.non_field_errors %}
+          <div class="alert alert-danger mb-3">
+            {% for err in form.non_field_errors %}
+              <div>{{ err }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+
+        <form method="post" novalidate id="singleVisitEditForm">
+          {% csrf_token %}
+
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="field-label" for="{{ form.visit_category.id_for_label }}">
+                Visit Category <span class="text-danger">*</span>
+              </label>
+              {{ form.visit_category }}
+              {% if form.visit_category.errors %}
+                <div class="text-danger small mt-1">{{ form.visit_category.errors|join:", " }}</div>
+              {% endif %}
+            </div>
+
+            <div class="col-md-6">
+              <label class="field-label" for="{{ form.visit_date.id_for_label }}">
+                Visit Date <span class="text-danger">*</span>
+              </label>
+              {{ form.visit_date }}
+              {% if form.visit_date.errors %}
+                <div class="text-danger small mt-1">{{ form.visit_date.errors|join:", " }}</div>
+              {% endif %}
+            </div>
+
+            <div class="col-md-6" id="customerFieldWrap">
+              <label class="field-label" for="{{ form.customer.id_for_label }}">
+                Customer <span class="text-danger">*</span>
+              </label>
+              {{ form.customer }}
+              {% if form.customer.errors %}
+                <div class="text-danger small mt-1">{{ form.customer.errors|join:", " }}</div>
+              {% endif %}
+            </div>
+
+            <div class="col-md-6" id="counterpartyFieldWrap" style="display:none;">
+              <label class="field-label" for="{{ form.counterparty_name.id_for_label }}">
+                Vendor / Supplier / Warehouse Name <span class="text-danger">*</span>
+              </label>
+              {{ form.counterparty_name }}
+              {% if form.counterparty_name.errors %}
+                <div class="text-danger small mt-1">{{ form.counterparty_name.errors|join:", " }}</div>
+              {% endif %}
+            </div>
+
+            <div class="col-12">
+              <label class="field-label" for="{{ form.location.id_for_label }}">
+                Location <span class="text-danger">*</span>
+              </label>
+              {{ form.location }}
+              {% if form.location.errors %}
+                <div class="text-danger small mt-1">{{ form.location.errors|join:", " }}</div>
+              {% endif %}
+            </div>
+
+            <div class="col-12">
+              <label class="field-label" for="{{ form.purpose.id_for_label }}">
+                Purpose / Remarks <span class="text-danger">*</span>
+              </label>
+              {{ form.purpose }}
+              {% if form.purpose.errors %}
+                <div class="text-danger small mt-1">{{ form.purpose.errors|join:", " }}</div>
+              {% endif %}
+            </div>
+          </div>
+
+          <hr class="my-4" />
+
+          <div class="d-flex gap-2 flex-wrap align-items-center">
+            <button type="submit" name="submit_action" value="save_draft" class="btn btn-outline-secondary">
+              <i class="fas fa-save me-1"></i>Save Draft
+            </button>
+            <button type="submit" name="submit_action" value="submit_to_manager" class="btn btn-primary">
+              <i class="fas fa-paper-plane me-1"></i>
+              {% if is_resubmit %}Resubmit to Manager{% else %}Submit to Manager{% endif %}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header fw-semibold">Approval Info</div>
+      <div class="card-body">
+        <div class="manager-info-box mb-3">
+          <div class="label">Reporting Manager</div>
+          <div><i class="fas fa-user-tie me-1 text-primary"></i> Auto-assigned from your profile</div>
+          <div class="small text-muted mt-1">Manager is automatically fetched from your employee hierarchy. You cannot select manually.</div>
+        </div>
+
+        <table class="table table-sm mb-0">
+          <tr>
+            <th class="text-muted small" style="width:120px;">Visit #</th>
+            <td class="small">{{ plan.id }}</td>
+          </tr>
+          <tr>
+            <th class="text-muted small">Category</th>
+            <td class="small">{{ visit_category_label }}</td>
+          </tr>
+          <tr>
+            <th class="text-muted small">Current Status</th>
+            <td>
+              <span class="status-pill {% if plan.approval_status == 'REJECTED' %}status-rejected{% elif plan.approval_status == 'DRAFT' %}status-draft{% else %}status-draft{% endif %}">
+                {{ plan.get_approval_status_display }}
+              </span>
+            </td>
+          </tr>
+          {% if plan.submitted_at %}
+          <tr>
+            <th class="text-muted small">Submitted</th>
+            <td class="small">{{ plan.submitted_at }}</td>
+          </tr>
+          {% endif %}
+        </table>
+      </div>
+    </div>
+
+    {% if is_resubmit %}
+    <div class="card mt-3">
+      <div class="card-body">
+        <div class="small text-muted">
+          <i class="fas fa-redo me-1 text-warning"></i>
+          <strong>Resubmit Flow:</strong> Fix the issues raised by your manager, then click <em>Resubmit to Manager</em>. A new approval email will be sent automatically.
+        </div>
+      </div>
+    </div>
     {% endif %}
-
-    {% if form.non_field_errors %}
-      <div class="alert alert-danger">
-        {% for err in form.non_field_errors %}
-          <div>{{ err }}</div>
-        {% endfor %}
-      </div>
-    {% endif %}
-
-    <form method="post" novalidate id="singleVisitEditForm">
-      {% csrf_token %}
-
-      <div class="row g-3">
-        <div class="col-md-6">
-          <label class="field-label" for="{{ form.visit_category.id_for_label }}">Visit Category</label>
-          {{ form.visit_category }}
-          {% if form.visit_category.errors %}
-            <div class="text-danger small mt-1">{{ form.visit_category.errors|join:", " }}</div>
-          {% endif %}
-        </div>
-
-        <div class="col-md-6">
-          <label class="field-label" for="{{ form.visit_date.id_for_label }}">Visit Date</label>
-          {{ form.visit_date }}
-          {% if form.visit_date.errors %}
-            <div class="text-danger small mt-1">{{ form.visit_date.errors|join:", " }}</div>
-          {% endif %}
-        </div>
-
-        <div class="col-md-6" id="customerFieldWrap">
-          <label class="field-label" for="{{ form.customer.id_for_label }}">Customer</label>
-          {{ form.customer }}
-          {% if form.customer.errors %}
-            <div class="text-danger small mt-1">{{ form.customer.errors|join:", " }}</div>
-          {% endif %}
-        </div>
-
-        <div class="col-md-6" id="counterpartyFieldWrap">
-          <label class="field-label" for="{{ form.counterparty_name.id_for_label }}">
-            Customer / Vendor / Supplier / Warehouse Name
-          </label>
-          {{ form.counterparty_name }}
-          {% if form.counterparty_name.errors %}
-            <div class="text-danger small mt-1">{{ form.counterparty_name.errors|join:", " }}</div>
-          {% endif %}
-        </div>
-
-        <div class="col-12">
-          <label class="field-label" for="{{ form.location.id_for_label }}">Location</label>
-          {{ form.location }}
-          {% if form.location.errors %}
-            <div class="text-danger small mt-1">{{ form.location.errors|join:", " }}</div>
-          {% endif %}
-        </div>
-
-        <div class="col-12">
-          <label class="field-label" for="{{ form.purpose.id_for_label }}">Purpose / Remarks</label>
-          {{ form.purpose }}
-          {% if form.purpose.errors %}
-            <div class="text-danger small mt-1">{{ form.purpose.errors|join:", " }}</div>
-          {% endif %}
-        </div>
-      </div>
-
-      <div class="d-flex gap-2 flex-wrap mt-4">
-        <button type="submit" name="submit_action" value="save_draft" class="btn btn-outline-secondary">
-          Save Draft
-        </button>
-        <button type="submit" name="submit_action" value="submit_to_manager" class="btn btn-primary">
-          {% if is_resubmit %}Resubmit to Manager{% else %}Submit to Manager{% endif %}
-        </button>
-      </div>
-    </form>
   </div>
 </div>
 
 <script>
 (function () {
-  const categoryField = document.getElementById("{{ form.visit_category.id_for_label }}");
-  const customerWrap = document.getElementById("customerFieldWrap");
-  const counterpartyWrap = document.getElementById("counterpartyFieldWrap");
+  // Auto-apply Bootstrap classes to form fields rendered by Django forms
+  document.querySelectorAll("#singleVisitEditForm select").forEach(el => {
+    if (!el.classList.contains("form-select")) el.classList.add("form-select", "form-select-sm");
+  });
+  document.querySelectorAll("#singleVisitEditForm input[type='date']").forEach(el => {
+    if (!el.classList.contains("form-control")) el.classList.add("form-control", "form-control-sm");
+  });
+  document.querySelectorAll("#singleVisitEditForm input:not([type='hidden'])").forEach(el => {
+    if (!el.classList.contains("form-control")) el.classList.add("form-control", "form-control-sm");
+  });
+  document.querySelectorAll("#singleVisitEditForm textarea").forEach(el => {
+    if (!el.classList.contains("form-control")) el.classList.add("form-control", "form-control-sm");
+  });
+
+  // Toggle customer vs counterparty field based on visit category
+  const categoryField     = document.getElementById("{{ form.visit_category.id_for_label }}");
+  const customerWrap      = document.getElementById("customerFieldWrap");
+  const counterpartyWrap  = document.getElementById("counterpartyFieldWrap");
 
   function syncFields() {
     if (!categoryField) return;
     const isCustomer = (categoryField.value || "") === "CUSTOMER";
-    if (customerWrap) customerWrap.style.display = isCustomer ? "" : "none";
+    if (customerWrap)     customerWrap.style.display     = isCustomer ? "" : "none";
     if (counterpartyWrap) counterpartyWrap.style.display = isCustomer ? "none" : "";
   }
 

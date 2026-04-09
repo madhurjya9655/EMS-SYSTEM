@@ -50,9 +50,7 @@
     background: #fff;
   }
 
-  .kam-section-card .card-body {
-    padding: 1rem;
-  }
+  .kam-section-card .card-body { padding: 1rem; }
 
   .kam-global-window {
     border: 1px solid rgba(13,110,253,.18);
@@ -61,33 +59,27 @@
     padding: .75rem .9rem;
   }
 
-  .kam-global-window .kam-window-label {
-    font-size: .875rem;
-    color: #495057;
-  }
+  .kam-global-window .kam-window-label { font-size: .875rem; color: #495057; }
+  .kam-global-window .kam-window-value { font-weight: 600; color: #212529; }
 
-  .kam-global-window .kam-window-value {
-    font-weight: 600;
-    color: #212529;
-  }
+  .kam-table-input { min-width: 140px; }
+  .kam-table-input-wide { min-width: 220px; }
+  .kam-table-input-num { min-width: 160px; text-align: right; }
 
-  .kam-table-input {
-    min-width: 140px;
-  }
+  .kam-muted-note { font-size: .875rem; color: #6c757d; }
 
-  .kam-table-input-wide {
-    min-width: 220px;
+  .status-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
   }
-
-  .kam-table-input-num {
-    min-width: 160px;
-    text-align: right;
-  }
-
-  .kam-muted-note {
-    font-size: .875rem;
-    color: #6c757d;
-  }
+  .status-badge-draft { background: #f3f4f6; color: #6b7280; }
+  .status-badge-pending { background: #fef3c7; color: #d97706; }
+  .status-badge-approved { background: #dcfce7; color: #16a34a; }
+  .status-badge-rejected { background: #fee2e2; color: #dc2626; }
 </style>
 
 <div class="container-fluid kam-form">
@@ -95,11 +87,11 @@
     <div>
       <h3 class="mb-0">{{ page_title|default:"Plan Visit" }}</h3>
       <div class="kam-muted-note mt-1">
-        Create Batch Visits or Single Visits from one place.
+        Submit visit plans for manager approval. Any active employee can apply.
       </div>
     </div>
     <div class="d-flex align-items-center gap-2 flex-wrap">
-      <a class="btn btn-sm btn-outline-primary" href="{% url 'kam:single_visit_list' %}">Single Visits</a>
+      <a class="btn btn-sm btn-outline-primary" href="{% url 'kam:single_visit_list' %}">My Visits</a>
       <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:visit_batches' %}">View Batches</a>
     </div>
   </div>
@@ -107,44 +99,156 @@
   {% if messages %}
     <div class="mb-3">
       {% for message in messages %}
-        <div class="alert alert-{{ message.tags|default:'info' }} mb-2">{{ message }}</div>
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show mb-2" role="alert">
+          {{ message }}
+          <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
       {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if not visitplan_schema_ready %}
+    <div class="alert alert-warning">
+      <strong>Database migration required.</strong>
+      Run: <code>python manage.py makemigrations &amp;&amp; python manage.py migrate</code>
     </div>
   {% endif %}
 
   <ul class="nav nav-tabs" id="planTabs" role="tablist">
     <li class="nav-item" role="presentation">
-      <a class="nav-link active"
-         id="batch-tab"
+      <a class="nav-link active" id="single-tab"
          data-toggle="tab" data-bs-toggle="tab"
-         href="#batch"
-         role="tab"
-         aria-controls="batch"
-         aria-selected="true">
-        Batch (Primary)
+         href="#single" role="tab"
+         aria-controls="single" aria-selected="true">
+        Single Visit
       </a>
     </li>
     <li class="nav-item" role="presentation">
-      <a class="nav-link"
-         id="single-tab"
+      <a class="nav-link" id="batch-tab"
          data-toggle="tab" data-bs-toggle="tab"
-         href="#single"
-         role="tab"
-         aria-controls="single"
-         aria-selected="false">
-        Single Visit
+         href="#batch" role="tab"
+         aria-controls="batch" aria-selected="false">
+        Batch Visit
       </a>
     </li>
   </ul>
 
   <div class="tab-content border border-top-0 p-3 bg-white" id="planTabsContent">
 
-    <div class="tab-pane fade show active" id="batch" role="tabpanel" aria-labelledby="batch-tab">
+    <!-- ═══════════════════════════════════════════════
+         SINGLE VISIT TAB
+    ════════════════════════════════════════════════ -->
+    <div class="tab-pane fade show active" id="single" role="tabpanel" aria-labelledby="single-tab">
+
+      <div class="row mb-3 mt-1">
+        <div class="col-12">
+          <div class="alert alert-info d-flex align-items-center gap-2 py-2 mb-0" role="alert">
+            <i class="fas fa-info-circle"></i>
+            <div class="small">
+              Your <strong>Reporting Manager</strong> is assigned automatically from your employee profile.
+              No manual manager selection required.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <form method="post" id="singleForm" novalidate>
+        {% csrf_token %}
+        <input type="hidden" name="mode" value="single" />
+
+        {% if single_form.non_field_errors %}
+          <div class="alert alert-danger">
+            {% for err in single_form.non_field_errors %}
+              <div>{{ err }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+
+        <div class="row g-3 align-items-start">
+          <div class="col-12 col-md-4">
+            <label class="form-label mb-1" for="{{ single_form.visit_category.id_for_label }}">
+              Visit Category <span class="text-danger">*</span>
+            </label>
+            {{ single_form.visit_category }}
+            {% if single_form.visit_category.errors %}
+              <div class="text-danger small mt-1">{{ single_form.visit_category.errors }}</div>
+            {% endif %}
+          </div>
+
+          <div class="col-12 col-md-4">
+            <label class="form-label mb-1" for="{{ single_form.visit_date.id_for_label }}">
+              Visit Date <span class="text-danger">*</span>
+            </label>
+            {{ single_form.visit_date }}
+            {% if single_form.visit_date.errors %}
+              <div class="text-danger small mt-1">{{ single_form.visit_date.errors }}</div>
+            {% endif %}
+          </div>
+
+          <div class="col-12 col-md-6" id="singleCustomerWrap">
+            <label class="form-label mb-1" for="{{ single_form.customer.id_for_label }}">
+              Customer <span class="text-danger">*</span>
+            </label>
+            {{ single_form.customer }}
+            {% if single_form.customer.errors %}
+              <div class="text-danger small mt-1">{{ single_form.customer.errors }}</div>
+            {% endif %}
+          </div>
+
+          <div class="col-12 col-md-6" id="singleCounterpartyWrap" style="display:none;">
+            <label class="form-label mb-1" for="{{ single_form.counterparty_name.id_for_label }}">
+              Vendor / Supplier / Warehouse Name <span class="text-danger">*</span>
+            </label>
+            {{ single_form.counterparty_name }}
+            {% if single_form.counterparty_name.errors %}
+              <div class="text-danger small mt-1">{{ single_form.counterparty_name.errors }}</div>
+            {% endif %}
+          </div>
+
+          <div class="col-12 col-md-6">
+            <label class="form-label mb-1" for="{{ single_form.location.id_for_label }}">
+              Location <span class="text-danger">*</span>
+            </label>
+            {{ single_form.location }}
+            {% if single_form.location.errors %}
+              <div class="text-danger small mt-1">{{ single_form.location.errors }}</div>
+            {% endif %}
+          </div>
+
+          <div class="col-12 col-md-6">
+            <label class="form-label mb-1" for="{{ single_form.purpose.id_for_label }}">
+              Purpose / Remarks <span class="text-danger">*</span>
+            </label>
+            {{ single_form.purpose }}
+            {% if single_form.purpose.errors %}
+              <div class="text-danger small mt-1">{{ single_form.purpose.errors }}</div>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="d-flex gap-2 mt-4 flex-wrap align-items-center">
+          <button type="submit" class="btn btn-outline-secondary" name="submit_action" value="save_draft">
+            <i class="fas fa-save me-1"></i> Save Draft
+          </button>
+          <button type="submit" class="btn btn-primary" name="submit_action" value="submit_to_manager">
+            <i class="fas fa-paper-plane me-1"></i> Submit to Manager
+          </button>
+          <span class="kam-muted-note ms-2">
+            <i class="fas fa-lock me-1"></i> Manager is auto-assigned from your reporting officer
+          </span>
+        </div>
+      </form>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════
+         BATCH VISIT TAB
+    ════════════════════════════════════════════════ -->
+    <div class="tab-pane fade" id="batch" role="tabpanel" aria-labelledby="batch-tab">
       <form method="post" id="batchForm" novalidate>
         {% csrf_token %}
         <input type="hidden" name="mode" value="batch" />
 
-        <div class="row g-3 align-items-end">
+        <div class="row g-3 align-items-end mt-1">
           <div class="col-12 col-lg-3">
             <label class="form-label mb-1">Visit Category</label>
             {{ batch_form.visit_category }}
@@ -187,8 +291,8 @@
 
         <hr class="my-3" />
 
-        <div id="categoryHint" class="kam-hint" style="display:none;">
-          Select a <b>Visit Category</b> to continue.
+        <div id="categoryHint" class="kam-hint">
+          Select a <b>Visit Category</b> above to continue.
         </div>
 
         <div id="customerBatchSection" style="display:none;">
@@ -202,9 +306,10 @@
                     <option value="SHEET">SHEET</option>
                     <option value="MANUAL">MANUAL</option>
                   </select>
-                  <button type="button" class="btn btn-sm btn-outline-primary" id="btnRefreshCustomers">Refresh</button>
+                  <button type="button" class="btn btn-sm btn-outline-primary" id="btnRefreshCustomers">
+                    <i class="fas fa-sync-alt me-1"></i>Refresh
+                  </button>
                 </div>
-
                 <div class="d-flex gap-2 align-items-center flex-wrap">
                   <button type="button" class="btn btn-sm btn-outline-success"
                           data-toggle="modal" data-bs-toggle="modal"
@@ -241,10 +346,10 @@
 
               <div class="d-flex gap-2 mt-3 flex-wrap">
                 <button type="submit" name="action" value="save_draft" class="btn btn-outline-secondary">
-                  Save Draft Batch
+                  <i class="fas fa-save me-1"></i> Save Draft Batch
                 </button>
                 <button type="submit" name="action" value="proceed" class="btn btn-primary">
-                  Proceed to Manager
+                  <i class="fas fa-paper-plane me-1"></i> Proceed to Manager
                 </button>
               </div>
             </div>
@@ -277,10 +382,10 @@
 
               <div class="d-flex gap-2 mt-3 flex-wrap">
                 <button type="submit" name="action" value="save_draft" class="btn btn-outline-secondary">
-                  Save Draft Batch
+                  <i class="fas fa-save me-1"></i> Save Draft Batch
                 </button>
                 <button type="submit" name="action" value="proceed" class="btn btn-primary">
-                  Proceed to Manager
+                  <i class="fas fa-paper-plane me-1"></i> Proceed to Manager
                 </button>
               </div>
             </div>
@@ -288,111 +393,78 @@
         </div>
       </form>
     </div>
-
-    <div class="tab-pane fade" id="single" role="tabpanel" aria-labelledby="single-tab">
-      <form method="post" id="singleForm" novalidate>
-        {% csrf_token %}
-        <input type="hidden" name="mode" value="single" />
-
-        {% if single_form.non_field_errors %}
-          <div class="alert alert-danger">
-            {% for err in single_form.non_field_errors %}
-              <div>{{ err }}</div>
-            {% endfor %}
-          </div>
-        {% endif %}
-
-        <div class="row g-3 align-items-end">
-          <div class="col-12 col-md-4">
-            <label class="form-label mb-1">Visit Category</label>
-            {{ single_form.visit_category }}
-            {% if single_form.visit_category.errors %}
-              <div class="text-danger small mt-1">{{ single_form.visit_category.errors }}</div>
-            {% endif %}
-          </div>
-
-          <div class="col-12 col-md-4">
-            <label class="form-label mb-1">Visit Date</label>
-            {{ single_form.visit_date }}
-            {% if single_form.visit_date.errors %}
-              <div class="text-danger small mt-1">{{ single_form.visit_date.errors }}</div>
-            {% endif %}
-          </div>
-
-          <div class="col-12 col-md-6" id="singleCustomerWrap">
-            <label class="form-label mb-1">Customer</label>
-            {{ single_form.customer }}
-            {% if single_form.customer.errors %}
-              <div class="text-danger small mt-1">{{ single_form.customer.errors }}</div>
-            {% endif %}
-          </div>
-
-          <div class="col-12 col-md-6" id="singleCounterpartyWrap">
-            <label class="form-label mb-1">Customer / Vendor / Supplier / Warehouse Name</label>
-            {{ single_form.counterparty_name }}
-            {% if single_form.counterparty_name.errors %}
-              <div class="text-danger small mt-1">{{ single_form.counterparty_name.errors }}</div>
-            {% endif %}
-          </div>
-
-          <div class="col-12 col-md-6">
-            <label class="form-label mb-1">Location</label>
-            {{ single_form.location }}
-            {% if single_form.location.errors %}
-              <div class="text-danger small mt-1">{{ single_form.location.errors }}</div>
-            {% endif %}
-          </div>
-
-          <div class="col-12 col-md-6">
-            <label class="form-label mb-1">Purpose / Remarks</label>
-            {{ single_form.purpose }}
-            {% if single_form.purpose.errors %}
-              <div class="text-danger small mt-1">{{ single_form.purpose.errors }}</div>
-            {% endif %}
-          </div>
-        </div>
-
-        <div class="d-flex gap-2 mt-3 flex-wrap">
-          <button type="submit" class="btn btn-outline-secondary" name="submit_action" value="save_draft">
-            Save Draft
-          </button>
-          <button type="submit" class="btn btn-primary" name="submit_action" value="submit_to_manager">
-            Submit to Manager
-          </button>
-        </div>
-      </form>
-    </div>
   </div>
 
+  <!-- ═══════════════════════════════════════════════
+       THIS WEEK'S PLANS TABLE
+  ════════════════════════════════════════════════ -->
   <hr class="my-4" />
 
-  <h5 class="mb-2">This Week Plans</h5>
+  <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
+    <h5 class="mb-0">This Week's Visit Plans</h5>
+    <a href="{% url 'kam:single_visit_list' %}" class="btn btn-sm btn-outline-primary">View All</a>
+  </div>
+
   <div class="table-responsive">
     <table class="table table-sm table-striped align-middle">
-      <thead>
+      <thead class="table-light">
         <tr>
+          <th>#</th>
           <th>Date</th>
           <th>Customer / Counterparty</th>
           <th>Category</th>
+          <th>Location</th>
           <th>Status</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
         {% for p in plans %}
           <tr>
-            <td>{{ p.visit_date }}{% if p.visit_date_to %} → {{ p.visit_date_to }}{% endif %}</td>
-            <td>{% if p.customer %}{{ p.customer.name }}{% else %}{{ p.counterparty_name }}{% endif %}</td>
+            <td class="text-muted small">{{ p.id }}</td>
+            <td>{{ p.visit_date }}{% if p.visit_date_to %} &rarr; {{ p.visit_date_to }}{% endif %}</td>
+            <td>
+              {% if p.customer %}{{ p.customer.name }}
+              {% else %}{{ p.counterparty_name|default:"&mdash;" }}
+              {% endif %}
+            </td>
             <td>{{ p.get_visit_category_display }}</td>
-            <td>{{ p.approval_status }}</td>
+            <td class="text-muted small">{{ p.location|default:"&mdash;" }}</td>
+            <td>
+              {% if p.approval_status == "DRAFT" %}
+                <span class="status-badge status-badge-draft">Draft</span>
+              {% elif p.approval_status == "PENDING_APPROVAL" %}
+                <span class="status-badge status-badge-pending">Pending</span>
+              {% elif p.approval_status == "APPROVED" %}
+                <span class="status-badge status-badge-approved">Approved</span>
+              {% elif p.approval_status == "REJECTED" %}
+                <span class="status-badge status-badge-rejected">Rejected</span>
+              {% else %}
+                <span class="status-badge status-badge-draft">{{ p.approval_status }}</span>
+              {% endif %}
+            </td>
+            <td>
+              <a href="{% url 'kam:single_visit_detail' p.id %}" class="btn btn-xs btn-outline-secondary" style="font-size:12px;padding:2px 8px;">
+                View
+              </a>
+              {% if p.approval_status == "DRAFT" or p.approval_status == "REJECTED" %}
+                <a href="{% url 'kam:single_visit_edit' p.id %}" class="btn btn-xs btn-outline-primary ms-1" style="font-size:12px;padding:2px 8px;">
+                  Edit
+                </a>
+              {% endif %}
+            </td>
           </tr>
         {% empty %}
-          <tr><td colspan="4" class="text-muted">No plans in this week.</td></tr>
+          <tr>
+            <td colspan="7" class="text-muted text-center py-3">No visit plans this week. Use the form above to create one.</td>
+          </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </div>
 
+<!-- Manual Customer Modal -->
 <div class="modal fade" id="manualCustomerModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
@@ -403,28 +475,28 @@
       <div class="modal-body">
         <div class="row g-3">
           <div class="col-12 col-md-6">
-            <label class="form-label mb-1">Name *</label>
-            <input class="form-control form-control-sm" id="mc_name" />
+            <label class="form-label mb-1">Name <span class="text-danger">*</span></label>
+            <input class="form-control form-control-sm" id="mc_name" placeholder="Customer name" />
           </div>
           <div class="col-12 col-md-6">
             <label class="form-label mb-1">Mobile</label>
-            <input class="form-control form-control-sm" id="mc_mobile" />
+            <input class="form-control form-control-sm" id="mc_mobile" placeholder="Mobile number" />
           </div>
           <div class="col-12">
             <label class="form-label mb-1">Address</label>
-            <input class="form-control form-control-sm" id="mc_address" />
+            <input class="form-control form-control-sm" id="mc_address" placeholder="Full address" />
           </div>
           <div class="col-12 col-md-6">
             <label class="form-label mb-1">Email</label>
-            <input class="form-control form-control-sm" id="mc_email" />
+            <input class="form-control form-control-sm" id="mc_email" placeholder="email@example.com" />
           </div>
           <div class="col-12 col-md-6">
             <label class="form-label mb-1">GST Number</label>
-            <input class="form-control form-control-sm" id="mc_gst" />
+            <input class="form-control form-control-sm" id="mc_gst" placeholder="GST number" />
           </div>
           <div class="col-12 col-md-4">
             <label class="form-label mb-1">Pincode</label>
-            <input class="form-control form-control-sm" id="mc_pincode" />
+            <input class="form-control form-control-sm" id="mc_pincode" placeholder="Pincode" />
           </div>
         </div>
         <div class="small text-muted mt-2">Manual customers are editable/deletable; sheet customers are read-only.</div>
@@ -433,7 +505,7 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-outline-secondary" type="button" data-dismiss="modal" data-bs-dismiss="modal">Close</button>
-        <button class="btn btn-success" type="button" id="mc_save">Save</button>
+        <button class="btn btn-success" type="button" id="mc_save">Save Customer</button>
       </div>
     </div>
   </div>
@@ -443,56 +515,40 @@
 (function() {
   function applyBootstrap() {
     document.querySelectorAll("#batchForm select, #singleForm select").forEach(el => {
-      el.classList.add("form-select", "form-select-sm");
+      if (!el.classList.contains("form-select")) el.classList.add("form-select", "form-select-sm");
     });
-
     document.querySelectorAll("#batchForm input, #singleForm input").forEach(el => {
-      if (el.type === "checkbox" || el.type === "hidden") return;
-      el.classList.add("form-control", "form-control-sm");
+      if (el.type === "checkbox" || el.type === "hidden" || el.type === "date") return;
+      if (!el.classList.contains("form-control")) el.classList.add("form-control", "form-control-sm");
     });
-
+    document.querySelectorAll('#batchForm input[type="date"], #singleForm input[type="date"]').forEach(el => {
+      if (!el.classList.contains("form-control")) el.classList.add("form-control", "form-control-sm");
+    });
     document.querySelectorAll("#batchForm textarea, #singleForm textarea").forEach(el => {
-      el.classList.add("form-control", "form-control-sm");
+      if (!el.classList.contains("form-control")) el.classList.add("form-control", "form-control-sm");
     });
-
     const purpose = document.querySelector('#batchForm textarea[name$="purpose"]');
     if (purpose) purpose.classList.add("kam-remarks-compact");
   }
 
   function getCookie(name) {
-    let cookieValue = null;
-    if (document.cookie && document.cookie !== "") {
-      const cookies = document.cookie.split(";");
-      for (let i = 0; i < cookies.length; i++) {
-        const cookie = cookies[i].trim();
-        if (cookie.substring(0, name.length + 1) === (name + "=")) {
-          cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-          break;
-        }
-      }
+    let v = null;
+    if (document.cookie) {
+      document.cookie.split(";").forEach(c => {
+        c = c.trim();
+        if (c.startsWith(name + "=")) v = decodeURIComponent(c.slice(name.length + 1));
+      });
     }
-    return cookieValue;
+    return v;
   }
 
   function esc(s) {
-    return (s || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+    return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
 
-  function qs(sel) {
-    return document.querySelector(sel);
-  }
-
-  function isCustomerCat(v) {
-    return String(v || "").toUpperCase() === "CUSTOMER";
-  }
-
-  function hasCat(v) {
-    return String(v || "").trim() !== "";
-  }
+  function qs(sel) { return document.querySelector(sel); }
+  function isCustomerCat(v) { return String(v||"").toUpperCase() === "CUSTOMER"; }
+  function hasCat(v) { return String(v||"").trim() !== ""; }
 
   const csrftoken          = getCookie("csrftoken");
   const batchForm          = document.getElementById("batchForm");
@@ -513,7 +569,6 @@
   const batchCategoryEl    = qs('#batchForm select[name$="visit_category"]');
   const batchFromEl        = qs('#batchForm input[type="date"][name$="from_date"]');
   const batchToEl          = qs('#batchForm input[type="date"][name$="to_date"]');
-
   const singleCategoryEl   = qs('#singleForm select[name$="visit_category"]');
   const singleCustomerWrap = document.getElementById("singleCustomerWrap");
   const singleCpWrap       = document.getElementById("singleCounterpartyWrap");
@@ -524,16 +579,10 @@
     if (!globalDateInfoText) return;
     const f = batchFromEl ? (batchFromEl.value || "") : "";
     const t = batchToEl ? (batchToEl.value || "") : "";
-
-    if (f && t) {
-      globalDateInfoText.textContent = f + " → " + t;
-    } else if (f) {
-      globalDateInfoText.textContent = f + " → Select To Date";
-    } else if (t) {
-      globalDateInfoText.textContent = "Select From Date → " + t;
-    } else {
-      globalDateInfoText.textContent = "Select From Date and To Date above.";
-    }
+    if (f && t) globalDateInfoText.textContent = f + " → " + t;
+    else if (f) globalDateInfoText.textContent = f + " → (select To Date)";
+    else if (t) globalDateInfoText.textContent = "(select From Date) → " + t;
+    else globalDateInfoText.textContent = "Select From Date and To Date above.";
   }
 
   let selectedSet = new Set();
@@ -542,35 +591,23 @@
   function updateSelectedCount() {
     const checks = document.querySelectorAll(".cust-check");
     let cnt = 0;
-    let total = checks.length;
-
-    checks.forEach(ch => {
-      if (ch.checked) cnt++;
-    });
-
+    checks.forEach(ch => { if (ch.checked) cnt++; });
     if (selCount) selCount.textContent = `${cnt} selected`;
-
     if (selectAllCust) {
-      selectAllCust.checked = total > 0 && cnt === total;
-      selectAllCust.indeterminate = cnt > 0 && cnt < total;
+      selectAllCust.checked = checks.length > 0 && cnt === checks.length;
+      selectAllCust.indeterminate = cnt > 0 && cnt < checks.length;
     }
   }
 
   function toggleSections() {
     const v = batchCategoryEl ? batchCategoryEl.value : "";
-
     if (!hasCat(v)) {
       if (categoryHint) categoryHint.style.display = "";
       if (customerSection) customerSection.style.display = "none";
       if (nonCustomerSection) nonCustomerSection.style.display = "none";
-      if (custTbody) {
-        custTbody.innerHTML = `<tr><td colspan="6" class="text-muted">Select category to load customers…</td></tr>`;
-      }
       return;
     }
-
     if (categoryHint) categoryHint.style.display = "none";
-
     if (isCustomerCat(v)) {
       if (customerSection) customerSection.style.display = "";
       if (nonCustomerSection) nonCustomerSection.style.display = "none";
@@ -585,76 +622,60 @@
   function toggleSingleFields() {
     const v = singleCategoryEl ? singleCategoryEl.value : "";
     const isCust = isCustomerCat(v);
-
     if (singleCustomerWrap) singleCustomerWrap.style.display = isCust ? "" : "none";
     if (singleCpWrap) singleCpWrap.style.display = isCust ? "none" : "";
   }
 
   function loadCustomers() {
     if (!custTbody) return;
-
     document.querySelectorAll(".cust-check").forEach(ch => {
       if (ch.checked) selectedSet.add(String(ch.getAttribute("data-cid")));
     });
-
-    custTbody.innerHTML = `<tr><td colspan="6" class="text-muted">Loading…</td></tr>`;
-
-    const q = encodeURIComponent((custSearch && custSearch.value) ? custSearch.value : "");
-    const src = encodeURIComponent((custSource && custSource.value) ? custSource.value : "");
-
-    fetch(`${apiUrl}?q=${q}&source=${src}`, {
-      headers: { "Accept": "application/json" }
-    })
+    custTbody.innerHTML = `<tr><td colspan="6" class="text-muted text-center py-3"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</td></tr>`;
+    const q = encodeURIComponent((custSearch && custSearch.value) || "");
+    const src = encodeURIComponent((custSource && custSource.value) || "");
+    fetch(`${apiUrl}?q=${q}&source=${src}`, { headers: { "Accept": "application/json" } })
       .then(r => r.json())
       .then(data => {
-        if (!data.ok) throw new Error(data.error || "Failed");
+        if (!data.ok) throw new Error(data.error || "Failed to load customers");
         customerCache = data.customers || [];
         renderCustomers();
       })
       .catch(err => {
-        custTbody.innerHTML = `<tr><td colspan="6" class="text-danger">Error: ${esc(err.message)}</td></tr>`;
+        custTbody.innerHTML = `<tr><td colspan="6" class="text-danger text-center py-3">Error: ${esc(err.message)}</td></tr>`;
       });
   }
 
   function renderCustomers() {
     if (!custTbody) return;
-
     if (!customerCache.length) {
-      custTbody.innerHTML = `<tr><td colspan="6" class="text-muted">No customers found.</td></tr>`;
+      custTbody.innerHTML = `<tr><td colspan="6" class="text-muted text-center py-3">No customers found.</td></tr>`;
       updateSelectedCount();
       return;
     }
-
     const rows = customerCache.map(c => {
       const cid = String(c.id);
       const checked = selectedSet.has(cid) ? "checked" : "";
-
-      return `
-        <tr>
-          <td><input class="form-check-input cust-check" type="checkbox" data-cid="${esc(cid)}" ${checked}></td>
-          <td>
-            <div class="fw-semibold">${esc(c.name)}</div>
-            <div class="small text-muted">${esc(c.code || "")}${c.mobile ? " • " + esc(c.mobile) : ""}</div>
-          </td>
-          <td><input class="form-control form-control-sm kam-table-input-wide" type="text" name="purpose_${esc(cid)}" placeholder="Optional"></td>
-          <td><input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_sales_mt_${esc(cid)}" placeholder="e.g. 12.5"></td>
-          <td><input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_collection_${esc(cid)}" placeholder="e.g. 250000"></td>
-          <td><span class="badge bg-light text-dark">${esc((c.source || "").toUpperCase())}</span></td>
-        </tr>
-      `;
+      return `<tr>
+        <td><input class="form-check-input cust-check" type="checkbox" data-cid="${esc(cid)}" ${checked}></td>
+        <td>
+          <div class="fw-semibold">${esc(c.name)}</div>
+          <div class="small text-muted">${esc(c.code||"")}${c.mobile?" &bull; "+esc(c.mobile):""}</div>
+        </td>
+        <td><input class="form-control form-control-sm kam-table-input-wide" type="text" name="purpose_${esc(cid)}" placeholder="Optional"></td>
+        <td><input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_sales_mt_${esc(cid)}" placeholder="e.g. 12.5"></td>
+        <td><input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_collection_${esc(cid)}" placeholder="e.g. 250000"></td>
+        <td><span class="badge bg-light text-dark border">${esc((c.source||"").toUpperCase())}</span></td>
+      </tr>`;
     }).join("");
-
     custTbody.innerHTML = rows;
-
     document.querySelectorAll(".cust-check").forEach(ch => {
       ch.addEventListener("change", () => {
         const cid = String(ch.getAttribute("data-cid"));
-        if (ch.checked) selectedSet.add(cid);
-        else selectedSet.delete(cid);
+        if (ch.checked) selectedSet.add(cid); else selectedSet.delete(cid);
         updateSelectedCount();
       });
     });
-
     updateSelectedCount();
   }
 
@@ -663,21 +684,9 @@
       document.querySelectorAll(".cust-check").forEach(ch => {
         ch.checked = selectAllCust.checked;
         const cid = String(ch.getAttribute("data-cid"));
-        if (ch.checked) selectedSet.add(cid);
-        else selectedSet.delete(cid);
+        if (ch.checked) selectedSet.add(cid); else selectedSet.delete(cid);
       });
       updateSelectedCount();
-    });
-  }
-
-  if (btnRefresh) btnRefresh.addEventListener("click", loadCustomers);
-  if (custSource) custSource.addEventListener("change", loadCustomers);
-  if (custSearch) {
-    custSearch.addEventListener("keydown", e => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        loadCustomers();
-      }
     });
   }
 
@@ -685,7 +694,6 @@
     batchForm.addEventListener("submit", () => {
       if (!selectedHidden) return;
       selectedHidden.innerHTML = "";
-
       document.querySelectorAll(".cust-check").forEach(ch => {
         if (!ch.checked) return;
         const inp = document.createElement("input");
@@ -699,15 +707,12 @@
 
   function addLine() {
     if (!nonCustomerTbody) return;
-
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td><input class="form-control form-control-sm" name="counterparty_name[]" placeholder="Name"></td>
+      <td><input class="form-control form-control-sm" name="counterparty_name[]" placeholder="Name *"></td>
       <td><input class="form-control form-control-sm" name="counterparty_location[]" placeholder="Location"></td>
       <td><input class="form-control form-control-sm" name="counterparty_purpose[]" placeholder="Purpose"></td>
-      <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger">Remove</button></td>
-    `;
-
+      <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger">Remove</button></td>`;
     tr.querySelector("button").addEventListener("click", () => tr.remove());
     nonCustomerTbody.appendChild(tr);
   }
@@ -715,46 +720,39 @@
   const mcSave = document.getElementById("mc_save");
   const mcErr  = document.getElementById("mc_err");
   const mcOk   = document.getElementById("mc_ok");
-
   if (mcSave) {
     mcSave.addEventListener("click", () => {
       const payload = new URLSearchParams();
-
-      ["name", "mobile", "address", "email", "gst_number", "pincode"].forEach(k => {
+      ["name","mobile","address","email","gst_number","pincode"].forEach(k => {
         const el = document.getElementById("mc_" + (k === "gst_number" ? "gst" : k));
         payload.append(k, (el && el.value) || "");
       });
-
       fetch("{% url 'kam:customer_create_manual' %}", {
         method: "POST",
-        headers: {
-          "X-CSRFToken": csrftoken,
-          "Accept": "application/json"
-        },
+        headers: { "X-CSRFToken": csrftoken, "Accept": "application/json" },
         body: payload,
       })
-      .then(r => r.json().then(j => ({ ok: r.ok, json: j })))
-      .then(({ ok, json }) => {
-        if (!ok || !json.ok) throw new Error(json.error || "Failed");
-
-        if (mcErr) mcErr.style.display = "none";
-        if (mcOk) {
-          mcOk.style.display = "";
-          mcOk.textContent = "Saved. Refreshing list…";
-        }
-
-        loadCustomers();
-      })
-      .catch(err => {
-        if (mcOk) mcOk.style.display = "none";
-        if (mcErr) {
-          mcErr.style.display = "";
-          mcErr.textContent = err.message;
-        }
-      });
+        .then(r => r.json().then(j => ({ ok: r.ok, json: j })))
+        .then(({ ok, json }) => {
+          if (!ok || !json.ok) throw new Error(json.error || "Failed");
+          if (mcErr) mcErr.style.display = "none";
+          if (mcOk) { mcOk.style.display = ""; mcOk.textContent = "Saved. Refreshing customer list…"; }
+          loadCustomers();
+        })
+        .catch(err => {
+          if (mcOk) mcOk.style.display = "none";
+          if (mcErr) { mcErr.style.display = ""; mcErr.textContent = err.message; }
+        });
     });
   }
 
+  if (btnRefresh) btnRefresh.addEventListener("click", loadCustomers);
+  if (custSource) custSource.addEventListener("change", loadCustomers);
+  if (custSearch) {
+    custSearch.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); loadCustomers(); }
+    });
+  }
   if (addLineBtn) addLineBtn.addEventListener("click", addLine);
   if (batchCategoryEl) batchCategoryEl.addEventListener("change", toggleSections);
   if (singleCategoryEl) singleCategoryEl.addEventListener("change", toggleSingleFields);

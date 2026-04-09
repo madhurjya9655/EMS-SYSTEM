@@ -215,6 +215,14 @@ class Profile(models.Model):
 
     # New fields used across modules
     employee_id = models.CharField(max_length=50, blank=True, default="")
+    reporting_officer = models.ForeignKey(
+    settings.AUTH_USER_MODEL,
+    on_delete=models.SET_NULL,
+    null=True,
+    blank=True,
+    related_name="direct_report_profiles",
+    help_text="This employee's reporting manager. Auto-used in visit/leave approval.",
+)
 
     # Admin-only overrides for routing (take precedence over JSON map)
     manager_override_email = models.EmailField(
