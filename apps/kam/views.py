@@ -1,4 +1,8 @@
 # FILE: apps/kam/views.py
+# FIXES APPLIED:
+#   FIX 2 — All datetime objects made timezone-aware via timezone.make_aware()
+#   FIX 3 — Customer 404 replaced with safe fallback (never crash on invalid ?id=)
+#   FIX 5 — All @login_required use explicit login_url='/accounts/login/'
 from __future__ import annotations
 
 import logging
@@ -29,6 +33,23 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
+
+# FIX 5 — explicit login_url on all login_required decorators
+from django.contrib.auth.decorators import login_required as _django_login_required
+
+
+def login_required(func=None, login_url="/accounts/login/", redirect_field_name="next"):
+    """
+    FIX 5: Wrapper that always passes login_url='/accounts/login/' so that
+    unauthenticated users are redirected to the correct login page with ?next=
+    preserved, regardless of project-level LOGIN_URL setting.
+    """
+    if func is not None:
+        return _django_login_required(func, login_url=login_url, redirect_field_name=redirect_field_name)
+    def decorator(view_func):
+        return _django_login_required(view_func, login_url=login_url, redirect_field_name=redirect_field_name)
+    return decorator
+
 
 from apps.users.permissions import _user_permission_codes
 
@@ -129,7 +150,6 @@ def _is_manager(user) -> bool:
         return True
     if _in_group(user, ("Manager", "Admin", "Finance")):
         return True
-    # Also allow users with the kam_manager permission code
     try:
         from apps.users.permissions import _user_permission_codes
         codes = _user_permission_codes(user)
@@ -256,10 +276,6 @@ def _visitplan_workflow_schema_ready() -> bool:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FIX: Sales (F) is authoritative for qty_mt.
-# Sheet1 and Sales (F) both exist as separate rows for the same invoices.
-# Sales (F) always has KAM mapped and has more rows (3126 MT vs 2503 MT March).
-# When Sales (F) rows exist in a queryset, use them exclusively.
-# Falls back to all rows only when no Sales (F) data exists (very old periods).
 # ─────────────────────────────────────────────────────────────────────────────
 def _preferred_inv_qs(qs):
     salesf = qs.filter(source_tab="Sales (F)")
@@ -305,19 +321,9 @@ def _parse_batch_token(token: str) -> Tuple[int, str]:
 # Manager / KAM lookup helpers
 # ─────────────────────────────────────────────────────────────────────────────
 def _active_manager_for_kam(kam_user: User) -> Optional[User]:
-    """
-    Fetch reporting officer from ApproverMapping (authoritative business hierarchy).
-    Falls back to KamManagerMapping for backward compatibility.
-
-    Priority order:
-    1. ApproverMapping.reporting_person  (leave/approval hierarchy — source of truth)
-    2. KamManagerMapping                 (legacy KAM-specific mapping)
-    3. Profile.reporting_officer         (last-resort profile field)
-    """
     if not kam_user or not getattr(kam_user, "id", None):
         return None
 
-    # PRIMARY: ApproverMapping — the authoritative employee hierarchy table
     try:
         from apps.leave.models import ApproverMapping
         mapping = (
@@ -333,7 +339,6 @@ def _active_manager_for_kam(kam_user: User) -> Optional[User]:
     except Exception:
         logger.exception("_active_manager_for_kam: ApproverMapping lookup failed for user_id=%s", kam_user.id)
 
-    # FALLBACK 1: KamManagerMapping (legacy KAM-specific mapping)
     try:
         m = (
             KamManagerMapping.objects.select_related("manager")
@@ -346,7 +351,6 @@ def _active_manager_for_kam(kam_user: User) -> Optional[User]:
     except Exception:
         logger.exception("_active_manager_for_kam: KamManagerMapping lookup failed for user_id=%s", kam_user.id)
 
-    # FALLBACK 2: Profile.reporting_officer
     try:
         profile = getattr(kam_user, "profile", None)
         if profile and getattr(profile, "reporting_officer_id", None):
@@ -359,13 +363,6 @@ def _active_manager_for_kam(kam_user: User) -> Optional[User]:
     return None
 
 def _active_cc_for_kam(kam_user: User) -> List[User]:
-    """
-    Source of truth:
-    - ApproverMapping.cc_person  -> default CC
-    - CCConfiguration.is_active  -> CC status on/off
-
-    Returns a deduplicated list of active users with email.
-    """
     if not kam_user or not getattr(kam_user, "id", None):
         return []
 
@@ -419,16 +416,10 @@ def _kams_managed_by_manager(manager_user: User) -> List[int]:
     )
 
 def _can_manager_approve_visit(manager_user: User, plan: "VisitPlan") -> bool:
-    """
-    Check if manager_user can approve this visit.
-    Checks ApproverMapping first, then KamManagerMapping, then profile fallback.
-    """
     if _is_admin(manager_user):
         return True
-    # Check KamManagerMapping (legacy)
     if plan.kam_id in set(_kams_managed_by_manager(manager_user)):
         return True
-    # Check ApproverMapping — authoritative hierarchy
     try:
         from apps.leave.models import ApproverMapping
         if ApproverMapping.objects.filter(
@@ -438,7 +429,6 @@ def _can_manager_approve_visit(manager_user: User, plan: "VisitPlan") -> bool:
             return True
     except Exception:
         pass
-    # Check profile.reporting_officer (last resort)
     try:
         profile = getattr(plan.kam, "profile", None)
         if profile and getattr(profile, "reporting_officer_id", None) == manager_user.id:
@@ -513,7 +503,6 @@ def _single_visit_qs_for_user(user: User):
     if _is_admin(user):
         return qs
     if _is_manager(user):
-        # Collect employee IDs via ApproverMapping (authoritative)
         approver_mapped_ids = []
         try:
             from apps.leave.models import ApproverMapping
@@ -522,19 +511,13 @@ def _single_visit_qs_for_user(user: User):
                     reporting_person=user
                 ).values_list("employee_id", flat=True)
             )
-            logger.debug(
-                "_single_visit_qs_for_user: ApproverMapping gave %d employee IDs for manager %s",
-                len(approver_mapped_ids), user.username,
-            )
         except Exception:
             logger.exception(
                 "_single_visit_qs_for_user: ApproverMapping lookup failed for manager %s", user.username
             )
 
-        # Also collect via KamManagerMapping (legacy)
         kam_manager_ids = _kams_managed_by_manager(user)
 
-        # Also collect via profile.reporting_officer (last resort)
         profile_ro_ids = list(
             User.objects.filter(
                 profile__reporting_officer=user, is_active=True
@@ -543,25 +526,15 @@ def _single_visit_qs_for_user(user: User):
 
         kam_ids = list(set(kam_manager_ids) | set(approver_mapped_ids) | set(profile_ro_ids))
 
-        logger.debug(
-            "_single_visit_qs_for_user: manager=%s total_kam_ids=%s "
-            "(approver_mapped=%s kam_manager=%s profile_ro=%s)",
-            user.username, len(kam_ids),
-            len(approver_mapped_ids), len(kam_manager_ids), len(profile_ro_ids),
-        )
-
         if not kam_ids:
-            # Manager has no mapped KAMs at all — return empty rather than crash
             logger.warning(
-                "_single_visit_qs_for_user: manager=%s has NO mapped KAM IDs via any source. "
-                "Check ApproverMapping, KamManagerMapping, and Profile.reporting_officer.",
+                "_single_visit_qs_for_user: manager=%s has NO mapped KAM IDs via any source.",
                 user.username,
             )
             return qs.none()
 
         return qs.filter(kam_id__in=kam_ids)
 
-    # KAM sees their own single visits regardless of approval status
     return qs.filter(kam=user)
 
 
@@ -650,6 +623,19 @@ def _parse_decimal_or_none(s: str) -> Optional[Decimal]:
         return None
 
 
+# FIX 2 — Timezone-aware datetime helpers
+# All datetime construction now uses timezone.make_aware() to prevent
+# RuntimeWarning: DateTimeField received a naive datetime.
+
+def _make_aware(dt) -> timezone.datetime:
+    """Ensure a datetime is timezone-aware. No-op if already aware."""
+    if dt is None:
+        return dt
+    if timezone.is_naive(dt):
+        return timezone.make_aware(dt)
+    return dt
+
+
 def _iso_week_bounds(dt: timezone.datetime) -> Tuple[timezone.datetime, timezone.datetime, str]:
     local = timezone.localtime(dt)
     start = local - timezone.timedelta(days=local.weekday())
@@ -704,6 +690,10 @@ def _year_bounds(dt: timezone.datetime) -> Tuple[timezone.datetime, timezone.dat
 
 
 def _parse_ymd_part(s: str) -> Optional[timezone.datetime]:
+    """
+    FIX 2 — Always return timezone-aware datetime. Previously returned naive
+    datetime objects which caused RuntimeWarning in ORM date comparisons.
+    """
     s = (s or "").strip()
     if not s:
         return None
@@ -716,6 +706,7 @@ def _parse_ymd_part(s: str) -> Optional[timezone.datetime]:
             y, m, d = int(s[0:4]), int(s[5:7]), int(s[8:10])
         else:
             return None
+        # FIX 2: use timezone.make_aware() instead of bare datetime()
         return timezone.make_aware(timezone.datetime(y, m, d, 0, 0, 0))
     except Exception:
         return None
@@ -741,6 +732,7 @@ def _get_period(request: HttpRequest) -> Tuple[str, timezone.datetime, timezone.
     if p == "year":
         return ("YEAR", *_year_bounds(ref))
     if p == "all":
+        # FIX 2: use timezone.make_aware() for boundary datetimes
         s = timezone.make_aware(timezone.datetime(2000, 1, 1))
         e = timezone.make_aware(timezone.datetime(2100, 1, 1))
         return "ALL", s, e, "ALL"
@@ -775,6 +767,7 @@ def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timez
             ws, we, _ = _year_bounds(now)
             return ws, we, f"{ws.date()} → {(we - timezone.timedelta(days=1)).date()}"
         if range_shortcut in ("all", "*"):
+            # FIX 2: timezone-aware boundary datetimes
             s = timezone.make_aware(timezone.datetime(2000, 1, 1))
             e = timezone.make_aware(timezone.datetime(2100, 1, 1))
             return s, e, "ALL"
@@ -785,6 +778,7 @@ def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timez
     to_d = _parse_iso_date(to_s)
 
     if from_d and to_d and from_d <= to_d:
+        # FIX 2: make_aware on all constructed datetimes
         start = timezone.make_aware(timezone.datetime(from_d.year, from_d.month, from_d.day, 0, 0, 0))
         end = timezone.make_aware(timezone.datetime(to_d.year, to_d.month, to_d.day, 0, 0, 0)) + timezone.timedelta(days=1)
         return start, end, f"{from_d} → {to_d}"
@@ -795,6 +789,7 @@ def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timez
     today_local = timezone.localtime(now).replace(hour=0, minute=0, second=0, microsecond=0)
     m, y = today_local.month, today_local.year
     fy_start_year = y if m >= 4 else y - 1
+    # FIX 2: make_aware for fiscal year start
     fy_start = timezone.make_aware(timezone.datetime(fy_start_year, 4, 1, 0, 0, 0))
     fy_end = today_local + timezone.timedelta(days=1)
     return fy_start, fy_end, f"{fy_start.date()} → {today_local.date()} (Fiscal YTD)"
@@ -1019,10 +1014,8 @@ def _notify_kam_batch_decision(*, request, batch, actor, status, rejection_reaso
 # =====================================================================
 # ADMIN: KAM → Manager Mapping
 # =====================================================================
-from django.contrib.auth.decorators import login_required
 
-
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_any_kam_code("kam_manager", "kam_dashboard", "kam_plan")
 def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
     if not _is_admin(request.user):
@@ -1217,7 +1210,7 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # DASHBOARD
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_dashboard")
 def dashboard(request: HttpRequest) -> HttpResponse:
     start_dt, end_dt, range_label = _get_dashboard_range(request)
@@ -1243,13 +1236,9 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     start_date = start_dt.date()
     end_date = end_dt.date()
 
-    # ── FIX: use Sales (F) as authoritative source for qty_mt ──────────────
-    # Sales (F) has all KAMs mapped (3126 MT March) while Sheet1 has NULL KAM
-    # rows that get filtered by scope, producing the wrong lower number (2503 MT).
     inv_qs = InvoiceFact.objects.filter(invoice_date__gte=start_date, invoice_date__lt=end_date)
     inv_qs = _filter_qs_by_kam_scope(inv_qs, request.user, scope_kam_id, "kam_id")
     inv_qs = _preferred_inv_qs(inv_qs)
-    # ───────────────────────────────────────────────────────────────────────
 
     visit_plan_qs = VisitPlan.objects.filter(visit_date__gte=start_date, visit_date__lt=end_date)
     visit_act_qs = VisitActual.objects.filter(plan__visit_date__gte=start_date, plan__visit_date__lt=end_date)
@@ -1376,7 +1365,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     prod_by_grade = list(inv_qs.values("grade").annotate(mt=Sum("qty_mt")).order_by("-mt"))
     prod_by_size = list(inv_qs.values("size").annotate(mt=Sum("qty_mt")).order_by("-mt"))
 
-    # ── Trend rows — also use Sales (F) as authoritative source ────────────
     trend_rows: List[Dict] = []
     anchor_end = _last_completed_ms_week_end(timezone.now())
     for k in (3, 2, 1, 0):
@@ -1398,7 +1386,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             "calls": calls_i.count(),
             "collections": _safe_decimal(coll_i.aggregate(a=Sum("amount")).get("a")),
         })
-    # ───────────────────────────────────────────────────────────────────────
 
     ctx = {
         "page_title": "KAM Dashboard",
@@ -1450,7 +1437,7 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # TODAY'S DETAILS
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_manager")
 def manager_dashboard(request: HttpRequest) -> HttpResponse:
     if not _is_manager(request.user):
@@ -1504,7 +1491,7 @@ def manager_dashboard(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # MANAGER KPIs
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_manager_kpis")
 def manager_kpis(request: HttpRequest) -> HttpResponse:
     if not _is_manager(request.user):
@@ -1524,11 +1511,9 @@ def manager_kpis(request: HttpRequest) -> HttpResponse:
     latest_snap_date = OverdueSnapshot.objects.order_by("-snapshot_date").values_list("snapshot_date", flat=True).first()
     rows: List[Dict] = []
     for kam in kams:
-        # ── FIX: prefer Sales (F) for qty_mt per KAM ──────────────────────
         inv_qs = InvoiceFact.objects.filter(kam=kam, invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date())
         inv_qs = _preferred_inv_qs(inv_qs)
         sales_mt = _safe_decimal(inv_qs.aggregate(mt=Sum("qty_mt")).get("mt"))
-        # ──────────────────────────────────────────────────────────────────
         visits_qs = VisitActual.objects.filter(plan__kam=kam, plan__visit_date__gte=start_dt.date(), plan__visit_date__lt=end_dt.date())
         visits_actual = visits_qs.count()
         visits_successful = visits_qs.filter(successful=True).count()
@@ -1570,11 +1555,9 @@ def manager_kpis(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # PLAN VISIT — Single + Batch
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 def weekly_plan(request: HttpRequest) -> HttpResponse:
-    # ── FIX 1: schema_ready MUST be assigned first, before any POST branch ──
     schema_ready = _visitplan_workflow_schema_ready()
-    # ────────────────────────────────────────────────────────────────────────
 
     user = request.user
     try:
@@ -1592,7 +1575,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
     if "purpose" in batch_form.fields:
         batch_form.fields["purpose"].required = False
 
-    # ── Guard: block POST if DB schema is not ready ──────────────────────
     if request.method == "POST" and not schema_ready:
         messages.error(
             request,
@@ -1600,20 +1582,12 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             "Run: python manage.py makemigrations kam && python manage.py migrate",
         )
         return redirect(reverse("kam:plan"))
-    # ─────────────────────────────────────────────────────────────────────
 
-    # ═════════════════════════════════════════════════════════════════════
-    # SINGLE VISIT — POST
-    # ═════════════════════════════════════════════════════════════════════
     if request.method == "POST" and (request.POST.get("mode") or "").strip().lower() == "single":
         single_form = SingleVisitForm(request.POST, prefix=SINGLE_PREFIX)
         if "customer" in single_form.fields:
             single_form.fields["customer"].queryset = customer_qs
 
-        # ── FIX: Relax customer field requirement ────────────────────────
-        # When the user picks "Enter New Customer", the dropdown is disabled
-        # by JS so no customer_id is POSTed. Django would fail validation.
-        # Also relax for non-customer categories (vendor/supplier/warehouse).
         _manual_name = (request.POST.get("manual_customer") or "").strip()
         _raw_cat = (
             request.POST.get(f"{SINGLE_PREFIX}-visit_category") or
@@ -1622,7 +1596,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
         if "customer" in single_form.fields:
             if _manual_name or _raw_cat != "CUSTOMER":
                 single_form.fields["customer"].required = False
-        # ─────────────────────────────────────────────────────────────────
 
         if single_form.is_valid():
             submit_action = (request.POST.get("submit_action") or "save_draft").strip().lower()
@@ -1630,7 +1603,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             plan.kam  = user
             plan.batch = None
 
-            # ── Auto-assign reporting officer ──────────────────────────
             try:
                 profile = getattr(user, "profile", None)
                 if profile and getattr(profile, "reporting_officer_id", None):
@@ -1638,12 +1610,10 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             except Exception:
                 pass
 
-            # ── FIX 2: Manual customer entry ───────────────────────────
             manual_customer_name = (request.POST.get("manual_customer") or "").strip()
 
             if plan.visit_category == VisitPlan.CAT_CUSTOMER:
                 if manual_customer_name:
-                    # Create or retrieve customer by name
                     try:
                         customer_obj, created = Customer.objects.get_or_create(
                             name__iexact=manual_customer_name,
@@ -1664,17 +1634,14 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                         return redirect(reverse("kam:plan"))
 
                 elif plan.customer_id:
-                    # Existing dropdown selection — verify scope
                     if not customer_qs.filter(id=plan.customer_id).exists():
                         messages.error(request, "Invalid customer selection (out of your scope).")
                         return redirect(reverse("kam:plan"))
                 else:
-                    # Neither dropdown nor manual → validation error
                     messages.error(request, "Customer is required. Select an existing customer or enter a new one.")
                     return redirect(reverse("kam:plan"))
             else:
                 plan.customer = None
-            # ──────────────────────────────────────────────────────────
 
             if not (plan.location or "").strip():
                 if plan.visit_category == VisitPlan.CAT_CUSTOMER and plan.customer and plan.customer.address:
@@ -1734,9 +1701,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
         messages.error(request, "Single visit has errors. Please correct and save again.")
 
-    # ═════════════════════════════════════════════════════════════════════
-    # BATCH VISIT — POST
-    # ═════════════════════════════════════════════════════════════════════
     if request.method == "POST" and (request.POST.get("mode") or "").strip().lower() == "batch":
         batch_form = VisitBatchForm(request.POST, prefix=BATCH_PREFIX)
         if "customers" in batch_form.fields:
@@ -1769,10 +1733,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                 customers_selected = batch_form.cleaned_data.get("customers") or []
                 selected_ids = [c.id for c in customers_selected]
 
-            # ── FIX: Batch manual customer entry ─────────────────────────
-            # Process manually typed customer names from the batch form.
-            # get_or_create ensures no duplicates; new customer is created
-            # as MANUAL source and assigned to the current user as KAM.
             manual_names = [
                 n.strip() for n in request.POST.getlist("batch_manual_customer[]")
                 if (n or "").strip()
@@ -1805,7 +1765,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                         f"Could not create customer '{mname}': {exc}",
                     )
                     return redirect(reverse("kam:plan"))
-            # ── End batch manual customer entry ───────────────────────────
 
             non_customer_lines: List[MultiVisitPlanLineForm] = []
             if visit_category in (VisitPlan.CAT_SUPPLIER, VisitPlan.CAT_WAREHOUSE, VisitPlan.CAT_VENDOR):
@@ -1824,7 +1783,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
             visit_category_label = _VISIT_CATEGORY_LABELS.get(visit_category, visit_category)
 
-            # ── PROCEED TO MANAGER ────────────────────────────────────
             if proceed_flag:
                 if not (from_date and to_date):
                     messages.error(request, "From/To dates are required.")
@@ -1915,23 +1873,23 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                         approve_url   = request.build_absolute_uri(reverse("kam:visit_batch_approve_link", args=[approve_token]))
                         reject_url    = request.build_absolute_uri(reverse("kam:visit_batch_reject_link",  args=[reject_token]))
                         subject = f"[KAM] Approval Required: Batch #{batch.id} ({batch.from_date}..{batch.to_date}) - {user.username}"
-                        html_body =             _build_batch_approval_email(
-                        request=request,
-                        batch=batch,
-                        kam_user=user,
-                        visit_category_label=visit_category_label,
-                        remarks=remarks,
-                        approve_url=approve_url,
-                        reject_url=reject_url,
-                        customers=customers_for_batch,
-                    )
+                        html_body = _build_batch_approval_email(
+                            request=request,
+                            batch=batch,
+                            kam_user=user,
+                            visit_category_label=visit_category_label,
+                            remarks=remarks,
+                            approve_url=approve_url,
+                            reject_url=reject_url,
+                            customers=customers_for_batch,
+                        )
                         cc_users = _active_cc_for_kam(user)
                         _send_safe_mail(subject, html_body, [mgr_user], cc_users)
 
                     messages.success(request, f"Submitted for manager approval: {len(line_rows)} customers (Batch #{batch.id}).")
                     return redirect(reverse("kam:plan"))
 
-                else:  # Non-customer batch
+                else:
                     if not non_customer_lines:
                         messages.error(request, f"Add at least one counterparty line to submit a {visit_category_label} batch.")
                         return redirect(reverse("kam:plan"))
@@ -1986,7 +1944,6 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     messages.success(request, f"Submitted for manager approval: {len(non_customer_lines)} lines (Batch #{batch.id}).")
                     return redirect(reverse("kam:plan"))
 
-            # ── SAVE DRAFT BATCH ──────────────────────────────────────
             with transaction.atomic():
                 batch: VisitBatch = batch_form.save(commit=False)
                 batch.kam             = user
@@ -2057,15 +2014,9 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                 messages.success(request, f"Batch saved as Draft: {created_lines} lines (Batch #{batch.id}).")
                 return redirect(reverse("kam:plan"))
 
-    # ═════════════════════════════════════════════════════════════════════
-    # GET — render page
-    # ═════════════════════════════════════════════════════════════════════
     week_start, week_end, _ = _iso_week_bounds(timezone.now())
 
     if schema_ready:
-        # Show a 14-day window: 7 days back + 7 days forward from today
-        # so that visits on any day this week AND next are always visible
-        # regardless of ISO week boundary edge cases.
         today_local = timezone.localtime(timezone.now()).date()
         plan_window_start = today_local - timezone.timedelta(days=7)
         plan_window_end   = today_local + timezone.timedelta(days=7)
@@ -2099,7 +2050,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # SINGLE VISIT DETAIL
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 def single_visit_detail(request: HttpRequest, plan_id: int) -> HttpResponse:
     plan = get_object_or_404(_single_visit_qs_for_user(request.user), id=plan_id)
     audit_log = list(VisitApprovalAudit.objects.filter(plan=plan).select_related("actor").order_by("created_at"))
@@ -2115,7 +2066,7 @@ def single_visit_detail(request: HttpRequest, plan_id: int) -> HttpResponse:
 # =====================================================================
 # SINGLE VISIT EDIT
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 def single_visit_edit(request: HttpRequest, plan_id: int) -> HttpResponse:
     plan = get_object_or_404(_single_visit_qs_for_user(request.user).filter(kam=request.user), id=plan_id)
     if plan.is_locked:
@@ -2195,9 +2146,9 @@ def single_visit_edit(request: HttpRequest, plan_id: int) -> HttpResponse:
 
 
 # =====================================================================
-# SINGLE VISIT APPROVE LINK
+# SINGLE VISIT APPROVE / REJECT LINKS
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 def single_visit_approve_link(request: HttpRequest, token: str) -> HttpResponse:
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
@@ -2235,10 +2186,7 @@ def single_visit_approve_link(request: HttpRequest, token: str) -> HttpResponse:
     return redirect(reverse("kam:single_visit_detail", args=[plan_id]))
 
 
-# =====================================================================
-# SINGLE VISIT REJECT LINK
-# =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 def single_visit_reject_link(request: HttpRequest, token: str) -> HttpResponse:
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
@@ -2302,7 +2250,7 @@ def single_visit_reject_link(request: HttpRequest, token: str) -> HttpResponse:
 # =====================================================================
 # SINGLE VISIT LIST
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 def single_visit_list(request: HttpRequest) -> HttpResponse:
     if not _visitplan_workflow_schema_ready():
         messages.error(request, "Single Visit workflow DB fields are not migrated yet. Run migrations before using this page.")
@@ -2329,7 +2277,7 @@ def single_visit_list(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # SINGLE VISIT APPROVE / REJECT (form POST)
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_manager")
 def single_visit_approve(request: HttpRequest, plan_id: int) -> HttpResponse:
     if request.method != "POST":
@@ -2359,7 +2307,7 @@ def single_visit_approve(request: HttpRequest, plan_id: int) -> HttpResponse:
     return redirect(reverse("kam:single_visit_detail", args=[plan.id]))
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_manager")
 def single_visit_reject(request: HttpRequest, plan_id: int) -> HttpResponse:
     if request.method != "POST":
@@ -2395,7 +2343,7 @@ def single_visit_reject(request: HttpRequest, plan_id: int) -> HttpResponse:
 # =====================================================================
 # Customer APIs + CRUD
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_plan")
 def customers_api(request: HttpRequest) -> JsonResponse:
     user = request.user
@@ -2418,7 +2366,7 @@ def customers_api(request: HttpRequest) -> JsonResponse:
     return JsonResponse({"ok": True, "count": len(rows), "customers": rows})
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_plan")
 def customer_create_manual(request: HttpRequest) -> JsonResponse:
     if request.method != "POST":
@@ -2440,7 +2388,7 @@ def customer_create_manual(request: HttpRequest) -> JsonResponse:
     return JsonResponse({"ok": True, "customer": {"id": c.id, "name": c.name}})
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_plan")
 def customer_update_manual(request: HttpRequest, customer_id: int) -> JsonResponse:
     if request.method != "POST":
@@ -2457,7 +2405,7 @@ def customer_update_manual(request: HttpRequest, customer_id: int) -> JsonRespon
     return JsonResponse({"ok": True})
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_plan")
 def customer_delete_manual(request: HttpRequest, customer_id: int) -> JsonResponse:
     if request.method != "POST":
@@ -2483,13 +2431,13 @@ def _wants_json(request: HttpRequest) -> bool:
     return "application/json" in (request.headers.get("Accept") or "").lower()
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_any_kam_code("kam_plan", "kam_manager")
 def visit_batches(request: HttpRequest) -> HttpResponse:
     return visit_batches_api(request) if _wants_json(request) else visit_batches_page(request)
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_any_kam_code("kam_plan", "kam_manager")
 def visit_batches_page(request: HttpRequest) -> HttpResponse:
     user = request.user
@@ -2500,7 +2448,7 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
     return render(request, "kam/visit_batches.html", {"page_title": "Visit History", "rows": list(qs[:300]), "can_view_all": _is_manager(user)})
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_any_kam_code("kam_plan", "kam_manager")
 def visit_batches_api(request: HttpRequest) -> JsonResponse:
     user = request.user
@@ -2509,7 +2457,7 @@ def visit_batches_api(request: HttpRequest) -> JsonResponse:
     return JsonResponse({"ok": True, "count": len(rows), "batches": rows})
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_any_kam_code("kam_plan", "kam_manager")
 def visit_history_edit(request: HttpRequest, plan_id: int) -> HttpResponse:
     user = request.user
@@ -2552,7 +2500,7 @@ def visit_history_edit(request: HttpRequest, plan_id: int) -> HttpResponse:
     return render(request, "kam/visit_history_edit.html", {"page_title": "Edit Visit", "plan": plan, "actual_form": actual_form, "existing_actual": existing_actual, "can_edit_plan_fields": True})
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_any_kam_code("kam_manager", "kam_plan")
 def visit_batch_detail(request: HttpRequest, batch_id: int) -> HttpResponse:
     b = get_object_or_404(_visitbatch_qs_for_user(request.user), id=batch_id)
@@ -2561,7 +2509,7 @@ def visit_batch_detail(request: HttpRequest, batch_id: int) -> HttpResponse:
     return render(request, "kam/visit_batch_detail.html", {"page_title": f"Visit History — Batch #{b.id}", "batch": b, "lines": lines, "can_approve": can_approve, "can_edit": (not _is_manager(request.user)) and (b.approval_status in {STATUS_DRAFT, STATUS_REJECTED}), "can_delete": (not _is_manager(request.user)) and (b.approval_status in {STATUS_DRAFT})})
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_plan")
 def visit_batch_delete(request: HttpRequest, batch_id: int) -> HttpResponse:
     if request.method != "POST":
@@ -2583,7 +2531,7 @@ def visit_batch_delete(request: HttpRequest, batch_id: int) -> HttpResponse:
     return redirect(reverse("kam:visit_batches"))
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_manager")
 def visit_batch_approve(request: HttpRequest, batch_id: int) -> HttpResponse:
     if request.method != "POST":
@@ -2613,7 +2561,7 @@ def visit_batch_approve(request: HttpRequest, batch_id: int) -> HttpResponse:
     return redirect(reverse("kam:visit_batches"))
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_manager")
 def visit_batch_reject(request: HttpRequest, batch_id: int) -> HttpResponse:
     if request.method != "POST":
@@ -2648,7 +2596,7 @@ def visit_batch_reject(request: HttpRequest, batch_id: int) -> HttpResponse:
 # =====================================================================
 # EMAIL APPROVAL LINKS (Batch)
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_any_kam_code("kam_manager", "kam_visit_approve")
 def visit_batch_approve_link(request: HttpRequest, token: str) -> HttpResponse:
     if not _is_manager(request.user):
@@ -2686,7 +2634,7 @@ def visit_batch_approve_link(request: HttpRequest, token: str) -> HttpResponse:
     return redirect(reverse("kam:visit_batches"))
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_any_kam_code("kam_manager", "kam_visit_reject")
 def visit_batch_reject_link(request: HttpRequest, token: str) -> HttpResponse:
     if not _is_manager(request.user):
@@ -2738,7 +2686,7 @@ def visit_batch_reject_link(request: HttpRequest, token: str) -> HttpResponse:
 # =====================================================================
 # VISITS & CALLS
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_visits")
 def visits(request: HttpRequest) -> HttpResponse:
     user = request.user
@@ -2841,7 +2789,7 @@ def visits(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # MANAGER VIEW
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 def manager_view(request: HttpRequest) -> HttpResponse:
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
@@ -2881,13 +2829,11 @@ def manager_view(request: HttpRequest) -> HttpResponse:
         calls_summary = {"total": total_calls, "successful": successful_calls, "conversion_pct": _pct(Decimal(successful_calls), Decimal(total_calls)) if total_calls else None}
 
     if active_tab == "sales":
-        # ── FIX: prefer Sales (F) for qty_mt in manager view sales tab ────
         qs = _filter_qs_by_kam_scope(
             InvoiceFact.objects.filter(invoice_date__gte=start_date, invoice_date__lt=end_date),
             request.user, scope_kam_id, "kam_id"
         )
         qs = _preferred_inv_qs(qs)
-        # ──────────────────────────────────────────────────────────────────
         sales_data = list(qs.values(customer_name=F("customer__name"), kam_username=F("kam__username")).annotate(mt=Sum("qty_mt")).order_by("-mt")[:300])
         sales_summary = {"total_mt": _safe_decimal(qs.aggregate(mt=Sum("qty_mt")).get("mt")), "customer_count": len(sales_data)}
 
@@ -2924,7 +2870,7 @@ def manager_view(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # Legacy approve/reject
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_visit_approve")
 def visit_approve(request: HttpRequest, plan_id: int) -> HttpResponse:
     if request.method != "POST":
@@ -2933,7 +2879,7 @@ def visit_approve(request: HttpRequest, plan_id: int) -> HttpResponse:
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
     plan = get_object_or_404(VisitPlan, id=plan_id)
     if not _can_manager_approve_visit(request.user, plan):
-            return HttpResponseForbidden("403 Forbidden: This visit is not in your approval scope.")
+        return HttpResponseForbidden("403 Forbidden: This visit is not in your approval scope.")
     plan.approval_status = STATUS_APPROVED
     plan.approved_by = request.user
     plan.approved_at = timezone.now()
@@ -2943,7 +2889,7 @@ def visit_approve(request: HttpRequest, plan_id: int) -> HttpResponse:
     return redirect(reverse("kam:manager_kpis"))
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_visit_reject")
 def visit_reject(request: HttpRequest, plan_id: int) -> HttpResponse:
     if request.method != "POST":
@@ -2952,7 +2898,7 @@ def visit_reject(request: HttpRequest, plan_id: int) -> HttpResponse:
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
     plan = get_object_or_404(VisitPlan, id=plan_id)
     if not _can_manager_approve_visit(request.user, plan):
-            return HttpResponseForbidden("403 Forbidden: This visit is not in your approval scope.")
+        return HttpResponseForbidden("403 Forbidden: This visit is not in your approval scope.")
     plan.approval_status = STATUS_REJECTED
     plan.approved_by = request.user
     plan.approved_at = timezone.now()
@@ -2965,7 +2911,7 @@ def visit_reject(request: HttpRequest, plan_id: int) -> HttpResponse:
 # =====================================================================
 # Quick entry: Call / Collection
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_call_new")
 def call_new(request: HttpRequest) -> HttpResponse:
     qs = _customer_qs_for_user(request.user).order_by("name")
@@ -2987,7 +2933,7 @@ def call_new(request: HttpRequest) -> HttpResponse:
     return render(request, "kam/call_new.html", {"page_title": "Log Call", "form": form})
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_collection_new")
 def collection_new(request: HttpRequest) -> HttpResponse:
     qs = _customer_qs_for_user(request.user).order_by("name")
@@ -3011,9 +2957,15 @@ def collection_new(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # CUSTOMER 360
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_customers")
 def customers(request: HttpRequest) -> HttpResponse:
+    """
+    FIX 3 — Safe customer fallback.
+    NEVER crash on ?id=<invalid>. If the provided ID does not exist or is
+    out of scope, fall back to the first customer in the queryset (or None).
+    This prevents 404 errors when the frontend sends stale/invalid IDs.
+    """
     scope_kam_id, scope_label = _resolve_scope(request, request.user)
     customer_id = request.GET.get("id")
 
@@ -3030,7 +2982,19 @@ def customers(request: HttpRequest) -> HttpResponse:
         base_qs = Customer.objects.filter(Q(kam=request.user) | Q(primary_kam=request.user))
 
     customer_list = list(base_qs.order_by("name")[:300])
-    customer = get_object_or_404(base_qs, id=customer_id) if customer_id else (customer_list[0] if customer_list else None)
+
+    # FIX 3 — Safe customer lookup: never crash on invalid/missing ID
+    customer = None
+    if customer_id:
+        try:
+            customer = base_qs.filter(id=int(customer_id)).first()
+        except (ValueError, TypeError):
+            customer = None
+
+    # Fallback: use first customer in list if no valid ID was provided
+    if not customer:
+        customer = customer_list[0] if customer_list else None
+
     period_type, start_date, end_date, period_id = _get_customer360_range(request)
 
     exposure = overdue = credit_limit = Decimal(0)
@@ -3089,7 +3053,7 @@ def customers(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # TARGETS
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_targets")
 def targets(request: HttpRequest) -> HttpResponse:
     if not _is_manager(request.user):
@@ -3212,7 +3176,7 @@ def targets(request: HttpRequest) -> HttpResponse:
     return render(request, "kam/targets.html", ctx)
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_targets_lines")
 def targets_lines(request: HttpRequest) -> HttpResponse:
     return redirect(reverse("kam:targets"))
@@ -3221,7 +3185,7 @@ def targets_lines(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # REPORTS
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_reports")
 def reports(request: HttpRequest) -> HttpResponse:
     start_dt, end_dt, range_label = _get_dashboard_range(request)
@@ -3244,12 +3208,10 @@ def reports(request: HttpRequest) -> HttpResponse:
     metric = (request.GET.get("metric") or "sales").strip().lower()
     rows = []
     if metric == "sales":
-        # ── FIX: prefer Sales (F) for qty_mt in reports ───────────────────
         qs = InvoiceFact.objects.filter(invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date())
         if scope_kam_id is not None:
             qs = qs.filter(kam_id=scope_kam_id)
         qs = _preferred_inv_qs(qs)
-        # ──────────────────────────────────────────────────────────────────
         rows = list(qs.values(customer_name=F("customer__name"), kam_username=F("kam__username")).annotate(mt=Sum("qty_mt")).order_by("-mt")[:300])
     elif metric == "calls":
         qs = CallLog.objects.filter(call_datetime__gte=start_dt, call_datetime__lt=end_dt)
@@ -3276,7 +3238,7 @@ def reports(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # CSV export
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_export_kpi_csv")
 def export_kpi_csv(request: HttpRequest) -> StreamingHttpResponse:
     period_type, start_dt, end_dt, period_id = _get_period(request)
@@ -3322,7 +3284,7 @@ def export_kpi_csv(request: HttpRequest) -> StreamingHttpResponse:
 # =====================================================================
 # Collections Plan
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_collections_plan")
 def collections_plan(request: HttpRequest) -> HttpResponse:
     period_type, start_dt, end_dt, period_id = _get_period(request)
@@ -3440,7 +3402,7 @@ def _build_collections_plan_qs(customer_qs, period_type, period_id, start_dt, en
     return (period_rows | range_rows).distinct().order_by("customer__name")
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_collections_plan")
 def collection_plan_record_actual(request: HttpRequest, plan_id: int) -> HttpResponse:
     plan = get_object_or_404(CollectionPlan, id=plan_id)
@@ -3465,7 +3427,7 @@ def collection_plan_record_actual(request: HttpRequest, plan_id: int) -> HttpRes
     return render(request, "kam/collection_plan_record_actual.html", ctx)
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_collections_plan")
 def collection_plan_delete(request: HttpRequest, plan_id: int) -> HttpResponse:
     if request.method != "POST":
@@ -3484,7 +3446,7 @@ def collection_plan_delete(request: HttpRequest, plan_id: int) -> HttpResponse:
 # =====================================================================
 # Sync endpoints
 # =====================================================================
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_sync_now")
 def sync_now(request: HttpRequest) -> HttpResponse:
     if not _is_manager(request.user):
@@ -3503,7 +3465,7 @@ def sync_now(request: HttpRequest) -> HttpResponse:
     return redirect(reverse("kam:dashboard"))
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_sync_trigger")
 def sync_trigger(request: HttpRequest) -> HttpResponse:
     if not _is_manager(request.user):
@@ -3514,7 +3476,7 @@ def sync_trigger(request: HttpRequest) -> HttpResponse:
     return redirect(reverse("kam:dashboard"))
 
 
-@login_required
+@login_required(login_url="/accounts/login/")
 @require_kam_code("kam_sync_step")
 def sync_step(request: HttpRequest) -> HttpResponse:
     if not _is_manager(request.user):

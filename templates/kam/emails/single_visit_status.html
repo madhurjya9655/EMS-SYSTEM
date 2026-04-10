@@ -103,7 +103,7 @@
 
     <div class="{% if status == 'APPROVED' %}header-approved{% else %}header-rejected{% endif %}">
       <div class="header-icon">
-        {% if status == "APPROVED" %}✅{% else %}❌{% endif %}
+        {% if status == "APPROVED" %}{% else %}{% endif %}
       </div>
       <h1>
         {% if status == "APPROVED" %}
