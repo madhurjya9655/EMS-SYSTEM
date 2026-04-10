@@ -358,6 +358,55 @@ def _active_manager_for_kam(kam_user: User) -> Optional[User]:
 
     return None
 
+def _active_cc_for_kam(kam_user: User) -> List[User]:
+    """
+    Source of truth:
+    - ApproverMapping.cc_person  -> default CC
+    - CCConfiguration.is_active  -> CC status on/off
+
+    Returns a deduplicated list of active users with email.
+    """
+    if not kam_user or not getattr(kam_user, "id", None):
+        return []
+
+    cc_users: List[User] = []
+
+    try:
+        from apps.leave.models import ApproverMapping, CCConfiguration
+
+        mapping = (
+            ApproverMapping.objects
+            .select_related("cc_person")
+            .filter(employee=kam_user)
+            .first()
+        )
+
+        if not mapping or not mapping.cc_person_id:
+            return []
+
+        cc_user = mapping.cc_person
+        if not cc_user or not getattr(cc_user, "is_active", False):
+            return []
+
+        cc_config = CCConfiguration.objects.filter(user=cc_user).first()
+        if cc_config and not cc_config.is_active:
+            return []
+
+        if getattr(cc_user, "email", None):
+            cc_users.append(cc_user)
+
+    except Exception:
+        logger.exception("_active_cc_for_kam: CC lookup failed for user_id=%s", kam_user.id)
+
+    seen = set()
+    out: List[User] = []
+    for u in cc_users:
+        if not u or not getattr(u, "id", None) or u.id in seen:
+            continue
+        seen.add(u.id)
+        out.append(u)
+    return out
+
 def _kams_managed_by_manager(manager_user: User) -> List[int]:
     if not manager_user or not getattr(manager_user, "id", None):
         return []
@@ -1676,7 +1725,8 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     request=request, plan=plan, kam_user=user,
                     manager_user=mgr_user, approve_url=approve_url, reject_url=reject_url,
                 )
-                sent_ok = _send_safe_mail(subject, html_body, [mgr_user])
+                cc_users = _active_cc_for_kam(user)
+                sent_ok = _send_safe_mail(subject, html_body, [mgr_user], cc_users)
                 if not sent_ok:
                     logger.warning("Approval email could not be sent for single visit #%s", plan.id)
                 messages.success(request, f"Single visit #{plan.id} submitted for manager approval.")
@@ -1864,14 +1914,19 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                         reject_token  = _make_batch_token(batch.id, "REJECT")
                         approve_url   = request.build_absolute_uri(reverse("kam:visit_batch_approve_link", args=[approve_token]))
                         reject_url    = request.build_absolute_uri(reverse("kam:visit_batch_reject_link",  args=[reject_token]))
-                        subject   = f"[KAM] Approval Required: Batch #{batch.id} ({batch.from_date}..{batch.to_date}) - {user.username}"
-                        html_body = _build_batch_approval_email(
-                            request=request, batch=batch, kam_user=user,
-                            visit_category_label=visit_category_label, remarks=remarks,
-                            approve_url=approve_url, reject_url=reject_url,
-                            customers=customers_for_batch,
-                        )
-                        _send_safe_mail(subject, html_body, [mgr_user], [])
+                        subject = f"[KAM] Approval Required: Batch #{batch.id} ({batch.from_date}..{batch.to_date}) - {user.username}"
+                        html_body =             _build_batch_approval_email(
+                        request=request,
+                        batch=batch,
+                        kam_user=user,
+                        visit_category_label=visit_category_label,
+                        remarks=remarks,
+                        approve_url=approve_url,
+                        reject_url=reject_url,
+                        customers=customers_for_batch,
+                    )
+                        cc_users = _active_cc_for_kam(user)
+                        _send_safe_mail(subject, html_body, [mgr_user], cc_users)
 
                     messages.success(request, f"Submitted for manager approval: {len(line_rows)} customers (Batch #{batch.id}).")
                     return redirect(reverse("kam:plan"))
@@ -1925,7 +1980,8 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                             approve_url=approve_url, reject_url=reject_url,
                             counterparty_names=counterparty_names,
                         )
-                        _send_safe_mail(subject, html_body, [mgr_user], [])
+                        cc_users = _active_cc_for_kam(user)
+                        _send_safe_mail(subject, html_body, [mgr_user], cc_users)
 
                     messages.success(request, f"Submitted for manager approval: {len(non_customer_lines)} lines (Batch #{batch.id}).")
                     return redirect(reverse("kam:plan"))
@@ -2119,7 +2175,8 @@ def single_visit_edit(request: HttpRequest, plan_id: int) -> HttpResponse:
                 reject_url = request.build_absolute_uri(reverse("kam:single_visit_reject_link", args=[reject_token]))
                 subject = f"[KAM] Re-Approval Required: Single Visit #{updated_plan.id} ({updated_plan.visit_date}) — {request.user.get_full_name() or request.user.username}"
                 html_body = _build_single_visit_approval_email(request=request, plan=updated_plan, kam_user=request.user, manager_user=mgr_user, approve_url=approve_url, reject_url=reject_url)
-                _send_safe_mail(subject, html_body, [mgr_user])
+                cc_users = _active_cc_for_kam(request.user)
+                _send_safe_mail(subject, html_body, [mgr_user], cc_users)
                 messages.success(request, f"Visit #{updated_plan.id} resubmitted for manager approval.")
                 return redirect(reverse("kam:single_visit_detail", args=[updated_plan.id]))
         else:

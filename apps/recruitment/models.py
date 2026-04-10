@@ -1,3 +1,4 @@
+#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\recruitment\models.py
 from django.db import models
 from django.conf import settings
 
