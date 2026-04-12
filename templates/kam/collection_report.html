@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block title %}Collection Report{% endblock %}
+{% block breadcrumb %}Collection Report{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex align-items-start justify-content-between flex-wrap gap-2 mb-3">
+  <div>
+    <h1 class="page-title">Collection Report</h1>
+    <p class="text-muted small mb-0">Planned vs Actual collections — filtered by KAM and date range.</p>
+  </div>
+  <a href="{% url 'kam:collections_plan' %}" class="btn btn-sm btn-outline-secondary">
+    <i class="fas fa-arrow-left me-1"></i>Back to Plans
+  </a>
+</div>
+
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show mb-3">
+      {{ message }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+  {% endfor %}
+{% endif %}
+
+<form method="get" class="card mb-4">
+  <div class="card-body">
+    <div class="row g-3 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label small fw-semibold">KAM</label>
+        <select name="kam" class="form-select">
+          <option value="">— All KAMs —</option>
+          {% for u in kam_users %}
+            <option value="{{ u.id }}" {% if selected_kam == u.id|stringformat:"s" %}selected{% endif %}>
+              {{ u.get_full_name|default:u.username }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small fw-semibold">From Date</label>
+        <input type="date" name="start" value="{{ filter_start }}" class="form-control">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small fw-semibold">To Date</label>
+        <input type="date" name="end" value="{{ filter_end }}" class="form-control">
+      </div>
+      <div class="col-md-3 d-flex gap-2">
+        <button type="submit" class="btn btn-primary btn-sm">
+          <i class="fas fa-filter me-1"></i>Apply
+        </button>
+        <a href="{% url 'kam:collection_report' %}" class="btn btn-outline-secondary btn-sm">Reset</a>
+      </div>
+    </div>
+  </div>
+</form>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="card border-0 shadow-sm">
+      <div class="card-body">
+        <div class="small text-muted fw-semibold mb-1">Total Planned</div>
+        <div class="fs-5 fw-bold text-primary">₹ {{ planned|floatformat:0|intcomma }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card border-0 shadow-sm">
+      <div class="card-body">
+        <div class="small text-muted fw-semibold mb-1">Total Collected</div>
+        <div class="fs-5 fw-bold text-success">₹ {{ actual|floatformat:0|intcomma }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card border-0 shadow-sm">
+      <div class="card-body">
+        <div class="small text-muted fw-semibold mb-1">Shortfall</div>
+        <div class="fs-5 fw-bold text-danger">₹ {{ shortfall|floatformat:0|intcomma }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card border-0 shadow-sm">
+      <div class="card-body">
+        <div class="small text-muted fw-semibold mb-1">Achievement</div>
+        <div class="fs-5 fw-bold">{{ achievement_pct|floatformat:1 }}%</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header fw-semibold">
+    <i class="fas fa-table me-1 text-muted"></i>
+    Collection Detail
+    <span class="badge bg-secondary ms-2">{{ data|length }}</span>
+  </div>
+  {% if data %}
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead style="background:#f9fafb;">
+        <tr>
+          <th class="ps-3">#</th>
+          <th>KAM</th>
+          <th>Customer</th>
+          <th>Period</th>
+          <th class="text-end">Planned (₹)</th>
+          <th class="text-end">Collected (₹)</th>
+          <th class="text-end">Shortfall (₹)</th>
+          <th class="text-center">%</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in data %}
+        <tr>
+          <td class="ps-3 text-muted small">{{ forloop.counter }}</td>
+          <td><span class="badge bg-light text-dark">{{ row.kam.username|default:"—" }}</span></td>
+          <td class="fw-semibold">{{ row.customer.name|default:"—" }}</td>
+          <td class="small text-muted">
+            {% if row.period_type %}{{ row.period_type }}: {{ row.period_id }}
+            {% elif row.from_date %}{{ row.from_date }} → {{ row.to_date }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-end fw-semibold">₹ {{ row.planned_amount|floatformat:0|intcomma }}</td>
+          <td class="text-end fw-semibold text-success">
+            {% if row.actual_amount %}₹ {{ row.actual_amount|floatformat:0|intcomma }}{% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td class="text-end text-danger">
+            {% if row.planned_amount %}
+              ₹ {% widthratio row.actual_amount|default:0 1 1 as actual_val %}
+              {{ row.planned_amount|add:"-0"|floatformat:0|intcomma }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-center">
+            {% if row.planned_amount and row.planned_amount > 0 %}
+              {% widthratio row.actual_amount|default:0 row.planned_amount 100 %}%
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot style="background:#f9fafb;font-weight:700;">
+        <tr>
+          <td colspan="4" class="ps-3">Totals</td>
+          <td class="text-end">₹ {{ planned|floatformat:0|intcomma }}</td>
+          <td class="text-end text-success">₹ {{ actual|floatformat:0|intcomma }}</td>
+          <td class="text-end text-danger">₹ {{ shortfall|floatformat:0|intcomma }}</td>
+          <td class="text-center">{{ achievement_pct|floatformat:1 }}%</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="text-center py-5 text-muted">
+    <i class="fas fa-inbox fa-2x mb-3 d-block text-secondary"></i>
+    No collection plans found for the selected filters.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

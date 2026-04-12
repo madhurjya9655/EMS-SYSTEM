@@ -116,4 +116,6 @@ urlpatterns = [
     path("sync/now/", views.sync_now, name="sync_now"),
     path("sync/trigger/", views.sync_trigger, name="sync_trigger"),
     path("sync/step/", views.sync_step, name="sync_step"),
+    path("collections/update/<int:pk>/", views.update_actual_collection, name="update_actual_collection"),
+    path("collections/report/", views.collection_report, name="collection_report"),
 ]

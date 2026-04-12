@@ -8,20 +8,43 @@ def _is_authenticated(user):
 
 
 def _normalize_permissions(perm_list):
+    """
+    Accepts:
+    - comma-separated string: "add_user,list_users"
+    - list/tuple/set of permission names
+    Returns a clean list of permission strings.
+    """
     if not perm_list:
         return []
+
+    if isinstance(perm_list, (list, tuple, set)):
+        return [str(p).strip() for p in perm_list if str(p).strip()]
 
     return [p.strip() for p in str(perm_list).split(",") if p.strip()]
 
 
 def _user_all_permissions(user):
+    """
+    Safely fetch all permissions for the user.
+    Returns a set like:
+        {"auth.add_user", "users.list_users"}
+    """
+    if not _is_authenticated(user):
+        return set()
+
     try:
-        return user.get_all_permissions()
+        perms = user.get_all_permissions()
+        return perms if perms else set()
     except Exception:
         return set()
 
 
 def _has_single_permission(user, perm_name, all_perms=None):
+    """
+    Supports:
+    - full permission: "app_label.codename"
+    - codename only: "add_user"
+    """
     if not _is_authenticated(user):
         return False
 
@@ -46,7 +69,10 @@ def _has_single_permission(user, perm_name, all_perms=None):
     if all_perms is None:
         all_perms = _user_all_permissions(user)
 
-    return any(p.split(".")[-1] == perm_name for p in all_perms)
+    try:
+        return any(p.split(".")[-1] == perm_name for p in all_perms)
+    except Exception:
+        return False
 
 
 @register.filter(name="has_group")
@@ -58,10 +84,20 @@ def has_group(user, group_name):
     if not _is_authenticated(user):
         return False
 
+    if getattr(user, "is_superuser", False):
+        return True
+
     if not group_name:
         return False
 
-    return user.groups.filter(name=str(group_name).strip()).exists()
+    group_name = str(group_name).strip()
+    if not group_name:
+        return False
+
+    try:
+        return user.groups.filter(name=group_name).exists()
+    except Exception:
+        return False
 
 
 @register.filter(name="has_permission")
@@ -79,6 +115,7 @@ def has_any_permission(user, perm_list):
     """
     Usage:
         {% if user|has_any_permission:"add_user,list_users,delete_user" %}
+
     Returns True if user has ANY ONE of the listed permissions.
     """
     if not _is_authenticated(user):
@@ -99,6 +136,7 @@ def has_any_permission(user, perm_list):
 def has_any_permissions(user, perm_list):
     """
     Alias for has_any_permission
+
     Usage:
         {% if user|has_any_permissions:"add_user,list_users" %}
     """
@@ -110,6 +148,7 @@ def has_all_permissions(user, perm_list):
     """
     Usage:
         {% if user|has_all_permissions:"add_user,list_users" %}
+
     Returns True only if user has ALL listed permissions.
     """
     if not _is_authenticated(user):

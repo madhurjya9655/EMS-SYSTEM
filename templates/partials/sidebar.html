@@ -92,6 +92,7 @@
 
 <div class="sub-panel" id="subPanel" aria-label="Module navigation">
 
+  <!-- PEOPLE -->
   <div class="sub-panel-section" id="panel-people">
     <div class="sub-panel-header">
       <div class="sub-panel-icon"><i class="fa-solid fa-users"></i></div>
@@ -130,6 +131,7 @@
     </div>
   </div>
 
+  <!-- TASKS -->
   <div class="sub-panel-section" id="panel-tasks">
     <div class="sub-panel-header">
       <div class="sub-panel-icon" style="background:#f5f3ff;color:#7c3aed"><i class="fa-solid fa-list-check"></i></div>
@@ -180,6 +182,7 @@
     </div>
   </div>
 
+  <!-- SALES — ✅ Collection Report link added -->
   <div class="sub-panel-section" id="panel-sales">
     <div class="sub-panel-header">
       <div class="sub-panel-icon" style="background:#fff7ed;color:#ea580c"><i class="fa-solid fa-chart-line"></i></div>
@@ -199,11 +202,13 @@
       {% if user|has_any_permission:"kam_targets,kam_targets_lines" %}<a href="{% url 'kam:targets' %}" class="sub-link {% if request.resolver_match.url_name == 'targets' %}active{% endif %}"><i class="fa-solid fa-bullseye"></i> Targets</a>{% endif %}
       {% if user|has_permission:"kam_reports" %}<a href="{% url 'kam:reports' %}?metric=sales" class="sub-link {% if request.resolver_match.url_name == 'reports' and request.resolver_match.app_name == 'kam' %}active{% endif %}"><i class="fa-solid fa-file-lines"></i> KAM Reports</a>{% endif %}
       {% if user|has_permission:"kam_collections_plan" %}<a href="{% url 'kam:collections_plan' %}" class="sub-link {% if request.resolver_match.url_name == 'collections_plan' %}active{% endif %}"><i class="fa-solid fa-money-bill-wave"></i> Collections Plan</a>{% endif %}
+      {% if user|has_permission:"kam_manager" or user.is_superuser %}<a href="{% url 'kam:collection_report' %}" class="sub-link {% if request.resolver_match.url_name == 'collection_report' %}active{% endif %}"><i class="fa-solid fa-chart-bar"></i> Collection Report</a>{% endif %}
       {% if user|has_any_permission:"kam_sync_now,kam_sync_trigger,kam_sync_step" %}<a href="{% url 'kam:sync_now' %}" class="sub-link"><i class="fa-solid fa-rotate"></i> Sync Now</a>{% endif %}
       {% if user.is_superuser %}<a href="{% url 'kam:admin_kam_manager_mapping' %}" class="sub-link {% if request.resolver_match.url_name == 'admin_kam_manager_mapping' %}active{% endif %}"><i class="fa-solid fa-user-shield"></i> KAM → Manager</a>{% endif %}
     </div>
   </div>
 
+  <!-- FINANCE -->
   <div class="sub-panel-section" id="panel-finance">
     <div class="sub-panel-header">
       <div class="sub-panel-icon" style="background:#f0fdf4;color:#22c55e"><i class="fa-solid fa-wallet"></i></div>
@@ -245,6 +250,7 @@
     </div>
   </div>
 
+  <!-- REPORTS -->
   <div class="sub-panel-section" id="panel-reports">
     <div class="sub-panel-header">
       <div class="sub-panel-icon" style="background:#ecfeff;color:#0891b2"><i class="fa-solid fa-chart-pie"></i></div>
@@ -262,6 +268,7 @@
     </div>
   </div>
 
+  <!-- SETTINGS -->
   <div class="sub-panel-section" id="panel-settings">
     <div class="sub-panel-header">
       <div class="sub-panel-icon" style="background:#f9fafb;color:#6b7280"><i class="fa-solid fa-gear"></i></div>

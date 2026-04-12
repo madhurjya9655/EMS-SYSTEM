@@ -3351,7 +3351,7 @@ def collections_plan(request: HttpRequest) -> HttpResponse:
                 )
 
         messages.success(request, "Collection plan saved.")
-        return redirect(f"{reverse('kam:collections_plan')}?period={request.GET.get('period', 'month')}&asof={request.GET.get('asof', '')}")
+        return redirect(f"{reverse('kam:collections_plan')}?period={request.GET.get('period', 'week')}&asof={request.GET.get('asof', '')}")
 
     else:
         form = CollectionPlanForm(initial={"period_type": period_type, "period_id": period_id})
@@ -3362,8 +3362,10 @@ def collections_plan(request: HttpRequest) -> HttpResponse:
     return render(request, "kam/collections_plan.html", ctx)
 
 
+
 def _build_collections_plan_ctx(request, customer_qs, period_type, period_id, start_dt, end_dt, form, scope_label=None):
-    plans_qs = _build_collections_plan_qs(customer_qs, period_type, period_id, start_dt, end_dt)
+    scope_kam_id, _ = _resolve_scope(request, request.user)
+    plans_qs = _build_collections_plan_qs(request.user, scope_kam_id, period_type, period_id, start_dt, end_dt)
     total_planned = Decimal(0)
     total_actual = Decimal(0)
     for p in plans_qs:
@@ -3395,10 +3397,32 @@ def _build_collections_plan_ctx(request, customer_qs, period_type, period_id, st
     }
 
 
-def _build_collections_plan_qs(customer_qs, period_type, period_id, start_dt, end_dt):
-    plan_qs = CollectionPlan.objects.select_related("customer", "kam").filter(customer__in=customer_qs)
+# AFTER — replace with this:
+def _build_collections_plan_qs(user, scope_kam_id, period_type, period_id, start_dt, end_dt):
+    """
+    FIX 2026-04-10: Filter CollectionPlan by kam_id directly.
+    Previous approach filtered via customer__in=customer_qs which silently
+    excluded plans when customer.kam was NULL (common for sheet-synced customers).
+    Filtering on CollectionPlan.kam is authoritative and never misses plans.
+    """
+    plan_qs = CollectionPlan.objects.select_related("customer", "kam")
+
+    # Scope by KAM directly — never rely on customer.kam being set
+    kam_ids = _scoped_kam_ids(user, scope_kam_id)
+    if kam_ids is None:
+        pass  # admin: see all
+    elif not kam_ids:
+        return plan_qs.none()
+    else:
+        plan_qs = plan_qs.filter(kam_id__in=kam_ids)
+
     period_rows = plan_qs.filter(period_type=period_type, period_id=period_id)
-    range_rows = plan_qs.filter(from_date__isnull=False, to_date__isnull=False, from_date__lte=end_dt.date(), to_date__gte=start_dt.date())
+    range_rows = plan_qs.filter(
+        from_date__isnull=False,
+        to_date__isnull=False,
+        from_date__lte=end_dt.date(),
+        to_date__gte=start_dt.date(),
+    )
     return (period_rows | range_rows).distinct().order_by("customer__name")
 
 
@@ -3440,8 +3464,83 @@ def collection_plan_delete(request: HttpRequest, plan_id: int) -> HttpResponse:
         return redirect(reverse("kam:collections_plan"))
     plan.delete()
     messages.success(request, "Collection plan deleted.")
-    return redirect(f"{reverse('kam:collections_plan')}?period={request.GET.get('period', 'month')}&asof={request.GET.get('asof', '')}")
+    return redirect(f"{reverse('kam:collections_plan')}?period={request.GET.get('period', 'week')}&asof={request.GET.get('asof', '')}")
 
+@login_required(login_url="/accounts/login/")
+@require_kam_code("kam_collections_plan")
+def update_actual_collection(request: HttpRequest, pk: int) -> HttpResponse:
+    obj = get_object_or_404(CollectionPlan, pk=pk)
+
+    # Security: KAM can only update their own; superuser/manager can update all
+    if not request.user.is_superuser and not _is_manager(request.user):
+        if obj.kam != request.user:
+            return HttpResponseForbidden("403 Forbidden: Not your plan.")
+
+    if request.method == "POST":
+        actual = request.POST.get("actual_amount")
+        if actual:
+            try:
+                obj.actual_amount = Decimal(actual)
+                obj.save(update_fields=["actual_amount"])
+                messages.success(request, "Actual amount saved.")
+            except Exception:
+                messages.error(request, "Invalid amount.")
+
+    return redirect(reverse("kam:collections_plan"))
+
+
+@login_required(login_url="/accounts/login/")
+@require_kam_code("kam_manager")
+def collection_report(request: HttpRequest) -> HttpResponse:
+    if not _is_manager(request.user):
+        return HttpResponseForbidden("403 Forbidden: Manager access required.")
+
+    qs = CollectionPlan.objects.select_related("customer", "kam").all()
+
+    kam_id = (request.GET.get("kam") or "").strip()
+    start = (request.GET.get("start") or "").strip()
+    end = (request.GET.get("end") or "").strip()
+
+    if kam_id and kam_id.isdigit():
+        qs = qs.filter(kam_id=int(kam_id))
+
+    start_d = _parse_iso_date(start)
+    end_d = _parse_iso_date(end)
+    if start_d and end_d and start_d <= end_d:
+        qs = qs.filter(planned_date__range=[start_d, end_d]) if hasattr(CollectionPlan, 'planned_date') else qs.filter(from_date__lte=end_d, to_date__gte=start_d)
+
+    # Scope: non-admin managers only see their KAMs
+    if not _is_admin(request.user):
+        allowed_kam_ids = _kams_managed_by_manager(request.user)
+        qs = qs.filter(kam_id__in=allowed_kam_ids)
+
+    agg = qs.aggregate(
+        planned=Sum("planned_amount"),
+        actual=Sum("actual_amount"),
+    )
+    planned = _safe_decimal(agg.get("planned"))
+    actual = _safe_decimal(agg.get("actual"))
+
+    # Build KAM options for filter dropdown
+    if _is_admin(request.user):
+        kam_users = User.objects.filter(is_active=True).order_by("username")
+    else:
+        kam_ids_list = _kams_managed_by_manager(request.user)
+        kam_users = User.objects.filter(is_active=True, id__in=kam_ids_list).order_by("username")
+
+    ctx = {
+        "page_title": "Collection Report",
+        "data": qs.order_by("kam__username", "customer__name"),
+        "planned": planned,
+        "actual": actual,
+        "shortfall": max(planned - actual, Decimal(0)),
+        "achievement_pct": float(actual / planned * 100) if planned else 0.0,
+        "kam_users": kam_users,
+        "selected_kam": kam_id,
+        "filter_start": start,
+        "filter_end": end,
+    }
+    return render(request, "kam/collection_report.html", ctx)
 
 # =====================================================================
 # Sync endpoints
