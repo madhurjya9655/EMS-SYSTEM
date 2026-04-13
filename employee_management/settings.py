@@ -1,7 +1,4 @@
 ﻿# FILE: employee_management/settings.py
-# UPDATED: 2026-04-06
-# CHANGE: Added KAM Google Sheet sync to CELERY_BEAT_SCHEDULE
-
 import os
 import sqlite3
 from pathlib import Path
@@ -214,14 +211,31 @@ else:
 # -----------------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
-if DATABASE_URL:
+# Render / production must always use PostgreSQL.
+# Local development may still use SQLite if DATABASE_URL is not set.
+if ON_RENDER or not DEBUG:
+    if not DATABASE_URL:
+        raise RuntimeError(
+            "DATABASE_URL is required in production/Render. "
+            "Configure your Render PostgreSQL database and set DATABASE_URL."
+        )
+
     DATABASES = {
         "default": dj_database_url.config(
             default=DATABASE_URL,
             conn_max_age=600,
             conn_health_checks=True,
+            ssl_require=True,
         )
     }
+
+    # Optional PostgreSQL connection tuning
+    DATABASES["default"].setdefault("OPTIONS", {})
+    DATABASES["default"]["OPTIONS"].update({
+        "connect_timeout": env_int("DB_CONNECT_TIMEOUT", 10),
+        "application_name": os.getenv("DB_APPLICATION_NAME", "bos-lakshya-web"),
+    })
+
 else:
     sqlite_path = os.getenv("SQLITE_PATH", "").strip()
     if not sqlite_path:
@@ -481,7 +495,6 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
-        # ── KAM sync logger ─────────────────────────────────────────────
         "apps.kam": {
             "handlers": _app_handlers,
             "level": "INFO",
@@ -721,7 +734,7 @@ JSON_DUMPS_PARAMS = {"ensure_ascii": False}
 if ON_RENDER:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    WEB_CONCURRENCY = env_int("WEB_CONCURRENCY", 1)
+    WEB_CONCURRENCY = env_int("WEB_CONCURRENCY", 2)
     MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
     FILE_UPLOAD_MAX_MEMORY_SIZE = min(FILE_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024)
     DATA_UPLOAD_MAX_MEMORY_SIZE = min(DATA_UPLOAD_MAX_MEMORY_SIZE, 5 * 1024 * 1024)
@@ -742,7 +755,7 @@ if DEBUG:
 # VALIDATION / REQUIRED DIRS
 # -----------------------------------------------------------------------------
 def validate_email_settings():
-    if (not DEBUG and EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend"):
+    if not DEBUG and EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend":
         if not EMAIL_HOST_USER or not EMAIL_HOST_PASSWORD:
             import warnings
             warnings.warn(
@@ -797,15 +810,6 @@ PERMISSION_DEBUG_ENABLED = env_bool("PERMISSION_DEBUG_ENABLED", DEBUG and not ON
 
 # -----------------------------------------------------------------------------
 # CELERY
-# ─────────────────────────────────────────────────────────────────────────────
-# Broker:  Redis (required for Celery)
-# Beat:    django_celery_beat DatabaseScheduler
-# Tasks:   all apps auto-discovered via autodiscover_tasks()
-#
-# KAM sync schedule:
-#   - Full sync: every 30 minutes (KAM_SYNC_INTERVAL_MINUTES env var, default 30)
-#   - Runs as: apps.kam.tasks.sync_google_sheet_to_db
-#   - Only runs if KAM_SALES_SHEET_ID and KAM_SA_JSON_CONTENT are set
 # -----------------------------------------------------------------------------
 try:
     from celery.schedules import crontab  # type: ignore
@@ -849,12 +853,9 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
-# ── KAM sync interval (configurable via env var) ──────────────────────────────
-# Default: every 30 minutes. Set KAM_SYNC_INTERVAL_MINUTES=60 for hourly.
-_KAM_SYNC_INTERVAL = env_int("KAM_SYNC_INTERVAL_MINUTES", 30) * 60  # convert to seconds
+_KAM_SYNC_INTERVAL = env_int("KAM_SYNC_INTERVAL_MINUTES", 30) * 60
 
 CELERY_BEAT_SCHEDULE = {
-    # ── Existing task schedules (unchanged) ─────────────────────────────────
     "pre10am_unblock_and_generate_0955": {
         "task": "apps.tasks.tasks.run_pre10am_unblock_and_generate",
         "schedule": crontab(hour=9, minute=55),
@@ -884,20 +885,12 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.tasks.pending_digest.send_admin_all_pending_digest",
         "schedule": crontab(hour=19, minute=0, day_of_week="1-6"),
     },
-
-    # ── KAM Google Sheet → PostgreSQL sync ──────────────────────────────────
-    # Runs every KAM_SYNC_INTERVAL_MINUTES (default: 30 min).
-    # Safe to run even if KAM_SALES_SHEET_ID is not set — task exits cleanly.
-    # To disable: set KAM_SYNC_ENABLED=0 in Render env vars.
     "kam-sync-google-sheet-to-db": {
         "task": "apps.kam.tasks.sync_google_sheet_to_db",
         "schedule": _KAM_SYNC_INTERVAL,
-        # Optional: restrict to business hours (8am–8pm IST, Mon–Sat)
-        # "schedule": crontab(minute="*/30", hour="8-20", day_of_week="1-6"),
     },
 }
 
-# Disable KAM sync entirely if env var says so (safety valve)
 if not env_bool("KAM_SYNC_ENABLED", True):
     CELERY_BEAT_SCHEDULE.pop("kam-sync-google-sheet-to-db", None)
 
