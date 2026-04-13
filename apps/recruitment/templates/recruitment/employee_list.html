@@ -67,17 +67,18 @@
   .emp-search input::placeholder { color: #9ca3af; }
 
   /* ── TABLE ── */
-  .emp-table-wrap { overflow-x: auto; }
+  .emp-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .emp-table {
     width: 100%;
     border-collapse: collapse;
     font-size: 13px;
+    min-width: 900px;
   }
   .emp-table thead th {
     background: #f8f9fc;
     border-bottom: 1px solid #e5e7eb;
-    padding: 10px 14px;
-    font-size: 11px;
+    padding: 10px 12px;
+    font-size: 10.5px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .07em;
@@ -85,7 +86,6 @@
     white-space: nowrap;
     position: sticky; top: 0; z-index: 1;
   }
-  .emp-table thead th:first-child { border-radius: 0; }
   .emp-table tbody tr {
     border-bottom: 1px solid #f3f4f6;
     transition: background .15s;
@@ -93,12 +93,17 @@
   .emp-table tbody tr:last-child { border-bottom: none; }
   .emp-table tbody tr:hover { background: #f8faff; }
   .emp-table td {
-    padding: 11px 14px;
+    padding: 10px 12px;
     vertical-align: middle;
     color: #374151;
     font-size: 13px;
   }
-  .emp-table td.email-col { color: #1d4ed8; font-weight: 500; }
+  .emp-table td.email-col {
+    color: #1d4ed8; font-weight: 500;
+    font-size: 12.5px;
+    word-break: break-all;
+    max-width: 180px;
+  }
   .emp-table td.name-col { font-weight: 600; color: #111827; }
 
   /* Avatar + name cell */
@@ -112,11 +117,11 @@
     text-transform: uppercase;
   }
 
-  /* ── EMPLOYEE STATUS BADGE ── */
+  /* ── EMPLOYEE STATUS BADGE (driven by User.is_active) ── */
   .emp-status {
     display: inline-flex; align-items: center; gap: 5px;
-    padding: 3px 10px; border-radius: 999px;
-    font-size: 11.5px; font-weight: 700;
+    padding: 3px 9px; border-radius: 999px;
+    font-size: 11px; font-weight: 700;
     letter-spacing: .02em; white-space: nowrap;
   }
   .emp-status-dot {
@@ -141,12 +146,21 @@
   }
   .cc-dot.active { background: #10b981; }
   .cc-dot.inactive { background: #ef4444; }
-  .cc-status { display: flex; align-items: center; gap: 0; font-size: 12.5px; }
+  .cc-status { display: flex; align-items: center; gap: 0; font-size: 12px; }
   .cc-status.active { color: #065f46; }
   .cc-status.inactive { color: #991b1b; }
 
   /* Muted dash */
   .dash { color: #d1d5db; }
+
+  /* Reporting officer / cc text wrap */
+  .wrap-cell {
+    word-break: break-word;
+    white-space: normal;
+    font-size: 12px;
+    max-width: 160px;
+    line-height: 1.45;
+  }
 
   /* Action buttons */
   .action-group { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
@@ -158,6 +172,7 @@
     cursor: pointer; text-decoration: none;
     transition: background .15s, border-color .15s;
     font-family: 'DM Sans', sans-serif;
+    white-space: nowrap;
   }
   .btn-edit:hover { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
   .btn-del {
@@ -165,7 +180,7 @@
     width: 30px; height: 30px; border-radius: 7px;
     background: #fff; border: 1px solid #e5e7eb;
     color: #9ca3af; font-size: 12px;
-    cursor: pointer;
+    cursor: pointer; flex-shrink: 0;
     transition: background .15s, border-color .15s, color .15s;
     font-family: 'DM Sans', sans-serif;
   }
@@ -187,7 +202,7 @@
     font-family: 'DM Sans', sans-serif; cursor: pointer;
     transition: background .18s, box-shadow .18s, transform .12s;
     box-shadow: 0 2px 8px rgba(59,130,246,.3);
-    text-decoration: none;
+    text-decoration: none; white-space: nowrap;
   }
   .btn-neo-primary:hover { background: #2563eb; color: #fff; box-shadow: 0 4px 14px rgba(37,99,235,.35); transform: translateY(-1px); }
   .btn-neo-primary:active { transform: translateY(0); }
@@ -199,7 +214,7 @@
     font-size: 13px; font-weight: 600;
     font-family: 'DM Sans', sans-serif; cursor: pointer;
     transition: background .15s, border-color .15s, color .15s;
-    text-decoration: none;
+    text-decoration: none; white-space: nowrap;
   }
   .btn-neo-outline:hover { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
 
@@ -241,11 +256,34 @@
   }
   .neo-modal .form-text { font-size: 11.5px; color: #6b7280; margin-top: 4px; }
 
+  /* ── RESPONSIVE ── */
+  @media (max-width: 1200px) {
+    .emp-table { min-width: 800px; }
+    .emp-table td, .emp-table thead th { padding: 9px 10px; }
+  }
+
+  @media (max-width: 992px) {
+    .emp-table { min-width: 750px; }
+    .emp-search input { width: 140px; }
+  }
+
   @media (max-width: 768px) {
-    .emp-search input { width: 120px; }
+    .emp-search input { width: 110px; }
     .page-hd { flex-direction: column; gap: .75rem; }
-    .page-hd-actions { width: 100%; }
+    .page-hd-actions { width: 100%; justify-content: flex-start; }
     .btn-neo-outline span { display: none; }
+    .btn-neo-outline { padding: 8px 10px; }
+    .emp-table { min-width: 680px; font-size: 12px; }
+    .emp-table td { padding: 8px 9px; }
+    .emp-table thead th { padding: 8px 9px; font-size: 9.5px; }
+    .page-hd-left h1 { font-size: 1.2rem; }
+    .emp-toolbar { padding: 10px 14px; }
+  }
+
+  @media (max-width: 480px) {
+    .emp-table { min-width: 600px; }
+    .emp-search input { width: 90px; }
+    .btn-neo-primary { padding: 7px 12px; font-size: 12px; }
   }
 </style>
 
@@ -294,23 +332,22 @@
     <table class="emp-table" id="empTable">
       <thead>
         <tr>
-          <th style="width:20%">Employee Name</th>
-          <th style="width:18%">E-mail</th>
+          <th style="width:18%">Employee Name</th>
+          <th style="width:16%">E-mail</th>
           <th style="width:9%">Mobile</th>
           <th style="width:9%">MD Name</th>
           <th style="width:13%">Reporting Officer</th>
           <th style="width:11%">Default CC</th>
-          <th style="width:6%">CC Status</th>
-          <th style="width:7%">Designation</th>
-          {# ── STATUS column — driven by User.is_active (single source of truth) ── #}
-          <th style="width:7%">Status</th>
-          {% if request.user.is_superuser %}<th style="width:1%;text-align:right">Actions</th>{% endif %}
+          <th style="width:7%">CC Status</th>
+          <th style="width:8%">Designation</th>
+          <th style="width:6%">Status</th>
+          {% if request.user.is_superuser %}<th style="width:3%;text-align:right">Actions</th>{% endif %}
         </tr>
       </thead>
       <tbody>
         {% for r in rows %}
         <tr>
-          <!-- Name + avatar -->
+
           <td class="name-col">
             <div class="emp-name-cell">
               <div class="emp-avatar">{{ r.name|slice:":2" }}</div>
@@ -332,13 +369,13 @@
 
           <td>
             {% if r.reporting_officer %}
-              <span style="word-break:break-word;white-space:normal">{{ r.reporting_officer }}</span>
+              <span class="wrap-cell">{{ r.reporting_officer }}</span>
             {% else %}<span class="dash">—</span>{% endif %}
           </td>
 
           <td>
             {% if r.cc_label %}
-              <span style="word-break:break-word;white-space:normal;font-size:12.5px">{{ r.cc_label }}</span>
+              <span class="wrap-cell">{{ r.cc_label }}</span>
             {% else %}<span class="dash">—</span>{% endif %}
           </td>
 
@@ -359,14 +396,11 @@
             {% else %}<span class="dash">—</span>{% endif %}
           </td>
 
-          {#
-            ── EMPLOYEE STATUS ──────────────────────────────────────────────────
-            Source: row['is_active'] = u.is_active (User.is_active)
-            This is the SINGLE SOURCE OF TRUTH.
-            Never use Employee.is_active or Employee.status directly in template.
-            Signal in users/signals.py keeps Employee.is_active in sync automatically.
-            ─────────────────────────────────────────────────────────────────────
-          #}
+          {% comment %}
+            STATUS column — reads r.is_active which is set in the view as u.is_active.
+            User.is_active is the single source of truth.
+            The signal in users/signals.py keeps Employee.is_active in sync automatically.
+          {% endcomment %}
           <td>
             {% if r.is_active %}
               <span class="emp-status active">
@@ -399,10 +433,10 @@
             </div>
           </td>
           {% endif %}
+
         </tr>
         {% empty %}
         <tr>
-          {# colspan = 10 with superuser (added Status col), 9 without #}
           <td colspan="{% if request.user.is_superuser %}10{% else %}9{% endif %}" style="padding:0;border:none">
             <div class="emp-empty">
               <i class="fas fa-users-slash"></i>
@@ -430,7 +464,7 @@
 {% endif %}
 
 
-<!-- ── ADD EMPLOYEE MODAL ── -->
+<!-- ADD EMPLOYEE MODAL -->
 {% if request.user.is_superuser %}
 <div class="modal fade neo-modal" id="addEmployeeModal" tabindex="-1" aria-labelledby="addEmployeeLabel" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
