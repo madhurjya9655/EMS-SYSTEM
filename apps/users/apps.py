@@ -1,3 +1,4 @@
+# apps/users/apps.py
 from __future__ import annotations
 
 from django.apps import AppConfig
@@ -10,11 +11,11 @@ class UsersConfig(AppConfig):
 
     def ready(self) -> None:
         """
-        Import-time hook for signals or other startup wiring.
+        Import-time hook — registers all signals on server startup.
 
-        NOTE: We are NOT auto-creating Profile instances here because
-        Profile.phone is unique/required — silently creating profiles
-        without a valid phone would cause integrity/UX issues.
+        Signals registered here:
+          1. Profile.post_save  → ensure Admin role marks user.is_staff = True
+          2. User.post_save     → sync Employee.is_active from User.is_active
+                                  (single source of truth enforcement)
         """
-        # from . import signals  # Enable when you actually add signals
-        return
+        import apps.users.signals  # noqa: F401  — registers all receivers

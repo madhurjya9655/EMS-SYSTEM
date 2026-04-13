@@ -43,16 +43,24 @@ class EmployeeListView(LoginRequiredMixin, ListView):
         # Suppress default object_list; template uses 'rows' we provide.
         return Employee.objects.none()
 
+    # REPLACE get_context_data in EmployeeListView (apps/recruitment/views.py)
+
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
 
-        # IMPORTANT: no .only(...) with select_related('profile') to avoid deferred clash
-        users = User.objects.select_related("profile").order_by("username")
+        # Fetch ALL users (active + inactive) so admins see the full picture.
+        # Filter by is_active in template using user.is_active — single source of truth.
+        users = (
+            User.objects.select_related("profile", "employee_record")
+            .order_by("username")
+        )
 
         # Prefetch ApproverMapping into a dict by user_id
         mappings = {
             m.employee_id: m
-            for m in ApproverMapping.objects.select_related("employee", "reporting_person", "cc_person")
+            for m in ApproverMapping.objects.select_related(
+                "employee", "reporting_person", "cc_person"
+            )
         }
 
         # Prefetch CCConfiguration into a dict by user_id
@@ -61,7 +69,7 @@ class EmployeeListView(LoginRequiredMixin, ListView):
             for c in CCConfiguration.objects.select_related("user")
         }
 
-        def full_name(u: User) -> str:
+        def full_name(u) -> str:
             name = (getattr(u, "get_full_name", lambda: "")() or "").strip()
             if name:
                 return name
@@ -70,7 +78,7 @@ class EmployeeListView(LoginRequiredMixin, ListView):
             combo = f"{first} {last}".strip()
             return combo or (u.username or "").strip()
 
-        def label_with_email(u: User | None) -> str:
+        def label_with_email(u) -> str:
             if not u:
                 return ""
             nm = full_name(u)
@@ -79,37 +87,38 @@ class EmployeeListView(LoginRequiredMixin, ListView):
 
         rows = []
         for u in users:
-            prof: Profile | None = getattr(u, "profile", None)
-            mapping: ApproverMapping | None = mappings.get(u.id)
-            cc_config: CCConfiguration | None = cc_configs.get(u.id)
+            prof = getattr(u, "profile", None)
+            mapping = mappings.get(u.id)
+            cc_config = cc_configs.get(u.id)
 
-            # Reporting officer (from ApproverMapping)
             rp_name = rp_email = ""
             if mapping and mapping.reporting_person:
                 rp = mapping.reporting_person
                 rp_name = full_name(rp) or (rp.username or "")
                 rp_email = (rp.email or "").strip()
 
-            # Default CC label (single, from ApproverMapping)
-            cc_label = label_with_email(mapping.cc_person) if (mapping and mapping.cc_person) else ""
-
-            # "MD Name" — mirror Reporting officer (as per requirement)
-            md_name = rp_name
+            cc_label = (
+                label_with_email(mapping.cc_person)
+                if (mapping and mapping.cc_person)
+                else ""
+            )
 
             rows.append(
                 {
-                    "user_id": u.id,  # used by the custom Edit Mapping page
+                    "user_id": u.id,
                     "email": (u.email or "").strip(),
                     "name": full_name(u),
                     "mobile": (getattr(prof, "phone", None) or ""),
-                    "md_name": md_name,
-                    "reporting_officer": f"{rp_name} ({rp_email})" if rp_name or rp_email else "",
+                    "md_name": rp_name,
+                    "reporting_officer": (
+                        f"{rp_name} ({rp_email})" if (rp_name or rp_email) else ""
+                    ),
                     "cc_label": cc_label,
                     "cc_config_active": cc_config.is_active if cc_config else False,
-                    # Use role as designation if no explicit designation field exists
                     "designation": (getattr(prof, "role", "") or ""),
-                    # admin edit shortcut (fallback link)
                     "mapping_id": mapping.id if mapping else None,
+                    # ── STATUS: always from User.is_active — single source of truth ──
+                    "is_active": u.is_active,
                 }
             )
 
@@ -131,13 +140,16 @@ def _split_name(full: str) -> Tuple[str, str]:
     return " ".join(parts[:-1]), parts[-1]
 
 
+# REPLACE THIS FUNCTION in apps/recruitment/views.py
+
 @login_required
 @user_passes_test(lambda u: u.is_superuser)
 @transaction.atomic
 def employee_create(request):
     """
     POST-only endpoint backing the 'Add Employee' modal.
-    Creates (or updates) a Django auth User + Profile + CC Configuration.
+    Creates (or updates) a Django auth User + Profile + Employee record + CC Configuration.
+    Employee.is_active is always set from User.is_active — never set independently.
     """
     if request.method != "POST":
         return HttpResponseForbidden("POST required")
@@ -157,10 +169,9 @@ def employee_create(request):
     username_base = (email.split("@")[0] or name.split()[0] or "user").lower()
     username = username_base
 
-    # If a user with the email exists, update it; else create a new one.
+    # ── Get or create auth User ──────────────────────────────────────────
     user = User.objects.filter(email__iexact=email).first()
     if user is None:
-        # Make sure username is unique
         i = 1
         while User.objects.filter(username__iexact=username).exists():
             i += 1
@@ -173,7 +184,6 @@ def employee_create(request):
         user.save()
         created = True
     else:
-        # Update name if provided
         first, last = _split_name(name)
         if first or last:
             user.first_name = first
@@ -181,27 +191,55 @@ def employee_create(request):
             user.save(update_fields=["first_name", "last_name"])
         created = False
 
-    # Ensure Profile exists and update fields we show in the grid
+    # ── Ensure Profile exists ────────────────────────────────────────────
     profile, _ = Profile.objects.get_or_create(user=user)
-    changed = False
+    prof_changed = False
     if mobile and profile.phone != mobile:
         profile.phone = mobile
-        changed = True
+        prof_changed = True
     if designation and profile.role != designation:
         profile.role = designation
-        changed = True
-    if changed:
+        prof_changed = True
+    if prof_changed:
         profile.save()
 
-    # Add to CC Configuration if requested
+    # ── Ensure Employee record exists and is linked ──────────────────────
+    # is_active is always derived from User.is_active — never set independently
+    from apps.recruitment.models import Employee  # noqa: PLC0415
+    employee, emp_created = Employee.objects.get_or_create(
+        email=email,
+        defaults={
+            "user": user,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "phone": mobile,
+            "department": designation,
+            "is_active": user.is_active,   # mirror from User
+        },
+    )
+    if not emp_created:
+        # Link user if previously orphaned
+        emp_changed = False
+        if employee.user_id != user.pk:
+            employee.user = user
+            emp_changed = True
+        # Always re-sync active status
+        if employee.is_active != user.is_active:
+            employee.is_active = user.is_active
+            emp_changed = True
+        if emp_changed:
+            employee.save(update_fields=["user", "is_active"])
+
+    # ── Optional CC Configuration ────────────────────────────────────────
     if add_to_cc_config:
+        from apps.leave.models import CCConfiguration  # noqa: PLC0415
         cc_config, cc_created = CCConfiguration.objects.get_or_create(
             user=user,
             defaults={
-                'is_active': True,
-                'department': designation or 'Other',
-                'sort_order': 20,  # Default sort order for new users
-            }
+                "is_active": True,
+                "department": designation or "Other",
+                "sort_order": 20,
+            },
         )
         if cc_created:
             messages.info(request, f"Added {name} to CC configuration options.")
@@ -210,12 +248,16 @@ def employee_create(request):
     return redirect(next_url)
 
 
+# REPLACE THIS FUNCTION in apps/recruitment/views.py
+
 @login_required
 @user_passes_test(lambda u: u.is_superuser)
 @transaction.atomic
 def employee_delete(request, user_id: int):
     """
-    POST-only: deletes the Django auth User and detaches any ApproverMapping links and CC config.
+    POST-only: deletes the Django auth User.
+    Employee record is deleted automatically via CASCADE (user OneToOneField).
+    Cleans up mappings and CC config first.
     """
     if request.method != "POST":
         return HttpResponseForbidden("POST required")
@@ -223,17 +265,18 @@ def employee_delete(request, user_id: int):
     next_url = request.POST.get("next") or reverse("recruitment:employee_list")
     user = get_object_or_404(User, pk=user_id)
 
-    # Clean up mappings that reference this user
-    # 1) If the user is an employee in mapping → delete those rows
+    # Clean up ApproverMapping references
     ApproverMapping.objects.filter(employee_id=user.id).delete()
-    # 2) If used as reporting/cc → null them out (if nullable)
     ApproverMapping.objects.filter(reporting_person_id=user.id).update(reporting_person=None)
     ApproverMapping.objects.filter(cc_person_id=user.id).update(cc_person=None)
 
     # Clean up CC Configuration
+    from apps.leave.models import CCConfiguration  # noqa: PLC0415
     CCConfiguration.objects.filter(user_id=user.id).delete()
 
     name = getattr(user, "get_full_name", lambda: "")() or user.username or user.email
+
+    # Deleting User cascades to Employee via OneToOneField(on_delete=CASCADE)
     user.delete()
 
     messages.success(request, f"Deleted employee: {name}")

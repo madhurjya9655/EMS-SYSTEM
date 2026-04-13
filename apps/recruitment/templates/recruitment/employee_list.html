@@ -112,6 +112,27 @@
     text-transform: uppercase;
   }
 
+  /* ── EMPLOYEE STATUS BADGE ── */
+  .emp-status {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 10px; border-radius: 999px;
+    font-size: 11.5px; font-weight: 700;
+    letter-spacing: .02em; white-space: nowrap;
+  }
+  .emp-status-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  }
+  .emp-status.active {
+    background: #ecfdf5; color: #065f46;
+    border: 1px solid #a7f3d0;
+  }
+  .emp-status.active .emp-status-dot { background: #10b981; }
+  .emp-status.inactive {
+    background: #fef2f2; color: #991b1b;
+    border: 1px solid #fecaca;
+  }
+  .emp-status.inactive .emp-status-dot { background: #ef4444; }
+
   /* CC status */
   .cc-dot {
     display: inline-block;
@@ -273,14 +294,16 @@
     <table class="emp-table" id="empTable">
       <thead>
         <tr>
-          <th style="width:22%">Employee Name</th>
-          <th style="width:20%">E-mail</th>
-          <th style="width:10%">Mobile</th>
-          <th style="width:10%">MD Name</th>
-          <th style="width:15%">Reporting Officer</th>
-          <th style="width:13%">Default CC</th>
+          <th style="width:20%">Employee Name</th>
+          <th style="width:18%">E-mail</th>
+          <th style="width:9%">Mobile</th>
+          <th style="width:9%">MD Name</th>
+          <th style="width:13%">Reporting Officer</th>
+          <th style="width:11%">Default CC</th>
           <th style="width:6%">CC Status</th>
-          <th style="width:10%">Designation</th>
+          <th style="width:7%">Designation</th>
+          {# ── STATUS column — driven by User.is_active (single source of truth) ── #}
+          <th style="width:7%">Status</th>
           {% if request.user.is_superuser %}<th style="width:1%;text-align:right">Actions</th>{% endif %}
         </tr>
       </thead>
@@ -336,6 +359,26 @@
             {% else %}<span class="dash">—</span>{% endif %}
           </td>
 
+          {#
+            ── EMPLOYEE STATUS ──────────────────────────────────────────────────
+            Source: row['is_active'] = u.is_active (User.is_active)
+            This is the SINGLE SOURCE OF TRUTH.
+            Never use Employee.is_active or Employee.status directly in template.
+            Signal in users/signals.py keeps Employee.is_active in sync automatically.
+            ─────────────────────────────────────────────────────────────────────
+          #}
+          <td>
+            {% if r.is_active %}
+              <span class="emp-status active">
+                <span class="emp-status-dot"></span>Active
+              </span>
+            {% else %}
+              <span class="emp-status inactive">
+                <span class="emp-status-dot"></span>Inactive
+              </span>
+            {% endif %}
+          </td>
+
           {% if request.user.is_superuser %}
           <td>
             <div class="action-group">
@@ -359,7 +402,8 @@
         </tr>
         {% empty %}
         <tr>
-          <td colspan="{% if request.user.is_superuser %}9{% else %}8{% endif %}" style="padding:0;border:none">
+          {# colspan = 10 with superuser (added Status col), 9 without #}
+          <td colspan="{% if request.user.is_superuser %}10{% else %}9{% endif %}" style="padding:0;border:none">
             <div class="emp-empty">
               <i class="fas fa-users-slash"></i>
               <p>No employees found.</p>
