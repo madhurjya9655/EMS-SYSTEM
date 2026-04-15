@@ -1,4 +1,5 @@
 # FILE: apps/kam/urls.py
+# UPDATED: 2026-04-14 — Added customer_search_api + customer_360_api endpoints
 from django.urls import path
 from . import views
 
@@ -19,7 +20,6 @@ urlpatterns = [
 
     # ══════════════════════════════════════════════════════════════════
     # EMPLOYEE VISIT PLAN FLOW
-    # Uses existing single-visit views already present in views.py
     # ══════════════════════════════════════════════════════════════════
 
     # Employee: apply / list / detail / edit
@@ -103,6 +103,10 @@ urlpatterns = [
     path("customers/create/", views.customer_create_manual, name="customer_create_manual"),
     path("customers/<int:customer_id>/update/", views.customer_update_manual, name="customer_update_manual"),
     path("customers/<int:customer_id>/delete/", views.customer_delete_manual, name="customer_delete_manual"),
+
+    # ── Customer Search + 360 APIs (NEW — for Collection Plan AJAX) ────
+    path("api/customer-search/", views.customer_search_api, name="customer_search_api"),
+    path("api/customer-360/<int:customer_id>/", views.customer_360_api, name="customer_360_api"),
 
     # ── Targets ────────────────────────────────────────────────────────
     path("targets/", views.targets, name="targets"),

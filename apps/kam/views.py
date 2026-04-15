@@ -2021,8 +2021,9 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
         plan_window_start = today_local - timezone.timedelta(days=7)
         plan_window_end   = today_local + timezone.timedelta(days=7)
         my_plans = _visitplan_qs_for_user(user).filter(
-            visit_date__gte=plan_window_start,
-            visit_date__lte=plan_window_end,
+        batch__isnull=True,          # ← only standalone / single visits
+        visit_date__gte=plan_window_start,
+        visit_date__lte=plan_window_end,
         ).order_by("visit_date", "customer__name")
     else:
         my_plans = []
@@ -2052,7 +2053,18 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 @login_required(login_url="/accounts/login/")
 def single_visit_detail(request: HttpRequest, plan_id: int) -> HttpResponse:
-    plan = get_object_or_404(_single_visit_qs_for_user(request.user), id=plan_id)
+    qs = _single_visit_qs_for_user(request.user)
+    plan = qs.filter(id=plan_id).first()
+    if plan is None:
+        if not _is_manager(request.user):
+            plan = get_object_or_404(
+                VisitPlan.objects.select_related("customer", "kam"),
+                id=plan_id,
+                kam=request.user,
+                batch__isnull=True,
+            )
+        else:
+            raise Http404
     audit_log = list(VisitApprovalAudit.objects.filter(plan=plan).select_related("actor").order_by("created_at"))
     ctx = {
         "page_title": f"Single Visit #{plan.id}", "plan": plan, "audit_log": audit_log,
@@ -2419,6 +2431,114 @@ def customer_delete_manual(request: HttpRequest, customer_id: int) -> JsonRespon
         return JsonResponse({"ok": False, "error": "Customer is used in submitted/approved plans"}, status=409)
     c.delete()
     return JsonResponse({"ok": True})
+
+
+# =====================================================================
+# Customer Search API  (NEW — 2026-04-14)
+# Powers AJAX typeahead in Collection Plan
+# =====================================================================
+@login_required(login_url="/accounts/login/")
+def customer_search_api(request: HttpRequest) -> JsonResponse:
+    """
+    AJAX customer search with role-based scoping.
+    GET ?q=<search_term>
+    Returns: { "results": [{ "id", "name", "code", "mobile" }, ...] }
+    """
+    query = (request.GET.get("q") or "").strip()
+
+    # Role-scoped base queryset — reuses existing helper, never bypasses roles
+    qs = _customer_qs_for_user(request.user).order_by("name")
+
+    if query:
+        qs = qs.filter(
+            Q(name__icontains=query) |
+            Q(mobile__icontains=query) |
+            Q(code__icontains=query)
+        )
+
+    data = list(
+        qs.values("id", "name", "code", "mobile")[:20]
+    )
+
+    # Normalise None → empty string so JS JSON is clean
+    for row in data:
+        row["code"]   = row.get("code")   or ""
+        row["mobile"] = row.get("mobile") or ""
+
+    return JsonResponse({"results": data})
+
+
+# =====================================================================
+# Customer 360 API  (NEW — 2026-04-14)
+# Inline panel on Collection Plan page — summary card per customer
+# =====================================================================
+@login_required(login_url="/accounts/login/")
+def customer_360_api(request: HttpRequest, customer_id: int) -> JsonResponse:
+    """
+    Returns aggregated Customer 360 data for a single customer.
+    GET /kam/api/customer-360/<customer_id>/
+    Role filtering is enforced via _customer_qs_for_user (same as all other views).
+    """
+    # Security: customer must be in the requesting user's allowed scope
+    accessible_qs = _customer_qs_for_user(request.user)
+    try:
+        customer = accessible_qs.get(id=customer_id)
+    except Customer.DoesNotExist:
+        return JsonResponse({"error": "Customer not found or access denied"}, status=404)
+
+    # ── Collection Plans — filtered by KAM role ──────────────────────
+    plans = CollectionPlan.objects.filter(customer_id=customer.id)
+    if not _is_admin(request.user):
+        if _is_manager(request.user):
+            allowed_kam_ids = _kams_managed_by_manager(request.user)
+            plans = plans.filter(kam_id__in=allowed_kam_ids)
+        else:
+            # KAM: only their own plans (CollectionPlan.kam_id is authoritative)
+            plans = plans.filter(kam_id=request.user.id)
+
+    agg = plans.aggregate(
+        planned=Sum("planned_amount"),
+        actual=Sum("actual_amount"),
+    )
+    total_planned   = _safe_decimal(agg.get("planned"))
+    total_collected = _safe_decimal(agg.get("actual"))
+    outstanding     = total_planned - total_collected
+
+    last_collection = plans.order_by("-updated_at").first()
+
+    # ── Visits — unscoped (all visits for this customer shown) ──────
+    visits     = VisitPlan.objects.filter(customer_id=customer.id)
+    last_visit = visits.order_by("-visit_date").first()
+
+    # ── KAM display name ─────────────────────────────────────────────
+    kam_name = ""
+    if customer.kam_id:
+        try:
+            kam_name = customer.kam.get_full_name() or customer.kam.username
+        except Exception:
+            pass
+
+    # ── Last collection date (timezone-aware → local) ────────────────
+    last_coll_date = None
+    if last_collection and last_collection.updated_at:
+        try:
+            last_coll_date = timezone.localtime(last_collection.updated_at).strftime("%d %b %Y")
+        except Exception:
+            last_coll_date = str(last_collection.updated_at.date())
+
+    data = {
+        "name":               customer.name,
+        "kam":                kam_name,
+        "code":               getattr(customer, "code",   None) or "",
+        "mobile":             getattr(customer, "mobile", None) or "",
+        "total_planned":      float(total_planned),
+        "total_collected":    float(total_collected),
+        "outstanding":        float(outstanding),
+        "last_collection_date": last_coll_date,
+        "last_visit_date":    str(last_visit.visit_date) if last_visit else None,
+        "total_visits":       visits.count(),
+    }
+    return JsonResponse(data)
 
 
 # =====================================================================
