@@ -645,6 +645,22 @@
 
       <div class="rail-divider"></div>
 
+      {# ═══════════════════════════════════════════════════════════════
+         90 DAYS STOCK ANALYSIS — ALL EMPLOYEES, NO PERMISSION REQUIRED
+         Opens external Google Apps Script link in a new tab.
+         DO NOT wrap in any {% if perms %} or {% if user.role %} block.
+      ═══════════════════════════════════════════════════════════════ #}
+      <a href="https://script.google.com/a/macros/blueoceansteels.com/s/AKfycbxyvMlqCjXAX3MOkds3qwt75ehe7T0bHqUuI84A64r_h8SgYGbY3hzbVuTbYSf7dFgK5w/exec"
+         class="rail-btn"
+         target="_blank"
+         rel="noopener noreferrer"
+         data-tip="90 Days Stock Analysis"
+         title="90 Days Stock Analysis">
+        <i class="fa-solid fa-box-archive"></i>
+      </a>
+
+      <div class="rail-divider"></div>
+
       {% if user|has_any_permission:"list_users,add_user" or user.is_superuser %}
       <button type="button"
               class="rail-btn {% if request.resolver_match.app_name == 'users' or request.resolver_match.app_name == 'settings' %}active{% endif %}"
@@ -779,6 +795,19 @@
         {% if user|has_permission:"kam_manager" or user.is_superuser %}<a href="{% url 'kam:collection_report' %}" class="sub-link {% if request.resolver_match.url_name == 'collection_report' %}active{% endif %}"><i class="fa-solid fa-chart-bar"></i> Collection Report</a>{% endif %}
         {% if user|has_any_permission:"kam_sync_now,kam_sync_trigger,kam_sync_step" %}<a href="{% url 'kam:sync_now' %}" class="sub-link"><i class="fa-solid fa-rotate"></i> Sync Now</a>{% endif %}
         {% if user.is_superuser %}<a href="{% url 'kam:admin_kam_manager_mapping' %}" class="sub-link {% if request.resolver_match.url_name == 'admin_kam_manager_mapping' %}active{% endif %}"><i class="fa-solid fa-user-shield"></i> KAM → Manager</a>{% endif %}
+
+        {# ═══════════════════════════════════════════════════════════════
+           90 DAYS STOCK ANALYSIS — ALL EMPLOYEES, NO PERMISSION REQUIRED
+           External link — no backend validation, opens new tab always.
+           DO NOT add any {% if perms %} or {% if user.role %} wrapper.
+        ═══════════════════════════════════════════════════════════════ #}
+        <span class="sub-section-label">Stock Tools</span>
+        <a href="https://script.google.com/a/macros/blueoceansteels.com/s/AKfycbxyvMlqCjXAX3MOkds3qwt75ehe7T0bHqUuI84A64r_h8SgYGbY3hzbVuTbYSf7dFgK5w/exec"
+           class="sub-link"
+           target="_blank"
+           rel="noopener noreferrer">
+          <i class="fa-solid fa-box-archive"></i> 90 Days Stock Analysis
+        </a>
       </div>
     </div>
 

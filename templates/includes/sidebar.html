@@ -133,7 +133,6 @@
             </div>
             {% endif %}
 
-            {# ✅ SALES GROUP — Collection Report added #}
             {% if user|has_any_permission:"kam_dashboard,kam_plan,kam_visits,kam_customers,kam_reports,kam_manager" or user.is_superuser %}
             <div class="sidebar-group">
                 <div class="sidebar-group-label">Sales</div>
@@ -237,6 +236,19 @@
                     <span>KAM → Manager</span>
                 </a>
                 {% endif %}
+
+                {# ═══════════════════════════════════════════════════════════════
+                   90 DAYS STOCK ANALYSIS — ALL EMPLOYEES, NO PERMISSION REQUIRED
+                   External link — no backend validation, opens new tab always.
+                   DO NOT add any {% if perms %} or {% if user.role %} wrapper.
+                ═══════════════════════════════════════════════════════════════ #}
+                <a href="https://script.google.com/a/macros/blueoceansteels.com/s/AKfycbxyvMlqCjXAX3MOkds3qwt75ehe7T0bHqUuI84A64r_h8SgYGbY3hzbVuTbYSf7dFgK5w/exec"
+                   class="sidebar-link"
+                   target="_blank"
+                   rel="noopener noreferrer">
+                    <i class="fa-solid fa-box-archive"></i>
+                    <span>90 Days Stock Analysis</span>
+                </a>
             </div>
             {% endif %}
 
