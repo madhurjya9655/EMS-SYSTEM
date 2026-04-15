@@ -147,9 +147,12 @@ def _split_name(full: str) -> Tuple[str, str]:
 @transaction.atomic
 def employee_create(request):
     """
-    POST-only endpoint backing the 'Add Employee' modal.
-    Creates (or updates) a Django auth User + Profile + Employee record + CC Configuration.
-    Employee.is_active is always set from User.is_active — never set independently.
+    POST-only endpoint backing the Employees page.
+    Creates/updates auth User + Profile + Employee record.
+    Also persists routing exactly as shown on Employee page:
+      - reporting_person -> ApproverMapping.reporting_person
+      - cc_person        -> ApproverMapping.cc_person
+      - add_to_cc_config -> CCConfiguration
     """
     if request.method != "POST":
         return HttpResponseForbidden("POST required")
@@ -160,6 +163,9 @@ def employee_create(request):
     name = (request.POST.get("name") or "").strip()
     mobile = (request.POST.get("mobile") or "").strip()
     designation = (request.POST.get("designation") or "").strip()
+
+    reporting_person_id = (request.POST.get("reporting_person_id") or "").strip()
+    cc_person_id = (request.POST.get("cc_person_id") or "").strip()
     add_to_cc_config = bool(request.POST.get("add_to_cc_config"))
 
     if not email or not name:
@@ -169,7 +175,6 @@ def employee_create(request):
     username_base = (email.split("@")[0] or name.split()[0] or "user").lower()
     username = username_base
 
-    # ── Get or create auth User ──────────────────────────────────────────
     user = User.objects.filter(email__iexact=email).first()
     if user is None:
         i = 1
@@ -185,13 +190,20 @@ def employee_create(request):
         created = True
     else:
         first, last = _split_name(name)
-        if first or last:
+        changed = False
+        if first != (user.first_name or ""):
             user.first_name = first
+            changed = True
+        if last != (user.last_name or ""):
             user.last_name = last
-            user.save(update_fields=["first_name", "last_name"])
+            changed = True
+        if email != (user.email or "").strip().lower():
+            user.email = email
+            changed = True
+        if changed:
+            user.save(update_fields=["first_name", "last_name", "email"])
         created = False
 
-    # ── Ensure Profile exists ────────────────────────────────────────────
     profile, _ = Profile.objects.get_or_create(user=user)
     prof_changed = False
     if mobile and profile.phone != mobile:
@@ -203,9 +215,8 @@ def employee_create(request):
     if prof_changed:
         profile.save()
 
-    # ── Ensure Employee record exists and is linked ──────────────────────
-    # is_active is always derived from User.is_active — never set independently
     from apps.recruitment.models import Employee  # noqa: PLC0415
+
     employee, emp_created = Employee.objects.get_or_create(
         email=email,
         defaults={
@@ -214,26 +225,61 @@ def employee_create(request):
             "last_name": user.last_name,
             "phone": mobile,
             "department": designation,
-            "is_active": user.is_active,   # mirror from User
+            "is_active": user.is_active,
         },
     )
+
     if not emp_created:
-        # Link user if previously orphaned
-        emp_changed = False
+        update_fields = []
         if employee.user_id != user.pk:
             employee.user = user
-            emp_changed = True
-        # Always re-sync active status
+            update_fields.append("user")
+        if employee.first_name != user.first_name:
+            employee.first_name = user.first_name
+            update_fields.append("first_name")
+        if employee.last_name != user.last_name:
+            employee.last_name = user.last_name
+            update_fields.append("last_name")
+        if mobile and employee.phone != mobile:
+            employee.phone = mobile
+            update_fields.append("phone")
+        if designation and employee.department != designation:
+            employee.department = designation
+            update_fields.append("department")
         if employee.is_active != user.is_active:
             employee.is_active = user.is_active
-            emp_changed = True
-        if emp_changed:
-            employee.save(update_fields=["user", "is_active"])
+            update_fields.append("is_active")
+        if update_fields:
+            employee.save(update_fields=update_fields)
 
-    # ── Optional CC Configuration ────────────────────────────────────────
+    reporting_person = None
+    if reporting_person_id.isdigit():
+        reporting_person = User.objects.filter(id=int(reporting_person_id), is_active=True).first()
+
+    cc_person = None
+    if cc_person_id.isdigit():
+        cc_person = User.objects.filter(id=int(cc_person_id), is_active=True).first()
+
+    mapping, _ = ApproverMapping.objects.get_or_create(
+        employee=user,
+        defaults={
+            "reporting_person": reporting_person,
+            "cc_person": cc_person,
+        },
+    )
+
+    mapping_changed = False
+    if mapping.reporting_person_id != (reporting_person.id if reporting_person else None):
+        mapping.reporting_person = reporting_person
+        mapping_changed = True
+    if mapping.cc_person_id != (cc_person.id if cc_person else None):
+        mapping.cc_person = cc_person
+        mapping_changed = True
+    if mapping_changed:
+        mapping.save()
+
     if add_to_cc_config:
-        from apps.leave.models import CCConfiguration  # noqa: PLC0415
-        cc_config, cc_created = CCConfiguration.objects.get_or_create(
+        cc_config, _ = CCConfiguration.objects.get_or_create(
             user=user,
             defaults={
                 "is_active": True,
@@ -241,10 +287,17 @@ def employee_create(request):
                 "sort_order": 20,
             },
         )
-        if cc_created:
-            messages.info(request, f"Added {name} to CC configuration options.")
+        if not cc_config.is_active:
+            cc_config.is_active = True
+            cc_config.save(update_fields=["is_active"])
 
-    messages.success(request, f"{'Created' if created else 'Updated'} employee: {name} ({email})")
+    logger_email = getattr(cc_person, "email", None) if cc_person else None
+    messages.success(
+        request,
+        f"{'Created' if created else 'Updated'} employee: {name} ({email}). "
+        f"Reporting To: {getattr(reporting_person, 'email', None) or '—'}, "
+        f"CC: {logger_email or '—'}"
+    )
     return redirect(next_url)
 
 

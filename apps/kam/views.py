@@ -213,7 +213,6 @@ def _get_ip(request: HttpRequest) -> Optional[str]:
         return xff.split(",")[0].strip()
     return request.META.get("REMOTE_ADDR")
 
-
 def _send_safe_mail(
     subject: str,
     body: str,
@@ -238,20 +237,48 @@ def _send_safe_mail(
         cc_emails = _uniq(cc_emails)
 
         if not to_emails and not cc_emails:
-            logger.warning("Email skipped because no valid recipients were found. subject=%r", subject)
+            logger.warning(
+                "Email skipped because no valid recipients were found. subject=%r",
+                subject,
+            )
             return False
 
-        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None)
+        from_email = (
+            getattr(settings, "DEFAULT_FROM_EMAIL", None)
+            or getattr(settings, "EMAIL_HOST_USER", None)
+        )
+
+        logger.info(
+            "KAM Mail Debug → subject=%r TO=%s CC=%s",
+            subject,
+            to_emails,
+            cc_emails,
+        )
+
         email = EmailMessage(
-            subject=subject, body=body, from_email=from_email,
-            to=to_emails, cc=cc_emails,
+            subject=subject,
+            body=body,
+            from_email=from_email,
+            to=to_emails,
+            cc=cc_emails,
         )
         email.content_subtype = "html" if "<html" in (body or "").lower() else "plain"
+
         sent_count = email.send(fail_silently=False)
-        logger.info("Email send attempted. subject=%r to=%s cc=%s sent_count=%s", subject, to_emails, cc_emails, sent_count)
+
+        logger.info(
+            "Email send attempted. subject=%r to=%s cc=%s sent_count=%s",
+            subject,
+            to_emails,
+            cc_emails,
+            sent_count,
+        )
         return bool(sent_count)
+
     except Exception:
-        logger.exception("Email send failed. subject=%r to_users=%s cc_users=%s", subject,
+        logger.exception(
+            "Email send failed. subject=%r to_users=%s cc_users=%s",
+            subject,
             [getattr(u, "username", None) for u in to_users],
             [getattr(u, "username", None) for u in (cc_users or [])],
         )
@@ -363,10 +390,20 @@ def _active_manager_for_kam(kam_user: User) -> Optional[User]:
     return None
 
 def _active_cc_for_kam(kam_user: User) -> List[User]:
-    if not kam_user or not getattr(kam_user, "id", None):
-        return []
+    """
+    Fetch CC exactly from the same source shown on the Employee page:
+      - ApproverMapping.cc_person
+      - optional CCConfiguration.is_active gate
 
-    cc_users: List[User] = []
+    No profile fallback.
+    No KamManagerMapping fallback.
+    No alternate source.
+
+    This keeps mail CC fully aligned with what admin configures on the Employee page.
+    """
+    if not kam_user or not getattr(kam_user, "id", None):
+        logger.warning("KAM CC Debug → invalid kam_user=%r", kam_user)
+        return []
 
     try:
         from apps.leave.models import ApproverMapping, CCConfiguration
@@ -375,34 +412,88 @@ def _active_cc_for_kam(kam_user: User) -> List[User]:
             ApproverMapping.objects
             .select_related("cc_person")
             .filter(employee=kam_user)
+            .order_by("-id")
             .first()
         )
 
-        if not mapping or not mapping.cc_person_id:
+        if not mapping:
+            logger.warning(
+                "KAM CC Debug → no ApproverMapping found for employee_id=%s email=%s",
+                kam_user.id,
+                getattr(kam_user, "email", None),
+            )
+            return []
+
+        logger.info(
+            "KAM CC Debug → mapping found: mapping_id=%s employee_id=%s cc_person_id=%s",
+            mapping.id,
+            kam_user.id,
+            getattr(mapping, "cc_person_id", None),
+        )
+
+        if not mapping.cc_person_id:
+            logger.warning(
+                "KAM CC Debug → Employee page CC is blank for employee_id=%s email=%s mapping_id=%s",
+                kam_user.id,
+                getattr(kam_user, "email", None),
+                mapping.id,
+            )
             return []
 
         cc_user = mapping.cc_person
-        if not cc_user or not getattr(cc_user, "is_active", False):
+        if not cc_user:
+            logger.warning(
+                "KAM CC Debug → mapping.cc_person relation missing for employee_id=%s mapping_id=%s",
+                kam_user.id,
+                mapping.id,
+            )
             return []
 
-        cc_config = CCConfiguration.objects.filter(user=cc_user).first()
+        if not getattr(cc_user, "is_active", False):
+            logger.warning(
+                "KAM CC Debug → CC user inactive. cc_user_id=%s cc_email=%s",
+                cc_user.id,
+                getattr(cc_user, "email", None),
+            )
+            return []
+
+        cc_email = (getattr(cc_user, "email", "") or "").strip()
+        if not cc_email:
+            logger.warning(
+                "KAM CC Debug → CC user has blank email. cc_user_id=%s",
+                cc_user.id,
+            )
+            return []
+
+        cc_config = (
+            CCConfiguration.objects
+            .filter(user=cc_user)
+            .order_by("-id")
+            .first()
+        )
+
         if cc_config and not cc_config.is_active:
+            logger.warning(
+                "KAM CC Debug → CCConfiguration inactive for cc_user_id=%s cc_email=%s",
+                cc_user.id,
+                cc_email,
+            )
             return []
 
-        if getattr(cc_user, "email", None):
-            cc_users.append(cc_user)
+        logger.info(
+            "KAM CC Debug → final CC resolved from Employee page for employee_id=%s: %s",
+            kam_user.id,
+            [cc_email],
+        )
+        return [cc_user]
 
     except Exception:
-        logger.exception("_active_cc_for_kam: CC lookup failed for user_id=%s", kam_user.id)
-
-    seen = set()
-    out: List[User] = []
-    for u in cc_users:
-        if not u or not getattr(u, "id", None) or u.id in seen:
-            continue
-        seen.add(u.id)
-        out.append(u)
-    return out
+        logger.exception(
+            "_active_cc_for_kam failed for employee_id=%s email=%s",
+            getattr(kam_user, "id", None),
+            getattr(kam_user, "email", None),
+        )
+        return []
 
 def _kams_managed_by_manager(manager_user: User) -> List[int]:
     if not manager_user or not getattr(manager_user, "id", None):
