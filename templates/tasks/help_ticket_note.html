@@ -1,15 +1,18 @@
+{# templates/tasks/help_ticket_note.html #}
 {% extends "base.html" %}
 {% load static %}
 
 {% block content %}
 <div class="container py-4">
   <h3>Add Note &amp; Close HT-{{ ticket.id }}</h3>
+
   <form
     method="post"
     enctype="multipart/form-data"
     action="{% url 'tasks:complete_help_ticket' ticket.id %}?next={{ next }}"
   >
     {% csrf_token %}
+
     <div class="mb-3">
       <label class="form-label">Resolved Notes</label>
       <textarea
@@ -20,10 +23,12 @@
         required
       >{{ ticket.resolved_notes }}</textarea>
     </div>
+
     <div class="mb-3">
       <label class="form-label">Attachment (optional)</label>
       <input type="file" name="media_upload" class="form-control">
     </div>
+
     <div class="d-flex gap-2">
       <button type="submit" class="btn btn-primary">Submit Note &amp; Close</button>
       <a href="{{ next }}" class="btn btn-secondary">Cancel</a>

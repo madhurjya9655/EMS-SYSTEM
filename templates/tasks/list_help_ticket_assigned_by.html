@@ -1,3 +1,4 @@
+{# templates/tasks/list_help_ticket_assigned_by.html #}
 {% extends "tasks/help_ticket_tasks_base.html" %}
 {% load static %}
 
@@ -5,7 +6,6 @@
 
 {% block help_ticket_content %}
 
-<!-- Filter card -->
 <div class="card mb-4">
   <div
     class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
@@ -24,16 +24,18 @@
 
   <div id="filterPanelAB" class="collapse show">
     <div class="card-body">
-      <form method="get" class="row g-3 align-items-end"
-            role="search" aria-label="Assigned-by-me Filters">
-
+      <form
+        method="get"
+        class="row g-3 align-items-end"
+        role="search"
+        aria-label="Assigned-by-me Filters"
+      >
         <div class="col-md-3">
           <label for="fltStatus" class="form-label">Status</label>
           <select id="fltStatus" name="status" class="form-select">
             <option value="" {% if not request.GET.status %}selected{% endif %}>All</option>
             {% for key, label in status_choices %}
-              <option value="{{ key }}"
-                {% if request.GET.status == key %}selected{% endif %}>
+              <option value="{{ key }}" {% if request.GET.status == key %}selected{% endif %}>
                 {{ label }}
               </option>
             {% endfor %}
@@ -45,8 +47,10 @@
           <select id="fltAssignTo" name="assign_to" class="form-select">
             <option value="">All</option>
             {% for u in users %}
-              <option value="{{ u.id }}"
-                {% if request.GET.assign_to|default:'' == u.id|stringformat:"s" %}selected{% endif %}>
+              <option
+                value="{{ u.id }}"
+                {% if request.GET.assign_to|default:'' == u.id|stringformat:"s" %}selected{% endif %}
+              >
                 {{ u.get_full_name|default:u.username }}
               </option>
             {% endfor %}
@@ -55,14 +59,24 @@
 
         <div class="col-md-3">
           <label for="fltFrom" class="form-label">From</label>
-          <input id="fltFrom" type="date" name="from_date" class="form-control"
-                 value="{{ request.GET.from_date }}">
+          <input
+            id="fltFrom"
+            type="date"
+            name="from_date"
+            class="form-control"
+            value="{{ request.GET.from_date }}"
+          >
         </div>
 
         <div class="col-md-3">
           <label for="fltTo" class="form-label">To</label>
-          <input id="fltTo" type="date" name="to_date" class="form-control"
-                 value="{{ request.GET.to_date }}">
+          <input
+            id="fltTo"
+            type="date"
+            name="to_date"
+            class="form-control"
+            value="{{ request.GET.to_date }}"
+          >
         </div>
 
         <div class="col-12 text-end">
@@ -78,7 +92,6 @@
   </div>
 </div>
 
-<!-- Table + bulk delete -->
 <div class="card">
   <div class="card-body p-0">
     <form method="post" action="{% url 'tasks:assigned_by_me' %}" data-bulk>
@@ -108,14 +121,21 @@
               <th scope="col">Action</th>
             </tr>
           </thead>
+
           <tbody>
             {% for ticket in items %}
               <tr>
                 <td>
-                  <input type="checkbox" name="sel" value="{{ ticket.id }}"
-                         class="form-check-input" data-row-check
-                         aria-label="Select HT-{{ ticket.id }}">
+                  <input
+                    type="checkbox"
+                    name="sel"
+                    value="{{ ticket.id }}"
+                    class="form-check-input"
+                    data-row-check
+                    aria-label="Select HT-{{ ticket.id }}"
+                  >
                 </td>
+
                 <td>HT-{{ ticket.id }}</td>
                 <td>{{ ticket.assign_to_display|default:"—" }}</td>
                 <td>{{ ticket.title }}</td>
@@ -123,35 +143,52 @@
                 <td>{{ ticket.planned_date|date:"d M, Y h:i A"|default:"—" }}</td>
                 <td>{{ ticket.resolved_at|date:"d M, Y h:i A"|default:"—" }}</td>
                 <td>{{ ticket.delay|default:"—" }}</td>
+
                 <td>
                   {% if ticket.resolved_by %}
                     {{ ticket.resolved_by.get_full_name|default:ticket.resolved_by.username }}
-                  {% else %}—{% endif %}
+                  {% else %}
+                    —
+                  {% endif %}
                 </td>
+
                 <td class="text-wrap" style="max-width:200px;">
                   {{ ticket.resolved_notes|default:"—"|truncatewords:15 }}
                 </td>
+
                 <td>
                   {% if ticket.media_upload %}
                     <a href="{{ ticket.media_upload.url }}" download class="btn btn-sm btn-outline-primary">
                       <i class="fas fa-download" aria-hidden="true"></i>
                     </a>
-                  {% else %}—{% endif %}
+                  {% else %}
+                    —
+                  {% endif %}
                 </td>
+
                 <td>
                   <span class="badge
-                    {% if ticket.status == 'Open' %}bg-warning text-dark
-                    {% elif ticket.status == 'Closed' %}bg-success
-                    {% elif ticket.status == 'In Progress' %}bg-info text-dark
-                    {% else %}bg-secondary{% endif %}">
+                    {% if ticket.status == 'Open' %}
+                      bg-warning text-dark
+                    {% elif ticket.status == 'Closed' %}
+                      bg-success
+                    {% elif ticket.status == 'In Progress' %}
+                      bg-info text-dark
+                    {% else %}
+                      bg-secondary
+                    {% endif %}
+                  ">
                     {{ ticket.status }}
                   </span>
                 </td>
+
                 <td>
-                  <a href="{% url 'tasks:delete_help_ticket' ticket.id %}"
-                     class="btn btn-sm btn-outline-danger"
-                     title="Delete HT-{{ ticket.id }}"
-                     aria-label="Delete HT-{{ ticket.id }}">
+                  <a
+                    href="{% url 'tasks:delete_help_ticket' ticket.id %}"
+                    class="btn btn-sm btn-outline-danger"
+                    title="Delete HT-{{ ticket.id }}"
+                    aria-label="Delete HT-{{ ticket.id }}"
+                  >
                     <i class="fas fa-trash" aria-hidden="true"></i>
                   </a>
                 </td>
@@ -169,18 +206,20 @@
       </div>
 
       {% if items %}
-      <div class="d-flex justify-content-between align-items-center p-3 border-top">
-        <small class="text-muted">
-          <span data-selected-count>0</span> selected
-        </small>
-        <button type="submit"
-                class="btn btn-danger btn-sm"
-                data-bulk-submit
-                data-confirm="Delete selected help tickets?"
-                disabled>
-          <i class="fas fa-trash-alt me-1" aria-hidden="true"></i> Delete Selected
-        </button>
-      </div>
+        <div class="d-flex justify-content-between align-items-center p-3 border-top">
+          <small class="text-muted">
+            <span data-selected-count>0</span> selected
+          </small>
+          <button
+            type="submit"
+            class="btn btn-danger btn-sm"
+            data-bulk-submit
+            data-confirm="Delete selected help tickets?"
+            disabled
+          >
+            <i class="fas fa-trash-alt me-1" aria-hidden="true"></i> Delete Selected
+          </button>
+        </div>
       {% endif %}
     </form>
   </div>
@@ -193,10 +232,18 @@
   <script>
     (function () {
       const panel = document.getElementById('filterPanelAB');
-      const icon  = document.getElementById('filterToggleIconAB');
-      if (!panel || !icon) return;
-      panel.addEventListener('show.bs.collapse', () => icon.className = 'fas fa-minus');
-      panel.addEventListener('hide.bs.collapse', () => icon.className = 'fas fa-plus');
+      const icon = document.getElementById('filterToggleIconAB');
+      if (!panel || !icon) {
+        return;
+      }
+
+      panel.addEventListener('show.bs.collapse', function () {
+        icon.className = 'fas fa-minus';
+      });
+
+      panel.addEventListener('hide.bs.collapse', function () {
+        icon.className = 'fas fa-plus';
+      });
     })();
   </script>
 {% endblock %}

@@ -1,9 +1,10 @@
 # FILE: apps/tasks/signals.py
 # PURPOSE: Suppress signal-based task notifications on Sundays/holidays and respect leave/non-working day rules
-# UPDATED: 2026-03-07
+# UPDATED: 2026-04-16
 
 from __future__ import annotations
 
+import inspect
 import logging
 from datetime import datetime, time as dt_time
 
@@ -59,6 +60,53 @@ def _is_non_working_planned_day(planned_dt) -> bool:
         return True
 
 
+def _get_supported_kwargs(func, kwargs: dict) -> dict:
+    """
+    Return only kwargs supported by the target function.
+    This prevents runtime crashes when helper signatures differ.
+    """
+    try:
+        sig = inspect.signature(func)
+        params = sig.parameters
+
+        # If helper accepts **kwargs, pass everything through.
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            return kwargs
+
+        accepted = {}
+        for key, value in kwargs.items():
+            if key in params:
+                accepted[key] = value
+            else:
+                logger.info(
+                    _utils._safe_console_text(
+                        f"[SIGNALS] Skipping unsupported helper kwarg '{key}' for {getattr(func, '__name__', repr(func))}()."
+                    )
+                )
+        return accepted
+    except Exception:
+        logger.exception("Failed to inspect helper signature for %r", func)
+        return kwargs
+
+
+def _call_helper_safe(func, **kwargs):
+    """
+    Call email helper defensively:
+      - filters unsupported kwargs
+      - logs clearly if helper is missing or fails
+    """
+    try:
+        filtered_kwargs = _get_supported_kwargs(func, kwargs)
+        return func(**filtered_kwargs)
+    except Exception:
+        logger.exception(
+            "Helper call failed for %s with kwargs=%r",
+            getattr(func, "__name__", repr(func)),
+            list(kwargs.keys()),
+        )
+        raise
+
+
 # -----------------------------------------------------------------------------
 # Scheduling policy
 # -----------------------------------------------------------------------------
@@ -102,31 +150,39 @@ def _send_delegation_assignment_immediate(obj: Delegation) -> None:
 
     try:
         if obj.assign_by_id and obj.assign_by_id == obj.assign_to_id:
-            logger.info(_utils._safe_console_text(
-                f"[SIGNALS] Immediate delegation email suppressed for DL-{obj.id}: self-assigned."
-            ))
+            logger.info(
+                _utils._safe_console_text(
+                    f"[SIGNALS] Immediate delegation email suppressed for DL-{obj.id}: self-assigned."
+                )
+            )
             return
     except Exception:
         pass
 
     if _is_non_working_planned_day(getattr(obj, "planned_date", None)):
-        logger.info(_utils._safe_console_text(
-            f"[SIGNALS] Immediate delegation email suppressed for DL-{obj.id}: planned on Sunday/holiday."
-        ))
+        logger.info(
+            _utils._safe_console_text(
+                f"[SIGNALS] Immediate delegation email suppressed for DL-{obj.id}: planned on Sunday/holiday."
+            )
+        )
         return
 
     to_email = (getattr(getattr(obj, "assign_to", None), "email", "") or "").strip()
     if not to_email:
-        logger.info(_utils._safe_console_text(
-            f"[SIGNALS] Immediate delegation email skipped for DL-{obj.id}: no assignee email."
-        ))
+        logger.info(
+            _utils._safe_console_text(
+                f"[SIGNALS] Immediate delegation email skipped for DL-{obj.id}: no assignee email."
+            )
+        )
         return
 
     try:
         if is_user_blocked_at(obj.assign_to, timezone.now().astimezone(IST)):
-            logger.info(_utils._safe_console_text(
-                f"[SIGNALS] Immediate delegation email suppressed for DL-{obj.id}: assignee on leave now."
-            ))
+            logger.info(
+                _utils._safe_console_text(
+                    f"[SIGNALS] Immediate delegation email suppressed for DL-{obj.id}: assignee on leave now."
+                )
+            )
             return
     except Exception:
         # fail-safe: if we cannot evaluate, do not send
@@ -138,7 +194,8 @@ def _send_delegation_assignment_immediate(obj: Delegation) -> None:
         except Exception:
             complete_url = SITE_URL
 
-        _utils.send_delegation_assignment_to_user(
+        _call_helper_safe(
+            _utils.send_delegation_assignment_to_user,
             delegation=obj,
             complete_url=complete_url,
             subject_prefix=f"New Delegation Assigned – {obj.task_name}",
@@ -260,18 +317,22 @@ def send_help_ticket_email_on_create(sender, instance: HelpTicket, created: bool
         return
 
     if _is_non_working_planned_day(getattr(instance, "planned_date", None)):
-        logger.info(_utils._safe_console_text(
-            f"[SIGNALS] HelpTicket HT-{getattr(instance, 'id', '?')} email suppressed: planned on Sunday/holiday."
-        ))
+        logger.info(
+            _utils._safe_console_text(
+                f"[SIGNALS] HelpTicket HT-{getattr(instance, 'id', '?')} email suppressed: planned on Sunday/holiday."
+            )
+        )
         return
 
     # If assignee is on leave NOW, or planned timestamp lies within leave window, suppress.
     try:
         assignee = getattr(instance, "assign_to", None)
         if assignee and is_user_blocked_at(assignee, timezone.now().astimezone(IST)):
-            logger.info(_utils._safe_console_text(
-                f"[SIGNALS] HelpTicket HT-{getattr(instance, 'id', '?')} email suppressed: assignee on leave now."
-            ))
+            logger.info(
+                _utils._safe_console_text(
+                    f"[SIGNALS] HelpTicket HT-{getattr(instance, 'id', '?')} email suppressed: assignee on leave now."
+                )
+            )
             return
         if assignee and getattr(instance, "planned_date", None):
             planned_dt = instance.planned_date
@@ -279,9 +340,11 @@ def send_help_ticket_email_on_create(sender, instance: HelpTicket, created: bool
                 planned_dt = timezone.make_aware(planned_dt, timezone.get_current_timezone())
             planned_ist = timezone.localtime(planned_dt, IST)
             if is_user_blocked_at(assignee, planned_ist):
-                logger.info(_utils._safe_console_text(
-                    f"[SIGNALS] HelpTicket HT-{getattr(instance, 'id', '?')} email suppressed: planned time within leave."
-                ))
+                logger.info(
+                    _utils._safe_console_text(
+                        f"[SIGNALS] HelpTicket HT-{getattr(instance, 'id', '?')} email suppressed: planned time within leave."
+                    )
+                )
                 return
     except Exception:
         # fail-safe: do not send if we cannot evaluate
@@ -293,13 +356,15 @@ def send_help_ticket_email_on_create(sender, instance: HelpTicket, created: bool
 
     def _send_now():
         try:
-            complete_url = f"{SITE_URL}{reverse('tasks:help_ticket_detail', args=[instance.id])}"
+            detail_url = f"{SITE_URL}{reverse('tasks:help_ticket_detail', args=[instance.id])}"
         except Exception:
-            complete_url = SITE_URL
+            detail_url = SITE_URL
 
-        _utils.send_help_ticket_assignment_to_user(
+        _call_helper_safe(
+            _utils.send_help_ticket_assignment_to_user,
             ticket=instance,
-            complete_url=complete_url,
+            complete_url=detail_url,
+            detail_url=detail_url,
             subject_prefix="Help Ticket Assigned",
         )
 
@@ -312,38 +377,48 @@ def send_help_ticket_email_on_create(sender, instance: HelpTicket, created: bool
 @receiver(post_save, sender=Checklist, dispatch_uid="tasks.checklist.postsave.log_complete")
 def log_checklist_completion(sender, instance, created, **kwargs):
     if not created and instance.status == "Completed":
-        logger.info(_utils._safe_console_text(
-            f"Checklist {instance.id} '{instance.task_name}' completed by {instance.assign_to}"
-        ))
+        logger.info(
+            _utils._safe_console_text(
+                f"Checklist {instance.id} '{instance.task_name}' completed by {instance.assign_to}"
+            )
+        )
 
 
 @receiver(post_save, sender=Delegation, dispatch_uid="tasks.delegation.postsave.log_complete")
 def log_delegation_completion(sender, instance, created, **kwargs):
     if not created and instance.status == "Completed":
-        logger.info(_utils._safe_console_text(
-            f"Delegation {instance.id} '{instance.task_name}' completed by {instance.assign_to}"
-        ))
+        logger.info(
+            _utils._safe_console_text(
+                f"Delegation {instance.id} '{instance.task_name}' completed by {instance.assign_to}"
+            )
+        )
 
 
 @receiver(post_save, sender=HelpTicket, dispatch_uid="tasks.helpticket.postsave.log_close")
 def log_helpticket_completion(sender, instance, created, **kwargs):
     if not created and instance.status == "Closed":
-        logger.info(_utils._safe_console_text(
-            f"Help Ticket {instance.id} '{instance.title}' closed by {instance.assign_to}"
-        ))
+        logger.info(
+            _utils._safe_console_text(
+                f"Help Ticket {instance.id} '{instance.title}' closed by {instance.assign_to}"
+            )
+        )
 
 
 @receiver(post_save, sender=Checklist, dispatch_uid="tasks.checklist.postsave.log_create")
 def log_checklist_creation(sender, instance, created, **kwargs):
     if created:
-        logger.debug(_utils._safe_console_text(
-            f"Created checklist {instance.id} '{instance.task_name}' for {instance.assign_to} at {instance.planned_date}"
-        ))
+        logger.debug(
+            _utils._safe_console_text(
+                f"Created checklist {instance.id} '{instance.task_name}' for {instance.assign_to} at {instance.planned_date}"
+            )
+        )
 
 
 @receiver(post_save, sender=Delegation, dispatch_uid="tasks.delegation.postsave.log_create")
 def log_delegation_creation(sender, instance, created, **kwargs):
     if created:
-        logger.debug(_utils._safe_console_text(
-            f"Created delegation {instance.id} '{instance.task_name}' for {instance.assign_to} at {instance.planned_date}"
-        ))
+        logger.debug(
+            _utils._safe_console_text(
+                f"Created delegation {instance.id} '{instance.task_name}' for {instance.assign_to} at {instance.planned_date}"
+            )
+        )

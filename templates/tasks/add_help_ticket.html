@@ -1,11 +1,15 @@
+{# templates/tasks/add_help_ticket.html #}
 {% extends "base.html" %}
 {% load static %}
 
 {% block title %}
-  {% if current_tab == 'edit' %}Edit{% else %}New{% endif %} Help Ticket
+  {% if current_tab == 'edit' %}
+    Edit Help Ticket
+  {% else %}
+    New Help Ticket
+  {% endif %}
 {% endblock %}
 
-{# base.html exposes 'head_extra' (not 'extra_css') for <head> injections #}
 {% block head_extra %}
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
 {% endblock %}
@@ -13,10 +17,16 @@
 {% block content %}
   <div class="page-header mb-4 d-flex justify-content-between align-items-center">
     <h1 class="h3">
-      {% if current_tab == 'edit' %}Edit{% else %}New{% endif %} Help Ticket
+      {% if current_tab == 'edit' %}
+        Edit Help Ticket
+      {% else %}
+        New Help Ticket
+      {% endif %}
     </h1>
+
     <a href="{% url 'tasks:list_help_ticket' %}" class="btn btn-outline-secondary btn-sm">
-      <i class="fas fa-arrow-left me-1" aria-hidden="true"></i> Back to List
+      <i class="fas fa-arrow-left me-1" aria-hidden="true"></i>
+      Back to List
     </a>
   </div>
 
@@ -31,103 +41,128 @@
           </div>
         {% endif %}
 
-        <!-- Subject -->
         <div class="mb-3">
           <label for="{{ form.title.id_for_label }}" class="form-label fw-semibold">
             Subject <span class="text-danger">*</span>
           </label>
           {{ form.title }}
           {% if form.title.errors %}
-            <div class="invalid-feedback d-block">{{ form.title.errors }}</div>
+            <div class="invalid-feedback d-block">
+              {{ form.title.errors }}
+            </div>
           {% endif %}
         </div>
 
-        <!-- Problem Solver -->
         <div class="mb-3">
           <label for="{{ form.assign_to.id_for_label }}" class="form-label fw-semibold">
             Problem Solver <span class="text-danger">*</span>
           </label>
           {{ form.assign_to }}
           {% if form.assign_to.errors %}
-            <div class="invalid-feedback d-block">{{ form.assign_to.errors }}</div>
+            <div class="invalid-feedback d-block">
+              {{ form.assign_to.errors }}
+            </div>
           {% endif %}
         </div>
 
-        <!-- Description -->
         <div class="mb-3">
           <label for="{{ form.description.id_for_label }}" class="form-label fw-semibold">
             Description
           </label>
           {{ form.description }}
           {% if form.description.errors %}
-            <div class="invalid-feedback d-block">{{ form.description.errors }}</div>
+            <div class="invalid-feedback d-block">
+              {{ form.description.errors }}
+            </div>
           {% endif %}
         </div>
 
-        <!-- Priority / Status / Est. Minutes -->
         <div class="row g-3 mb-3">
           <div class="col-md-4">
-            <label for="{{ form.priority.id_for_label }}" class="form-label fw-semibold">Priority</label>
+            <label for="{{ form.priority.id_for_label }}" class="form-label fw-semibold">
+              Priority
+            </label>
             {{ form.priority }}
             {% if form.priority.errors %}
-              <div class="invalid-feedback d-block">{{ form.priority.errors }}</div>
+              <div class="invalid-feedback d-block">
+                {{ form.priority.errors }}
+              </div>
             {% endif %}
           </div>
+
           <div class="col-md-4">
-            <label for="{{ form.status.id_for_label }}" class="form-label fw-semibold">Status</label>
+            <label for="{{ form.status.id_for_label }}" class="form-label fw-semibold">
+              Status
+            </label>
             {{ form.status }}
             {% if form.status.errors %}
-              <div class="invalid-feedback d-block">{{ form.status.errors }}</div>
+              <div class="invalid-feedback d-block">
+                {{ form.status.errors }}
+              </div>
             {% endif %}
           </div>
+
           <div class="col-md-4">
             <label for="{{ form.estimated_minutes.id_for_label }}" class="form-label fw-semibold">
               Est. Minutes
             </label>
             {{ form.estimated_minutes }}
             {% if form.estimated_minutes.errors %}
-              <div class="invalid-feedback d-block">{{ form.estimated_minutes.errors }}</div>
+              <div class="invalid-feedback d-block">
+                {{ form.estimated_minutes.errors }}
+              </div>
             {% endif %}
           </div>
         </div>
 
-        <!-- Planned Date with calendar icon -->
         <div class="mb-3">
           <label for="{{ form.planned_date.id_for_label }}" class="form-label fw-semibold">
             Planned Date
           </label>
           <div class="input-group">
             {{ form.planned_date }}
-            <span class="input-group-text" id="planned_date_icon" style="cursor:pointer;"
-                  title="Open date picker" aria-label="Open date picker">
-              📅
+            <span
+              class="input-group-text"
+              id="planned_date_icon"
+              style="cursor: pointer;"
+              title="Open date picker"
+              aria-label="Open date picker"
+            >
             </span>
           </div>
           {% if form.planned_date.errors %}
-            <div class="invalid-feedback d-block">{{ form.planned_date.errors }}</div>
+            <div class="invalid-feedback d-block">
+              {{ form.planned_date.errors }}
+            </div>
           {% endif %}
         </div>
 
-        <!-- Attachment -->
         <div class="mb-4">
           <label for="{{ form.media_upload.id_for_label }}" class="form-label fw-semibold">
             Attachment
           </label>
           {{ form.media_upload }}
           {% if form.media_upload.errors %}
-            <div class="invalid-feedback d-block">{{ form.media_upload.errors }}</div>
+            <div class="invalid-feedback d-block">
+              {{ form.media_upload.errors }}
+            </div>
           {% endif %}
         </div>
 
-        <!-- Actions -->
         <div class="text-end border-top pt-3">
-          <a href="{% url 'tasks:list_help_ticket' %}" class="btn btn-secondary me-2">Cancel</a>
+          <a href="{% url 'tasks:list_help_ticket' %}" class="btn btn-secondary me-2">
+            Cancel
+          </a>
+
           <button type="submit" class="btn btn-primary">
             <i class="fas fa-save me-1" aria-hidden="true"></i>
-            {% if current_tab == 'edit' %}Update{% else %}Create{% endif %}
+            {% if current_tab == 'edit' %}
+              Update
+            {% else %}
+              Create
+            {% endif %}
           </button>
         </div>
-
       </form>
     </div>
   </div>
@@ -138,18 +173,22 @@
   <script>
     document.addEventListener('DOMContentLoaded', function () {
       const plannedInput = document.getElementById('id_planned_date');
-      if (!plannedInput) return;
+      if (!plannedInput || typeof flatpickr === 'undefined') {
+        return;
+      }
 
-      const picker = flatpickr('#id_planned_date', {
-        enableTime:      true,
-        time_24hr:       true,
+      const picker = flatpickr(plannedInput, {
+        enableTime: true,
+        time_24hr: true,
         minuteIncrement: 5,
-        dateFormat:      'Y-m-d H:i',
+        dateFormat: 'Y-m-d H:i'
       });
 
       const icon = document.getElementById('planned_date_icon');
       if (icon) {
-        icon.addEventListener('click', function () { picker.open(); });
+        icon.addEventListener('click', function () {
+          picker.open();
+        });
       }
     });
   </script>

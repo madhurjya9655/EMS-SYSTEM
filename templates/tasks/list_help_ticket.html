@@ -1,3 +1,4 @@
+{# templates/tasks/list_help_ticket.html #}
 {% extends "base.html" %}
 {% load static %}
 
@@ -6,7 +7,6 @@
 {% block content %}
 
 <style>
-  /* ── Segment-tab control for Help Ticket sub-tabs ── */
   .ht-tabs {
     display: inline-flex;
     background: var(--surface-alt);
@@ -15,6 +15,7 @@
     padding: 4px;
     gap: 2px;
   }
+
   .ht-tabs a {
     display: inline-flex;
     align-items: center;
@@ -27,17 +28,22 @@
     white-space: nowrap;
     transition: background var(--transition), color var(--transition), box-shadow var(--transition);
   }
+
   .ht-tabs a:hover {
     background: var(--surface);
     color: var(--text);
   }
+
   .ht-tabs a.active {
     background: var(--primary);
     color: #fff;
     font-weight: 600;
     box-shadow: 0 2px 8px rgba(59,130,246,.30);
   }
-  .ht-tabs a.active i { color: #fff; }
+
+  .ht-tabs a.active i {
+    color: #fff;
+  }
 </style>
 
 <div class="page-header mb-4 d-flex justify-content-between align-items-center">
@@ -47,7 +53,6 @@
   </a>
 </div>
 
-<!-- Filter card -->
 <div class="card mb-4">
   <div
     class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
@@ -66,19 +71,27 @@
 
   <div id="filterPanel" class="collapse show">
     <div class="card-body">
-      <form method="get" class="row g-3 align-items-end"
-            role="search" aria-label="Help Ticket Filters">
-
+      <form method="get" class="row g-3 align-items-end" role="search" aria-label="Help Ticket Filters">
         <div class="col-md-3">
           <label for="fltFrom" class="form-label">From Date</label>
-          <input id="fltFrom" type="date" name="from_date" class="form-control"
-                 value="{{ request.GET.from_date }}">
+          <input
+            id="fltFrom"
+            type="date"
+            name="from_date"
+            class="form-control"
+            value="{{ request.GET.from_date }}"
+          >
         </div>
 
         <div class="col-md-3">
           <label for="fltTo" class="form-label">To Date</label>
-          <input id="fltTo" type="date" name="to_date" class="form-control"
-                 value="{{ request.GET.to_date }}">
+          <input
+            id="fltTo"
+            type="date"
+            name="to_date"
+            class="form-control"
+            value="{{ request.GET.to_date }}"
+          >
         </div>
 
         <div class="col-md-3">
@@ -86,8 +99,10 @@
           <select id="fltAssignBy" name="assign_by" class="form-select">
             <option value="all">All</option>
             {% for u in users %}
-              <option value="{{ u.id }}"
-                {% if request.GET.assign_by|stringformat:"s" == u.id|stringformat:"s" %}selected{% endif %}>
+              <option
+                value="{{ u.id }}"
+                {% if request.GET.assign_by|stringformat:"s" == u.id|stringformat:"s" %}selected{% endif %}
+              >
                 {{ u.get_full_name|default:u.username }}
               </option>
             {% endfor %}
@@ -99,8 +114,10 @@
           <select id="fltAssignTo" name="assign_to" class="form-select">
             <option value="all">All</option>
             {% for u in users %}
-              <option value="{{ u.id }}"
-                {% if request.GET.assign_to|stringformat:"s" == u.id|stringformat:"s" %}selected{% endif %}>
+              <option
+                value="{{ u.id }}"
+                {% if request.GET.assign_to|stringformat:"s" == u.id|stringformat:"s" %}selected{% endif %}
+              >
                 {{ u.get_full_name|default:u.username }}
               </option>
             {% endfor %}
@@ -112,8 +129,7 @@
           <select id="fltStatus" name="status" class="form-select">
             <option value="all">All</option>
             {% for key, label in status_choices %}
-              <option value="{{ key }}"
-                {% if request.GET.status == key %}selected{% endif %}>
+              <option value="{{ key }}" {% if request.GET.status == key %}selected{% endif %}>
                 {{ label }}
               </option>
             {% endfor %}
@@ -125,8 +141,7 @@
           <select id="fltPriority" name="priority" class="form-select">
             <option value="all">All</option>
             {% for key, label in priority_choices %}
-              <option value="{{ key }}"
-                {% if request.GET.priority == key %}selected{% endif %}>
+              <option value="{{ key }}" {% if request.GET.priority == key %}selected{% endif %}>
                 {{ label }}
               </option>
             {% endfor %}
@@ -146,31 +161,37 @@
   </div>
 </div>
 
-<!-- Sub-tab navigation — segment control -->
 <div class="mb-3">
   <div class="ht-tabs" role="tablist" aria-label="Help ticket views">
-    <a href="{% url 'tasks:list_help_ticket' %}"
-       class="{% if current_tab == 'all' %}active{% endif %}"
-       role="tab"
-       aria-current="{% if current_tab == 'all' %}page{% endif %}">
+    <a
+      href="{% url 'tasks:list_help_ticket' %}"
+      class="{% if current_tab == 'all' %}active{% endif %}"
+      role="tab"
+      aria-current="{% if current_tab == 'all' %}page{% endif %}"
+    >
       <i class="fas fa-list" aria-hidden="true"></i> All
     </a>
-    <a href="{% url 'tasks:assigned_to_me' %}"
-       class="{% if current_tab == 'assigned_to' %}active{% endif %}"
-       role="tab"
-       aria-current="{% if current_tab == 'assigned_to' %}page{% endif %}">
+
+    <a
+      href="{% url 'tasks:assigned_to_me' %}"
+      class="{% if current_tab == 'assigned_to' %}active{% endif %}"
+      role="tab"
+      aria-current="{% if current_tab == 'assigned_to' %}page{% endif %}"
+    >
       <i class="fas fa-inbox" aria-hidden="true"></i> Assigned To Me
     </a>
-    <a href="{% url 'tasks:assigned_by_me' %}"
-       class="{% if current_tab == 'assigned_by' %}active{% endif %}"
-       role="tab"
-       aria-current="{% if current_tab == 'assigned_by' %}page{% endif %}">
+
+    <a
+      href="{% url 'tasks:assigned_by_me' %}"
+      class="{% if current_tab == 'assigned_by' %}active{% endif %}"
+      role="tab"
+      aria-current="{% if current_tab == 'assigned_by' %}page{% endif %}"
+    >
       <i class="fas fa-paper-plane" aria-hidden="true"></i> Assigned By Me
     </a>
   </div>
 </div>
 
-<!-- All Tickets table -->
 <div class="card">
   <div class="card-body p-0">
     <form method="post" action="{% url 'tasks:list_help_ticket' %}" data-bulk>
@@ -181,13 +202,15 @@
       <div class="table-responsive">
         <table class="table table-striped align-middle mb-0">
           <caption class="visually-hidden">All help tickets</caption>
+
           <thead class="table-light">
             <tr>
               {% if can_create %}
-              <th scope="col" style="width:32px;">
-                <input type="checkbox" data-select-all aria-label="Select all">
-              </th>
+                <th scope="col" style="width:32px;">
+                  <input type="checkbox" data-select-all aria-label="Select all">
+                </th>
               {% endif %}
+
               <th scope="col">Ticket ID</th>
               <th scope="col">Assigned By</th>
               <th scope="col">Problem Solver</th>
@@ -195,28 +218,37 @@
               <th scope="col">Planned Date</th>
               <th scope="col">Priority</th>
               <th scope="col">Status</th>
+
               {% if can_create %}
-              <th scope="col" class="text-end">Actions</th>
+                <th scope="col" class="text-end">Actions</th>
               {% endif %}
             </tr>
           </thead>
+
           <tbody>
             {% for ticket in items %}
               <tr>
                 {% if can_create %}
-                <td>
-                  <input type="checkbox" name="sel" value="{{ ticket.id }}"
-                         class="form-check-input" data-row-check
-                         aria-label="Select HT-{{ ticket.id }}">
-                </td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      name="sel"
+                      value="{{ ticket.id }}"
+                      class="form-check-input"
+                      data-row-check
+                      aria-label="Select HT-{{ ticket.id }}"
+                    >
+                  </td>
                 {% endif %}
 
                 <td>
-                  <button type="button"
-                          class="btn btn-link btn-sm p-0 text-decoration-none fw-semibold"
-                          data-bs-toggle="modal"
-                          data-bs-target="#htModal{{ ticket.id }}"
-                          aria-label="View details for HT-{{ ticket.id }}">
+                  <button
+                    type="button"
+                    class="btn btn-link btn-sm p-0 text-decoration-none fw-semibold"
+                    data-bs-toggle="modal"
+                    data-bs-target="#htModal{{ ticket.id }}"
+                    aria-label="View details for HT-{{ ticket.id }}"
+                  >
                     HT-{{ ticket.id }}
                   </button>
                 </td>
@@ -226,52 +258,69 @@
                 <td>{{ ticket.title }}</td>
 
                 <td>
-                  {% if ticket.planned_date %}{{ ticket.planned_date|date:"d M, Y H:i" }}
-                  {% else %}—{% endif %}
+                  {% if ticket.planned_date %}
+                    {{ ticket.planned_date|date:"d M, Y H:i" }}
+                  {% else %}
+                    —
+                  {% endif %}
                 </td>
 
                 <td>
                   <span class="badge
-                    {% if ticket.priority == 'High' %}bg-danger
-                    {% elif ticket.priority == 'Medium' %}bg-warning text-dark
-                    {% else %}bg-success{% endif %}">
+                    {% if ticket.priority == 'High' %}
+                      bg-danger
+                    {% elif ticket.priority == 'Medium' %}
+                      bg-warning text-dark
+                    {% else %}
+                      bg-success
+                    {% endif %}
+                  ">
                     {{ ticket.priority|default:"Normal" }}
                   </span>
                 </td>
 
                 <td>
                   <span class="badge
-                    {% if ticket.status == 'Open' %}bg-warning text-dark
-                    {% elif ticket.status == 'Closed' %}bg-success
-                    {% elif ticket.status == 'In Progress' %}bg-info text-dark
-                    {% else %}bg-secondary{% endif %}">
+                    {% if ticket.status == 'Open' %}
+                      bg-warning text-dark
+                    {% elif ticket.status == 'Closed' %}
+                      bg-success
+                    {% elif ticket.status == 'In Progress' %}
+                      bg-info text-dark
+                    {% else %}
+                      bg-secondary
+                    {% endif %}
+                  ">
                     {{ ticket.status }}
                   </span>
                 </td>
 
                 {% if can_create %}
-                <td class="text-end text-nowrap">
-                  <a href="{% url 'tasks:edit_help_ticket' ticket.pk %}"
-                     class="btn btn-sm btn-outline-secondary"
-                     title="Edit HT-{{ ticket.id }}"
-                     aria-label="Edit HT-{{ ticket.id }}">
-                    <i class="fas fa-edit" aria-hidden="true"></i>
-                  </a>
-                  <a href="{% url 'tasks:delete_help_ticket' ticket.pk %}"
-                     class="btn btn-sm btn-outline-danger ms-1"
-                     title="Delete HT-{{ ticket.id }}"
-                     aria-label="Delete HT-{{ ticket.id }}">
-                    <i class="fas fa-trash" aria-hidden="true"></i>
-                  </a>
-                </td>
+                  <td class="text-end text-nowrap">
+                    <a
+                      href="{% url 'tasks:edit_help_ticket' ticket.pk %}"
+                      class="btn btn-sm btn-outline-secondary"
+                      title="Edit HT-{{ ticket.id }}"
+                      aria-label="Edit HT-{{ ticket.id }}"
+                    >
+                      <i class="fas fa-edit" aria-hidden="true"></i>
+                    </a>
+
+                    <a
+                      href="{% url 'tasks:delete_help_ticket' ticket.pk %}"
+                      class="btn btn-sm btn-outline-danger ms-1"
+                      title="Delete HT-{{ ticket.id }}"
+                      aria-label="Delete HT-{{ ticket.id }}"
+                    >
+                      <i class="fas fa-trash" aria-hidden="true"></i>
+                    </a>
+                  </td>
                 {% endif %}
               </tr>
             {% empty %}
               <tr>
-                <td colspan="{% if can_create %}9{% else %}7{% endif %}"
-                    class="text-center py-5 text-muted">
-                  <i class="fas fa-ticket-alt fa-2x mb-2 d-block text-secondary"
-                     aria-hidden="true"></i>
+                <td colspan="{% if can_create %}9{% else %}8{% endif %}" class="text-center py-5 text-muted">
+                  <i class="fas fa-ticket-alt fa-2x mb-2 d-block text-secondary" aria-hidden="true"></i>
                   No help tickets found for the selected filters.
                 </td>
               </tr>
@@ -281,171 +330,192 @@
       </div>
 
       {% if items and can_create %}
-      <div class="d-flex justify-content-between align-items-center p-3 border-top">
-        <small class="text-muted">
-          <span data-selected-count>0</span> selected
-        </small>
-        <button type="submit"
-                class="btn btn-danger btn-sm"
-                data-bulk-submit
-                data-confirm="Delete selected help tickets?"
-                disabled>
-          <i class="fas fa-trash-alt me-1" aria-hidden="true"></i> Delete Selected
-        </button>
-      </div>
+        <div class="d-flex justify-content-between align-items-center p-3 border-top">
+          <small class="text-muted">
+            <span data-selected-count>0</span> selected
+          </small>
+          <button
+            type="submit"
+            class="btn btn-danger btn-sm"
+            data-bulk-submit
+            data-confirm="Delete selected help tickets?"
+            disabled
+          >
+            <i class="fas fa-trash-alt me-1" aria-hidden="true"></i> Delete Selected
+          </button>
+        </div>
       {% endif %}
     </form>
   </div>
 </div>
 
-<!-- Details Modals — rendered OUTSIDE the table/form -->
 {% for ticket in items %}
-<div class="modal fade"
-     id="htModal{{ ticket.id }}"
-     tabindex="-1"
-     aria-labelledby="htModalLabel{{ ticket.id }}"
-     aria-hidden="true">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-content">
+  <div
+    class="modal fade"
+    id="htModal{{ ticket.id }}"
+    tabindex="-1"
+    aria-labelledby="htModalLabel{{ ticket.id }}"
+    aria-hidden="true"
+  >
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="htModalLabel{{ ticket.id }}">
+            <i class="fas fa-ticket-alt me-1" aria-hidden="true"></i>
+            HT-{{ ticket.id }}: {{ ticket.title }}
+          </h5>
+          <button
+            type="button"
+            class="btn-close"
+            data-bs-dismiss="modal"
+            aria-label="Close dialog"
+          ></button>
+        </div>
 
-      <div class="modal-header">
-        <h5 class="modal-title" id="htModalLabel{{ ticket.id }}">
-          <i class="fas fa-ticket-alt me-1" aria-hidden="true"></i>
-          HT-{{ ticket.id }}: {{ ticket.title }}
-        </h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"
-                aria-label="Close dialog"></button>
-      </div>
+        <div class="modal-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="fw-bold">Ticket ID:</label>
+              <p>HT-{{ ticket.id }}</p>
+            </div>
 
-      <div class="modal-body">
-        <div class="row g-3">
+            <div class="col-md-6">
+              <label class="fw-bold">Status:</label>
+              <p>
+                <span class="badge
+                  {% if ticket.status == 'Open' %}
+                    bg-warning text-dark
+                  {% elif ticket.status == 'Closed' %}
+                    bg-success
+                  {% elif ticket.status == 'In Progress' %}
+                    bg-info text-dark
+                  {% else %}
+                    bg-secondary
+                  {% endif %}
+                ">
+                  {{ ticket.status }}
+                </span>
+              </p>
+            </div>
 
-          <div class="col-md-6">
-            <label class="fw-bold">Ticket ID:</label>
-            <p>HT-{{ ticket.id }}</p>
+            <div class="col-12">
+              <label class="fw-bold">Subject:</label>
+              <p>{{ ticket.title }}</p>
+            </div>
+
+            {% if ticket.description %}
+              <div class="col-12">
+                <label class="fw-bold">Description:</label>
+                <div class="border rounded p-2 bg-light">
+                  {{ ticket.description|linebreaks }}
+                </div>
+              </div>
+            {% endif %}
+
+            <div class="col-md-6">
+              <label class="fw-bold">Assigned By:</label>
+              <p>{{ ticket.assign_by.get_full_name|default:ticket.assign_by.username }}</p>
+            </div>
+
+            <div class="col-md-6">
+              <label class="fw-bold">Problem Solver:</label>
+              <p>{{ ticket.assign_to.get_full_name|default:ticket.assign_to.username }}</p>
+            </div>
+
+            <div class="col-md-6">
+              <label class="fw-bold">Created At:</label>
+              <p>{{ ticket.created_at|date:"d M, Y H:i" }}</p>
+            </div>
+
+            <div class="col-md-6">
+              <label class="fw-bold">Planned Date:</label>
+              <p>
+                {% if ticket.planned_date %}
+                  {{ ticket.planned_date|date:"d M, Y H:i" }}
+                {% else %}
+                  —
+                {% endif %}
+              </p>
+            </div>
+
+            <div class="col-md-6">
+              <label class="fw-bold">Priority:</label>
+              <p>
+                <span class="badge
+                  {% if ticket.priority == 'High' %}
+                    bg-danger
+                  {% elif ticket.priority == 'Medium' %}
+                    bg-warning text-dark
+                  {% else %}
+                    bg-success
+                  {% endif %}
+                ">
+                  {{ ticket.priority|default:"Normal" }}
+                </span>
+              </p>
+            </div>
+
+            {% if ticket.estimated_minutes %}
+              <div class="col-md-6">
+                <label class="fw-bold">Estimated Minutes:</label>
+                <p>{{ ticket.estimated_minutes }}</p>
+              </div>
+            {% endif %}
+
+            {% if ticket.delay %}
+              <div class="col-md-6">
+                <label class="fw-bold">Delay:</label>
+                <p>{{ ticket.delay }}</p>
+              </div>
+            {% endif %}
+
+            {% if ticket.resolved_at %}
+              <div class="col-md-6">
+                <label class="fw-bold">Resolved At:</label>
+                <p>{{ ticket.resolved_at|date:"d M, Y H:i" }}</p>
+              </div>
+            {% endif %}
+
+            {% if ticket.resolved_by %}
+              <div class="col-md-6">
+                <label class="fw-bold">Resolved By:</label>
+                <p>{{ ticket.resolved_by.get_full_name|default:ticket.resolved_by.username }}</p>
+              </div>
+            {% endif %}
+
+            {% if ticket.resolved_notes %}
+              <div class="col-12">
+                <label class="fw-bold">Resolved Notes:</label>
+                <p>{{ ticket.resolved_notes|linebreaks }}</p>
+              </div>
+            {% endif %}
+
+            {% if ticket.media_upload %}
+              <div class="col-12">
+                <label class="fw-bold">Attachment:</label>
+                <p>
+                  <a href="{{ ticket.media_upload.url }}" download class="btn btn-sm btn-outline-primary">
+                    <i class="fas fa-download me-1" aria-hidden="true"></i> Download
+                  </a>
+                </p>
+              </div>
+            {% endif %}
           </div>
+        </div>
 
-          <div class="col-md-6">
-            <label class="fw-bold">Status:</label>
-            <p>
-              <span class="badge
-                {% if ticket.status == 'Open' %}bg-warning text-dark
-                {% elif ticket.status == 'Closed' %}bg-success
-                {% elif ticket.status == 'In Progress' %}bg-info text-dark
-                {% else %}bg-secondary{% endif %}">
-                {{ ticket.status }}
-              </span>
-            </p>
-          </div>
-
-          <div class="col-12">
-            <label class="fw-bold">Subject:</label>
-            <p>{{ ticket.title }}</p>
-          </div>
-
-          {% if ticket.description %}
-          <div class="col-12">
-            <label class="fw-bold">Description:</label>
-            <div class="border rounded p-2 bg-light">{{ ticket.description|linebreaks }}</div>
-          </div>
+        <div class="modal-footer">
+          {% if can_create %}
+            <a href="{% url 'tasks:edit_help_ticket' ticket.pk %}" class="btn btn-primary">
+              <i class="fas fa-edit me-1" aria-hidden="true"></i> Edit
+            </a>
           {% endif %}
-
-          <div class="col-md-6">
-            <label class="fw-bold">Assigned By:</label>
-            <p>{{ ticket.assign_by.get_full_name|default:ticket.assign_by.username }}</p>
-          </div>
-
-          <div class="col-md-6">
-            <label class="fw-bold">Problem Solver:</label>
-            <p>{{ ticket.assign_to.get_full_name|default:ticket.assign_to.username }}</p>
-          </div>
-
-          <div class="col-md-6">
-            <label class="fw-bold">Created At:</label>
-            <p>{{ ticket.created_at|date:"d M, Y H:i" }}</p>
-          </div>
-
-          <div class="col-md-6">
-            <label class="fw-bold">Planned Date:</label>
-            <p>{% if ticket.planned_date %}{{ ticket.planned_date|date:"d M, Y H:i" }}{% else %}—{% endif %}</p>
-          </div>
-
-          <div class="col-md-6">
-            <label class="fw-bold">Priority:</label>
-            <p>
-              <span class="badge
-                {% if ticket.priority == 'High' %}bg-danger
-                {% elif ticket.priority == 'Medium' %}bg-warning text-dark
-                {% else %}bg-success{% endif %}">
-                {{ ticket.priority|default:"Normal" }}
-              </span>
-            </p>
-          </div>
-
-          {% if ticket.estimated_minutes %}
-          <div class="col-md-6">
-            <label class="fw-bold">Estimated Minutes:</label>
-            <p>{{ ticket.estimated_minutes }}</p>
-          </div>
-          {% endif %}
-
-          {% if ticket.delay %}
-          <div class="col-md-6">
-            <label class="fw-bold">Delay:</label>
-            <p>{{ ticket.delay }}</p>
-          </div>
-          {% endif %}
-
-          {% if ticket.resolved_at %}
-          <div class="col-md-6">
-            <label class="fw-bold">Resolved At:</label>
-            <p>{{ ticket.resolved_at|date:"d M, Y H:i" }}</p>
-          </div>
-          {% endif %}
-
-          {% if ticket.resolved_by %}
-          <div class="col-md-6">
-            <label class="fw-bold">Resolved By:</label>
-            <p>{{ ticket.resolved_by.get_full_name|default:ticket.resolved_by.username }}</p>
-          </div>
-          {% endif %}
-
-          {% if ticket.resolved_notes %}
-          <div class="col-12">
-            <label class="fw-bold">Resolved Notes:</label>
-            <p>{{ ticket.resolved_notes|linebreaks }}</p>
-          </div>
-          {% endif %}
-
-          {% if ticket.media_upload %}
-          <div class="col-12">
-            <label class="fw-bold">Attachment:</label>
-            <p>
-              <a href="{{ ticket.media_upload.url }}" download
-                 class="btn btn-sm btn-outline-primary">
-                <i class="fas fa-download me-1" aria-hidden="true"></i> Download
-              </a>
-            </p>
-          </div>
-          {% endif %}
-
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+            Close
+          </button>
         </div>
       </div>
-
-      <div class="modal-footer">
-        {% if can_create %}
-        <a href="{% url 'tasks:edit_help_ticket' ticket.pk %}"
-           class="btn btn-primary">
-          <i class="fas fa-edit me-1" aria-hidden="true"></i> Edit
-        </a>
-        {% endif %}
-        <button type="button" class="btn btn-secondary"
-                data-bs-dismiss="modal">Close</button>
-      </div>
-
     </div>
   </div>
-</div>
 {% endfor %}
 
 {% endblock %}
@@ -455,10 +525,18 @@
   <script>
     (function () {
       const panel = document.getElementById('filterPanel');
-      const icon  = document.getElementById('filterToggleIcon');
-      if (!panel || !icon) return;
-      panel.addEventListener('show.bs.collapse', () => { icon.className = 'fas fa-minus'; });
-      panel.addEventListener('hide.bs.collapse', () => { icon.className = 'fas fa-plus'; });
+      const icon = document.getElementById('filterToggleIcon');
+      if (!panel || !icon) {
+        return;
+      }
+
+      panel.addEventListener('show.bs.collapse', function () {
+        icon.className = 'fas fa-minus';
+      });
+
+      panel.addEventListener('hide.bs.collapse', function () {
+        icon.className = 'fas fa-plus';
+      });
     })();
   </script>
 {% endblock %}

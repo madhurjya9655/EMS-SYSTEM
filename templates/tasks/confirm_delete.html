@@ -4,125 +4,116 @@
 {% block title %}Confirm Delete | BOS EMS{% endblock %}
 
 {% block content %}
-<div class="container" style="max-width: 600px;">
+<div class="container py-4" style="max-width: 720px;">
   <div class="page-header mb-4">
-    <h2 class="page-title text-danger">
-      <i class="fas fa-exclamation-triangle me-2"></i>
+    <h1 class="h3 text-danger mb-2">
+      <i class="fas fa-trash-alt me-2" aria-hidden="true"></i>
       Confirm Delete {{ type }}
-    </h2>
+    </h1>
     <p class="text-muted mb-0">
-      This action cannot be undone. Please confirm your decision.
+      This action is permanent and cannot be undone.
     </p>
   </div>
 
-  <div class="card shadow-sm border-danger">
-    <div class="card-header bg-danger text-white">
-      <h5 class="mb-0">
-        <i class="fas fa-trash-alt me-2"></i>
-        Delete Confirmation
-      </h5>
+  <div class="card shadow-sm border-0 delete-card">
+    <div class="card-header bg-danger text-white py-3">
+      <div class="d-flex align-items-center">
+        <i class="fas fa-exclamation-triangle me-2" aria-hidden="true"></i>
+        <h5 class="mb-0">Delete Confirmation</h5>
+      </div>
     </div>
-    <div class="card-body">
-      <div class="alert alert-warning border-0 mb-4">
-        <div class="d-flex align-items-start">
-          <i class="fas fa-exclamation-triangle text-warning me-3 mt-1"></i>
+
+    <div class="card-body p-4">
+      <div class="alert alert-warning d-flex align-items-start gap-3 mb-4" role="alert">
+        <i class="fas fa-exclamation-circle mt-1" aria-hidden="true"></i>
+        <div>
+          <div class="fw-semibold mb-1">Please review before deleting</div>
           <div>
-            <h6 class="alert-heading mb-2">Warning!</h6>
-            <p class="mb-0">
-              You are about to permanently delete this {{ type|lower }}. 
-              This action cannot be undone and all associated data will be lost.
-            </p>
+            You are about to permanently delete this {{ type|lower }} and any associated information tied to it.
           </div>
         </div>
       </div>
 
-      <div class="card bg-light border-0 mb-4">
-        <div class="card-body">
-          <h6 class="card-title text-primary mb-3">
-            <i class="fas fa-info-circle me-2"></i>
-            {{ type }} Details
-          </h6>
-          
-          <div class="row g-2">
+      <div class="border rounded-3 bg-light p-3 mb-4">
+        <h6 class="text-primary mb-3">
+          <i class="fas fa-info-circle me-2" aria-hidden="true"></i>
+          {{ type }} Details
+        </h6>
+
+        <div class="row g-3">
+          <div class="col-sm-4">
+            <div class="text-muted small">Name</div>
+          </div>
+          <div class="col-sm-8">
+            <div class="fw-semibold">
+              {% if object.task_name %}
+                {{ object.task_name }}
+              {% elif object.title %}
+                {{ object.title }}
+              {% else %}
+                {{ object }}
+              {% endif %}
+            </div>
+          </div>
+
+          {% if object.assign_to %}
             <div class="col-sm-4">
-              <small class="text-muted">Name:</small>
+              <div class="text-muted small">Assigned To</div>
             </div>
             <div class="col-sm-8">
-              <strong>
-                {% if object.task_name %}
-                  {{ object.task_name }}
-                {% elif object.title %}
-                  {{ object.title }}
-                {% else %}
-                  {{ object }}
-                {% endif %}
-              </strong>
-            </div>
-            
-            {% if object.assign_to %}
-            <div class="col-sm-4">
-              <small class="text-muted">Assigned To:</small>
-            </div>
-            <div class="col-sm-8">
-              <span class="badge bg-info">
+              <span class="badge bg-info text-dark">
                 {{ object.assign_to.get_full_name|default:object.assign_to.username }}
               </span>
             </div>
-            {% endif %}
-            
-            {% if object.priority %}
+          {% endif %}
+
+          {% if object.priority %}
             <div class="col-sm-4">
-              <small class="text-muted">Priority:</small>
+              <div class="text-muted small">Priority</div>
             </div>
             <div class="col-sm-8">
-              <span class="badge bg-{% if object.priority == 'High' %}danger{% elif object.priority == 'Medium' %}warning{% else %}success{% endif %}">
+              <span class="badge {% if object.priority == 'High' %}bg-danger{% elif object.priority == 'Medium' %}bg-warning text-dark{% else %}bg-success{% endif %}">
                 {{ object.priority }}
               </span>
             </div>
-            {% endif %}
-            
-            {% if object.status %}
+          {% endif %}
+
+          {% if object.status %}
             <div class="col-sm-4">
-              <small class="text-muted">Status:</small>
+              <div class="text-muted small">Status</div>
             </div>
             <div class="col-sm-8">
-              <span class="badge bg-secondary">{{ object.status }}</span>
+              <span class="badge bg-secondary">
+                {{ object.status }}
+              </span>
             </div>
-            {% endif %}
-          </div>
+          {% endif %}
         </div>
       </div>
 
-      <div class="row">
-        <div class="col-12">
-          <p class="text-danger mb-4">
-            <i class="fas fa-question-circle me-2"></i>
-            <strong>Are you sure you want to delete "
-            {% if object.task_name %}
-              {{ object.task_name }}
-            {% elif object.title %}
-              {{ object.title }}
-            {% else %}
-              {{ object }}
-            {% endif %}
-            "?</strong>
-          </p>
-        </div>
+      <div class="mb-4">
+        <p class="mb-0 text-danger fw-semibold">
+          <i class="fas fa-question-circle me-2" aria-hidden="true"></i>
+          Are you sure you want to delete
+          “{% if object.task_name %}{{ object.task_name }}{% elif object.title %}{{ object.title }}{% else %}{{ object }}{% endif %}”?
+        </p>
       </div>
 
       <form method="post" id="delete-form">
         {% csrf_token %}
-        <div class="d-flex justify-content-end gap-3">
-          <a href="{% if type == 'Checklist' %}{% url 'tasks:list_checklist' %}{% elif type == 'Delegation' %}{% url 'tasks:list_delegation' %}{% elif type == 'Help Ticket' %}{% url 'tasks:list_help_ticket' %}{% else %}{% url 'dashboard:home' %}{% endif %}" 
-             class="btn btn-outline-secondary btn-lg">
-            <i class="fas fa-times me-2"></i>
+        <div class="d-flex flex-column flex-sm-row justify-content-end gap-2">
+          <a
+            href="{% if type == 'Checklist' %}{% url 'tasks:list_checklist' %}{% elif type == 'Delegation' %}{% url 'tasks:list_delegation' %}{% elif type == 'Help Ticket' %}{% url 'tasks:list_help_ticket' %}{% else %}{% url 'dashboard:home' %}{% endif %}"
+            class="btn btn-outline-secondary"
+          >
+            <i class="fas fa-arrow-left me-2" aria-hidden="true"></i>
             Cancel
           </a>
-          
-          <button type="submit" class="btn btn-danger btn-lg" id="confirm-delete-btn">
-            <span class="spinner-border spinner-border-sm me-2 d-none" role="status"></span>
-            <i class="fas fa-trash-alt me-2"></i>
-            <strong>Yes, Delete {{ type }}</strong>
+
+          <button type="submit" class="btn btn-danger" id="confirm-delete-btn">
+            <span class="spinner-border spinner-border-sm me-2 d-none" role="status" aria-hidden="true"></span>
+            <i class="fas fa-trash-alt me-2" aria-hidden="true"></i>
+            Yes, Delete {{ type }}
           </button>
         </div>
       </form>
@@ -131,52 +122,51 @@
 </div>
 
 <style>
-.card {
-  border-radius: 12px;
-  overflow: hidden;
-}
+  .delete-card {
+    border-radius: 14px;
+    overflow: hidden;
+  }
 
-.card-header {
-  border: none;
-}
+  .delete-card .card-header {
+    border-bottom: 0;
+  }
 
-.btn-danger {
-  background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
-  border: none;
-}
+  .delete-card .alert-warning {
+    border: 1px solid #ffe08a;
+    background: #fff8e1;
+    color: #7a5a00;
+  }
 
-.btn-danger:hover {
-  background: linear-gradient(135deg, #c82333 0%, #bd2130 100%);
-  transform: translateY(-1px);
-}
-
-.alert-warning {
-  background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
-  border: 1px solid #ffc107;
-  color: #856404;
-}
-
-.bg-light {
-  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%) !important;
-}
+  .delete-card .btn-danger {
+    border: 0;
+  }
 </style>
+{% endblock %}
 
+{% block extra_js %}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
+  document.addEventListener('DOMContentLoaded', function () {
     const form = document.getElementById('delete-form');
     const deleteBtn = document.getElementById('confirm-delete-btn');
+
+    if (!form || !deleteBtn) {
+      return;
+    }
+
     const spinner = deleteBtn.querySelector('.spinner-border');
-    
-    form.addEventListener('submit', function(e) {
-        // Double confirmation for critical action
-        if (!confirm('This action cannot be undone. Are you absolutely sure?')) {
-            e.preventDefault();
-            return false;
-        }
-        
-        deleteBtn.disabled = true;
+
+    form.addEventListener('submit', function (e) {
+      const confirmed = window.confirm('This action cannot be undone. Are you absolutely sure?');
+      if (!confirmed) {
+        e.preventDefault();
+        return;
+      }
+
+      deleteBtn.disabled = true;
+      if (spinner) {
         spinner.classList.remove('d-none');
+      }
     });
-});
+  });
 </script>
 {% endblock %}

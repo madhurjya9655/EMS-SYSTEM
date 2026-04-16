@@ -24,6 +24,7 @@ SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
 IST = ZoneInfo(getattr(settings, "TIME_ZONE", "Asia/Kolkata")) if ZoneInfo else timezone.get_fixed_timezone(330)
 DEFAULT_ASSIGN_T = _time(10, 0)
 
+
 # -------------------------------------------------------------------
 # EMAIL RESTRICTIONS (config-driven; settings.EMAIL_RESTRICTIONS)
 # -------------------------------------------------------------------
@@ -44,6 +45,7 @@ def _email_restrictions() -> Dict[str, Dict[str, Any]]:
     except Exception:
         return {}
 
+
 def _restriction_profile_for_email(addr: str) -> Optional[Dict[str, Any]]:
     addr_lc = (addr or "").strip().lower()
     if not addr_lc:
@@ -57,6 +59,7 @@ def _restriction_profile_for_email(addr: str) -> Optional[Dict[str, Any]]:
         except Exception:
             continue
     return None
+
 
 def _infer_email_category(subject: str, template_name: str, context: Dict[str, Any]) -> str:
     """
@@ -74,19 +77,17 @@ def _infer_email_category(subject: str, template_name: str, context: Dict[str, A
     tmpl = (template_name or "").lower()
     kind = str((context or {}).get("kind") or "").strip().lower()
 
-    # Delegation assignment-style emails
     if kind == "delegation":
         return "delegation.assigned_by"
 
-    # Pending digest / summary
     if "pending" in subj or "pending" in tmpl:
-        # if the subject/title mentions delegation explicitly, treat as delegation digest
         title = str((context or {}).get("title") or "")
         if "delegation" in subj or "delegation" in title.lower():
             return "delegation.pending_digest"
         return "pending.digest"
 
     return "general"
+
 
 def _is_allowed_by_profile(profile: Dict[str, Any], category: str) -> bool:
     try:
@@ -95,6 +96,7 @@ def _is_allowed_by_profile(profile: Dict[str, Any], category: str) -> bool:
         return category in allow_set
     except Exception:
         return False
+
 
 # -------------------------------------------------------------------
 # Legacy "Pankaj D1–D4" compatibility (kept, but now config-driven first)
@@ -111,6 +113,7 @@ _AMREEN_EMAIL = (
     or getattr(settings, "REIMBURSEMENT_SENDER_EMAIL", "")
 ).strip().lower()
 
+
 def _ist_today() -> _date:
     now = timezone.now()
     try:
@@ -119,6 +122,7 @@ def _ist_today() -> _date:
     except Exception:
         pass
     return timezone.localdate()
+
 
 def _is_restricted_primary(addr: str | None) -> bool:
     """
@@ -130,6 +134,7 @@ def _is_restricted_primary(addr: str | None) -> bool:
     if _restriction_profile_for_email(a) is not None:
         return True
     return a == _PANKAJ_EMAIL_LEGACY
+
 
 def _legacy_pankaj_allowed_context(ctx: Dict[str, Any] | None) -> bool:
     """
@@ -168,13 +173,13 @@ def _legacy_pankaj_allowed_context(ctx: Dict[str, Any] | None) -> bool:
         if not (planned_date_ist < _ist_today()):
             return False
 
-        # legacy: must be assigned_by Pankaj
         if assigned_by_email != _PANKAJ_EMAIL_LEGACY:
             return False
 
         return True
     except Exception:
         return False
+
 
 # -------------------------------------------------------------------
 # Generic helpers
@@ -189,6 +194,7 @@ def _safe_console_text(s: object) -> str:
     except Exception:
         return text
 
+
 def _dedupe_emails(emails: Iterable[str]) -> List[str]:
     seen = set()
     out: List[str] = []
@@ -201,11 +207,13 @@ def _dedupe_emails(emails: Iterable[str]) -> List[str]:
                 out.append(s)
     return out
 
+
 def _without_emails(emails: Sequence[str], exclude: Sequence[str] | None) -> List[str]:
     if not emails:
         return []
     excl = {e.strip().lower() for e in (exclude or []) if e}
     return [e for e in emails if e and e.strip().lower() not in excl]
+
 
 def get_admin_emails(exclude: Sequence[str] | None = None) -> List[str]:
     try:
@@ -224,6 +232,7 @@ def get_admin_emails(exclude: Sequence[str] | None = None) -> List[str]:
         logger.error("get_admin_emails failed: %s", e)
         return []
 
+
 def _display_name(user) -> str:
     if not user:
         return "System"
@@ -235,6 +244,7 @@ def _display_name(user) -> str:
         return uname if uname else "System"
     except Exception:
         return "System"
+
 
 def _fmt_value(v: Any) -> Any:
     if isinstance(v, datetime):
@@ -249,8 +259,10 @@ def _fmt_value(v: Any) -> Any:
             return str(v)
     return v
 
+
 def _fmt_items(items: Sequence[Dict[str, Any]]) -> Sequence[Dict[str, Any]]:
     return [{"label": str(r.get("label", "")), "value": _fmt_value(r.get("value"))} for r in (items or [])]
+
 
 def _fmt_rows(rows: Sequence[Dict[str, Any]]) -> Sequence[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
@@ -260,6 +272,7 @@ def _fmt_rows(rows: Sequence[Dict[str, Any]]) -> Sequence[Dict[str, Any]]:
             new_row[str(k)] = _fmt_value(v)
         out.append(new_row)
     return out
+
 
 def _fmt_dt_date(dt: Any) -> str:
     if not dt:
@@ -277,11 +290,14 @@ def _fmt_dt_date(dt: Any) -> str:
         logger.error("Failed to format datetime %r: %s", dt, e)
         return str(dt)
 
+
 def _from_email() -> str:
     return getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "EMAIL_HOST_USER", None) or "EMS <no-reply@example.com>"
 
+
 def _fail_silently() -> bool:
     return bool(getattr(settings, "EMAIL_FAIL_SILENTLY", False) or getattr(settings, "DEBUG", False))
+
 
 def _is_tombstoned(obj) -> bool:
     try:
@@ -289,11 +305,32 @@ def _is_tombstoned(obj) -> bool:
     except Exception:
         return False
 
+
 def _is_self_assigned(obj) -> bool:
     try:
-        return bool(getattr(obj, "assign_by_id", None) and getattr(obj, "assign_to_id", None) and obj.assign_by_id == obj.assign_to_id)
+        return bool(
+            getattr(obj, "assign_by_id", None)
+            and getattr(obj, "assign_to_id", None)
+            and obj.assign_by_id == obj.assign_to_id
+        )
     except Exception:
         return False
+
+
+def _resolve_action_url(
+    *,
+    complete_url: Optional[str] = None,
+    detail_url: Optional[str] = None,
+) -> str:
+    """
+    Compatibility helper:
+    supports old callers passing complete_url and newer callers passing detail_url.
+    """
+    for candidate in (complete_url, detail_url, SITE_URL):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return SITE_URL
+
 
 # -------------------------------------------------------------------
 # Core sending helpers
@@ -305,12 +342,19 @@ def _render_or_fallback(template_name: str, context: Dict[str, Any], fallback: s
         logger.warning("Template %s not found or failed to render (%s). Using fallback.", template_name, e)
         return fallback
 
-def _apply_restrictions_to_primary(to_email: str, subject: str, template_name: str, context: Dict[str, Any], cc_list: List[str]) -> Tuple[Optional[str], List[str]]:
+
+def _apply_restrictions_to_primary(
+    to_email: str,
+    subject: str,
+    template_name: str,
+    context: Dict[str, Any],
+    cc_list: List[str],
+) -> Tuple[Optional[str], List[str]]:
     """
     Config-driven restriction gate:
       - If to_email matches a restricted profile:
           allow ONLY if category is allow-listed OR legacy strict delegation rule matches.
-      - If allowed and legacy requires Amreen CC, enforce it (legacy behavior preserved).
+      - If allowed and legacy requires Amreen CC, enforce it.
     """
     to_email = (to_email or "").strip()
     if not to_email:
@@ -320,10 +364,8 @@ def _apply_restrictions_to_primary(to_email: str, subject: str, template_name: s
     category = _infer_email_category(subject, template_name, context)
 
     if prof is None:
-        # Legacy single-email restriction still supported
         if to_email.strip().lower() != _PANKAJ_EMAIL_LEGACY:
             return to_email, cc_list
-        # Legacy: allow only strict delegation overdue case
         if _legacy_pankaj_allowed_context(context):
             cc_lc = [e.lower() for e in cc_list]
             if _AMREEN_EMAIL and _AMREEN_EMAIL not in cc_lc:
@@ -332,11 +374,9 @@ def _apply_restrictions_to_primary(to_email: str, subject: str, template_name: s
         logger.info("Suppressed email to legacy restricted recipient per rules (category=%s)", category)
         return None, cc_list
 
-    # Config profile exists
     if _is_allowed_by_profile(prof, category):
         return to_email, cc_list
 
-    # Preserve the legacy strict allow-rule if it matches (so you don't break existing ops behavior)
     if _legacy_pankaj_allowed_context(context):
         cc_lc = [e.lower() for e in cc_list]
         if _AMREEN_EMAIL and _AMREEN_EMAIL not in cc_lc:
@@ -346,11 +386,13 @@ def _apply_restrictions_to_primary(to_email: str, subject: str, template_name: s
     logger.info("Suppressed email to restricted recipient per EMAIL_RESTRICTIONS (category=%s)", category)
     return None, cc_list
 
-def _filter_restricted_from_list(seq: Sequence[str], subject: str, template_name: str, context: Dict[str, Any]) -> List[str]:
-    """
-    Removes restricted recipients from any list unless allowed by EMAIL_RESTRICTIONS
-    (or legacy strict delegation rule).
-    """
+
+def _filter_restricted_from_list(
+    seq: Sequence[str],
+    subject: str,
+    template_name: str,
+    context: Dict[str, Any],
+) -> List[str]:
     out: List[str] = []
     category = _infer_email_category(subject, template_name, context)
 
@@ -361,20 +403,19 @@ def _filter_restricted_from_list(seq: Sequence[str], subject: str, template_name
 
         prof = _restriction_profile_for_email(addr)
         if prof is None:
-            # legacy single-email restriction
             if addr.strip().lower() == _PANKAJ_EMAIL_LEGACY and not _legacy_pankaj_allowed_context(context):
                 logger.info("Suppressed legacy restricted recipient from list (category=%s)", category)
                 continue
             out.append(addr)
             continue
 
-        # profile exists
         if _is_allowed_by_profile(prof, category) or _legacy_pankaj_allowed_context(context):
             out.append(addr)
         else:
             logger.info("Suppressed restricted recipient from list per EMAIL_RESTRICTIONS (category=%s)", category)
 
     return _dedupe_emails(out)
+
 
 def _send_unified_assignment_email(
     *,
@@ -389,10 +430,14 @@ def _send_unified_assignment_email(
 
     cc_list = _dedupe_emails(cc or [])
 
-    # Apply restriction gate to primary recipient (uses EMAIL_RESTRICTIONS first)
     to_email, cc_list = _apply_restrictions_to_primary(to_email, subject, "", context, cc_list)
     if not to_email:
         return
+
+    action_url = _resolve_action_url(
+        complete_url=context.get("complete_url"),
+        detail_url=context.get("detail_url"),
+    )
 
     text_fallback = (
         f"Task Assignment: {context.get('task_title', 'New Task')}\n\n"
@@ -403,7 +448,7 @@ def _send_unified_assignment_email(
         f"Planned Date: {context.get('planned_date_display', 'Not specified')}\n"
         f"Assigned By: {context.get('assign_by_display', 'System')}\n\n"
         f"{context.get('cta_text', 'Please complete this task as soon as possible.')}\n"
-        f"Open URL: {context.get('complete_url', 'N/A')}\n"
+        f"Open URL: {action_url}\n"
         f"\nRegards,\nEMS System"
     )
 
@@ -433,7 +478,7 @@ def _send_unified_assignment_email(
       <tr><td><strong>Assigned By:</strong></td><td>{context.get('assign_by_display', 'System')}</td></tr>
     </table>
     <p>{context.get('cta_text', 'Please complete this task as soon as possible.')}</p>
-    <p><a href="{context.get('complete_url', '#')}" class="btn">Open Task</a></p>
+    <p><a href="{action_url}" class="btn">Open Task</a></p>
     <p class="muted">EMS System</p>
   </div>
 </body>
@@ -456,6 +501,7 @@ def _send_unified_assignment_email(
         logger.info("Sent assignment email to %s (CC=%s, %s)", to_email, ", ".join(cc_list) or "-", subject)
     except Exception as e:
         logger.error("Failed sending assignment email to %s: %s", to_email, e)
+
 
 def send_html_email(
     *,
@@ -517,6 +563,7 @@ def send_html_email(
         if not effective_fail_silently:
             raise
 
+
 def _send_email(
     subject: str,
     template_name: str,
@@ -536,6 +583,7 @@ def _send_email(
         fail_silently=fail_silently,
     )
 
+
 def _build_subject(subject_prefix: str, task_title: str) -> str:
     sp = (subject_prefix or "").strip()
     if not sp:
@@ -549,8 +597,13 @@ def _build_subject(subject_prefix: str, task_title: str) -> str:
         return sp
     return f"{sp}: {task_title}"
 
+
 def send_checklist_assignment_to_user(
-    *, task, complete_url: str, subject_prefix: str = "Checklist Assigned"
+    *,
+    task,
+    complete_url: Optional[str] = None,
+    detail_url: Optional[str] = None,
+    subject_prefix: str = "Checklist Assigned",
 ) -> None:
     if _is_tombstoned(task):
         return
@@ -560,6 +613,8 @@ def send_checklist_assignment_to_user(
     to_email = getattr(getattr(task, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
+
+    action_url = _resolve_action_url(complete_url=complete_url, detail_url=detail_url)
 
     task_title = getattr(task, "task_name", "Checklist")
     subject = _build_subject(subject_prefix, task_title)
@@ -572,7 +627,8 @@ def send_checklist_assignment_to_user(
         "priority_display": getattr(task, "priority", "") or "Low",
         "assign_by_display": _display_name(getattr(task, "assign_by", None)),
         "assignee_name": _display_name(getattr(task, "assign_to", None)),
-        "complete_url": complete_url,
+        "complete_url": action_url,
+        "detail_url": action_url,
         "cta_text": "Open the task and mark it complete when done.",
         "task_message": getattr(task, "message", "") or "",
         "instructions": getattr(task, "message", "") or "",
@@ -596,10 +652,12 @@ def send_checklist_assignment_to_user(
         context=ctx,
     )
 
+
 def send_delegation_assignment_to_user(
     *,
     delegation,
-    complete_url: str,
+    complete_url: Optional[str] = None,
+    detail_url: Optional[str] = None,
     subject_prefix: str = "Delegation Assigned",
     cc_users: Optional[Sequence[User]] = None,
     cc_emails: Optional[Sequence[str]] = None,
@@ -612,6 +670,8 @@ def send_delegation_assignment_to_user(
     to_email = getattr(getattr(delegation, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
+
+    action_url = _resolve_action_url(complete_url=complete_url, detail_url=detail_url)
 
     task_title = getattr(delegation, "task_name", "Delegation")
     subject = _build_subject(subject_prefix, task_title)
@@ -666,7 +726,8 @@ def send_delegation_assignment_to_user(
         "priority_display": getattr(delegation, "priority", "") or "Low",
         "assign_by_display": _display_name(getattr(delegation, "assign_by", None)),
         "assignee_name": _display_name(getattr(delegation, "assign_to", None)),
-        "complete_url": complete_url,
+        "complete_url": action_url,
+        "detail_url": action_url,
         "cta_text": "Open the task and mark it complete when done.",
         "instructions": getattr(delegation, "message", "") or "",
         "task_frequency": (
@@ -691,8 +752,13 @@ def send_delegation_assignment_to_user(
         cc=cc_final,
     )
 
+
 def send_help_ticket_assignment_to_user(
-    *, ticket, complete_url: str, subject_prefix: str = "Help Ticket Assigned"
+    *,
+    ticket,
+    complete_url: Optional[str] = None,
+    detail_url: Optional[str] = None,
+    subject_prefix: str = "Help Ticket Assigned",
 ) -> None:
     if _is_tombstoned(ticket):
         return
@@ -702,6 +768,8 @@ def send_help_ticket_assignment_to_user(
     to_email = getattr(getattr(ticket, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
+
+    action_url = _resolve_action_url(complete_url=complete_url, detail_url=detail_url)
 
     task_title = getattr(ticket, "title", "Help Ticket")
     subject = _build_subject(subject_prefix, task_title)
@@ -714,7 +782,8 @@ def send_help_ticket_assignment_to_user(
         "priority_display": getattr(ticket, "priority", "") or "Low",
         "assign_by_display": _display_name(getattr(ticket, "assign_by", None)),
         "assignee_name": _display_name(getattr(ticket, "assign_to", None)),
-        "complete_url": complete_url,
+        "complete_url": action_url,
+        "detail_url": action_url,
         "cta_text": "Open the ticket to add notes or close it when resolved.",
         "task_message": getattr(ticket, "description", "") or "",
         "instructions": getattr(ticket, "description", "") or "",
@@ -728,6 +797,7 @@ def send_help_ticket_assignment_to_user(
         to_email=to_email,
         context=ctx,
     )
+
 
 def send_checklist_admin_confirmation(*, task, subject_prefix: str = "Checklist Assignment") -> None:
     exclude = []
@@ -766,6 +836,7 @@ def send_checklist_admin_confirmation(*, task, subject_prefix: str = "Checklist 
         },
         to=admins,
     )
+
 
 def send_delegation_admin_confirmation(*, delegation, subject_prefix: str = "Delegation Assignment") -> None:
     exclude = []
@@ -808,6 +879,7 @@ def send_delegation_admin_confirmation(*, delegation, subject_prefix: str = "Del
         to=admins,
     )
 
+
 def send_help_ticket_admin_confirmation(*, ticket, subject_prefix: str = "Help Ticket Assignment") -> None:
     exclude = []
     try:
@@ -844,6 +916,7 @@ def send_help_ticket_admin_confirmation(*, ticket, subject_prefix: str = "Help T
         to=admins,
     )
 
+
 def send_checklist_unassigned_notice(*, task, old_user) -> None:
     email = getattr(old_user, "email", "") or ""
     if not email.strip():
@@ -860,6 +933,7 @@ def send_checklist_unassigned_notice(*, task, old_user) -> None:
         },
         to=[email],
     )
+
 
 def send_delegation_unassigned_notice(*, delegation, old_user) -> None:
     email = getattr(old_user, "email", "") or ""
@@ -878,6 +952,7 @@ def send_delegation_unassigned_notice(*, delegation, old_user) -> None:
         to=[email],
     )
 
+
 def send_help_ticket_unassigned_notice(*, ticket, old_user) -> None:
     email = getattr(old_user, "email", "") or ""
     if not email.strip():
@@ -894,6 +969,7 @@ def send_help_ticket_unassigned_notice(*, ticket, old_user) -> None:
         },
         to=[email],
     )
+
 
 def send_task_reminder_email(*, task, task_type: str = "Checklist") -> None:
     if _is_tombstoned(task):
@@ -959,6 +1035,7 @@ def send_task_reminder_email(*, task, task_type: str = "Checklist") -> None:
         "task_id": task.id,
         "cta_text": "Please review and complete this item.",
         "complete_url": SITE_URL,
+        "detail_url": SITE_URL,
     }
 
     _send_unified_assignment_email(
@@ -966,6 +1043,7 @@ def send_task_reminder_email(*, task, task_type: str = "Checklist") -> None:
         to_email=to_email,
         context=ctx,
     )
+
 
 def send_admin_bulk_summary(*, title: str, rows: Sequence[dict], exclude_assigner_email: str | None = None) -> None:
     exclude = [exclude_assigner_email] if exclude_assigner_email else None
@@ -991,6 +1069,7 @@ def send_admin_bulk_summary(*, title: str, rows: Sequence[dict], exclude_assigne
         },
         to=admins,
     )
+
 
 def send_bulk_completion_summary(*, user, completed_tasks: List, date_range: str = "today") -> None:
     email = getattr(user, "email", "") or ""
@@ -1018,6 +1097,7 @@ def send_bulk_completion_summary(*, user, completed_tasks: List, date_range: str
         },
         to=[email],
     )
+
 
 def send_welcome_email(*, user: User, raw_password: str | None = None) -> None:
     to_email = (getattr(user, "email", "") or "").strip()
@@ -1059,6 +1139,7 @@ def send_welcome_email(*, user: User, raw_password: str | None = None) -> None:
     except Exception as e:
         logger.error("Failed to send welcome email to %s: %s", to_email, e)
 
+
 def test_email_configuration() -> bool:
     try:
         from_addr = _from_email()
@@ -1076,6 +1157,7 @@ def test_email_configuration() -> bool:
         logger.error("Email configuration test failed: %s", e)
         return False
 
+
 def get_email_statistics() -> Dict[str, Any]:
     return {
         "emails_sent_today": 0,
@@ -1083,6 +1165,7 @@ def get_email_statistics() -> Dict[str, Any]:
         "email_service_status": "active",
         "last_email_sent": timezone.now(),
     }
+
 
 __all__ = [
     "send_html_email",
