@@ -3329,7 +3329,12 @@ def customers(request: HttpRequest) -> HttpResponse:
             if snap:
                 exposure = _safe_decimal(snap.exposure)
                 overdue = _safe_decimal(snap.overdue)
-                ageing = {"a0_30": _safe_decimal(snap.ageing_0_30), "a31_60": _safe_decimal(snap.ageing_31_60), "a61_90": _safe_decimal(snap.ageing_61_90), "a90_plus": _safe_decimal(snap.ageing_90_plus)}
+                ageing = {
+                    "a0_30": _safe_decimal(snap.ageing_0_30),
+                    "a31_60": _safe_decimal(snap.ageing_31_60),
+                    "a61_90": _safe_decimal(snap.ageing_61_90),
+                    "a90_plus": _safe_decimal(snap.ageing_90_plus),
+                }
 
         credit_limit = _safe_decimal(customer.credit_limit)
         if not exposure:
@@ -3344,19 +3349,80 @@ def customers(request: HttpRequest) -> HttpResponse:
             except Exception:
                 risk_ratio = None
 
-                sales_base = InvoiceFact.objects.filter(
+        sales_base = InvoiceFact.objects.filter(
             customer=customer,
             invoice_date__gte=start_date,
             invoice_date__lte=end_date,
         )
-
         sales_qs = _preferred_inv_qs(sales_base)
-
         sales = (
             sales_qs
             .values("invoice_date__year", "invoice_date__month")
             .annotate(mt=Sum("qty_mt"))
             .order_by("invoice_date__year", "invoice_date__month")
+        )
+        sales_history = [
+            {
+                "year": r["invoice_date__year"],
+                "month": r["invoice_date__month"],
+                "mt": _safe_decimal(r["mt"]),
+            }
+            for r in sales
+        ]
+
+        colls = (
+            CollectionTxn.objects
+            .filter(
+                customer=customer,
+                txn_datetime__date__gte=start_date,
+                txn_datetime__date__lte=end_date,
+            )
+            .values("txn_datetime__year", "txn_datetime__month")
+            .annotate(amount=Sum("amount"))
+            .order_by("txn_datetime__year", "txn_datetime__month")
+        )
+        collections_history = [
+            {
+                "year": r["txn_datetime__year"],
+                "month": r["txn_datetime__month"],
+                "amount": _safe_decimal(r["amount"]),
+            }
+            for r in colls
+        ]
+
+        visit_history = list(
+            VisitPlan.objects
+            .select_related("actual", "kam")
+            .filter(customer=customer, visit_date__gte=start_date, visit_date__lte=end_date)
+            .order_by("-visit_date")[:20]
+        )
+        call_history = list(
+            CallLog.objects
+            .select_related("kam")
+            .filter(customer=customer, call_datetime__date__gte=start_date, call_datetime__date__lte=end_date)
+            .order_by("-call_datetime")[:20]
+        )
+        lead_history = list(
+            LeadFact.objects
+            .filter(customer=customer, doe__gte=start_date, doe__lte=end_date)
+            .order_by("-doe")[:20]
+        )
+        overdue_history = list(
+            OverdueSnapshot.objects
+            .filter(customer=customer)
+            .order_by("-snapshot_date")[:12]
+        )
+        today = timezone.localdate()
+        followups = list(
+            VisitActual.objects
+            .filter(
+                plan__customer=customer,
+                next_action__isnull=False,
+                next_action__gt="",
+                next_action_date__isnull=False,
+                next_action_date__gte=today,
+            )
+            .order_by("next_action_date")[:10]
         )
         sales_history = [{"year": r["invoice_date__year"], "month": r["invoice_date__month"], "mt": _safe_decimal(r["mt"])} for r in sales]
         colls = CollectionTxn.objects.filter(customer=customer, txn_datetime__date__gte=start_date, txn_datetime__date__lte=end_date).values("txn_datetime__year", "txn_datetime__month").annotate(amount=Sum("amount")).order_by("txn_datetime__year", "txn_datetime__month")
