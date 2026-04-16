@@ -1,22 +1,13 @@
 # FILE: apps/kam/sheets_adapter.py
-# PURPOSE: Fix Sales sync field mismatches, zero-overwrite bug, overdues ageing gap
-# FIXED 2026-04-08 (ISSUE 1 — LEADS):
-#   - _sync_frontend: CORRECTED column indices from screenshot analysis
-#     Col[0]=Enquiry No, Col[1]=Timestamp, Col[2]=Email, Col[3]=Type,
-#     Col[4]=KAM Name, Col[5]=Customer Name, Col[6]=Grade, Col[7]=Size(MM),
-#     Col[8]=Qty(MT), Col[9]=Supply Condition, Col[10]=Shape, Col[11]=Status,
-#     Col[12]=Revenue RS/MT, Col[13]=Remarks  ← WAS using 21,22,23 (WRONG)
-#   - _sync_frontend: doe NEVER NULL — falls back to today()
-#   - _sync_enquiry_f: doe NEVER NULL — falls back to today()
-#   - LeadFact.objects.update_or_create() used everywhere (idempotent)
-#   - KAM mapping applied on every lead row
-# FIXED 2026-04-08 (ISSUE 2 — COLLECTION MERGE):
-#   - CollectionTxn.source field stamped as 'GOOGLE_SHEET' on sheet sync
-#   - System entries keep source='ERP' (set in views/forms, not changed here)
-#   - Sheet collections NEVER overwrite ERP entries (different source key)
-#   - _sync_collections: new section reads Collection tab from sheet
-#   - Dashboard aggregation queries SUM of BOTH sources (views.py fix separate)
-# All previous fixes from 2026-04-07 preserved.
+# PURPOSE: Stable Google Sheet → DB sync for KAM dashboards / Customer 360
+# FIXES INCLUDED:
+#   - Sales(F) and Sheet1 use update_or_create() for full idempotent repair
+#   - Existing rows get KAM/customer/value repaired on re-sync
+#   - Customer owner fields (kam + primary_kam) are repaired consistently
+#   - Collections update existing KAM when corrected mapping is available
+#   - Leads remain idempotent and doe never NULL
+#   - Overdues remain idempotent
+#   - Collection sheet rows are stored with source='GOOGLE_SHEET'
 
 from __future__ import annotations
 
@@ -61,9 +52,11 @@ User = get_user_model()
 def _env(name: str, default: str = "") -> str:
     return (os.getenv(name) or default).strip()
 
+
 def _env_flag(name: str, default: bool = True) -> bool:
     v = _env(name, "1" if default else "0").lower()
     return v not in ("0", "false", "no", "off", "")
+
 
 def _require_env(name: str) -> str:
     val = _env(name)
@@ -125,6 +118,7 @@ def _load_sa_info() -> dict:
             + "\n".join(f"  {p}" for p in attempted)
             + "\n\nSet KAM_SA_JSON_CONTENT env var with the full JSON content of your service account."
         )
+
     raise GoogleCredentialError(
         "No Google service account credentials configured.\n"
         "Required: KAM_SA_JSON_CONTENT (env var with JSON content)\n"
@@ -156,38 +150,62 @@ def build_sheets_service():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TAB NAME RESOLUTION (from env vars with sane defaults)
+# TAB NAME RESOLUTION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _tab_sales_f()      -> str: return _env("KAM_TAB_SALES",       "Sales (F)")
-def _tab_sheet1()       -> str: return _env("KAM_TAB_SHEET1",      "Sheet1")
-def _tab_kam_names()    -> str: return _env("KAM_TAB_KAM_NAMES",   "KAM names")
-def _tab_frontend()     -> str: return _env("KAM_TAB_FRONTEND",    "Front End")
-def _tab_enquiry_f()    -> str: return _env("KAM_TAB_ENQUIRY",     "Enquiry (F)")
-def _tab_customers()    -> str: return _env("KAM_TAB_CUSTOMERS",   "Customer Details")
-def _tab_overdues()     -> str: return _env("KAM_TAB_OVERDUES",    "Overdues")
-def _tab_collection()   -> str: return _env("KAM_TAB_COLLECTION",  "Collection")
+def _tab_sales_f() -> str:
+    return _env("KAM_TAB_SALES", "Sales (F)")
+
+
+def _tab_sheet1() -> str:
+    return _env("KAM_TAB_SHEET1", "Sheet1")
+
+
+def _tab_kam_names() -> str:
+    return _env("KAM_TAB_KAM_NAMES", "KAM names")
+
+
+def _tab_frontend() -> str:
+    return _env("KAM_TAB_FRONTEND", "Front End")
+
+
+def _tab_enquiry_f() -> str:
+    return _env("KAM_TAB_ENQUIRY", "Enquiry (F)")
+
+
+def _tab_customers() -> str:
+    return _env("KAM_TAB_CUSTOMERS", "Customer Details")
+
+
+def _tab_overdues() -> str:
+    return _env("KAM_TAB_OVERDUES", "Overdues")
+
+
+def _tab_collection() -> str:
+    return _env("KAM_TAB_COLLECTION", "Collection")
+
 
 def resolve_sections() -> Dict[str, bool]:
     return {
-        "sales_f":    _env_flag("KAM_SYNC_SALES",       True),
-        "sheet1":     _env_flag("KAM_SYNC_SHEET1",      True),
-        "frontend":   _env_flag("KAM_SYNC_FRONTEND",    True),
-        "enquiry_f":  _env_flag("KAM_SYNC_ENQUIRY",     True),
-        "customers":  _env_flag("KAM_SYNC_CUSTOMERS",   True),
-        "overdues":   _env_flag("KAM_SYNC_OVERDUES",    True),
-        "collection": _env_flag("KAM_SYNC_COLLECTION",  True),
+        "sales_f": _env_flag("KAM_SYNC_SALES", True),
+        "sheet1": _env_flag("KAM_SYNC_SHEET1", True),
+        "frontend": _env_flag("KAM_SYNC_FRONTEND", True),
+        "enquiry_f": _env_flag("KAM_SYNC_ENQUIRY", True),
+        "customers": _env_flag("KAM_SYNC_CUSTOMERS", True),
+        "overdues": _env_flag("KAM_SYNC_OVERDUES", True),
+        "collection": _env_flag("KAM_SYNC_COLLECTION", True),
     }
+
 
 def resolve_tabs_for_logging() -> Dict[str, str]:
     return {
-        "sales_f":    _tab_sales_f(),
-        "sheet1":     _tab_sheet1(),
-        "kam_names":  _tab_kam_names(),
-        "frontend":   _tab_frontend(),
-        "enquiry_f":  _tab_enquiry_f(),
-        "customers":  _tab_customers(),
-        "overdues":   _tab_overdues(),
+        "sales_f": _tab_sales_f(),
+        "sheet1": _tab_sheet1(),
+        "kam_names": _tab_kam_names(),
+        "frontend": _tab_frontend(),
+        "enquiry_f": _tab_enquiry_f(),
+        "customers": _tab_customers(),
+        "overdues": _tab_overdues(),
         "collection": _tab_collection(),
     }
 
@@ -198,34 +216,41 @@ def resolve_tabs_for_logging() -> Dict[str, str]:
 
 @dataclass
 class SyncStats:
-    customers_upserted:   int = 0
-    sales_upserted:       int = 0
-    leads_upserted:       int = 0
-    overdues_upserted:    int = 0
+    customers_upserted: int = 0
+    sales_upserted: int = 0
+    leads_upserted: int = 0
+    overdues_upserted: int = 0
     collections_upserted: int = 0
-    skipped:              int = 0
-    unknown_kam:          int = 0
-    notes: List[str]          = field(default_factory=list)
+    skipped: int = 0
+    unknown_kam: int = 0
+    notes: List[str] = field(default_factory=list)
 
     def merge(self, other: "SyncStats") -> None:
-        self.customers_upserted   += other.customers_upserted
-        self.sales_upserted       += other.sales_upserted
-        self.leads_upserted       += other.leads_upserted
-        self.overdues_upserted    += other.overdues_upserted
+        self.customers_upserted += other.customers_upserted
+        self.sales_upserted += other.sales_upserted
+        self.leads_upserted += other.leads_upserted
+        self.overdues_upserted += other.overdues_upserted
         self.collections_upserted += other.collections_upserted
-        self.skipped              += other.skipped
-        self.unknown_kam          += other.unknown_kam
+        self.skipped += other.skipped
+        self.unknown_kam += other.unknown_kam
         self.notes.extend(other.notes)
 
     def as_message(self) -> str:
         parts = []
-        if self.customers_upserted:   parts.append(f"Customers: {self.customers_upserted}")
-        if self.sales_upserted:       parts.append(f"Sales: {self.sales_upserted}")
-        if self.leads_upserted:       parts.append(f"Leads: {self.leads_upserted}")
-        if self.overdues_upserted:    parts.append(f"Overdues: {self.overdues_upserted}")
-        if self.collections_upserted: parts.append(f"Collections: {self.collections_upserted}")
-        if self.skipped:              parts.append(f"Skipped: {self.skipped}")
-        if self.unknown_kam:          parts.append(f"Unknown KAM: {self.unknown_kam}")
+        if self.customers_upserted:
+            parts.append(f"Customers: {self.customers_upserted}")
+        if self.sales_upserted:
+            parts.append(f"Sales: {self.sales_upserted}")
+        if self.leads_upserted:
+            parts.append(f"Leads: {self.leads_upserted}")
+        if self.overdues_upserted:
+            parts.append(f"Overdues: {self.overdues_upserted}")
+        if self.collections_upserted:
+            parts.append(f"Collections: {self.collections_upserted}")
+        if self.skipped:
+            parts.append(f"Skipped: {self.skipped}")
+        if self.unknown_kam:
+            parts.append(f"Unknown KAM: {self.unknown_kam}")
         return " | ".join(parts) if parts else "No changes"
 
 
@@ -257,6 +282,7 @@ def _cell(row: List[str], idx: int, default: str = "") -> str:
     except IndexError:
         return default
 
+
 def _decimal(val: str) -> Optional[Decimal]:
     if not val:
         return None
@@ -268,16 +294,6 @@ def _decimal(val: str) -> Optional[Decimal]:
 
 
 def _parse_date(val: str) -> Optional[date]:
-    """
-    Parse date from common Indian/ISO formats including short-year variants.
-
-    FIX 2026-04-07:
-    - Strip surrounding single-quotes (Google Sheets CSV export artefact: '1-Dec-23')
-    - Added '%d-%b-%y' and '%d %b %y' to support '1-Dec-23', '01-Dec-23', '15 Jan 24'
-    - Excel serial guard tightened: only treat as serial if value >= 10000
-      (avoids treating small numbers like '23' as a serial date)
-    - No hardcoded year restrictions.
-    """
     if not val:
         return None
 
@@ -286,23 +302,22 @@ def _parse_date(val: str) -> Optional[date]:
         return None
 
     for fmt in (
-        "%d-%b-%y",    # 1-Dec-23 / 01-Dec-23
-        "%d %b %y",    # 1 Dec 23 / 01 Dec 23
-        "%d-%b-%Y",    # 01-Dec-2023
-        "%d %b %Y",    # 01 Dec 2023
-        "%Y-%m-%d",    # 2023-12-01
-        "%d/%m/%Y",    # 01/12/2023
-        "%d-%m-%Y",    # 01-12-2023
-        "%m/%d/%Y",    # 12/01/2023 (US)
-        "%d/%m/%y",    # 01/12/23
-        "%Y/%m/%d",    # 2023/12/01
+        "%d-%b-%y",
+        "%d %b %y",
+        "%d-%b-%Y",
+        "%d %b %Y",
+        "%Y-%m-%d",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%m/%d/%Y",
+        "%d/%m/%y",
+        "%Y/%m/%d",
     ):
         try:
             return datetime.strptime(val, fmt).date()
         except ValueError:
             continue
 
-    # Excel serial date
     try:
         serial = int(float(val))
         if 10000 < serial < 100000:
@@ -319,9 +334,12 @@ def _parse_timestamp(val: str) -> Optional[datetime]:
         return None
     val = val.strip().strip("'").strip()
     for fmt in (
-        "%m/%d/%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S",
-        "%Y-%m-%d %H:%M:%S", "%m/%d/%Y %H:%M",
-        "%d/%m/%Y %H:%M",    "%Y-%m-%dT%H:%M:%S",
+        "%m/%d/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%m/%d/%Y %H:%M",
+        "%d/%m/%Y %H:%M",
+        "%Y-%m-%dT%H:%M:%S",
     ):
         try:
             dt = datetime.strptime(val, fmt)
@@ -348,6 +366,7 @@ def _normalize(s: str) -> str:
 def _normalize_customer_name(name: str) -> str:
     return " ".join(name.strip().split()).strip()
 
+
 def _safe_get_or_create_customer(
     name: str,
     kam_user=None,
@@ -357,7 +376,7 @@ def _safe_get_or_create_customer(
     if not clean_name:
         raise ValueError("Customer name cannot be blank")
 
-    defaults = {"kam": kam_user}
+    defaults = {"kam": kam_user, "primary_kam": kam_user}
     if extra_defaults:
         defaults.update(extra_defaults)
 
@@ -366,7 +385,10 @@ def _safe_get_or_create_customer(
     if not matches:
         try:
             with transaction.atomic():
-                customer, _ = Customer.objects.get_or_create(name=clean_name, defaults=defaults)
+                customer, _ = Customer.objects.get_or_create(
+                    name=clean_name,
+                    defaults=defaults,
+                )
             return customer
         except Customer.MultipleObjectsReturned:
             matches = list(Customer.objects.filter(name__iexact=clean_name).order_by("pk"))
@@ -374,14 +396,21 @@ def _safe_get_or_create_customer(
     if len(matches) == 1:
         customer = matches[0]
         changed = False
-        if kam_user and not customer.kam:
-            customer.kam = kam_user
-            changed = True
+
+        if kam_user:
+            if customer.kam_id != kam_user.id:
+                customer.kam = kam_user
+                changed = True
+            if customer.primary_kam_id != kam_user.id:
+                customer.primary_kam = kam_user
+                changed = True
+
         if extra_defaults:
             for f, val in extra_defaults.items():
                 if val is not None and not getattr(customer, f, None):
                     setattr(customer, f, val)
                     changed = True
+
         if changed:
             try:
                 customer.save()
@@ -404,6 +433,20 @@ def _safe_get_or_create_customer(
         except Exception as del_exc:
             logger.error("Could not delete duplicate customer pk=%s: %s", dup.pk, del_exc)
 
+    if kam_user:
+        changed = False
+        if survivor.kam_id != kam_user.id:
+            survivor.kam = kam_user
+            changed = True
+        if survivor.primary_kam_id != kam_user.id:
+            survivor.primary_kam = kam_user
+            changed = True
+        if changed:
+            try:
+                survivor.save()
+            except Exception:
+                pass
+
     return survivor
 
 
@@ -420,8 +463,8 @@ def _load_kam_names_tab(service, sheet_id: str) -> Dict[str, str]:
     mapping: Dict[str, str] = {}
     for row in rows[1:]:
         short_name = _cell(row, 0)
-        kam_name   = _cell(row, 1)
-        email      = _cell(row, 2)
+        kam_name = _cell(row, 1)
+        email = _cell(row, 2)
         if not email or "@" not in email:
             continue
         if kam_name:
@@ -446,16 +489,20 @@ def _build_user_lookup() -> Dict[str, User]:
                 lookup[_normalize(full)] = u
         except Exception:
             pass
+
         if u.email:
             lookup[_normalize(u.email)] = u
             local = u.email.split("@")[0]
             lookup[_normalize(local)] = u
+
         uname = u.username or ""
         lookup[_normalize(uname)] = u
+
         parts = re.split(r"[._\-]", uname)
         if len(parts) >= 2:
             lookup[_normalize(parts[0])] = u
             lookup[_normalize("".join(parts))] = u
+
         first = (u.first_name or (parts[0] if parts else "")).strip().lower()
         if first:
             first_name_index.setdefault(first, []).append(u)
@@ -484,7 +531,6 @@ def _resolve_kam_user(
 
     user: Optional[User] = None
 
-    # 1. Env override
     email_override = env_usermap.get(name) or env_usermap.get(key)
     if email_override:
         try:
@@ -495,7 +541,6 @@ def _resolve_kam_user(
             except User.DoesNotExist:
                 pass
 
-    # 2. KAM names tab → email → DB
     if not user:
         email_from_tab = tab_mapping.get(name) or tab_mapping.get(key)
         if not email_from_tab:
@@ -515,31 +560,27 @@ def _resolve_kam_user(
                         user, created = User.objects.get_or_create(
                             email=email_from_tab,
                             defaults={
-                                "username":   email_from_tab,
+                                "username": email_from_tab,
                                 "first_name": parts[0] if parts else "",
-                                "last_name":  " ".join(parts[1:]) if len(parts) > 1 else "",
-                            }
+                                "last_name": " ".join(parts[1:]) if len(parts) > 1 else "",
+                            },
                         )
                         if created:
                             logger.info("Auto-created user for KAM '%s' → %s", name, email_from_tab)
 
-    # 3. DB lookup dict
     if not user:
         user = db_lookup.get(key)
 
-    # 4. Compact key
     if not user:
         compact = re.sub(r"[^a-z0-9]", "", key)
         user = db_lookup.get(compact)
 
-    # 5. Direct DB username match
     if not user:
         try:
             user = User.objects.get(username__iexact=name)
         except User.DoesNotExist:
             pass
 
-    # 6. First + Last name match
     if not user:
         try:
             name_parts = name.split()
@@ -580,7 +621,7 @@ def _load_env_usermap() -> Dict[str, str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# POST-SYNC BACKFILL: assign Customer.kam from their InvoiceFact records
+# POST-SYNC BACKFILL
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _backfill_customer_kam() -> int:
@@ -608,12 +649,13 @@ def _backfill_customer_kam() -> int:
         try:
             kam_user = User.objects.get(pk=top["kam"])
             customer.kam = kam_user
-            if not customer.primary_kam:
-                customer.primary_kam = kam_user
+            customer.primary_kam = kam_user
             customer.save(update_fields=["kam", "primary_kam"])
             updated += 1
             logger.info(
-                "KAM backfill: '%s' → %s", customer.name, kam_user.get_full_name() or kam_user.username
+                "KAM backfill: '%s' → %s",
+                customer.name,
+                kam_user.get_full_name() or kam_user.username,
             )
         except User.DoesNotExist:
             logger.error("KAM backfill: user pk=%s not found for customer '%s'", top["kam"], customer.name)
@@ -657,18 +699,19 @@ def _sync_customers(
         try:
             with transaction.atomic():
                 obj = _safe_get_or_create_customer(name, kam_user=kam_user)
-                obj.address              = _cell(row, 2) or obj.address
-                obj.email                = _cell(row, 3) or obj.email
-                obj.mobile               = _cell(row, 4) or obj.mobile
-                obj.contact_person       = _cell(row, 5) or obj.contact_person
-                obj.credit_limit         = _decimal(_cell(row, 6)) or obj.credit_limit
-                obj.credit_period_days   = _decimal(_cell(row, 7)) or obj.credit_period_days
-                obj.total_exposure       = _decimal(_cell(row, 8)) or obj.total_exposure
+                obj.address = _cell(row, 2) or obj.address
+                obj.email = _cell(row, 3) or obj.email
+                obj.mobile = _cell(row, 4) or obj.mobile
+                obj.contact_person = _cell(row, 5) or obj.contact_person
+                obj.credit_limit = _decimal(_cell(row, 6)) or obj.credit_limit
+                obj.credit_period_days = _decimal(_cell(row, 7)) or obj.credit_period_days
+                obj.total_exposure = _decimal(_cell(row, 8)) or obj.total_exposure
                 obj.current_credit_limit = _decimal(_cell(row, 10)) or obj.current_credit_limit
+
                 if kam_user:
                     obj.kam = kam_user
-                    if not obj.primary_kam:
-                        obj.primary_kam = kam_user
+                    obj.primary_kam = kam_user
+
                 obj.save()
                 stats.customers_upserted += 1
         except Exception as exc:
@@ -697,17 +740,17 @@ def _sync_sales_f(
 
     for i, row in enumerate(rows[1:], start=2):
         invoice_date_raw = _cell(row, 0)
-        buyer_name       = _cell(row, 1)
-        kam_name         = _cell(row, 2)
-        qty_raw          = _cell(row, 3)
-        full_name        = _cell(row, 4)
+        buyer_name = _cell(row, 1)
+        kam_name = _cell(row, 2)
+        qty_raw = _cell(row, 3)
+        full_name = _cell(row, 4)
 
         if not buyer_name and not full_name:
             stats.skipped += 1
             continue
 
         customer_name = full_name or buyer_name
-        invoice_date  = _parse_date(invoice_date_raw)
+        invoice_date = _parse_date(invoice_date_raw)
         if not invoice_date:
             logger.debug("Sales (F) row %d: cannot parse date '%s'", i, invoice_date_raw)
             stats.skipped += 1
@@ -723,29 +766,19 @@ def _sync_sales_f(
 
         try:
             with transaction.atomic():
-                obj, created = InvoiceFact.objects.get_or_create(
+                InvoiceFact.objects.update_or_create(
                     row_uuid=row_uuid,
                     defaults={
-                        "customer":       customer,
-                        "kam":            kam_user,
-                        "invoice_date":   invoice_date,
-                        "qty_mt":         qty,
-                        "invoice_value":  Decimal("0"),
-                        "revenue_gst":    Decimal("0"),
+                        "customer": customer,
+                        "kam": kam_user,
+                        "invoice_date": invoice_date,
+                        "qty_mt": qty,
+                        "invoice_value": Decimal("0"),
+                        "revenue_gst": Decimal("0"),
                         "raw_buyer_name": buyer_name,
-                        "source_tab":     tab_name,
+                        "source_tab": tab_name,
                     },
                 )
-                if not created:
-                    update_fields = ["qty_mt", "customer", "raw_buyer_name", "source_tab", "updated_at"]
-                    obj.qty_mt         = qty
-                    obj.customer       = customer
-                    obj.raw_buyer_name = buyer_name
-                    obj.source_tab     = tab_name
-                    if kam_user and not obj.kam:
-                        obj.kam = kam_user
-                        update_fields.append("kam")
-                    obj.save(update_fields=update_fields)
                 stats.sales_upserted += 1
         except Exception as exc:
             logger.error("Sales (F) row %d upsert failed: %s", i, exc)
@@ -755,7 +788,7 @@ def _sync_sales_f(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION: SALES — Sheet1 (historical invoices with full amounts)
+# SECTION: SALES — Sheet1
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_sheet1(
@@ -773,17 +806,17 @@ def _sync_sheet1(
     date_parse_failures: List[str] = []
 
     for i, row in enumerate(rows[1:], start=2):
-        kam_name          = _cell(row, 0)
-        customer_name     = _cell(row, 1)
-        invoice_no        = _cell(row, 4)
-        invoice_date_raw  = _cell(row, 5)
-        invoice_date      = _parse_date(invoice_date_raw)
-        value_gst         = _decimal(_cell(row, 6))
-        qty               = _decimal(_cell(row, 14)) or Decimal("0")
-        invoice_value     = _decimal(_cell(row, 17))
-        rate_mt           = _decimal(_cell(row, 16))
-        grade             = _cell(row, 12)
-        size              = _cell(row, 13)
+        kam_name = _cell(row, 0)
+        customer_name = _cell(row, 1)
+        invoice_no = _cell(row, 4)
+        invoice_date_raw = _cell(row, 5)
+        invoice_date = _parse_date(invoice_date_raw)
+        value_gst = _decimal(_cell(row, 6))
+        qty = _decimal(_cell(row, 14)) or Decimal("0")
+        invoice_value = _decimal(_cell(row, 17))
+        rate_mt = _decimal(_cell(row, 16))
+        grade = _cell(row, 12)
+        size = _cell(row, 13)
 
         if not customer_name:
             stats.skipped += 1
@@ -815,41 +848,22 @@ def _sync_sheet1(
 
         try:
             with transaction.atomic():
-                obj, created = InvoiceFact.objects.get_or_create(
+                InvoiceFact.objects.update_or_create(
                     row_uuid=row_uuid,
                     defaults={
-                        "customer":      customer,
-                        "kam":           kam_user,
-                        "invoice_date":  invoice_date,
-                        "invoice_no":    invoice_no,
+                        "customer": customer,
+                        "kam": kam_user,
+                        "invoice_date": invoice_date,
+                        "invoice_no": invoice_no,
                         "invoice_value": final_value,
-                        "revenue_gst":   final_value,
-                        "qty_mt":        qty,
-                        "rate_mt":       rate_mt,
-                        "grade":         grade,
-                        "size":          size,
-                        "source_tab":    tab_name,
+                        "revenue_gst": final_value,
+                        "qty_mt": qty,
+                        "rate_mt": rate_mt,
+                        "grade": grade,
+                        "size": size,
+                        "source_tab": tab_name,
                     },
                 )
-                if not created:
-                    update_fields = [
-                        "invoice_value", "revenue_gst", "qty_mt",
-                        "rate_mt", "grade", "size", "source_tab",
-                        "customer", "invoice_no", "updated_at",
-                    ]
-                    obj.invoice_value = final_value
-                    obj.revenue_gst   = final_value
-                    obj.qty_mt        = qty
-                    obj.rate_mt       = rate_mt
-                    obj.grade         = grade
-                    obj.size          = size
-                    obj.source_tab    = tab_name
-                    obj.customer      = customer
-                    obj.invoice_no    = invoice_no
-                    if kam_user and not obj.kam:
-                        obj.kam = kam_user
-                        update_fields.append("kam")
-                    obj.save(update_fields=update_fields)
                 stats.sales_upserted += 1
         except Exception as exc:
             logger.error("Sheet1 row %d upsert failed: %s", i, exc)
@@ -866,31 +880,6 @@ def _sync_sheet1(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION: LEADS — Front End
-#
-# TAB LAYOUT (verified from screenshot 2026-04-08):
-#   Col[0]  = Enquiry Number
-#   Col[1]  = Timestamp
-#   Col[2]  = Email
-#   Col[3]  = Type
-#   Col[4]  = KAM Name          ← YELLOW (key field)
-#   Col[5]  = Customer Name     ← YELLOW (key field)
-#   Col[6]  = Grade
-#   Col[7]  = Size(MM)
-#   Col[8]  = Qty (MT)
-#   Col[9]  = Supply Condition
-#   Col[10] = Shape
-#   Col[11] = Status            ← YELLOW (key field)
-#   Col[12] = Revenue RS/MT
-#   Col[13] = Remarks
-#
-# BUG FIXED: Previous code used Col[21] for Status, Col[22] for Revenue,
-#            Col[23] for Remarks — those columns don't exist → all NULL/empty.
-#            This caused leads to appear with blank status and 0 qty_mt,
-#            making dashboard filtering exclude them.
-#
-# FIX: doe NEVER NULL — falls back to today() if timestamp missing/unparseable.
-# FIX: update_or_create() used — fully idempotent on re-sync.
-# FIX: KAM mapped on every row.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_frontend(
@@ -905,9 +894,6 @@ def _sync_frontend(
         return stats
 
     tab_name = _tab_frontend()
-
-    # ── Detect actual column positions from header row ──────────────────────
-    # This makes the sync resilient to sheet column reordering.
     header = [h.strip().lower() for h in rows[0]] if rows else []
 
     def _hcol(keywords: List[str], fallback: int) -> int:
@@ -917,17 +903,16 @@ def _sync_frontend(
                     return idx
         return fallback
 
-    # Map columns — fallback values match screenshot layout
-    col_enquiry_no    = _hcol(["enquiry"],              0)
-    col_timestamp     = _hcol(["timestamp"],            1)
-    col_kam_name      = _hcol(["kam"],                  4)
-    col_customer_name = _hcol(["customer"],             5)
-    col_grade         = _hcol(["grade"],                6)
-    col_size          = _hcol(["size"],                 7)
-    col_qty           = _hcol(["qty"],                  8)
-    col_status        = _hcol(["status"],              11)   # FIX: was 21
-    col_revenue_mt    = _hcol(["revenue"],             12)   # FIX: was 22
-    col_remarks       = _hcol(["remark"],              13)   # FIX: was 23
+    col_enquiry_no = _hcol(["enquiry"], 0)
+    col_timestamp = _hcol(["timestamp"], 1)
+    col_kam_name = _hcol(["kam"], 4)
+    col_customer_name = _hcol(["customer"], 5)
+    col_grade = _hcol(["grade"], 6)
+    col_size = _hcol(["size"], 7)
+    col_qty = _hcol(["qty"], 8)
+    col_status = _hcol(["status"], 11)
+    col_revenue_mt = _hcol(["revenue"], 12)
+    col_remarks = _hcol(["remark"], 13)
 
     logger.info(
         "Front End column map: enquiry=%d ts=%d kam=%d customer=%d "
@@ -939,16 +924,16 @@ def _sync_frontend(
     null_doe_count = 0
 
     for i, row in enumerate(rows[1:], start=2):
-        enquiry_no    = _cell(row, col_enquiry_no)
+        enquiry_no = _cell(row, col_enquiry_no)
         timestamp_raw = _cell(row, col_timestamp)
-        kam_name      = _cell(row, col_kam_name)
+        kam_name = _cell(row, col_kam_name)
         customer_name = _cell(row, col_customer_name)
-        grade         = _cell(row, col_grade)
-        size          = _cell(row, col_size)
-        qty_raw       = _cell(row, col_qty)
-        status        = _cell(row, col_status)
-        revenue_mt    = _decimal(_cell(row, col_revenue_mt))
-        remarks       = _cell(row, col_remarks)
+        grade = _cell(row, col_grade)
+        size = _cell(row, col_size)
+        qty_raw = _cell(row, col_qty)
+        status = _cell(row, col_status)
+        revenue_mt = _decimal(_cell(row, col_revenue_mt))
+        remarks = _cell(row, col_remarks)
 
         if not customer_name:
             stats.skipped += 1
@@ -956,10 +941,6 @@ def _sync_frontend(
 
         ts = _parse_timestamp(timestamp_raw)
         doe_date = ts.date() if ts else None
-
-        # ── CRITICAL FIX: doe must NEVER be NULL ──────────────────────────
-        # Dashboard filters on doe__gte / doe__lt — NULL rows are invisible.
-        # If the timestamp column is empty or unparseable, use today's date.
         if not doe_date:
             doe_date = timezone.now().date()
             null_doe_count += 1
@@ -969,8 +950,6 @@ def _sync_frontend(
             )
 
         qty = _decimal(qty_raw) or Decimal("0")
-
-        # ── CRITICAL FIX: always map KAM ──────────────────────────────────
         kam_user = (
             _resolve_kam_user(kam_name, tab_mapping, db_lookup, env_usermap, stats, local_cache)
             if kam_name else None
@@ -985,19 +964,18 @@ def _sync_frontend(
 
         try:
             with transaction.atomic():
-                # ── CRITICAL FIX: always update_or_create (never skip existing) ──
                 LeadFact.objects.update_or_create(
                     row_uuid=row_uuid,
                     defaults={
-                        "customer":   customer,
-                        "kam":        kam_user,       # always set KAM
-                        "doe":        doe_date,        # never NULL
-                        "qty_mt":     qty,
-                        "status":     status or "OPEN",
-                        "grade":      grade,
-                        "size":       size,
+                        "customer": customer,
+                        "kam": kam_user,
+                        "doe": doe_date,
+                        "qty_mt": qty,
+                        "status": status or "OPEN",
+                        "grade": grade,
+                        "size": size,
                         "revenue_mt": revenue_mt,
-                        "remarks":    remarks,
+                        "remarks": remarks,
                         "source_tab": tab_name,
                         "enquiry_no": enquiry_no,
                     },
@@ -1018,12 +996,6 @@ def _sync_frontend(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION: LEADS — Enquiry (F)
-# Tab: Enquiry (F)
-# Cols: Timestamp[0] | KAM Name[1] | Customer Name[2] | Qty (MT)[3]
-#       Status[4] | Remarks[5]
-#
-# FIX: doe NEVER NULL — falls back to today.
-# FIX: KAM always mapped.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sync_enquiry_f(
@@ -1042,11 +1014,11 @@ def _sync_enquiry_f(
 
     for i, row in enumerate(rows[1:], start=2):
         timestamp_raw = _cell(row, 0)
-        kam_name      = _cell(row, 1)
+        kam_name = _cell(row, 1)
         customer_name = _cell(row, 2)
-        qty_raw       = _cell(row, 3)
-        status        = _cell(row, 4)
-        remarks       = _cell(row, 5)
+        qty_raw = _cell(row, 3)
+        status = _cell(row, 4)
+        remarks = _cell(row, 5)
 
         if not customer_name:
             stats.skipped += 1
@@ -1054,8 +1026,6 @@ def _sync_enquiry_f(
 
         ts = _parse_timestamp(timestamp_raw)
         doe_date = ts.date() if ts else None
-
-        # ── CRITICAL FIX: doe must NEVER be NULL ──────────────────────────
         if not doe_date:
             doe_date = timezone.now().date()
             null_doe_count += 1
@@ -1077,12 +1047,12 @@ def _sync_enquiry_f(
                 LeadFact.objects.update_or_create(
                     row_uuid=row_uuid,
                     defaults={
-                        "customer":   customer,
-                        "kam":        kam_user,       # always set KAM
-                        "doe":        doe_date,        # never NULL
-                        "qty_mt":     qty,
-                        "status":     status or "OPEN",
-                        "remarks":    remarks,
+                        "customer": customer,
+                        "kam": kam_user,
+                        "doe": doe_date,
+                        "qty_mt": qty,
+                        "status": status or "OPEN",
+                        "remarks": remarks,
                         "source_tab": tab_name,
                     },
                 )
@@ -1123,27 +1093,25 @@ def _sync_overdues(
                     return idx
         return fallback
 
-    col_customer  = _col(["customer"],               0)
-    col_kam       = _col(["kam"],                    1)
-    col_overdue   = _col(["overdue", "dues"],        2)
-    col_exposure  = _col(["exposure"],               3)
-    col_a0        = _col(["0-30", "0_30"],           4)
-    col_a31       = _col(["31-60", "31_60"],         5)
-    col_a61       = _col(["61-90", "61_90"],         6)
-    col_a90       = _col(["90+", "90_plus", "above 90"], 7)
+    col_customer = _col(["customer"], 0)
+    col_kam = _col(["kam"], 1)
+    col_overdue = _col(["overdue", "dues"], 2)
+    col_exposure = _col(["exposure"], 3)
+    col_a0 = _col(["0-30", "0_30"], 4)
+    col_a31 = _col(["31-60", "31_60"], 5)
+    col_a61 = _col(["61-90", "61_90"], 6)
+    col_a90 = _col(["90+", "90_plus", "above 90"], 7)
 
     has_ageing = any(kw in " ".join(header) for kw in ["0-30", "31-60", "61-90", "90+"])
     if not has_ageing:
-        logger.warning(
-            "Overdues tab: ageing columns not found in header. Header: %s", header[:10],
-        )
+        logger.warning("Overdues tab: ageing columns not found in header. Header: %s", header[:10])
 
     snapshot_date = timezone.now().date()
 
     for i, row in enumerate(rows[1:], start=2):
         customer_name = _cell(row, col_customer)
-        kam_name      = _cell(row, col_kam)
-        overdue_raw   = _cell(row, col_overdue)
+        kam_name = _cell(row, col_kam)
+        overdue_raw = _cell(row, col_overdue)
 
         if not customer_name:
             continue
@@ -1154,15 +1122,15 @@ def _sync_overdues(
             continue
 
         exposure_raw = _cell(row, col_exposure)
-        a0_raw       = _cell(row, col_a0)
-        a31_raw      = _cell(row, col_a31)
-        a61_raw      = _cell(row, col_a61)
-        a90_raw      = _cell(row, col_a90)
+        a0_raw = _cell(row, col_a0)
+        a31_raw = _cell(row, col_a31)
+        a61_raw = _cell(row, col_a61)
+        a90_raw = _cell(row, col_a90)
 
-        a0   = _decimal(a0_raw)  or Decimal("0")
-        a31  = _decimal(a31_raw) or Decimal("0")
-        a61  = _decimal(a61_raw) or Decimal("0")
-        a90  = _decimal(a90_raw) or Decimal("0")
+        a0 = _decimal(a0_raw) or Decimal("0")
+        a31 = _decimal(a31_raw) or Decimal("0")
+        a61 = _decimal(a61_raw) or Decimal("0")
+        a90 = _decimal(a90_raw) or Decimal("0")
         ageing_total = a0 + a31 + a61 + a90
 
         exposure = _decimal(exposure_raw) or (ageing_total if ageing_total > 0 else overdue_amt)
@@ -1179,13 +1147,13 @@ def _sync_overdues(
                     customer=customer,
                     snapshot_date=snapshot_date,
                     defaults={
-                        "kam":            kam_user,
-                        "overdue":        overdue_amt,
-                        "overdue_amt":    overdue_amt,
-                        "exposure":       exposure,
-                        "ageing_0_30":    a0,
-                        "ageing_31_60":   a31,
-                        "ageing_61_90":   a61,
+                        "kam": kam_user,
+                        "overdue": overdue_amt,
+                        "overdue_amt": overdue_amt,
+                        "exposure": exposure,
+                        "ageing_0_30": a0,
+                        "ageing_31_60": a31,
+                        "ageing_61_90": a61,
                         "ageing_90_plus": a90,
                     },
                 )
@@ -1198,34 +1166,11 @@ def _sync_overdues(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION: COLLECTION (Issue 2 — Collection Merge Architecture)
-#
-# PURPOSE: Sync historical collection data from Google Sheet → DB
-#          with source='GOOGLE_SHEET' so it never conflicts with
-#          system-entered collections (source='ERP').
-#
-# ARCHITECTURE:
-#   Google Sheet rows   → CollectionTxn(source='GOOGLE_SHEET')
-#   System entries      → CollectionTxn(source='ERP')  [set in views.py]
-#   Dashboard total     → SUM(GOOGLE_SHEET) + SUM(ERP)
-#
-# RULE: Sheet data is NEVER overwritten by ERP entries and vice versa.
-#       Each source has its own namespace in the DB.
-#
-# Tab: Collection
-# Expected cols: Date[0] | Customer Name[1] | KAM Name[2] | Amount[3]
-#                Mode[4] | Reference[5] | Remarks[6]
-#
-# If your Collection tab has different columns, set env var:
-#   KAM_COLLECTION_COL_DATE=0
-#   KAM_COLLECTION_COL_CUSTOMER=1
-#   KAM_COLLECTION_COL_KAM=2
-#   KAM_COLLECTION_COL_AMOUNT=3
+# SECTION: COLLECTION
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Source constants — must match CollectionTxn.source choices
 COLLECTION_SOURCE_SHEET = "GOOGLE_SHEET"
-COLLECTION_SOURCE_ERP   = "ERP"
+COLLECTION_SOURCE_ERP = "ERP"
 
 
 def _sync_collections(
@@ -1233,19 +1178,7 @@ def _sync_collections(
     tab_mapping, db_lookup, env_usermap,
     local_cache: Dict,
 ) -> SyncStats:
-    """
-    Sync historical collections from Google Sheet.
-
-    All rows are inserted/updated with source=GOOGLE_SHEET.
-    ERP entries (source=ERP) are never touched here — they live in a separate
-    namespace identified by their source field.
-
-    Idempotency: row_uuid built from (tab, date, customer, amount, row_index).
-    On re-sync the same row produces the same uuid → update_or_create is safe.
-    """
     stats = SyncStats()
-
-    # Check if Collection tab exists by trying to read it
     rows = _get_sheet_values(service, sheet_id, _tab_collection())
     if len(rows) < 2:
         stats.notes.append("Collection tab: no data rows (tab may not exist — skipping)")
@@ -1253,8 +1186,6 @@ def _sync_collections(
         return stats
 
     tab_name = _tab_collection()
-
-    # Detect column layout from header
     header = [h.strip().lower() for h in rows[0]] if rows else []
 
     def _hcol(keywords: List[str], fallback: int) -> int:
@@ -1264,13 +1195,13 @@ def _sync_collections(
                     return idx
         return fallback
 
-    col_date     = int(_env("KAM_COLLECTION_COL_DATE",     str(_hcol(["date"],                            0))))
-    col_customer = int(_env("KAM_COLLECTION_COL_CUSTOMER",  str(_hcol(["customer"],                       1))))
-    col_kam      = int(_env("KAM_COLLECTION_COL_KAM",       str(_hcol(["kam"],                            2))))
-    col_amount   = int(_env("KAM_COLLECTION_COL_AMOUNT",    str(_hcol(["amount", "collection", "amt"],    3))))
-    col_mode     = int(_env("KAM_COLLECTION_COL_MODE",      str(_hcol(["mode", "payment"],                4))))
-    col_ref      = int(_env("KAM_COLLECTION_COL_REF",       str(_hcol(["ref", "utr", "cheque"],           5))))
-    col_remarks  = int(_env("KAM_COLLECTION_COL_REMARKS",   str(_hcol(["remark", "note"],                 6))))
+    col_date = int(_env("KAM_COLLECTION_COL_DATE", str(_hcol(["date"], 0))))
+    col_customer = int(_env("KAM_COLLECTION_COL_CUSTOMER", str(_hcol(["customer"], 1))))
+    col_kam = int(_env("KAM_COLLECTION_COL_KAM", str(_hcol(["kam"], 2))))
+    col_amount = int(_env("KAM_COLLECTION_COL_AMOUNT", str(_hcol(["amount", "collection", "amt"], 3))))
+    col_mode = int(_env("KAM_COLLECTION_COL_MODE", str(_hcol(["mode", "payment"], 4))))
+    col_ref = int(_env("KAM_COLLECTION_COL_REF", str(_hcol(["ref", "utr", "cheque"], 5))))
+    col_remarks = int(_env("KAM_COLLECTION_COL_REMARKS", str(_hcol(["remark", "note"], 6))))
 
     logger.info(
         "Collection tab column map: date=%d customer=%d kam=%d amount=%d mode=%d ref=%d remarks=%d",
@@ -1278,13 +1209,13 @@ def _sync_collections(
     )
 
     for i, row in enumerate(rows[1:], start=2):
-        date_raw      = _cell(row, col_date)
+        date_raw = _cell(row, col_date)
         customer_name = _cell(row, col_customer)
-        kam_name      = _cell(row, col_kam)
-        amount_raw    = _cell(row, col_amount)
-        mode          = _cell(row, col_mode)
-        reference     = _cell(row, col_ref)
-        remarks       = _cell(row, col_remarks)
+        kam_name = _cell(row, col_kam)
+        amount_raw = _cell(row, col_amount)
+        mode = _cell(row, col_mode)
+        reference = _cell(row, col_ref)
+        remarks = _cell(row, col_remarks)
 
         if not customer_name or not amount_raw:
             stats.skipped += 1
@@ -1306,46 +1237,40 @@ def _sync_collections(
             if kam_name else None
         )
         customer = _safe_get_or_create_customer(customer_name, kam_user=kam_user)
-
-        # Unique key: tab + date + customer + amount + row index
-        # Using row index ensures re-sync of same data doesn't create duplicates
         row_uuid = _make_row_uuid(tab_name, txn_date, customer_name, amount_raw, i)
 
         try:
             with transaction.atomic():
-                # ── CRITICAL: source='GOOGLE_SHEET' always ─────────────────────
-                # This is what prevents sheet data from overwriting ERP data
-                # and what allows the dashboard to SUM both sources correctly.
                 obj, created = CollectionTxn.objects.get_or_create(
                     row_uuid=row_uuid,
                     defaults={
-                        "customer":     customer,
-                        "kam":          kam_user,
+                        "customer": customer,
+                        "kam": kam_user,
                         "txn_datetime": timezone.make_aware(
                             datetime(txn_date.year, txn_date.month, txn_date.day)
                         ),
-                        "amount":       amount,
-                        "mode":         mode or None,
-                        "reference":    reference or None,
+                        "amount": amount,
+                        "mode": mode or None,
+                        "reference": reference or None,
                         "reference_no": reference or None,
-                        "notes":        remarks or None,
-                        "source":       COLLECTION_SOURCE_SHEET,  # ← KEY: never overwrite ERP
+                        "notes": remarks or None,
+                        "source": COLLECTION_SOURCE_SHEET,
                     },
                 )
                 if not created:
-                    # Only update non-identifying fields; NEVER change source
-                    update_fields = ["customer", "amount", "mode", "reference",
-                                     "reference_no", "notes", "updated_at"]
-                    obj.customer     = customer
-                    obj.amount       = amount
-                    obj.mode         = mode or None
-                    obj.reference    = reference or None
+                    update_fields = [
+                        "customer", "amount", "mode", "reference",
+                        "reference_no", "notes", "updated_at",
+                    ]
+                    obj.customer = customer
+                    obj.amount = amount
+                    obj.mode = mode or None
+                    obj.reference = reference or None
                     obj.reference_no = reference or None
-                    obj.notes        = remarks or None
-                    if kam_user and not obj.kam:
+                    obj.notes = remarks or None
+                    if kam_user and obj.kam_id != kam_user.id:
                         obj.kam = kam_user
                         update_fields.append("kam")
-                    # ── CRITICAL: never change source on existing records ──────
                     obj.save(update_fields=update_fields)
                 stats.collections_upserted += 1
         except Exception as exc:
@@ -1364,21 +1289,18 @@ def _sync_collections(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_sync_now() -> SyncStats:
-    """
-    Full sync — called by sheets.run_sync_now() and Celery/cron tasks.
-    """
     sheet_id = _require_env("KAM_SALES_SHEET_ID")
     sections = resolve_sections()
-    total    = SyncStats()
+    total = SyncStats()
 
     try:
         service = build_sheets_service()
     except GoogleCredentialError:
         raise
 
-    tab_mapping  = _load_kam_names_tab(service, sheet_id)
-    db_lookup    = _build_user_lookup()
-    env_usermap  = _load_env_usermap()
+    tab_mapping = _load_kam_names_tab(service, sheet_id)
+    db_lookup = _build_user_lookup()
+    env_usermap = _load_env_usermap()
     local_cache: Dict[str, Optional[User]] = {}
 
     logger.info(
@@ -1426,12 +1348,8 @@ def run_sync_now() -> SyncStats:
         logger.info("Syncing: Collection (source=GOOGLE_SHEET)")
         s = _sync_collections(service, sheet_id, tab_mapping, db_lookup, env_usermap, local_cache)
         total.merge(s)
-        logger.info(
-            "  → collections=%d skipped=%d",
-            s.collections_upserted, s.skipped,
-        )
+        logger.info("  → collections=%d skipped=%d", s.collections_upserted, s.skipped)
 
-    # Backfill KAM for customers that still have kam=NULL
     logger.info("Running KAM backfill for unmapped customers ...")
     backfilled = _backfill_customer_kam()
     if backfilled:
@@ -1445,34 +1363,32 @@ def run_sync_now() -> SyncStats:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP SYNC (progressive — one section per call)
+# STEP SYNC
 # ─────────────────────────────────────────────────────────────────────────────
 
 _STEPS = [
-    ("customers",  "Customer Details"),
-    ("sales_f",    "Sales (F)"),
-    ("sheet1",     "Sheet1"),
-    ("frontend",   "Front End"),
-    ("enquiry_f",  "Enquiry (F)"),
-    ("overdues",   "Overdues"),
+    ("customers", "Customer Details"),
+    ("sales_f", "Sales (F)"),
+    ("sheet1", "Sheet1"),
+    ("frontend", "Front End"),
+    ("enquiry_f", "Enquiry (F)"),
+    ("overdues", "Overdues"),
     ("collection", "Collection"),
 ]
 
 _STEP_FN_MAP = {
-    "customers":  _sync_customers,
-    "sales_f":    _sync_sales_f,
-    "sheet1":     _sync_sheet1,
-    "frontend":   _sync_frontend,
-    "enquiry_f":  _sync_enquiry_f,
-    "overdues":   _sync_overdues,
+    "customers": _sync_customers,
+    "sales_f": _sync_sales_f,
+    "sheet1": _sync_sheet1,
+    "frontend": _sync_frontend,
+    "enquiry_f": _sync_enquiry_f,
+    "overdues": _sync_overdues,
     "collection": _sync_collections,
 }
 
+
 def step_sync(intent: "SyncIntent", *args, **kwargs) -> Dict[str, Any]:
-    """
-    Syncs one section at a time. SyncIntent.cursor_position tracks progress.
-    """
-    cursor   = getattr(intent, "cursor_position", 0) or 0
+    cursor = getattr(intent, "cursor_position", 0) or 0
     sections = resolve_sections()
     sheet_id = _require_env("KAM_SALES_SHEET_ID")
 
@@ -1484,9 +1400,9 @@ def step_sync(intent: "SyncIntent", *args, **kwargs) -> Dict[str, Any]:
     section_key, section_label = _STEPS[cursor]
 
     try:
-        service     = build_sheets_service()
+        service = build_sheets_service()
         tab_mapping = _load_kam_names_tab(service, sheet_id)
-        db_lookup   = _build_user_lookup()
+        db_lookup = _build_user_lookup()
         env_usermap = _load_env_usermap()
         local_cache: Dict[str, Optional[User]] = {}
 
@@ -1497,7 +1413,7 @@ def step_sync(intent: "SyncIntent", *args, **kwargs) -> Dict[str, Any]:
                 stats = fn(service, sheet_id, tab_mapping, db_lookup, env_usermap, local_cache)
 
         next_cursor = cursor + 1
-        is_last     = next_cursor >= len(_STEPS)
+        is_last = next_cursor >= len(_STEPS)
 
         backfilled = 0
         if is_last:
@@ -1511,18 +1427,18 @@ def step_sync(intent: "SyncIntent", *args, **kwargs) -> Dict[str, Any]:
         intent.save(update_fields=["cursor_position", "status"])
 
         return {
-            "done":    intent.status == "COMPLETE",
-            "step":    section_label,
+            "done": intent.status == "COMPLETE",
+            "step": section_label,
             "message": stats.as_message(),
             "stats": {
-                "customers_upserted":   stats.customers_upserted,
-                "sales_upserted":       stats.sales_upserted,
-                "leads_upserted":       stats.leads_upserted,
-                "overdues_upserted":    stats.overdues_upserted,
+                "customers_upserted": stats.customers_upserted,
+                "sales_upserted": stats.sales_upserted,
+                "leads_upserted": stats.leads_upserted,
+                "overdues_upserted": stats.overdues_upserted,
                 "collections_upserted": stats.collections_upserted,
-                "skipped":              stats.skipped,
-                "unknown_kam":          stats.unknown_kam,
-                "kam_backfilled":       backfilled,
+                "skipped": stats.skipped,
+                "unknown_kam": stats.unknown_kam,
+                "kam_backfilled": backfilled,
             },
         }
 

@@ -23,6 +23,7 @@ from django.db import transaction, models, connection
 from django.db.models import Sum, Q, F
 from django.db.utils import OperationalError, ProgrammingError
 from django.http import (
+    Http404,
     HttpRequest,
     HttpResponse,
     HttpResponseForbidden,
@@ -305,9 +306,25 @@ def _visitplan_workflow_schema_ready() -> bool:
 # FIX: Sales (F) is authoritative for qty_mt.
 # ─────────────────────────────────────────────────────────────────────────────
 def _preferred_inv_qs(qs):
-    salesf = qs.filter(source_tab="Sales (F)")
-    return salesf if salesf.exists() else qs
+    """
+    Canonical invoice source selector.
 
+    Priority:
+    1. Sheet1     -> authoritative historical/full invoice source
+    2. Sales (F)  -> fallback when Sheet1 has no rows in the filtered slice
+    3. exclude legacy NULL-source rows from reporting math
+
+    This keeps dashboard, reports and Customer 360 aligned.
+    """
+    sheet1_qs = qs.filter(source_tab="Sheet1")
+    if sheet1_qs.exists():
+        return sheet1_qs
+
+    salesf_qs = qs.filter(source_tab="Sales (F)")
+    if salesf_qs.exists():
+        return salesf_qs
+
+    return qs.exclude(source_tab__isnull=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Token Helpers
@@ -560,13 +577,70 @@ def _is_kam_candidate(u: User, codes: Optional[set] = None) -> bool:
 
 
 def _customer_qs_for_user(user: User):
+    """
+    Canonical customer scope.
+
+    IMPORTANT:
+    Some sheet-synced customers still have customer.kam / primary_kam = NULL,
+    but their InvoiceFact / LeadFact / CollectionTxn rows are correctly mapped
+    to a KAM. If we scope only by customer.kam, those customers disappear from
+    Customer 360 and related screens.
+
+    So visibility is based on:
+    1. direct customer ownership (kam / primary_kam)
+    2. invoice ownership
+    3. lead ownership
+    4. collection ownership
+    """
     qs = Customer.objects.all()
+
     if _is_admin(user):
-        return qs
+        return qs.distinct()
+
     if _is_manager(user):
         kam_ids = _kams_managed_by_manager(user)
-        return qs.filter(Q(kam_id__in=kam_ids) | Q(primary_kam_id__in=kam_ids))
-    return qs.filter(Q(kam=user) | Q(primary_kam=user))
+        if not kam_ids:
+            return qs.none()
+
+        invoice_customer_ids = InvoiceFact.objects.filter(
+            kam_id__in=kam_ids
+        ).values_list("customer_id", flat=True)
+
+        lead_customer_ids = LeadFact.objects.filter(
+            kam_id__in=kam_ids
+        ).values_list("customer_id", flat=True)
+
+        collection_customer_ids = CollectionTxn.objects.filter(
+            kam_id__in=kam_ids
+        ).values_list("customer_id", flat=True)
+
+        return qs.filter(
+            Q(kam_id__in=kam_ids)
+            | Q(primary_kam_id__in=kam_ids)
+            | Q(id__in=invoice_customer_ids)
+            | Q(id__in=lead_customer_ids)
+            | Q(id__in=collection_customer_ids)
+        ).distinct()
+
+    invoice_customer_ids = InvoiceFact.objects.filter(
+        kam=user
+    ).values_list("customer_id", flat=True)
+
+    lead_customer_ids = LeadFact.objects.filter(
+        kam=user
+    ).values_list("customer_id", flat=True)
+
+    collection_customer_ids = CollectionTxn.objects.filter(
+        kam=user
+    ).values_list("customer_id", flat=True)
+
+    return qs.filter(
+        Q(kam=user)
+        | Q(primary_kam=user)
+        | Q(id__in=invoice_customer_ids)
+        | Q(id__in=lead_customer_ids)
+        | Q(id__in=collection_customer_ids)
+    ).distinct()
 
 
 def _visitbatch_qs_for_user(user: User):
@@ -926,27 +1000,42 @@ def _target_setting_for_kam_window(kam_id: int, start_date, end_date_inclusive) 
 
 
 def _get_customer360_range(request: HttpRequest) -> Tuple[str, timezone.datetime.date, timezone.datetime.date, str]:
+    """
+    Customer 360 should default to ALL, not WEEK.
+
+    Reason:
+    Customer 360 is a relationship/history screen. Narrow default windows make
+    valid customers appear to have 'no sales data for this period' even when
+    their invoice history exists.
+    """
     from_s = (request.GET.get("from") or "").strip()
     to_s = (request.GET.get("to") or "").strip()
     from_d = _parse_iso_date(from_s)
     to_d = _parse_iso_date(to_s)
+
     if from_d and to_d and from_d <= to_d:
         return "CUSTOM", from_d, to_d, f"{from_d}..{to_d}"
-    p = (request.GET.get("period") or "week").strip().lower()
+
+    p = (request.GET.get("period") or "all").strip().lower()
     now = timezone.now()
+
     if p == "month":
         sdt, edt, pid = _month_bounds(now)
         return "MONTH", sdt.date(), (edt - timezone.timedelta(days=1)).date(), pid
+
     if p == "quarter":
         sdt, edt, pid = _quarter_bounds(now)
         return "QUARTER", sdt.date(), (edt - timezone.timedelta(days=1)).date(), pid
+
     if p == "year":
         sdt, edt, pid = _year_bounds(now)
         return "YEAR", sdt.date(), (edt - timezone.timedelta(days=1)).date(), pid
-    if p == "all":
-        return "ALL", timezone.datetime(2000, 1, 1).date(), timezone.datetime(2100, 1, 1).date(), "ALL"
-    sdt, edt, pid = _iso_week_bounds(now)
-    return "WEEK", sdt.date(), (edt - timezone.timedelta(days=1)).date(), pid
+
+    if p == "week":
+        sdt, edt, pid = _iso_week_bounds(now)
+        return "WEEK", sdt.date(), (edt - timezone.timedelta(days=1)).date(), pid
+
+    return "ALL", timezone.datetime(2000, 1, 1).date(), timezone.datetime(2100, 1, 1).date(), "ALL"
 
 
 def _add_months(d: date, months: int) -> date:
@@ -2566,42 +2655,49 @@ def customer_search_api(request: HttpRequest) -> JsonResponse:
 @login_required(login_url="/accounts/login/")
 def customer_360_api(request: HttpRequest, customer_id: int) -> JsonResponse:
     """
-    Returns aggregated Customer 360 data for a single customer.
-    GET /kam/api/customer-360/<customer_id>/
-    Role filtering is enforced via _customer_qs_for_user (same as all other views).
+    Lightweight Customer 360 API used by inline widgets.
+
+    Must stay aligned with:
+    - _customer_qs_for_user()
+    - _preferred_inv_qs()
     """
-    # Security: customer must be in the requesting user's allowed scope
     accessible_qs = _customer_qs_for_user(request.user)
     try:
         customer = accessible_qs.get(id=customer_id)
     except Customer.DoesNotExist:
         return JsonResponse({"error": "Customer not found or access denied"}, status=404)
 
-    # ── Collection Plans — filtered by KAM role ──────────────────────
     plans = CollectionPlan.objects.filter(customer_id=customer.id)
     if not _is_admin(request.user):
         if _is_manager(request.user):
             allowed_kam_ids = _kams_managed_by_manager(request.user)
             plans = plans.filter(kam_id__in=allowed_kam_ids)
         else:
-            # KAM: only their own plans (CollectionPlan.kam_id is authoritative)
             plans = plans.filter(kam_id=request.user.id)
 
-    agg = plans.aggregate(
+    plan_agg = plans.aggregate(
         planned=Sum("planned_amount"),
         actual=Sum("actual_amount"),
     )
-    total_planned   = _safe_decimal(agg.get("planned"))
-    total_collected = _safe_decimal(agg.get("actual"))
-    outstanding     = total_planned - total_collected
-
+    total_planned = _safe_decimal(plan_agg.get("planned"))
+    total_collected = _safe_decimal(plan_agg.get("actual"))
+    outstanding = total_planned - total_collected
     last_collection = plans.order_by("-updated_at").first()
 
-    # ── Visits — unscoped (all visits for this customer shown) ──────
-    visits     = VisitPlan.objects.filter(customer_id=customer.id)
+    sales_qs = _preferred_inv_qs(
+        InvoiceFact.objects.filter(customer=customer)
+    )
+    sales_agg = sales_qs.aggregate(
+        total_mt=Sum("qty_mt"),
+        total_value=Sum("invoice_value"),
+    )
+    total_sales_mt = _safe_decimal(sales_agg.get("total_mt"))
+    total_sales_value = _safe_decimal(sales_agg.get("total_value"))
+    last_invoice = sales_qs.order_by("-invoice_date").first()
+
+    visits = VisitPlan.objects.filter(customer_id=customer.id)
     last_visit = visits.order_by("-visit_date").first()
 
-    # ── KAM display name ─────────────────────────────────────────────
     kam_name = ""
     if customer.kam_id:
         try:
@@ -2609,7 +2705,6 @@ def customer_360_api(request: HttpRequest, customer_id: int) -> JsonResponse:
         except Exception:
             pass
 
-    # ── Last collection date (timezone-aware → local) ────────────────
     last_coll_date = None
     if last_collection and last_collection.updated_at:
         try:
@@ -2618,16 +2713,19 @@ def customer_360_api(request: HttpRequest, customer_id: int) -> JsonResponse:
             last_coll_date = str(last_collection.updated_at.date())
 
     data = {
-        "name":               customer.name,
-        "kam":                kam_name,
-        "code":               getattr(customer, "code",   None) or "",
-        "mobile":             getattr(customer, "mobile", None) or "",
-        "total_planned":      float(total_planned),
-        "total_collected":    float(total_collected),
-        "outstanding":        float(outstanding),
+        "name": customer.name,
+        "kam": kam_name,
+        "code": getattr(customer, "code", None) or "",
+        "mobile": getattr(customer, "mobile", None) or "",
+        "total_planned": float(total_planned),
+        "total_collected": float(total_collected),
+        "outstanding": float(outstanding),
+        "total_sales_mt": float(total_sales_mt),
+        "total_sales_value": float(total_sales_value),
+        "last_invoice_date": str(last_invoice.invoice_date) if last_invoice else None,
         "last_collection_date": last_coll_date,
-        "last_visit_date":    str(last_visit.visit_date) if last_visit else None,
-        "total_visits":       visits.count(),
+        "last_visit_date": str(last_visit.visit_date) if last_visit else None,
+        "total_visits": visits.count(),
     }
     return JsonResponse(data)
 
@@ -3180,17 +3278,28 @@ def customers(request: HttpRequest) -> HttpResponse:
     scope_kam_id, scope_label = _resolve_scope(request, request.user)
     customer_id = request.GET.get("id")
 
-    if _is_admin(request.user):
-        base_qs = Customer.objects.all()
-        if scope_kam_id is not None:
-            base_qs = base_qs.filter(Q(kam_id=scope_kam_id) | Q(primary_kam_id=scope_kam_id))
-    elif _is_manager(request.user):
-        allowed = set(_kams_managed_by_manager(request.user))
-        base_qs = Customer.objects.filter(Q(kam_id__in=allowed) | Q(primary_kam_id__in=allowed))
-        if scope_kam_id is not None:
-            base_qs = base_qs.filter(Q(kam_id=scope_kam_id) | Q(primary_kam_id=scope_kam_id))
-    else:
-        base_qs = Customer.objects.filter(Q(kam=request.user) | Q(primary_kam=request.user))
+    base_qs = _customer_qs_for_user(request.user)
+
+    if scope_kam_id is not None:
+        scoped_invoice_customer_ids = InvoiceFact.objects.filter(
+            kam_id=scope_kam_id
+        ).values_list("customer_id", flat=True)
+
+        scoped_lead_customer_ids = LeadFact.objects.filter(
+            kam_id=scope_kam_id
+        ).values_list("customer_id", flat=True)
+
+        scoped_collection_customer_ids = CollectionTxn.objects.filter(
+            kam_id=scope_kam_id
+        ).values_list("customer_id", flat=True)
+
+        base_qs = base_qs.filter(
+            Q(kam_id=scope_kam_id)
+            | Q(primary_kam_id=scope_kam_id)
+            | Q(id__in=scoped_invoice_customer_ids)
+            | Q(id__in=scoped_lead_customer_ids)
+            | Q(id__in=scoped_collection_customer_ids)
+        ).distinct()
 
     customer_list = list(base_qs.order_by("name")[:300])
 
@@ -3235,7 +3344,20 @@ def customers(request: HttpRequest) -> HttpResponse:
             except Exception:
                 risk_ratio = None
 
-        sales = InvoiceFact.objects.filter(customer=customer, invoice_date__gte=start_date, invoice_date__lte=end_date).values("invoice_date__year", "invoice_date__month").annotate(mt=Sum("qty_mt")).order_by("invoice_date__year", "invoice_date__month")
+                sales_base = InvoiceFact.objects.filter(
+            customer=customer,
+            invoice_date__gte=start_date,
+            invoice_date__lte=end_date,
+        )
+
+        sales_qs = _preferred_inv_qs(sales_base)
+
+        sales = (
+            sales_qs
+            .values("invoice_date__year", "invoice_date__month")
+            .annotate(mt=Sum("qty_mt"))
+            .order_by("invoice_date__year", "invoice_date__month")
+        )
         sales_history = [{"year": r["invoice_date__year"], "month": r["invoice_date__month"], "mt": _safe_decimal(r["mt"])} for r in sales]
         colls = CollectionTxn.objects.filter(customer=customer, txn_datetime__date__gte=start_date, txn_datetime__date__lte=end_date).values("txn_datetime__year", "txn_datetime__month").annotate(amount=Sum("amount")).order_by("txn_datetime__year", "txn_datetime__month")
         collections_history = [{"year": r["txn_datetime__year"], "month": r["txn_datetime__month"], "amount": _safe_decimal(r["amount"])} for r in colls]
