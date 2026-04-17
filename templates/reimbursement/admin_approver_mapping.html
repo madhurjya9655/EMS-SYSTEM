@@ -18,119 +18,74 @@
         <form method="post" novalidate>
           {% csrf_token %}
 
-          <!-- ── Email Recipients ───────────────────────────────────── -->
           <h6 class="text-muted text-uppercase small fw-bold mb-2">Email Recipients</h6>
 
           <div class="mb-3">
             {{ settings_form.admin_emails.label_tag }}
             {{ settings_form.admin_emails }}
-            {% if settings_form.admin_emails.help_text %}
-              <div class="form-text">{{ settings_form.admin_emails.help_text }}</div>
-            {% endif %}
-            {% if settings_form.admin_emails.errors %}
-              <div class="text-danger small">{{ settings_form.admin_emails.errors }}</div>
-            {% endif %}
+            {% if settings_form.admin_emails.errors %}<div class="text-danger small">{{ settings_form.admin_emails.errors }}</div>{% endif %}
           </div>
-
           <div class="mb-3">
             {{ settings_form.finance_emails.label_tag }}
             {{ settings_form.finance_emails }}
-            {% if settings_form.finance_emails.help_text %}
-              <div class="form-text">{{ settings_form.finance_emails.help_text }}</div>
-            {% endif %}
-            {% if settings_form.finance_emails.errors %}
-              <div class="text-danger small">{{ settings_form.finance_emails.errors }}</div>
-            {% endif %}
+            {% if settings_form.finance_emails.errors %}<div class="text-danger small">{{ settings_form.finance_emails.errors }}</div>{% endif %}
           </div>
-
           <div class="mb-3">
             {{ settings_form.management_emails.label_tag }}
             {{ settings_form.management_emails }}
-            {% if settings_form.management_emails.help_text %}
-              <div class="form-text">{{ settings_form.management_emails.help_text }}</div>
-            {% endif %}
-            {% if settings_form.management_emails.errors %}
-              <div class="text-danger small">{{ settings_form.management_emails.errors }}</div>
-            {% endif %}
+            {% if settings_form.management_emails.errors %}<div class="text-danger small">{{ settings_form.management_emails.errors }}</div>{% endif %}
           </div>
 
           <hr class="my-3">
-
-          <!-- ── Workflow & Policy ──────────────────────────────────── -->
           <h6 class="text-muted text-uppercase small fw-bold mb-2">Workflow &amp; Policy</h6>
 
           <div class="form-check mb-2">
             {{ settings_form.require_management_approval }}
             {{ settings_form.require_management_approval.label_tag }}
-            {% if settings_form.require_management_approval.errors %}
-              <div class="text-danger small">{{ settings_form.require_management_approval.errors }}</div>
-            {% endif %}
           </div>
-
           <div class="form-check mb-2">
             {{ settings_form.daily_digest_enabled }}
             {{ settings_form.daily_digest_enabled.label_tag }}
           </div>
-
           <div class="mb-3">
             {{ settings_form.digest_hour_local.label_tag }}
             {{ settings_form.digest_hour_local }}
-            {% if settings_form.digest_hour_local.errors %}
-              <div class="text-danger small">{{ settings_form.digest_hour_local.errors }}</div>
-            {% endif %}
+            {% if settings_form.digest_hour_local.errors %}<div class="text-danger small">{{ settings_form.digest_hour_local.errors }}</div>{% endif %}
           </div>
 
           <hr class="my-3">
-
-          <!-- ── Approval Chain (Email Routing) ─────────────────────── -->
           <h6 class="text-muted text-uppercase small fw-bold mb-2">Approval Chain (Email Routing)</h6>
 
           <div class="mb-3">
             {{ settings_form.approver_level1_email.label_tag }}
             {{ settings_form.approver_level1_email }}
-            {% if settings_form.approver_level1_email.errors %}
-              <div class="text-danger small">{{ settings_form.approver_level1_email.errors }}</div>
-            {% endif %}
+            {% if settings_form.approver_level1_email.errors %}<div class="text-danger small">{{ settings_form.approver_level1_email.errors }}</div>{% endif %}
           </div>
-
           <div class="mb-3">
             {{ settings_form.approver_level2_email.label_tag }}
             {{ settings_form.approver_level2_email }}
-            {% if settings_form.approver_level2_email.errors %}
-              <div class="text-danger small">{{ settings_form.approver_level2_email.errors }}</div>
-            {% endif %}
+            {% if settings_form.approver_level2_email.errors %}<div class="text-danger small">{{ settings_form.approver_level2_email.errors }}</div>{% endif %}
           </div>
-
           <div class="mb-3">
             {{ settings_form.approver_cc_emails.label_tag }}
             {{ settings_form.approver_cc_emails }}
-            {% if settings_form.approver_cc_emails.errors %}
-              <div class="text-danger small">{{ settings_form.approver_cc_emails.errors }}</div>
-            {% endif %}
+            {% if settings_form.approver_cc_emails.errors %}<div class="text-danger small">{{ settings_form.approver_cc_emails.errors }}</div>{% endif %}
           </div>
-
           <div class="mb-3">
             {{ settings_form.approver_bcc_emails.label_tag }}
             {{ settings_form.approver_bcc_emails }}
-            {% if settings_form.approver_bcc_emails.errors %}
-              <div class="text-danger small">{{ settings_form.approver_bcc_emails.errors }}</div>
-            {% endif %}
+            {% if settings_form.approver_bcc_emails.errors %}<div class="text-danger small">{{ settings_form.approver_bcc_emails.errors }}</div>{% endif %}
           </div>
 
           <hr class="my-3">
-
-          <!-- ── NEW: Submission Notification Recipients ────────────── -->
-          <h6 class="text-muted text-uppercase small fw-bold mb-1">
-            Submission Notification
-          </h6>
+          <h6 class="text-muted text-uppercase small fw-bold mb-1">Submission Notification</h6>
           <p class="text-muted small mb-3">
-            When an employee submits a reimbursement, a notification email is sent with
-            these recipients. <strong>TO</strong> = primary approver(s).
-            <strong>CC</strong> = observers / HR.
+            Sent when an employee submits a new reimbursement.
+            <strong>TO</strong> = primary approver. <strong>CC</strong> = observers.
           </p>
 
           <div class="mb-3">
-            <label class="form-label fw-semibold" for="{{ settings_form.submitted_notify_to_emails.id_for_label }}">
+            <label class="form-label fw-semibold">
               {{ settings_form.submitted_notify_to_emails.label }}
               <span class="badge bg-primary ms-1" style="font-size:10px;">TO</span>
             </label>
@@ -144,7 +99,7 @@
           </div>
 
           <div class="mb-3">
-            <label class="form-label fw-semibold" for="{{ settings_form.submitted_notify_cc_emails.id_for_label }}">
+            <label class="form-label fw-semibold">
               {{ settings_form.submitted_notify_cc_emails.label }}
               <span class="badge bg-secondary ms-1" style="font-size:10px;">CC</span>
             </label>
@@ -156,7 +111,6 @@
               <div class="text-danger small">{{ settings_form.submitted_notify_cc_emails.errors }}</div>
             {% endif %}
           </div>
-          <!-- ── end Submission Notification ───────────────────────── -->
 
           <button type="submit" name="save_settings" value="1" class="btn btn-primary w-100 mt-1">
             Save Settings
@@ -166,7 +120,7 @@
     </div>
 
     <!-- ================================================================
-         BULK APPLY CARD
+         BULK APPLY CARD  (now uses multi-select)
     ================================================================ -->
     <div class="card mb-3">
       <div class="card-header fw-semibold">Bulk Apply Manager / Finance</div>
@@ -175,33 +129,30 @@
           {% csrf_token %}
           {{ bulk_form.non_field_errors }}
 
-          <div class="form-check mb-2">
+          <div class="form-check mb-1">
             {{ bulk_form.apply_manager_to_all }}
             {{ bulk_form.apply_manager_to_all.label_tag }}
-            {% if bulk_form.apply_manager_to_all.errors %}
-              <div class="text-danger small">{{ bulk_form.apply_manager_to_all.errors }}</div>
-            {% endif %}
           </div>
           <div class="mb-3">
-            {{ bulk_form.manager_for_all.label_tag }}
-            {{ bulk_form.manager_for_all }}
-            {% if bulk_form.manager_for_all.errors %}
-              <div class="text-danger small">{{ bulk_form.manager_for_all.errors }}</div>
+            {{ bulk_form.managers_for_all.label_tag }}
+            {{ bulk_form.managers_for_all }}
+            {% if bulk_form.managers_for_all.help_text %}
+              <div class="form-text text-muted small">{{ bulk_form.managers_for_all.help_text }}</div>
             {% endif %}
+            {% if bulk_form.managers_for_all.errors %}<div class="text-danger small">{{ bulk_form.managers_for_all.errors }}</div>{% endif %}
           </div>
-          <div class="form-check mb-2">
+
+          <div class="form-check mb-1">
             {{ bulk_form.apply_finance_to_all }}
             {{ bulk_form.apply_finance_to_all.label_tag }}
-            {% if bulk_form.apply_finance_to_all.errors %}
-              <div class="text-danger small">{{ bulk_form.apply_finance_to_all.errors }}</div>
-            {% endif %}
           </div>
           <div class="mb-3">
             {{ bulk_form.finance_for_all.label_tag }}
             {{ bulk_form.finance_for_all }}
-            {% if bulk_form.finance_for_all.errors %}
-              <div class="text-danger small">{{ bulk_form.finance_for_all.errors }}</div>
+            {% if bulk_form.finance_for_all.help_text %}
+              <div class="form-text text-muted small">{{ bulk_form.finance_for_all.help_text }}</div>
             {% endif %}
+            {% if bulk_form.finance_for_all.errors %}<div class="text-danger small">{{ bulk_form.finance_for_all.errors }}</div>{% endif %}
           </div>
 
           <button type="submit" name="apply_bulk" value="1" class="btn btn-outline-primary w-100">
@@ -214,11 +165,16 @@
   </div>{# /col-md-4 #}
 
   <!-- ================================================================
-       PER-EMPLOYEE MAPPING TABLE
+       PER-EMPLOYEE MAPPING TABLE  (multi-select dropdowns)
   ================================================================ -->
   <div class="col-md-8">
     <div class="card mb-3">
-      <div class="card-header fw-semibold">Per-Employee Approver Mapping</div>
+      <div class="card-header fw-semibold d-flex align-items-center gap-2">
+        Per-Employee Approver Mapping
+        <span class="badge bg-info text-dark fw-normal" style="font-size:11px;">
+          Hold Ctrl / ⌘ to select multiple
+        </span>
+      </div>
       <div class="card-body">
         <form method="post" novalidate>
           {% csrf_token %}
@@ -226,10 +182,16 @@
             <table class="table table-sm table-hover align-middle">
               <thead class="table-light">
                 <tr>
-                  <th>Employee</th>
-                  <th>Role</th>
-                  <th>Manager</th>
-                  <th>Finance</th>
+                  <th style="min-width:160px;">Employee</th>
+                  <th style="min-width:80px;">Role</th>
+                  <th style="min-width:180px;">
+                    Manager(s)
+                    <div class="text-muted fw-normal" style="font-size:10px;">Ctrl/⌘ = multi-select</div>
+                  </th>
+                  <th style="min-width:180px;">
+                    Finance User(s)
+                    <div class="text-muted fw-normal" style="font-size:10px;">Ctrl/⌘ = multi-select</div>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -237,38 +199,71 @@
                 {% with user=row.user mapping=row.mapping %}
                 <tr>
                   <td>
-                    {{ user.get_full_name|default:user.username }}
-                    <div class="small text-muted">{{ user.email }}</div>
+                    <div class="fw-semibold small">{{ user.get_full_name|default:user.username }}</div>
+                    <div class="text-muted" style="font-size:11px;">{{ user.email }}</div>
                   </td>
                   <td>
                     {% if user.profile %}
-                      {{ user.profile.role }}
+                      <span class="badge bg-secondary fw-normal">{{ user.profile.role }}</span>
                     {% else %}
-                      <span class="text-muted small">-</span>
+                      <span class="text-muted small">–</span>
                     {% endif %}
                   </td>
+
+                  <!-- ── Managers multi-select ── -->
                   <td>
-                    <select name="manager_{{ user.id }}" class="form-select form-select-sm">
-                      <option value="">-- None --</option>
+                    <select
+                      name="managers_{{ user.id }}"
+                      class="form-select form-select-sm"
+                      multiple
+                      size="3"
+                      title="Hold Ctrl or ⌘ to select multiple managers"
+                    >
                       {% for u in all_users_for_select %}
                       <option value="{{ u.id }}"
-                        {% if mapping and mapping.manager and mapping.manager.id == u.id %}selected{% endif %}>
+                        {% if mapping and u in mapping.managers.all %}selected{% endif %}>
                         {{ u.get_full_name|default:u.username }}
                       </option>
                       {% endfor %}
                     </select>
+                    {% if mapping %}
+                      {% with mgr_count=mapping.managers.count %}
+                      {% if mgr_count > 0 %}
+                        <div class="text-muted mt-1" style="font-size:10px;">
+                          {{ mgr_count }} selected
+                        </div>
+                      {% endif %}
+                      {% endwith %}
+                    {% endif %}
                   </td>
+
+                  <!-- ── Finance Users multi-select ── -->
                   <td>
-                    <select name="finance_{{ user.id }}" class="form-select form-select-sm">
-                      <option value="">-- None --</option>
+                    <select
+                      name="finance_users_{{ user.id }}"
+                      class="form-select form-select-sm"
+                      multiple
+                      size="3"
+                      title="Hold Ctrl or ⌘ to select multiple finance users"
+                    >
                       {% for u in all_users_for_select %}
                       <option value="{{ u.id }}"
-                        {% if mapping and mapping.finance and mapping.finance.id == u.id %}selected{% endif %}>
+                        {% if mapping and u in mapping.finance_users.all %}selected{% endif %}>
                         {{ u.get_full_name|default:u.username }}
                       </option>
                       {% endfor %}
                     </select>
+                    {% if mapping %}
+                      {% with fin_count=mapping.finance_users.count %}
+                      {% if fin_count > 0 %}
+                        <div class="text-muted mt-1" style="font-size:10px;">
+                          {{ fin_count }} selected
+                        </div>
+                      {% endif %}
+                      {% endwith %}
+                    {% endif %}
                   </td>
+
                 </tr>
                 {% endwith %}
                 {% empty %}
@@ -279,13 +274,38 @@
               </tbody>
             </table>
           </div>
-          <button type="submit" name="save_mappings" value="1" class="btn btn-primary mt-2">
-            Save Mappings
-          </button>
+
+          <div class="d-flex align-items-center gap-3 mt-2">
+            <button type="submit" name="save_mappings" value="1" class="btn btn-primary">
+              Save Mappings
+            </button>
+            <span class="text-muted small">
+              To deselect all for a user, hold Ctrl/⌘ and click all selected entries,
+              or use the "– None –" option if available.
+            </span>
+          </div>
         </form>
       </div>
     </div>
   </div>{# /col-md-8 #}
 
 </div>{# /row #}
+
+{# ── Inline JS: update "N selected" counter live as user changes selections ── #}
+<script>
+(function () {
+  document.querySelectorAll('select[multiple]').forEach(function (sel) {
+    var counter = sel.nextElementSibling;
+    function updateCounter() {
+      var n = sel.selectedOptions.length;
+      if (counter && counter.style !== undefined) {
+        counter.textContent = n > 0 ? n + ' selected' : '';
+        counter.style.display = n > 0 ? '' : 'none';
+      }
+    }
+    sel.addEventListener('change', updateCounter);
+    updateCounter();
+  });
+})();
+</script>
 {% endblock %}

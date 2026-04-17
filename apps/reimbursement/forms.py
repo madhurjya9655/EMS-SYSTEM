@@ -1,4 +1,5 @@
-#E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\reimbursement\forms.py
+# FILE: apps/reimbursement/forms.py
+# UPDATED: ApproverMappingForm, ApproverMappingBulkForm updated for M2M managers/finance_users
 from __future__ import annotations
 
 import os
@@ -442,13 +443,6 @@ class EmployeeRejectedBillEditForm(forms.ModelForm):
 # ---------------------------------------------------------------------------
 
 class ReimbursementSettingsForm(forms.ModelForm):
-    """
-    Admin form to manage reimbursement email recipients and policy flags.
-
-    UPDATED: includes submitted_notify_to_emails and submitted_notify_cc_emails
-    so Admin can control who gets notified when an employee submits a request.
-    """
-
     class Meta:
         model = ReimbursementSettings
         fields = [
@@ -458,36 +452,25 @@ class ReimbursementSettingsForm(forms.ModelForm):
             "require_management_approval",
             "daily_digest_enabled",
             "digest_hour_local",
-            # Approval chain routing
             "approver_level1_email",
             "approver_level2_email",
             "approver_cc_emails",
             "approver_bcc_emails",
-            # NEW: submission notification recipients
             "submitted_notify_to_emails",
             "submitted_notify_cc_emails",
         ]
         widgets = {
             "admin_emails": forms.Textarea(
-                attrs={
-                    "class": "form-control",
-                    "rows": 2,
-                    "placeholder": "admin1@example.com, admin2@example.com",
-                }
+                attrs={"class": "form-control", "rows": 2,
+                       "placeholder": "admin1@example.com, admin2@example.com"}
             ),
             "finance_emails": forms.Textarea(
-                attrs={
-                    "class": "form-control",
-                    "rows": 2,
-                    "placeholder": "finance1@example.com, finance2@example.com",
-                }
+                attrs={"class": "form-control", "rows": 2,
+                       "placeholder": "finance1@example.com, finance2@example.com"}
             ),
             "management_emails": forms.Textarea(
-                attrs={
-                    "class": "form-control",
-                    "rows": 2,
-                    "placeholder": "mgmt1@example.com, mgmt2@example.com",
-                }
+                attrs={"class": "form-control", "rows": 2,
+                       "placeholder": "mgmt1@example.com, mgmt2@example.com"}
             ),
             "require_management_approval": forms.CheckboxInput(
                 attrs={"class": "form-check-input"}
@@ -499,45 +482,28 @@ class ReimbursementSettingsForm(forms.ModelForm):
                 attrs={"class": "form-control", "min": 0, "max": 23}
             ),
             "approver_level1_email": forms.EmailInput(
-                attrs={
-                    "class": "form-control",
-                    "placeholder": "Primary approver e.g. vilas@blueoceansteels.com",
-                }
+                attrs={"class": "form-control",
+                       "placeholder": "Primary approver e.g. vilas@blueoceansteels.com"}
             ),
             "approver_level2_email": forms.EmailInput(
-                attrs={
-                    "class": "form-control",
-                    "placeholder": "Next approver e.g. akshay@blueoceansteels.com",
-                }
+                attrs={"class": "form-control",
+                       "placeholder": "Next approver e.g. akshay@blueoceansteels.com"}
             ),
             "approver_cc_emails": forms.Textarea(
-                attrs={
-                    "class": "form-control",
-                    "rows": 2,
-                    "placeholder": "Comma-separated CC emails e.g. amreen@blueoceansteels.com",
-                }
+                attrs={"class": "form-control", "rows": 2,
+                       "placeholder": "Comma-separated CC emails e.g. amreen@blueoceansteels.com"}
             ),
             "approver_bcc_emails": forms.Textarea(
-                attrs={
-                    "class": "form-control",
-                    "rows": 2,
-                    "placeholder": "Comma-separated BCC emails",
-                }
+                attrs={"class": "form-control", "rows": 2,
+                       "placeholder": "Comma-separated BCC emails"}
             ),
-            # NEW widgets
             "submitted_notify_to_emails": forms.Textarea(
-                attrs={
-                    "class": "form-control",
-                    "rows": 2,
-                    "placeholder": "TO: e.g. vilas@blueoceansteels.com",
-                }
+                attrs={"class": "form-control", "rows": 2,
+                       "placeholder": "TO: e.g. vilas@blueoceansteels.com"}
             ),
             "submitted_notify_cc_emails": forms.Textarea(
-                attrs={
-                    "class": "form-control",
-                    "rows": 2,
-                    "placeholder": "CC: e.g. amreen@blueoceansteels.com, akshay@blueoceansteels.com",
-                }
+                attrs={"class": "form-control", "rows": 2,
+                       "placeholder": "CC: e.g. amreen@blueoceansteels.com, akshay@blueoceansteels.com"}
             ),
         }
         labels = {
@@ -564,41 +530,109 @@ class ReimbursementSettingsForm(forms.ModelForm):
         return hour
 
 
+# ---------------------------------------------------------------------------
+# ApproverMappingForm — UPDATED for M2M managers + finance_users
+# ---------------------------------------------------------------------------
+
 class ApproverMappingForm(forms.ModelForm):
+    """
+    Per-employee mapping form. Both managers and finance_users are M2M —
+    hold Ctrl/⌘ to select multiple in the UI.
+    """
+
     class Meta:
         model = ReimbursementApproverMapping
-        fields = ["employee", "manager", "finance"]
+        fields = ["employee", "managers", "finance_users"]
         widgets = {
             "employee": forms.Select(attrs={"class": "form-select"}),
-            "manager": forms.Select(attrs={"class": "form-select"}),
-            "finance": forms.Select(attrs={"class": "form-select"}),
+            # UPDATED: SelectMultiple for M2M
+            "managers": forms.SelectMultiple(
+                attrs={
+                    "class": "form-select",
+                    "size": "4",
+                    "title": "Hold Ctrl / ⌘ to select multiple",
+                }
+            ),
+            "finance_users": forms.SelectMultiple(
+                attrs={
+                    "class": "form-select",
+                    "size": "4",
+                    "title": "Hold Ctrl / ⌘ to select multiple",
+                }
+            ),
+        }
+        labels = {
+            "managers": "Manager(s)",
+            "finance_users": "Finance User(s)",
+        }
+        help_texts = {
+            "managers": "Hold Ctrl / ⌘ to select multiple.",
+            "finance_users": "Hold Ctrl / ⌘ to select multiple.",
         }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        active_qs = User.objects.filter(is_active=True).order_by(
+            "first_name", "last_name", "username"
+        )
+        self.fields["managers"].queryset = active_qs
+        self.fields["finance_users"].queryset = active_qs
+
+
+# ---------------------------------------------------------------------------
+# ApproverMappingBulkForm — UPDATED for M2M managers + finance_users
+# ---------------------------------------------------------------------------
 
 class ApproverMappingBulkForm(forms.Form):
+    """
+    Admin helper: apply the same managers / finance users to ALL employees at once.
+    Both fields are ModelMultipleChoiceField — hold Ctrl/⌘ to select multiple.
+    """
+
     apply_manager_to_all = forms.BooleanField(
         required=False,
         initial=False,
         widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
-        label="Apply manager to all",
+        label="Apply managers to all employees",
     )
+    # UPDATED: ModelMultipleChoiceField + SelectMultiple
+    managers_for_all = forms.ModelMultipleChoiceField(
+        queryset=User.objects.filter(is_active=True).order_by(
+            "first_name", "last_name", "username"
+        ),
+        required=False,
+        widget=forms.SelectMultiple(
+            attrs={
+                "class": "form-select",
+                "size": "5",
+                "title": "Hold Ctrl / ⌘ to select multiple",
+            }
+        ),
+        label="Manager(s) for all",
+        help_text="Hold Ctrl / ⌘ to select multiple.",
+    )
+
     apply_finance_to_all = forms.BooleanField(
         required=False,
         initial=False,
         widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
-        label="Apply finance to all",
+        label="Apply finance users to all employees",
     )
-    manager_for_all = forms.ModelChoiceField(
-        queryset=User.objects.filter(is_active=True).order_by("first_name", "last_name", "username"),
+    # UPDATED: ModelMultipleChoiceField + SelectMultiple
+    finance_for_all = forms.ModelMultipleChoiceField(
+        queryset=User.objects.filter(is_active=True).order_by(
+            "first_name", "last_name", "username"
+        ),
         required=False,
-        widget=forms.Select(attrs={"class": "form-select"}),
-        label="Manager (for all)",
-    )
-    finance_for_all = forms.ModelChoiceField(
-        queryset=User.objects.filter(is_active=True).order_by("first_name", "last_name", "username"),
-        required=False,
-        widget=forms.Select(attrs={"class": "form-select"}),
-        label="Finance (for all)",
+        widget=forms.SelectMultiple(
+            attrs={
+                "class": "form-select",
+                "size": "5",
+                "title": "Hold Ctrl / ⌘ to select multiple",
+            }
+        ),
+        label="Finance user(s) for all",
+        help_text="Hold Ctrl / ⌘ to select multiple.",
     )
 
     def __init__(self, *args, user=None, **kwargs):
@@ -606,13 +640,17 @@ class ApproverMappingBulkForm(forms.Form):
         super().__init__(*args, **kwargs)
 
     def save(self) -> int:
+        """
+        Apply selected managers/finance users to all active employees via M2M .set().
+        Returns number of mapping rows updated.
+        """
         if not hasattr(self, "cleaned_data"):
             raise ValueError("Call is_valid() before save().")
 
         apply_mgr = self.cleaned_data.get("apply_manager_to_all")
         apply_fin = self.cleaned_data.get("apply_finance_to_all")
-        mgr = self.cleaned_data.get("manager_for_all")
-        fin = self.cleaned_data.get("finance_for_all")
+        managers_qs = self.cleaned_data.get("managers_for_all")   # QuerySet or empty
+        finance_qs = self.cleaned_data.get("finance_for_all")     # QuerySet or empty
 
         if not apply_mgr and not apply_fin:
             return 0
@@ -623,33 +661,57 @@ class ApproverMappingBulkForm(forms.Form):
         for emp in employees:
             mapping, _ = ReimbursementApproverMapping.objects.get_or_create(employee=emp)
             changed = False
-            if apply_mgr and mgr and mapping.manager_id != getattr(mgr, "id", None):
-                mapping.manager = mgr
+
+            if apply_mgr and managers_qs is not None:
+                mapping.managers.set(managers_qs)
                 changed = True
-            if apply_fin and fin and mapping.finance_id != getattr(fin, "id", None):
-                mapping.finance = fin
+
+            if apply_fin and finance_qs is not None:
+                mapping.finance_users.set(finance_qs)
                 changed = True
+
             if changed:
-                mapping.save(update_fields=["manager", "finance"])
                 processed += 1
+
         return processed
 
 
 class ApproverDefaultsForm(forms.Form):
-    default_manager = forms.ModelChoiceField(
-        queryset=User.objects.filter(is_active=True).order_by("first_name", "last_name", "username"),
+    """
+    Small helper form at the top of the mapping page.
+    UPDATED: both fields are now ModelMultipleChoiceField.
+    """
+    default_managers = forms.ModelMultipleChoiceField(
+        queryset=User.objects.filter(is_active=True).order_by(
+            "first_name", "last_name", "username"
+        ),
         required=False,
-        widget=forms.Select(attrs={"class": "form-select form-select-sm"}),
-        label="Default Manager",
+        widget=forms.SelectMultiple(
+            attrs={
+                "class": "form-select form-select-sm",
+                "size": "4",
+                "title": "Hold Ctrl / ⌘ to select multiple",
+            }
+        ),
+        label="Default Manager(s)",
     )
-    default_finance = forms.ModelChoiceField(
-        queryset=User.objects.filter(is_active=True).order_by("first_name", "last_name", "username"),
+    default_finance_users = forms.ModelMultipleChoiceField(
+        queryset=User.objects.filter(is_active=True).order_by(
+            "first_name", "last_name", "username"
+        ),
         required=False,
-        widget=forms.Select(attrs={"class": "form-select form-select-sm"}),
-        label="Default Finance",
+        widget=forms.SelectMultiple(
+            attrs={
+                "class": "form-select form-select-sm",
+                "size": "4",
+                "title": "Hold Ctrl / ⌘ to select multiple",
+            }
+        ),
+        label="Default Finance User(s)",
     )
 
 
+# UPDATED: formset uses new ApproverMappingForm which references M2M fields
 ApproverMappingFormSet = forms.modelformset_factory(
     ReimbursementApproverMapping,
     form=ApproverMappingForm,
