@@ -32,10 +32,6 @@ class DateInput(forms.DateInput):
 
 
 def _allowed_exts() -> List[str]:
-    """
-    Allowed file extensions for receipts / bills. Comes from settings so
-    Admins can adjust without code changes.
-    """
     exts = getattr(settings, "REIMBURSEMENT_ALLOWED_EXTENSIONS", None)
     if not exts:
         exts = [".jpg", ".jpeg", ".png", ".pdf", ".xls", ".xlsx"]
@@ -45,17 +41,12 @@ def _allowed_exts() -> List[str]:
 
 
 def _accept_attr() -> str:
-    """
-    Browser file picker 'accept' attribute built from allowed extensions.
-    """
-    # Ensure each item starts with a dot and is lowercase
     cleaned = []
     for e in _allowed_exts():
         e = e.strip().lower()
         if not e:
             continue
         cleaned.append(e if e.startswith(".") else f".{e}")
-    # Keep order stable but dedup
     seen = set()
     out = []
     for e in cleaned:
@@ -70,11 +61,6 @@ def _max_file_mb() -> int:
 
 
 def _validate_uploaded_file(f, *, field_label: str = "file") -> None:
-    """
-    Lightweight server-side validator for uploaded receipt/bill files:
-    - Extension must be one of the allowed list
-    - Size must be <= REIMBURSEMENT_MAX_RECEIPT_MB
-    """
     if not f:
         return
     name = getattr(f, "name", "")
@@ -100,13 +86,6 @@ def _validate_uploaded_file(f, *, field_label: str = "file") -> None:
 # ---------------------------------------------------------------------------
 
 class ExpenseItemForm(forms.ModelForm):
-    """
-    Form for employees to upload individual expenses (bills).
-
-    - Vendor field is kept in the model (for old data) but hidden from the form.
-    - New field gst_type: GST Bill / Non GST Bill.
-    """
-
     class Meta:
         model = ExpenseItem
         fields = [
@@ -131,7 +110,6 @@ class ExpenseItemForm(forms.ModelForm):
                     "placeholder": "Amount",
                 }
             ),
-            # UI text fixed: not optional
             "description": forms.Textarea(
                 attrs={
                     "class": "form-control",
@@ -143,35 +121,24 @@ class ExpenseItemForm(forms.ModelForm):
                 attrs={"class": "form-check-input"},
                 choices=GST_TYPE_CHOICES,
             ),
-            # 'accept' is set dynamically in __init__
             "receipt_file": forms.FileInput(
                 attrs={"class": "form-control"}
             ),
         }
 
     def __init__(self, *args, **kwargs):
-        """
-        Optionally accept `user` kwarg to pre-fill sensible defaults later, if needed.
-        """
         self.user = kwargs.pop("user", None)
         super().__init__(*args, **kwargs)
 
-        # UI labels / defaults
         self.fields["category"].label = "Type of Expense"
         self.fields["gst_type"].label = "Bill Type"
         self.fields["gst_type"].initial = "non_gst"
-
-        # ✅ Align with domain rule: bill description is mandatory downstream
         self.fields["description"].required = True
-        # Make the label explicit so templates show it clearly
         self.fields["description"].label = "Description (required)"
         try:
-            # ensure placeholder is not stale if widget was overridden elsewhere
             self.fields["description"].widget.attrs["placeholder"] = "Describe the bill (required)"
         except Exception:
             pass
-
-        # Keep browser picker in sync with backend-allowed extensions
         try:
             self.fields["receipt_file"].widget.attrs["accept"] = _accept_attr()
         except Exception:
@@ -184,9 +151,6 @@ class ExpenseItemForm(forms.ModelForm):
 
 
 class ExpenseStatusFilterForm(forms.Form):
-    """
-    Simple filter for the Expense Inbox list.
-    """
     STATUS_CHOICES = [("", "All")] + list(ExpenseItem.Status.choices)
 
     status = forms.ChoiceField(
@@ -201,14 +165,6 @@ class ExpenseStatusFilterForm(forms.Form):
 # ---------------------------------------------------------------------------
 
 class ReimbursementCreateForm(forms.ModelForm):
-    """
-    Employee-facing form to submit a new ReimbursementRequest from multiple ExpenseItems.
-
-    NOTE:
-    - Manager / Finance approvers are fully controlled by Admin via
-      ReimbursementApproverMapping; employees cannot change them here.
-    """
-
     expense_items = forms.ModelMultipleChoiceField(
         queryset=ExpenseItem.objects.none(),
         widget=forms.CheckboxSelectMultiple,
@@ -229,16 +185,12 @@ class ReimbursementCreateForm(forms.ModelForm):
 
     class Meta:
         model = ReimbursementRequest
-        fields = []  # We control fields explicitly above
+        fields = []
 
     def __init__(self, *args, **kwargs):
-        """
-        Requires `user` kwarg (employee submitting).
-        """
         self.user = kwargs.pop("user", None)
         super().__init__(*args, **kwargs)
 
-        # Limit selectable expenses to the employee's own, still usable items
         if self.user is not None:
             self.fields["expense_items"].queryset = ExpenseItem.objects.filter(
                 created_by=self.user,
@@ -251,7 +203,6 @@ class ReimbursementCreateForm(forms.ModelForm):
         qs = self.cleaned_data.get("expense_items")
         if not qs or qs.count() == 0:
             raise forms.ValidationError("Please select at least one expense.")
-        # Ensure all items belong to the user
         if self.user is not None:
             for item in qs:
                 if item.created_by_id != self.user.id:
@@ -260,13 +211,6 @@ class ReimbursementCreateForm(forms.ModelForm):
 
 
 class RequestFilterForm(forms.Form):
-    """
-    Filter for 'My Requests' and summary pages.
-
-    NEW POLICY:
-    - Remove time-based filters (from_date, to_date).
-    - Keep only status.
-    """
     STATUS_CHOICES = [("", "All statuses")] + list(ReimbursementRequest.Status.choices)
 
     status = forms.ChoiceField(
@@ -274,9 +218,6 @@ class RequestFilterForm(forms.Form):
         required=False,
         widget=forms.Select(attrs={"class": "form-select form-select-sm"}),
     )
-    # Time-based filters removed per requirement:
-    # from_date = forms.DateField(...)
-    # to_date   = forms.DateField(...)
 
 
 # ---------------------------------------------------------------------------
@@ -299,9 +240,7 @@ class ManagerApprovalForm(forms.ModelForm):
 
     class Meta:
         model = ReimbursementRequest
-        fields = [
-            "manager_comment",
-        ]
+        fields = ["manager_comment"]
         widgets = {
             "manager_comment": forms.Textarea(
                 attrs={
@@ -329,9 +268,7 @@ class ManagementApprovalForm(forms.ModelForm):
 
     class Meta:
         model = ReimbursementRequest
-        fields = [
-            "management_comment",
-        ]
+        fields = ["management_comment"]
         widgets = {
             "management_comment": forms.Textarea(
                 attrs={
@@ -357,24 +294,17 @@ class ManagementApprovalForm(forms.ModelForm):
 
 
 class FinanceProcessForm(forms.ModelForm):
-    """
-    Finance review + mark-paid form.
-    """
-
     mark_paid = forms.BooleanField(
         required=False,
         initial=False,
         widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
-        label="Mark as Claim Settled",  # renamed for Finance language
+        label="Mark as Claim Settled",
         help_text="Tick this box to mark the reimbursement as Claim Settled (Paid).",
     )
 
     class Meta:
         model = ReimbursementRequest
-        fields = [
-            "finance_note",
-            "finance_payment_reference",
-        ]
+        fields = ["finance_note", "finance_payment_reference"]
         widgets = {
             "finance_note": forms.Textarea(
                 attrs={
@@ -393,17 +323,13 @@ class FinanceProcessForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # ✅ Gate the checkbox using the model's single source-of-truth guard,
-        #    not a raw status == APPROVED check.
         try:
             ref = (self.instance.finance_payment_reference or "") if self.instance else ""
             can, msg = self.instance.can_mark_paid(ref) if self.instance else (False, "")
             if not can and "reference" not in (msg or "").lower():
                 self.fields["mark_paid"].disabled = True
-                # Keep a concise hint without exposing backend messages here.
                 self.fields["mark_paid"].help_text = "Available after approvals, during Finance review."
         except Exception:
-            # Never break rendering
             pass
 
     def clean(self):
@@ -411,25 +337,17 @@ class FinanceProcessForm(forms.ModelForm):
         mark_paid = cleaned.get("mark_paid")
         ref = (cleaned.get("finance_payment_reference") or "").strip()
 
-        # Use the model's single source of truth
         if mark_paid:
             ok, msg = self.instance.can_mark_paid(ref)
             if not ok:
-                # Attach the message to the most relevant field for better UX
                 if "reference" in msg.lower():
                     self.add_error("finance_payment_reference", msg)
                 else:
-                    # Non-field and checkbox error to make it obvious
                     self.add_error("mark_paid", msg)
                     self.add_error(None, msg)
         return cleaned
 
 
-# ---------------------------
-# Finance verification (NEW)
-# ---------------------------
-
-# IMPORTANT: values align with FinanceVerifyView.post which accepts "verify" / "rejected"
 _FINANCE_VERIFY_CHOICES = [
     ("verify", "Verify & Send to Manager"),
     ("rejected", "Reject"),
@@ -437,10 +355,6 @@ _FINANCE_VERIFY_CHOICES = [
 
 
 class FinanceVerifyForm(forms.ModelForm):
-    """
-    First step Finance verification before manager approval.
-    """
-
     decision = forms.ChoiceField(
         choices=_FINANCE_VERIFY_CHOICES,
         widget=forms.Select(attrs={"class": "form-select"}),
@@ -449,9 +363,7 @@ class FinanceVerifyForm(forms.ModelForm):
 
     class Meta:
         model = ReimbursementRequest
-        fields = [
-            "finance_note",
-        ]
+        fields = ["finance_note"]
         widgets = {
             "finance_note": forms.Textarea(
                 attrs={
@@ -464,17 +376,10 @@ class FinanceVerifyForm(forms.ModelForm):
 
     def save(self, commit=True) -> ReimbursementRequest:
         obj: ReimbursementRequest = super().save(commit=False)
-        # The actual status transition and verified_by/verified_at will be handled in the view.
         if commit:
             obj.save(update_fields=["finance_note", "updated_at"])
         return obj
 
-
-# ---------------------------------------------------------------------------
-# Finance: bill-level actions (approve/reject a single line)
-# NOTE: These are non-model forms to keep them decoupled from any future
-#       per-line state model changes. Views/services will enforce rules.
-# ---------------------------------------------------------------------------
 
 _FINANCE_LINE_DECISIONS = [
     ("approve", "Approve this bill"),
@@ -483,13 +388,11 @@ _FINANCE_LINE_DECISIONS = [
 
 
 class FinanceLineDecisionForm(forms.Form):
-    """
-    Finance action for a single bill (ReimbursementLine).
-    - decision=approve|reject
-    - finance_rejection_reason required if reject
-    """
     line_id = forms.IntegerField(widget=forms.HiddenInput)
-    decision = forms.ChoiceField(choices=_FINANCE_LINE_DECISIONS, widget=forms.Select(attrs={"class": "form-select"}))
+    decision = forms.ChoiceField(
+        choices=_FINANCE_LINE_DECISIONS,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
     finance_rejection_reason = forms.CharField(
         required=False,
         widget=forms.Textarea(
@@ -512,19 +415,12 @@ class FinanceLineDecisionForm(forms.Form):
 
 
 class EmployeeRejectedBillEditForm(forms.ModelForm):
-    """
-    Employee edits/replaces ONLY a rejected bill (line):
-    - Can update amount/description/receipt_file
-    - Actual eligibility (line is currently rejected and belongs to employee)
-      is enforced in the view/service layer.
-    """
     class Meta:
         model = ReimbursementLine
         fields = ["amount", "description", "receipt_file"]
         widgets = {
             "amount": forms.NumberInput(attrs={"class": "form-control", "min": "0.01", "step": "0.01"}),
             "description": forms.Textarea(attrs={"class": "form-control", "rows": 3, "placeholder": "Optional"}),
-            # 'accept' set dynamically in __init__
             "receipt_file": forms.FileInput(attrs={"class": "form-control"}),
         }
 
@@ -547,8 +443,10 @@ class EmployeeRejectedBillEditForm(forms.ModelForm):
 
 class ReimbursementSettingsForm(forms.ModelForm):
     """
-    Admin form to manage reimbursement email recipients and policy flags,
-    including the approval-chain routing emails.
+    Admin form to manage reimbursement email recipients and policy flags.
+
+    UPDATED: includes submitted_notify_to_emails and submitted_notify_cc_emails
+    so Admin can control who gets notified when an employee submits a request.
     """
 
     class Meta:
@@ -560,11 +458,14 @@ class ReimbursementSettingsForm(forms.ModelForm):
             "require_management_approval",
             "daily_digest_enabled",
             "digest_hour_local",
-            # NEW: approval chain routing (all editable by Admin)
-            "approver_level1_email",   # e.g. vilas@blueoceansteels.com
-            "approver_level2_email",   # e.g. akshay@blueoceansteels.com
-            "approver_cc_emails",      # e.g. amreen@...
-            "approver_bcc_emails",     # e.g. vilas@... (for BCC on level2 mail)
+            # Approval chain routing
+            "approver_level1_email",
+            "approver_level2_email",
+            "approver_cc_emails",
+            "approver_bcc_emails",
+            # NEW: submission notification recipients
+            "submitted_notify_to_emails",
+            "submitted_notify_cc_emails",
         ]
         widgets = {
             "admin_emails": forms.Textarea(
@@ -595,37 +496,62 @@ class ReimbursementSettingsForm(forms.ModelForm):
                 attrs={"class": "form-check-input"}
             ),
             "digest_hour_local": forms.NumberInput(
-                attrs={
-                    "class": "form-control",
-                    "min": 0,
-                    "max": 23,
-                }
+                attrs={"class": "form-control", "min": 0, "max": 23}
             ),
             "approver_level1_email": forms.EmailInput(
                 attrs={
                     "class": "form-control",
-                    "placeholder": "Primary approver (e.g. vilas@blueoceansteels.com)",
+                    "placeholder": "Primary approver e.g. vilas@blueoceansteels.com",
                 }
             ),
             "approver_level2_email": forms.EmailInput(
                 attrs={
                     "class": "form-control",
-                    "placeholder": "Next approver after level 1 (e.g. akshay@blueoceansteels.com)",
+                    "placeholder": "Next approver e.g. akshay@blueoceansteels.com",
                 }
             ),
             "approver_cc_emails": forms.Textarea(
                 attrs={
                     "class": "form-control",
                     "rows": 2,
-                    "placeholder": "Comma-separated CC emails, e.g. amreen@blueoceansteels.com",
+                    "placeholder": "Comma-separated CC emails e.g. amreen@blueoceansteels.com",
                 }
             ),
             "approver_bcc_emails": forms.Textarea(
                 attrs={
                     "class": "form-control",
                     "rows": 2,
-                    "placeholder": "Comma-separated BCC emails, e.g. vilas@blueoceansteels.com",
+                    "placeholder": "Comma-separated BCC emails",
                 }
+            ),
+            # NEW widgets
+            "submitted_notify_to_emails": forms.Textarea(
+                attrs={
+                    "class": "form-control",
+                    "rows": 2,
+                    "placeholder": "TO: e.g. vilas@blueoceansteels.com",
+                }
+            ),
+            "submitted_notify_cc_emails": forms.Textarea(
+                attrs={
+                    "class": "form-control",
+                    "rows": 2,
+                    "placeholder": "CC: e.g. amreen@blueoceansteels.com, akshay@blueoceansteels.com",
+                }
+            ),
+        }
+        labels = {
+            "submitted_notify_to_emails": "Submission Notify — TO",
+            "submitted_notify_cc_emails": "Submission Notify — CC",
+        }
+        help_texts = {
+            "submitted_notify_to_emails": (
+                "Who receives the TO line when an employee submits a reimbursement. "
+                "Comma-separated email addresses."
+            ),
+            "submitted_notify_cc_emails": (
+                "Who is CC'd on the submission notification email. "
+                "Comma-separated email addresses."
             ),
         }
 
@@ -639,9 +565,6 @@ class ReimbursementSettingsForm(forms.ModelForm):
 
 
 class ApproverMappingForm(forms.ModelForm):
-    """
-    Per-employee mapping row (used in admin UI).
-    """
     class Meta:
         model = ReimbursementApproverMapping
         fields = ["employee", "manager", "finance"]
@@ -653,11 +576,6 @@ class ApproverMappingForm(forms.ModelForm):
 
 
 class ApproverMappingBulkForm(forms.Form):
-    """
-    Admin helper form to set the same manager/finance for all employees in one go.
-    (kept for compatibility even if current view uses ApproverDefaultsForm instead)
-    """
-
     apply_manager_to_all = forms.BooleanField(
         required=False,
         initial=False,
@@ -670,8 +588,6 @@ class ApproverMappingBulkForm(forms.Form):
         widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
         label="Apply finance to all",
     )
-
-    # Restrict to active users for picker clarity
     manager_for_all = forms.ModelChoiceField(
         queryset=User.objects.filter(is_active=True).order_by("first_name", "last_name", "username"),
         required=False,
@@ -685,16 +601,11 @@ class ApproverMappingBulkForm(forms.Form):
         label="Finance (for all)",
     )
 
-    # --- accept `user` so the view can pass it without error
     def __init__(self, *args, user=None, **kwargs):
         self.user = user
         super().__init__(*args, **kwargs)
 
     def save(self) -> int:
-        """
-        Apply selected defaults to all employees.
-        Returns number of mapping rows processed (created/updated).
-        """
         if not hasattr(self, "cleaned_data"):
             raise ValueError("Call is_valid() before save().")
 
@@ -704,10 +615,9 @@ class ApproverMappingBulkForm(forms.Form):
         fin = self.cleaned_data.get("finance_for_all")
 
         if not apply_mgr and not apply_fin:
-            return 0  # nothing to do
+            return 0
 
         processed = 0
-        # Safer scope: only active users
         employees = User.objects.filter(is_active=True)
 
         for emp in employees:
@@ -725,17 +635,7 @@ class ApproverMappingBulkForm(forms.Form):
         return processed
 
 
-# Extra helpers used by the new mapping view (grid-style)
-
 class ApproverDefaultsForm(forms.Form):
-    """
-    Small helper form at the top of the mapping page.
-
-    Admin can pick one Manager and/or one Finance user and click
-    "Apply to all" – the view then pre-fills every row with those defaults
-    before saving.
-    """
-
     default_manager = forms.ModelChoiceField(
         queryset=User.objects.filter(is_active=True).order_by("first_name", "last_name", "username"),
         required=False,
@@ -759,15 +659,10 @@ ApproverMappingFormSet = forms.modelformset_factory(
 
 
 # ---------------------------------------------------------------------------
-# Legacy forms (for `Reimbursement` model) – kept for backward compatibility
+# Legacy forms
 # ---------------------------------------------------------------------------
 
 class ReimbursementForm(forms.ModelForm):
-    """
-    Legacy/simple reimbursement form (single bill).
-    New flows should use ExpenseItem + ReimbursementRequest.
-    """
-
     class Meta:
         model = Reimbursement
         fields = ["amount", "category", "bill"]
@@ -784,7 +679,6 @@ class ReimbursementForm(forms.ModelForm):
                 attrs={"class": "form-select"},
                 choices=REIMBURSEMENT_CATEGORY_CHOICES,
             ),
-            # 'accept' set dynamically in __init__
             "bill": forms.FileInput(attrs={"class": "form-control"}),
         }
 
@@ -802,32 +696,20 @@ class ReimbursementForm(forms.ModelForm):
 
 
 class ManagerReviewForm(forms.ModelForm):
-    """
-    Legacy manager review form for simple Reimbursement model.
-    """
-
     class Meta:
         model = Reimbursement
         fields = ["status", "manager_comment"]
         widgets = {
             "status": forms.Select(attrs={"class": "form-select"}),
-            "manager_comment": forms.Textarea(
-                attrs={"class": "form-control", "rows": 3}
-            ),
+            "manager_comment": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
         }
 
 
 class FinanceReviewForm(forms.ModelForm):
-    """
-    Legacy finance review form for simple Reimbursement model.
-    """
-
     class Meta:
         model = Reimbursement
         fields = ["status", "finance_comment"]
         widgets = {
             "status": forms.Select(attrs={"class": "form-select"}),
-            "finance_comment": forms.Textarea(
-                attrs={"class": "form-control", "rows": 3}
-            ),
+            "finance_comment": forms.Textarea(attrs={"class": "form-control", "rows": 3}),
         }

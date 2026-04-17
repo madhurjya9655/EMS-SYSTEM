@@ -1,22 +1,21 @@
-Reimbursement Request Submitted
+New Reimbursement Submitted — #{{ request_id }}
 
-Employee: {{ employee_name }}
-Employee Email: {{ employee_email|default:"-" }}
-Request ID: #{{ request_id }}
-Total Amount: ₹ {{ total_amount }}
-Status: {{ status_label }}
-Submitted At: {{ submitted_at }}
-
+Employee : {{ employee_name }} ({{ employee_email|default:"-" }})
+Request  : #{{ request_id }}
+Amount   : ₹ {{ total_amount }}
+Status   : {{ status_label }}
+Submitted: {{ submitted_at }}
 {% if employee_note %}
 Employee Note:
 {{ employee_note }}
 {% endif %}
 
-Review this request:
-{{ detail_url }}
+View request: {{ detail_url }}
 
-To: {{ manager_to }}
-CC: {% if admin_cc %}{{ admin_cc|join:", " }}{% else %}-{% endif %}
+─────────────────────────────
+To : {{ manager_to }}
+CC : {% if admin_cc %}{{ admin_cc|join:", " }}{% else %}-{% endif %}
+─────────────────────────────
 
 Regards,
 BOS Lakshya

@@ -2,6 +2,7 @@
 # FIXED: 2026-03-21
 # ISSUE 1 FIX: apply_derived_status_from_bills() no longer auto-advances to PAID
 # ISSUE 2 FIX: employee_resubmit() now resets all bill statuses to SUBMITTED
+# UPDATED: added submitted_notify_to_emails / submitted_notify_cc_emails fields
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -114,6 +115,30 @@ class ReimbursementSettings(models.Model):
     approver_cc_emails = models.TextField(blank=True, default="")
     approver_bcc_emails = models.TextField(blank=True, default="")
 
+    # -----------------------------------------------------------------------
+    # NEW: Submission notification recipients
+    # When an employee submits a reimbursement, a notification email is sent:
+    #   TO  = submitted_notify_to_emails  (e.g. manager / approver)
+    #   CC  = submitted_notify_cc_emails  (e.g. HR, admin observers)
+    # Both fields are fully editable by Admin from the Settings page.
+    # -----------------------------------------------------------------------
+    submitted_notify_to_emails = models.TextField(
+        blank=True,
+        default="vilas@blueoceansteels.com",
+        help_text=(
+            "TO recipients for the submission notification email. "
+            "Comma-separated. E.g. vilas@blueoceansteels.com"
+        ),
+    )
+    submitted_notify_cc_emails = models.TextField(
+        blank=True,
+        default="amreen@blueoceansteels.com,akshay@blueoceansteels.com,sharyu@blueoceansteels.com",
+        help_text=(
+            "CC recipients for the submission notification email. "
+            "Comma-separated. E.g. amreen@blueoceansteels.com, akshay@blueoceansteels.com"
+        ),
+    )
+
     class Meta:
         verbose_name = "Reimbursement Settings"
         verbose_name_plural = "Reimbursement Settings"
@@ -160,6 +185,15 @@ class ReimbursementSettings(models.Model):
 
     def approver_bcc_list(self) -> list[str]:
         return _parse_email_list(self.approver_bcc_emails)
+
+    # NEW helpers
+    def submitted_notify_to_list(self) -> list[str]:
+        """TO recipients for the submission notification email."""
+        return _parse_email_list(self.submitted_notify_to_emails)
+
+    def submitted_notify_cc_list(self) -> list[str]:
+        """CC recipients for the submission notification email."""
+        return _parse_email_list(self.submitted_notify_cc_emails)
 
 
 # ---------------------------------------------------------------------------
@@ -441,48 +475,20 @@ class ReimbursementRequest(models.Model):
         return self.status == self.Status.PAID
 
     def get_display_status(self) -> str:
-        """
-        FIX (Issue #1): Single source-of-truth for status display.
-
-        Priority ladder:
-          1. If status == PAID or paid_at is stamped  → "Paid / Completed"
-          2. If awaiting Finance settlement after manager/management approval
-             → "Manager Approved – Awaiting Payment"
-          3. Otherwise fall back to the human-readable Status label.
-
-        Templates must call this method instead of reading the raw `status` field
-        directly.  That was the UI-layer root cause of paid requests still showing
-        "Finance Approved".
-        """
-        # Guard 1: explicitly paid
         if self.status == self.Status.PAID or self.paid_at:
             return "Paid / Completed"
-
-        # Guard 2: awaiting Finance settlement (after manager/management sign-off)
         if self.status in {self.Status.PENDING_FINANCE, self.Status.APPROVED}:
             if (self.manager_decision or "").lower() == "approved":
                 return "Manager Approved – Awaiting Payment"
             return "Finance Approved – Awaiting Payment"
-
-        # Default: use the verbose Status label
         return dict(self.Status.choices).get(self.status, self.status)
 
     def recalc_total(self, save: bool = True) -> Decimal:
-        """
-        FIX (Issue #2 / Fix 4): Dynamic total excludes Finance-rejected and
-        Manager-rejected lines.
-
-        Rejected lines are returned to the employee and must NOT inflate the
-        reimbursable total.  PAID lines are kept so the settled amount stays
-        accurate after payment.
-        """
         L = self.lines.model
-
         excluded_statuses = [
             L.BillStatus.FINANCE_REJECTED,
             L.BillStatus.MANAGER_REJECTED,
         ]
-
         total = (
             self.lines.filter(status=L.Status.INCLUDED)
             .exclude(bill_status__in=excluded_statuses)
@@ -496,16 +502,6 @@ class ReimbursementRequest(models.Model):
         return total
 
     def derive_status_from_bills(self) -> str:
-        """
-        Derives the correct request status purely from bill-level states.
-
-        NOTE: This method intentionally does NOT return PAID.
-        PAID is an explicit, irreversible action that requires a payment reference
-        and must only be set via mark_paid(). Auto-advancing to PAID here would
-        bypass the finance_payment_reference validation in _validate_transition()
-        and silently leave requests stuck at their pre-payment status — which was
-        the original root cause of Issue #1.
-        """
         L = ReimbursementLine
         bill_statuses = list(
             self.lines.filter(status=L.Status.INCLUDED)
@@ -517,7 +513,6 @@ class ReimbursementRequest(models.Model):
 
         statuses = set(bill_statuses)
 
-        # 1. Finance verification needed — blocks everything else.
         if statuses & {
             L.BillStatus.SUBMITTED,
             L.BillStatus.EMPLOYEE_RESUBMITTED,
@@ -525,23 +520,17 @@ class ReimbursementRequest(models.Model):
         }:
             return self.Status.PENDING_FINANCE_VERIFY
 
-        # 2. Manager action needed on finance-approved or queued bills.
         if statuses & {L.BillStatus.FINANCE_APPROVED, L.BillStatus.MANAGER_PENDING}:
             return self.Status.PENDING_MANAGER
 
-        # Strip "returned-to-employee" bills from active consideration.
         active = statuses - {L.BillStatus.FINANCE_REJECTED}
 
-        # 3. Nothing active in the forward workflow → all rejected.
         if not active:
             return self.Status.REJECTED
 
-        # 4. All active bills are manager-approved or paid → awaiting Finance settlement.
-        #    NOTE: We do NOT return PAID here. mark_paid() handles that exclusively.
         if active <= {L.BillStatus.MANAGER_APPROVED, L.BillStatus.PAID}:
             return self.Status.PENDING_FINANCE
 
-        # Fallback
         return self.Status.PENDING_FINANCE_VERIFY
 
     _STATUS_ORDER = {
@@ -564,31 +553,11 @@ class ReimbursementRequest(models.Model):
     def apply_derived_status_from_bills(
         self, *, actor: Optional[models.Model] = None, reason: str = ""
     ) -> None:
-        """
-        FIX (Issue #1): PAID status is NEVER auto-advanced here.
-
-        Root cause of the "paid bill still shows Finance Approved" bug:
-          - derive_status_from_bills() used to return PAID when all bills were PAID.
-          - This method would call self.save() with status=PAID.
-          - _validate_transition() requires finance_payment_reference, which is NOT
-            set at this point (only mark_paid() sets it).
-          - The DjangoCoreValidationError was silently swallowed in ReimbursementLine.save().
-          - The request remained at PENDING_FINANCE / APPROVED permanently, showing as
-            "Finance Approved" in the UI.
-
-        Fix (two layers):
-          1. derive_status_from_bills() no longer returns PAID.
-          2. Explicit guard below as defence-in-depth.
-
-        PAID is set exclusively by mark_paid() which sets finance_payment_reference
-        BEFORE calling save(), allowing _validate_transition() to pass cleanly.
-        """
         if self.is_final:
             return
 
         new_status = self.derive_status_from_bills()
 
-        # Defence-in-depth: PAID must only be set via mark_paid().
         if new_status == self.Status.PAID:
             logger.warning(
                 "apply_derived_status_from_bills: derive returned PAID for req=%s — "
@@ -603,7 +572,6 @@ class ReimbursementRequest(models.Model):
         current_rank = self._status_rank(self.status)
         new_rank = self._status_rank(new_status)
 
-        # Monotonic guard: never regress status.
         if new_rank < current_rank:
             return
 
@@ -680,7 +648,7 @@ class ReimbursementRequest(models.Model):
         require_mgmt = ReimbursementSettings.get_solo().require_management_approval
 
         if new == self.Status.PENDING_MANAGER and not self.verified_by_id:
-            pass  # verified_by set by calling view post-transition
+            pass
 
         if new == self.Status.PENDING_MANAGEMENT and not self._is_manager_approved():
             raise DjangoCoreValidationError(
@@ -776,13 +744,6 @@ class ReimbursementRequest(models.Model):
         actor: Optional[models.Model] = None,
         note: str = "",
     ) -> None:
-        """
-        The ONLY method that may set status = PAID.
-
-        Sets finance_payment_reference BEFORE calling save() so that
-        _validate_transition() does not raise a ValidationError due to a missing
-        reference — which was the silent-failure root cause of Issue #1.
-        """
         ok, msg = self.can_mark_paid(reference)
         if not ok:
             raise DjangoCoreValidationError(msg)
@@ -791,12 +752,9 @@ class ReimbursementRequest(models.Model):
             return
 
         from_status = self.status
-
         L = self.lines.model
         now = timezone.now()
 
-        # Bulk-update all included lines to PAID (bypasses per-line save() intentionally —
-        # parent is stamped PAID immediately after, making per-line re-derivation moot).
         self.lines.filter(status=L.Status.INCLUDED).update(
             bill_status=L.BillStatus.PAID,
             payment_reference=reference.strip(),
@@ -804,7 +762,6 @@ class ReimbursementRequest(models.Model):
             updated_at=now,
         )
 
-        # Set reference BEFORE save() so _validate_transition() passes cleanly.
         self.status = self.Status.PAID
         self.finance_payment_reference = reference.strip()
         self.paid_at = now
@@ -834,24 +791,6 @@ class ReimbursementRequest(models.Model):
     def employee_resubmit(
         self, *, actor: Optional[models.Model], note: str = ""
     ) -> None:
-        """
-        FIX (Issue #2): Resubmission now resets ALL non-PAID included bill statuses
-        back to SUBMITTED so Finance can re-review the updated request.
-
-        Root cause of "updated reimbursement not visible to Finance":
-          - The old implementation only reset the request-level approval chain
-            (status, manager_decision, verified_by, etc.) but left every
-            ReimbursementLine.bill_status unchanged — e.g., still FINANCE_APPROVED
-            from the previous approval cycle.
-          - FinanceQueueView annotates has_pending_submitted=True which requires
-            at least one INCLUDED line with bill_status IN (SUBMITTED,
-            EMPLOYEE_RESUBMITTED).
-          - Since all bills remained FINANCE_APPROVED, has_pending_submitted was
-            always False and Finance never saw the resubmitted request.
-
-        Fix: bulk-update ALL non-PAID INCLUDED lines to SUBMITTED before saving
-        the request, so FinanceQueueView picks it up immediately.
-        """
         if self.status == self.Status.PAID:
             raise DjangoCoreValidationError(
                 _("Paid reimbursements cannot be resubmitted.")
@@ -866,9 +805,6 @@ class ReimbursementRequest(models.Model):
         with transaction.atomic():
             now_ts = timezone.now()
 
-            # FIX: Reset all non-PAID included bills to SUBMITTED so Finance queue
-            # picks them up via the has_pending_submitted annotation filter.
-            # Clear rejection metadata so Finance starts with a clean slate.
             self.lines.filter(
                 status=ReimbursementLine.Status.INCLUDED,
             ).exclude(
@@ -881,7 +817,6 @@ class ReimbursementRequest(models.Model):
                 updated_at=now_ts,
             )
 
-            # Reset request-level approval chain.
             self.status = self.Status.PENDING_FINANCE_VERIFY
             self.submitted_at = now_ts
             self.verified_by = None
@@ -916,7 +851,6 @@ class ReimbursementRequest(models.Model):
                 ]
             )
 
-            # Recalculate total after bill status reset (rejected lines now excluded).
             self.recalc_total(save=True)
 
             ReimbursementLog.log(
@@ -950,7 +884,6 @@ class ReimbursementRequest(models.Model):
         with transaction.atomic():
             now_ts = timezone.now()
 
-            # Reset bill statuses on admin reversal so Finance queue sees them.
             self.lines.filter(
                 status=ReimbursementLine.Status.INCLUDED,
             ).exclude(
@@ -1130,7 +1063,6 @@ class ReimbursementLine(models.Model):
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.INCLUDED, db_index=True
     )
-
     bill_status = models.CharField(
         max_length=32,
         choices=BillStatus.choices,
@@ -1153,10 +1085,8 @@ class ReimbursementLine(models.Model):
         blank=True,
         related_name="modified_reimbursement_lines",
     )
-
     payment_reference = models.CharField(max_length=255, blank=True, default="")
     paid_at = models.DateTimeField(null=True, blank=True)
-
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1327,20 +1257,17 @@ class ReimbursementLine(models.Model):
         try:
             try:
                 from .services import notifications as _notif
-
                 if hasattr(_notif, "send_bill_rejected_by_finance"):
                     _notif.send_bill_rejected_by_finance(self.request, self)
                 else:
                     raise ImportError
             except Exception:
                 from .emails import send_bill_rejected_by_finance as _legacy
-
                 _legacy(self.request, self)
         except Exception:
             logger.exception(
                 "Failed to send bill-rejected email for req=%s line=%s",
-                self.request_id,
-                self.pk,
+                self.request_id, self.pk,
             )
 
         ReimbursementLog.log(
@@ -1397,20 +1324,17 @@ class ReimbursementLine(models.Model):
         try:
             try:
                 from .services import notifications as _notif
-
                 if hasattr(_notif, "send_bill_resubmitted"):
                     _notif.send_bill_resubmitted(self.request, self, actor=actor)
                 else:
                     raise ImportError
             except Exception:
                 from .emails import send_bill_resubmitted as _legacy
-
                 _legacy(self.request, self, actor=actor)
         except Exception:
             logger.exception(
                 "Failed to send bill-resubmitted email for req=%s line=%s",
-                self.request_id,
-                self.pk,
+                self.request_id, self.pk,
             )
 
         ReimbursementLog.log(
@@ -1463,13 +1387,11 @@ class ReimbursementLine(models.Model):
 
         try:
             from .emails import send_bill_rejected_by_manager
-
             send_bill_rejected_by_manager(self.request, self, reason=reason)
         except Exception:
             logger.exception(
                 "Failed to send bill-rejected-by-manager email: req=%s line=%s",
-                self.request_id,
-                self.pk,
+                self.request_id, self.pk,
             )
 
         ReimbursementLog.log(
@@ -1514,13 +1436,11 @@ class ReimbursementLine(models.Model):
 
         try:
             from .emails import send_bill_paid
-
             send_bill_paid(self.request, self)
         except Exception:
             logger.exception(
                 "Failed to send bill-paid email: req=%s line=%s",
-                self.request_id,
-                self.pk,
+                self.request_id, self.pk,
             )
 
         ReimbursementLog.log(

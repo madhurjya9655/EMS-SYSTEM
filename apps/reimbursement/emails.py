@@ -563,29 +563,39 @@ def send_bill_paid(req: ReimbursementRequest, line: ReimbursementLine) -> None:
 
 def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_note: str = "") -> None:
     """
-    Sent to Finance when an employee submits or resubmits a reimbursement.
+    Sent when an employee submits or resubmits a reimbursement.
 
-    FIX: review_url / approve_url / reject_url now all point to the finance
-    VERIFY page (absolute URL), with queue_url as the fallback queue link.
-    Both are now guaranteed absolute URLs via _abs_url().
+    TWO emails are sent:
+    1. Finance queue notification (existing behaviour, using reimbursement_finance_verify template)
+    2. Submission notification to admin/manager list (using reimbursement_submitted template)
+       TO  = ReimbursementSettings.submitted_notify_to_list()
+       CC  = ReimbursementSettings.submitted_notify_cc_list()
     """
-    subject = f"Reimbursement #{req.id}: Submitted for Finance Verification"
+    settings_obj = ReimbursementSettings.get_solo()
     verify_url = _finance_verify_url(req)
     queue_url = _finance_queue_url()
-    ctx = {
+    detail_url = _request_detail_url(req)
+    status_label = dict(ReimbursementRequest.Status.choices).get(req.status, req.status)
+
+    # ── Email 1: Finance verification queue ──────────────────────────────────
+    finance_ctx = {
         "employee_name": _display_name(req.created_by),
         "employee_email": getattr(req.created_by, "email", "") or "-",
         "request_id": req.id,
         "total_amount": _fmt_amount(req.total_amount),
         "note": employee_note or "-",
         "queue_url": queue_url,
-        # All action buttons point to the verify page (absolute URL)
         "review_url": verify_url,
         "approve_url": verify_url,
         "reject_url": verify_url,
         "submitted_at": req.submitted_at,
     }
-    _send(_finance_emails(), subject, "reimbursement_finance_verify", ctx)
+    _send(
+        _finance_emails(),
+        f"Reimbursement #{req.id}: Submitted for Finance Verification",
+        "reimbursement_finance_verify",
+        finance_ctx,
+    )
     ReimbursementLog.log(
         req,
         ReimbursementLog.Action.EMAIL_SENT,
@@ -594,6 +604,42 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
         extra={"template": "reimbursement_finance_verify"},
     )
 
+    # ── Email 2: Submission notification (manager/admin list) ─────────────────
+    notify_to = settings_obj.submitted_notify_to_list()
+    notify_cc = settings_obj.submitted_notify_cc_list()
+
+    if notify_to:
+        submitted_ctx = {
+            "employee_name": _display_name(req.created_by),
+            "employee_email": getattr(req.created_by, "email", "") or "-",
+            "request_id": req.id,
+            "total_amount": _fmt_amount(req.total_amount),
+            "status_label": status_label,
+            "submitted_at": _fmt_dt(req.submitted_at) if req.submitted_at else "-",
+            "employee_note": employee_note or "",
+            "detail_url": detail_url,
+            "queue_url": queue_url,
+            "manager_to": ", ".join(notify_to),
+            "admin_cc": notify_cc,
+        }
+        _send(
+            notify_to,
+            f"New Reimbursement Submitted — #{req.id} by {_display_name(req.created_by)}",
+            "reimbursement_submitted",
+            submitted_ctx,
+            cc=notify_cc or None,
+        )
+        ReimbursementLog.log(
+            req,
+            ReimbursementLog.Action.EMAIL_SENT,
+            actor=None,
+            message=f"Email: submission notification sent (to={notify_to}, cc={notify_cc}).",
+            extra={
+                "template": "reimbursement_submitted",
+                "to": notify_to,
+                "cc": notify_cc,
+            },
+        )
 
 def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
     """
