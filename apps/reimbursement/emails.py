@@ -469,28 +469,47 @@ def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *,
     )
 
 
-def send_bill_to_manager(req: ReimbursementRequest, line: ReimbursementLine) -> None:
-    subject = f"Reimbursement #{req.id}: Bill #{line.id} needs your approval"
+def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *, actor) -> None:
+    """
+    FIX: Corrected-bill resubmission email.
+    TO  = Finance emails
+    CC  = Manager email + ReimbursementSettings.approver_cc_list()
+    """
+    settings_obj = ReimbursementSettings.get_solo()
+
+    # Build CC: manager + configured approver CC list, deduplicated
+    cc_raw = _manager_emails(req) + settings_obj.approver_cc_list()
+
+    subject = f"Reimbursement #{req.id}: Employee resubmitted a corrected bill"
     ctx = {
-        "manager_name": _display_name(req.manager),
         "employee_name": _display_name(req.created_by),
+        "employee_email": getattr(req.created_by, "email", "") or "-",
         "request_id": req.id,
         "bill_id": line.id,
         "bill_amount": f"{line.amount:.2f}",
         "bill_description": line.description or "-",
-        # FIX: use queue URL as primary CTA — it IS in PERMISSION_URLS
-        "queue_url": _manager_queue_url(),
-        # Secondary convenience link — safe after login redirect
-        "review_url": _manager_review_url(req),
+        "resubmitted_by": _display_name(actor),
+        "detail_url": _finance_queue_url(),
+        "queue_url": _finance_queue_url(),
         "status_label": dict(ReimbursementRequest.Status.choices).get(req.status, req.status),
     }
-    _send(_manager_emails(req), subject, "reimbursement_bill_to_manager", ctx)
+
+    to = _finance_emails()
+    cc = _dedup(cc_raw) or []
+
+    _send(to, subject, "reimbursement_bill_resubmitted", ctx, cc=cc)
+
     ReimbursementLog.log(
         req,
         ReimbursementLog.Action.EMAIL_SENT,
-        actor=None,
-        message=f"Email: bill #{line.id} sent to manager.",
-        extra={"line_id": line.id, "template": "reimbursement_bill_to_manager"},
+        actor=actor,
+        message=f"Email: bill #{line.id} resubmitted sent to finance (cc={cc}).",
+        extra={
+            "line_id": line.id,
+            "template": "reimbursement_bill_resubmitted",
+            "to": to,
+            "cc": cc,
+        },
     )
 
 
@@ -578,20 +597,15 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
 
 def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
     """
-    Sent to the manager after Finance verifies bills.
+    FIX: Finance-verified email to manager.
+    TO  = Manager email (fallback: Finance)
+    CC  = ReimbursementSettings.approver_cc_list()
 
-    FIX (Issue 1 root cause #2):
-    Previous version sent managers a direct link to manager_review/<pk>/ which
-    is NOT in PERMISSION_URLS → PermissionEnforcementMiddleware blocked it after
-    login redirect → manager got redirected to dashboard → 404/confusion.
-
-    Fix:
-    - queue_url  = manager_pending (PRIMARY CTA button) — IS in PERMISSION_URLS
-    - review_url = manager_review/<pk>/ (secondary convenience link)
-      Also guaranteed absolute via _abs_url().
-      PermissionEnforcementMiddleware now maps reimbursement_manager_review →
-      reimbursement:manager_review (see permission_urls.py fix).
+    Previous version sent with no CC — approver_cc_list() was never included.
     """
+    settings_obj = ReimbursementSettings.get_solo()
+    cc = _dedup(settings_obj.approver_cc_list()) or []
+
     subject = f"Reimbursement #{req.id}: Ready for your approval"
     queue_url = _manager_queue_url()
     review_url = _manager_review_url(req)
@@ -600,26 +614,29 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
         "employee_name": _display_name(req.created_by),
         "request_id": req.id,
         "total_amount": _fmt_amount(req.total_amount),
-        # PRIMARY CTA — use queue; it IS in PERMISSION_URLS
         "queue_url": queue_url,
-        # Employee detail — for reference only
         "detail_url": _request_detail_url(req),
-        # Secondary direct review link (works after login + permission check)
         "review_url": review_url,
-        # Keep approve_url / reject_url pointing at review page
         "approve_url": review_url,
         "reject_url": review_url,
     }
+
     to = _manager_emails(req)
     if not to:
-        to = _finance_emails()  # fallback to finance if manager has no email
-    _send(to, subject, "reimbursement_finance_verified", ctx)
+        to = _finance_emails()  # fallback if manager has no email
+
+    _send(to, subject, "reimbursement_finance_verified", ctx, cc=cc)
+
     ReimbursementLog.log(
         req,
         ReimbursementLog.Action.EMAIL_SENT,
         actor=None,
-        message="Email: finance verified -> manager.",
-        extra={"template": "reimbursement_finance_verified"},
+        message=f"Email: finance verified -> manager (to={to}, cc={cc}).",
+        extra={
+            "template": "reimbursement_finance_verified",
+            "to": to,
+            "cc": cc,
+        },
     )
 
 
