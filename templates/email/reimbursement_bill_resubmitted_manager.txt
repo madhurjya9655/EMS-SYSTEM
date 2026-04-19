@@ -1,0 +1,27 @@
+Reimbursement #{{ request_id }} — Your Approval Needed
+
+Hi {% if manager_name %}{{ manager_name }}{% else %}Manager{% endif %},
+
+{{ employee_name }} ({{ employee_email }}) has resubmitted a corrected bill
+for reimbursement #{{ request_id }}. Finance has been notified to re-verify.
+Your final decision is required.
+
+─────────────────────────────
+Employee      : {{ employee_name }}
+Request ID    : #{{ request_id }}
+Bill Line ID  : #{{ bill_id }}
+Amount        : ₹ {{ bill_amount }}
+Description   : {{ bill_description }}
+─────────────────────────────
+
+APPROVE: {{ approve_url }}
+
+REJECT : {{ reject_url }}
+
+Or review the full request: {{ review_url }}
+
+WARNING: Clicking Approve or Reject will immediately record your decision.
+Links expire in 7 days.
+
+Regards,
+BOS Lakshya

@@ -507,7 +507,7 @@ class ReimbursementCreateView(LoginRequiredMixin, PermissionRequiredMixin, FormV
             return self.form_invalid(form)
 
         mapping = ReimbursementApproverMapping.for_employee(user)
-        manager = mapping.manager if mapping else None
+        manager = mapping.primary_manager() if mapping else None
         management = None
 
         req = ReimbursementRequest.objects.create(
@@ -2071,7 +2071,9 @@ class ApproverMappingAdminView(
         mappings = {
             m.employee_id: m
             for m in ReimbursementApproverMapping.objects.select_related(
-                "employee", "manager", "finance"
+                "employee"
+            ).prefetch_related(
+                "managers", "finance_users"
             )
         }
         for u in self._all_users_for_select():
@@ -2115,7 +2117,7 @@ class ApproverMappingAdminView(
 
         apply_manager = form.cleaned_data.get("apply_manager_to_all")
         apply_finance = form.cleaned_data.get("apply_finance_to_all")
-        manager_for_all = form.cleaned_data.get("manager_for_all")
+        managers_for_all = form.cleaned_data.get("managers_for_all")
         finance_for_all = form.cleaned_data.get("finance_for_all")
 
         users = self._all_users_for_select()
@@ -2124,10 +2126,10 @@ class ApproverMappingAdminView(
             mapping, _ = ReimbursementApproverMapping.objects.get_or_create(employee=u)
             changed = False
             if apply_manager:
-                mapping.manager = manager_for_all
+                mapping.managers.set(manager_for_all or [])
                 changed = True
             if apply_finance:
-                mapping.finance = finance_for_all
+                mapping.finance_users.set(finance_for_all or [])
                 changed = True
             if changed:
                 mapping.save()
@@ -2139,29 +2141,36 @@ class ApproverMappingAdminView(
         return redirect(request.path)
 
     def _handle_save_mappings(self, request):
-        users = self._all_users_for_select()
-        id_to_user = {u.id: u for u in users}
-        processed = 0
+       users = self._all_users_for_select()
+       id_to_user = {u.id: u for u in users}
+       processed = 0
 
-        for u in users:
-            manager_id = request.POST.get(f"manager_{u.id}") or ""
-            finance_id = request.POST.get(f"finance_{u.id}") or ""
+       for u in users:
+        manager_ids = [
+            int(x) for x in request.POST.getlist(f"managers_{u.id}")
+            if str(x).isdigit() and int(x) in id_to_user
+        ]
+        finance_user_ids = [
+            int(x) for x in request.POST.getlist(f"finance_users_{u.id}")
+            if str(x).isdigit() and int(x) in id_to_user
+        ]
 
-            manager = id_to_user.get(int(manager_id)) if manager_id.isdigit() else None
-            finance = id_to_user.get(int(finance_id)) if finance_id.isdigit() else None
+        mapping, _ = ReimbursementApproverMapping.objects.get_or_create(employee=u)
 
-            mapping, _ = ReimbursementApproverMapping.objects.get_or_create(employee=u)
-            if mapping.manager_id != (
-                manager.id if manager else None
-            ) or mapping.finance_id != (finance.id if finance else None):
-                mapping.manager = manager
-                mapping.finance = finance
-                mapping.save()
-                processed += 1
+        current_manager_ids = set(mapping.managers.values_list("id", flat=True))
+        current_finance_ids = set(mapping.finance_users.values_list("id", flat=True))
+
+        new_manager_ids = set(manager_ids)
+        new_finance_ids = set(finance_user_ids)
+
+        if current_manager_ids != new_manager_ids or current_finance_ids != new_finance_ids:
+            mapping.managers.set([id_to_user[mid] for mid in manager_ids])
+            mapping.finance_users.set([id_to_user[fid] for fid in finance_user_ids])
+            processed += 1
 
         messages.success(
-            request,
-            f"Per-employee mappings saved. Rows processed: {processed}.",
+        request,
+        f"Per-employee mappings saved. Rows processed: {processed}.",
         )
         return redirect(request.path)
 

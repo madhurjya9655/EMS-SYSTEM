@@ -1,13 +1,18 @@
-Reimbursement #{{ request_id }} - Employee resubmitted a corrected bill
+Reimbursement #{{ request_id }} — Corrected Bill Resubmitted (Finance Action Required)
 
-Employee: {{ employee_name }} ({{ employee_email }})
-Bill Line ID: #{{ bill_id }}
-Amount: ₹ {{ bill_amount }}
-Description: {{ bill_description }}
+Hi Finance,
+
+{{ employee_name }} ({{ employee_email }}) has resubmitted a corrected bill.
+Please re-verify the bill below and proceed.
+
+─────────────────────────────
+Bill Line ID  : #{{ bill_id }}
+Amount        : ₹ {{ bill_amount }}
+Description   : {{ bill_description }}
 Resubmitted By: {{ resubmitted_by }}
-Request Status: {{ status_label }}
+─────────────────────────────
 
-{% if detail_url %}Review: {{ detail_url }}{% endif %}
+{% if queue_url %}Finance Queue: {{ queue_url }}{% endif %}
 
 Regards,
-System
+BOS Lakshya
