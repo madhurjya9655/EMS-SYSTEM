@@ -1,0 +1,682 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Vendor Admin Setup{% endblock %}
+{% block navbar_title %}Vendor Admin Setup{% endblock %}
+{% block breadcrumb %}Vendor Payments / Admin Setup{% endblock %}
+{% block page_title %}Vendor Approval Setup{% endblock %}
+
+{% block head_extra %}
+<style>
+/* ══ Tag-input / chip system ═══════════════════════════════════════════════ */
+.tag-box {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 8px 10px;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.tag-box:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(79,140,255,.10);
+}
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.chip-list:empty { margin-bottom: 0; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--primary-soft);
+  border: 1px solid var(--primary-border);
+  color: var(--primary-dark);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 9px 3px 10px;
+  border-radius: 999px;
+  animation: chipPop .14s ease;
+}
+@keyframes chipPop { from { opacity:0; transform:scale(.8); } to { opacity:1; transform:scale(1); } }
+.chip-icon { font-size: 9px; opacity: .6; }
+.chip-rm {
+  background: none; border: none; cursor: pointer;
+  color: var(--primary); opacity: .7;
+  font-size: 10px; padding: 0 1px; line-height: 1;
+  display: grid; place-items: center;
+  transition: opacity var(--transition), color var(--transition);
+}
+.chip-rm:hover { opacity: 1; color: var(--danger); }
+.tag-input-row { display: flex; gap: 8px; align-items: center; }
+.tag-text {
+  flex: 1; border: none; outline: none;
+  background: transparent; font-size: 13px;
+  color: var(--text); font-family: var(--font-body);
+  min-width: 0;
+}
+.tag-text::placeholder { color: var(--subtle); }
+.tag-add-btn {
+  flex-shrink: 0; height: 30px; padding: 0 13px;
+  border-radius: var(--radius-xs);
+  background: var(--primary); color: #fff;
+  border: none; font-size: 12px; font-weight: 700;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  transition: background var(--transition), transform var(--transition);
+  white-space: nowrap;
+}
+.tag-add-btn:hover { background: var(--primary-dark); transform: translateY(-1px); }
+.tag-err { font-size: 11.5px; color: var(--danger); margin-top: 4px; display: none; }
+.tag-err.show { display: block; }
+
+/* ── Manual email rows ───────────────────────────────────────────────────── */
+.manual-email-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 8px; border-radius: 6px;
+  background: var(--primary-soft);
+  border: 1px solid var(--primary-border);
+  margin-top: 4px;
+}
+.manual-email-item .me-label {
+  font-size: 12.5px; color: var(--primary-dark);
+  font-weight: 600; flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.manual-email-badge {
+  font-size: 9.5px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--primary);
+  background: white; border: 1px solid var(--primary-border);
+  border-radius: 999px; padding: 1px 7px; flex-shrink: 0;
+}
+
+/* ── Layout helpers ──────────────────────────────────────────────────────── */
+.cfg-block { border-top: 1px solid var(--border-light); padding-top: 18px; margin-top: 18px; }
+.cfg-block:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+.cfg-lbl {
+  font-size: 12.5px; font-weight: 700; color: var(--text-2);
+  margin-bottom: 5px; display: flex; align-items: center; gap: 7px;
+}
+.cfg-badge {
+  font-size: 9.5px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .06em; background: var(--primary-soft);
+  color: var(--primary); border: 1px solid var(--primary-border);
+  border-radius: 999px; padding: 2px 8px;
+}
+.cfg-sub { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; }
+
+.cb-scroll {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface-alt); padding: 8px 10px;
+  max-height: 190px; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+}
+.cb-scroll::-webkit-scrollbar { width: 4px; }
+.cb-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.cb-scroll label {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 6px; border-radius: 6px;
+  font-size: 13px; color: var(--text-2);
+  cursor: pointer; transition: background var(--transition);
+  user-select: none;
+}
+.cb-scroll label:hover { background: var(--primary-soft); color: var(--primary); }
+.cb-scroll input[type="checkbox"] {
+  accent-color: var(--primary); width: 14px; height: 14px; flex-shrink: 0; cursor: pointer;
+}
+
+.or-divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 10px 0 8px; color: var(--subtle);
+  font-size: 10.5px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .08em;
+}
+.or-divider::before,
+.or-divider::after { content: ''; flex: 1; height: 1px; background: var(--border-light); }
+
+/* ── Vendor table ────────────────────────────────────────────────────────── */
+.vendor-action-btns { display: flex; gap: 6px; justify-content: flex-end; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+
+  <!-- ══ LEFT : Approval Configuration ═════════════════════════════════════ -->
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header">
+        <span><i class="fa-solid fa-sliders me-2 text-primary"></i>Approval Configuration</span>
+      </div>
+      <div class="card-body">
+        <form method="post" id="cfgForm">
+          {% csrf_token %}
+
+          {% if form.non_field_errors %}
+            <div class="alert alert-danger mb-3">{{ form.non_field_errors }}</div>
+          {% endif %}
+
+          {# Hidden inputs synced by JS before every submit #}
+          {{ form.finance_manual_emails }}
+          {{ form.mumbai_manual_emails }}
+
+          <!-- ── Finance Users ──────────────────────────────────────────── -->
+          <div class="cfg-block">
+            <div class="cfg-lbl">
+              Finance Users
+              <span class="cfg-badge">Step 1 Approvers</span>
+            </div>
+            <div class="cfg-sub">Select system users and/or add external emails below.</div>
+
+            <div class="cb-scroll" id="finCbScroll">
+              {% for cb in form.finance_users %}
+                <label>{{ cb.tag }}{{ cb.choice_label }}</label>
+              {% empty %}
+                <span style="font-size:12px;color:var(--muted)">No users found.</span>
+              {% endfor %}
+              <div id="finManualList"></div>
+            </div>
+
+            <div class="or-divider">or add email manually</div>
+
+            <div class="tag-box"
+                 data-group="fin"
+                 data-initial="{{ finance_manual_emails_val }}">
+              <div class="chip-list" id="finChips"></div>
+              <div class="tag-input-row">
+                <input class="tag-text" id="finInput"
+                       placeholder="name@company.com"
+                       autocomplete="off" inputmode="email">
+                <button class="tag-add-btn" data-add-group="fin">
+                  <i class="fa-solid fa-plus"></i> Add
+                </button>
+              </div>
+            </div>
+            <div class="tag-err" id="finErr">Please enter a valid email address.</div>
+          </div>
+
+          <!-- ── Senior Authority ──────────────────────────────────────── -->
+          <div class="cfg-block">
+            <div class="cfg-lbl">
+              Senior Authority
+              <span class="cfg-badge">Final Approver</span>
+            </div>
+            {{ form.senior_authority }}
+          </div>
+
+          <!-- ── Mumbai Accounts ───────────────────────────────────────── -->
+          <div class="cfg-block">
+            <div class="cfg-lbl">
+              Mumbai Accounts
+              <span class="cfg-badge">TO Recipients</span>
+            </div>
+            <div class="cfg-sub">These receive the final approval notification email.</div>
+
+            <div class="cb-scroll" id="mumCbScroll">
+              {% for cb in form.mumbai_accounts %}
+                <label>{{ cb.tag }}{{ cb.choice_label }}</label>
+              {% empty %}
+                <span style="font-size:12px;color:var(--muted)">No users found.</span>
+              {% endfor %}
+              <div id="mumManualList"></div>
+            </div>
+
+            <div class="or-divider">or add email manually</div>
+
+            <div class="tag-box"
+                 data-group="mum"
+                 data-initial="{{ mumbai_manual_emails_val }}">
+              <div class="chip-list" id="mumChips"></div>
+              <div class="tag-input-row">
+                <input class="tag-text" id="mumInput"
+                       placeholder="accounts@company.com"
+                       autocomplete="off" inputmode="email">
+                <button class="tag-add-btn" data-add-group="mum">
+                  <i class="fa-solid fa-plus"></i> Add
+                </button>
+              </div>
+            </div>
+            <div class="tag-err" id="mumErr">Please enter a valid email address.</div>
+          </div>
+
+          <!-- ── CC Emails ─────────────────────────────────────────────── -->
+          <div class="cfg-block">
+            <div class="cfg-lbl">
+              CC Emails
+              <span class="cfg-badge">Always CC'd</span>
+            </div>
+            <div class="cfg-sub">Comma-separated. Included in every final approval email.</div>
+            {{ form.cc_emails }}
+          </div>
+
+          <!-- ── Save ──────────────────────────────────────────────────── -->
+          <div class="cfg-block">
+            <button name="save_config" class="btn btn-primary">
+              <i class="fa-solid fa-floppy-disk"></i> Save Config
+            </button>
+          </div>
+
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ RIGHT : Vendor Master ═════════════════════════════════════════════ -->
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header">
+        <span><i class="fa-solid fa-building me-2"></i>Vendor Master</span>
+      </div>
+      <div class="card-body">
+
+        <!-- Add vendor -->
+        <form method="post" action="{% url 'vendor:add_vendor' %}"
+              class="d-flex gap-2 mb-4 flex-wrap">
+          {% csrf_token %}
+          <input name="name" class="form-control"
+                 placeholder="Vendor name" required
+                 style="min-width:150px;flex:1">
+          <select name="vendor_type" class="form-select" style="width:155px;flex-shrink:0">
+            {% for val, label in vendor_type_choices %}
+              <option value="{{ val }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-primary" style="white-space:nowrap;flex-shrink:0">
+            <i class="fa-solid fa-plus"></i> Add
+          </button>
+        </form>
+
+        <!-- Vendor table -->
+        <div class="data-table-wrap" style="max-height:520px">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th style="text-align:right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for v in vendors %}
+              <tr>
+                <td style="font-weight:600">{{ v.name }}</td>
+                <td>{{ v.get_type_display }}</td>
+                <td>
+                  <span class="status-badge {% if v.is_active %}completed{% else %}draft{% endif %}">
+                    {% if v.is_active %}Active{% else %}Inactive{% endif %}
+                  </span>
+                </td>
+                <td class="action-cell">
+                  <div class="vendor-action-btns">
+
+                    <!--
+                      FIX: No onclick attribute.
+                      All data needed by JS lives in data-* attributes.
+                      VS Code never tries to parse data-* values as JavaScript,
+                      so no false positives — even when they contain Django tags.
+                    -->
+                    <button
+                      class="btn btn-sm btn-outline-primary js-edit-vendor"
+                      data-pk="{{ v.pk }}"
+                      data-name="{{ v.name|escapejs }}"
+                      data-vtype="{{ v.type }}"
+                      data-edit-url="{% url 'vendor:edit_vendor' v.pk %}"
+                      title="Edit vendor">
+                      <i class="fa-solid fa-pen-to-square"></i>
+                    </button>
+
+                    <form method="post"
+                          action="{% url 'vendor:toggle_vendor' v.pk %}"
+                          class="d-inline">
+                      {% csrf_token %}
+                      <button
+                        class="btn btn-sm {% if v.is_active %}btn-light{% else %}btn-outline-primary{% endif %}"
+                        title="{% if v.is_active %}Deactivate{% else %}Activate{% endif %}">
+                        <i class="fa-solid {% if v.is_active %}fa-toggle-on{% else %}fa-toggle-off{% endif %}"></i>
+                      </button>
+                    </form>
+
+                    <!--
+                      FIX: No onsubmit attribute.
+                      Vendor name for confirm dialog stored in data-vendor-name.
+                      A JS event listener handles the confirmation.
+                    -->
+                    <form method="post"
+                          action="{% url 'vendor:delete_vendor' v.pk %}"
+                          class="d-inline js-delete-vendor-form"
+                          data-vendor-name="{{ v.name|escapejs }}">
+                      {% csrf_token %}
+                      <button
+                        class="btn btn-sm btn-light text-danger"
+                        title="Delete vendor">
+                        <i class="fa-solid fa-trash-can"></i>
+                      </button>
+                    </form>
+
+                  </div>
+                </td>
+              </tr>
+              {% empty %}
+              <tr>
+                <td colspan="4">
+                  <div class="empty-state">
+                    <div class="empty-state-icon"><i class="fa-solid fa-building"></i></div>
+                    No vendors added yet.
+                  </div>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ══ Edit Vendor Modal ═════════════════════════════════════════════════════ -->
+<div class="modal fade" id="editVendorModal" tabindex="-1"
+     aria-labelledby="editVendorModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered" style="max-width:480px">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="editVendorModalLabel">
+          <i class="fa-solid fa-pen-to-square me-2 text-primary"></i>Edit Vendor
+        </h5>
+        <button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form method="post" id="editVendorForm" action="">
+        {% csrf_token %}
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Vendor Name</label>
+            <input name="name" id="editVendorName" class="form-control" required>
+          </div>
+          <div class="mb-1">
+            <label class="form-label">Vendor Type</label>
+            <select name="vendor_type" id="editVendorType" class="form-select">
+              {% for val, label in vendor_type_choices %}
+                <option value="{{ val }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk"></i> Save Changes
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+/*
+  ============================================================
+  VENDOR ADMIN SETUP  —  JavaScript
+  ============================================================
+  ROOT CAUSE OF ALL ERRORS (plain language):
+
+  VS Code's HTML validator reads every onclick="..." and
+  onsubmit="..." attribute as JavaScript. When those attributes
+  contain Django template expressions like {{ v.type|escapejs }},
+  VS Code sees the raw text ".type" and treats "type" as a
+  JavaScript reserved keyword — producing 4 cascading errors:
+
+    1. Property assignment expected  ← parser sees "type" as keyword,
+                                        not a value, so expects a "="
+    2. ';' expected (×2)            ← now the commas after look wrong
+    3. Argument expression expected  ← closing paren is now unexpected
+
+  THE FIX:
+  Remove ALL onclick / onsubmit attributes from HTML.
+  Store data in  data-*  attributes instead (VS Code never
+  parses data-* values as JavaScript).
+  One JS event listener handles everything cleanly.
+  ============================================================
+*/
+(function () {
+  'use strict';
+
+  /* ================================================================
+     SECTION 1 — TAG INPUT SYSTEM
+     Manages manual email chips for Finance Users and Mumbai Accounts.
+  ================================================================ */
+
+  var tagCfg = {
+    fin: {
+      hiddenId : 'id_finance_manual_emails',
+      chipsId  : 'finChips',
+      inputId  : 'finInput',
+      errId    : 'finErr',
+      listId   : 'finManualList',
+      wrapSel  : '[data-group="fin"]'
+    },
+    mum: {
+      hiddenId : 'id_mumbai_manual_emails',
+      chipsId  : 'mumChips',
+      inputId  : 'mumInput',
+      errId    : 'mumErr',
+      listId   : 'mumManualList',
+      wrapSel  : '[data-group="mum"]'
+    }
+  };
+
+  var tagState = { fin: [], mum: [] };
+
+  /* Read saved emails from data-initial (written by Django view context).
+     This is the reliable source — not the hidden input value. */
+  function initTags() {
+    Object.keys(tagCfg).forEach(function (grp) {
+      var wrap = document.querySelector(tagCfg[grp].wrapSel);
+      if (!wrap) { return; }
+      var raw = (wrap.dataset.initial || '').trim();
+      tagState[grp] = raw
+        ? raw.split(',')
+              .map(function (e) { return e.trim().toLowerCase(); })
+              .filter(Boolean)
+        : [];
+      renderAll(grp);
+    });
+  }
+
+  function renderAll(grp) {
+    renderChips(grp);
+    renderManualRows(grp);
+    syncHidden(grp);
+  }
+
+  /* Chip pills inside the tag-box */
+  function renderChips(grp) {
+    var c = document.getElementById(tagCfg[grp].chipsId);
+    if (!c) { return; }
+    c.innerHTML = '';
+    tagState[grp].forEach(function (email, idx) {
+      var el = document.createElement('span');
+      el.className = 'chip';
+      el.innerHTML =
+        '<i class="fa-solid fa-envelope chip-icon"></i>' +
+        '<span>' + safeHtml(email) + '</span>' +
+        '<button class="chip-rm" data-grp="' + grp + '" data-idx="' + idx + '"' +
+        ' aria-label="Remove">' +
+        '<i class="fa-solid fa-xmark"></i></button>';
+      c.appendChild(el);
+    });
+  }
+
+  /* Blue rows inside the checkbox scroll (so saved emails are visible) */
+  function renderManualRows(grp) {
+    var listEl = document.getElementById(tagCfg[grp].listId);
+    if (!listEl) { return; }
+    listEl.innerHTML = '';
+    tagState[grp].forEach(function (email, idx) {
+      var row = document.createElement('div');
+      row.className = 'manual-email-item';
+      row.innerHTML =
+        '<i class="fa-solid fa-envelope"' +
+        ' style="font-size:11px;color:var(--primary);opacity:.7;flex-shrink:0"></i>' +
+        '<span class="me-label">' + safeHtml(email) + '</span>' +
+        '<span class="manual-email-badge">manual</span>' +
+        '<button class="chip-rm" data-grp="' + grp + '" data-idx="' + idx + '"' +
+        ' aria-label="Remove" style="margin-left:4px">' +
+        '<i class="fa-solid fa-xmark"></i></button>';
+      listEl.appendChild(row);
+    });
+  }
+
+  /* Keep the hidden <input> in sync so the CSV travels with form POST */
+  function syncHidden(grp) {
+    var el = document.getElementById(tagCfg[grp].hiddenId);
+    if (el) { el.value = tagState[grp].join(', '); }
+  }
+
+  /* Add a new email chip */
+  function addChip(grp) {
+    var inputEl = document.getElementById(tagCfg[grp].inputId);
+    var errEl   = document.getElementById(tagCfg[grp].errId);
+    var val     = (inputEl.value || '').trim().toLowerCase();
+
+    if (!val) { return; }
+    errEl.classList.remove('show');
+
+    if (!isEmail(val)) {
+      errEl.classList.add('show');
+      inputEl.focus();
+      return;
+    }
+    if (tagState[grp].indexOf(val) !== -1) {
+      inputEl.value = '';
+      inputEl.focus();
+      return; /* duplicate — silent ignore */
+    }
+    tagState[grp].push(val);
+    inputEl.value = '';
+    renderAll(grp);
+    inputEl.focus();
+  }
+
+  /* ================================================================
+     SECTION 2 — VENDOR EDIT MODAL
+     Data comes from  data-*  attributes — no inline onclick needed.
+  ================================================================ */
+
+  function openEditModal(pk, vendorName, vendorTypeVal, editUrl) {
+    var editFormEl  = document.getElementById('editVendorForm');
+    var nameEl      = document.getElementById('editVendorName');
+    var typeDropEl  = document.getElementById('editVendorType');
+
+    editFormEl.action = editUrl;
+    nameEl.value = vendorName;
+
+    var opts = typeDropEl.options;
+    for (var i = 0; i < opts.length; i++) {
+      opts[i].selected = (opts[i].value === vendorTypeVal);
+    }
+
+    var bsModal = new bootstrap.Modal(document.getElementById('editVendorModal'));
+    bsModal.show();
+    setTimeout(function () { nameEl.focus(); nameEl.select(); }, 350);
+  }
+
+  /* ================================================================
+     SECTION 3 — EVENT DELEGATION
+     One listener handles: add-chip buttons, chip-remove buttons,
+     edit-vendor buttons, delete-vendor form submissions.
+     No onclick/onsubmit attributes in HTML — zero VS Code warnings.
+  ================================================================ */
+
+  document.addEventListener('click', function (evt) {
+
+    /* ── Add chip button ──────────────────────────────────────────── */
+    var addBtn = evt.target.closest('[data-add-group]');
+    if (addBtn) {
+      evt.preventDefault();
+      addChip(addBtn.dataset.addGroup);
+      return;
+    }
+
+    /* ── Remove chip / manual-row button ─────────────────────────── */
+    var rmBtn = evt.target.closest('.chip-rm');
+    if (rmBtn) {
+      var grp = rmBtn.dataset.grp;
+      var idx = parseInt(rmBtn.dataset.idx, 10);
+      tagState[grp].splice(idx, 1);
+      renderAll(grp);
+      return;
+    }
+
+    /* ── Edit vendor button ──────────────────────────────────────── */
+    var editBtn = evt.target.closest('.js-edit-vendor');
+    if (editBtn) {
+      openEditModal(
+        editBtn.dataset.pk,
+        editBtn.dataset.name,
+        editBtn.dataset.vtype,
+        editBtn.dataset.editUrl
+      );
+      return;
+    }
+
+  });
+
+  /* ── Delete vendor form — intercept submit for confirmation ─────── */
+  document.addEventListener('submit', function (evt) {
+    var frm = evt.target.closest('.js-delete-vendor-form');
+    if (!frm) { return; }
+    var vendorName = frm.dataset.vendorName || 'this vendor';
+    var confirmed  = window.confirm(
+      'Delete "' + vendorName + '"?\n\n' +
+      'If it has linked payment requests it will be deactivated instead.'
+    );
+    if (!confirmed) { evt.preventDefault(); }
+  });
+
+  /* ── Enter/comma key adds chip ─────────────────────────────────── */
+  Object.keys(tagCfg).forEach(function (grp) {
+    var inputEl = document.getElementById(tagCfg[grp].inputId);
+    if (!inputEl) { return; }
+    inputEl.addEventListener('keydown', function (evt) {
+      if (evt.key === 'Enter' || evt.key === ',') {
+        evt.preventDefault();
+        addChip(grp);
+      }
+      document.getElementById(tagCfg[grp].errId).classList.remove('show');
+    });
+  });
+
+  /* ── Sync hidden inputs before cfgForm submits ──────────────────── */
+  var cfgForm = document.getElementById('cfgForm');
+  if (cfgForm) {
+    cfgForm.addEventListener('submit', function () {
+      Object.keys(tagCfg).forEach(function (grp) { syncHidden(grp); });
+    });
+  }
+
+  /* ================================================================
+     HELPERS
+  ================================================================ */
+  function isEmail(val) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(val);
+  }
+  function safeHtml(str) {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  /* ── Boot ───────────────────────────────────────────────────────── */
+  initTags();
+
+}());
+</script>
+{% endblock %}

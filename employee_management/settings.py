@@ -121,6 +121,7 @@ LOCAL_APPS = [
     "dashboard.apps.DashboardConfig",
     "apps.settings.apps.SettingsConfig",
     "apps.kam.apps.KamConfig",
+    "apps.vendor",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS

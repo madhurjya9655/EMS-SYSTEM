@@ -74,6 +74,8 @@ urlpatterns = [
     # Root → dashboard
     path("", RedirectView.as_view(pattern_name="dashboard:home", permanent=False), name="site-root"),
 
+    path('vendor/', include('apps.vendor.urls', namespace='vendor')),
+
     # Healthcheck aliases
     path("up",  healthcheck, name="healthcheck-no-slash"),
     path("up/", healthcheck, name="healthcheck"),

@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}New Vendor Payment{% endblock %}
+{% block navbar_title %}New Vendor Payment{% endblock %}
+{% block breadcrumb %}Vendor Payments / New Request{% endblock %}
+{% block page_title %}New Payment Request{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'vendor:my_requests' %}" class="btn btn-light btn-sm">
+    <i class="fa-solid fa-arrow-left"></i> My Requests
+  </a>
+{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:900px">
+  <div class="card-header">
+    <span><i class="fa-solid fa-file-invoice-dollar me-2 text-primary"></i>Vendor Payment Entry</span>
+  </div>
+  <div class="card-body">
+    <form method="post" enctype="multipart/form-data" id="vpForm">
+      {% csrf_token %}
+
+      {% if form.non_field_errors %}
+        <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+      {% endif %}
+
+      <div class="row g-3 mb-3">
+        <div class="col-md-6">
+          <label class="form-label">Vendor</label>
+          {{ form.vendor }}
+          {% if form.vendor.errors %}<div class="form-text text-danger">{{ form.vendor.errors }}</div>{% endif %}
+        </div>
+        <div class="col-md-6" id="manualVendorWrapper" style="display:none">
+          <label class="form-label">Vendor Name (Others)</label>
+          {{ form.vendor_name_manual }}
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Vendor Type</label>
+          {{ form.vendor_type }}
+        </div>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-md-4">
+          <label class="form-label">Invoice Date</label>
+          {{ form.invoice_date }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Invoice Number</label>
+          {{ form.invoice_number }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Bill Type</label>
+          {{ form.bill_type }}
+        </div>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-md-4">
+          <label class="form-label">Base Amount (₹)</label>
+          {{ form.base_amount }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">GST Amount (₹)</label>
+          {{ form.gst_amount }}
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Total Amount (₹)</label>
+          <input type="text" class="form-control" id="totalDisplay" readonly placeholder="Auto-calculated">
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Description</label>
+        {{ form.description }}
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Attachment <small class="text-muted">(PDF/Image — auto compressed)</small></label>
+        <input type="file" name="attachment" class="form-control" accept=".pdf,.jpg,.jpeg,.png,.webp">
+        {% if form.attachment.errors %}<div class="form-text text-danger">{{ form.attachment.errors }}</div>{% endif %}
+      </div>
+
+      <div class="d-flex gap-2 mt-4">
+        <button type="submit" name="action" value="draft" class="btn btn-light">
+          <i class="fa-regular fa-floppy-disk"></i> Save Draft
+        </button>
+        <button type="submit" name="action" value="submit" class="btn btn-primary">
+          <i class="fa-solid fa-paper-plane"></i> Submit for Approval
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  var vendorSelect = document.getElementById('id_vendor');
+  var manualWrapper = document.getElementById('manualVendorWrapper');
+  var base = document.getElementById('id_base_amount');
+  var gst = document.getElementById('id_gst_amount');
+  var total = document.getElementById('totalDisplay');
+
+  function toggleManual() {
+    var opt = vendorSelect ? vendorSelect.options[vendorSelect.selectedIndex] : null;
+    var isOther = opt && opt.text.toLowerCase().includes('other');
+    if (manualWrapper) manualWrapper.style.display = isOther ? '' : 'none';
+  }
+
+  function calcTotal() {
+    var b = parseFloat(base ? base.value : 0) || 0;
+    var g = parseFloat(gst ? gst.value : 0) || 0;
+    if (total) total.value = '₹ ' + (b + g).toFixed(2);
+  }
+
+  if (vendorSelect) vendorSelect.addEventListener('change', toggleManual);
+  if (base) base.addEventListener('input', calcTotal);
+  if (gst) gst.addEventListener('input', calcTotal);
+  toggleManual();
+  calcTotal();
+})();
+</script>
+{% endblock %}

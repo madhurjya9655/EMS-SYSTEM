@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}My Vendor Requests{% endblock %}
+{% block navbar_title %}My Vendor Requests{% endblock %}
+{% block breadcrumb %}Vendor Payments / My Requests{% endblock %}
+{% block page_title %}My Requests{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'vendor:new_request' %}" class="btn btn-primary btn-sm">
+    <i class="fa-solid fa-plus"></i> New Request
+  </a>
+{% endblock %}
+
+{% block content %}
+<div class="dt-card">
+  <div class="dt-toolbar">
+    <div class="dt-toolbar-l">
+      <span class="dt-title">Payment Requests</span>
+      <span class="dt-count">{{ requests.count }}</span>
+    </div>
+    <div class="dt-toolbar-r">
+      <form method="get" class="d-flex gap-2">
+        <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+          <option value="">All Status</option>
+          {% for val, label in status_choices %}
+            <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </form>
+    </div>
+  </div>
+  <div class="data-table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Request ID</th>
+          <th>Vendor</th>
+          <th>Invoice No</th>
+          <th>Total</th>
+          <th>Bill Type</th>
+          <th>Status</th>
+          <th>Date</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in requests %}
+        <tr>
+          <td><strong>{{ r.request_id }}</strong></td>
+          <td>{{ r.vendor_display_name }}</td>
+          <td>{{ r.invoice_number }}</td>
+          <td>₹{{ r.total_amount|floatformat:2 }}</td>
+          <td>{{ r.get_bill_type_display }}</td>
+          <td><span class="status-badge {{ r.get_status_badge }}">{{ r.get_status_display }}</span></td>
+          <td>{{ r.created_at|date:"d M Y" }}</td>
+          <td class="action-cell">
+            <a href="{% url 'vendor:detail' r.pk %}" class="btn btn-sm btn-light">View</a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="8" class="empty-state">No requests found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

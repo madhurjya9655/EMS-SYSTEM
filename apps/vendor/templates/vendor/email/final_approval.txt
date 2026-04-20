@@ -1,0 +1,18 @@
+Vendor Payment Approved
+
+Request ID   : {{ obj.request_id }}
+Vendor       : {{ obj.vendor_display_name }}
+Invoice No   : {{ obj.invoice_number }}
+Invoice Date : {{ obj.invoice_date }}
+Base Amount  : INR {{ obj.base_amount }}
+GST Amount   : INR {{ obj.gst_amount }}
+Total Amount : INR {{ obj.total_amount }}
+Bill Type    : {{ obj.get_bill_type_display }}
+
+Description  : {{ obj.description }}
+
+Approved By  : {{ obj.final_approved_by.get_full_name|default:obj.final_approved_by.username }}
+
+---
+This is a system-generated notification from BOS Lakshya EMS.
+Please process the payment at the earliest.

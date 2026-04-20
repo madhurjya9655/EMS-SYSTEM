@@ -627,9 +627,10 @@
       </button>
       {% endif %}
 
-      {% if user|has_any_permission:"petty_cash_list,petty_cash_apply,reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin" or user|has_group:"Manager" or user|has_group:"Finance" %}
+      {# ── FINANCE rail-btn: includes vendor app_name ── #}
+      {% if user|has_any_permission:"petty_cash_list,petty_cash_apply,reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin" or user|has_group:"Manager" or user|has_group:"Finance" or user.is_authenticated %}
       <button type="button"
-              class="rail-btn {% if request.resolver_match.app_name == 'reimbursement' or request.resolver_match.app_name == 'petty_cash' %}active{% endif %}"
+              class="rail-btn {% if request.resolver_match.app_name == 'reimbursement' or request.resolver_match.app_name == 'petty_cash' or request.resolver_match.app_name == 'vendor' %}active{% endif %}"
               data-panel="finance" data-tip="Finance" title="Finance">
         <i class="fa-solid fa-wallet"></i>
       </button>
@@ -645,7 +646,6 @@
 
       <div class="rail-divider"></div>
 
-    
       <a href="https://script.google.com/a/macros/blueoceansteels.com/s/AKfycbxyvMlqCjXAX3MOkds3qwt75ehe7T0bHqUuI84A64r_h8SgYGbY3hzbVuTbYSf7dFgK5w/exec"
          class="rail-btn"
          target="_blank"
@@ -684,6 +684,7 @@
 
   <div class="sub-panel" id="subPanel" aria-label="Module navigation">
 
+    <!-- ══ PEOPLE ══════════════════════════════════════════════════════════ -->
     <div class="sub-panel-section" id="panel-people">
       <div class="sub-panel-header">
         <div class="sub-panel-icon"><i class="fa-solid fa-users"></i></div>
@@ -722,6 +723,7 @@
       </div>
     </div>
 
+    <!-- ══ TASKS ═══════════════════════════════════════════════════════════ -->
     <div class="sub-panel-section" id="panel-tasks">
       <div class="sub-panel-header">
         <div class="sub-panel-icon" style="background:#f5f3ff;color:#7c3aed"><i class="fa-solid fa-list-check"></i></div>
@@ -769,6 +771,7 @@
       </div>
     </div>
 
+    <!-- ══ SALES ═══════════════════════════════════════════════════════════ -->
     <div class="sub-panel-section" id="panel-sales">
       <div class="sub-panel-header">
         <div class="sub-panel-icon" style="background:#fff7ed;color:#ea580c"><i class="fa-solid fa-chart-line"></i></div>
@@ -802,6 +805,7 @@
       </div>
     </div>
 
+    <!-- ══ FINANCE ═════════════════════════════════════════════════════════ -->
     <div class="sub-panel-section" id="panel-finance">
       <div class="sub-panel-header">
         <div class="sub-panel-icon" style="background:#f0fdf4;color:#22c55e"><i class="fa-solid fa-wallet"></i></div>
@@ -809,6 +813,29 @@
         <button type="button" class="sub-panel-close" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
       </div>
       <div class="sub-panel-nav">
+
+        {# ══ VENDOR PAYMENTS (new) ══════════════════════════════════════════ #}
+        <span class="sub-section-label">Vendor Payments</span>
+        <a href="{% url 'vendor:new_request' %}"
+           class="sub-link {% if request.resolver_match.url_name == 'new_request' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
+          <i class="fa-solid fa-file-invoice-dollar"></i> New Request
+        </a>
+        <a href="{% url 'vendor:my_requests' %}"
+           class="sub-link {% if request.resolver_match.url_name == 'my_requests' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
+          <i class="fa-solid fa-list-alt"></i> My Requests
+        </a>
+        <a href="{% url 'vendor:approval_queue' %}"
+           class="sub-link {% if request.resolver_match.url_name == 'approval_queue' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
+          <i class="fa-solid fa-check-circle"></i> Approval Queue
+        </a>
+        {% if user.is_superuser %}
+        <a href="{% url 'vendor:admin_setup' %}"
+           class="sub-link {% if request.resolver_match.url_name == 'admin_setup' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
+          <i class="fa-solid fa-gear"></i> Vendor Setup
+        </a>
+        {% endif %}
+
+        {# ══ PETTY CASH ════════════════════════════════════════════════════ #}
         {% if user|has_any_permission:"petty_cash_list,petty_cash_apply" or user|has_group:"Manager" or user|has_group:"Finance" %}
         <span class="sub-section-label">Petty Cash</span>
         {% if user|has_permission:"petty_cash_list" %}<a href="{% url 'petty_cash:list_requests' %}" class="sub-link {% if request.resolver_match.url_name == 'list_requests' %}active{% endif %}"><i class="fa-solid fa-file-invoice-dollar"></i> My Requests</a>{% endif %}
@@ -817,6 +844,7 @@
         {% if user|has_group:"Finance" %}<a href="{% url 'petty_cash:finance_requests' %}" class="sub-link {% if request.resolver_match.url_name == 'finance_requests' %}active{% endif %}"><i class="fa-solid fa-coins"></i> Finance Approvals</a>{% endif %}
         {% endif %}
 
+        {# ══ REIMBURSEMENT ════════════════════════════════════════════════ #}
         {% if user|has_any_permission:"reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin,reimbursement_analytics" %}
         <span class="sub-section-label">Reimbursement</span>
         {% if user|has_permission:"reimbursement_apply" %}<a href="{% url 'reimbursement:expense_inbox' %}" class="sub-link {% if request.resolver_match.url_name == 'expense_inbox' %}active{% endif %}"><i class="fa-solid fa-receipt"></i> Upload Expenses</a>{% endif %}
@@ -840,9 +868,11 @@
         <a href="{% url 'reimbursement:analytics_dashboard' %}" class="sub-link {% if request.resolver_match.url_name == 'analytics_dashboard' %}active{% endif %}"><i class="fa-solid fa-chart-line"></i> Analytics</a>
         {% endif %}
         {% endif %}
+
       </div>
     </div>
 
+    <!-- ══ REPORTS ═════════════════════════════════════════════════════════ -->
     <div class="sub-panel-section" id="panel-reports">
       <div class="sub-panel-header">
         <div class="sub-panel-icon" style="background:#ecfeff;color:#0891b2"><i class="fa-solid fa-chart-pie"></i></div>
@@ -860,6 +890,7 @@
       </div>
     </div>
 
+    <!-- ══ SETTINGS ════════════════════════════════════════════════════════ -->
     <div class="sub-panel-section" id="panel-settings">
       <div class="sub-panel-header">
         <div class="sub-panel-icon" style="background:#f9fafb;color:#6b7280"><i class="fa-solid fa-gear"></i></div>

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Approval Queue{% endblock %}
+{% block navbar_title %}Vendor Approval Queue{% endblock %}
+{% block breadcrumb %}Vendor Payments / Approval Queue{% endblock %}
+{% block page_title %}Approval Queue{% endblock %}
+
+{% block content %}
+<div class="dt-card">
+  <div class="dt-toolbar">
+    <div class="dt-toolbar-l">
+      <span class="dt-title">Pending Approvals</span>
+      <span class="dt-count">{{ requests.count }}</span>
+    </div>
+    <div class="dt-toolbar-r">
+      {% if is_finance %}<span class="badge bg-primary">Finance Approver</span>{% endif %}
+      {% if is_senior %}<span class="badge bg-success">Senior Approver</span>{% endif %}
+    </div>
+  </div>
+  <div class="data-table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Request ID</th>
+          <th>Vendor</th>
+          <th>Invoice No</th>
+          <th>Total</th>
+          <th>Submitted By</th>
+          <th>Status</th>
+          <th>Date</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in requests %}
+        <tr>
+          <td><strong>{{ r.request_id }}</strong></td>
+          <td>{{ r.vendor_display_name }}</td>
+          <td>{{ r.invoice_number }}</td>
+          <td>₹{{ r.total_amount|floatformat:2 }}</td>
+          <td>{{ r.created_by.get_full_name|default:r.created_by.username }}</td>
+          <td><span class="status-badge {{ r.get_status_badge }}">{{ r.get_status_display }}</span></td>
+          <td>{{ r.created_at|date:"d M Y" }}</td>
+          <td class="action-cell">
+            <a href="{% url 'vendor:detail' r.pk %}" class="btn btn-sm btn-primary">Review</a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="8" class="empty-state">No pending approvals.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

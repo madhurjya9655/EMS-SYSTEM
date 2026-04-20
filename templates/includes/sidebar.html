@@ -21,6 +21,7 @@
                 <span>Dashboard</span>
             </a>
 
+            {# ══ PEOPLE ═══════════════════════════════════════════════════════ #}
             {% if user|has_permission:"list_users" or user|has_group:"HR" or user.is_superuser or user|has_any_permission:"leave_list,leave_apply,leave_pending_manager" %}
             <div class="sidebar-group">
                 <div class="sidebar-group-label">People</div>
@@ -55,6 +56,7 @@
             </div>
             {% endif %}
 
+            {# ══ TASKS ════════════════════════════════════════════════════════ #}
             {% if user|has_any_permission:"add_checklist,list_checklist,add_delegation,list_delegation,add_ticket,list_all_tickets,assigned_to_me,assigned_by_me,mt_bulk_upload" %}
             <div class="sidebar-group">
                 <div class="sidebar-group-label">Tasks</div>
@@ -133,6 +135,7 @@
             </div>
             {% endif %}
 
+            {# ══ SALES / KAM ══════════════════════════════════════════════════ #}
             {% if user|has_any_permission:"kam_dashboard,kam_plan,kam_visits,kam_customers,kam_reports,kam_manager" or user.is_superuser %}
             <div class="sidebar-group">
                 <div class="sidebar-group-label">Sales</div>
@@ -161,7 +164,7 @@
                 </a>
                 {% endif %}
 
-                {% if user|has_any_permission:"kam_visits,kam_call_new,kam_collection_new" %}
+                {% if user|has_any_permissions:"kam_visits,kam_call_new,kam_collection_new" %}
                 <a href="{% url 'kam:visits' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'visits' %}active{% endif %}">
                     <i class="fa-solid fa-phone-volume"></i>
@@ -190,7 +193,7 @@
                 </a>
                 {% endif %}
 
-                {% if user|has_any_permission:"kam_targets,kam_targets_lines" %}
+                {% if user|has_any_permissions:"kam_targets,kam_targets_lines" %}
                 <a href="{% url 'kam:targets' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'targets' %}active{% endif %}">
                     <i class="fa-solid fa-bullseye"></i>
@@ -222,7 +225,7 @@
                 </a>
                 {% endif %}
 
-                {% if user|has_any_permission:"kam_sync_now,kam_sync_trigger,kam_sync_step" %}
+                {% if user|has_any_permissions:"kam_sync_now,kam_sync_trigger,kam_sync_step" %}
                 <a href="{% url 'kam:sync_now' %}" class="sidebar-link">
                     <i class="fa-solid fa-rotate"></i>
                     <span>Sync Now</span>
@@ -237,11 +240,6 @@
                 </a>
                 {% endif %}
 
-                {# ═══════════════════════════════════════════════════════════════
-                   90 DAYS STOCK ANALYSIS — ALL EMPLOYEES, NO PERMISSION REQUIRED
-                   External link — no backend validation, opens new tab always.
-                   DO NOT add any {% if perms %} or {% if user.role %} wrapper.
-                ═══════════════════════════════════════════════════════════════ #}
                 <a href="https://script.google.com/a/macros/blueoceansteels.com/s/AKfycbxyvMlqCjXAX3MOkds3qwt75ehe7T0bHqUuI84A64r_h8SgYGbY3hzbVuTbYSf7dFgK5w/exec"
                    class="sidebar-link"
                    target="_blank"
@@ -252,10 +250,39 @@
             </div>
             {% endif %}
 
-            {% if user|has_any_permission:"petty_cash_list,petty_cash_apply,reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin" or user|has_group:"Manager" or user|has_group:"Finance" %}
+            {# ══ FINANCE ══════════════════════════════════════════════════════ #}
+            {% if user|has_any_permission:"petty_cash_list,petty_cash_apply,reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin" or user|has_group:"Manager" or user|has_group:"Finance" or user.is_authenticated %}
             <div class="sidebar-group">
                 <div class="sidebar-group-label">Finance</div>
 
+                {# ── Vendor Payments (new) ──────────────────────────────────── #}
+                <a href="{% url 'vendor:new_request' %}"
+                   class="sidebar-link {% if request.resolver_match.url_name == 'new_request' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
+                    <i class="fa-solid fa-file-invoice-dollar"></i>
+                    <span>New Vendor Payment</span>
+                </a>
+
+                <a href="{% url 'vendor:my_requests' %}"
+                   class="sidebar-link {% if request.resolver_match.url_name == 'my_requests' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
+                    <i class="fa-solid fa-list-alt"></i>
+                    <span>My Vendor Requests</span>
+                </a>
+
+                <a href="{% url 'vendor:approval_queue' %}"
+                   class="sidebar-link {% if request.resolver_match.url_name == 'approval_queue' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
+                    <i class="fa-solid fa-check-circle"></i>
+                    <span>Vendor Approvals</span>
+                </a>
+
+                {% if user.is_superuser %}
+                <a href="{% url 'vendor:admin_setup' %}"
+                   class="sidebar-link {% if request.resolver_match.url_name == 'admin_setup' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
+                    <i class="fa-solid fa-gear"></i>
+                    <span>Vendor Setup</span>
+                </a>
+                {% endif %}
+
+                {# ── Petty Cash ────────────────────────────────────────────── #}
                 {% if user|has_permission:"petty_cash_list" %}
                 <a href="{% url 'petty_cash:list_requests' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'list_requests' %}active{% endif %}">
@@ -272,6 +299,7 @@
                 </a>
                 {% endif %}
 
+                {# ── Reimbursement ─────────────────────────────────────────── #}
                 {% if user|has_permission:"reimbursement_apply" %}
                 <a href="{% url 'reimbursement:expense_inbox' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'expense_inbox' %}active{% endif %}">
@@ -306,6 +334,7 @@
             </div>
             {% endif %}
 
+            {# ══ REPORTS ══════════════════════════════════════════════════════ #}
             {% if user|has_any_permission:"doer_tasks,weekly_mis_score,performance_score" or user.is_superuser or user|has_group:"Admin" or user|has_group:"Manager" %}
             <div class="sidebar-group">
                 <div class="sidebar-group-label">Reports</div>
@@ -336,6 +365,7 @@
             </div>
             {% endif %}
 
+            {# ══ SETTINGS ═════════════════════════════════════════════════════ #}
             {% if user|has_any_permission:"list_users,add_user" or user.is_superuser %}
             <div class="sidebar-group">
                 <div class="sidebar-group-label">Settings</div>
