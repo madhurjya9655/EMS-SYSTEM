@@ -144,6 +144,14 @@ PERMISSION_URLS: dict[str, str] = {
     "reimbursement_finance_verify":     "reimbursement:finance_verify",
     "reimbursement_request_detail":     "reimbursement:request_detail",
 
+# ── Vendor Payments ────────────────────────────────────────────────
+
+    "vendor_create"         : "vendor:new_request",
+    "vendor_view_own"       : "vendor:my_requests",
+    "vendor_finance_approve": "vendor:approval_queue",
+    "vendor_final_approve"  : "vendor:approval_queue",
+    "vendor_admin"          : "vendor:admin_setup",
+
     # ── Reports ────────────────────────────────────────────────────────
     "doer_tasks":               "reports:doer_tasks",
     "weekly_mis_score":         "reports:weekly_mis_score",

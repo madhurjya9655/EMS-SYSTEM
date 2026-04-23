@@ -1,6 +1,6 @@
 {# FILE: templates/kam/reports.html #}
 {# PURPOSE: KAM Reports — last 4 weeks analytics with Chart.js trend charts + detail tables #}
-{# UPDATED: 2026-03-05 #}
+{# UPDATED: 2026-04-14 #}
 {% extends "base.html" %}
 {% load humanize %}
 
@@ -15,7 +15,9 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 1.25rem;
+    height: 100%;
   }
+
   .chart-title {
     font-size: 11px;
     font-weight: 700;
@@ -24,7 +26,24 @@
     color: var(--subtle);
     margin-bottom: 0.75rem;
   }
-  .chart-wrap { position: relative; height: 180px; }
+
+  .chart-wrap {
+    position: relative;
+    height: 220px;
+  }
+
+  .chart-empty {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--subtle);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 16px;
+  }
 
   .metric-tab {
     padding: 6px 16px;
@@ -38,8 +57,18 @@
     text-decoration: none;
     transition: all 0.14s ease;
   }
-  .metric-tab:hover { background: var(--surface-alt); color: var(--text); }
-  .metric-tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+  .metric-tab:hover {
+    background: var(--surface-alt);
+    color: var(--text);
+    text-decoration: none;
+  }
+
+  .metric-tab.active {
+    background: var(--primary);
+    color: #fff;
+    border-color: var(--primary);
+  }
 
   .report-card {
     background: var(--surface);
@@ -47,6 +76,7 @@
     border-radius: var(--radius);
     overflow: hidden;
   }
+
   .report-card-header {
     display: flex;
     align-items: center;
@@ -55,7 +85,10 @@
     border-bottom: 1px solid var(--border-light);
     font-size: 13px;
     font-weight: 700;
+    gap: 10px;
+    flex-wrap: wrap;
   }
+
   .badge-count {
     display: inline-flex;
     align-items: center;
@@ -69,6 +102,7 @@
     font-size: 11px;
     font-weight: 700;
   }
+
   .report-table th {
     font-size: 11px;
     font-weight: 700;
@@ -76,7 +110,12 @@
     letter-spacing: 0.05em;
     color: var(--muted);
   }
-  .report-table td { font-size: 13px; vertical-align: middle; }
+
+  .report-table td {
+    font-size: 13px;
+    vertical-align: middle;
+  }
+
   .success-badge {
     display: inline-flex;
     align-items: center;
@@ -86,8 +125,17 @@
     padding: 2px 8px;
     border-radius: 999px;
   }
-  .success-badge.yes { background: #ecfdf5; color: var(--success); }
-  .success-badge.no  { background: #fef2f2; color: var(--danger); }
+
+  .success-badge.yes {
+    background: #ecfdf5;
+    color: var(--success);
+  }
+
+  .success-badge.no {
+    background: #fef2f2;
+    color: var(--danger);
+  }
+
   .range-pill {
     display: inline-flex;
     align-items: center;
@@ -100,17 +148,25 @@
     padding: 3px 10px;
     border-radius: 999px;
   }
+
   .empty-state {
     padding: 40px 20px;
     text-align: center;
     color: var(--subtle);
     font-size: 13px;
   }
-  .empty-state i { font-size: 2rem; margin-bottom: 10px; display: block; }
+
+  .empty-state i {
+    font-size: 2rem;
+    margin-bottom: 10px;
+    display: block;
+  }
 </style>
 {% endblock %}
 
 {% block content %}
+
+{{ weeks_trend|default:"[]"|json_script:"trendDataJson" }}
 
 {# ── PAGE HEADER ─────────────────────────────────────────────────────── #}
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:6px;">
@@ -136,20 +192,28 @@
 </div>
 
 {# ── FILTER BAR ───────────────────────────────────────────────────────── #}
-<form method="get" class="d-flex align-items-end gap-2 flex-wrap mb-3 p-3 border rounded"
-      style="background:var(--surface);" id="reportsFilterForm">
+<form method="get"
+      class="d-flex align-items-end gap-2 flex-wrap mb-3 p-3 border rounded"
+      style="background:var(--surface);"
+      id="reportsFilterForm">
   <input type="hidden" name="metric" value="{{ metric }}">
 
   <div class="d-flex flex-column gap-1">
     <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--subtle);">From</span>
-    <input type="date" name="from" value="{% firstof request.GET.from filter_from %}"
-           class="form-control form-control-sm" style="min-width:140px;">
+    <input type="date"
+           name="from"
+           value="{% firstof request.GET.from filter_from %}"
+           class="form-control form-control-sm"
+           style="min-width:140px;">
   </div>
 
   <div class="d-flex flex-column gap-1">
     <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--subtle);">To</span>
-    <input type="date" name="to" value="{% firstof request.GET.to filter_to %}"
-           class="form-control form-control-sm" style="min-width:140px;">
+    <input type="date"
+           name="to"
+           value="{% firstof request.GET.to filter_to %}"
+           class="form-control form-control-sm"
+           style="min-width:140px;">
   </div>
 
   {% if can_choose_kam %}
@@ -176,46 +240,61 @@
 </form>
 
 {# ── 4-WEEK TREND CHARTS ──────────────────────────────────────────────── #}
-{% if weeks_trend %}
 <div class="mb-4">
-  <div class="d-flex align-items-center justify-content-between mb-3">
+  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
     <h5 class="fw-bold m-0">Last 4 Weeks Analytics</h5>
-    <span class="text-muted small">Scope: {{ scope_label }}</span>
+    <span class="text-muted small">Scope: {{ scope_label|default:"ALL" }}</span>
   </div>
+
   <div class="row g-3">
 
     <div class="col-md-6 col-xl-4">
       <div class="chart-card">
         <div class="chart-title"><i class="fas fa-boxes-stacked me-1"></i>Sales Trend (MT)</div>
-        <div class="chart-wrap"><canvas id="chartSales"></canvas></div>
+        <div class="chart-wrap">
+          <canvas id="chartSales"></canvas>
+          <div class="chart-empty" id="emptyChartSales">No sales trend data</div>
+        </div>
       </div>
     </div>
 
     <div class="col-md-6 col-xl-4">
       <div class="chart-card">
         <div class="chart-title"><i class="fas fa-route me-1"></i>Visits Trend</div>
-        <div class="chart-wrap"><canvas id="chartVisits"></canvas></div>
+        <div class="chart-wrap">
+          <canvas id="chartVisits"></canvas>
+          <div class="chart-empty" id="emptyChartVisits">No visits trend data</div>
+        </div>
       </div>
     </div>
 
     <div class="col-md-6 col-xl-4">
       <div class="chart-card">
         <div class="chart-title"><i class="fas fa-phone-volume me-1"></i>Calls Trend</div>
-        <div class="chart-wrap"><canvas id="chartCalls"></canvas></div>
+        <div class="chart-wrap">
+          <canvas id="chartCalls"></canvas>
+          <div class="chart-empty" id="emptyChartCalls">No calls trend data</div>
+        </div>
       </div>
     </div>
 
     <div class="col-md-6 col-xl-6">
       <div class="chart-card">
         <div class="chart-title"><i class="fas fa-bullseye me-1"></i>Leads Trend</div>
-        <div class="chart-wrap"><canvas id="chartLeads"></canvas></div>
+        <div class="chart-wrap">
+          <canvas id="chartLeads"></canvas>
+          <div class="chart-empty" id="emptyChartLeads">No leads trend data</div>
+        </div>
       </div>
     </div>
 
     <div class="col-md-6 col-xl-6">
       <div class="chart-card">
         <div class="chart-title"><i class="fas fa-money-bill-wave me-1"></i>Collections Trend (₹)</div>
-        <div class="chart-wrap"><canvas id="chartCollections"></canvas></div>
+        <div class="chart-wrap">
+          <canvas id="chartCollections"></canvas>
+          <div class="chart-empty" id="emptyChartCollections">No collections trend data</div>
+        </div>
       </div>
     </div>
 
@@ -227,6 +306,8 @@
   <div class="report-card-header">
     <span><i class="fas fa-table me-1 text-muted"></i>4-Week Trend Data</span>
   </div>
+
+  {% if weeks_trend %}
   <div class="table-responsive">
     <table class="table table-sm report-table mb-0">
       <thead>
@@ -247,14 +328,18 @@
           <td class="text-end">{{ row.visits }}</td>
           <td class="text-end">{{ row.calls }}</td>
           <td class="text-end">{{ row.leads }}</td>
-          <td class="text-end">₹ {{ row.collections|floatformat:0 }}</td>
+          <td class="text-end">₹ {{ row.collections|floatformat:0|intcomma }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  {% else %}
+  <div class="empty-state">
+    <i class="fas fa-chart-line"></i>No 4-week trend data available.
+  </div>
+  {% endif %}
 </div>
-{% endif %}
 
 {# ── METRIC TABS ──────────────────────────────────────────────────────── #}
 <div class="d-flex gap-2 flex-wrap mb-3">
@@ -262,13 +347,25 @@
      class="metric-tab {% if metric == 'sales' %}active{% endif %}">
     <i class="fas fa-boxes-stacked me-1"></i>Sales
   </a>
+
   <a href="?metric=calls{% if request.GET.from %}&from={{ request.GET.from }}{% endif %}{% if request.GET.to %}&to={{ request.GET.to }}{% endif %}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
      class="metric-tab {% if metric == 'calls' %}active{% endif %}">
     <i class="fas fa-phone-volume me-1"></i>Calls
   </a>
+
   <a href="?metric=visits{% if request.GET.from %}&from={{ request.GET.from }}{% endif %}{% if request.GET.to %}&to={{ request.GET.to }}{% endif %}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
      class="metric-tab {% if metric == 'visits' %}active{% endif %}">
     <i class="fas fa-route me-1"></i>Visits
+  </a>
+
+  <a href="?metric=leads{% if request.GET.from %}&from={{ request.GET.from }}{% endif %}{% if request.GET.to %}&to={{ request.GET.to }}{% endif %}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
+     class="metric-tab {% if metric == 'leads' %}active{% endif %}">
+    <i class="fas fa-bullseye me-1"></i>Leads
+  </a>
+
+  <a href="?metric=collections{% if request.GET.from %}&from={{ request.GET.from }}{% endif %}{% if request.GET.to %}&to={{ request.GET.to }}{% endif %}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
+     class="metric-tab {% if metric == 'collections' %}active{% endif %}">
+    <i class="fas fa-money-bill-wave me-1"></i>Collections
   </a>
 </div>
 
@@ -281,6 +378,7 @@
     </span>
     {% if rows %}<span style="font-size:12px;color:var(--muted);">Top 300 by MT</span>{% endif %}
   </div>
+
   {% if rows %}
   <div class="table-responsive">
     <table class="table table-sm report-table align-middle mb-0">
@@ -329,6 +427,7 @@
     </span>
     {% if rows %}<span style="font-size:12px;color:var(--muted);">Latest 500 calls</span>{% endif %}
   </div>
+
   {% if rows %}
   <div class="table-responsive">
     <table class="table table-sm report-table align-middle mb-0">
@@ -379,6 +478,7 @@
     </span>
     {% if rows %}<span style="font-size:12px;color:var(--muted);">Latest 500 visits</span>{% endif %}
   </div>
+
   {% if rows %}
   <div class="table-responsive">
     <table class="table table-sm report-table align-middle mb-0">
@@ -430,26 +530,153 @@
 </div>
 {% endif %}
 
+{# ── LEADS TABLE ──────────────────────────────────────────────────────── #}
+{% if metric == 'leads' %}
+<div class="report-card">
+  <div class="report-card-header">
+    <span><i class="fas fa-bullseye me-1 text-muted"></i>Leads Log
+      <span class="badge-count ms-2">{{ rows|length }}</span>
+    </span>
+    {% if rows %}<span style="font-size:12px;color:var(--muted);">Latest 500 leads</span>{% endif %}
+  </div>
+
+  {% if rows %}
+  <div class="table-responsive">
+    <table class="table table-sm report-table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Customer</th>
+          <th>KAM</th>
+          <th>Date</th>
+          <th>Status</th>
+          <th class="text-end">Qty (MT)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td style="color:var(--subtle);font-size:11px;">{{ forloop.counter }}</td>
+          <td style="font-weight:600;">{{ row.customer_name|default:"—" }}</td>
+          <td>
+            {% if row.kam_username %}
+              <span style="background:var(--primary-soft);color:var(--primary);font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:4px;">
+                {{ row.kam_username }}
+              </span>
+            {% else %}
+              <span style="color:var(--subtle);">—</span>
+            {% endif %}
+          </td>
+          <td style="color:var(--muted);font-size:12.5px;">{{ row.doe|date:"d M Y" }}</td>
+          <td>{{ row.status|default:"—" }}</td>
+          <td class="text-end" style="font-weight:700;">{{ row.qty_mt|floatformat:3 }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <i class="fas fa-bullseye"></i>No leads recorded for this period.
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ── COLLECTIONS TABLE ────────────────────────────────────────────────── #}
+{% if metric == 'collections' %}
+<div class="report-card">
+  <div class="report-card-header">
+    <span><i class="fas fa-money-bill-wave me-1 text-muted"></i>Collections Log
+      <span class="badge-count ms-2">{{ rows|length }}</span>
+    </span>
+    {% if rows %}<span style="font-size:12px;color:var(--muted);">Latest 500 collection entries</span>{% endif %}
+  </div>
+
+  {% if rows %}
+  <div class="table-responsive">
+    <table class="table table-sm report-table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Customer</th>
+          <th>KAM</th>
+          <th>Date &amp; Time</th>
+          <th class="text-end">Amount (₹)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td style="color:var(--subtle);font-size:11px;">{{ forloop.counter }}</td>
+          <td style="font-weight:600;">{{ row.customer_name|default:"—" }}</td>
+          <td>
+            {% if row.kam_username %}
+              <span style="background:var(--primary-soft);color:var(--primary);font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:4px;">
+                {{ row.kam_username }}
+              </span>
+            {% else %}
+              <span style="color:var(--subtle);">—</span>
+            {% endif %}
+          </td>
+          <td style="color:var(--muted);font-size:12.5px;">{{ row.txn_datetime|date:"d M Y, H:i" }}</td>
+          <td class="text-end" style="font-weight:700;">₹ {{ row.amount|floatformat:0|intcomma }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <i class="fas fa-money-bill-wave"></i>No collections recorded for this period.
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
 {% endblock %}
 
 {% block extra_js %}
 <script>
 (function () {
-  var trendRaw = '{{ weeks_trend|escapejs }}';
-  var trendData = [];
-  try {
-    // weeks_trend is passed as a Python list — use json_script pattern via inline assignment
-    trendData = JSON.parse(document.getElementById('trendDataJson').textContent);
-  } catch (_) {}
+  function getTrendData() {
+    var node = document.getElementById('trendDataJson');
+    if (!node) return [];
+    try {
+      return JSON.parse(node.textContent || '[]');
+    } catch (err) {
+      console.error('Failed to parse trendDataJson:', err);
+      return [];
+    }
+  }
 
-  if (!trendData.length) return;
+  var trendData = getTrendData();
 
-  var labels      = trendData.map(function(r){ return r.week; });
-  var salesData   = trendData.map(function(r){ return r.sales_mt; });
-  var visitsData  = trendData.map(function(r){ return r.visits; });
-  var callsData   = trendData.map(function(r){ return r.calls; });
-  var leadsData   = trendData.map(function(r){ return r.leads; });
-  var collData    = trendData.map(function(r){ return r.collections; });
+  var labels = trendData.map(function (r) { return r.week || ''; });
+  var salesData = trendData.map(function (r) { return Number(r.sales_mt || 0); });
+  var visitsData = trendData.map(function (r) { return Number(r.visits || 0); });
+  var callsData = trendData.map(function (r) { return Number(r.calls || 0); });
+  var leadsData = trendData.map(function (r) { return Number(r.leads || 0); });
+  var collData = trendData.map(function (r) { return Number(r.collections || 0); });
+
+  function hasAnyValue(arr) {
+    if (!Array.isArray(arr) || !arr.length) return false;
+    return arr.some(function (v) { return Number(v || 0) !== 0; });
+  }
+
+  function showEmpty(canvasId, emptyId, shouldShow) {
+    var canvas = document.getElementById(canvasId);
+    var empty = document.getElementById(emptyId);
+    if (!canvas || !empty) return;
+
+    if (shouldShow) {
+      canvas.style.display = 'none';
+      empty.style.display = 'flex';
+    } else {
+      canvas.style.display = 'block';
+      empty.style.display = 'none';
+    }
+  }
 
   var baseOpts = {
     responsive: true,
@@ -458,16 +685,38 @@
       legend: { display: false },
       tooltip: { mode: 'index', intersect: false }
     },
+    interaction: {
+      mode: 'index',
+      intersect: false
+    },
     scales: {
-      x: { grid: { display: false }, ticks: { font: { size: 11 } } },
-      y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,.05)' }, ticks: { font: { size: 11 } } }
+      x: {
+        grid: { display: false },
+        ticks: { font: { size: 11 } }
+      },
+      y: {
+        beginAtZero: true,
+        grid: { color: 'rgba(0,0,0,.05)' },
+        ticks: {
+          font: { size: 11 },
+          precision: 0
+        }
+      }
     }
   };
 
-  function mkChart(id, label, data, color) {
-    var ctx = document.getElementById(id);
-    if (!ctx) return;
-    new Chart(ctx, {
+  function makeLineChart(id, emptyId, label, data, color) {
+    var el = document.getElementById(id);
+    if (!el) return;
+
+    if (!labels.length || !hasAnyValue(data)) {
+      showEmpty(id, emptyId, true);
+      return;
+    }
+
+    showEmpty(id, emptyId, false);
+
+    new Chart(el, {
       type: 'line',
       data: {
         labels: labels,
@@ -475,28 +724,26 @@
           label: label,
           data: data,
           borderColor: color,
-          backgroundColor: color.replace('rgb(', 'rgba(').replace(')', ', 0.08)'),
+          backgroundColor: color.replace('rgb(', 'rgba(').replace(')', ', 0.10)'),
           fill: true,
           tension: 0.35,
           pointRadius: 4,
+          pointHoverRadius: 5,
           pointBackgroundColor: color,
           pointBorderColor: '#fff',
-          pointBorderWidth: 2
+          pointBorderWidth: 2,
+          borderWidth: 2
         }]
       },
       options: JSON.parse(JSON.stringify(baseOpts))
     });
   }
 
-  mkChart('chartSales',       'Sales (MT)',       salesData,  'rgb(59, 130, 246)');
-  mkChart('chartVisits',      'Visits',           visitsData, 'rgb(34, 197, 94)');
-  mkChart('chartCalls',       'Calls',            callsData,  'rgb(168, 85, 247)');
-  mkChart('chartLeads',       'Leads',            leadsData,  'rgb(249, 115, 22)');
-  mkChart('chartCollections', 'Collections (₹)',  collData,   'rgb(20, 184, 166)');
+  makeLineChart('chartSales', 'emptyChartSales', 'Sales (MT)', salesData, 'rgb(59, 130, 246)');
+  makeLineChart('chartVisits', 'emptyChartVisits', 'Visits', visitsData, 'rgb(34, 197, 94)');
+  makeLineChart('chartCalls', 'emptyChartCalls', 'Calls', callsData, 'rgb(168, 85, 247)');
+  makeLineChart('chartLeads', 'emptyChartLeads', 'Leads', leadsData, 'rgb(249, 115, 22)');
+  makeLineChart('chartCollections', 'emptyChartCollections', 'Collections (₹)', collData, 'rgb(20, 184, 166)');
 })();
 </script>
-{% endblock %}
-
-{% block body_end %}
-{{ weeks_trend|json_script:"trendDataJson" }}
 {% endblock %}

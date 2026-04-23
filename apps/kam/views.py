@@ -964,8 +964,19 @@ def _resolve_scope(request: HttpRequest, actor: User) -> Tuple[Optional[int], st
     if not _is_manager(actor):
         return actor.id, actor.username
 
-    raw_scope = _first_query_value(request, "user", "kam", "KAM", "username", "user_name", "kam_username")
-    raw_scope_id = _first_query_value(request, "kam_id", "user_id", "id")
+    raw_scope = _first_query_value(
+        request,
+        "user",
+        "kam",
+        "KAM",
+        "username",
+        "user_name",
+        "kam_username",
+    )
+    # IMPORTANT:
+    # Do NOT use generic "id" here.
+    # On Customer 360, ?id=... is the customer id, not the KAM/user id.
+    raw_scope_id = _first_query_value(request, "kam_id", "user_id")
 
     u = None
     if raw_scope_id and raw_scope_id.isdigit():
@@ -973,19 +984,31 @@ def _resolve_scope(request: HttpRequest, actor: User) -> Tuple[Optional[int], st
     elif raw_scope:
         if raw_scope.upper() in {"ALL", "*"}:
             return None, "ALL"
-        u = User.objects.filter(Q(username__iexact=raw_scope) | Q(email__iexact=raw_scope), is_active=True).first()
+
+        u = User.objects.filter(
+            Q(username__iexact=raw_scope) | Q(email__iexact=raw_scope),
+            is_active=True,
+        ).first()
+
         if not u and " " in raw_scope.strip():
             parts = [p for p in raw_scope.strip().split() if p]
             if len(parts) >= 2:
-                u = User.objects.filter(first_name__iexact=parts[0], last_name__iexact=" ".join(parts[1:]), is_active=True).first()
+                u = User.objects.filter(
+                    first_name__iexact=parts[0],
+                    last_name__iexact=" ".join(parts[1:]),
+                    is_active=True,
+                ).first()
 
     if not u:
         return None, "ALL"
+
     if _is_admin(actor):
         return u.id, u.username
+
     allowed = set(_kams_managed_by_manager(actor))
     if u.id in allowed:
         return u.id, u.username
+
     return None, "ALL"
 
 
@@ -1556,7 +1579,7 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             request.user, scope_kam_id, "kam_id"
         )
         inv_i = _preferred_inv_qs(inv_i)
-        vis_i = _filter_qs_by_kam_scope(VisitActual.objects.filter(plan__visit_date__gte=start_i.date(), plan__visit_date__lt=end_i.date()), request.user, scope_kam_id, "plan__kam_id")
+        vis_i = _filter_qs_by_kam_scope(VisitPlan.objects.filter(visit_date__gte=start_i.date(), visit_date__lt=end_i.date()), request.user, scope_kam_id, "kam_id")
         calls_i = _filter_qs_by_kam_scope(CallLog.objects.filter(call_datetime__gte=start_i, call_datetime__lt=end_i), request.user, scope_kam_id, "kam_id")
         coll_i = _filter_qs_by_kam_scope(CollectionTxn.objects.filter(txn_datetime__gte=start_i, txn_datetime__lt=end_i), request.user, scope_kam_id, "kam_id")
         trend_rows.append({
@@ -3312,7 +3335,7 @@ def customers(request: HttpRequest) -> HttpResponse:
             customer = None
 
     # Fallback: use first customer in list if no valid ID was provided
-    if not customer:
+    if customer is None:
         customer = customer_list[0] if customer_list else None
 
     period_type, start_date, end_date, period_id = _get_customer360_range(request)
@@ -3591,48 +3614,180 @@ def reports(request: HttpRequest) -> HttpResponse:
     scope_kam_id, scope_label = _resolve_scope(request, request.user)
 
     anchor_end = _last_completed_ms_week_end(timezone.now())
-    weeks_trend = []
+    weeks_trend: List[Dict] = []
+
     for k in (3, 2, 1, 0):
-        end_i = anchor_end - timezone.timedelta(days=7 * k)
-        start_i = end_i - timezone.timedelta(days=7)
-        _, __, pid_i = _ms_week_bounds(start_i)
-        inv_i = _filter_qs_by_kam_scope(InvoiceFact.objects.filter(invoice_date__gte=start_i.date(), invoice_date__lt=end_i.date()), request.user, scope_kam_id, "kam_id")
-        inv_i = _preferred_inv_qs(inv_i)
-        vis_i = _filter_qs_by_kam_scope(VisitActual.objects.filter(plan__visit_date__gte=start_i.date(), plan__visit_date__lt=end_i.date()), request.user, scope_kam_id, "plan__kam_id")
-        calls_i = _filter_qs_by_kam_scope(CallLog.objects.filter(call_datetime__gte=start_i, call_datetime__lt=end_i), request.user, scope_kam_id, "kam_id")
-        coll_i = _filter_qs_by_kam_scope(CollectionTxn.objects.filter(txn_datetime__gte=start_i, txn_datetime__lt=end_i), request.user, scope_kam_id, "kam_id")
-        leads_i = _filter_qs_by_kam_scope(LeadFact.objects.filter(doe__gte=start_i.date(), doe__lt=end_i.date()), request.user, scope_kam_id, "kam_id")
-        weeks_trend.append({"week": pid_i, "sales_mt": float(_safe_decimal(inv_i.aggregate(mt=Sum("qty_mt")).get("mt"))), "visits": vis_i.count(), "calls": calls_i.count(), "collections": float(_safe_decimal(coll_i.aggregate(a=Sum("amount")).get("a"))), "leads": leads_i.count()})
+        week_end = anchor_end - timezone.timedelta(days=7 * k)
+        week_start = week_end - timezone.timedelta(days=7)
+        _, __, week_label = _ms_week_bounds(week_start)
+
+        inv_qs = _filter_qs_by_kam_scope(
+            InvoiceFact.objects.filter(
+                invoice_date__gte=week_start.date(),
+                invoice_date__lt=week_end.date(),
+            ),
+            request.user,
+            scope_kam_id,
+            "kam_id",
+        )
+        inv_qs = _preferred_inv_qs(inv_qs)
+
+        visit_actual_qs = _filter_qs_by_kam_scope(
+            VisitActual.objects.filter(
+                plan__visit_date__gte=week_start.date(),
+                plan__visit_date__lt=week_end.date(),
+            ),
+            request.user,
+            scope_kam_id,
+            "plan__kam_id",
+        )
+
+        call_qs = _filter_qs_by_kam_scope(
+            CallLog.objects.filter(
+                call_datetime__gte=week_start,
+                call_datetime__lt=week_end,
+            ),
+            request.user,
+            scope_kam_id,
+            "kam_id",
+        )
+
+        lead_qs = _filter_qs_by_kam_scope(
+            LeadFact.objects.filter(
+                doe__gte=week_start.date(),
+                doe__lt=week_end.date(),
+            ),
+            request.user,
+            scope_kam_id,
+            "kam_id",
+        )
+
+        collection_qs = _filter_qs_by_kam_scope(
+            CollectionTxn.objects.filter(
+                txn_datetime__gte=week_start,
+                txn_datetime__lt=week_end,
+            ),
+            request.user,
+            scope_kam_id,
+            "kam_id",
+        )
+
+        weeks_trend.append({
+            "week": week_label,
+            "sales_mt": float(_safe_decimal(inv_qs.aggregate(mt=Sum("qty_mt")).get("mt"))),
+            "visits": int(visit_actual_qs.count()),
+            "calls": int(call_qs.count()),
+            "leads": int(lead_qs.count()),
+            "collections": float(_safe_decimal(collection_qs.aggregate(a=Sum("amount")).get("a"))),
+        })
 
     metric = (request.GET.get("metric") or "sales").strip().lower()
     rows = []
+
     if metric == "sales":
-        qs = InvoiceFact.objects.filter(invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date())
+        qs = InvoiceFact.objects.filter(
+            invoice_date__gte=start_dt.date(),
+            invoice_date__lt=end_dt.date(),
+        )
         if scope_kam_id is not None:
             qs = qs.filter(kam_id=scope_kam_id)
         qs = _preferred_inv_qs(qs)
-        rows = list(qs.values(customer_name=F("customer__name"), kam_username=F("kam__username")).annotate(mt=Sum("qty_mt")).order_by("-mt")[:300])
+
+        rows = list(
+            qs.values(
+                customer_name=F("customer__name"),
+                kam_username=F("kam__username"),
+            )
+            .annotate(mt=Sum("qty_mt"))
+            .order_by("-mt")[:300]
+        )
+
     elif metric == "calls":
-        qs = CallLog.objects.filter(call_datetime__gte=start_dt, call_datetime__lt=end_dt)
+        qs = CallLog.objects.filter(
+            call_datetime__gte=start_dt,
+            call_datetime__lt=end_dt,
+        )
         if scope_kam_id is not None:
             qs = qs.filter(kam_id=scope_kam_id)
-        rows = list(qs.values("id", "call_datetime", kam_username=F("kam__username"), customer_name=F("customer__name")).order_by("-call_datetime")[:500])
+
+        rows = list(
+            qs.values(
+                "id",
+                "call_datetime",
+                kam_username=F("kam__username"),
+                customer_name=F("customer__name"),
+            ).order_by("-call_datetime")[:500]
+        )
+
     elif metric == "visits":
-        qs = VisitActual.objects.filter(plan__visit_date__gte=start_dt.date(), plan__visit_date__lt=end_dt.date())
+        qs = VisitActual.objects.filter(
+            plan__visit_date__gte=start_dt.date(),
+            plan__visit_date__lt=end_dt.date(),
+        )
         if scope_kam_id is not None:
             qs = qs.filter(plan__kam_id=scope_kam_id)
-        rows = list(qs.values("id", "successful", visit_date=F("plan__visit_date"), kam_username=F("plan__kam__username"), customer_name=F("plan__customer__name")).order_by("-visit_date")[:500])
+
+        rows = list(
+            qs.values(
+                "id",
+                "successful",
+                visit_date=F("plan__visit_date"),
+                kam_username=F("plan__kam__username"),
+                customer_name=F("plan__customer__name"),
+            ).order_by("-visit_date")[:500]
+        )
+
+    elif metric == "leads":
+        qs = LeadFact.objects.filter(
+            doe__isnull=False,
+            doe__gte=start_dt.date(),
+            doe__lt=end_dt.date(),
+        )
+        if scope_kam_id is not None:
+            qs = qs.filter(kam_id=scope_kam_id)
+
+        rows = list(
+            qs.values(
+                "id",
+                "doe",
+                "status",
+                "qty_mt",
+                kam_username=F("kam__username"),
+                customer_name=F("customer__name"),
+            ).order_by("-doe")[:500]
+        )
+
+    elif metric == "collections":
+        qs = CollectionTxn.objects.filter(
+            txn_datetime__gte=start_dt,
+            txn_datetime__lt=end_dt,
+        )
+        if scope_kam_id is not None:
+            qs = qs.filter(kam_id=scope_kam_id)
+
+        rows = list(
+            qs.values(
+                "id",
+                "txn_datetime",
+                "amount",
+                kam_username=F("kam__username"),
+                customer_name=F("customer__name"),
+            ).order_by("-txn_datetime")[:500]
+        )
 
     ctx = {
-        "page_title": "KAM Reports", "metric": metric, "range_label": range_label,
-        "scope_label": scope_label, "can_choose_kam": _is_manager(request.user),
-        "kam_options": _kam_options_for_user(request.user), "rows": rows,
+        "page_title": "KAM Reports",
+        "metric": metric,
+        "range_label": range_label,
+        "scope_label": scope_label,
+        "can_choose_kam": _is_manager(request.user),
+        "kam_options": _kam_options_for_user(request.user),
+        "rows": rows,
         "weeks_trend": weeks_trend,
         "filter_from": start_dt.date().isoformat(),
         "filter_to": (end_dt - timezone.timedelta(days=1)).date().isoformat(),
     }
     return render(request, "kam/reports.html", ctx)
-
 
 # =====================================================================
 # CSV export

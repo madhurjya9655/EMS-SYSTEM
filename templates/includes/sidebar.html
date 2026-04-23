@@ -251,36 +251,47 @@
             {% endif %}
 
             {# ══ FINANCE ══════════════════════════════════════════════════════ #}
-            {% if user|has_any_permission:"petty_cash_list,petty_cash_apply,reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin" or user|has_group:"Manager" or user|has_group:"Finance" or user.is_authenticated %}
+            {% if user|has_any_permission:"petty_cash_list,petty_cash_apply,reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin,vendor_create,vendor_view_own,vendor_finance_approve,vendor_final_approve,vendor_admin" or user|has_group:"Manager" or user|has_group:"Finance" %}
             <div class="sidebar-group">
                 <div class="sidebar-group-label">Finance</div>
 
-                {# ── Vendor Payments (new) ──────────────────────────────────── #}
+                {# ── Vendor Payments — permission-gated ──────────────────────── #}
+                {% if user|has_any_permission:"vendor_create,vendor_view_own,vendor_finance_approve,vendor_final_approve,vendor_admin" or user.is_superuser %}
+
+                {% if user|has_any_permission:"vendor_create" or user.is_superuser %}
                 <a href="{% url 'vendor:new_request' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'new_request' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
                     <i class="fa-solid fa-file-invoice-dollar"></i>
                     <span>New Vendor Payment</span>
                 </a>
+                {% endif %}
 
+                {% if user|has_any_permission:"vendor_create,vendor_view_own" or user.is_superuser %}
                 <a href="{% url 'vendor:my_requests' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'my_requests' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
                     <i class="fa-solid fa-list-alt"></i>
                     <span>My Vendor Requests</span>
                 </a>
+                {% endif %}
 
+                {% if user|has_any_permission:"vendor_finance_approve,vendor_final_approve" or user.is_superuser %}
                 <a href="{% url 'vendor:approval_queue' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'approval_queue' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
                     <i class="fa-solid fa-check-circle"></i>
                     <span>Vendor Approvals</span>
                 </a>
+                {% endif %}
 
-                {% if user.is_superuser %}
+                {% if user|has_any_permission:"vendor_admin" or user.is_superuser %}
                 <a href="{% url 'vendor:admin_setup' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'admin_setup' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
                     <i class="fa-solid fa-gear"></i>
                     <span>Vendor Setup</span>
                 </a>
                 {% endif %}
+
+                {% endif %}
+                {# ── END Vendor Payments ─────────────────────────────────────── #}
 
                 {# ── Petty Cash ────────────────────────────────────────────── #}
                 {% if user|has_permission:"petty_cash_list" %}

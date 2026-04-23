@@ -94,6 +94,16 @@ PERMISSIONS_STRUCTURE = {
         ("reimbursement_admin", "Admin – Reimbursement Console"),
         ("reimbursement_analytics", "Analytics Dashboard"),
     ],
+
+    
+    "Vendor Payments": [
+        ("vendor_create",          "Create & Submit Requests"),
+        ("vendor_view_own",        "View Own Requests"),
+        ("vendor_finance_approve", "Finance Approval (Step 1)"),
+        ("vendor_final_approve",   "Final Approval (Senior Authority)"),
+        ("vendor_admin",           "Admin Setup & Vendor Master"),
+    ],
+    
     "Reports": [
         ("doer_tasks", "Doer Tasks"),
         ("weekly_mis_score", "Weekly MIS Score"),

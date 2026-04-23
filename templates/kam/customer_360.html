@@ -1,10 +1,12 @@
 {# FILE: templates/kam/customer_360.html #}
 {# PURPOSE: Customer 360 — full detail view with tabs #}
-{# UPDATED: 2026-04-14 — Call History tab, safe fallback, refined UX #}
+{# UPDATED: 2026-04-14 — cleaned tabs, safer rendering, refined UX #}
 {% extends "base.html" %}
 {% load humanize %}
 
-{% block title %}{% if customer %}{{ customer.name }} — Customer 360{% else %}Customer 360{% endif %} — BOS Lakshya{% endblock %}
+{% block title %}
+  {% if customer %}{{ customer.name }} — Customer 360{% else %}Customer 360{% endif %} — BOS Lakshya
+{% endblock %}
 {% block breadcrumb %}Customer 360{% endblock %}
 
 {% block head_extra %}
@@ -22,7 +24,6 @@
     margin-bottom: 16px;
   }
 
-  /* ── Filter / Selector bar ────────────────────── */
   .c360-filter-bar {
     display: flex;
     gap: 8px;
@@ -30,7 +31,6 @@
     flex-wrap: wrap;
   }
 
-  /* ── Customer picker sidebar ──────────────────── */
   .c360-sidebar {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -82,8 +82,14 @@
     cursor: pointer;
   }
 
-  .c360-customer-item:hover { background: var(--surface-alt); text-decoration: none; }
-  .c360-customer-item.active { background: var(--primary-soft, #eff6ff); }
+  .c360-customer-item:hover {
+    background: var(--surface-alt);
+    text-decoration: none;
+  }
+
+  .c360-customer-item.active {
+    background: var(--primary-soft, #eff6ff);
+  }
 
   .c360-customer-name {
     font-size: 13px;
@@ -92,7 +98,9 @@
     line-height: 1.3;
   }
 
-  .c360-customer-item.active .c360-customer-name { color: var(--primary); }
+  .c360-customer-item.active .c360-customer-name {
+    color: var(--primary);
+  }
 
   .c360-customer-code {
     font-size: 11px;
@@ -100,10 +108,10 @@
     margin-top: 1px;
   }
 
-  /* ── Main detail column ───────────────────────── */
-  .c360-detail { min-width: 0; }
+  .c360-detail {
+    min-width: 0;
+  }
 
-  /* ── Customer header card ─────────────────────── */
   .c360-hero-card {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -133,10 +141,18 @@
     margin-top: 4px;
   }
 
-  .c360-hero-meta a { color: var(--primary); text-decoration: none; }
-  .c360-hero-meta a:hover { text-decoration: underline; }
+  .c360-hero-meta a {
+    color: var(--primary);
+    text-decoration: none;
+  }
 
-  .c360-hero-meta-sep { color: var(--border); }
+  .c360-hero-meta a:hover {
+    text-decoration: underline;
+  }
+
+  .c360-hero-meta-sep {
+    color: var(--border);
+  }
 
   .c360-actions {
     display: flex;
@@ -145,7 +161,6 @@
     align-items: flex-start;
   }
 
-  /* ── KPI summary row ─────────────────────────── */
   .c360-kpi-strip {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -178,7 +193,6 @@
     line-height: 1.1;
   }
 
-  /* ── Tabs ────────────────────────────────────── */
   .nav-tabs .nav-link {
     font-size: 12.5px;
     font-weight: 600;
@@ -191,7 +205,6 @@
     border-bottom-color: var(--primary);
   }
 
-  /* ── Content card ────────────────────────────── */
   .c360-tab-card {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -207,7 +220,10 @@
     color: var(--text);
   }
 
-  .c360-tab-body { padding: 0; }
+  .c360-tab-body {
+    padding: 0;
+  }
+
   .c360-empty {
     padding: 40px 20px;
     text-align: center;
@@ -215,7 +231,11 @@
     font-size: 13px;
   }
 
-  .c360-empty i { font-size: 1.8rem; display: block; margin-bottom: 8px; }
+  .c360-empty i {
+    font-size: 1.8rem;
+    display: block;
+    margin-bottom: 8px;
+  }
 
   .c360-tab-footer {
     padding: 10px 16px;
@@ -223,7 +243,6 @@
     background: var(--surface-alt);
   }
 
-  /* ── Ageing grid ─────────────────────────────── */
   .ageing-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -239,7 +258,9 @@
     text-align: center;
   }
 
-  .ageing-bucket.danger-bucket { border-color: var(--danger); }
+  .ageing-bucket.danger-bucket {
+    border-color: var(--danger);
+  }
 
   .ageing-bucket-label {
     font-size: 11px;
@@ -257,35 +278,35 @@
     color: var(--text);
   }
 
-  .ageing-bucket.danger-bucket .ageing-bucket-value { color: var(--danger); }
-
-  /* ── Period selector sidebar filter ──────────── */
-  .c360-sidebar-filter-input {
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 4px 8px;
-    width: 100%;
-    font-size: 12px;
-    background: var(--surface-alt);
-    color: var(--text);
+  .ageing-bucket.danger-bucket .ageing-bucket-value {
+    color: var(--danger);
   }
 
-  /* ── Responsive ──────────────────────────────── */
   @media (max-width: 900px) {
-    .c360-kpi-strip { grid-template-columns: repeat(2, 1fr); }
-    .ageing-grid { grid-template-columns: repeat(2, 1fr); }
+    .c360-kpi-strip {
+      grid-template-columns: repeat(2, 1fr);
+    }
+
+    .ageing-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
   }
 
   @media (max-width: 600px) {
-    .c360-kpi-strip { grid-template-columns: repeat(2, 1fr); }
-    .c360-actions .btn { font-size: 12px; }
+    .c360-kpi-strip {
+      grid-template-columns: repeat(2, 1fr);
+    }
+
+    .c360-actions .btn {
+      font-size: 12px;
+    }
   }
 </style>
 {% endblock %}
 
 {% block content %}
+{% with active_tab=request.GET.tab|default:'sales' current_user=request.GET.user|default:'' %}
 
-{# ─── Page header + filter bar ─────────────────────── #}
 <div class="c360-page-header">
   <div>
     <h1 class="page-title m-0">Customer 360°</h1>
@@ -296,39 +317,43 @@
     {% if can_choose_kam %}
       <form method="get" class="d-flex gap-2 align-items-center">
         <input type="hidden" name="id" value="{{ customer.id|default:'' }}">
+        <input type="hidden" name="period" value="{{ period_type|lower }}">
+        <input type="hidden" name="tab" value="{{ active_tab }}">
         <select name="user" class="form-select form-select-sm" style="min-width:140px;" onchange="this.form.submit()">
           <option value="">All KAMs</option>
           {% for uname in kam_options %}
-            <option value="{{ uname }}" {% if scope_label == uname %}selected{% endif %}>{{ uname }}</option>
+            <option value="{{ uname }}" {% if current_user == uname or scope_label == uname %}selected{% endif %}>
+              {{ uname }}
+            </option>
           {% endfor %}
         </select>
       </form>
     {% endif %}
 
     <form method="get" class="d-flex gap-2 align-items-center">
-      {% if request.GET.user %}<input type="hidden" name="user" value="{{ request.GET.user }}">{% endif %}
+      {% if current_user %}<input type="hidden" name="user" value="{{ current_user }}">{% endif %}
       <input type="hidden" name="id" value="{{ customer.id|default:'' }}">
+      <input type="hidden" name="tab" value="{{ active_tab }}">
       <select name="period" class="form-select form-select-sm" onchange="this.form.submit()">
-        <option value="week"    {% if period_type == 'WEEK'    %}selected{% endif %}>This Week</option>
-        <option value="month"   {% if period_type == 'MONTH'   %}selected{% endif %}>This Month</option>
+        <option value="week" {% if period_type == 'WEEK' %}selected{% endif %}>This Week</option>
+        <option value="month" {% if period_type == 'MONTH' %}selected{% endif %}>This Month</option>
         <option value="quarter" {% if period_type == 'QUARTER' %}selected{% endif %}>This Quarter</option>
-        <option value="year"    {% if period_type == 'YEAR'    %}selected{% endif %}>This Year</option>
-        <option value="all"     {% if period_type == 'ALL'     %}selected{% endif %}>All Time</option>
+        <option value="year" {% if period_type == 'YEAR' %}selected{% endif %}>This Year</option>
+        <option value="all" {% if period_type == 'ALL' %}selected{% endif %}>All Time</option>
       </select>
     </form>
   </div>
 </div>
 
-{# ─── Two-column layout ────────────────────────────── #}
 <div class="row g-3">
 
-  {# ── LEFT: Customer Picker ──────────────────────── #}
   <div class="col-md-3">
     <div class="c360-sidebar">
       <div class="c360-sidebar-header">
         <i class="fas fa-address-book"></i> Customers
         <span class="badge bg-secondary ms-auto" style="font-size:10px;">{{ customer_list|length }}</span>
       </div>
+
       <div class="c360-sidebar-search">
         <input
           type="text"
@@ -338,52 +363,73 @@
           oninput="filterSidebarList(this.value)"
         />
       </div>
+
       <div class="c360-sidebar-list" id="sidebarList">
         {% if customer_list %}
           {% for c in customer_list %}
-            <a href="?id={{ c.id }}&period={{ period_type|lower }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
-               class="c360-customer-item {% if customer and c.id == customer.id %}active{% endif %}"
-               data-name="{{ c.name|lower }}">
+            <a
+              href="?id={{ c.id }}&period={{ period_type|lower }}&tab={{ active_tab }}{% if current_user %}&user={{ current_user }}{% endif %}"
+              class="c360-customer-item {% if customer and c.id == customer.id %}active{% endif %}"
+              data-name="{{ c.name|lower }}"
+            >
               <div class="c360-customer-name">{{ c.name }}</div>
-              {% if c.code %}<div class="c360-customer-code">{{ c.code }}</div>{% endif %}
+              {% if c.code %}
+                <div class="c360-customer-code">{{ c.code }}</div>
+              {% endif %}
             </a>
           {% endfor %}
         {% else %}
-          <div class="c360-empty"><i class="fas fa-inbox"></i>No customers in scope.</div>
+          <div class="c360-empty">
+            <i class="fas fa-inbox"></i>
+            No customers in scope.
+          </div>
         {% endif %}
       </div>
     </div>
   </div>
 
-  {# ── RIGHT: Customer Detail ─────────────────────── #}
   <div class="col-md-9">
     {% if customer %}
 
-      {# ── Hero Card ─────────────────────────────── #}
       <div class="c360-hero-card">
         <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
           <div>
             <div class="c360-hero-name">
               {{ customer.name }}
-              {% if customer.is_nbd %}<span class="badge bg-info" style="font-size:11px;">NBD</span>{% endif %}
+              {% if customer.is_nbd %}
+                <span class="badge bg-info" style="font-size:11px;">NBD</span>
+              {% endif %}
             </div>
+
             <div class="c360-hero-meta">
               {% if customer.code %}
                 <span><i class="fas fa-hashtag me-1"></i><strong>{{ customer.code }}</strong></span>
                 <span class="c360-hero-meta-sep">|</span>
               {% endif %}
+
               {% if customer.gst_number %}
                 <span>GST: <strong>{{ customer.gst_number }}</strong></span>
                 <span class="c360-hero-meta-sep">|</span>
               {% endif %}
+
               {% if customer.type %}
                 <span>{{ customer.type }}</span>
                 <span class="c360-hero-meta-sep">|</span>
               {% endif %}
+
               <span>
                 <i class="fas fa-user me-1"></i>KAM:
-                <strong>{{ customer.kam.get_full_name|default:customer.kam.username|default:"Unassigned" }}</strong>
+                <strong>
+                  {% if customer.kam %}
+                    {{ customer.kam.get_full_name|default:customer.kam.username }}
+                  {% elif customer.primary_kam %}
+                    {{ customer.primary_kam.get_full_name|default:customer.primary_kam.username }}
+                  {% else %}
+                    Unassigned
+                  {% endif %}
+                </strong>
               </span>
+
               {% if customer.mobile %}
                 <span class="c360-hero-meta-sep">|</span>
                 <span>
@@ -391,12 +437,16 @@
                   <a href="tel:{{ customer.mobile }}">{{ customer.mobile }}</a>
                 </span>
               {% endif %}
+
               {% if customer.address %}
                 <span class="c360-hero-meta-sep">|</span>
-                <span><i class="fas fa-location-dot me-1"></i>{{ customer.address|truncatechars:55 }}</span>
+                <span>
+                  <i class="fas fa-location-dot me-1"></i>{{ customer.address|truncatechars:55 }}
+                </span>
               {% endif %}
             </div>
           </div>
+
           <div class="c360-actions">
             <a href="{% url 'kam:plan' %}?customer={{ customer.pk }}" class="btn btn-sm btn-outline-secondary">
               <i class="fas fa-calendar-check me-1"></i>Plan Visit
@@ -414,7 +464,6 @@
         </div>
       </div>
 
-      {# ── KPI Strip ─────────────────────────────── #}
       <div class="c360-kpi-strip">
         <div class="c360-kpi-card">
           <div class="c360-kpi-card-label">Exposure</div>
@@ -422,18 +471,21 @@
             &#8377;&nbsp;{{ exposure|floatformat:0|intcomma }}
           </div>
         </div>
+
         <div class="c360-kpi-card">
           <div class="c360-kpi-card-label">Overdue</div>
           <div class="c360-kpi-card-value {% if overdue > 0 %}text-danger{% endif %}">
             &#8377;&nbsp;{{ overdue|floatformat:0|intcomma }}
           </div>
         </div>
+
         <div class="c360-kpi-card">
           <div class="c360-kpi-card-label">Credit Limit</div>
           <div class="c360-kpi-card-value">
             &#8377;&nbsp;{{ credit_limit|floatformat:0|intcomma }}
           </div>
         </div>
+
         <div class="c360-kpi-card">
           <div class="c360-kpi-card-label">Risk Ratio</div>
           <div class="c360-kpi-card-value {% if risk_ratio and risk_ratio > 1 %}text-danger{% elif risk_ratio %}text-success{% endif %}">
@@ -442,58 +494,52 @@
         </div>
       </div>
 
-      {# ── Tabs ──────────────────────────────────── #}
-      {% with tab=request.GET.tab|default:'sales' %}
       <ul class="nav nav-tabs mb-3" role="tablist">
-        {% for t_key, t_label, t_icon in tab_items|default:"" %}
-          {# fallback to manual if context var missing #}
-        {% endfor %}
         <li class="nav-item">
-          <a class="nav-link {% if tab == 'sales' %}active{% endif %}"
-             href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=sales{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+          <a class="nav-link {% if active_tab == 'sales' %}active{% endif %}"
+             href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=sales{% if current_user %}&user={{ current_user }}{% endif %}">
             <i class="fas fa-boxes-stacked me-1"></i>Sales
           </a>
         </li>
         <li class="nav-item">
-          <a class="nav-link {% if tab == 'visits' %}active{% endif %}"
-             href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=visits{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+          <a class="nav-link {% if active_tab == 'visits' %}active{% endif %}"
+             href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=visits{% if current_user %}&user={{ current_user }}{% endif %}">
             <i class="fas fa-route me-1"></i>Visits
           </a>
         </li>
         <li class="nav-item">
-          <a class="nav-link {% if tab == 'calls' %}active{% endif %}"
-             href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=calls{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+          <a class="nav-link {% if active_tab == 'calls' %}active{% endif %}"
+             href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=calls{% if current_user %}&user={{ current_user }}{% endif %}">
             <i class="fas fa-phone-volume me-1"></i>Calls
           </a>
         </li>
         <li class="nav-item">
-          <a class="nav-link {% if tab == 'leads' %}active{% endif %}"
-             href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=leads{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+          <a class="nav-link {% if active_tab == 'leads' %}active{% endif %}"
+             href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=leads{% if current_user %}&user={{ current_user }}{% endif %}">
             <i class="fas fa-filter-circle-dollar me-1"></i>Leads
           </a>
         </li>
         <li class="nav-item">
-          <a class="nav-link {% if tab == 'collections' %}active{% endif %}"
-             href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=collections{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+          <a class="nav-link {% if active_tab == 'collections' %}active{% endif %}"
+             href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=collections{% if current_user %}&user={{ current_user }}{% endif %}">
             <i class="fas fa-indian-rupee-sign me-1"></i>Collections
           </a>
         </li>
         <li class="nav-item">
-          <a class="nav-link {% if tab == 'overdue' %}active{% endif %}"
-             href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=overdue{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+          <a class="nav-link {% if active_tab == 'overdue' %}active{% endif %}"
+             href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=overdue{% if current_user %}&user={{ current_user }}{% endif %}">
             <i class="fas fa-triangle-exclamation me-1"></i>Overdues
           </a>
         </li>
         <li class="nav-item">
-          <a class="nav-link {% if tab == 'ageing' %}active{% endif %}"
-             href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=ageing{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}">
+          <a class="nav-link {% if active_tab == 'ageing' %}active{% endif %}"
+             href="?id={{ customer.id }}&period={{ period_type|lower }}&tab=ageing{% if current_user %}&user={{ current_user }}{% endif %}">
             <i class="fas fa-layer-group me-1"></i>Ageing
           </a>
         </li>
       </ul>
 
-      {# ── TAB: Sales ─────────────────────────────── #}
-      {% if tab == 'sales' %}
+      {% if active_tab == 'sales' %}
         <div class="c360-tab-card">
           <div class="c360-tab-header">Sales History &mdash; {{ period_type }}</div>
           <div class="c360-tab-body">
@@ -502,16 +548,18 @@
                 <table class="table table-sm table-hover align-middle mb-0">
                   <thead class="table-light">
                     <tr>
-                      <th>Year</th><th>Month</th><th class="text-end">MT</th>
+                      <th>Year</th>
+                      <th>Month</th>
+                      <th class="text-end">MT</th>
                     </tr>
                   </thead>
                   <tbody>
                     {% for r in sales_history %}
-                    <tr>
-                      <td>{{ r.year }}</td>
-                      <td>{{ r.month }}</td>
-                      <td class="text-end fw-bold">{{ r.mt|floatformat:3 }}</td>
-                    </tr>
+                      <tr>
+                        <td>{{ r.year }}</td>
+                        <td>{{ r.month }}</td>
+                        <td class="text-end fw-bold">{{ r.mt|floatformat:3 }}</td>
+                      </tr>
                     {% endfor %}
                   </tbody>
                   <tfoot class="table-light fw-bold">
@@ -523,14 +571,16 @@
                 </table>
               </div>
             {% else %}
-              <div class="c360-empty"><i class="fas fa-chart-simple"></i>No sales data for this period.</div>
+              <div class="c360-empty">
+                <i class="fas fa-chart-simple"></i>
+                No sales data for this period.
+              </div>
             {% endif %}
           </div>
         </div>
       {% endif %}
 
-      {# ── TAB: Visits ────────────────────────────── #}
-      {% if tab == 'visits' %}
+      {% if active_tab == 'visits' %}
         <div class="c360-tab-card">
           <div class="c360-tab-header">Visit History</div>
           <div class="c360-tab-body">
@@ -539,53 +589,63 @@
                 <table class="table table-sm table-hover align-middle mb-0">
                   <thead class="table-light">
                     <tr>
-                      <th>Date</th><th>Category</th><th>KAM</th>
-                      <th>Status</th><th>Outcome</th><th>Notes</th><th></th>
+                      <th>Date</th>
+                      <th>Category</th>
+                      <th>KAM</th>
+                      <th>Status</th>
+                      <th>Outcome</th>
+                      <th>Notes</th>
+                      <th></th>
                     </tr>
                   </thead>
                   <tbody>
                     {% for v in visit_history %}
-                    <tr>
-                      <td class="text-nowrap fw-semibold small">{{ v.visit_date }}</td>
-                      <td class="small">{{ v.get_visit_category_display }}</td>
-                      <td class="small">{{ v.kam.get_full_name|default:v.kam.username }}</td>
-                      <td>
-                        {% if v.approval_status == 'APPROVED' %}
-                          <span class="badge bg-success">Approved</span>
-                        {% elif v.approval_status == 'PENDING_APPROVAL' %}
-                          <span class="badge bg-warning text-dark">Pending</span>
-                        {% elif v.approval_status == 'REJECTED' %}
-                          <span class="badge bg-danger">Rejected</span>
-                        {% else %}
-                          <span class="badge bg-secondary">Draft</span>
-                        {% endif %}
-                      </td>
-                      <td>
-                        {% if v.actual %}
-                          {% if v.actual.successful %}
-                            <span class="badge bg-success">Done ✓</span>
+                      <tr>
+                        <td class="text-nowrap fw-semibold small">{{ v.visit_date }}</td>
+                        <td class="small">{{ v.get_visit_category_display }}</td>
+                        <td class="small">{{ v.kam.get_full_name|default:v.kam.username }}</td>
+                        <td>
+                          {% if v.approval_status == 'APPROVED' %}
+                            <span class="badge bg-success">Approved</span>
+                          {% elif v.approval_status == 'PENDING_APPROVAL' %}
+                            <span class="badge bg-warning text-dark">Pending</span>
+                          {% elif v.approval_status == 'REJECTED' %}
+                            <span class="badge bg-danger">Rejected</span>
                           {% else %}
-                            <span class="badge bg-danger">Not Done</span>
+                            <span class="badge bg-secondary">Draft</span>
                           {% endif %}
-                        {% else %}
-                          <span class="text-muted small">—</span>
-                        {% endif %}
-                      </td>
-                      <td class="small text-muted" style="max-width:180px;">
-                        {{ v.actual.meeting_notes|default:"—"|truncatechars:50 }}
-                      </td>
-                      <td>
-                        <a href="{% url 'kam:visit_history_edit' v.pk %}"
-                           class="btn btn-xs btn-outline-primary"
-                           style="font-size:.72rem;padding:.18rem .42rem;">Edit</a>
-                      </td>
-                    </tr>
+                        </td>
+                        <td>
+                          {% if v.actual %}
+                            {% if v.actual.successful %}
+                              <span class="badge bg-success">Done ✓</span>
+                            {% else %}
+                              <span class="badge bg-danger">Not Done</span>
+                            {% endif %}
+                          {% else %}
+                            <span class="text-muted small">—</span>
+                          {% endif %}
+                        </td>
+                        <td class="small text-muted" style="max-width:180px;">
+                          {{ v.actual.meeting_notes|default:"—"|truncatechars:50 }}
+                        </td>
+                        <td>
+                          <a href="{% url 'kam:visit_history_edit' v.pk %}"
+                             class="btn btn-xs btn-outline-primary"
+                             style="font-size:.72rem;padding:.18rem .42rem;">
+                            Edit
+                          </a>
+                        </td>
+                      </tr>
                     {% endfor %}
                   </tbody>
                 </table>
               </div>
             {% else %}
-              <div class="c360-empty"><i class="fas fa-route"></i>No visit history for this period.</div>
+              <div class="c360-empty">
+                <i class="fas fa-route"></i>
+                No visit history for this period.
+              </div>
             {% endif %}
           </div>
           <div class="c360-tab-footer">
@@ -596,8 +656,7 @@
         </div>
       {% endif %}
 
-      {# ── TAB: Calls ─────────────────────────────── #}
-      {% if tab == 'calls' %}
+      {% if active_tab == 'calls' %}
         <div class="c360-tab-card">
           <div class="c360-tab-header">Call History</div>
           <div class="c360-tab-body">
@@ -606,29 +665,35 @@
                 <table class="table table-sm table-hover align-middle mb-0">
                   <thead class="table-light">
                     <tr>
-                      <th>Date &amp; Time</th><th>KAM</th><th>Summary</th>
-                      <th>Outcome</th><th>Duration</th>
+                      <th>Date &amp; Time</th>
+                      <th>KAM</th>
+                      <th>Summary</th>
+                      <th>Outcome</th>
+                      <th>Duration</th>
                     </tr>
                   </thead>
                   <tbody>
                     {% for c in call_history %}
-                    <tr>
-                      <td class="text-nowrap small fw-semibold">{{ c.call_datetime|date:"d M Y H:i" }}</td>
-                      <td class="small">{{ c.kam.get_full_name|default:c.kam.username }}</td>
-                      <td class="small text-muted" style="max-width:240px;">
-                        {{ c.summary|default:"—"|truncatechars:80 }}
-                      </td>
-                      <td class="small">{{ c.outcome|default:"—" }}</td>
-                      <td class="small">
-                        {% if c.duration_minutes %}{{ c.duration_minutes }} min{% else %}—{% endif %}
-                      </td>
-                    </tr>
+                      <tr>
+                        <td class="text-nowrap small fw-semibold">{{ c.call_datetime|date:"d M Y H:i" }}</td>
+                        <td class="small">{{ c.kam.get_full_name|default:c.kam.username }}</td>
+                        <td class="small text-muted" style="max-width:240px;">
+                          {{ c.summary|default:"—"|truncatechars:80 }}
+                        </td>
+                        <td class="small">{{ c.outcome|default:"—" }}</td>
+                        <td class="small">
+                          {% if c.duration_minutes %}{{ c.duration_minutes }} min{% else %}—{% endif %}
+                        </td>
+                      </tr>
                     {% endfor %}
                   </tbody>
                 </table>
               </div>
             {% else %}
-              <div class="c360-empty"><i class="fas fa-phone-slash"></i>No call history for this period.</div>
+              <div class="c360-empty">
+                <i class="fas fa-phone-slash"></i>
+                No call history for this period.
+              </div>
             {% endif %}
           </div>
           <div class="c360-tab-footer">
@@ -639,8 +704,7 @@
         </div>
       {% endif %}
 
-      {# ── TAB: Leads ─────────────────────────────── #}
-      {% if tab == 'leads' %}
+      {% if active_tab == 'leads' %}
         <div class="c360-tab-card">
           <div class="c360-tab-header">Lead / Enquiry History</div>
           <div class="c360-tab-body">
@@ -649,44 +713,51 @@
                 <table class="table table-sm table-hover align-middle mb-0">
                   <thead class="table-light">
                     <tr>
-                      <th>Date</th><th>Enquiry No</th><th>Grade</th>
-                      <th>Size</th><th class="text-end">MT</th><th>Status</th><th>Remarks</th>
+                      <th>Date</th>
+                      <th>Enquiry No</th>
+                      <th>Grade</th>
+                      <th>Size</th>
+                      <th class="text-end">MT</th>
+                      <th>Status</th>
+                      <th>Remarks</th>
                     </tr>
                   </thead>
                   <tbody>
                     {% for l in lead_history %}
-                    <tr>
-                      <td class="text-nowrap small">{{ l.doe|default:"—" }}</td>
-                      <td class="small fw-semibold">{{ l.enquiry_no|default:"—" }}</td>
-                      <td class="small">{{ l.grade|default:"—" }}</td>
-                      <td class="small">{{ l.size|default:"—" }}</td>
-                      <td class="text-end fw-bold">{{ l.qty_mt|floatformat:3 }}</td>
-                      <td>
-                        {% if l.status == 'WON' %}
-                          <span class="badge bg-success">Won</span>
-                        {% elif l.status == 'LOST' %}
-                          <span class="badge bg-danger">Lost</span>
-                        {% elif l.status == 'NEGOTIATION' %}
-                          <span class="badge bg-warning text-dark">Negotiation</span>
-                        {% else %}
-                          <span class="badge bg-info">Open</span>
-                        {% endif %}
-                      </td>
-                      <td class="small text-muted">{{ l.remarks|default:"—"|truncatechars:50 }}</td>
-                    </tr>
+                      <tr>
+                        <td class="text-nowrap small">{{ l.doe|default:"—" }}</td>
+                        <td class="small fw-semibold">{{ l.enquiry_no|default:"—" }}</td>
+                        <td class="small">{{ l.grade|default:"—" }}</td>
+                        <td class="small">{{ l.size|default:"—" }}</td>
+                        <td class="text-end fw-bold">{{ l.qty_mt|floatformat:3 }}</td>
+                        <td>
+                          {% if l.status == 'WON' %}
+                            <span class="badge bg-success">Won</span>
+                          {% elif l.status == 'LOST' %}
+                            <span class="badge bg-danger">Lost</span>
+                          {% elif l.status == 'NEGOTIATION' %}
+                            <span class="badge bg-warning text-dark">Negotiation</span>
+                          {% else %}
+                            <span class="badge bg-info">Open</span>
+                          {% endif %}
+                        </td>
+                        <td class="small text-muted">{{ l.remarks|default:"—"|truncatechars:50 }}</td>
+                      </tr>
                     {% endfor %}
                   </tbody>
                 </table>
               </div>
             {% else %}
-              <div class="c360-empty"><i class="fas fa-filter-circle-dollar"></i>No leads for this period.</div>
+              <div class="c360-empty">
+                <i class="fas fa-filter-circle-dollar"></i>
+                No leads for this period.
+              </div>
             {% endif %}
           </div>
         </div>
       {% endif %}
 
-      {# ── TAB: Collections ───────────────────────── #}
-      {% if tab == 'collections' %}
+      {% if active_tab == 'collections' %}
         <div class="c360-tab-card">
           <div class="c360-tab-header">Collection History &mdash; {{ period_type }}</div>
           <div class="c360-tab-body">
@@ -695,22 +766,27 @@
                 <table class="table table-sm table-hover align-middle mb-0">
                   <thead class="table-light">
                     <tr>
-                      <th>Year</th><th>Month</th><th class="text-end">Amount (₹)</th>
+                      <th>Year</th>
+                      <th>Month</th>
+                      <th class="text-end">Amount (₹)</th>
                     </tr>
                   </thead>
                   <tbody>
                     {% for r in collections_history %}
-                    <tr>
-                      <td>{{ r.year }}</td>
-                      <td>{{ r.month }}</td>
-                      <td class="text-end fw-bold">&#8377; {{ r.amount|floatformat:0|intcomma }}</td>
-                    </tr>
+                      <tr>
+                        <td>{{ r.year }}</td>
+                        <td>{{ r.month }}</td>
+                        <td class="text-end fw-bold">&#8377; {{ r.amount|floatformat:0|intcomma }}</td>
+                      </tr>
                     {% endfor %}
                   </tbody>
                 </table>
               </div>
             {% else %}
-              <div class="c360-empty"><i class="fas fa-indian-rupee-sign"></i>No collection data for this period.</div>
+              <div class="c360-empty">
+                <i class="fas fa-indian-rupee-sign"></i>
+                No collection data for this period.
+              </div>
             {% endif %}
           </div>
           <div class="c360-tab-footer">
@@ -721,8 +797,7 @@
         </div>
       {% endif %}
 
-      {# ── TAB: Overdues ──────────────────────────── #}
-      {% if tab == 'overdue' %}
+      {% if active_tab == 'overdue' %}
         <div class="c360-tab-card">
           <div class="c360-tab-header">Overdue History (Snapshots)</div>
           <div class="c360-tab-body">
@@ -742,32 +817,34 @@
                   </thead>
                   <tbody>
                     {% for od in overdue_history %}
-                    <tr>
-                      <td class="fw-semibold small">{{ od.snapshot_date }}</td>
-                      <td class="text-end small">{{ od.exposure|floatformat:0|intcomma }}</td>
-                      <td class="text-end small">{{ od.ageing_0_30|floatformat:0|intcomma }}</td>
-                      <td class="text-end small">{{ od.ageing_31_60|floatformat:0|intcomma }}</td>
-                      <td class="text-end small">{{ od.ageing_61_90|floatformat:0|intcomma }}</td>
-                      <td class="text-end small {% if od.ageing_90_plus > 0 %}text-danger fw-bold{% endif %}">
-                        {{ od.ageing_90_plus|floatformat:0|intcomma }}
-                      </td>
-                      <td class="text-end fw-bold {% if od.overdue > 0 %}text-danger{% endif %}">
-                        {{ od.overdue|floatformat:0|intcomma }}
-                      </td>
-                    </tr>
+                      <tr>
+                        <td class="fw-semibold small">{{ od.snapshot_date }}</td>
+                        <td class="text-end small">{{ od.exposure|floatformat:0|intcomma }}</td>
+                        <td class="text-end small">{{ od.ageing_0_30|floatformat:0|intcomma }}</td>
+                        <td class="text-end small">{{ od.ageing_31_60|floatformat:0|intcomma }}</td>
+                        <td class="text-end small">{{ od.ageing_61_90|floatformat:0|intcomma }}</td>
+                        <td class="text-end small {% if od.ageing_90_plus > 0 %}text-danger fw-bold{% endif %}">
+                          {{ od.ageing_90_plus|floatformat:0|intcomma }}
+                        </td>
+                        <td class="text-end fw-bold {% if od.overdue > 0 %}text-danger{% endif %}">
+                          {{ od.overdue|floatformat:0|intcomma }}
+                        </td>
+                      </tr>
                     {% endfor %}
                   </tbody>
                 </table>
               </div>
             {% else %}
-              <div class="c360-empty"><i class="fas fa-triangle-exclamation"></i>No overdue snapshots on record.</div>
+              <div class="c360-empty">
+                <i class="fas fa-triangle-exclamation"></i>
+                No overdue snapshots on record.
+              </div>
             {% endif %}
           </div>
         </div>
       {% endif %}
 
-      {# ── TAB: Ageing ────────────────────────────── #}
-      {% if tab == 'ageing' %}
+      {% if active_tab == 'ageing' %}
         <div class="c360-tab-card">
           <div class="c360-tab-header">Current Ageing Bucket</div>
           <div class="ageing-grid">
@@ -791,37 +868,36 @@
         </div>
       {% endif %}
 
-      {% endwith %}
-
     {% else %}
-      {# ── No customer selected ─────────────────── #}
       <div class="c360-tab-card">
         <div class="c360-empty" style="padding: 60px 20px;">
           <i class="fas fa-address-book" style="font-size:3rem;color:var(--border);"></i>
           <div class="mt-3 fw-semibold" style="font-size:15px;color:var(--muted);">Select a Customer</div>
-          <div class="mt-1 small text-muted">Choose a customer from the panel on the left to view their 360° profile.</div>
+          <div class="mt-1 small text-muted">
+            Choose a customer from the panel on the left to view their 360° profile.
+          </div>
         </div>
       </div>
     {% endif %}
-  </div>{# /col-md-9 #}
+  </div>
 
-</div>{# /row #}
+</div>
 
+{% endwith %}
 {% endblock %}
 
 {% block extra_js %}
 <script>
-/* ── Sidebar client-side filter ────────────────────── */
 function filterSidebarList(query) {
   var q = (query || '').toLowerCase().trim();
   var items = document.querySelectorAll('#sidebarList .c360-customer-item');
+
   items.forEach(function (item) {
     var name = (item.dataset.name || '').toLowerCase();
     item.style.display = (!q || name.includes(q)) ? '' : 'none';
   });
 }
 
-/* ── Scroll active item into view ──────────────────── */
 (function () {
   var activeItem = document.querySelector('.c360-customer-item.active');
   if (activeItem) {
