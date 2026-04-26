@@ -1166,6 +1166,171 @@ def _sync_overdues(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SECTION: COLLECTION PLAN SNAPSHOT (from Overdues tab)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sync_overdues_to_collection_plan(
+    service, sheet_id: str,
+    tab_mapping, db_lookup, env_usermap,
+    local_cache: Dict,
+) -> SyncStats:
+    """
+    Sync Google Sheet Overdues tab → CollectionPlan.overdue_amount snapshot.
+
+    DATA SOURCE: Overdues tab, Yellow section (columns A–C only):
+      col A = customer_name
+      col B = kam_name
+      col C = overdue_amount
+
+    RULES:
+      - kam_id is MANDATORY; skip rows where KAM cannot be resolved
+      - Creates CollectionPlan if customer+kam pair doesn't exist
+      - Updates ONLY overdue_amount on existing entries
+      - NEVER overwrites actual_amount, collection_date, payment_details, utr_number
+      - Deduplicates within a single sync run (same customer+kam seen twice → skip second)
+      - No manual customer or amount entry
+
+    Returns SyncStats with customers_upserted counting rows synced into CollectionPlan.
+    """
+    from .models import CollectionPlan  # local import avoids circular
+
+    stats = SyncStats()
+    rows = _get_sheet_values(service, sheet_id, _tab_overdues())
+
+    if len(rows) < 2:
+        stats.notes.append("Overdues tab: no data rows — Collection Plan sync skipped")
+        logger.warning("_sync_overdues_to_collection_plan: Overdues tab empty.")
+        return stats
+
+    header = [h.strip().lower() for h in rows[0]] if rows else []
+
+    def _col(keywords: List[str], fallback: int) -> int:
+        for idx, h in enumerate(header):
+            for kw in keywords:
+                if kw in h:
+                    return idx
+        return fallback
+
+    # Yellow section: cols A–C
+    col_customer = _col(["customer"], 0)
+    col_kam      = _col(["kam"],      1)
+    col_overdue  = _col(["overdue", "dues", "amount"], 2)
+
+    logger.info(
+        "_sync_overdues_to_collection_plan: col_customer=%d col_kam=%d col_overdue=%d",
+        col_customer, col_kam, col_overdue,
+    )
+
+    snapshot_date = timezone.now().date()
+    now_ts        = timezone.now()
+
+    # Track pairs already processed in this sync run — prevents duplicates
+    processed_pairs: set = set()
+
+    for i, row in enumerate(rows[1:], start=2):
+        customer_name = _cell(row, col_customer)
+        kam_name      = _cell(row, col_kam)
+        overdue_raw   = _cell(row, col_overdue)
+
+        if not customer_name:
+            stats.skipped += 1
+            continue
+
+        overdue_amt = _decimal(overdue_raw)
+        if overdue_amt is None or overdue_amt <= 0:
+            logger.debug(
+                "Collection Plan sync row %d: zero/invalid overdue '%s' for customer '%s' — skipped",
+                i, overdue_raw, customer_name,
+            )
+            stats.skipped += 1
+            continue
+
+        # KAM is MANDATORY for collection plan
+        if not kam_name:
+            logger.warning(
+                "Collection Plan sync row %d: customer '%s' has no KAM name — skipped",
+                i, customer_name,
+            )
+            stats.unknown_kam += 1
+            continue
+
+        kam_user = _resolve_kam_user(
+            kam_name, tab_mapping, db_lookup, env_usermap, stats, local_cache
+        )
+
+        if not kam_user:
+            # unknown_kam already incremented by _resolve_kam_user
+            continue
+
+        # Dedup within this sync run
+        pair_key = (_normalize(customer_name), kam_user.id)
+        if pair_key in processed_pairs:
+            logger.debug(
+                "Collection Plan sync row %d: duplicate pair ('%s', %s) skipped",
+                i, customer_name, kam_user.username,
+            )
+            stats.skipped += 1
+            continue
+        processed_pairs.add(pair_key)
+
+        try:
+            customer = _safe_get_or_create_customer(customer_name, kam_user=kam_user)
+
+            with transaction.atomic():
+                # Authoritative key for new system: customer + kam
+                existing = (
+                    CollectionPlan.objects
+                    .filter(customer=customer, kam=kam_user)
+                    .order_by("-last_synced_at", "-created_at")
+                    .first()
+                )
+
+                if existing:
+                    # UPDATE overdue_amount ONLY — never touch actual collection data
+                    existing.overdue_amount = overdue_amt
+                    existing.planned_amount = overdue_amt   # backward compat
+                    existing.last_synced_at = now_ts
+                    existing.save(update_fields=[
+                        "overdue_amount", "planned_amount", "last_synced_at", "updated_at",
+                    ])
+                    logger.debug(
+                        "Collection Plan updated: customer='%s' kam='%s' overdue=₹%s",
+                        customer.name, kam_user.username, overdue_amt,
+                    )
+                else:
+                    CollectionPlan.objects.create(
+                        customer       = customer,
+                        kam            = kam_user,
+                        overdue_amount = overdue_amt,
+                        planned_amount = overdue_amt,
+                        period_type    = None,
+                        period_id      = None,
+                        from_date      = snapshot_date,
+                        to_date        = None,
+                        last_synced_at = now_ts,
+                    )
+                    logger.info(
+                        "Collection Plan created: customer='%s' kam='%s' overdue=₹%s",
+                        customer.name, kam_user.username, overdue_amt,
+                    )
+
+                stats.customers_upserted += 1
+
+        except Exception as exc:
+            logger.error(
+                "Collection Plan sync row %d failed: customer='%s' kam='%s' — %s",
+                i, customer_name, kam_name, exc,
+            )
+            stats.skipped += 1
+
+    logger.info(
+        "Collection Plan sync complete: synced=%d skipped=%d unknown_kam=%d",
+        stats.customers_upserted, stats.skipped, stats.unknown_kam,
+    )
+    return stats
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SECTION: COLLECTION
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1344,6 +1509,22 @@ def run_sync_now() -> SyncStats:
         total.merge(s)
         logger.info("  → overdues=%d skipped=%d", s.overdues_upserted, s.skipped)
 
+    # ── NEW: Sync Overdues → CollectionPlan snapshot ────────────────────────
+    if sections.get("overdues"):
+        logger.info("Syncing: Overdues → CollectionPlan (overdue_amount snapshot)")
+        s_cp = _sync_overdues_to_collection_plan(
+            service, sheet_id, tab_mapping, db_lookup, env_usermap, local_cache
+        )
+        # Merge into total — use collections_upserted counter to avoid double-counting customers
+        total.collections_upserted += s_cp.customers_upserted
+        total.skipped              += s_cp.skipped
+        if s_cp.notes:
+            total.notes.extend(s_cp.notes)
+        logger.info(
+            "  → collection_plan_synced=%d skipped=%d unknown_kam=%d",
+            s_cp.customers_upserted, s_cp.skipped, s_cp.unknown_kam,
+        )
+
     if sections.get("collection"):
         logger.info("Syncing: Collection (source=GOOGLE_SHEET)")
         s = _sync_collections(service, sheet_id, tab_mapping, db_lookup, env_usermap, local_cache)
@@ -1367,23 +1548,25 @@ def run_sync_now() -> SyncStats:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _STEPS = [
-    ("customers", "Customer Details"),
-    ("sales_f", "Sales (F)"),
-    ("sheet1", "Sheet1"),
-    ("frontend", "Front End"),
-    ("enquiry_f", "Enquiry (F)"),
-    ("overdues", "Overdues"),
-    ("collection", "Collection"),
+    ("customers",            "Customer Details"),
+    ("sales_f",              "Sales (F)"),
+    ("sheet1",               "Sheet1"),
+    ("frontend",             "Front End"),
+    ("enquiry_f",            "Enquiry (F)"),
+    ("overdues",             "Overdues"),
+    ("collection_plan_sync", "Collection Plan Snapshot"),   # ← NEW
+    ("collection",           "Collection"),
 ]
 
 _STEP_FN_MAP = {
-    "customers": _sync_customers,
-    "sales_f": _sync_sales_f,
-    "sheet1": _sync_sheet1,
-    "frontend": _sync_frontend,
-    "enquiry_f": _sync_enquiry_f,
-    "overdues": _sync_overdues,
-    "collection": _sync_collections,
+    "customers":            _sync_customers,
+    "sales_f":              _sync_sales_f,
+    "sheet1":               _sync_sheet1,
+    "frontend":             _sync_frontend,
+    "enquiry_f":            _sync_enquiry_f,
+    "overdues":             _sync_overdues,
+    "collection_plan_sync": _sync_overdues_to_collection_plan,   # ← NEW
+    "collection":           _sync_collections,
 }
 
 

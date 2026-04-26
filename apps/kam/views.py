@@ -34,6 +34,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 
 # FIX 5 — explicit login_url on all login_required decorators
 from django.contrib.auth.decorators import login_required as _django_login_required
@@ -62,7 +63,6 @@ from .forms import (
     CollectionForm,
     TargetLineInlineForm,
     TargetSettingForm,
-    CollectionPlanForm,
     CollectionPlanActualForm,
     VisitBatchForm,
     MultiVisitPlanLineForm,
@@ -1106,6 +1106,13 @@ def _build_batch_approval_email(
     *, request, batch, kam_user, visit_category_label, remarks,
     approve_url, reject_url, customers=None, counterparty_names=None,
 ) -> str:
+    # Override with direct action URLs
+    direct_approve_url = request.build_absolute_uri(
+        reverse("kam:direct_batch_approve", args=[_make_batch_token(batch.id, "APPROVE")])
+    )
+    direct_reject_url = request.build_absolute_uri(
+        reverse("kam:direct_batch_reject", args=[_make_batch_token(batch.id, "REJECT")])
+    )
     customers = customers or []
     counterparty_names = counterparty_names or []
     try:
@@ -1115,44 +1122,40 @@ def _build_batch_approval_email(
             "date_range": f"{batch.from_date} → {batch.to_date}",
             "remarks": remarks, "customers": customers,
             "counterparty_names": counterparty_names,
-            "approve_url": approve_url, "reject_url": reject_url,
+            "approve_url": direct_approve_url,
+            "reject_url":  direct_reject_url,
         })
     except Exception:
         pass
-    if customers:
-        lines_txt = "\n".join(f"{i}. {c.name}" for i, c in enumerate(customers, start=1))
-    else:
-        lines_txt = "\n".join(f"{i}. {n}" for i, n in enumerate(counterparty_names, start=1))
     return (
-        f"Batch ID: {batch.id}\nKAM: {kam_user.get_full_name() or kam_user.username}\n"
-        f"Category: {visit_category_label}\nDate Range: {batch.from_date} to {batch.to_date}\n"
-        f"Remarks:\n{remarks}\n\n"
-        f"{'Customers' if customers else 'Counterparties'}:\n{lines_txt}\n\n"
-        f"Approve: {approve_url}\nReject:  {reject_url}\n"
+        f"Batch #{batch.id}\nApprove: {direct_approve_url}\nReject: {direct_reject_url}\n"
     )
 
 
 def _build_single_visit_approval_email(
     *, request, plan, kam_user, manager_user, approve_url, reject_url,
 ) -> str:
+    # Build DIRECT action URLs (no login needed)
+    direct_approve_url = request.build_absolute_uri(
+        reverse("kam:direct_single_visit_approve", args=[_make_single_token(plan.id, "APPROVE")])
+    )
+    direct_reject_url = request.build_absolute_uri(
+        reverse("kam:direct_single_visit_reject", args=[_make_single_token(plan.id, "REJECT")])
+    )
     visit_category_label = _VISIT_CATEGORY_LABELS.get(plan.visit_category, plan.visit_category)
     counterparty = plan.customer.name if plan.customer_id else (plan.counterparty_name or "—")
     try:
         return render_to_string("kam/emails/single_visit_approval.html", {
             "plan": plan, "kam_user": kam_user, "manager_user": manager_user,
             "visit_category_label": visit_category_label, "counterparty": counterparty,
-            "approve_url": approve_url, "reject_url": reject_url,
+            "approve_url": direct_approve_url,
+            "reject_url":  direct_reject_url,
         })
     except Exception:
         pass
     return (
         f"Single Visit Approval Required\nVisit ID: #{plan.id}\n"
-        f"KAM: {kam_user.get_full_name() or kam_user.username}\n"
-        f"Category: {visit_category_label}\nEntity: {counterparty}\n"
-        f"Visit Date: {plan.visit_date}"
-        f"{f' → {plan.visit_date_to}' if plan.visit_date_to else ''}\n"
-        f"Location: {plan.location or '—'}\nPurpose: {plan.purpose or '—'}\n\n"
-        f"Approve: {approve_url}\nReject:  {reject_url}\n"
+        f"Approve: {direct_approve_url}\nReject: {direct_reject_url}\n"
     )
 
 
@@ -1482,27 +1485,21 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     else:
         customer_ids_for_scope = list(_customer_qs_for_user(request.user).values_list("id", flat=True))
 
-    cp_qs = CollectionPlan.objects.filter(
-        Q(from_date__isnull=False, from_date__lte=end_date, to_date__gte=start_date)
-        | Q(period_type__isnull=False)
-    )
+    # ── Collection Plan Aggregation (overdue-driven, sheet = source of truth) ──
+    cp_qs = CollectionPlan.objects.filter(overdue_amount__gt=0)
     cp_qs = _filter_qs_by_kam_scope(cp_qs, request.user, scope_kam_id, "kam_id")
     cp_agg = cp_qs.aggregate(
-        total_planned=Sum("planned_amount"),
+        total_overdue=Sum("overdue_amount"),
         total_actual=Sum("actual_amount"),
     )
-    collection_planned = _safe_decimal(cp_agg.get("total_planned")) or collections_plan_amount
-    collection_actual_plan = _safe_decimal(cp_agg.get("total_actual"))
+    collection_total_customers = cp_qs.count()
+    collection_overdue         = _safe_decimal(cp_agg.get("total_overdue"))
+    collection_actual_plan     = _safe_decimal(cp_agg.get("total_actual"))
+    collection_pending         = max(collection_overdue - collection_actual_plan, Decimal("0"))
 
-    coll_plan_legacy_agg = (
-        CollectionPlan.objects.filter(customer_id__in=customer_ids_for_scope)
-        .filter(
-            Q(from_date__isnull=False, from_date__lte=end_date, to_date__gte=start_date)
-            | Q(period_type__isnull=False)
-        )
-        .aggregate(total_planned=Sum("planned_amount"))
-    )
-    collections_planned = _safe_decimal(coll_plan_legacy_agg.get("total_planned")) or collections_plan_amount
+    # Backward-compat aliases used in ctx and _pct() calls below
+    collection_planned  = collection_overdue
+    collections_planned = collection_overdue
 
     overdue_snapshot_date = None
     prev_overdue_snapshot_date = None
@@ -3838,155 +3835,229 @@ def export_kpi_csv(request: HttpRequest) -> StreamingHttpResponse:
 # =====================================================================
 # Collections Plan
 # =====================================================================
+
 @login_required(login_url="/accounts/login/")
 @require_kam_code("kam_collections_plan")
 def collections_plan(request: HttpRequest) -> HttpResponse:
-    period_type, start_dt, end_dt, period_id = _get_period(request)
-    customer_qs = _customer_qs_for_user(request.user).order_by("name")
+    """
+    NEW ARCHITECTURE: Overdue-driven collection tracking.
+
+    DATA FLOW:
+      Google Sheet Overdues tab (cols A–C)
+        → sync → CollectionPlan.overdue_amount
+        → KAM fills actual_amount, collection_date, payment_details, utr_number
+        → pending = overdue - actual
+
+    ROLE-BASED ACCESS:
+      KAM     → own customers (filtered by plan.kam_id = request.user.id)
+      Manager → mapped team's customers (via KamManagerMapping)
+      Admin   → all
+
+    REMOVED: Manual customer selection, manual planned amount, "Add New Entry" form.
+    """
     scope_kam_id, scope_label = _resolve_scope(request, request.user)
 
+    # ── POST: record actual collection ─────────────────────────────────────
     if request.method == "POST":
-        form = CollectionPlanForm(request.POST)
-        if "customer" in form.fields:
-            form.fields["customer"].queryset = customer_qs
+        action = (request.POST.get("action") or "").strip().lower()
 
-        raw_customer_id = (request.POST.get("customer") or "").strip()
-        raw_planned = (request.POST.get("planned_amount") or "").strip()
-        raw_ptype = (request.POST.get("period_type") or "").strip()
-        raw_pid = (request.POST.get("period_id") or "").strip()
-        raw_fd = (request.POST.get("from_date") or "").strip()
-        raw_td = (request.POST.get("to_date") or "").strip()
+        if action == "record_actual":
+            plan_id = (request.POST.get("plan_id") or "").strip()
+            if not plan_id.isdigit():
+                messages.error(request, "Invalid plan reference.")
+                return redirect(reverse("kam:collections_plan"))
 
-        cust = None
-        if raw_customer_id.isdigit():
-            cust = customer_qs.filter(id=int(raw_customer_id)).first()
+            plan = get_object_or_404(CollectionPlan, id=int(plan_id))
 
-        if not cust:
-            messages.error(request, "Please select a valid customer.")
-            ctx = _build_collections_plan_ctx(request, customer_qs, period_type, period_id, start_dt, end_dt, form, scope_label)
-            return render(request, "kam/collections_plan.html", ctx)
+            # ── Role-based security check ──────────────────────────────────
+            if not _is_admin(request.user):
+                if _is_manager(request.user):
+                    allowed_kams = set(_kams_managed_by_manager(request.user))
+                    if plan.kam_id not in allowed_kams:
+                        return HttpResponseForbidden("403 Forbidden: Not your team's plan.")
+                else:
+                    if plan.kam_id != request.user.id:
+                        return HttpResponseForbidden("403 Forbidden: Not your plan.")
 
-        try:
-            planned = Decimal(raw_planned) if raw_planned else None
-        except Exception:
-            planned = None
+            actual_raw       = (request.POST.get("actual_amount")   or "").strip()
+            cdate_raw        = (request.POST.get("collection_date")  or "").strip()
+            payment_details  = (request.POST.get("payment_details")  or "").strip() or None
+            utr_number       = (request.POST.get("utr_number")       or "").strip() or None
 
-        if planned is None or planned < 0:
-            messages.error(request, "Please enter a valid planned amount (≥ 0).")
-            ctx = _build_collections_plan_ctx(request, customer_qs, period_type, period_id, start_dt, end_dt, form, scope_label)
-            return render(request, "kam/collections_plan.html", ctx)
+            # Parse amount
+            try:
+                actual = Decimal(actual_raw) if actual_raw else Decimal("0")
+            except Exception:
+                messages.error(request, "Invalid amount — enter a valid number.")
+                return redirect(reverse("kam:collections_plan"))
 
-        has_period = bool(raw_ptype and raw_pid)
-        fd = _parse_iso_date(raw_fd)
-        td = _parse_iso_date(raw_td)
-        has_range = bool(fd and td and fd <= td)
+            if actual < 0:
+                messages.error(request, "Amount cannot be negative.")
+                return redirect(reverse("kam:collections_plan"))
 
-        if not has_period and not has_range:
-            messages.error(request, "Please provide either a Period Type + Period ID, or a From/To date range.")
-            ctx = _build_collections_plan_ctx(request, customer_qs, period_type, period_id, start_dt, end_dt, form, scope_label)
-            return render(request, "kam/collections_plan.html", ctx)
+            cdate = _parse_iso_date(cdate_raw)
+            if not cdate:
+                messages.error(request, "Collection date is required.")
+                return redirect(reverse("kam:collections_plan"))
 
-        if not customer_qs.filter(id=cust.id).exists():
-            return HttpResponseForbidden("403 Forbidden: Customer out of your scope.")
+            with transaction.atomic():
+                plan.actual_amount        = actual
+                plan.collection_date      = cdate
+                plan.payment_details      = payment_details
+                plan.utr_number           = utr_number
+                plan.collection_reference = utr_number  # backward compat
+                plan.save()
 
-        owner = (cust.kam or cust.primary_kam or request.user) if _is_manager(request.user) else request.user
+            messages.success(
+                request,
+                f"Collection recorded: {plan.customer.name} — ₹{actual:,.0f} on {cdate}."
+            )
+            return redirect(reverse("kam:collections_plan"))
 
-        with transaction.atomic():
-            defaults = {"planned_amount": planned, "kam": owner}
-            if has_period:
-                CollectionPlan.objects.update_or_create(
-                    customer=cust, period_type=raw_ptype, period_id=raw_pid,
-                    defaults={**defaults, "from_date": None, "to_date": None},
+        if action == "sync_from_sheet":
+            if not _is_manager(request.user):
+                return HttpResponseForbidden("403 Forbidden: Manager access required.")
+            try:
+                result = _sync_overdue_collection_plans()
+                messages.success(
+                    request,
+                    f"Sync complete — {result['synced']} customers synced, "
+                    f"{result['skipped']} skipped, "
+                    f"{result['unknown_kam']} unknown KAM."
                 )
-            else:
-                CollectionPlan.objects.update_or_create(
-                    customer=cust, from_date=fd, to_date=td, period_type=None, period_id=None,
-                    defaults=defaults,
-                )
+            except Exception as exc:
+                logger.exception("Sync from sheet failed")
+                messages.error(request, f"Sync failed: {exc}")
+            return redirect(reverse("kam:collections_plan"))
 
-        messages.success(request, "Collection plan saved.")
-        return redirect(f"{reverse('kam:collections_plan')}?period={request.GET.get('period', 'week')}&asof={request.GET.get('asof', '')}")
+        messages.error(request, "Unknown action.")
+        return redirect(reverse("kam:collections_plan"))
 
-    else:
-        form = CollectionPlanForm(initial={"period_type": period_type, "period_id": period_id})
-        if "customer" in form.fields:
-            form.fields["customer"].queryset = customer_qs
+    # ── GET: build view ─────────────────────────────────────────────────────
+    qs = _build_overdue_collection_qs(request.user, scope_kam_id)
 
-    ctx = _build_collections_plan_ctx(request, customer_qs, period_type, period_id, start_dt, end_dt, form, scope_label)
+    # Status filter
+    status_filter = (request.GET.get("status") or "").strip().upper()
+    if status_filter in ("OPEN", "PARTIAL", "COLLECTED"):
+        qs = qs.filter(collection_status=status_filter)
+
+    # KAM filter (managers/admin only)
+    kam_filter = (
+        request.GET.get("user") or
+        request.GET.get("kam")  or
+        ""
+    ).strip()
+    if kam_filter and _is_manager(request.user):
+        filter_user = User.objects.filter(username__iexact=kam_filter, is_active=True).first()
+        if filter_user:
+            qs = qs.filter(kam=filter_user)
+
+    plans = list(qs.select_related("customer", "kam").order_by("kam__username", "customer__name"))
+
+    # ── Aggregations: Sum / Count — always dynamic ─────────────────────────
+    plan_ids = [p.id for p in plans]
+    agg = CollectionPlan.objects.filter(id__in=plan_ids).aggregate(
+        total_overdue=Sum("overdue_amount"),
+        total_collected=Sum("actual_amount"),
+    )
+    total_customers = len(plans)
+    total_overdue   = _safe_decimal(agg.get("total_overdue"))
+    total_collected = _safe_decimal(agg.get("total_collected"))
+    total_pending   = max(total_overdue - total_collected, Decimal("0"))
+
+    # ── KAM-wise grouping (for manager/admin view) ─────────────────────────
+    kam_groups: Dict[str, dict] = {}
+    for plan in plans:
+        kam_key = plan.kam.username if plan.kam_id else "Unknown"
+        if kam_key not in kam_groups:
+            kam_groups[kam_key] = {
+                "kam":             plan.kam,
+                "plans":           [],
+                "total_overdue":   Decimal("0"),
+                "total_collected": Decimal("0"),
+            }
+        kam_groups[kam_key]["plans"].append(plan)
+        kam_groups[kam_key]["total_overdue"]   += _safe_decimal(plan.overdue_amount)
+        kam_groups[kam_key]["total_collected"] += _safe_decimal(plan.actual_amount)
+
+    for g in kam_groups.values():
+        g["total_pending"] = max(g["total_overdue"] - g["total_collected"], Decimal("0"))
+
+    ctx = {
+        "page_title":     "Collection Tracking",
+        "plans":          plans,
+        "kam_groups":     list(kam_groups.values()),
+        "scope_label":    scope_label,
+        "can_choose_kam": _is_manager(request.user),
+        "is_manager":     _is_manager(request.user),
+        "is_admin":       _is_admin(request.user),
+        "kam_options":    _kam_options_for_user(request.user),
+        "selected_user":  kam_filter,
+        "status_filter":  status_filter,
+        "totals": {
+            "customers": total_customers,
+            "overdue":   total_overdue,
+            "collected": total_collected,
+            "pending":   total_pending,
+        },
+    }
     return render(request, "kam/collections_plan.html", ctx)
 
 
-
-def _build_collections_plan_ctx(request, customer_qs, period_type, period_id, start_dt, end_dt, form, scope_label=None):
-    scope_kam_id, _ = _resolve_scope(request, request.user)
-    plans_qs = _build_collections_plan_qs(request.user, scope_kam_id, period_type, period_id, start_dt, end_dt)
-    total_planned = Decimal(0)
-    total_actual = Decimal(0)
-    for p in plans_qs:
-        total_planned += _safe_decimal(p.planned_amount)
-        total_actual += _safe_decimal(p.actual_amount)
-
-    shortfall = max(total_planned - total_actual, Decimal(0))
-    achievement_pct = float((total_actual / total_planned * 100)) if total_planned else 0.0
-
-    chart_labels = []
-    chart_planned = []
-    chart_actual = []
-    for p in plans_qs.select_related("customer")[:30]:
-        chart_labels.append(p.customer.name if p.customer else "—")
-        chart_planned.append(float(_safe_decimal(p.planned_amount)))
-        chart_actual.append(float(_safe_decimal(p.actual_amount)))
-
-    return {
-        "page_title": "Collections Plan", "period_type": period_type, "period_id": period_id,
-        "filter_from": start_dt.date().isoformat(),
-        "filter_to": (end_dt - timezone.timedelta(days=1)).date().isoformat(),
-        "plans": plans_qs, "form": form,
-        "totals": {"planned": total_planned, "actual": total_actual, "achievement_pct": achievement_pct, "shortfall": shortfall},
-        "can_choose_kam": _is_manager(request.user),
-        "kam_options": _kam_options_for_user(request.user),
-        "selected_user": _first_query_value(request, "user", "kam", "KAM", "username"),
-        "scope_label": scope_label or "ALL",
-        "cp_chart_data": {"labels": chart_labels, "planned": chart_planned, "actual": chart_actual},
-    }
-
-
-# AFTER — replace with this:
-def _build_collections_plan_qs(user, scope_kam_id, period_type, period_id, start_dt, end_dt):
+def _build_overdue_collection_qs(user: User, scope_kam_id: Optional[int]):
     """
-    FIX 2026-04-10: Filter CollectionPlan by kam_id directly.
-    Previous approach filtered via customer__in=customer_qs which silently
-    excluded plans when customer.kam was NULL (common for sheet-synced customers).
-    Filtering on CollectionPlan.kam is authoritative and never misses plans.
+    Return CollectionPlan queryset filtered to overdue-driven entries only.
+    Scoped by role: KAM → own, Manager → team, Admin → all.
     """
-    plan_qs = CollectionPlan.objects.select_related("customer", "kam")
-
-    # Scope by KAM directly — never rely on customer.kam being set
+    qs = CollectionPlan.objects.select_related("customer", "kam").filter(
+        overdue_amount__gt=0      # only sheet-synced entries
+    )
     kam_ids = _scoped_kam_ids(user, scope_kam_id)
     if kam_ids is None:
-        pass  # admin: see all
-    elif not kam_ids:
-        return plan_qs.none()
-    else:
-        plan_qs = plan_qs.filter(kam_id__in=kam_ids)
+        return qs                 # admin: all
+    if not kam_ids:
+        return qs.none()
+    return qs.filter(kam_id__in=kam_ids)
 
-    period_rows = plan_qs.filter(period_type=period_type, period_id=period_id)
-    range_rows = plan_qs.filter(
-        from_date__isnull=False,
-        to_date__isnull=False,
-        from_date__lte=end_dt.date(),
-        to_date__gte=start_dt.date(),
+
+def _sync_overdue_collection_plans() -> dict:
+    """
+    Trigger Google Sheet Overdues tab → CollectionPlan sync.
+    Called by manager via POST action='sync_from_sheet'.
+    """
+    from . import sheets_adapter
+    sheet_id    = sheets_adapter._require_env("KAM_SALES_SHEET_ID")
+    service     = sheets_adapter.build_sheets_service()
+    tab_mapping = sheets_adapter._load_kam_names_tab(service, sheet_id)
+    db_lookup   = sheets_adapter._build_user_lookup()
+    env_usermap = sheets_adapter._load_env_usermap()
+    local_cache: Dict = {}
+
+    stats = sheets_adapter._sync_overdues_to_collection_plan(
+        service, sheet_id, tab_mapping, db_lookup, env_usermap, local_cache
     )
-    return (period_rows | range_rows).distinct().order_by("customer__name")
+    return {
+        "synced":      stats.customers_upserted,
+        "skipped":     stats.skipped,
+        "unknown_kam": stats.unknown_kam,
+        "notes":       stats.notes,
+    }
 
 
 @login_required(login_url="/accounts/login/")
 @require_kam_code("kam_collections_plan")
 def collection_plan_record_actual(request: HttpRequest, plan_id: int) -> HttpResponse:
+    """Standalone page for recording actual collection (used by direct URL)."""
     plan = get_object_or_404(CollectionPlan, id=plan_id)
-    customer_qs = _customer_qs_for_user(request.user)
-    if not customer_qs.filter(id=plan.customer_id).exists():
-        return HttpResponseForbidden("403 Forbidden: Not your plan.")
+
+    # Security
+    if not _is_admin(request.user):
+        if _is_manager(request.user):
+            if plan.kam_id not in set(_kams_managed_by_manager(request.user)):
+                return HttpResponseForbidden("403 Forbidden: Not your team's plan.")
+        else:
+            if plan.kam_id != request.user.id:
+                return HttpResponseForbidden("403 Forbidden: Not your plan.")
 
     next_url = request.GET.get("next") or reverse("kam:collections_plan")
 
@@ -3996,29 +4067,82 @@ def collection_plan_record_actual(request: HttpRequest, plan_id: int) -> HttpRes
             form.save()
             messages.success(request, "Actual collection recorded.")
             return redirect(next_url)
-        else:
-            messages.error(request, "Please correct the errors below.")
+        messages.error(request, "Please correct the errors below.")
     else:
         form = CollectionPlanActualForm(instance=plan)
 
-    ctx = {"page_title": "Record Actual Collection", "plan": plan, "form": form, "next_url": next_url}
+    ctx = {
+        "page_title": "Record Actual Collection",
+        "plan":       plan,
+        "form":       form,
+        "next_url":   next_url,
+    }
     return render(request, "kam/collection_plan_record_actual.html", ctx)
 
 
 @login_required(login_url="/accounts/login/")
 @require_kam_code("kam_collections_plan")
 def collection_plan_delete(request: HttpRequest, plan_id: int) -> HttpResponse:
+    """Admin/manager only: delete a collection plan entry that has no actual collected."""
     if request.method != "POST":
         return HttpResponseForbidden("403 Forbidden: POST required.")
+    if not _is_admin(request.user):
+        return HttpResponseForbidden("403 Forbidden: Admin only.")
     plan = get_object_or_404(CollectionPlan, id=plan_id)
-    if not _customer_qs_for_user(request.user).filter(id=plan.customer_id).exists():
-        return HttpResponseForbidden("403 Forbidden: Not your plan.")
-    if plan.actual_amount is not None and plan.actual_amount > 0:
-        messages.error(request, "Cannot delete a plan that already has an actual collection recorded.")
+    if plan.actual_amount and plan.actual_amount > 0:
+        messages.error(request, "Cannot delete — actual collection already recorded.")
         return redirect(reverse("kam:collections_plan"))
     plan.delete()
-    messages.success(request, "Collection plan deleted.")
-    return redirect(f"{reverse('kam:collections_plan')}?period={request.GET.get('period', 'week')}&asof={request.GET.get('asof', '')}")
+    messages.success(request, "Entry deleted.")
+    return redirect(reverse("kam:collections_plan"))
+
+
+
+
+
+@login_required(login_url="/accounts/login/")
+@require_kam_code("kam_manager")
+def collection_report(request: HttpRequest) -> HttpResponse:
+    if not _is_manager(request.user):
+        return HttpResponseForbidden("403 Forbidden: Manager access required.")
+
+    qs = CollectionPlan.objects.select_related("customer", "kam").filter(overdue_amount__gt=0)
+
+    if not _is_admin(request.user):
+        qs = qs.filter(kam_id__in=_kams_managed_by_manager(request.user))
+
+    kam_id = (request.GET.get("kam") or "").strip()
+    if kam_id and kam_id.isdigit():
+        qs = qs.filter(kam_id=int(kam_id))
+
+    agg = qs.aggregate(
+        total_overdue=Sum("overdue_amount"),
+        actual=Sum("actual_amount"),
+    )
+    total_overdue   = _safe_decimal(agg.get("total_overdue"))
+    actual          = _safe_decimal(agg.get("actual"))
+    pending         = max(total_overdue - actual, Decimal("0"))
+
+    kam_users = (
+        User.objects.filter(is_active=True).order_by("username")
+        if _is_admin(request.user)
+        else User.objects.filter(
+            is_active=True,
+            id__in=_kams_managed_by_manager(request.user)
+        ).order_by("username")
+    )
+
+    ctx = {
+        "page_title":     "Collection Report",
+        "data":           qs.order_by("kam__username", "customer__name"),
+        "total_overdue":  total_overdue,
+        "actual":         actual,
+        "pending":        pending,
+        "achievement_pct": float(actual / total_overdue * 100) if total_overdue else 0.0,
+        "kam_users":      kam_users,
+        "selected_kam":   kam_id,
+    }
+    return render(request, "kam/collection_report.html", ctx)
 
 @login_required(login_url="/accounts/login/")
 @require_kam_code("kam_collections_plan")
@@ -4027,7 +4151,7 @@ def update_actual_collection(request: HttpRequest, pk: int) -> HttpResponse:
 
     # Security: KAM can only update their own; superuser/manager can update all
     if not request.user.is_superuser and not _is_manager(request.user):
-        if obj.kam != request.user:
+        if obj.kam_id != request.user.id:
             return HttpResponseForbidden("403 Forbidden: Not your plan.")
 
     if request.method == "POST":
@@ -4042,59 +4166,519 @@ def update_actual_collection(request: HttpRequest, pk: int) -> HttpResponse:
 
     return redirect(reverse("kam:collections_plan"))
 
-
-@login_required(login_url="/accounts/login/")
-@require_kam_code("kam_manager")
-def collection_report(request: HttpRequest) -> HttpResponse:
-    if not _is_manager(request.user):
-        return HttpResponseForbidden("403 Forbidden: Manager access required.")
-
-    qs = CollectionPlan.objects.select_related("customer", "kam").all()
-
-    kam_id = (request.GET.get("kam") or "").strip()
-    start = (request.GET.get("start") or "").strip()
-    end = (request.GET.get("end") or "").strip()
-
-    if kam_id and kam_id.isdigit():
-        qs = qs.filter(kam_id=int(kam_id))
-
-    start_d = _parse_iso_date(start)
-    end_d = _parse_iso_date(end)
-    if start_d and end_d and start_d <= end_d:
-        qs = qs.filter(planned_date__range=[start_d, end_d]) if hasattr(CollectionPlan, 'planned_date') else qs.filter(from_date__lte=end_d, to_date__gte=start_d)
-
-    # Scope: non-admin managers only see their KAMs
-    if not _is_admin(request.user):
-        allowed_kam_ids = _kams_managed_by_manager(request.user)
-        qs = qs.filter(kam_id__in=allowed_kam_ids)
-
-    agg = qs.aggregate(
-        planned=Sum("planned_amount"),
-        actual=Sum("actual_amount"),
+def _direct_action_page(title: str, message: str, color: str, icon: str) -> HttpResponse:
+    """Standalone result page after a direct email action. No f-string CSS."""
+    html = (
+        "<!DOCTYPE html><html lang='en'><head>"
+        "<meta charset='UTF-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
+        "<title>" + title + "</title>"
+        "<style>"
+        "* { margin:0; padding:0; box-sizing:border-box; }"
+        "body { font-family:'Segoe UI',Arial,sans-serif; background:#f0f2f5;"
+        "       display:flex; align-items:center; justify-content:center;"
+        "       min-height:100vh; padding:20px; }"
+        ".card { background:#fff; border-radius:16px; padding:48px 40px;"
+        "        max-width:480px; width:100%; text-align:center;"
+        "        box-shadow:0 8px 32px rgba(0,0,0,.12); }"
+        ".icon { font-size:56px; margin-bottom:16px; }"
+        "h1 { font-size:22px; font-weight:700; color:#1e293b; margin-bottom:10px; }"
+        "p  { font-size:14px; color:#64748b; line-height:1.6; }"
+        ".close-note { margin-top:24px; font-size:12px; color:#94a3b8; }"
+        "</style></head><body>"
+        "<div class='card'>"
+        "<div class='icon'>" + icon + "</div>"
+        "<h1>" + title + "</h1>"
+        "<p>" + message + "</p>"
+        "<p class='close-note'>You can close this tab now.</p>"
+        "</div></body></html>"
     )
-    planned = _safe_decimal(agg.get("planned"))
-    actual = _safe_decimal(agg.get("actual"))
+    return HttpResponse(html)
 
-    # Build KAM options for filter dropdown
-    if _is_admin(request.user):
-        kam_users = User.objects.filter(is_active=True).order_by("username")
-    else:
-        kam_ids_list = _kams_managed_by_manager(request.user)
-        kam_users = User.objects.filter(is_active=True, id__in=kam_ids_list).order_by("username")
 
-    ctx = {
-        "page_title": "Collection Report",
-        "data": qs.order_by("kam__username", "customer__name"),
-        "planned": planned,
-        "actual": actual,
-        "shortfall": max(planned - actual, Decimal(0)),
-        "achievement_pct": float(actual / planned * 100) if planned else 0.0,
-        "kam_users": kam_users,
-        "selected_kam": kam_id,
-        "filter_start": start,
-        "filter_end": end,
-    }
-    return render(request, "kam/collection_report.html", ctx)
+@csrf_exempt
+def direct_single_visit_approve(request: HttpRequest, token: str) -> HttpResponse:
+    """
+    Direct email approval — no login required.
+    Token validates identity. Shows simple result page.
+    """
+    try:
+        plan_id, action = _parse_single_token(token)
+    except SignatureExpired:
+        return _direct_action_page(
+            "Link Expired", "This approval link has expired (7-day limit). Please ask the KAM to resubmit.",
+            "#f59e0b", "⏰"
+        )
+    except BadSignature:
+        return _direct_action_page(
+            "Invalid Link", "This link is not valid or has already been used.",
+            "#ef4444", "❌"
+        )
+
+    if action != "APPROVE":
+        return _direct_action_page("Wrong Link", "This link is not an approval link.", "#ef4444", "")
+
+    try:
+        with transaction.atomic():
+            plan = VisitPlan.objects.select_for_update().filter(id=plan_id, batch__isnull=True).first()
+            if not plan:
+                return _direct_action_page("Not Found", "Visit plan not found.", "#ef4444", "")
+            if plan.approval_status == VisitPlan.APPROVED:
+                return _direct_action_page(
+                    "Already Approved",
+                    f"Single Visit #{plan.id} was already approved earlier.",
+                    "#22c55e", "✅"
+                )
+            if plan.approval_status != VisitPlan.PENDING_APPROVAL:
+                return _direct_action_page(
+                    "Cannot Approve",
+                    f"Visit #{plan.id} is not pending approval (status: {plan.approval_status}).",
+                    "#f59e0b", "⚠️"
+                )
+            now_ts = timezone.now()
+            plan.approval_status = VisitPlan.APPROVED
+            plan.approved_at = now_ts
+            plan.save(update_fields=["approval_status", "approved_at", "updated_at"])
+            VisitApprovalAudit.objects.create(
+                plan=plan,
+                actor=plan.kam,   # log as action by the kam's record (no auth user here)
+                action=VisitApprovalAudit.ACTION_APPROVE,
+                note="Approved via direct email link (no login required)",
+            )
+        logger.info("Direct email approval: VisitPlan #%s approved via token", plan_id)
+        return _direct_action_page(
+            "Visit Approved ✓",
+            f"Single Visit #{plan_id} has been approved successfully. The KAM has been notified.",
+            "#22c55e", "✅"
+        )
+    except Exception as exc:
+        logger.exception("direct_single_visit_approve failed for plan_id=%s", plan_id)
+        return _direct_action_page("Error", f"Something went wrong: {exc}", "#ef4444", "")
+
+
+@csrf_exempt
+def direct_single_visit_reject(request: HttpRequest, token: str) -> HttpResponse:
+    """
+    Direct email rejection — no login required.
+    GET → shows rejection reason form.
+    POST → applies rejection.
+    """
+    try:
+        plan_id, action = _parse_single_token(token)
+    except SignatureExpired:
+        return _direct_action_page(
+            "Link Expired",
+            "This reject link has expired (7-day limit).",
+            "#f59e0b",
+            "⏰",
+        )
+    except BadSignature:
+        return _direct_action_page(
+            "Invalid Link",
+            "This link is not valid.",
+            "#ef4444",
+            "❌",
+        )
+
+    if action != "REJECT":
+        return _direct_action_page(
+            "Wrong Link",
+            "This link is not a rejection link.",
+            "#ef4444",
+            "❌",
+        )
+
+    plan = VisitPlan.objects.select_related("kam", "customer").filter(
+        id=plan_id,
+        batch__isnull=True,
+    ).first()
+
+    if not plan:
+        return _direct_action_page(
+            "Not Found",
+            "Visit plan not found.",
+            "#ef4444",
+            "❌",
+        )
+
+    if plan.approval_status == VisitPlan.REJECTED:
+        return _direct_action_page(
+            "Already Rejected",
+            f"Visit #{plan_id} was already rejected.",
+            "#f59e0b",
+            "⚠️",
+        )
+
+    if request.method == "GET":
+        kam_name = (
+            plan.kam.get_full_name()
+            or plan.kam.username
+            if plan.kam
+            else "KAM"
+        )
+
+        counterparty = (
+            plan.customer.name
+            if plan.customer_id and plan.customer
+            else (plan.counterparty_name or "—")
+        )
+
+        html = (
+            "<!DOCTYPE html>"
+            "<html lang='en'><head>"
+            "<meta charset='UTF-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
+            "<title>Reject Visit #" + str(plan_id) + "</title>"
+            "<style>"
+            "* { margin:0; padding:0; box-sizing:border-box; }"
+            "body { font-family:'Segoe UI',Arial,sans-serif; background:#f0f2f5;"
+            "       display:flex; align-items:center; justify-content:center;"
+            "       min-height:100vh; padding:20px; }"
+            ".card { background:#fff; border-radius:16px; padding:40px;"
+            "        max-width:500px; width:100%; box-shadow:0 8px 32px rgba(0,0,0,.12); }"
+            "h1 { font-size:20px; font-weight:700; color:#1e293b; margin-bottom:6px; }"
+            ".sub { font-size:13px; color:#64748b; margin-bottom:24px; line-height:1.5; }"
+            ".info { background:#fef2f2; border:1px solid #fecaca; border-radius:10px;"
+            "        padding:14px 16px; font-size:13px; color:#991b1b; margin-bottom:20px; }"
+            "label { font-size:12px; font-weight:700; color:#374151; text-transform:uppercase;"
+            "        letter-spacing:.05em; display:block; margin-bottom:6px; }"
+            "textarea { width:100%; padding:12px; border:1px solid #d1d5db; border-radius:8px;"
+            "           font-size:13px; font-family:inherit; resize:vertical; outline:none; }"
+            "textarea:focus { border-color:#ef4444; }"
+            ".btn-reject { display:block; width:100%; padding:14px; background:#dc2626;"
+            "              color:#fff; border:none; border-radius:8px; font-size:15px;"
+            "              font-weight:700; cursor:pointer; margin-top:16px; }"
+            "</style></head><body>"
+            "<div class='card'>"
+            "<h1>Reject Visit #" + str(plan_id) + "</h1>"
+            "<p class='sub'>KAM: " + str(kam_name) + "<br>"
+            "Entity: " + str(counterparty) + "<br>"
+            "Visit Date: " + str(plan.visit_date) + "</p>"
+            "<div class='info'>"
+            "<strong>You are about to reject this visit.</strong><br>"
+            "Please provide a reason so the KAM can address it and resubmit."
+            "</div>"
+            "<form method='post'>"
+            "<label for='reason'>Rejection Reason *</label>"
+            "<textarea id='reason' name='reason' rows='4'"
+            "  placeholder='Enter reason for rejection...' required></textarea>"
+            "<button type='submit' class='btn-reject'>Reject This Visit</button>"
+            "</form>"
+            "</div></body></html>"
+        )
+        return HttpResponse(html)
+
+    reason = (request.POST.get("reason") or "").strip()
+
+    if not reason:
+        return _direct_action_page(
+            "Reason Required",
+            "Please go back and provide a rejection reason.",
+            "#f59e0b",
+            "⚠️",
+        )
+
+    try:
+        with transaction.atomic():
+            plan = VisitPlan.objects.select_for_update().filter(
+                id=plan_id,
+                batch__isnull=True,
+            ).first()
+
+            if not plan:
+                return _direct_action_page(
+                    "Not Found",
+                    "Visit plan not found.",
+                    "#ef4444",
+                    "❌",
+                )
+
+            if plan.approval_status != VisitPlan.PENDING_APPROVAL:
+                return _direct_action_page(
+                    "Cannot Reject",
+                    f"Visit #{plan_id} is not pending approval.",
+                    "#f59e0b",
+                    "⚠️",
+                )
+
+            now_ts = timezone.now()
+
+            plan.approval_status = VisitPlan.REJECTED
+            plan.rejected_at = now_ts
+            plan.rejection_reason = reason
+            plan.save(
+                update_fields=[
+                    "approval_status",
+                    "rejected_at",
+                    "rejection_reason",
+                    "updated_at",
+                ]
+            )
+
+            VisitApprovalAudit.objects.create(
+                plan=plan,
+                actor=plan.kam,
+                action=VisitApprovalAudit.ACTION_REJECT,
+                note=f"[DIRECT EMAIL] {reason[:255]}",
+            )
+
+        logger.info(
+            "Direct email rejection: VisitPlan #%s rejected via token. Reason: %s",
+            plan_id,
+            reason[:100],
+        )
+
+        return _direct_action_page(
+            "Visit Rejected",
+            f"Visit #{plan_id} has been rejected. Reason recorded: {reason[:100]}. The KAM will be notified.",
+            "#ef4444",
+            "❌",
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "direct_single_visit_reject failed for plan_id=%s",
+            plan_id,
+        )
+        return _direct_action_page(
+            "Error",
+            f"Something went wrong: {exc}",
+            "#ef4444",
+            "❌",
+        )
+
+
+@csrf_exempt
+def direct_batch_approve(request: HttpRequest, token: str) -> HttpResponse:
+    """Direct email batch approval — no login required."""
+    try:
+        batch_id, action = _parse_batch_token(token)
+    except SignatureExpired:
+        return _direct_action_page("Link Expired", "This approval link expired (7-day limit).", "#f59e0b", "")
+    except BadSignature:
+        return _direct_action_page("Invalid Link", "This link is not valid.", "#ef4444", "")
+
+    if action != "APPROVE":
+        return _direct_action_page("Wrong Link", "This is not an approval link.", "#ef4444", "")
+
+    try:
+        with transaction.atomic():
+            batch = VisitBatch.objects.select_for_update().filter(id=batch_id).first()
+            if not batch:
+                return _direct_action_page("Not Found", "Batch not found.", "#ef4444", "")
+            if batch.approval_status == STATUS_APPROVED:
+                return _direct_action_page("Already Approved", f"Batch #{batch_id} was already approved.", "#22c55e", "")
+            if batch.approval_status not in {STATUS_PENDING_APPROVAL, STATUS_PENDING_LEGACY}:
+                return _direct_action_page("Cannot Approve", f"Batch #{batch_id} is not pending approval.", "#f59e0b", "")
+            now_ts = timezone.now()
+            batch.approval_status = STATUS_APPROVED
+            batch.approved_at = now_ts
+            batch.save(update_fields=["approval_status", "approved_at", "updated_at"])
+            VisitPlan.objects.filter(batch=batch).update(
+                approval_status=STATUS_APPROVED, approved_at=now_ts, updated_at=now_ts
+            )
+            VisitApprovalAudit.objects.create(
+                batch=batch, actor=batch.kam,
+                action=VisitApprovalAudit.ACTION_APPROVE,
+                note="Approved via direct email link (no login required)",
+            )
+        logger.info("Direct email approval: Batch #%s approved", batch_id)
+        return _direct_action_page(
+            "Batch Approved ✓",
+            f"Visit Batch #{batch_id} has been approved. All visits in this batch are now approved.",
+            "#22c55e", ""
+        )
+    except Exception as exc:
+        logger.exception("direct_batch_approve failed for batch_id=%s", batch_id)
+        return _direct_action_page("Error", f"Something went wrong: {exc}", "#ef4444", "")
+
+
+@csrf_exempt
+def direct_batch_reject(request: HttpRequest, token: str) -> HttpResponse:
+    """
+    Direct email batch rejection — no login required.
+    GET → shows rejection reason form.
+    POST → applies rejection.
+    """
+    try:
+        batch_id, action = _parse_batch_token(token)
+    except SignatureExpired:
+        return _direct_action_page(
+            "Link Expired",
+            "This reject link expired (7-day limit).",
+            "#f59e0b",
+            "⏰",
+        )
+    except BadSignature:
+        return _direct_action_page(
+            "Invalid Link",
+            "This link is not valid.",
+            "#ef4444",
+            "❌",
+        )
+
+    if action != "REJECT":
+        return _direct_action_page(
+            "Wrong Link",
+            "This is not a rejection link.",
+            "#ef4444",
+            "❌",
+        )
+
+    batch = VisitBatch.objects.select_related("kam").filter(id=batch_id).first()
+
+    if not batch:
+        return _direct_action_page(
+            "Not Found",
+            "Batch not found.",
+            "#ef4444",
+            "❌",
+        )
+
+    if batch.approval_status == STATUS_REJECTED:
+        return _direct_action_page(
+            "Already Rejected",
+            f"Batch #{batch_id} was already rejected.",
+            "#f59e0b",
+            "⚠️",
+        )
+
+    if request.method == "GET":
+        kam_name = (
+            batch.kam.get_full_name()
+            or batch.kam.username
+            if batch.kam
+            else "KAM"
+        )
+
+        html = (
+            "<!DOCTYPE html>"
+            "<html lang='en'><head>"
+            "<meta charset='UTF-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
+            "<title>Reject Batch #" + str(batch_id) + "</title>"
+            "<style>"
+            "* { margin:0; padding:0; box-sizing:border-box; }"
+            "body { font-family:'Segoe UI',Arial,sans-serif; background:#f0f2f5;"
+            "       display:flex; align-items:center; justify-content:center;"
+            "       min-height:100vh; padding:20px; }"
+            ".card { background:#fff; border-radius:16px; padding:40px;"
+            "        max-width:500px; width:100%; box-shadow:0 8px 32px rgba(0,0,0,.12); }"
+            "h1 { font-size:20px; font-weight:700; color:#1e293b; margin-bottom:6px; }"
+            ".sub { font-size:13px; color:#64748b; margin-bottom:24px; }"
+            ".info { background:#fef2f2; border:1px solid #fecaca; border-radius:10px;"
+            "        padding:14px 16px; font-size:13px; color:#991b1b; margin-bottom:20px; }"
+            "label { font-size:12px; font-weight:700; color:#374151; text-transform:uppercase;"
+            "        letter-spacing:.05em; display:block; margin-bottom:6px; }"
+            "textarea { width:100%; padding:12px; border:1px solid #d1d5db; border-radius:8px;"
+            "           font-size:13px; font-family:inherit; resize:vertical; outline:none; }"
+            "textarea:focus { border-color:#ef4444; }"
+            ".btn-reject { display:block; width:100%; padding:14px; background:#dc2626;"
+            "              color:#fff; border:none; border-radius:8px; font-size:15px;"
+            "              font-weight:700; cursor:pointer; margin-top:16px; }"
+            "</style></head><body>"
+            "<div class='card'>"
+            "<h1>Reject Batch #" + str(batch_id) + "</h1>"
+            "<p class='sub'>KAM: " + str(kam_name) + " &mdash; "
+            + str(batch.from_date) + " &rarr; " + str(batch.to_date) + "</p>"
+            "<div class='info'>"
+            "<strong>You are about to reject this visit batch.</strong><br>"
+            "Please provide a reason so the KAM can address it and resubmit."
+            "</div>"
+            "<form method='post'>"
+            "<label for='reason'>Rejection Reason *</label>"
+            "<textarea id='reason' name='reason' rows='4'"
+            "  placeholder='Enter reason for rejection...' required></textarea>"
+            "<button type='submit' class='btn-reject'>Reject This Batch</button>"
+            "</form>"
+            "</div></body></html>"
+        )
+        return HttpResponse(html)
+
+    reason = (request.POST.get("reason") or "").strip()
+
+    if not reason:
+        return _direct_action_page(
+            "Reason Required",
+            "Please provide a rejection reason.",
+            "#f59e0b",
+            "⚠️",
+        )
+
+    try:
+        with transaction.atomic():
+            batch = VisitBatch.objects.select_for_update().filter(id=batch_id).first()
+
+            if not batch:
+                return _direct_action_page(
+                    "Not Found",
+                    "Batch not found.",
+                    "#ef4444",
+                    "❌",
+                )
+
+            if batch.approval_status not in {
+                STATUS_PENDING_APPROVAL,
+                STATUS_PENDING_LEGACY,
+            }:
+                return _direct_action_page(
+                    "Cannot Reject",
+                    "Batch is not pending approval.",
+                    "#f59e0b",
+                    "⚠️",
+                )
+
+            now_ts = timezone.now()
+
+            batch.approval_status = STATUS_REJECTED
+            batch.rejected_at = now_ts
+            batch.rejection_reason = reason
+            batch.save(
+                update_fields=[
+                    "approval_status",
+                    "rejected_at",
+                    "rejection_reason",
+                    "updated_at",
+                ]
+            )
+
+            VisitPlan.objects.filter(batch=batch).update(
+                approval_status=STATUS_REJECTED,
+                updated_at=now_ts,
+            )
+
+            VisitApprovalAudit.objects.create(
+                batch=batch,
+                actor=batch.kam,
+                action=VisitApprovalAudit.ACTION_REJECT,
+                note=f"[DIRECT EMAIL] {reason[:255]}",
+            )
+
+        logger.info(
+            "Direct email rejection: Batch #%s rejected. Reason: %s",
+            batch_id,
+            reason[:100],
+        )
+
+        return _direct_action_page(
+            "Batch Rejected",
+            f"Batch #{batch_id} rejected. Reason: {reason[:100]}. KAM will be notified.",
+            "#ef4444",
+            "❌",
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "direct_batch_reject failed for batch_id=%s",
+            batch_id,
+        )
+        return _direct_action_page(
+            "Error",
+            f"Something went wrong: {exc}",
+            "#ef4444",
+            "❌",
+        )
+
 
 # =====================================================================
 # Sync endpoints

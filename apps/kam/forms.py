@@ -584,32 +584,66 @@ class CollectionPlanForm(forms.ModelForm):
 
 class CollectionPlanActualForm(forms.ModelForm):
     """
-    Used to record actual collection against an existing CollectionPlan entry.
-    Only exposes actual_amount, collection_date, and collection_reference.
+    NEW: Records actual collection against an overdue-driven CollectionPlan entry.
+    
+    Fields exposed:
+      - actual_amount    (required)
+      - collection_date  (required)
+      - payment_details  (required)
+      - utr_number       (optional)
+      - notes            (optional)
+    
+    NEVER exposes: overdue_amount, planned_amount, customer, kam — those are read-only.
     """
 
     class Meta:
-        model = CollectionPlan
-        fields = ["actual_amount", "collection_date", "collection_reference", "notes"]
+        model  = CollectionPlan
+        fields = ["actual_amount", "collection_date", "payment_details", "utr_number", "notes"]
         widgets = {
-            "collection_date": forms.DateInput(attrs={"type": "date"}),
-            "notes": forms.Textarea(attrs={"rows": 2, "placeholder": "Remarks (optional)"}),
-            "collection_reference": forms.TextInput(
-                attrs={"placeholder": "Cheque no / UTR / reference (optional)"}
+            "collection_date": forms.DateInput(
+                attrs={"type": "date", "class": "form-control"}
+            ),
+            "payment_details": forms.TextInput(
+                attrs={
+                    "class":       "form-control",
+                    "placeholder": "NEFT / RTGS / Cheque / Cash / UPI",
+                }
+            ),
+            "utr_number": forms.TextInput(
+                attrs={
+                    "class":       "form-control",
+                    "placeholder": "UTR / Cheque No (optional)",
+                }
+            ),
+            "notes": forms.Textarea(
+                attrs={
+                    "class":       "form-control",
+                    "rows":        2,
+                    "placeholder": "Remarks (optional)",
+                }
             ),
         }
         labels = {
-            "actual_amount":        "Amount Collected (₹)",
-            "collection_date":      "Date of Collection",
-            "collection_reference": "Reference / UTR",
+            "actual_amount":   "Amount Collected (₹)",
+            "collection_date": "Date of Collection",
+            "payment_details": "Payment Mode / Details",
+            "utr_number":      "UTR / Cheque Number",
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["notes"].required               = False
-        self.fields["collection_reference"].required = False
-        self.fields["collection_date"].required      = True
-        self.fields["actual_amount"].required        = True
+        self.fields["actual_amount"].required   = True
+        self.fields["collection_date"].required = True
+        self.fields["payment_details"].required = False
+        self.fields["utr_number"].required      = False
+        self.fields["notes"].required           = False
+
+        self.fields["actual_amount"].widget.attrs.update({
+            "class":       "form-control",
+            "step":        "0.01",
+            "min":         "0",
+            "placeholder": "0.00",
+        })
 
     def clean_actual_amount(self):
         amt = self.cleaned_data.get("actual_amount")
@@ -623,6 +657,15 @@ class CollectionPlanActualForm(forms.ModelForm):
         if not data.get("collection_date"):
             self.add_error("collection_date", "Collection date is required.")
         return data
+
+    def save(self, commit=True):
+        inst = super().save(commit=False)
+        # Keep collection_reference in sync with utr_number
+        if inst.utr_number:
+            inst.collection_reference = inst.utr_number
+        if commit:
+            inst.save()
+        return inst
 
 
 class TargetLineInlineForm(forms.Form):

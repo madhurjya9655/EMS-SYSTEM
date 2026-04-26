@@ -122,4 +122,10 @@ urlpatterns = [
     path("sync/step/", views.sync_step, name="sync_step"),
     path("collections/update/<int:pk>/", views.update_actual_collection, name="update_actual_collection"),
     path("collections/report/", views.collection_report, name="collection_report"),
+
+    # Direct email approval URLs (no login required — token validated)
+    path("email/visit/<str:token>/approve/", views.direct_single_visit_approve, name="direct_single_visit_approve"),
+    path("email/visit/<str:token>/reject/",  views.direct_single_visit_reject,  name="direct_single_visit_reject"),
+    path("email/batch/<str:token>/approve/", views.direct_batch_approve,         name="direct_batch_approve"),
+    path("email/batch/<str:token>/reject/",  views.direct_batch_reject,          name="direct_batch_reject"),
 ]

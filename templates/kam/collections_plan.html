@@ -1,524 +1,352 @@
 {% extends "base.html" %}
 {% load humanize %}
 
-{% block title %}Collections Plan — BOS Lakshya{% endblock %}
-{% block breadcrumb %}Collections Plan{% endblock %}
+{% block title %}Collection Tracking — BOS Lakshya{% endblock %}
+{% block breadcrumb %}Collection Tracking{% endblock %}
 
 {% block head_extra %}
-<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-
 <style>
-  .cp-page-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-    margin-bottom: 18px;
-  }
-
-  .cp-page-title {
-    margin: 0;
-  }
-
-  .cp-page-subtitle {
-    margin: 4px 0 0;
-    color: var(--muted);
-    font-size: 13px;
-  }
-
-  .cp-summary-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 14px;
-    margin-bottom: 20px;
-  }
-
-  .cp-stat-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px 18px;
-    position: relative;
-    overflow: hidden;
-    box-shadow: var(--shadow-xs);
-  }
-
-  .cp-stat-card::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 4px;
-    border-radius: 4px 0 0 4px;
-  }
-
-  .cp-stat-card.stat-planned::before { background: var(--primary); }
-  .cp-stat-card.stat-actual::before  { background: var(--success); }
-  .cp-stat-card.stat-achv::before    { background: #7c3aed; }
-  .cp-stat-card.stat-short::before   { background: var(--danger); }
-
-  .cp-stat-label {
-    font-size: 11px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--muted);
-    margin-bottom: 8px;
-  }
-
-  .cp-stat-value {
-    font-size: 1.45rem;
-    font-weight: 800;
-    font-family: var(--font-display);
-    color: var(--text);
-    line-height: 1.1;
-  }
-
-  .cp-stat-sub {
-    font-size: 11.5px;
-    color: var(--subtle);
-    margin-top: 5px;
-  }
-
-  .cp-filter-bar {
-    display: flex;
-    align-items: flex-end;
-    gap: 10px;
-    flex-wrap: wrap;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px 16px;
-    margin-bottom: 16px;
-    box-shadow: var(--shadow-xs);
-  }
-
-  .cp-filter-group {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-  }
-
-  .cp-filter-label {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--subtle);
-  }
-
-  .cp-filter-bar .form-control,
-  .cp-filter-bar .form-select {
-    min-width: 150px;
-    min-height: 40px;
-    font-size: 13px;
-  }
-
-  .cp-card,
-  .cp-card-overflow,
-  .cp-form-card,
-  .cp-section-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow-xs);
-  }
-
-  .cp-card-overflow {
-    overflow: hidden;
-  }
-
-  .cp-card-header {
-    font-size: 13px;
-    font-weight: 700;
-    padding: 13px 16px;
-    border-bottom: 1px solid var(--border-light);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    background: #fcfcfd;
-  }
-
-  .cp-count-pill {
-    display: inline-block;
-    background: var(--primary);
-    color: #fff;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 999px;
-    margin-left: 8px;
-    vertical-align: middle;
-  }
-
-  .cp-chart-wrap {
-    position: relative;
-    height: 220px;
-  }
-
-  .cp-form-card {
-    overflow: hidden;
-    margin-bottom: 20px;
-  }
-
-  .cp-form-header {
-    padding: 16px 18px;
-    border-bottom: 1px solid var(--border-light);
-    font-size: 15px;
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    cursor: pointer;
-    user-select: none;
-    background: #fcfcfd;
-  }
-
-  .cp-form-header-left {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  .cp-form-title {
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--text);
-    line-height: 1.2;
-  }
-
-  .cp-form-subtitle {
-    font-size: 12px;
-    color: var(--muted);
-    font-weight: 500;
-  }
-
-  .cp-toggle-chip {
-    width: 28px;
-    height: 28px;
-    border-radius: 999px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--primary-soft);
-    color: var(--primary);
-    border: 1px solid var(--primary-border);
-    flex-shrink: 0;
-    font-size: 12px;
-  }
-
-  .cp-form-header .toggle-icon {
-    margin-left: auto;
-    transition: transform 0.2s ease;
-    color: var(--muted);
-    font-size: 13px;
-    flex-shrink: 0;
-  }
-
-  .cp-form-header.collapsed .toggle-icon {
-    transform: rotate(-90deg);
-  }
-
-  .cp-form-body {
-    padding: 20px 20px 18px;
-  }
-
-  .cp-form-grid {
-    display: grid;
-    grid-template-columns: repeat(12, minmax(0, 1fr));
-    gap: 18px 20px;
-  }
-
-  .cp-col-customer { grid-column: span 5; }
-  .cp-col-amount   { grid-column: span 3; }
-  .cp-col-notes    { grid-column: span 4; }
-
-  .cp-col-from     { grid-column: span 3; }
-  .cp-col-to       { grid-column: span 3; }
-  .cp-col-type     { grid-column: span 2; }
-  .cp-col-period   { grid-column: span 4; }
-
-  .cp-form-field {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-  }
-
-  .cp-form-field .form-label {
-    font-size: 12.5px;
-    font-weight: 700;
-    color: var(--text-2);
-    margin-bottom: 7px;
-    line-height: 1.3;
-  }
-
-  .cp-form-hint-inline {
-    font-size: 12px;
-    color: var(--muted);
-    font-weight: 500;
-  }
-
-  .cp-form-body .form-control,
-  .cp-form-body .form-select {
-    min-height: 42px;
-    height: 42px;
-    border-radius: 10px;
-  }
-
-  .cp-form-body textarea.form-control {
-    min-height: 92px;
-    height: 92px;
-    resize: vertical;
-    padding-top: 10px;
-  }
-
-  .cp-helper-box {
-    grid-column: 1 / -1;
-    background: #f8fafc;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 12px 14px;
-    font-size: 13px;
-    color: var(--text-2);
-  }
-
-  .cp-helper-title {
-    font-weight: 700;
-    color: var(--text);
-    margin-right: 6px;
-  }
-
-  .cp-form-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-top: 22px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border-light);
-  }
-
-  .cp-form-actions .btn {
-    min-width: 140px;
-  }
-
-  .cp-table th {
-    font-size: 11px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--muted);
-    white-space: nowrap;
-    padding-top: 12px;
-    padding-bottom: 12px;
-  }
-
-  .cp-table td {
-    font-size: 13px;
-    vertical-align: middle;
-  }
-
-  .cp-table .amount-col {
-    font-weight: 700;
-    font-family: var(--font-display);
-  }
-
-  .cp-table .amount-actual { color: var(--success); }
-  .cp-table .amount-zero   { color: var(--subtle); }
-
-  .status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 4px 10px;
-    border-radius: 999px;
-    white-space: nowrap;
-    border: 1px solid transparent;
-  }
-
-  .status-badge.open {
-    background: #f3f4f6;
-    color: #6b7280;
-    border-color: #e5e7eb;
-  }
-
-  .status-badge.partial {
-    background: #fffbeb;
-    color: #d97706;
-    border-color: #fde68a;
-  }
-
-  .status-badge.collected {
-    background: #ecfdf5;
-    color: #059669;
-    border-color: #a7f3d0;
-  }
-
-  .cp-progress-wrap { min-width: 88px; }
-
-  .cp-progress {
-    height: 6px;
-    background: #e5e7eb;
-    border-radius: 999px;
-    overflow: hidden;
-    margin-top: 5px;
-  }
-
-  .cp-progress-fill {
-    height: 100%;
-    border-radius: 999px;
-    background: var(--success);
-    transition: width 0.4s ease;
-  }
-
-  .cp-progress-fill.over { background: var(--primary); }
-
-  .cp-thead { background: #f9fafb; }
-  .cp-tfoot { background: #f9fafb; font-weight: 700; }
-  .cp-tfoot-actual { font-size: 13px; color: var(--success); }
-  .cp-td-counter { color: var(--subtle); font-size: 11px; padding: 10px 12px; }
-  .cp-td-period { font-size: 12px; color: var(--muted); }
-  .cp-period-strong { font-weight: 700; color: var(--text); }
-  .cp-td-date { font-size: 12px; color: var(--muted); white-space: nowrap; }
-  .cp-ref-hint { font-size: 11px; }
-  .cp-subtle { color: var(--subtle); }
-  .cp-pct-label { display: block; font-size: 11px; font-weight: 700; color: var(--text); }
-  .cp-pct-dash  { color: var(--subtle); font-size: 11px; }
-  .cp-notes-hint { font-size: 11px; font-weight: 400; color: var(--muted); margin-top: 2px; }
-
-  .cp-kam-pill {
-    display: inline-block;
-    background: #eff6ff;
-    color: var(--primary);
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 6px;
-  }
-
-  .cp-empty-state {
-    padding: 48px 20px;
-    text-align: center;
-    color: var(--subtle);
-  }
-
-  .cp-empty-title {
-    color: var(--text);
-    font-weight: 700;
-    margin-bottom: 4px;
-  }
-
-  .cp-modal-summary {
-    background: #f8fafc;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 12px 14px;
-    font-size: 13px;
-    color: var(--text-2);
-  }
-
-  .cp-modal-summary strong {
-    color: var(--text);
-  }
-
-  .cp-form-body .select2-container,
-  .cp-filter-bar .select2-container {
-    width: 100% !important;
-  }
-
-  .cp-form-body .select2-container--default .select2-selection--single,
-  .cp-filter-bar .select2-container--default .select2-selection--single {
-    height: 42px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 6px 12px;
-    display: flex;
-    align-items: center;
-    background: var(--surface);
-  }
-
-  .cp-form-body .select2-container--default .select2-selection--single .select2-selection__rendered,
-  .cp-filter-bar .select2-container--default .select2-selection--single .select2-selection__rendered {
-    line-height: 28px;
-    padding-left: 0;
-    color: var(--text);
-  }
-
-  .cp-form-body .select2-container--default .select2-selection--single .select2-selection__arrow,
-  .cp-filter-bar .select2-container--default .select2-selection--single .select2-selection__arrow {
-    height: 40px;
-    right: 8px;
-  }
-
-  @media (max-width: 1100px) {
-    .cp-col-customer,
-    .cp-col-amount,
-    .cp-col-notes,
-    .cp-col-from,
-    .cp-col-to,
-    .cp-col-type,
-    .cp-col-period {
-      grid-column: span 6;
-    }
-  }
-
-  @media (max-width: 900px) {
-    .cp-summary-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
-
-  @media (max-width: 768px) {
-    .cp-form-body {
-      padding: 16px;
-    }
-
-    .cp-form-grid {
-      gap: 14px;
-    }
-
-    .cp-col-customer,
-    .cp-col-amount,
-    .cp-col-notes,
-    .cp-col-from,
-    .cp-col-to,
-    .cp-col-type,
-    .cp-col-period {
-      grid-column: 1 / -1;
-    }
-
-    .cp-form-actions .btn {
-      min-width: 0;
-      flex: 1 1 auto;
-    }
-  }
-
-  @media (max-width: 560px) {
-    .cp-summary-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .cp-page-head {
-      align-items: stretch;
-    }
-  }
+/* ================================================================
+   COLLECTION TRACKING — OVERDUE-DRIVEN SYSTEM
+   No manual entry. Sheet = source of truth.
+================================================================ */
+
+.ct-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+/* ── Summary KPI Cards ── */
+.ct-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.ct-kpi-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--shadow-xs);
+}
+
+.ct-kpi-card::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 4px;
+  border-radius: 4px 0 0 4px;
+}
+
+.ct-kpi-card.kpi-customers::before { background: var(--primary); }
+.ct-kpi-card.kpi-overdue::before   { background: #ef4444; }
+.ct-kpi-card.kpi-collected::before { background: #22c55e; }
+.ct-kpi-card.kpi-pending::before   { background: #f59e0b; }
+
+.ct-kpi-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.ct-kpi-value {
+  font-size: 1.45rem;
+  font-weight: 800;
+  font-family: var(--font-display);
+  color: var(--text);
+  line-height: 1.1;
+}
+
+.ct-kpi-sub {
+  font-size: 11.5px;
+  color: var(--subtle);
+  margin-top: 5px;
+}
+
+/* ── Filter Bar ── */
+.ct-filter-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.ct-filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ct-filter-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--subtle);
+}
+
+/* ── Info Banner ── */
+.ct-info-banner {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #1e40af;
+}
+
+.ct-info-banner i { margin-top: 1px; flex-shrink: 0; }
+
+/* ── KAM Group Header ── */
+.ct-kam-group {
+  margin-bottom: 20px;
+}
+
+.ct-kam-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.ct-kam-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.ct-kam-stats {
+  display: flex;
+  gap: 20px;
+  font-size: 12.5px;
+}
+
+.ct-kam-stat { color: var(--muted); }
+.ct-kam-stat strong { color: var(--text); }
+
+/* ── Main Table ── */
+.ct-table-wrap {
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  overflow: hidden;
+}
+
+.ct-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ct-table th {
+  background: #f9fafb;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.ct-table td {
+  padding: 12px 14px;
+  font-size: 13px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.ct-table tr:last-child td { border-bottom: none; }
+.ct-table tr:hover td { background: #fafbfc; }
+
+.ct-customer-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ct-amount {
+  font-weight: 700;
+  font-family: var(--font-display);
+  font-size: 13.5px;
+}
+
+.ct-amount.overdue   { color: #ef4444; }
+.ct-amount.collected { color: #22c55e; }
+.ct-amount.pending   { color: #f59e0b; }
+.ct-amount.zero      { color: var(--subtle); font-weight: 400; }
+
+/* ── Status Badge ── */
+.ct-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.ct-status.open      { background: #f3f4f6; color: #6b7280; border-color: #e5e7eb; }
+.ct-status.partial   { background: #fffbeb; color: #d97706; border-color: #fde68a; }
+.ct-status.collected { background: #ecfdf5; color: #059669; border-color: #a7f3d0; }
+
+/* ── Progress Bar ── */
+.ct-progress-wrap { min-width: 80px; }
+
+.ct-progress {
+  height: 5px;
+  background: #e5e7eb;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.ct-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: #22c55e;
+  transition: width 0.4s ease;
+}
+
+.ct-progress-fill.over { background: var(--primary); }
+
+.ct-pct-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* ── Collection Info Display ── */
+.ct-coll-info {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.ct-coll-date {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.ct-coll-ref {
+  font-size: 11px;
+  color: var(--subtle);
+}
+
+/* ── Record Button ── */
+.ct-record-btn {
+  font-size: 11.5px;
+  padding: 5px 12px;
+  white-space: nowrap;
+}
+
+/* ── Last Synced Chip ── */
+.ct-sync-chip {
+  font-size: 11px;
+  color: var(--subtle);
+  font-style: italic;
+}
+
+/* ── Empty State ── */
+.ct-empty {
+  padding: 56px 24px;
+  text-align: center;
+  color: var(--subtle);
+}
+
+.ct-empty-icon { font-size: 2rem; margin-bottom: 12px; display: block; }
+.ct-empty-title { font-size: 15px; font-weight: 700; color: var(--text-2); margin-bottom: 6px; }
+
+/* ── Inline Record Form ── */
+.ct-inline-form {
+  display: none;
+  background: #f8fafc;
+  border-top: 1px solid var(--border-light);
+  padding: 14px 16px;
+}
+
+.ct-inline-form.active { display: block; }
+
+.ct-inline-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 2fr 1fr;
+  gap: 10px;
+  align-items: end;
+}
+
+.ct-inline-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--subtle);
+  margin-bottom: 4px;
+}
+
+@media (max-width: 1100px) {
+  .ct-kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .ct-inline-grid { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 768px) {
+  .ct-kpi-grid { grid-template-columns: 1fr 1fr; }
+  .ct-inline-grid { grid-template-columns: 1fr; }
+  .ct-table th, .ct-table td { padding: 8px 10px; }
+}
+
+@media (max-width: 560px) {
+  .ct-kpi-grid { grid-template-columns: 1fr; }
+}
 </style>
 {% endblock %}
 
 {% block content %}
 
-<div class="cp-page-head">
+<div class="ct-page-head">
   <div>
-    <h1 class="page-title cp-page-title">Collections Plan</h1>
-    <p class="cp-page-subtitle">Plan collections by customer and record actual amounts received.</p>
+    <h1 class="page-title">Collection Tracking</h1>
+    <p class="text-muted small mt-1">
+      Overdue amounts are synced from Google Sheet. Enter actual collections below.
+    </p>
   </div>
-  <div class="d-flex gap-2">
+  <div class="d-flex gap-2 flex-wrap">
+    {% if is_manager %}
+    <form method="post" action="{% url 'kam:collections_plan' %}" style="display:inline;">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="sync_from_sheet">
+      <button type="submit" class="btn btn-sm btn-outline-primary"
+              onclick="return confirm('Sync overdue data from Google Sheet now?')">
+        <i class="fas fa-rotate me-1"></i>Sync from Sheet
+      </button>
+    </form>
+    {% endif %}
     <a href="{% url 'kam:dashboard' %}" class="btn btn-sm btn-outline-secondary">
       <i class="fas fa-arrow-left me-1"></i>Dashboard
     </a>
@@ -534,24 +362,49 @@
   {% endfor %}
 {% endif %}
 
-<span id="cpFormHasErrors" {% if form.errors %}data-open="1"{% endif %} hidden></span>
-{{ cp_chart_data|default:"null"|json_script:"cpChartData" }}
+<!-- Info Banner -->
+<div class="ct-info-banner">
+  <i class="fas fa-circle-info"></i>
+  <div>
+    <strong>Data Source:</strong> Overdue amounts are automatically synced from the
+    <strong>Google Sheet → Overdues tab (columns A–C)</strong>.
+    No manual entries needed — just record your actual collections.
+  </div>
+</div>
 
-<form class="cp-filter-bar" method="get" id="cpFilterForm">
-  <div class="cp-filter-group">
-    <label class="cp-filter-label" for="filter-from">From</label>
-    <input id="filter-from" type="date" name="from" value="{% firstof request.GET.from filter_from %}" class="form-control">
+<!-- KPI Summary -->
+<div class="ct-kpi-grid">
+  <div class="ct-kpi-card kpi-customers">
+    <div class="ct-kpi-label"><i class="fas fa-users me-1"></i>Total Customers</div>
+    <div class="ct-kpi-value">{{ totals.customers }}</div>
+    <div class="ct-kpi-sub">Customers with overdue</div>
   </div>
 
-  <div class="cp-filter-group">
-    <label class="cp-filter-label" for="filter-to">To</label>
-    <input id="filter-to" type="date" name="to" value="{% firstof request.GET.to filter_to %}" class="form-control">
+  <div class="ct-kpi-card kpi-overdue">
+    <div class="ct-kpi-label"><i class="fas fa-triangle-exclamation me-1"></i>Total Overdue</div>
+    <div class="ct-kpi-value">&#8377;&nbsp;{{ totals.overdue|floatformat:0|intcomma }}</div>
+    <div class="ct-kpi-sub">From Google Sheet snapshot</div>
   </div>
 
+  <div class="ct-kpi-card kpi-collected">
+    <div class="ct-kpi-label"><i class="fas fa-check-circle me-1"></i>Total Collected</div>
+    <div class="ct-kpi-value">&#8377;&nbsp;{{ totals.collected|floatformat:0|intcomma }}</div>
+    <div class="ct-kpi-sub">Actual received</div>
+  </div>
+
+  <div class="ct-kpi-card kpi-pending">
+    <div class="ct-kpi-label"><i class="fas fa-clock me-1"></i>Total Pending</div>
+    <div class="ct-kpi-value">&#8377;&nbsp;{{ totals.pending|floatformat:0|intcomma }}</div>
+    <div class="ct-kpi-sub">Overdue minus Collected</div>
+  </div>
+</div>
+
+<!-- Filter Bar -->
+<form class="ct-filter-bar" method="get" id="ctFilterForm">
   {% if can_choose_kam %}
-  <div class="cp-filter-group">
-    <label class="cp-filter-label" for="filter-user">KAM</label>
-    <select id="filter-user" name="user" class="form-select">
+  <div class="ct-filter-group">
+    <label class="ct-filter-label">KAM</label>
+    <select name="user" class="form-select form-select-sm" style="min-width:150px;">
       <option value="" {% if not selected_user %}selected{% endif %}>All KAMs</option>
       {% for uname in kam_options %}
         <option value="{{ uname }}" {% if selected_user == uname %}selected{% endif %}>{{ uname }}</option>
@@ -560,356 +413,348 @@
   </div>
   {% endif %}
 
-  <div class="cp-filter-group">
-    <label class="cp-filter-label" for="filter-status">Status</label>
-    <select id="filter-status" name="status" class="form-select">
-      <option value="" {% if not request.GET.status %}selected{% endif %}>All Statuses</option>
-      <option value="OPEN" {% if request.GET.status == 'OPEN' %}selected{% endif %}>Open</option>
-      <option value="PARTIAL" {% if request.GET.status == 'PARTIAL' %}selected{% endif %}>Partial</option>
-      <option value="COLLECTED" {% if request.GET.status == 'COLLECTED' %}selected{% endif %}>Collected</option>
+  <div class="ct-filter-group">
+    <label class="ct-filter-label">Status</label>
+    <select name="status" class="form-select form-select-sm" style="min-width:130px;">
+      <option value="" {% if not status_filter %}selected{% endif %}>All Statuses</option>
+      <option value="OPEN"      {% if status_filter == 'OPEN'      %}selected{% endif %}>Open</option>
+      <option value="PARTIAL"   {% if status_filter == 'PARTIAL'   %}selected{% endif %}>Partial</option>
+      <option value="COLLECTED" {% if status_filter == 'COLLECTED' %}selected{% endif %}>Collected</option>
     </select>
   </div>
 
   <div class="d-flex gap-2 align-items-end">
-    <button class="btn btn-primary btn-sm" type="submit">Apply</button>
-    <a class="btn btn-outline-secondary btn-sm" href="{% url 'kam:collections_plan' %}">Reset</a>
+    <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+    <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:collections_plan' %}">Reset</a>
+  </div>
+
+  <div class="ms-auto align-self-center text-muted small">
+    Scope: <strong>{{ scope_label }}</strong>
   </div>
 </form>
 
-<div class="cp-summary-grid">
-  <div class="cp-stat-card stat-planned">
-    <div class="cp-stat-label">Total Planned</div>
-    <div class="cp-stat-value">&#8377; {{ totals.planned|default:0|floatformat:0|intcomma }}</div>
-    <div class="cp-stat-sub">{{ plans|length }} plan entr{{ plans|length|pluralize:"y,ies" }}</div>
-  </div>
-
-  <div class="cp-stat-card stat-actual">
-    <div class="cp-stat-label">Total Collected</div>
-    <div class="cp-stat-value">&#8377; {{ totals.actual|default:0|floatformat:0|intcomma }}</div>
-    <div class="cp-stat-sub">Actual received</div>
-  </div>
-
-  <div class="cp-stat-card stat-achv">
-    <div class="cp-stat-label">Achievement</div>
-    <div class="cp-stat-value">
-      {% if totals.achievement_pct is not None %}{{ totals.achievement_pct|floatformat:1 }}%{% else %}&mdash;{% endif %}
-    </div>
-    <div class="cp-stat-sub">Actual divided by Planned</div>
-  </div>
-
-  <div class="cp-stat-card stat-short">
-    <div class="cp-stat-label">Shortfall</div>
-    <div class="cp-stat-value">&#8377; {{ totals.shortfall|default:0|floatformat:0|intcomma }}</div>
-    <div class="cp-stat-sub">Planned minus Collected</div>
-  </div>
-</div>
-
+<!-- Collection Table -->
 {% if plans %}
-<div class="card mb-4 cp-card">
-  <div class="cp-card-header">
-    <span>Planned vs Actual — by Customer</span>
+
+  {% if is_manager or is_admin %}
+    <!-- MANAGER/ADMIN: KAM-wise grouped view -->
+    {% for group in kam_groups %}
+    <div class="ct-kam-group">
+      <div class="ct-kam-group-header">
+        <div class="ct-kam-name">
+          <i class="fas fa-user-tie text-primary"></i>
+          {{ group.kam.get_full_name|default:group.kam.username }}
+          <span class="badge bg-primary-soft text-primary ms-1" style="font-size:11px;">
+            {{ group.plans|length }} customer{{ group.plans|length|pluralize }}
+          </span>
+        </div>
+        <div class="ct-kam-stats">
+          <span class="ct-kam-stat">
+            Overdue: <strong>&#8377; {{ group.total_overdue|floatformat:0|intcomma }}</strong>
+          </span>
+          <span class="ct-kam-stat">
+            Collected: <strong style="color:#22c55e;">&#8377; {{ group.total_collected|floatformat:0|intcomma }}</strong>
+          </span>
+          <span class="ct-kam-stat">
+            Pending: <strong style="color:#f59e0b;">&#8377; {{ group.total_pending|floatformat:0|intcomma }}</strong>
+          </span>
+        </div>
+      </div>
+
+      <div class="ct-table-wrap">
+        <table class="ct-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Customer</th>
+              <th class="text-end">Overdue (&#8377;)</th>
+              <th class="text-end">Collected (&#8377;)</th>
+              <th class="text-end">Pending (&#8377;)</th>
+              <th class="text-center">Progress</th>
+              <th class="text-center">Status</th>
+              <th>Collection Info</th>
+              <th class="text-center">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for plan in group.plans %}
+            <tr>
+              <td style="color:var(--subtle);font-size:11px;">{{ forloop.counter }}</td>
+              <td>
+                <div class="ct-customer-name">{{ plan.customer.name }}</div>
+                {% if plan.last_synced_at %}
+                  <div class="ct-sync-chip">Synced {{ plan.last_synced_at|date:"d M H:i" }}</div>
+                {% endif %}
+              </td>
+              <td class="text-end">
+                <span class="ct-amount overdue">&#8377; {{ plan.overdue_amount|floatformat:0|intcomma }}</span>
+              </td>
+              <td class="text-end">
+                {% if plan.actual_amount %}
+                  <span class="ct-amount collected">&#8377; {{ plan.actual_amount|floatformat:0|intcomma }}</span>
+                {% else %}
+                  <span class="ct-amount zero">—</span>
+                {% endif %}
+              </td>
+              <td class="text-end">
+                <span class="ct-amount pending">&#8377; {{ plan.pending_amount|floatformat:0|intcomma }}</span>
+              </td>
+              <td class="text-center ct-progress-wrap">
+                {% if plan.overdue_amount and plan.overdue_amount > 0 %}
+                  {% widthratio plan.actual_amount|default:0 plan.overdue_amount 100 as bar_pct %}
+                  <span class="ct-pct-label">{{ bar_pct|default:0 }}%</span>
+                  <div class="ct-progress">
+                    <div class="ct-progress-fill js-ct-bar" data-pct="{{ bar_pct|default:0 }}"></div>
+                  </div>
+                {% else %}—{% endif %}
+              </td>
+              <td class="text-center">
+                {% if plan.collection_status == 'COLLECTED' %}
+                  <span class="ct-status collected"><i class="fas fa-check"></i>Collected</span>
+                {% elif plan.collection_status == 'PARTIAL' %}
+                  <span class="ct-status partial"><i class="fas fa-circle-half-stroke"></i>Partial</span>
+                {% else %}
+                  <span class="ct-status open"><i class="fas fa-circle"></i>Open</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if plan.actual_amount %}
+                  <div class="ct-coll-info">&#8377; {{ plan.actual_amount|floatformat:0|intcomma }}</div>
+                  {% if plan.collection_date %}
+                    <div class="ct-coll-date">{{ plan.collection_date|date:"d M Y" }}</div>
+                  {% endif %}
+                  {% if plan.payment_details %}
+                    <div class="ct-coll-ref">{{ plan.payment_details }}</div>
+                  {% endif %}
+                  {% if plan.utr_number %}
+                    <div class="ct-coll-ref">UTR: {{ plan.utr_number }}</div>
+                  {% endif %}
+                {% else %}
+                  <span style="color:var(--subtle);font-size:12px;">Not yet recorded</span>
+                {% endif %}
+              </td>
+              <td class="text-center">
+                <button type="button"
+                        class="btn btn-sm btn-outline-success ct-record-btn js-open-record"
+                        data-plan-id="{{ plan.id }}"
+                        data-customer="{{ plan.customer.name|escapejs }}"
+                        data-overdue="{{ plan.overdue_amount }}"
+                        data-actual="{{ plan.actual_amount|default:'' }}"
+                        data-date="{{ plan.collection_date|date:'Y-m-d'|default:'' }}"
+                        data-payment="{{ plan.payment_details|default:''|escapejs }}"
+                        data-utr="{{ plan.utr_number|default:''|escapejs }}">
+                  Record
+                </button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endfor %}
+
+  {% else %}
+    <!-- KAM: own customers, flat table -->
+    <div class="ct-table-wrap" style="border-radius:var(--radius);border-top:1px solid var(--border);">
+      <table class="ct-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Customer</th>
+            <th class="text-end">Overdue (&#8377;)</th>
+            <th class="text-end">Collected (&#8377;)</th>
+            <th class="text-end">Pending (&#8377;)</th>
+            <th class="text-center">Progress</th>
+            <th class="text-center">Status</th>
+            <th>Collection Info</th>
+            <th class="text-center">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for plan in plans %}
+          <tr>
+            <td style="color:var(--subtle);font-size:11px;">{{ forloop.counter }}</td>
+            <td>
+              <div class="ct-customer-name">{{ plan.customer.name }}</div>
+              {% if plan.last_synced_at %}
+                <div class="ct-sync-chip">Synced {{ plan.last_synced_at|date:"d M H:i" }}</div>
+              {% endif %}
+            </td>
+            <td class="text-end">
+              <span class="ct-amount overdue">&#8377; {{ plan.overdue_amount|floatformat:0|intcomma }}</span>
+            </td>
+            <td class="text-end">
+              {% if plan.actual_amount %}
+                <span class="ct-amount collected">&#8377; {{ plan.actual_amount|floatformat:0|intcomma }}</span>
+              {% else %}
+                <span class="ct-amount zero">—</span>
+              {% endif %}
+            </td>
+            <td class="text-end">
+              <span class="ct-amount pending">&#8377; {{ plan.pending_amount|floatformat:0|intcomma }}</span>
+            </td>
+            <td class="text-center ct-progress-wrap">
+              {% if plan.overdue_amount and plan.overdue_amount > 0 %}
+                {% widthratio plan.actual_amount|default:0 plan.overdue_amount 100 as bar_pct %}
+                <span class="ct-pct-label">{{ bar_pct|default:0 }}%</span>
+                <div class="ct-progress">
+                  <div class="ct-progress-fill js-ct-bar" data-pct="{{ bar_pct|default:0 }}"></div>
+                </div>
+              {% else %}—{% endif %}
+            </td>
+            <td class="text-center">
+              {% if plan.collection_status == 'COLLECTED' %}
+                <span class="ct-status collected"><i class="fas fa-check"></i>Collected</span>
+              {% elif plan.collection_status == 'PARTIAL' %}
+                <span class="ct-status partial"><i class="fas fa-circle-half-stroke"></i>Partial</span>
+              {% else %}
+                <span class="ct-status open"><i class="fas fa-circle"></i>Open</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if plan.actual_amount %}
+                <div class="ct-coll-info">&#8377; {{ plan.actual_amount|floatformat:0|intcomma }}</div>
+                {% if plan.collection_date %}
+                  <div class="ct-coll-date">{{ plan.collection_date|date:"d M Y" }}</div>
+                {% endif %}
+                {% if plan.payment_details %}
+                  <div class="ct-coll-ref">{{ plan.payment_details }}</div>
+                {% endif %}
+                {% if plan.utr_number %}
+                  <div class="ct-coll-ref">UTR: {{ plan.utr_number }}</div>
+                {% endif %}
+              {% else %}
+                <span style="color:var(--subtle);font-size:12px;">Not yet recorded</span>
+              {% endif %}
+            </td>
+            <td class="text-center">
+              <button type="button"
+                      class="btn btn-sm btn-outline-success ct-record-btn js-open-record"
+                      data-plan-id="{{ plan.id }}"
+                      data-customer="{{ plan.customer.name|escapejs }}"
+                      data-overdue="{{ plan.overdue_amount }}"
+                      data-actual="{{ plan.actual_amount|default:'' }}"
+                      data-date="{{ plan.collection_date|date:'Y-m-d'|default:'' }}"
+                      data-payment="{{ plan.payment_details|default:''|escapejs }}"
+                      data-utr="{{ plan.utr_number|default:''|escapejs }}">
+                Record
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot style="background:#f9fafb;font-weight:700;">
+          <tr>
+            <td colspan="2" style="padding:10px 14px;font-size:13px;">Totals</td>
+            <td class="text-end" style="color:#ef4444;">
+              &#8377; {{ totals.overdue|floatformat:0|intcomma }}
+            </td>
+            <td class="text-end" style="color:#22c55e;">
+              &#8377; {{ totals.collected|floatformat:0|intcomma }}
+            </td>
+            <td class="text-end" style="color:#f59e0b;">
+              &#8377; {{ totals.pending|floatformat:0|intcomma }}
+            </td>
+            <td colspan="4"></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  {% endif %}
+
+{% else %}
+  <div class="ct-empty">
+    <span class="ct-empty-icon"><i class="fas fa-database"></i></span>
+    <div class="ct-empty-title">No overdue data found</div>
+    <p class="small mb-3">
+      Overdue data is synced from <strong>Google Sheet → Overdues tab (columns A–C)</strong>.
+      {% if is_manager %}
+        <br>Click "Sync from Sheet" to fetch the latest data.
+      {% endif %}
+    </p>
+    {% if is_manager %}
+    <form method="post" action="{% url 'kam:collections_plan' %}">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="sync_from_sheet">
+      <button type="submit" class="btn btn-primary btn-sm">
+        <i class="fas fa-rotate me-1"></i>Sync from Sheet Now
+      </button>
+    </form>
+    {% endif %}
   </div>
-  <div class="card-body p-3">
-    <div class="cp-chart-wrap"><canvas id="cpBarChart"></canvas></div>
-  </div>
-</div>
 {% endif %}
 
-<div class="cp-form-card mb-4" id="newPlanCard">
-  <div class="cp-form-header collapsed" id="newPlanToggle" onclick="toggleNewPlan()">
-    <span class="cp-toggle-chip">+</span>
-    <div class="cp-form-header-left">
-      <span class="cp-form-title">Add New Collection Plan Entry</span>
-      <span class="cp-form-subtitle">Create a planned collection entry with customer, amount, and period details.</span>
-    </div>
-    <i class="fas fa-chevron-down toggle-icon" id="newPlanChevron"></i>
-  </div>
-
-  <div class="cp-form-body" id="newPlanBody" style="display:none;">
-    <form method="post" action="{% url 'kam:collections_plan' %}" novalidate>
-      {% csrf_token %}
-      <input type="hidden" name="action" value="create">
-
-      {% if form.non_field_errors %}
-        <div class="alert alert-danger mb-3">
-          {% for e in form.non_field_errors %}
-            <div>{{ e }}</div>
-          {% endfor %}
-        </div>
-      {% endif %}
-
-      <div class="cp-form-grid">
-        <div class="cp-form-field cp-col-customer">
-          <label class="form-label" for="{{ form.customer.id_for_label }}">
-            Customer <span class="text-danger">*</span>
-          </label>
-          {{ form.customer }}
-          {% if form.customer.errors %}
-            <div class="text-danger small mt-1">{{ form.customer.errors.0 }}</div>
-          {% endif %}
-        </div>
-
-        <div class="cp-form-field cp-col-amount">
-          <label class="form-label" for="{{ form.planned_amount.id_for_label }}">
-            Planned Amount (&#8377;) <span class="text-danger">*</span>
-          </label>
-          {{ form.planned_amount }}
-          {% if form.planned_amount.errors %}
-            <div class="text-danger small mt-1">{{ form.planned_amount.errors.0 }}</div>
-          {% endif %}
-        </div>
-
-        <div class="cp-form-field cp-col-notes">
-          <label class="form-label" for="{{ form.notes.id_for_label }}">
-            Notes <span class="cp-form-hint-inline">(optional)</span>
-          </label>
-          {{ form.notes }}
-          {% if form.notes.errors %}
-            <div class="text-danger small mt-1">{{ form.notes.errors.0 }}</div>
-          {% endif %}
-        </div>
-
-        <div class="cp-helper-box">
-          <span class="cp-helper-title">Planning rule:</span>
-          Provide either <strong>From Date and To Date</strong> or <strong>Period Type and Period ID</strong>.
-          If both are entered, the period values will take priority.
-        </div>
-
-        <div class="cp-form-field cp-col-from">
-          <label class="form-label" for="{{ form.from_date.id_for_label }}">From Date</label>
-          {{ form.from_date }}
-          {% if form.from_date.errors %}
-            <div class="text-danger small mt-1">{{ form.from_date.errors.0 }}</div>
-          {% endif %}
-        </div>
-
-        <div class="cp-form-field cp-col-to">
-          <label class="form-label" for="{{ form.to_date.id_for_label }}">To Date</label>
-          {{ form.to_date }}
-          {% if form.to_date.errors %}
-            <div class="text-danger small mt-1">{{ form.to_date.errors.0 }}</div>
-          {% endif %}
-        </div>
-
-        <div class="cp-form-field cp-col-type">
-          <label class="form-label" for="{{ form.period_type.id_for_label }}">Period Type</label>
-          {{ form.period_type }}
-          {% if form.period_type.errors %}
-            <div class="text-danger small mt-1">{{ form.period_type.errors.0 }}</div>
-          {% endif %}
-        </div>
-
-        <div class="cp-form-field cp-col-period">
-          <label class="form-label" for="{{ form.period_id.id_for_label }}">Period ID</label>
-          {{ form.period_id }}
-          {% if form.period_id.errors %}
-            <div class="text-danger small mt-1">{{ form.period_id.errors.0 }}</div>
-          {% endif %}
-        </div>
-      </div>
-
-      <div class="cp-form-actions">
-        <button type="submit" class="btn btn-primary">
-          Add Plan Entry
-        </button>
-        <button type="button" class="btn btn-outline-secondary" onclick="toggleNewPlan()">
-          Cancel
-        </button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<div class="card cp-card-overflow">
-  <div class="cp-card-header">
-    <span>
-      Collection Plans
-      <span class="cp-count-pill">{{ plans|length }}</span>
-    </span>
-    <span class="text-muted small">Scope: {{ scope_label }}</span>
-  </div>
-
-  {% if plans %}
-  <div class="table-responsive">
-    <table class="table table-sm align-middle mb-0 cp-table">
-      <thead class="cp-thead">
-        <tr>
-          <th style="padding:10px 12px;">#</th>
-          <th>Customer</th>
-          {% if can_choose_kam %}<th>KAM</th>{% endif %}
-          <th>Period / Range</th>
-          <th class="text-end">Planned (&#8377;)</th>
-          <th class="text-end">Collected (&#8377;)</th>
-          <th class="text-center" style="min-width:100px;">Progress</th>
-          <th class="text-center">Status</th>
-          <th style="white-space:nowrap;">Collection Date</th>
-          <th class="text-center">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for plan in plans %}
-        <tr id="plan-row-{{ plan.id }}">
-          <td class="cp-td-counter">{{ forloop.counter }}</td>
-
-          <td style="font-weight:600;">
-            {{ plan.customer.name }}
-            {% if plan.notes %}<div class="cp-notes-hint">{{ plan.notes|truncatechars:40 }}</div>{% endif %}
-          </td>
-
-          {% if can_choose_kam %}
-          <td><span class="cp-kam-pill">{{ plan.kam.username }}</span></td>
-          {% endif %}
-
-          <td class="cp-td-period">
-            {% if plan.period_type and plan.period_id %}
-              <span class="cp-period-strong">{{ plan.period_type }}</span> {{ plan.period_id }}
-            {% elif plan.from_date and plan.to_date %}
-              {{ plan.from_date|date:"d M" }} – {{ plan.to_date|date:"d M Y" }}
-            {% else %}
-              <span class="cp-subtle">&mdash;</span>
-            {% endif %}
-          </td>
-
-          <td class="text-end amount-col">&#8377; {{ plan.planned_amount|floatformat:0|intcomma }}</td>
-
-          <td class="text-end amount-col {% if plan.actual_amount %}amount-actual{% else %}amount-zero{% endif %}">
-            {% if plan.actual_amount is not None %}
-              &#8377; {{ plan.actual_amount|floatformat:0|intcomma }}
-            {% else %}
-              <span class="cp-subtle" style="font-weight:400;font-size:12px;">Not recorded</span>
-            {% endif %}
-          </td>
-
-          <td class="text-center cp-progress-wrap">
-            {% if plan.planned_amount and plan.planned_amount > 0 %}
-              {% widthratio plan.actual_amount|default:0 plan.planned_amount 100 as bar_pct %}
-              <span class="cp-pct-label">{{ bar_pct|default:0 }}%</span>
-              <div class="cp-progress">
-                <div class="cp-progress-fill js-progress-fill" data-pct="{{ bar_pct|default:0 }}"></div>
-              </div>
-            {% else %}
-              <span class="cp-pct-dash">&mdash;</span>
-            {% endif %}
-          </td>
-
-          <td class="text-center">
-            {% if plan.collection_status == 'COLLECTED' %}
-              <span class="status-badge collected">Collected</span>
-            {% elif plan.collection_status == 'PARTIAL' %}
-              <span class="status-badge partial">Partial</span>
-            {% else %}
-              <span class="status-badge open">Open</span>
-            {% endif %}
-          </td>
-
-          <td class="cp-td-date">
-            {% if plan.collection_date %}
-              {{ plan.collection_date|date:"d M Y" }}
-              {% if plan.collection_reference %}<div class="cp-ref-hint">Ref: {{ plan.collection_reference }}</div>{% endif %}
-            {% else %}
-              <span class="cp-subtle">&mdash;</span>
-            {% endif %}
-          </td>
-
-          <td class="text-center">
-            <div class="d-flex gap-1 justify-content-center">
-              <button
-                type="button"
-                class="btn btn-sm btn-outline-success js-open-actual"
-                style="font-size:11px;padding:3px 8px;"
-                data-action-url="{% url 'kam:collection_plan_record_actual' plan.id %}"
-                data-customer="{{ plan.customer.name|escapejs }}"
-                data-planned="{{ plan.planned_amount }}"
-                data-actual="{{ plan.actual_amount|default:'' }}"
-                data-date="{{ plan.collection_date|date:'Y-m-d'|default:'' }}"
-                data-ref="{{ plan.collection_reference|default:''|escapejs }}"
-                data-notes="{{ plan.notes|default:''|escapejs }}"
-                title="Record actual collection">
-                Record Actual
-              </button>
-
-              {% if not plan.actual_amount %}
-                <form method="post" action="{% url 'kam:collection_plan_delete' plan.id %}" onsubmit="return confirm('Delete this plan entry?')" style="display:inline;">
-                  {% csrf_token %}
-                  <button type="submit" class="btn btn-sm btn-outline-danger" style="font-size:11px;padding:3px 8px;" title="Delete plan entry">
-                    Delete
-                  </button>
-                </form>
-              {% endif %}
-            </div>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-      <tfoot class="cp-tfoot">
-        <tr>
-          <td colspan="{% if can_choose_kam %}4{% else %}3{% endif %}" style="padding:10px 12px;font-size:13px;">
-            Totals
-          </td>
-          <td class="text-end" style="font-size:13px;">&#8377; {{ totals.planned|default:0|floatformat:0|intcomma }}</td>
-          <td class="text-end cp-tfoot-actual">&#8377; {{ totals.actual|default:0|floatformat:0|intcomma }}</td>
-          <td class="text-center" style="font-size:13px;">
-            {% if totals.achievement_pct is not None %}{{ totals.achievement_pct|floatformat:1 }}%{% else %}&mdash;{% endif %}
-          </td>
-          <td colspan="3"></td>
-        </tr>
-      </tfoot>
-    </table>
-  </div>
-  {% else %}
-  <div class="cp-empty-state">
-    <div class="cp-empty-title">No collection plan entries found</div>
-    <div class="small">Create your first plan entry for this period.</div>
-    <div class="mt-3">
-      <button class="btn btn-primary btn-sm" onclick="toggleNewPlan()">Add First Entry</button>
-    </div>
-  </div>
-  {% endif %}
-</div>
-
-<div class="modal fade" id="actualModal" tabindex="-1" aria-labelledby="actualModalLabel" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered" style="max-width:480px;">
+<!-- ── Record Collection Modal ── -->
+<div class="modal fade" id="recordModal" tabindex="-1" aria-labelledby="recordModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered" style="max-width:500px;">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title" id="actualModalLabel">Record Actual Collection</h5>
+        <h5 class="modal-title" id="recordModalLabel">
+          <i class="fas fa-indian-rupee-sign me-2 text-success"></i>Record Collection
+        </h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
 
-      <form method="post" id="actualModalForm" novalidate>
+      <form method="post" action="{% url 'kam:collections_plan' %}" id="recordModalForm" novalidate>
         {% csrf_token %}
         <input type="hidden" name="action" value="record_actual">
+        <input type="hidden" name="plan_id" id="modalPlanId">
 
         <div class="modal-body">
-          <div class="cp-modal-summary mb-3">
-            <strong>Customer:</strong> <span id="modalCustomerName"></span><br>
-            <strong>Planned Amount:</strong> &#8377; <span id="modalPlannedAmt"></span>
+          <!-- Customer + Overdue Summary -->
+          <div style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:13px;">
+            <div style="font-weight:700;color:var(--text);margin-bottom:4px;" id="modalCustomerName"></div>
+            <div style="color:#ef4444;">
+              Overdue Amount: <strong>&#8377; <span id="modalOverdueAmt"></span></strong>
+            </div>
           </div>
 
-          <div class="mb-3">
-            <label class="form-label small fw-semibold">Amount Collected (&#8377;) <span class="text-danger">*</span></label>
-            <input type="number" name="actual_amount" id="modalActualAmount" class="form-control" step="0.01" min="0" placeholder="0.00" required>
-            <div class="text-muted small mt-1">The planned amount will remain unchanged.</div>
-          </div>
+          <div class="row g-3">
+            <div class="col-6">
+              <label class="form-label small fw-bold">
+                Amount Collected (&#8377;) <span class="text-danger">*</span>
+              </label>
+              <input type="number" name="actual_amount" id="modalActualAmount"
+                     class="form-control" step="0.01" min="0"
+                     placeholder="0.00" required>
+            </div>
 
-          <div class="mb-3">
-            <label class="form-label small fw-semibold">Date of Collection <span class="text-danger">*</span></label>
-            <input type="date" name="collection_date" id="modalCollectionDate" class="form-control" required>
-          </div>
+            <div class="col-6">
+              <label class="form-label small fw-bold">
+                Collection Date <span class="text-danger">*</span>
+              </label>
+              <input type="date" name="collection_date" id="modalCollectionDate"
+                     class="form-control" required>
+            </div>
 
-          <div class="mb-3">
-            <label class="form-label small fw-semibold">Reference / UTR <span class="text-muted fw-normal">(optional)</span></label>
-            <input type="text" name="collection_reference" id="modalCollectionRef" class="form-control" placeholder="Cheque no / UTR / NEFT reference">
-          </div>
+            <div class="col-12">
+              <label class="form-label small fw-bold">
+                Payment Mode / Details
+              </label>
+              <input type="text" name="payment_details" id="modalPaymentDetails"
+                     class="form-control"
+                     placeholder="NEFT / RTGS / Cheque / Cash / UPI">
+            </div>
 
-          <div class="mb-1">
-            <label class="form-label small fw-semibold">Notes <span class="text-muted fw-normal">(optional)</span></label>
-            <textarea name="notes" id="modalNotes" class="form-control" rows="2" placeholder="Any remarks"></textarea>
+            <div class="col-12">
+              <label class="form-label small fw-bold">
+                UTR / Cheque Number
+                <span class="text-muted fw-normal">(optional)</span>
+              </label>
+              <input type="text" name="utr_number" id="modalUtr"
+                     class="form-control"
+                     placeholder="UTR or Cheque number">
+            </div>
           </div>
         </div>
 
-        <div class="modal-footer gap-2">
-          <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
-          <button type="submit" class="btn btn-success btn-sm">Save Actual</button>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary btn-sm"
+                  data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-success btn-sm">
+            <i class="fas fa-check me-1"></i>Save Collection
+          </button>
         </div>
       </form>
     </div>
@@ -919,130 +764,33 @@
 {% endblock %}
 
 {% block extra_js %}
-<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
 <script>
 (function () {
 
-  window.toggleNewPlan = function () {
-    var body = document.getElementById("newPlanBody");
-    var header = document.getElementById("newPlanToggle");
-    var chip = header ? header.querySelector(".cp-toggle-chip") : null;
-    var open = body.style.display === "none";
-
-    body.style.display = open ? "block" : "none";
-    header.classList.toggle("collapsed", !open);
-
-    if (chip) {
-      chip.textContent = open ? "−" : "+";
-    }
-  };
-
-  var errFlag = document.getElementById("cpFormHasErrors");
-  if (errFlag && errFlag.dataset.open === "1") {
-    toggleNewPlan();
-  }
-
-  if (window.jQuery && jQuery.fn.select2) {
-    var customerSelect = document.getElementById("id_customer");
-    if (customerSelect) {
-      jQuery(customerSelect).select2({
-        width: "100%",
-        placeholder: "Search and select customer",
-        allowClear: true
-      });
-    }
-  }
-
-  document.addEventListener("click", function (evt) {
-    var btn = evt.target.closest(".js-open-actual");
-    if (!btn) { return; }
-
-    var form = document.getElementById("actualModalForm");
-    form.action = btn.dataset.actionUrl;
-
-    document.getElementById("modalCustomerName").textContent = btn.dataset.customer || "";
-    document.getElementById("modalPlannedAmt").textContent = Number(btn.dataset.planned || 0).toLocaleString("en-IN");
-    document.getElementById("modalActualAmount").value = btn.dataset.actual || "";
-    document.getElementById("modalCollectionDate").value = btn.dataset.date || "";
-    document.getElementById("modalCollectionRef").value = btn.dataset.ref || "";
-    document.getElementById("modalNotes").value = btn.dataset.notes || "";
-
-    new bootstrap.Modal(document.getElementById("actualModal")).show();
-  });
-
-  document.querySelectorAll(".js-progress-fill").forEach(function (el) {
+  // ── Progress bars ─────────────────────────────────────────────────────────
+  document.querySelectorAll(".js-ct-bar").forEach(function (el) {
     var pct = parseInt(el.dataset.pct || "0", 10);
     el.style.width = (pct > 100 ? 100 : pct) + "%";
-    if (pct >= 100) {
-      el.classList.add("over");
-    }
+    if (pct >= 100) el.classList.add("over");
   });
 
-  var chartMeta = document.getElementById("cpChartData");
-  var chartEl = document.getElementById("cpBarChart");
+  // ── Record Collection Modal ───────────────────────────────────────────────
+  document.addEventListener("click", function (evt) {
+    var btn = evt.target.closest(".js-open-record");
+    if (!btn) return;
 
-  if (chartMeta && chartEl) {
-    var chartData = JSON.parse(chartMeta.textContent || "null");
-    if (chartData && chartData.labels && chartData.labels.length) {
-      new Chart(chartEl, {
-        type: "bar",
-        data: {
-          labels: chartData.labels,
-          datasets: [
-            {
-              label: "Planned (\u20b9)",
-              data: chartData.planned,
-              backgroundColor: "rgba(59,130,246,0.7)",
-              borderColor: "rgb(59,130,246)",
-              borderWidth: 1,
-              borderRadius: 4
-            },
-            {
-              label: "Collected (\u20b9)",
-              data: chartData.actual,
-              backgroundColor: "rgba(34,197,94,0.7)",
-              borderColor: "rgb(34,197,94)",
-              borderWidth: 1,
-              borderRadius: 4
-            }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: {
-              position: "top",
-              labels: { font: { size: 11 } }
-            },
-            tooltip: {
-              callbacks: {
-                label: function (ctx) {
-                  return " \u20b9 " + Number(ctx.raw).toLocaleString("en-IN");
-                }
-              }
-            }
-          },
-          scales: {
-            x: {
-              grid: { display: false },
-              ticks: { font: { size: 10 }, maxRotation: 30 }
-            },
-            y: {
-              beginAtZero: true,
-              grid: { color: "rgba(0,0,0,.04)" },
-              ticks: {
-                font: { size: 10 },
-                callback: function (v) {
-                  return "\u20b9" + (v / 1000).toFixed(0) + "k";
-                }
-              }
-            }
-          }
-        }
-      });
-    }
-  }
+    document.getElementById("modalPlanId").value           = btn.dataset.planId  || "";
+    document.getElementById("modalCustomerName").textContent = btn.dataset.customer || "";
+    document.getElementById("modalOverdueAmt").textContent =
+      Number(btn.dataset.overdue || 0).toLocaleString("en-IN");
+
+    document.getElementById("modalActualAmount").value   = btn.dataset.actual   || "";
+    document.getElementById("modalCollectionDate").value = btn.dataset.date     || "";
+    document.getElementById("modalPaymentDetails").value = btn.dataset.payment  || "";
+    document.getElementById("modalUtr").value            = btn.dataset.utr      || "";
+
+    new bootstrap.Modal(document.getElementById("recordModal")).show();
+  });
 
 }());
 </script>

@@ -1,6 +1,8 @@
 # FILE: apps/kam/models.py
 from __future__ import annotations
 
+from decimal import Decimal
+
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
@@ -318,49 +320,64 @@ class TargetLine(TimeStamped):
 
 
 class CollectionPlan(TimeStamped):
-    PERIOD_WEEK = TargetHeader.PERIOD_WEEK
-    PERIOD_MONTH = TargetHeader.PERIOD_MONTH
-    PERIOD_QUARTER = TargetHeader.PERIOD_QUARTER
-    PERIOD_YEAR = TargetHeader.PERIOD_YEAR
+    """
+    OVERDUE-DRIVEN Collection Tracking Entry.
 
-    STATUS_OPEN = "OPEN"
-    STATUS_PARTIAL = "PARTIAL"
+    DATA FLOW:
+      Google Sheet Overdues tab (col A–C)
+        → _sync_overdues_to_collection_plan()
+        → overwrites overdue_amount ONLY
+        → never touches actual_amount
+
+    KAM fills: actual_amount, collection_date, payment_details, utr_number
+    pending_amount = overdue_amount - actual_amount
+    """
+
+    STATUS_OPEN      = "OPEN"
+    STATUS_PARTIAL   = "PARTIAL"
     STATUS_COLLECTED = "COLLECTED"
-    STATUS_CHOICES = [
-        (STATUS_OPEN, "Open"),
-        (STATUS_PARTIAL, "Partial"),
+    STATUS_CHOICES   = [
+        (STATUS_OPEN,      "Open"),
+        (STATUS_PARTIAL,   "Partial"),
         (STATUS_COLLECTED, "Collected"),
     ]
 
-    period_type = models.CharField(
-        max_length=8,
-        choices=[
-            (PERIOD_WEEK, "Week"),
-            (PERIOD_MONTH, "Month"),
-            (PERIOD_QUARTER, "Quarter"),
-            (PERIOD_YEAR, "Year"),
-        ],
-        blank=True, null=True,
-    )
-    period_id = models.CharField(max_length=10, blank=True, null=True)
-    from_date = models.DateField(blank=True, null=True)
-    to_date = models.DateField(blank=True, null=True)
+    # ── MANDATORY — KAM from sheet, not from customer.kam ─────────────────
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT)
-    kam = models.ForeignKey(User, on_delete=models.PROTECT)
-    planned_amount = models.DecimalField(
-        max_digits=14, decimal_places=2, validators=[MinValueValidator(0)], default=0,
+    kam      = models.ForeignKey(
+        User, on_delete=models.PROTECT, related_name="collection_plans",
+        help_text="KAM resolved from Overdues tab column B. MANDATORY.",
     )
-    notes = models.TextField(blank=True, null=True)
 
+    # ── SOURCE OF TRUTH: Google Sheet Overdues tab (col A–C) ──────────────
+    overdue_amount = models.DecimalField(
+        max_digits=14, decimal_places=2, default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Synced from Google Sheet Overdues tab. Never manually edited.",
+    )
+    last_synced_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="When overdue_amount was last synced from sheet.",
+    )
+
+    # ── ACTUAL COLLECTION — filled by KAM only ────────────────────────────
     actual_amount = models.DecimalField(
         max_digits=14, decimal_places=2,
         null=True, blank=True,
         validators=[MinValueValidator(0)],
-        help_text="Actual amount collected against this plan entry.",
+        help_text="Actual amount collected by KAM.",
     )
     collection_date = models.DateField(
         null=True, blank=True,
-        help_text="Date the actual collection was recorded.",
+        help_text="Date actual collection was received.",
+    )
+    payment_details = models.CharField(
+        max_length=255, blank=True, null=True,
+        help_text="Mode of payment: NEFT / RTGS / Cheque / Cash / UPI etc.",
+    )
+    utr_number = models.CharField(
+        max_length=64, blank=True, null=True,
+        help_text="UTR / Cheque number (optional).",
     )
     collection_status = models.CharField(
         max_length=12,
@@ -368,17 +385,78 @@ class CollectionPlan(TimeStamped):
         default=STATUS_OPEN,
         db_index=True,
     )
-    collection_reference = models.CharField(
-        max_length=64, blank=True, null=True,
-        help_text="Cheque / UTR / reference for the actual collection.",
+
+    # ── LEGACY FIELDS — kept for backward compat, not used in new flow ─────
+    period_type = models.CharField(
+        max_length=8,
+        choices=[
+            ("WEEK", "Week"), ("MONTH", "Month"),
+            ("QUARTER", "Quarter"), ("YEAR", "Year"),
+        ],
+        blank=True, null=True,
     )
+    period_id        = models.CharField(max_length=10, blank=True, null=True)
+    from_date        = models.DateField(blank=True, null=True)
+    to_date          = models.DateField(blank=True, null=True)
+    planned_amount   = models.DecimalField(
+        max_digits=14, decimal_places=2, validators=[MinValueValidator(0)], default=0,
+        help_text="[DEPRECATED] Mirrors overdue_amount for backward compat.",
+    )
+    notes                = models.TextField(blank=True, null=True)
+    collection_reference = models.CharField(max_length=64, blank=True, null=True)
+
+    # ── COMPUTED PROPERTY ──────────────────────────────────────────────────
+    @property
+    def pending_amount(self):
+        """pending = overdue_amount - actual_amount"""
+        overdue = self.overdue_amount or Decimal("0")
+        actual  = self.actual_amount  or Decimal("0")
+        return max(overdue - actual, Decimal("0"))
+
+    @property
+    def shortfall(self):
+        return self.pending_amount
+
+    def save(self, *args, **kwargs):
+        # Keep planned_amount in sync for backward compat
+        if self.overdue_amount:
+            self.planned_amount = self.overdue_amount
+
+        # Sync collection_reference ↔ utr_number
+        if self.utr_number and not self.collection_reference:
+            self.collection_reference = self.utr_number
+        elif self.collection_reference and not self.utr_number:
+            self.utr_number = self.collection_reference
+
+        # Auto-set status based on actual vs overdue
+        if self.actual_amount is not None:
+            target = self.overdue_amount or self.planned_amount or Decimal("0")
+            if target > 0:
+                if self.actual_amount >= target:
+                    self.collection_status = self.STATUS_COLLECTED
+                elif self.actual_amount > 0:
+                    self.collection_status = self.STATUS_PARTIAL
+                else:
+                    self.collection_status = self.STATUS_OPEN
+
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"CollectionPlan#{self.id} {self.customer.name} "
+            f"overdue=₹{self.overdue_amount} actual=₹{self.actual_amount or 0}"
+        )
 
     class Meta:
-        unique_together = ("period_type", "period_id", "customer")
+        # Removed old: unique_together = ("period_type", "period_id", "customer")
+        # New system: customer + kam is the logical key (handled in sync via filter+update)
         indexes = [
-            models.Index(fields=["from_date", "to_date", "customer"]),
+            models.Index(fields=["customer", "kam"]),
             models.Index(fields=["kam"]),
             models.Index(fields=["collection_status"]),
+            models.Index(fields=["overdue_amount"]),
+            models.Index(fields=["last_synced_at"]),
+            models.Index(fields=["from_date", "to_date", "customer"]),
         ]
 
     def save(self, *args, **kwargs):
