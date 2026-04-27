@@ -309,15 +309,13 @@ def _sales_converted_qs(qs):
     """
     Canonical Sales dashboard queryset.
 
-    Business rule:
-      Sales = Sales (F) rows where Status = Order Converted.
+    Current Sales (F) tab is already the converted-sales source.
+    Older code expected source_status='Order Converted', but the live tab now has:
+      Date of Invoice, Buyer's Name, KAM, Qty(MT), Full Name
 
-    Sheet1 must not override Sales dashboard.
+    Therefore, do not require source_status for Sales (F).
     """
-    return qs.filter(
-        source_tab="Sales (F)",
-        source_status__iexact="Order Converted",
-    )
+    return qs.filter(source_tab="Sales (F)")
 
 
 def _legacy_invoice_qs(qs):
@@ -336,6 +334,32 @@ def _legacy_invoice_qs(qs):
         return salesf_qs
 
     return qs.exclude(source_tab__isnull=True)
+
+def _preferred_inv_qs(qs):
+    """
+    Preferred invoice queryset.
+
+    Priority:
+      1. Sales (F) for KAM sales dashboard / sales trend / Customer 360 MT
+      2. Sheet1 fallback for old invoice history
+      3. Any available invoice rows as final fallback
+
+    Important:
+      Current Sales (F) tab has columns:
+        Date of Invoice, Buyer's Name, KAM, Qty(MT), Full Name
+
+      It does NOT have Status = Order Converted anymore.
+      So Sales (F) itself is treated as the converted sales source.
+    """
+    sales_f_qs = qs.filter(source_tab="Sales (F)")
+    if sales_f_qs.exists():
+        return sales_f_qs
+
+    sheet1_qs = qs.filter(source_tab="Sheet1")
+    if sheet1_qs.exists():
+        return sheet1_qs
+
+    return qs
 
 
 def _lead_won_q():
@@ -3154,6 +3178,7 @@ def manager_view(request: HttpRequest) -> HttpResponse:
 
     start_dt, end_dt, range_label = _get_dashboard_range(request)
     scope_kam_id, scope_label = _resolve_scope(request, request.user)
+
     active_tab = (request.GET.get("tab") or "visits").strip().lower()
     if active_tab not in {"visits", "calls", "sales", "leads", "collections"}:
         active_tab = "visits"
@@ -3173,92 +3198,153 @@ def manager_view(request: HttpRequest) -> HttpResponse:
     collections_data, collections_summary = [], {}
 
     if active_tab == "visits":
-        qs = _filter_qs_by_kam_scope(VisitPlan.objects.select_related("customer", "kam").filter(visit_date__gte=start_date, visit_date__lt=end_date), request.user, scope_kam_id, "kam_id")
+        qs = _filter_qs_by_kam_scope(
+            VisitPlan.objects.select_related("customer", "kam").filter(
+                visit_date__gte=start_date,
+                visit_date__lt=end_date,
+            ),
+            request.user,
+            scope_kam_id,
+            "kam_id",
+        )
+
         visits_data = list(qs.order_by("-visit_date")[:500])
         total_actuals = VisitActual.objects.filter(plan__in=qs).count()
         successful = VisitActual.objects.filter(plan__in=qs, successful=True).count()
-        visits_summary = {"total_planned": qs.count(), "total_actual": total_actuals, "successful": successful, "success_pct": _pct(Decimal(successful), Decimal(total_actuals)) if total_actuals else None}
+
+        visits_summary = {
+            "total_planned": qs.count(),
+            "total_actual": total_actuals,
+            "successful": successful,
+            "success_pct": _pct(Decimal(successful), Decimal(total_actuals)) if total_actuals else None,
+        }
 
     if active_tab == "calls":
-        qs = _filter_qs_by_kam_scope(CallLog.objects.select_related("customer", "kam").filter(call_datetime__gte=start_dt, call_datetime__lt=end_dt), request.user, scope_kam_id, "kam_id")
+        qs = _filter_qs_by_kam_scope(
+            CallLog.objects.select_related("customer", "kam").filter(
+                call_datetime__gte=start_dt,
+                call_datetime__lt=end_dt,
+            ),
+            request.user,
+            scope_kam_id,
+            "kam_id",
+        )
+
         calls_data = list(qs.order_by("-call_datetime")[:500])
         total_calls = qs.count()
         successful_calls = qs.exclude(outcome="").exclude(outcome__isnull=True).count()
-        calls_summary = {"total": total_calls, "successful": successful_calls, "conversion_pct": _pct(Decimal(successful_calls), Decimal(total_calls)) if total_calls else None}
+
+        calls_summary = {
+            "total": total_calls,
+            "successful": successful_calls,
+            "conversion_pct": _pct(Decimal(successful_calls), Decimal(total_calls)) if total_calls else None,
+        }
 
     if active_tab == "sales":
-     qs = _filter_qs_by_kam_scope(
-        InvoiceFact.objects.filter(
-            invoice_date__gte=start_date,
-            invoice_date__lt=end_date,
-        ),
-        request.user,
-        scope_kam_id,
-        "kam_id",
-    )
-    qs = _sales_converted_qs(qs)
-
-    sales_data = list(
-        qs.values(
-            customer_name=F("customer__name"),
-            kam_username=F("kam__username"),
+        qs = _filter_qs_by_kam_scope(
+            InvoiceFact.objects.filter(
+                invoice_date__gte=start_date,
+                invoice_date__lt=end_date,
+            ),
+            request.user,
+            scope_kam_id,
+            "kam_id",
         )
-        .annotate(mt=Sum("qty_mt"))
-        .order_by("-mt")[:300]
-    )
+        qs = _sales_converted_qs(qs)
 
-    sales_summary = {
-        "total_mt": _safe_decimal(qs.aggregate(mt=Sum("qty_mt")).get("mt")),
-        "customer_count": len(sales_data),
-    }
+        sales_data = list(
+            qs.values(
+                customer_name=F("customer__name"),
+                kam_username=F("kam__username"),
+            )
+            .annotate(mt=Sum("qty_mt"))
+            .order_by("-mt")[:300]
+        )
+
+        sales_summary = {
+            "total_mt": _safe_decimal(qs.aggregate(mt=Sum("qty_mt")).get("mt")),
+            "customer_count": len(sales_data),
+        }
+
+    if active_tab == "leads":
+        qs = _filter_qs_by_kam_scope(
+            LeadFact.objects.select_related("customer", "kam").filter(
+                doe__gte=start_date,
+                doe__lt=end_date,
+            ),
+            request.user,
+            scope_kam_id,
+            "kam_id",
+        )
+
+        leads_data = list(qs.order_by("-doe")[:500])
+
+        leads_summary = {
+            "total_count": qs.count(),
+            "won_count": qs.filter(status="WON").count(),
+            "total_mt": _safe_decimal(qs.aggregate(mt=Sum("qty_mt")).get("mt")),
+            "won_mt": _safe_decimal(qs.filter(status="WON").aggregate(mt=Sum("qty_mt")).get("mt")),
+        }
 
     if active_tab == "collections":
-     qs = CollectionPlan.objects.select_related("customer", "kam").filter(overdue_amount__gt=0)
-    qs = _filter_qs_by_kam_scope(qs, request.user, scope_kam_id, "kam_id")
+        qs = CollectionPlan.objects.select_related("customer", "kam").filter(
+            overdue_amount__gt=0,
+        )
+        qs = _filter_qs_by_kam_scope(qs, request.user, scope_kam_id, "kam_id")
 
-    collections_data = list(qs.order_by("kam__username", "customer__name")[:500])
+        collections_data = list(
+            qs.order_by("kam__username", "customer__name")[:500]
+        )
 
-    agg = qs.aggregate(
-        total_overdue=Sum("overdue_amount"),
-        total_collected=Sum("actual_amount"),
-    )
+        agg = qs.aggregate(
+            total_overdue=Sum("overdue_amount"),
+            total_collected=Sum("actual_amount"),
+        )
 
-    total_overdue = _safe_decimal(agg.get("total_overdue"))
-    total_collected = _safe_decimal(agg.get("total_collected"))
-    total_pending = max(total_overdue - total_collected, Decimal("0"))
+        total_overdue = _safe_decimal(agg.get("total_overdue"))
+        total_collected = _safe_decimal(agg.get("total_collected"))
+        total_pending = max(total_overdue - total_collected, Decimal("0"))
 
-    collections_summary = {
-        "total_overdue": total_overdue,
-        "total_collected": total_collected,
-        "total_pending": total_pending,
-        "customer_count": qs.count(),
+        collections_summary = {
+            "total_overdue": total_overdue,
+            "total_collected": total_collected,
+            "total_pending": total_pending,
+            "customer_count": qs.count(),
 
-        # Backward-compatible aliases for older templates.
-        "total_amount": total_collected,
-        "transaction_count": qs.count(),
-    }
-
-    if active_tab == "collections":
-        qs = _filter_qs_by_kam_scope(CollectionTxn.objects.select_related("customer", "kam").filter(txn_datetime__gte=start_dt, txn_datetime__lt=end_dt), request.user, scope_kam_id, "kam_id")
-        collections_data = list(qs.order_by("-txn_datetime")[:500])
-        collections_summary = {"total_amount": _safe_decimal(qs.aggregate(a=Sum("amount")).get("a")), "transaction_count": qs.count()}
+            # Backward-compatible aliases for older template variables.
+            "total_amount": total_collected,
+            "transaction_count": qs.count(),
+        }
 
     ctx = {
-        "page_title": "Manager View", "range_label": range_label, "scope_label": scope_label,
+        "page_title": "Manager View",
+        "range_label": range_label,
+        "scope_label": scope_label,
         "active_tab": active_tab,
-        "tabs": [("visits", "Visits"), ("calls", "Calls"), ("sales", "Sales"), ("leads", "Leads"), ("collections", "Collections")],
+        "tabs": [
+            ("visits", "Visits"),
+            ("calls", "Calls"),
+            ("sales", "Sales"),
+            ("leads", "Leads"),
+            ("collections", "Collections"),
+        ],
         "kam_options": _kam_options_for_user(request.user),
         "filter_from": start_dt.date().isoformat(),
         "filter_to": (end_dt - timezone.timedelta(days=1)).date().isoformat(),
         "selected_user": scope_label if scope_label != "ALL" else "",
-        "visits_data": visits_data, "visits_summary": visits_summary,
-        "calls_data": calls_data, "calls_summary": calls_summary,
-        "sales_data": sales_data, "sales_summary": sales_summary,
-        "leads_data": leads_data, "leads_summary": leads_summary,
-        "collections_data": collections_data, "collections_summary": collections_summary,
+        "visits_data": visits_data,
+        "visits_summary": visits_summary,
+        "calls_data": calls_data,
+        "calls_summary": calls_summary,
+        "sales_data": sales_data,
+        "sales_summary": sales_summary,
+        "leads_data": leads_data,
+        "leads_summary": leads_summary,
+        "collections_data": collections_data,
+        "collections_summary": collections_summary,
     }
-    return render(request, "kam/manager_view.html", ctx)
 
+    return render(request, "kam/manager_view.html", ctx)
 
 # =====================================================================
 # Legacy approve/reject
