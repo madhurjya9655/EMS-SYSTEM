@@ -1,315 +1,598 @@
-{# FILE: templates/kam/manager_view.html #}
-{# PURPOSE: Manager View — analytics control panel with 5 tabs #}
-{# UPDATED: 2026-03-05 #}
 {% extends "base.html" %}
 {% load humanize %}
 
 {% block title %}Manager View — BOS Lakshya{% endblock %}
 {% block breadcrumb %}Manager View{% endblock %}
 
+{% block head_extra %}
+<style>
+  .manager-page {
+    font-family: Inter, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+
+  .manager-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+
+  .manager-title {
+    margin: 0;
+    font-size: 1.55rem;
+    font-weight: 750;
+    letter-spacing: -0.02em;
+    color: var(--text);
+  }
+
+  .manager-subtitle {
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .manager-filter-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    margin-bottom: 16px;
+  }
+
+  .manager-filter-grid {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .manager-filter-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .manager-filter-label {
+    font-size: 11px;
+    font-weight: 750;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--subtle);
+  }
+
+  .manager-filter-field .form-control,
+  .manager-filter-field .form-select {
+    min-width: 150px;
+    height: 37px;
+    font-size: 13px;
+  }
+
+  .manager-tabs {
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+
+  .manager-tabs .nav-link {
+    font-size: 13px;
+    color: var(--muted);
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 10px 14px;
+    font-weight: 650;
+  }
+
+  .manager-tabs .nav-link.active {
+    color: var(--primary);
+    background: transparent;
+    border-bottom-color: var(--primary);
+  }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+
+  .summary-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 15px 16px;
+    box-shadow: var(--shadow-xs);
+  }
+
+  .summary-label {
+    font-size: 11px;
+    color: var(--subtle);
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 7px;
+  }
+
+  .summary-value {
+    font-size: 1.45rem;
+    font-weight: 800;
+    line-height: 1.1;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+
+  .summary-value.success { color: #16a34a; }
+  .summary-value.danger { color: #dc2626; }
+  .summary-value.warning { color: #d97706; }
+
+  .data-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow-xs);
+  }
+
+  .data-card-header {
+    padding: 13px 16px;
+    border-bottom: 1px solid var(--border-light);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .data-card-title {
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .data-card-title i {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .table th {
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    background: #f9fafb;
+    border-bottom-color: var(--border);
+    white-space: nowrap;
+  }
+
+  .table td {
+    font-size: 13px;
+    vertical-align: middle;
+  }
+
+  .empty-state {
+    padding: 44px 20px;
+    text-align: center;
+    color: var(--subtle);
+    font-size: 13px;
+  }
+
+  @media (max-width: 1100px) {
+    .summary-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 768px) {
+    .summary-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .manager-filter-field,
+    .manager-filter-field .form-control,
+    .manager-filter-field .form-select {
+      width: 100%;
+      min-width: 0;
+    }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
+<div class="manager-page">
 
-{# ─── Page Header ──────────────────────────────────────────────────────── #}
-<div class="d-flex align-items-start justify-content-between flex-wrap gap-2 mb-3">
-  <div>
-    <h1 class="page-title m-0">Manager View</h1>
-    <div class="text-muted small mt-1">{{ range_label }}</div>
-  </div>
-  <a href="{% url 'kam:dashboard' %}" class="btn btn-sm btn-outline-secondary">← Dashboard</a>
-</div>
-
-{# ─── Filter Bar ──────────────────────────────────────────────────────── #}
-<form method="get" class="d-flex align-items-end gap-2 flex-wrap mb-3 p-3 border rounded bg-white">
-  <input type="hidden" name="tab" value="{{ active_tab }}">
-
-  <div>
-    <label class="form-label small fw-semibold mb-1">From</label>
-    <input type="date" name="from" class="form-control form-control-sm" value="{{ filter_from }}">
-  </div>
-  <div>
-    <label class="form-label small fw-semibold mb-1">To</label>
-    <input type="date" name="to" class="form-control form-control-sm" value="{{ filter_to }}">
-  </div>
-  <div>
-    <label class="form-label small fw-semibold mb-1">KAM</label>
-    <select name="user" class="form-select form-select-sm" style="min-width:160px;">
-      <option value="" {% if not selected_user %}selected{% endif %}>All KAMs</option>
-      {% for uname in kam_options %}
-        <option value="{{ uname }}" {% if selected_user == uname %}selected{% endif %}>{{ uname }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div class="d-flex gap-2 align-items-center" style="margin-top:1.5rem;">
-    <button type="submit" class="btn btn-primary btn-sm">Apply</button>
-    <a href="{% url 'kam:manager_view' %}?tab={{ active_tab }}" class="btn btn-outline-secondary btn-sm">Reset</a>
-  </div>
-</form>
-
-{# ─── Navigation Tabs ─────────────────────────────────────────────────── #}
-<ul class="nav nav-tabs mb-3">
-  {% for tab_id, tab_label in tabs %}
-    <li class="nav-item">
-      <a class="nav-link {% if active_tab == tab_id %}active fw-semibold{% endif %}"
-         href="?tab={{ tab_id }}&from={{ filter_from }}&to={{ filter_to }}&user={{ selected_user }}">
-        {{ tab_label }}
-      </a>
-    </li>
-  {% endfor %}
-</ul>
-
-{# ─── Fallback: render tabs directly ─────────────────────────────────── #}
-{% if not tabs %}
-<ul class="nav nav-tabs mb-3">
-  <li class="nav-item"><a class="nav-link {% if active_tab == 'visits' %}active fw-semibold{% endif %}" href="?tab=visits&from={{ filter_from }}&to={{ filter_to }}&user={{ selected_user }}">Visits</a></li>
-  <li class="nav-item"><a class="nav-link {% if active_tab == 'calls' %}active fw-semibold{% endif %}" href="?tab=calls&from={{ filter_from }}&to={{ filter_to }}&user={{ selected_user }}">Calls</a></li>
-  <li class="nav-item"><a class="nav-link {% if active_tab == 'sales' %}active fw-semibold{% endif %}" href="?tab=sales&from={{ filter_from }}&to={{ filter_to }}&user={{ selected_user }}">Sales</a></li>
-  <li class="nav-item"><a class="nav-link {% if active_tab == 'leads' %}active fw-semibold{% endif %}" href="?tab=leads&from={{ filter_from }}&to={{ filter_to }}&user={{ selected_user }}">Leads</a></li>
-  <li class="nav-item"><a class="nav-link {% if active_tab == 'collections' %}active fw-semibold{% endif %}" href="?tab=collections&from={{ filter_from }}&to={{ filter_to }}&user={{ selected_user }}">Collections</a></li>
-</ul>
-{% endif %}
-
-{# ─── VISITS TAB ──────────────────────────────────────────────────────── #}
-{% if active_tab == 'visits' %}
-  <div class="row g-3 mb-3">
-    <div class="col-6 col-md-3">
-      <div class="card p-3 text-center"><div class="small text-muted">Planned</div><div class="fs-4 fw-bold">{{ visits_summary.total_planned|default:0 }}</div></div>
+  <div class="manager-header">
+    <div>
+      <h1 class="manager-title">Manager View</h1>
+      <div class="manager-subtitle">
+        {{ range_label }}{% if scope_label %} · Scope: {{ scope_label }}{% endif %}
+      </div>
     </div>
-    <div class="col-6 col-md-3">
-      <div class="card p-3 text-center"><div class="small text-muted">Actual</div><div class="fs-4 fw-bold">{{ visits_summary.total_actual|default:0 }}</div></div>
+
+    <a href="{% url 'kam:dashboard' %}" class="btn btn-sm btn-outline-secondary">
+      Back to Dashboard
+    </a>
+  </div>
+
+  <form method="get" class="manager-filter-card">
+    <input type="hidden" name="tab" value="{{ active_tab }}">
+
+    <div class="manager-filter-grid">
+      <div class="manager-filter-field">
+        <label class="manager-filter-label">From</label>
+        <input type="date" name="from" class="form-control form-control-sm" value="{{ filter_from }}">
+      </div>
+
+      <div class="manager-filter-field">
+        <label class="manager-filter-label">To</label>
+        <input type="date" name="to" class="form-control form-control-sm" value="{{ filter_to }}">
+      </div>
+
+      <div class="manager-filter-field">
+        <label class="manager-filter-label">KAM</label>
+        <select name="user" class="form-select form-select-sm">
+          <option value="" {% if not selected_user %}selected{% endif %}>All KAMs</option>
+          {% for uname in kam_options %}
+            <option value="{{ uname }}" {% if selected_user == uname %}selected{% endif %}>{{ uname }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="d-flex gap-2 align-items-end">
+        <button type="submit" class="btn btn-primary btn-sm">
+          <i class="fas fa-filter me-1"></i>Apply
+        </button>
+        <a href="{% url 'kam:manager_view' %}?tab={{ active_tab }}" class="btn btn-outline-secondary btn-sm">
+          Reset
+        </a>
+      </div>
     </div>
-    <div class="col-6 col-md-3">
-      <div class="card p-3 text-center"><div class="small text-muted">Successful</div><div class="fs-4 fw-bold text-success">{{ visits_summary.successful|default:0 }}</div></div>
-    </div>
-    <div class="col-6 col-md-3">
-      <div class="card p-3 text-center"><div class="small text-muted">Success %</div>
-        <div class="fs-4 fw-bold {% if visits_summary.success_pct and visits_summary.success_pct >= 70 %}text-success{% elif visits_summary.success_pct %}text-warning{% endif %}">
+  </form>
+
+  <ul class="nav manager-tabs">
+    {% for tab_id, tab_label in tabs %}
+      <li class="nav-item">
+        <a class="nav-link {% if active_tab == tab_id %}active{% endif %}"
+           href="?tab={{ tab_id }}&from={{ filter_from }}&to={{ filter_to }}&user={{ selected_user }}">
+          {{ tab_label }}
+        </a>
+      </li>
+    {% endfor %}
+  </ul>
+
+  {% if active_tab == 'visits' %}
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="summary-label">Planned</div>
+        <div class="summary-value">{{ visits_summary.total_planned|default:0 }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Actual</div>
+        <div class="summary-value">{{ visits_summary.total_actual|default:0 }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Successful</div>
+        <div class="summary-value success">{{ visits_summary.successful|default:0 }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Success Rate</div>
+        <div class="summary-value">
           {% if visits_summary.success_pct %}{{ visits_summary.success_pct|floatformat:1 }}%{% else %}—{% endif %}
         </div>
       </div>
     </div>
-  </div>
 
-  <div class="card">
-    <div class="card-header fw-semibold">Visit Plans ({{ filter_from }} → {{ filter_to }})</div>
-    <div class="card-body p-0">
+    <div class="data-card">
+      <div class="data-card-header">
+        <div class="data-card-title">
+          <i class="fas fa-route"></i>Visit Plans
+        </div>
+      </div>
+
       {% if visits_data %}
         <div class="table-responsive">
           <table class="table table-sm table-hover mb-0 align-middle">
-            <thead class="table-light">
-              <tr><th>Date</th><th>Customer</th><th>KAM</th><th>Category</th><th>Status</th><th>Outcome</th></tr>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Customer / Entity</th>
+                <th>KAM</th>
+                <th>Category</th>
+                <th>Status</th>
+                <th>Outcome</th>
+              </tr>
             </thead>
             <tbody>
               {% for v in visits_data %}
-              <tr>
-                <td class="text-nowrap small">{{ v.visit_date }}</td>
-                <td>{% if v.customer %}{{ v.customer.name }}{% else %}{{ v.counterparty_name|default:"—" }}{% endif %}</td>
-                <td class="small">{{ v.kam.username }}</td>
-                <td class="small">{{ v.get_visit_category_display }}</td>
-                <td>
-                  {% if v.approval_status == 'APPROVED' %}<span class="badge bg-success">Approved</span>
-                  {% elif v.approval_status == 'PENDING_APPROVAL' %}<span class="badge bg-warning text-dark">Pending</span>
-                  {% elif v.approval_status == 'REJECTED' %}<span class="badge bg-danger">Rejected</span>
-                  {% else %}<span class="badge bg-secondary">Draft</span>{% endif %}
-                </td>
-                <td>
-                  {% if v.actual_id %}
-                    {% if v.actual.successful %}<span class="badge bg-success">Done ✓</span>
-                    {% else %}<span class="badge bg-danger">Not Done</span>{% endif %}
-                  {% else %}<span class="text-muted small">Pending</span>{% endif %}
-                </td>
-              </tr>
+                <tr>
+                  <td class="text-nowrap">{{ v.visit_date }}</td>
+                  <td>{% if v.customer %}{{ v.customer.name }}{% else %}{{ v.counterparty_name|default:"—" }}{% endif %}</td>
+                  <td>{{ v.kam.username }}</td>
+                  <td>{{ v.get_visit_category_display }}</td>
+                  <td>
+                    {% if v.approval_status == 'APPROVED' %}
+                      <span class="badge bg-success">Approved</span>
+                    {% elif v.approval_status == 'PENDING_APPROVAL' %}
+                      <span class="badge bg-warning text-dark">Pending</span>
+                    {% elif v.approval_status == 'REJECTED' %}
+                      <span class="badge bg-danger">Rejected</span>
+                    {% else %}
+                      <span class="badge bg-secondary">{{ v.approval_status }}</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if v.actual_id %}
+                      {% if v.actual.successful %}
+                        <span class="badge bg-success">Successful</span>
+                      {% else %}
+                        <span class="badge bg-danger">Not Successful</span>
+                      {% endif %}
+                    {% else %}
+                      <span class="text-muted">Pending</span>
+                    {% endif %}
+                  </td>
+                </tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
       {% else %}
-        <div class="p-4 text-center text-muted">No visit plans found for this period.</div>
+        <div class="empty-state">No visit plans found for the selected filters.</div>
       {% endif %}
     </div>
-  </div>
-{% endif %}
+  {% endif %}
 
-{# ─── CALLS TAB ──────────────────────────────────────────────────────── #}
-{% if active_tab == 'calls' %}
-  <div class="row g-3 mb-3">
-    <div class="col-6 col-md-4">
-      <div class="card p-3 text-center"><div class="small text-muted">Total Calls</div><div class="fs-4 fw-bold">{{ calls_summary.total|default:0 }}</div></div>
-    </div>
-    <div class="col-6 col-md-4">
-      <div class="card p-3 text-center"><div class="small text-muted">Successful</div><div class="fs-4 fw-bold text-success">{{ calls_summary.successful|default:0 }}</div></div>
-    </div>
-    <div class="col-6 col-md-4">
-      <div class="card p-3 text-center"><div class="small text-muted">Conversion %</div>
-        <div class="fs-4 fw-bold">
+  {% if active_tab == 'calls' %}
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="summary-label">Total Calls</div>
+        <div class="summary-value">{{ calls_summary.total|default:0 }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Successful</div>
+        <div class="summary-value success">{{ calls_summary.successful|default:0 }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Conversion</div>
+        <div class="summary-value">
           {% if calls_summary.conversion_pct %}{{ calls_summary.conversion_pct|floatformat:1 }}%{% else %}—{% endif %}
         </div>
       </div>
     </div>
-  </div>
 
-  <div class="card">
-    <div class="card-header fw-semibold">Call Logs ({{ filter_from }} → {{ filter_to }})</div>
-    <div class="card-body p-0">
+    <div class="data-card">
+      <div class="data-card-header">
+        <div class="data-card-title">
+          <i class="fas fa-phone-volume"></i>Call Logs
+        </div>
+      </div>
+
       {% if calls_data %}
         <div class="table-responsive">
           <table class="table table-sm table-hover mb-0">
-            <thead class="table-light">
-              <tr><th>Date &amp; Time</th><th>KAM</th><th>Customer</th><th>Duration</th><th>Outcome</th><th>Summary</th></tr>
+            <thead>
+              <tr>
+                <th>Date &amp; Time</th>
+                <th>KAM</th>
+                <th>Customer</th>
+                <th>Duration</th>
+                <th>Outcome</th>
+                <th>Summary</th>
+              </tr>
             </thead>
             <tbody>
               {% for c in calls_data %}
-              <tr>
-                <td class="text-nowrap small">{{ c.call_datetime|date:"d M Y H:i" }}</td>
-                <td class="small">{{ c.kam.username }}</td>
-                <td>{{ c.customer.name|default:"—" }}</td>
-                <td class="small">{% if c.duration_minutes %}{{ c.duration_minutes }}m{% else %}—{% endif %}</td>
-                <td class="small">{{ c.outcome|default:"—" }}</td>
-                <td class="small text-muted" style="max-width:200px;">{{ c.summary|default:"—"|truncatechars:60 }}</td>
-              </tr>
+                <tr>
+                  <td class="text-nowrap">{{ c.call_datetime|date:"d M Y H:i" }}</td>
+                  <td>{{ c.kam.username }}</td>
+                  <td>{{ c.customer.name|default:"—" }}</td>
+                  <td>{% if c.duration_minutes %}{{ c.duration_minutes }} min{% else %}—{% endif %}</td>
+                  <td>{{ c.outcome|default:"—" }}</td>
+                  <td class="text-muted">{{ c.summary|default:"—"|truncatechars:70 }}</td>
+                </tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
       {% else %}
-        <div class="p-4 text-center text-muted">No calls found for this period.</div>
+        <div class="empty-state">No calls found for the selected filters.</div>
       {% endif %}
     </div>
-  </div>
-{% endif %}
+  {% endif %}
 
-{# ─── SALES TAB ──────────────────────────────────────────────────────── #}
-{% if active_tab == 'sales' %}
-  <div class="row g-3 mb-3">
-    <div class="col-6 col-md-4">
-      <div class="card p-3 text-center"><div class="small text-muted">Total MT</div><div class="fs-4 fw-bold">{{ sales_summary.total_mt|floatformat:2 }}</div></div>
+  {% if active_tab == 'sales' %}
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="summary-label">Total Sales</div>
+        <div class="summary-value">{{ sales_summary.total_mt|default:0|floatformat:2 }} MT</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Customers</div>
+        <div class="summary-value">{{ sales_summary.customer_count|default:0 }}</div>
+      </div>
     </div>
-    <div class="col-6 col-md-4">
-      <div class="card p-3 text-center"><div class="small text-muted">Customers</div><div class="fs-4 fw-bold">{{ sales_summary.customer_count|default:0 }}</div></div>
-    </div>
-  </div>
 
-  <div class="card">
-    <div class="card-header fw-semibold">Sales by Customer ({{ filter_from }} → {{ filter_to }})</div>
-    <div class="card-body p-0">
+    <div class="data-card">
+      <div class="data-card-header">
+        <div class="data-card-title">
+          <i class="fas fa-boxes-stacked"></i>Sales by Customer
+        </div>
+        <div class="text-muted small">Order Converted only</div>
+      </div>
+
       {% if sales_data %}
         <div class="table-responsive">
           <table class="table table-sm table-hover mb-0">
-            <thead class="table-light">
-              <tr><th>Customer</th><th>KAM</th><th class="text-end">MT</th></tr>
+            <thead>
+              <tr>
+                <th>Customer</th>
+                <th>KAM</th>
+                <th class="text-end">Sales (MT)</th>
+              </tr>
             </thead>
             <tbody>
               {% for r in sales_data %}
-              <tr>
-                <td>{{ r.customer_name|default:"—" }}</td>
-                <td class="small">{{ r.kam_username|default:"—" }}</td>
-                <td class="text-end fw-bold">{{ r.mt|floatformat:3 }}</td>
-              </tr>
+                <tr>
+                  <td>{{ r.customer_name|default:"—" }}</td>
+                  <td>{{ r.kam_username|default:"—" }}</td>
+                  <td class="text-end fw-bold">{{ r.mt|default:0|floatformat:3 }}</td>
+                </tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
       {% else %}
-        <div class="p-4 text-center text-muted">No sales data found for this period.</div>
+        <div class="empty-state">No converted sales found for the selected filters.</div>
       {% endif %}
     </div>
-  </div>
-{% endif %}
+  {% endif %}
 
-{# ─── LEADS TAB ──────────────────────────────────────────────────────── #}
-{% if active_tab == 'leads' %}
-  <div class="row g-3 mb-3">
-    <div class="col-6 col-md-3">
-      <div class="card p-3 text-center"><div class="small text-muted">Total Leads</div><div class="fs-4 fw-bold">{{ leads_summary.total_count|default:0 }}</div></div>
-    </div>
-    <div class="col-6 col-md-3">
-      <div class="card p-3 text-center"><div class="small text-muted">Total MT</div><div class="fs-4 fw-bold">{{ leads_summary.total_mt|floatformat:2 }}</div></div>
-    </div>
-    <div class="col-6 col-md-3">
-      <div class="card p-3 text-center"><div class="small text-muted">Won MT</div><div class="fs-4 fw-bold text-success">{{ leads_summary.won_mt|floatformat:2 }}</div></div>
-    </div>
-    <div class="col-6 col-md-3">
-      <div class="card p-3 text-center"><div class="small text-muted">Conversion</div>
-        <div class="fs-4 fw-bold">
+  {% if active_tab == 'leads' %}
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="summary-label">Total Leads</div>
+        <div class="summary-value">{{ leads_summary.total_count|default:0 }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Won Leads</div>
+        <div class="summary-value success">{{ leads_summary.won_count|default:0 }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Total Volume</div>
+        <div class="summary-value">{{ leads_summary.total_mt|default:0|floatformat:2 }} MT</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Conversion</div>
+        <div class="summary-value">
           {% if leads_summary.conversion_pct %}{{ leads_summary.conversion_pct|floatformat:1 }}%{% else %}—{% endif %}
         </div>
       </div>
     </div>
-  </div>
 
-  <div class="card">
-    <div class="card-header fw-semibold">Leads / Enquiries ({{ filter_from }} → {{ filter_to }})</div>
-    <div class="card-body p-0">
+    <div class="data-card">
+      <div class="data-card-header">
+        <div class="data-card-title">
+          <i class="fas fa-filter-circle-dollar"></i>Leads / Enquiries
+        </div>
+      </div>
+
       {% if leads_data %}
         <div class="table-responsive">
           <table class="table table-sm table-hover mb-0">
-            <thead class="table-light">
-              <tr><th>Date</th><th>Customer</th><th>KAM</th><th>Grade</th><th class="text-end">MT</th><th>Status</th></tr>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Customer</th>
+                <th>KAM</th>
+                <th>Grade</th>
+                <th class="text-end">Qty (MT)</th>
+                <th>Status</th>
+              </tr>
             </thead>
             <tbody>
               {% for l in leads_data %}
-              <tr>
-                <td class="small">{{ l.doe|default:"—" }}</td>
-                <td>{{ l.customer.name|default:"—" }}</td>
-                <td class="small">{{ l.kam.username|default:"—" }}</td>
-                <td class="small">{{ l.grade|default:"—" }}</td>
-                <td class="text-end">{{ l.qty_mt|floatformat:3 }}</td>
-                <td>
-                  {% if l.status == 'WON' %}<span class="badge bg-success">Won</span>
-                  {% elif l.status == 'LOST' %}<span class="badge bg-danger">Lost</span>
-                  {% elif l.status == 'NEGOTIATION' %}<span class="badge bg-warning text-dark">Negotiation</span>
-                  {% else %}<span class="badge bg-info">Open</span>{% endif %}
-                </td>
-              </tr>
+                <tr>
+                  <td>{{ l.doe|default:"—" }}</td>
+                  <td>{{ l.customer.name|default:"—" }}</td>
+                  <td>{{ l.kam.username|default:"—" }}</td>
+                  <td>{{ l.grade|default:"—" }}</td>
+                  <td class="text-end">{{ l.qty_mt|default:0|floatformat:3 }}</td>
+                  <td>
+                    {% if l.status == 'WON' %}
+                      <span class="badge bg-success">Won</span>
+                    {% elif l.status == 'LOST' %}
+                      <span class="badge bg-danger">Lost</span>
+                    {% elif l.status == 'NEGOTIATION' %}
+                      <span class="badge bg-warning text-dark">Negotiation</span>
+                    {% else %}
+                      <span class="badge bg-info text-dark">Open</span>
+                    {% endif %}
+                  </td>
+                </tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
       {% else %}
-        <div class="p-4 text-center text-muted">No leads found for this period.</div>
+        <div class="empty-state">No leads found for the selected filters.</div>
       {% endif %}
     </div>
-  </div>
-{% endif %}
+  {% endif %}
 
-{# ─── COLLECTIONS TAB ─────────────────────────────────────────────────── #}
-{% if active_tab == 'collections' %}
-  <div class="row g-3 mb-3">
-    <div class="col-6 col-md-4">
-      <div class="card p-3 text-center"><div class="small text-muted">Total Collected</div><div class="fs-4 fw-bold">₹ {{ collections_summary.total_amount|floatformat:0|intcomma }}</div></div>
+  {% if active_tab == 'collections' %}
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="summary-label">Customers</div>
+        <div class="summary-value">{{ collections_summary.customer_count|default:0 }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Total Overdue</div>
+        <div class="summary-value danger">₹ {{ collections_summary.total_overdue|default:0|floatformat:0|intcomma }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Collected</div>
+        <div class="summary-value success">₹ {{ collections_summary.total_collected|default:0|floatformat:0|intcomma }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Pending</div>
+        <div class="summary-value warning">₹ {{ collections_summary.total_pending|default:0|floatformat:0|intcomma }}</div>
+      </div>
     </div>
-    <div class="col-6 col-md-4">
-      <div class="card p-3 text-center"><div class="small text-muted">Transactions</div><div class="fs-4 fw-bold">{{ collections_summary.transaction_count|default:0 }}</div></div>
-    </div>
-  </div>
 
-  <div class="card">
-    <div class="card-header fw-semibold">Collection Transactions ({{ filter_from }} → {{ filter_to }})</div>
-    <div class="card-body p-0">
+    <div class="data-card">
+      <div class="data-card-header">
+        <div class="data-card-title">
+          <i class="fas fa-indian-rupee-sign"></i>Overdue-Driven Collection Plans
+        </div>
+        <div class="text-muted small">Current overdue snapshot from PostgreSQL</div>
+      </div>
+
       {% if collections_data %}
         <div class="table-responsive">
           <table class="table table-sm table-hover mb-0">
-            <thead class="table-light">
-              <tr><th>Date</th><th>KAM</th><th>Customer</th><th class="text-end">Amount (₹)</th><th>Mode</th><th>Reference</th></tr>
+            <thead>
+              <tr>
+                <th>KAM</th>
+                <th>Customer</th>
+                <th class="text-end">Overdue (₹)</th>
+                <th class="text-end">Collected (₹)</th>
+                <th class="text-end">Pending (₹)</th>
+                <th>Status</th>
+                <th>Last Synced</th>
+              </tr>
             </thead>
             <tbody>
               {% for c in collections_data %}
-              <tr>
-                <td class="text-nowrap small">{{ c.txn_datetime|date:"d M Y" }}</td>
-                <td class="small">{{ c.kam.username }}</td>
-                <td>{{ c.customer.name|default:"—" }}</td>
-                <td class="text-end fw-bold">{{ c.amount|floatformat:0|intcomma }}</td>
-                <td class="small">{{ c.mode|default:"—" }}</td>
-                <td class="small text-muted">{{ c.reference|default:"—" }}</td>
-              </tr>
+                <tr>
+                  <td>{{ c.kam.username }}</td>
+                  <td>{{ c.customer.name|default:"—" }}</td>
+                  <td class="text-end fw-bold text-danger">{{ c.overdue_amount|default:0|floatformat:0|intcomma }}</td>
+                  <td class="text-end fw-bold text-success">{{ c.actual_amount|default:0|floatformat:0|intcomma }}</td>
+                  <td class="text-end fw-bold text-warning">{{ c.pending_amount|default:0|floatformat:0|intcomma }}</td>
+                  <td>
+                    {% if c.collection_status == 'COLLECTED' %}
+                      <span class="badge bg-success">Collected</span>
+                    {% elif c.collection_status == 'PARTIAL' %}
+                      <span class="badge bg-warning text-dark">Partial</span>
+                    {% else %}
+                      <span class="badge bg-secondary">Open</span>
+                    {% endif %}
+                  </td>
+                  <td class="text-muted">
+                    {% if c.last_synced_at %}{{ c.last_synced_at|date:"d M Y H:i" }}{% else %}—{% endif %}
+                  </td>
+                </tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
       {% else %}
-        <div class="p-4 text-center text-muted">No collections found for this period.</div>
+        <div class="empty-state">No overdue collection plans found for the selected filters.</div>
       {% endif %}
     </div>
-  </div>
-{% endif %}
+  {% endif %}
 
+</div>
 {% endblock %}

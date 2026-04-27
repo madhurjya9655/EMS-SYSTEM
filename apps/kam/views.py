@@ -305,16 +305,27 @@ def _visitplan_workflow_schema_ready() -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 # FIX: Sales (F) is authoritative for qty_mt.
 # ─────────────────────────────────────────────────────────────────────────────
-def _preferred_inv_qs(qs):
+def _sales_converted_qs(qs):
     """
-    Canonical invoice source selector.
+    Canonical Sales dashboard queryset.
 
-    Priority:
-    1. Sheet1     -> authoritative historical/full invoice source
-    2. Sales (F)  -> fallback when Sheet1 has no rows in the filtered slice
-    3. exclude legacy NULL-source rows from reporting math
+    Business rule:
+      Sales = Sales (F) rows where Status = Order Converted.
 
-    This keeps dashboard, reports and Customer 360 aligned.
+    Sheet1 must not override Sales dashboard.
+    """
+    return qs.filter(
+        source_tab="Sales (F)",
+        source_status__iexact="Order Converted",
+    )
+
+
+def _legacy_invoice_qs(qs):
+    """
+    Backward-compatible invoice queryset for Customer 360 / invoice history.
+
+    Use this only where historical invoice view is needed.
+    Do not use this for Sales KPI.
     """
     sheet1_qs = qs.filter(source_tab="Sheet1")
     if sheet1_qs.exists():
@@ -325,6 +336,14 @@ def _preferred_inv_qs(qs):
         return salesf_qs
 
     return qs.exclude(source_tab__isnull=True)
+
+
+def _lead_won_q():
+    return (
+        Q(status__iexact="WON")
+        | Q(status__iexact="CONVERTED")
+        | Q(status__iexact="ORDER CONVERTED")
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Token Helpers
@@ -1442,9 +1461,12 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     start_date = start_dt.date()
     end_date = end_dt.date()
 
-    inv_qs = InvoiceFact.objects.filter(invoice_date__gte=start_date, invoice_date__lt=end_date)
+    inv_qs = InvoiceFact.objects.filter(
+    invoice_date__gte=start_date,
+    invoice_date__lt=end_date,
+    )
     inv_qs = _filter_qs_by_kam_scope(inv_qs, request.user, scope_kam_id, "kam_id")
-    inv_qs = _preferred_inv_qs(inv_qs)
+    inv_qs = _sales_converted_qs(inv_qs)
 
     visit_plan_qs = VisitPlan.objects.filter(visit_date__gte=start_date, visit_date__lt=end_date)
     visit_act_qs = VisitActual.objects.filter(plan__visit_date__gte=start_date, plan__visit_date__lt=end_date)
@@ -1465,6 +1487,7 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     calls_total = call_qs.count()
     calls_successful = call_qs.filter(outcome__isnull=False).exclude(outcome="").count()
 
+    won_status_q = _lead_won_q()
     leads_agg = lead_qs.aggregate(
         total_mt=Sum("qty_mt"),
         won_mt=Sum("qty_mt", filter=Q(status="WON")),
@@ -1500,6 +1523,8 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     # Backward-compat aliases used in ctx and _pct() calls below
     collection_planned  = collection_overdue
     collections_planned = collection_overdue
+
+    overdue_sum = collection_overdue
 
     overdue_snapshot_date = None
     prev_overdue_snapshot_date = None
@@ -1613,6 +1638,8 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             "collections_eff_pct": coll_eff_pct,
             "collection_planned": collection_planned,
             "collection_actual": collection_actual_plan,
+            "collection_pending": collection_pending,
+            "collection_total_customers": collection_total_customers,
             "collection_ach_pct": collection_ach_pct,
             "collection_overdue_amt": overdue_sum,
             "overdue_sum": overdue_sum, "prev_overdue_sum": prev_overdue_sum,
@@ -1626,9 +1653,11 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         "trend_rows": trend_rows,
         "lead_analysis_data": {"total": leads_total_count, "converted": leads_converted_count},
         "collection_analysis_data": {
-            "planned": float(collection_planned),
-            "actual": float(collection_actual_plan),
-            "overdue": float(overdue_sum),
+        "planned": float(collection_planned),
+        "actual": float(collection_actual_plan),
+        "overdue": float(collection_overdue),
+        "pending": float(collection_pending),
+        "customers": collection_total_customers,
         },
     }
     return render(request, "kam/kam_dashboard.html", ctx)
@@ -3158,21 +3187,56 @@ def manager_view(request: HttpRequest) -> HttpResponse:
         calls_summary = {"total": total_calls, "successful": successful_calls, "conversion_pct": _pct(Decimal(successful_calls), Decimal(total_calls)) if total_calls else None}
 
     if active_tab == "sales":
-        qs = _filter_qs_by_kam_scope(
-            InvoiceFact.objects.filter(invoice_date__gte=start_date, invoice_date__lt=end_date),
-            request.user, scope_kam_id, "kam_id"
-        )
-        qs = _preferred_inv_qs(qs)
-        sales_data = list(qs.values(customer_name=F("customer__name"), kam_username=F("kam__username")).annotate(mt=Sum("qty_mt")).order_by("-mt")[:300])
-        sales_summary = {"total_mt": _safe_decimal(qs.aggregate(mt=Sum("qty_mt")).get("mt")), "customer_count": len(sales_data)}
+     qs = _filter_qs_by_kam_scope(
+        InvoiceFact.objects.filter(
+            invoice_date__gte=start_date,
+            invoice_date__lt=end_date,
+        ),
+        request.user,
+        scope_kam_id,
+        "kam_id",
+    )
+    qs = _sales_converted_qs(qs)
 
-    if active_tab == "leads":
-        qs = _filter_qs_by_kam_scope(LeadFact.objects.select_related("customer", "kam").filter(doe__gte=start_date, doe__lt=end_date), request.user, scope_kam_id, "kam_id")
-        leads_data = list(qs.order_by("-doe")[:500])
-        agg = qs.aggregate(total_mt=Sum("qty_mt"), won_mt=Sum("qty_mt", filter=Q(status="WON")))
-        total_mt = _safe_decimal(agg.get("total_mt"))
-        won_mt = _safe_decimal(agg.get("won_mt"))
-        leads_summary = {"total_mt": total_mt, "won_mt": won_mt, "conversion_pct": _pct(won_mt, total_mt) if total_mt else None, "total_count": qs.count()}
+    sales_data = list(
+        qs.values(
+            customer_name=F("customer__name"),
+            kam_username=F("kam__username"),
+        )
+        .annotate(mt=Sum("qty_mt"))
+        .order_by("-mt")[:300]
+    )
+
+    sales_summary = {
+        "total_mt": _safe_decimal(qs.aggregate(mt=Sum("qty_mt")).get("mt")),
+        "customer_count": len(sales_data),
+    }
+
+    if active_tab == "collections":
+     qs = CollectionPlan.objects.select_related("customer", "kam").filter(overdue_amount__gt=0)
+    qs = _filter_qs_by_kam_scope(qs, request.user, scope_kam_id, "kam_id")
+
+    collections_data = list(qs.order_by("kam__username", "customer__name")[:500])
+
+    agg = qs.aggregate(
+        total_overdue=Sum("overdue_amount"),
+        total_collected=Sum("actual_amount"),
+    )
+
+    total_overdue = _safe_decimal(agg.get("total_overdue"))
+    total_collected = _safe_decimal(agg.get("total_collected"))
+    total_pending = max(total_overdue - total_collected, Decimal("0"))
+
+    collections_summary = {
+        "total_overdue": total_overdue,
+        "total_collected": total_collected,
+        "total_pending": total_pending,
+        "customer_count": qs.count(),
+
+        # Backward-compatible aliases for older templates.
+        "total_amount": total_collected,
+        "transaction_count": qs.count(),
+    }
 
     if active_tab == "collections":
         qs = _filter_qs_by_kam_scope(CollectionTxn.objects.select_related("customer", "kam").filter(txn_datetime__gte=start_dt, txn_datetime__lt=end_dt), request.user, scope_kam_id, "kam_id")
@@ -3688,7 +3752,7 @@ def reports(request: HttpRequest) -> HttpResponse:
         )
         if scope_kam_id is not None:
             qs = qs.filter(kam_id=scope_kam_id)
-        qs = _preferred_inv_qs(qs)
+        qs = _sales_converted_qs(qs)
 
         rows = list(
             qs.values(
@@ -4115,33 +4179,47 @@ def collection_report(request: HttpRequest) -> HttpResponse:
     if kam_id and kam_id.isdigit():
         qs = qs.filter(kam_id=int(kam_id))
 
+    status = (request.GET.get("status") or "").strip().upper()
+    if status in {"OPEN", "PARTIAL", "COLLECTED"}:
+        qs = qs.filter(collection_status=status)
+
     agg = qs.aggregate(
         total_overdue=Sum("overdue_amount"),
-        actual=Sum("actual_amount"),
+        total_collected=Sum("actual_amount"),
     )
-    total_overdue   = _safe_decimal(agg.get("total_overdue"))
-    actual          = _safe_decimal(agg.get("actual"))
-    pending         = max(total_overdue - actual, Decimal("0"))
+
+    total_overdue = _safe_decimal(agg.get("total_overdue"))
+    total_collected = _safe_decimal(agg.get("total_collected"))
+    total_pending = max(total_overdue - total_collected, Decimal("0"))
+
+    achievement_pct = float((total_collected / total_overdue) * 100) if total_overdue else 0.0
 
     kam_users = (
         User.objects.filter(is_active=True).order_by("username")
         if _is_admin(request.user)
         else User.objects.filter(
             is_active=True,
-            id__in=_kams_managed_by_manager(request.user)
+            id__in=_kams_managed_by_manager(request.user),
         ).order_by("username")
     )
 
     ctx = {
-        "page_title":     "Collection Report",
-        "data":           qs.order_by("kam__username", "customer__name"),
-        "total_overdue":  total_overdue,
-        "actual":         actual,
-        "pending":        pending,
-        "achievement_pct": float(actual / total_overdue * 100) if total_overdue else 0.0,
-        "kam_users":      kam_users,
-        "selected_kam":   kam_id,
+        "page_title": "Collection Report",
+        "data": qs.order_by("kam__username", "customer__name"),
+        "total_overdue": total_overdue,
+        "total_collected": total_collected,
+        "total_pending": total_pending,
+        "achievement_pct": achievement_pct,
+        "kam_users": kam_users,
+        "selected_kam": kam_id,
+        "selected_status": status,
+
+        # Backward-compatible aliases.
+        "planned": total_overdue,
+        "actual": total_collected,
+        "shortfall": total_pending,
     }
+
     return render(request, "kam/collection_report.html", ctx)
 
 @login_required(login_url="/accounts/login/")

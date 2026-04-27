@@ -1,35 +1,285 @@
 {% extends "base.html" %}
 {% load humanize %}
 
-{% block title %}Collection Report{% endblock %}
+{% block title %}Collection Report — BOS Lakshya{% endblock %}
 {% block breadcrumb %}Collection Report{% endblock %}
 
+{% block head_extra %}
+<style>
+  .collection-report-page {
+    font-family: Inter, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+
+  .report-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+
+  .report-title {
+    margin: 0;
+    font-size: 1.55rem;
+    font-weight: 750;
+    letter-spacing: -0.02em;
+    color: var(--text);
+  }
+
+  .report-subtitle {
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--muted);
+    max-width: 780px;
+  }
+
+  .report-filter-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 15px 16px;
+    margin-bottom: 18px;
+    box-shadow: var(--shadow-xs);
+  }
+
+  .report-filter-grid {
+    display: grid;
+    grid-template-columns: minmax(180px, 1.4fr) minmax(160px, 1fr) auto;
+    gap: 12px;
+    align-items: end;
+  }
+
+  .report-filter-label {
+    font-size: 11px;
+    font-weight: 750;
+    color: var(--subtle);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 5px;
+  }
+
+  .report-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+
+  .report-summary-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    box-shadow: var(--shadow-xs);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .report-summary-card::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+  }
+
+  .report-summary-card.overdue::before { background: #dc2626; }
+  .report-summary-card.collected::before { background: #16a34a; }
+  .report-summary-card.pending::before { background: #d97706; }
+  .report-summary-card.achievement::before { background: var(--primary); }
+
+  .report-summary-label {
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--subtle);
+    margin-bottom: 8px;
+  }
+
+  .report-summary-value {
+    font-size: 1.4rem;
+    font-weight: 800;
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+    color: var(--text);
+  }
+
+  .report-summary-value.danger { color: #dc2626; }
+  .report-summary-value.success { color: #16a34a; }
+  .report-summary-value.warning { color: #d97706; }
+
+  .report-summary-sub {
+    margin-top: 5px;
+    font-size: 11.5px;
+    color: var(--subtle);
+  }
+
+  .report-table-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow-xs);
+  }
+
+  .report-table-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 13px 16px;
+    border-bottom: 1px solid var(--border-light);
+  }
+
+  .report-table-title {
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .report-table-title i {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .report-count-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface-alt);
+    color: var(--muted);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    min-width: 28px;
+    height: 22px;
+    padding: 0 8px;
+    font-size: 11px;
+    font-weight: 750;
+  }
+
+  .table th {
+    background: #f9fafb;
+    border-bottom-color: var(--border);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+  }
+
+  .table td {
+    font-size: 13px;
+    vertical-align: middle;
+  }
+
+  .amount {
+    font-weight: 800;
+    white-space: nowrap;
+  }
+
+  .amount.overdue { color: #dc2626; }
+  .amount.collected { color: #16a34a; }
+  .amount.pending { color: #d97706; }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    padding: 4px 9px;
+    font-size: 11px;
+    font-weight: 750;
+  }
+
+  .status-open {
+    background: #f3f4f6;
+    color: #4b5563;
+  }
+
+  .status-partial {
+    background: #fffbeb;
+    color: #b45309;
+  }
+
+  .status-collected {
+    background: #ecfdf5;
+    color: #047857;
+  }
+
+  .report-empty {
+    text-align: center;
+    padding: 52px 20px;
+    color: var(--subtle);
+    font-size: 13px;
+  }
+
+  .small-muted {
+    color: var(--subtle);
+    font-size: 12px;
+  }
+
+  @media (max-width: 1100px) {
+    .report-summary-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .report-filter-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .report-filter-actions {
+      grid-column: 1 / -1;
+    }
+  }
+
+  @media (max-width: 700px) {
+    .report-summary-grid,
+    .report-filter-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="page-header d-flex align-items-start justify-content-between flex-wrap gap-2 mb-3">
-  <div>
-    <h1 class="page-title">Collection Report</h1>
-    <p class="text-muted small mb-0">Planned vs Actual collections — filtered by KAM and date range.</p>
-  </div>
-  <a href="{% url 'kam:collections_plan' %}" class="btn btn-sm btn-outline-secondary">
-    <i class="fas fa-arrow-left me-1"></i>Back to Plans
-  </a>
-</div>
+<div class="collection-report-page">
 
-{% if messages %}
-  {% for message in messages %}
-    <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show mb-3">
-      {{ message }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  <div class="report-header">
+    <div>
+      <h1 class="report-title">Collection Report</h1>
+      <p class="report-subtitle">
+        Overdue-driven collection report. Overdue is synced from Google Sheet into PostgreSQL.
+        Collected amount is recorded in the ERP and pending amount is calculated dynamically.
+      </p>
     </div>
-  {% endfor %}
-{% endif %}
 
-<form method="get" class="card mb-4">
-  <div class="card-body">
-    <div class="row g-3 align-items-end">
-      <div class="col-md-3">
-        <label class="form-label small fw-semibold">KAM</label>
+    <a href="{% url 'kam:collections_plan' %}" class="btn btn-sm btn-outline-secondary">
+      <i class="fas fa-arrow-left me-1"></i>Back to Collection Tracking
+    </a>
+  </div>
+
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show mb-3">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      </div>
+    {% endfor %}
+  {% endif %}
+
+  <form method="get" class="report-filter-card">
+    <div class="report-filter-grid">
+      <div>
+        <label class="report-filter-label">KAM</label>
         <select name="kam" class="form-select">
-          <option value="">— All KAMs —</option>
+          <option value="">All KAMs</option>
           {% for u in kam_users %}
             <option value="{{ u.id }}" {% if selected_kam == u.id|stringformat:"s" %}selected{% endif %}>
               {{ u.get_full_name|default:u.username }}
@@ -37,125 +287,176 @@
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-3">
-        <label class="form-label small fw-semibold">From Date</label>
-        <input type="date" name="start" value="{{ filter_start }}" class="form-control">
+
+      <div>
+        <label class="report-filter-label">Status</label>
+        <select name="status" class="form-select">
+          <option value="">All Status</option>
+          <option value="OPEN" {% if selected_status == "OPEN" %}selected{% endif %}>Open</option>
+          <option value="PARTIAL" {% if selected_status == "PARTIAL" %}selected{% endif %}>Partial</option>
+          <option value="COLLECTED" {% if selected_status == "COLLECTED" %}selected{% endif %}>Collected</option>
+        </select>
       </div>
-      <div class="col-md-3">
-        <label class="form-label small fw-semibold">To Date</label>
-        <input type="date" name="end" value="{{ filter_end }}" class="form-control">
-      </div>
-      <div class="col-md-3 d-flex gap-2">
-        <button type="submit" class="btn btn-primary btn-sm">
+
+      <div class="report-filter-actions d-flex gap-2">
+        <button type="submit" class="btn btn-primary">
           <i class="fas fa-filter me-1"></i>Apply
         </button>
-        <a href="{% url 'kam:collection_report' %}" class="btn btn-outline-secondary btn-sm">Reset</a>
+        <a href="{% url 'kam:collection_report' %}" class="btn btn-outline-secondary">
+          Reset
+        </a>
       </div>
     </div>
-  </div>
-</form>
+  </form>
 
-<div class="row g-3 mb-4">
-  <div class="col-md-3">
-    <div class="card border-0 shadow-sm">
-      <div class="card-body">
-        <div class="small text-muted fw-semibold mb-1">Total Planned</div>
-        <div class="fs-5 fw-bold text-primary">₹ {{ planned|floatformat:0|intcomma }}</div>
-      </div>
+  <div class="report-summary-grid">
+    <div class="report-summary-card overdue">
+      <div class="report-summary-label">Total Overdue</div>
+      <div class="report-summary-value danger">₹ {{ total_overdue|default:0|floatformat:0|intcomma }}</div>
+      <div class="report-summary-sub">Synced from Google Sheet</div>
     </div>
-  </div>
-  <div class="col-md-3">
-    <div class="card border-0 shadow-sm">
-      <div class="card-body">
-        <div class="small text-muted fw-semibold mb-1">Total Collected</div>
-        <div class="fs-5 fw-bold text-success">₹ {{ actual|floatformat:0|intcomma }}</div>
-      </div>
-    </div>
-  </div>
-  <div class="col-md-3">
-    <div class="card border-0 shadow-sm">
-      <div class="card-body">
-        <div class="small text-muted fw-semibold mb-1">Shortfall</div>
-        <div class="fs-5 fw-bold text-danger">₹ {{ shortfall|floatformat:0|intcomma }}</div>
-      </div>
-    </div>
-  </div>
-  <div class="col-md-3">
-    <div class="card border-0 shadow-sm">
-      <div class="card-body">
-        <div class="small text-muted fw-semibold mb-1">Achievement</div>
-        <div class="fs-5 fw-bold">{{ achievement_pct|floatformat:1 }}%</div>
-      </div>
-    </div>
-  </div>
-</div>
 
-<div class="card">
-  <div class="card-header fw-semibold">
-    <i class="fas fa-table me-1 text-muted"></i>
-    Collection Detail
-    <span class="badge bg-secondary ms-2">{{ data|length }}</span>
+    <div class="report-summary-card collected">
+      <div class="report-summary-label">Total Collected</div>
+      <div class="report-summary-value success">₹ {{ total_collected|default:0|floatformat:0|intcomma }}</div>
+      <div class="report-summary-sub">Actual amount recorded</div>
+    </div>
+
+    <div class="report-summary-card pending">
+      <div class="report-summary-label">Total Pending</div>
+      <div class="report-summary-value warning">₹ {{ total_pending|default:0|floatformat:0|intcomma }}</div>
+      <div class="report-summary-sub">Overdue minus collected</div>
+    </div>
+
+    <div class="report-summary-card achievement">
+      <div class="report-summary-label">Achievement</div>
+      <div class="report-summary-value">{{ achievement_pct|default:0|floatformat:1 }}%</div>
+      <div class="report-summary-sub">Collected / Overdue</div>
+    </div>
   </div>
-  {% if data %}
-  <div class="table-responsive">
-    <table class="table table-sm align-middle mb-0">
-      <thead style="background:#f9fafb;">
-        <tr>
-          <th class="ps-3">#</th>
-          <th>KAM</th>
-          <th>Customer</th>
-          <th>Period</th>
-          <th class="text-end">Planned (₹)</th>
-          <th class="text-end">Collected (₹)</th>
-          <th class="text-end">Shortfall (₹)</th>
-          <th class="text-center">%</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in data %}
-        <tr>
-          <td class="ps-3 text-muted small">{{ forloop.counter }}</td>
-          <td><span class="badge bg-light text-dark">{{ row.kam.username|default:"—" }}</span></td>
-          <td class="fw-semibold">{{ row.customer.name|default:"—" }}</td>
-          <td class="small text-muted">
-            {% if row.period_type %}{{ row.period_type }}: {{ row.period_id }}
-            {% elif row.from_date %}{{ row.from_date }} → {{ row.to_date }}
-            {% else %}—{% endif %}
-          </td>
-          <td class="text-end fw-semibold">₹ {{ row.planned_amount|floatformat:0|intcomma }}</td>
-          <td class="text-end fw-semibold text-success">
-            {% if row.actual_amount %}₹ {{ row.actual_amount|floatformat:0|intcomma }}{% else %}<span class="text-muted">—</span>{% endif %}
-          </td>
-          <td class="text-end text-danger">
-            {% if row.planned_amount %}
-              ₹ {% widthratio row.actual_amount|default:0 1 1 as actual_val %}
-              {{ row.planned_amount|add:"-0"|floatformat:0|intcomma }}
-            {% else %}—{% endif %}
-          </td>
-          <td class="text-center">
-            {% if row.planned_amount and row.planned_amount > 0 %}
-              {% widthratio row.actual_amount|default:0 row.planned_amount 100 %}%
-            {% else %}—{% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-      <tfoot style="background:#f9fafb;font-weight:700;">
-        <tr>
-          <td colspan="4" class="ps-3">Totals</td>
-          <td class="text-end">₹ {{ planned|floatformat:0|intcomma }}</td>
-          <td class="text-end text-success">₹ {{ actual|floatformat:0|intcomma }}</td>
-          <td class="text-end text-danger">₹ {{ shortfall|floatformat:0|intcomma }}</td>
-          <td class="text-center">{{ achievement_pct|floatformat:1 }}%</td>
-        </tr>
-      </tfoot>
-    </table>
+
+  <div class="report-table-card">
+    <div class="report-table-header">
+      <div class="report-table-title">
+        <i class="fas fa-table"></i>Collection Details
+      </div>
+      <span class="report-count-badge">{{ data|length }}</span>
+    </div>
+
+    {% if data %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle table-hover mb-0">
+          <thead>
+            <tr>
+              <th class="ps-3">#</th>
+              <th>KAM</th>
+              <th>Customer</th>
+              <th class="text-end">Overdue (₹)</th>
+              <th class="text-end">Collected (₹)</th>
+              <th class="text-end">Pending (₹)</th>
+              <th class="text-center">Achievement</th>
+              <th class="text-center">Status</th>
+              <th>Collection Info</th>
+              <th>Last Synced</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {% for row in data %}
+              <tr>
+                <td class="ps-3 text-muted">{{ forloop.counter }}</td>
+
+                <td>
+                  <span class="badge bg-light text-dark">
+                    {{ row.kam.username|default:"—" }}
+                  </span>
+                </td>
+
+                <td class="fw-semibold">
+                  {{ row.customer.name|default:"—" }}
+                </td>
+
+                <td class="text-end">
+                  <span class="amount overdue">₹ {{ row.overdue_amount|default:0|floatformat:0|intcomma }}</span>
+                </td>
+
+                <td class="text-end">
+                  {% if row.actual_amount %}
+                    <span class="amount collected">₹ {{ row.actual_amount|floatformat:0|intcomma }}</span>
+                  {% else %}
+                    <span class="small-muted">—</span>
+                  {% endif %}
+                </td>
+
+                <td class="text-end">
+                  <span class="amount pending">₹ {{ row.pending_amount|default:0|floatformat:0|intcomma }}</span>
+                </td>
+
+                <td class="text-center">
+                  {% if row.overdue_amount and row.overdue_amount > 0 %}
+                    {% widthratio row.actual_amount|default:0 row.overdue_amount 100 %}%
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+
+                <td class="text-center">
+                  {% if row.collection_status == "COLLECTED" %}
+                    <span class="status-badge status-collected">Collected</span>
+                  {% elif row.collection_status == "PARTIAL" %}
+                    <span class="status-badge status-partial">Partial</span>
+                  {% else %}
+                    <span class="status-badge status-open">Open</span>
+                  {% endif %}
+                </td>
+
+                <td>
+                  {% if row.collection_date or row.payment_details or row.utr_number %}
+                    {% if row.collection_date %}
+                      <div>Date: {{ row.collection_date|date:"d M Y" }}</div>
+                    {% endif %}
+
+                    {% if row.payment_details %}
+                      <div>{{ row.payment_details }}</div>
+                    {% endif %}
+
+                    {% if row.utr_number %}
+                      <div class="small-muted">UTR: {{ row.utr_number }}</div>
+                    {% endif %}
+                  {% else %}
+                    <span class="small-muted">Not recorded</span>
+                  {% endif %}
+                </td>
+
+                <td class="small-muted">
+                  {% if row.last_synced_at %}
+                    {{ row.last_synced_at|date:"d M Y H:i" }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+
+          <tfoot>
+            <tr style="background:#f9fafb;font-weight:800;">
+              <td colspan="3" class="ps-3">Totals</td>
+              <td class="text-end amount overdue">₹ {{ total_overdue|default:0|floatformat:0|intcomma }}</td>
+              <td class="text-end amount collected">₹ {{ total_collected|default:0|floatformat:0|intcomma }}</td>
+              <td class="text-end amount pending">₹ {{ total_pending|default:0|floatformat:0|intcomma }}</td>
+              <td class="text-center">{{ achievement_pct|default:0|floatformat:1 }}%</td>
+              <td colspan="3"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    {% else %}
+      <div class="report-empty">
+        No overdue collection plans found for the selected filters.
+      </div>
+    {% endif %}
   </div>
-  {% else %}
-  <div class="text-center py-5 text-muted">
-    <i class="fas fa-inbox fa-2x mb-3 d-block text-secondary"></i>
-    No collection plans found for the selected filters.
-  </div>
-  {% endif %}
+
 </div>
 {% endblock %}
