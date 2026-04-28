@@ -451,28 +451,32 @@ def _active_manager_for_kam(kam_user: User) -> Optional[User]:
 
 def _active_cc_for_kam(kam_user: User) -> List[User]:
     """
-    Fetch CC exactly from the same source shown on the Employee page:
-      - ApproverMapping.cc_person
-      - optional CCConfiguration.is_active gate
+    Resolve CC recipients for KAM visit approval email.
 
-    No profile fallback.
-    No KamManagerMapping fallback.
-    No alternate source.
+    Live DB source:
+      ApproverMapping.employee = KAM / employee submitting visit
+      ApproverMapping.cc_person = single CC user
+      ApproverMapping.default_cc_users = multiple CC users
 
-    This keeps mail CC fully aligned with what admin configures on the Employee page.
+    Production rules:
+      - Read both cc_person and default_cc_users.
+      - Skip inactive users.
+      - Skip users with blank email.
+      - Remove duplicate emails.
+      - Never break visit submission if CC lookup fails.
     """
     if not kam_user or not getattr(kam_user, "id", None):
         logger.warning("KAM CC Debug → invalid kam_user=%r", kam_user)
         return []
 
     try:
-        from apps.leave.models import ApproverMapping, CCConfiguration
+        from apps.leave.models import ApproverMapping
 
         mapping = (
             ApproverMapping.objects
-            .select_related("cc_person")
+            .select_related("employee", "reporting_person", "cc_person")
+            .prefetch_related("default_cc_users")
             .filter(employee=kam_user)
-            .order_by("-id")
             .first()
         )
 
@@ -484,68 +488,61 @@ def _active_cc_for_kam(kam_user: User) -> List[User]:
             )
             return []
 
+        cc_candidates: List[User] = []
+
+        if getattr(mapping, "cc_person_id", None):
+            cc_candidates.append(mapping.cc_person)
+
+        try:
+            cc_candidates.extend(list(mapping.default_cc_users.all()))
+        except Exception:
+            logger.exception(
+                "KAM CC Debug → failed reading default_cc_users for employee_id=%s mapping_id=%s",
+                kam_user.id,
+                mapping.id,
+            )
+
+        final_cc_users: List[User] = []
+        seen_emails = set()
+
+        for cc_user in cc_candidates:
+            if not cc_user:
+                continue
+
+            cc_email = (getattr(cc_user, "email", "") or "").strip().lower()
+
+            if not cc_email:
+                logger.warning(
+                    "KAM CC Debug → skipping CC user with blank email. employee_id=%s cc_user_id=%s",
+                    kam_user.id,
+                    getattr(cc_user, "id", None),
+                )
+                continue
+
+            if not getattr(cc_user, "is_active", False):
+                logger.warning(
+                    "KAM CC Debug → skipping inactive CC user. employee_id=%s cc_user_id=%s cc_email=%s",
+                    kam_user.id,
+                    getattr(cc_user, "id", None),
+                    cc_email,
+                )
+                continue
+
+            if cc_email in seen_emails:
+                continue
+
+            seen_emails.add(cc_email)
+            final_cc_users.append(cc_user)
+
         logger.info(
-            "KAM CC Debug → mapping found: mapping_id=%s employee_id=%s cc_person_id=%s",
+            "KAM CC Debug → final CC resolved. employee_id=%s employee_email=%s mapping_id=%s cc_emails=%s",
+            kam_user.id,
+            getattr(kam_user, "email", None),
             mapping.id,
-            kam_user.id,
-            getattr(mapping, "cc_person_id", None),
+            [(u.email or "").strip() for u in final_cc_users],
         )
 
-        if not mapping.cc_person_id:
-            logger.warning(
-                "KAM CC Debug → Employee page CC is blank for employee_id=%s email=%s mapping_id=%s",
-                kam_user.id,
-                getattr(kam_user, "email", None),
-                mapping.id,
-            )
-            return []
-
-        cc_user = mapping.cc_person
-        if not cc_user:
-            logger.warning(
-                "KAM CC Debug → mapping.cc_person relation missing for employee_id=%s mapping_id=%s",
-                kam_user.id,
-                mapping.id,
-            )
-            return []
-
-        if not getattr(cc_user, "is_active", False):
-            logger.warning(
-                "KAM CC Debug → CC user inactive. cc_user_id=%s cc_email=%s",
-                cc_user.id,
-                getattr(cc_user, "email", None),
-            )
-            return []
-
-        cc_email = (getattr(cc_user, "email", "") or "").strip()
-        if not cc_email:
-            logger.warning(
-                "KAM CC Debug → CC user has blank email. cc_user_id=%s",
-                cc_user.id,
-            )
-            return []
-
-        cc_config = (
-            CCConfiguration.objects
-            .filter(user=cc_user)
-            .order_by("-id")
-            .first()
-        )
-
-        if cc_config and not cc_config.is_active:
-            logger.warning(
-                "KAM CC Debug → CCConfiguration inactive for cc_user_id=%s cc_email=%s",
-                cc_user.id,
-                cc_email,
-            )
-            return []
-
-        logger.info(
-            "KAM CC Debug → final CC resolved from Employee page for employee_id=%s: %s",
-            kam_user.id,
-            [cc_email],
-        )
-        return [cc_user]
+        return final_cc_users
 
     except Exception:
         logger.exception(
