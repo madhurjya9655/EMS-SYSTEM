@@ -220,61 +220,150 @@ def _client_ip(request: HttpRequest) -> Optional[str]:
 
 
 def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = True) -> Dict[str, int]:
+    """
+    Soft-skip already-created tasks that fall inside a PENDING or APPROVED leave window.
+
+    Production rule:
+    - Leave blocks immediately after apply.
+    - PENDING + APPROVED leave blocks tasks.
+    - REJECTED / CANCELLED leave does not block.
+    - Full-day leave blocks all tasks on covered IST dates.
+    - Half-day leave blocks only tasks whose planned_date falls inside exact leave window.
+    - Never hard-delete production tasks; mark is_skipped_due_to_leave=True.
+    """
     counts = {"checklist": 0, "delegation": 0, "help_ticket": 0, "fms": 0}
+
     try:
-        start_at = leave.start_at
-        end_at = leave.end_at
-
-        start_date = timezone.localtime(start_at, IST).date() if start_at else None
-        end_date = timezone.localtime(end_at, IST).date() if end_at else None
-
-        if not (start_date and end_date):
+        if getattr(leave, "status", None) not in (LeaveStatus.PENDING, LeaveStatus.APPROVED):
+            logger.info(
+                "Auto-skip ignored for leave %s because status is %s",
+                getattr(leave, "id", None),
+                getattr(leave, "status", None),
+            )
             return counts
+
+        if not getattr(leave, "employee_id", None):
+            return counts
+
+        start_at = getattr(leave, "start_at", None)
+        end_at = getattr(leave, "end_at", None)
+
+        if not (start_at and end_at):
+            logger.warning("Auto-skip skipped for leave %s because start_at/end_at missing", getattr(leave, "id", None))
+            return counts
+
+        start_ist = timezone.localtime(start_at, IST)
+        end_ist = timezone.localtime(end_at, IST)
+
+        if end_ist < start_ist:
+            start_ist, end_ist = end_ist, start_ist
+
+        start_date = getattr(leave, "start_date", None) or start_ist.date()
+        end_date = getattr(leave, "end_date", None) or end_ist.date()
+
+        if end_date < start_date:
+            start_date, end_date = end_date, start_date
+
+        is_half_day = bool(getattr(leave, "is_half_day", False))
 
         from apps.tasks.models import Checklist, Delegation, FMS, HelpTicket
 
         exclude_ids = {"checklist": [], "delegation": [], "help_ticket": []}
+
         if exclude_handover:
             try:
                 handovers = (
-                    LeaveHandover.objects.filter(leave_request=leave, is_active=True).only("task_type", "original_task_id")
+                    LeaveHandover.objects
+                    .filter(leave_request=leave, is_active=True)
+                    .only("task_type", "original_task_id")
                 )
                 for ho in handovers:
-                    exclude_ids.get(ho.task_type, []).append(ho.original_task_id)
+                    task_type = str(getattr(ho, "task_type", "") or "")
+                    if task_type in exclude_ids:
+                        exclude_ids[task_type].append(ho.original_task_id)
             except Exception:
-                pass
+                logger.exception(
+                    "Could not resolve handover exclusions for leave %s",
+                    getattr(leave, "id", None),
+                )
 
-        dt_window = Q(planned_date__gte=start_date) & Q(planned_date__lte=end_date)
+        if is_half_day:
+            # Exact half-day time window.
+            datetime_window = Q(planned_date__gte=start_ist) & Q(planned_date__lt=end_ist)
+        else:
+            # Full-day / multi-day leave. Use IST date range.
+            datetime_window = Q(planned_date__date__gte=start_date) & Q(planned_date__date__lte=end_date)
 
-        q = Checklist.objects.filter(assign_to=leave.employee, status="Pending").filter(dt_window)
+        q = (
+            Checklist.objects
+            .filter(
+                assign_to=leave.employee,
+                status="Pending",
+                is_skipped_due_to_leave=False,
+            )
+            .filter(datetime_window)
+        )
         if exclude_ids["checklist"]:
             q = q.exclude(id__in=exclude_ids["checklist"])
         counts["checklist"] = int(q.update(is_skipped_due_to_leave=True))
 
-        q = Delegation.objects.filter(assign_to=leave.employee, status="Pending").filter(dt_window)
+        q = (
+            Delegation.objects
+            .filter(
+                assign_to=leave.employee,
+                status="Pending",
+                is_skipped_due_to_leave=False,
+            )
+            .filter(datetime_window)
+        )
         if exclude_ids["delegation"]:
             q = q.exclude(id__in=exclude_ids["delegation"])
         counts["delegation"] = int(q.update(is_skipped_due_to_leave=True))
 
         q = (
-            HelpTicket.objects.filter(assign_to=leave.employee)
+            HelpTicket.objects
+            .filter(
+                assign_to=leave.employee,
+                is_skipped_due_to_leave=False,
+            )
             .exclude(status__in=["Closed", "COMPLETED", "Completed", "Done"])
-            .filter(dt_window)
+            .filter(datetime_window)
         )
         if exclude_ids["help_ticket"]:
             q = q.exclude(id__in=exclude_ids["help_ticket"])
         counts["help_ticket"] = int(q.update(is_skipped_due_to_leave=True))
 
-        ist_dates = leave.ist_dates() if hasattr(leave, "ist_dates") else []
-        if ist_dates:
-            counts["fms"] = int(
-                FMS.objects.filter(assign_to=leave.employee, planned_date__in=ist_dates)
-                .update(is_skipped_due_to_leave=True)
-            )
+        # FMS planned_date is DateField in production.
+        # DateField cannot support exact half-day time windows.
+        # Therefore:
+        # - Full-day leave: skip FMS on date range.
+        # - Half-day leave: do not auto-skip FMS here unless FMS becomes DateTimeField.
+        try:
+            if not is_half_day:
+                counts["fms"] = int(
+                    FMS.objects
+                    .filter(
+                        assign_to=leave.employee,
+                        planned_date__gte=start_date,
+                        planned_date__lte=end_date,
+                        is_skipped_due_to_leave=False,
+                    )
+                    .update(is_skipped_due_to_leave=True)
+                )
+        except Exception:
+            logger.exception("FMS auto-skip failed for leave %s", getattr(leave, "id", None))
 
-        logger.info("Auto-skip applied for leave %s: %s", leave.id, counts)
+        logger.info(
+            "Auto-skip applied for leave %s status=%s half_day=%s counts=%s",
+            getattr(leave, "id", None),
+            getattr(leave, "status", None),
+            is_half_day,
+            counts,
+        )
+
     except Exception:
         logger.exception("Auto-skip failed for leave %s", getattr(leave, "id", None))
+
     return counts
 
 
@@ -566,7 +655,11 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
                                     handovers_created = LeaveHandover.objects.bulk_create(handovers, ignore_conflicts=True)
 
                             skip_counts = _auto_skip_tasks_for_leave(lr, exclude_handover=True)
-                            logger.info("Skip counts for leave %s: %s", lr.id, skip_counts)
+                            logger.info(
+                            "Leave %s applied. Task auto-skip will run only after approval.",
+                            lr.id,
+                            skip_counts,
+                               )
 
                             def _apply_and_send_noop():
                                 try:
@@ -738,6 +831,7 @@ def approval_page(request: HttpRequest, pk: int) -> HttpResponse:
 @transaction.atomic
 def manager_decide_approve(request: HttpRequest, pk: int) -> HttpResponse:
     leave = get_object_or_404(LeaveRequest.objects.select_for_update(), pk=pk)
+
     if not _can_manage(request.user, leave):
         messages.error(request, "Only the assigned Reporting Person can approve this leave.")
         return redirect(_safe_next_url(request, "leave:manager_pending"))
@@ -747,15 +841,36 @@ def manager_decide_approve(request: HttpRequest, pk: int) -> HttpResponse:
         return redirect(_safe_next_url(request, "leave:manager_pending"))
 
     comment = (request.POST.get("decision_comment") or "").strip()
+
     try:
         leave.approve(by_user=request.user, comment=comment)
+
+        def _after_approval_commit():
+            try:
+                skip_counts = _auto_skip_tasks_for_leave(leave, exclude_handover=True)
+                logger.info(
+                    "Post-approval auto-skip for leave %s: %s",
+                    leave.id,
+                    skip_counts,
+                )
+            except Exception:
+                logger.exception(
+                    "Post-approval auto-skip failed for leave %s",
+                    getattr(leave, "id", None),
+                )
+
+        transaction.on_commit(_after_approval_commit)
+
         messages.success(request, "Leave approved.")
+
     except ValidationError as e:
         for msg in e.messages:
             messages.error(request, msg)
+
     except Exception:
         logger.exception("Approve failed for leave %s", leave.pk)
         messages.error(request, "Could not approve the leave. Please try again.")
+
     return redirect(_safe_next_url(request, "leave:manager_pending"))
 
 
@@ -987,9 +1102,9 @@ class TokenDecisionView(View):
 
         try:
             if new_status == LeaveStatus.APPROVED:
-                leave.approve(by_user=decider_user, comment="Email decision: APPROVED by Reporting Person.")
+             leave.approve(by_user=decider_user, comment="Email decision: APPROVED by Reporting Person.")
             else:
-                leave.reject(by_user=decider_user, comment="Email decision: REJECTED by Reporting Person.")
+             leave.reject(by_user=decider_user, comment="Email decision: REJECTED by Reporting Person.")
         except ValidationError as e:
             msg = next(iter(e.messages), "Action blocked.") if getattr(e, "messages", None) else "Action blocked."
             return render(request, self.template_error, {"message": msg}, status=400)

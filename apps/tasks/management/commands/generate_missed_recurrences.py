@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 IST = ZoneInfo("Asia/Kolkata")
 ASSIGN_ANCHOR_T = dt_time(10, 0)
-DUE_T = dt_time(19, 0)
 
 
 def _safe_console_text(s: object) -> str:
@@ -44,14 +43,22 @@ def _to_ist(dt: datetime) -> datetime:
 
 
 def _is_holiday_or_sunday(d: date) -> bool:
+    """
+    Return True if date is Sunday or configured admin holiday.
+    """
     try:
         if d.weekday() == 6:
             return True
     except Exception:
         pass
+
     try:
-        return Holiday.is_holiday(d)
+        try:
+            return bool(Holiday.is_holiday(d))
+        except Exception:
+            return Holiday.objects.filter(date=d).exists()
     except Exception:
+        logger.exception("Holiday check failed for date=%s", d)
         return False
 
 
@@ -64,29 +71,42 @@ def _get_user(user_id: int):
 
 def _is_user_blocked_on_date_at_10am(user_id: int, d: date) -> bool:
     """
-    Leave anchor for "day-of visibility" decisions: 10:00 IST.
-    Full-day leave blocks the day, half-day blocks only if overlapping 10:00 IST.
+    Leave anchor for missed recurrence generation: 10:00 IST.
+
+    New production rule:
+    - PENDING leave blocks immediately after apply.
+    - APPROVED leave blocks.
+    - Half-day leave blocks only if it overlaps 10:00 IST.
+    - Full-day leave blocks full date.
     """
     user = _get_user(user_id)
     if not user:
         return False
+
     anchor_ist = datetime.combine(d, ASSIGN_ANCHOR_T, tzinfo=IST)
     return bool(is_user_blocked_at(user, anchor_ist))
 
 
-def _push_to_next_allowed_date(user_id: int, d: date) -> date:
+def _should_skip_recurring_date(user_id: int, d: date) -> tuple[bool, str | None]:
     """
-    Advance until:
-      - not Sunday/holiday
-      - not blocked by leave at 10:00 IST
-    """
-    cur = d
-    for _ in range(0, 120):
-        if (not _is_holiday_or_sunday(cur)) and (not _is_user_blocked_on_date_at_10am(user_id, cur)):
-            return cur
-        cur += timedelta(days=1)
-    return cur
+    Hard missed-recurrence generation gate.
 
+    Recurring tasks must NOT generate on:
+    - Sunday
+    - Admin holiday
+    - Pending leave overlapping 10:00 IST
+    - Approved leave overlapping 10:00 IST
+
+    Important:
+    We SKIP the occurrence. We do NOT push it to the next working day.
+    """
+    if _is_holiday_or_sunday(d):
+        return True, "holiday_or_sunday"
+
+    if _is_user_blocked_on_date_at_10am(user_id, d):
+        return True, "leave"
+
+    return False, None
 
 def _series_q(
     *,
@@ -97,28 +117,40 @@ def _series_q(
     group_name: str | None,
 ) -> tuple[Q, int]:
     """
-    Legacy-tolerant grouping: treat NULL frequency as 1.
-    Excludes tombstoned rows (is_skipped_due_to_leave=True) so they don't participate in series logic.
+    Legacy-tolerant grouping:
+    - Treat NULL frequency as 1.
+    - Exclude tombstoned/skipped rows so they do not participate in series logic.
     """
     freq = max(int(frequency or 1), 1)
-    q = Q(assign_to_id=assign_to_id, task_name=task_name, mode=mode, is_skipped_due_to_leave=False)
+
+    q = Q(
+        assign_to_id=assign_to_id,
+        task_name=task_name,
+        mode=mode,
+        is_skipped_due_to_leave=False,
+    )
+
     if group_name:
         q &= Q(group_name=group_name)
+
     q &= Q(frequency__in=[freq, None])
+
     return q, freq
 
 
 class Command(BaseCommand):
     help = (
-        "Backfill missed recurrences (Checklist) WITHOUT violating the rule: next spawns ONLY after completion.\n"
-        "For each series, if there is NO Pending item and there IS a Completed item, create the next at 19:00 IST.\n"
-        "This command shifts the next date off Sunday/holidays and off assignee leave (leave check @ 10:00 IST).\n"
-        "IMPORTANT: This command does NOT send checklist emails. Consolidated 10:00 IST digest handles notifications."
+        "Backfill missed recurrences (Checklist) WITHOUT violating strict task-blocking rules.\n"
+        "For each series, if there is NO Pending item and there IS a Completed item, create the next occurrence.\n"
+        "STRICT RULES:\n"
+        "• Recurring task occurrence is SKIPPED if planned date is Sunday, admin holiday, or approved leave.\n"
+        "• This command DOES NOT push invalid occurrences to the next allowed date.\n"
+        "• This command does NOT send checklist emails. Consolidated 10:00 IST digest handles notifications."
     )
 
     def add_arguments(self, parser):
-        parser.add_argument("--dry-run", action="store_true", help="Show actions without writing to DB")
-        parser.add_argument("--user-id", type=int, help="Limit to a specific assignee (user id)")
+        parser.add_argument("--dry-run", action="store_true", help="Show actions without writing to DB.")
+        parser.add_argument("--user-id", type=int, help="Limit to a specific assignee user id.")
 
     def handle(self, *args, **opts):
         dry_run = bool(opts.get("dry_run", False))
@@ -127,7 +159,11 @@ class Command(BaseCommand):
         now = timezone.now()
         now_ist = now.astimezone(IST)
 
-        filters = {"mode__in": RECURRING_MODES, "is_skipped_due_to_leave": False}
+        filters = {
+            "mode__in": RECURRING_MODES,
+            "is_skipped_due_to_leave": False,
+        }
+
         if user_id:
             filters["assign_to_id"] = user_id
 
@@ -147,6 +183,7 @@ class Command(BaseCommand):
             processed += 1
 
             mode_norm = normalize_mode(s["mode"])
+
             if mode_norm not in RECURRING_MODES:
                 continue
 
@@ -158,6 +195,8 @@ class Command(BaseCommand):
                 group_name=s["group_name"],
             )
 
+            # Completion-gated rule:
+            # If any pending occurrence exists in this series, do not generate another.
             if Checklist.objects.filter(status="Pending").filter(q_series).exists():
                 continue
 
@@ -167,30 +206,55 @@ class Command(BaseCommand):
                 .order_by("-planned_date", "-id")
                 .first()
             )
+
             if not base or not base.planned_date:
                 continue
 
             next_planned = get_next_planned_date(base.planned_date, mode_norm, freq_norm)
+
             if not next_planned:
                 continue
 
-            next_date_ist = _to_ist(next_planned).date()
-            safe_date = _push_to_next_allowed_date(s["assign_to_id"], next_date_ist)
-            if safe_date != next_date_ist:
-                next_planned = datetime.combine(safe_date, DUE_T, tzinfo=IST).astimezone(
-                    timezone.get_current_timezone()
+            try:
+                next_date_ist = _to_ist(next_planned).date()
+            except Exception:
+                logger.exception(
+                    "Could not convert next_planned to IST for series=%s next_planned=%s",
+                    s,
+                    next_planned,
                 )
+                continue
 
+            # HARD BUSINESS RULE:
+            # Do not generate missed recurring tasks on Sunday/holiday/approved leave.
+            # Do not push the occurrence to another day.
+            should_skip, skip_reason = _should_skip_recurring_date(
+                user_id=s["assign_to_id"],
+                d=next_date_ist,
+            )
+
+            if should_skip:
+                logger.info(
+                    _safe_console_text(
+                        f"[MISSED] Skipped '{s['task_name']}' for user_id={s['assign_to_id']} "
+                        f"on {next_date_ist}: {skip_reason}"
+                    )
+                )
+                continue
+
+            # Existing safety:
+            # Suppress today creation because today reminders/visibility are handled separately.
             try:
                 if _to_ist(next_planned).date() == now_ist.date():
                     logger.info(
                         _safe_console_text(
                             f"[MISSED] Suppressed TODAY creation for series '{s['task_name']}' "
-                            f"(user_id={s['assign_to_id']}) @ {_to_ist(next_planned):%Y-%m-%d %H:%M IST}"
+                            f"user_id={s['assign_to_id']} @ {_to_ist(next_planned):%Y-%m-%d %H:%M IST}"
                         )
                     )
                     continue
             except Exception:
+                logger.exception("Today suppression check failed for series=%s", s)
                 continue
 
             dupe = (
@@ -202,6 +266,7 @@ class Command(BaseCommand):
                 )
                 .exists()
             )
+
             if dupe:
                 continue
 
@@ -240,19 +305,31 @@ class Command(BaseCommand):
                         status="Pending",
                         is_skipped_due_to_leave=False,
                     )
+
                 created += 1
+
                 self.stdout.write(
                     self.style.SUCCESS(
                         f"✅ Created: CL-{obj.id} '{obj.task_name}' @ {_to_ist(obj.planned_date):%Y-%m-%d %H:%M IST}"
                     )
                 )
+
             except Exception as e:
                 logger.exception("Failed to create missed recurrence for %s: %s", s, e)
                 self.stdout.write(self.style.ERROR(f"❌ Failed: {s['task_name']} - {e}"))
 
         if dry_run:
-            self.stdout.write(self.style.WARNING(f"[DRY RUN] Would create {created} task(s) from {processed} series"))
+            self.stdout.write(
+                self.style.WARNING(
+                    f"[DRY RUN] Would create {created} task(s) from {processed} series"
+                )
+            )
         else:
-            self.stdout.write(self.style.SUCCESS(f"Created {created} task(s) from {processed} series"))
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Created {created} task(s) from {processed} series"
+                )
+            )
+
         if created == 0:
             self.stdout.write("No missed recurrences needed to be created.")

@@ -1,4 +1,4 @@
-# apps/tasks/tasks.py
+#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\tasks.py
 from __future__ import annotations
 
 import logging
@@ -21,8 +21,6 @@ from .recurrence_utils import (
     normalize_mode,
     get_next_planned_date,
     is_working_day,
-    next_working_day,
-    pin_7pm_ist_on_date,
 )
 from .utils import (
     _safe_console_text,
@@ -86,6 +84,72 @@ def _is_after_10am_ist(now_ist: Optional[datetime] = None) -> bool:
     return n.time() >= dt_time(10, 0)
 
 
+def _ensure_aware_project(dt: datetime) -> datetime:
+    if timezone.is_naive(dt):
+        return timezone.make_aware(dt, timezone.get_current_timezone())
+    return dt
+
+
+def _planned_block_datetime(obj, fallback_dt: Optional[datetime] = None) -> datetime:
+    """
+    Return datetime used for leave-blocking checks.
+
+    DateTimeField planned_date:
+        use actual planned datetime.
+
+    DateField planned_date:
+        use 10:00 AM IST on that date.
+
+    Missing planned_date:
+        use fallback_dt or current time.
+    """
+    planned = getattr(obj, "planned_date", None)
+
+    if isinstance(planned, datetime):
+        return _ensure_aware_project(planned)
+
+    if isinstance(planned, dt_date):
+        return IST.localize(datetime.combine(planned, dt_time(10, 0))).astimezone(
+            timezone.get_current_timezone()
+        )
+
+    return fallback_dt or timezone.now()
+
+
+def _is_assignee_available_for_email(user, check_dt: datetime) -> bool:
+    """
+    Return False if assignee is blocked by PENDING / APPROVED leave at check_dt.
+
+    Fail closed:
+    if leave verification crashes, do not email/assign.
+    """
+    if not getattr(user, "id", None):
+        return False
+
+    try:
+        return bool(guard_assign(user, check_dt))
+    except Exception:
+        logger.exception(
+            "[TASK EMAIL] Leave guard failed for user_id=%s check_dt=%s",
+            getattr(user, "id", None),
+            check_dt,
+        )
+        return False
+
+
+def _is_task_allowed_for_assignee(obj, check_dt: Optional[datetime] = None) -> bool:
+    """
+    Common task visibility/email guard.
+    """
+    user = getattr(obj, "assign_to", None)
+    if not getattr(user, "id", None):
+        return False
+
+    when_dt = check_dt or _planned_block_datetime(obj)
+
+    return _is_assignee_available_for_email(user, when_dt)
+
+
 # -----------------------------------------------------------------------------
 # Shared day idempotency
 # -----------------------------------------------------------------------------
@@ -136,12 +200,14 @@ def _email_notifications_enabled() -> bool:
             return bool(v)
     except Exception:
         pass
+
     try:
         feats = getattr(settings, "FEATURES", None)
         if isinstance(feats, dict) and "EMAIL_NOTIFICATIONS" in feats:
             return bool(feats.get("EMAIL_NOTIFICATIONS", True))
     except Exception:
         pass
+
     return True
 
 
@@ -190,36 +256,34 @@ def _series_q_for_frequency(
     group_name: str | None,
 ):
     freq_set = [freq_norm, None]
-    q = Q(assign_to_id=assign_to_id, task_name=task_name, mode=mode)
+
+    q = Q(
+        assign_to_id=assign_to_id,
+        task_name=task_name,
+        mode=mode,
+    )
+
     if group_name:
         q &= Q(group_name=group_name)
+
     q &= Q(frequency__in=freq_set)
+
     if hasattr(Checklist, "is_skipped_due_to_leave"):
         q &= Q(is_skipped_due_to_leave=False)
+
     return q
 
 
 def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False) -> int:
     """
-    Create the next STRICTLY-FUTURE occurrence only when ALL of these are true:
-      1. NO Pending row exists in the series — including soft-deleted ones (golden rule).
-         This is the core fix for "deleted tasks reappearing": when a user soft-deletes
-         a pending row (_void_task_row sets is_skipped_due_to_leave=True, status stays
-         "Pending"), this check finds it and blocks regeneration.
-      2. A Completed row exists (base for date stepping).
-      3. Next stepped date > now.
-      4. Next date is NOT today (materializer's job).
-      5. Next date <= recurrence_end_date if set.
+    Create next strictly-future recurring checklist occurrence.
 
-    FIX A — Soft-delete-aware pending check:
-        _pending_check_q has NO is_skipped_due_to_leave constraint so it finds
-        soft-deleted pending rows. This prevents the generator from recreating
-        a task the user intentionally deleted.
-
-    FIX B — recurrence_end_date enforcement:
-        The model has a recurrence_end_date field that was never checked here.
-        We now look up the earliest recurrence_end_date across the entire series
-        and refuse to generate anything past it.
+    Strict production rules:
+    - Do not create if any Pending row exists in the series.
+    - Do not create beyond recurrence_end_date.
+    - Do not create for today.
+    - Do not shift Sunday/holiday to another day.
+    - Do not create if assignee is on PENDING / APPROVED leave at planned time.
     """
     now = timezone.now()
     now_ist = _now_ist()
@@ -227,25 +291,20 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
 
     freq_norm = max(int(series.get("frequency") or 1), 1)
 
-    # ── FIX A: Golden rule — check ALL pending rows including soft-deleted ────
-    # Do NOT add is_skipped_due_to_leave filter here. A soft-deleted pending row
-    # MUST block regeneration — that's the whole point of the soft-delete approach.
-    _pending_check_q = Q(
+    pending_q = Q(
         assign_to_id=series["assign_to_id"],
         task_name=series["task_name"],
         mode=series["mode"],
         frequency__in=[freq_norm, None],
         status="Pending",
     )
+
     if series.get("group_name"):
-        _pending_check_q &= Q(group_name=series["group_name"])
+        pending_q &= Q(group_name=series["group_name"])
 
-    if Checklist.objects.filter(_pending_check_q).exists():
+    if Checklist.objects.filter(pending_q).exists():
         return 0
-    # ─────────────────────────────────────────────────────────────────────────
 
-    # For everything else (finding last completed, dupe-guard etc.)
-    # use q_series which excludes soft-deleted rows.
     q_series = _series_q_for_frequency(
         assign_to_id=series["assign_to_id"],
         task_name=series["task_name"],
@@ -260,14 +319,12 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
         .order_by("-planned_date", "-id")
         .first()
     )
+
     if not completed or not getattr(completed, "planned_date", None):
         return 0
 
-    # ── FIX B: Respect recurrence_end_date ───────────────────────────────────
-    # The model has recurrence_end_date but the old generator never checked it.
-    # Look up the earliest end_date across the entire series (any row, any status)
-    # so that even if the row with the end_date is completed/skipped, we honour it.
     recurrence_end_date: Optional[dt_date] = None
+
     try:
         if hasattr(Checklist, "recurrence_end_date"):
             end_q = Q(
@@ -276,6 +333,7 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
                 mode=series["mode"],
                 frequency__in=[freq_norm, None],
             )
+
             if series.get("group_name"):
                 end_q &= Q(group_name=series["group_name"])
 
@@ -285,9 +343,9 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
                 .aggregate(earliest=Min("recurrence_end_date"))
             )
             recurrence_end_date = agg.get("earliest")
+
     except Exception as e:
         logger.warning(_safe_console_text(f"[RECUR GEN] recurrence_end_date lookup failed: {e}"))
-    # ─────────────────────────────────────────────────────────────────────────
 
     next_dt = get_next_planned_date(completed.planned_date, series["mode"], freq_norm)
 
@@ -295,26 +353,39 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
     while next_dt and next_dt <= now and safety < 730:
         next_dt = get_next_planned_date(next_dt, series["mode"], freq_norm)
         safety += 1
+
     if not next_dt:
         return 0
 
-    # Shift future occurrence off Sundays/holidays.
     try:
-        next_date_ist = next_dt.astimezone(IST).date()
-        shifted_date = next_working_day(next_date_ist)
-        if shifted_date != next_date_ist:
+        next_dt = _ensure_aware_project(next_dt)
+        next_dt_ist = next_dt.astimezone(IST)
+        next_date_ist = next_dt_ist.date()
+
+        if not is_working_day(next_date_ist):
             logger.info(
                 _safe_console_text(
-                    f"[RECUR GEN] Shifted '{series['task_name']}' from {next_date_ist} "
-                    f"(non-working) to {shifted_date} for assign_to_id={series['assign_to_id']}"
+                    f"[RECUR GEN] Skipped '{series['task_name']}' on {next_date_ist} "
+                    f"for assign_to_id={series['assign_to_id']}: holiday_or_sunday"
                 )
             )
-            next_dt = pin_7pm_ist_on_date(shifted_date)
+            return 0
+
+        assignee = getattr(completed, "assign_to", None)
+
+        if not _is_assignee_available_for_email(assignee, next_dt_ist):
+            logger.info(
+                _safe_console_text(
+                    f"[RECUR GEN] Skipped '{series['task_name']}' on {next_date_ist} "
+                    f"for assign_to_id={series['assign_to_id']}: leave"
+                )
+            )
+            return 0
+
     except Exception as e:
-        logger.error(_safe_console_text(f"[RECUR GEN] Working-day shift failed: {e}"))
+        logger.error(_safe_console_text(f"[RECUR GEN] Working-day/leave guard failed: {e}"))
         return 0
 
-    # Never create today (materializer's job).
     try:
         if next_dt.astimezone(IST).date() == today_ist:
             logger.info(
@@ -327,10 +398,10 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
     except Exception:
         return 0
 
-    # ── FIX B continued: block generation past recurrence_end_date ───────────
     if recurrence_end_date is not None:
         try:
             next_date_ist = next_dt.astimezone(IST).date()
+
             if next_date_ist > recurrence_end_date:
                 logger.info(
                     _safe_console_text(
@@ -340,11 +411,11 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
                     )
                 )
                 return 0
+
         except Exception as e:
             logger.error(_safe_console_text(f"[RECUR GEN] recurrence_end_date comparison failed: {e}"))
-    # ─────────────────────────────────────────────────────────────────────────
+            return 0
 
-    # Dupe guard in ±1 minute window
     dupe = (
         Checklist.objects.filter(status="Pending")
         .filter(q_series)
@@ -354,6 +425,7 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
         )
         .exists()
     )
+
     if dupe:
         return 0
 
@@ -392,16 +464,27 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
             group_name=getattr(completed, "group_name", None),
             actual_duration_minutes=0,
             status="Pending",
+            is_skipped_due_to_leave=False,
         )
 
     if _should_send_recur_email_now():
         try:
-            complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
-            send_checklist_assignment_to_user(
-                task=obj,
-                complete_url=complete_url,
-                subject_prefix=f"Checklist Created – {obj.task_name}",
-            )
+            email_check_dt = _planned_block_datetime(obj, timezone.now())
+
+            if _is_assignee_available_for_email(obj.assign_to, email_check_dt):
+                complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
+                send_checklist_assignment_to_user(
+                    task=obj,
+                    complete_url=complete_url,
+                    subject_prefix=f"Checklist Created – {obj.task_name}",
+                )
+            else:
+                logger.info(
+                    _safe_console_text(
+                        f"[RECUR GEN] Email skipped for CL-{obj.id}: assignee on leave"
+                    )
+                )
+
         except Exception as e:
             logger.error(_safe_console_text(f"[RECUR GEN] Email failure for checklist {obj.id}: {e}"))
 
@@ -412,13 +495,16 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
             f"at {obj.planned_date.astimezone(IST):%Y-%m-%d %H:%M IST}"
         )
     )
+
     return 1
 
 
 def _generate_recurring_checklists_sync(user_id: int | None = None, dry_run: bool = False) -> dict:
     filters = {"mode__in": RECURRING_MODES}
+
     if hasattr(Checklist, "is_skipped_due_to_leave"):
         filters["is_skipped_due_to_leave"] = False
+
     if user_id:
         filters["assign_to_id"] = user_id
 
@@ -433,15 +519,18 @@ def _generate_recurring_checklists_sync(user_id: int | None = None, dry_run: boo
 
     for s in seeds:
         m = normalize_mode(s["mode"])
+
         if m not in RECURRING_MODES:
             continue
 
         freq_norm = max(int(s.get("frequency") or 1), 1)
+
         s["mode"] = m
         s["frequency"] = freq_norm
 
         created = _ensure_future_occurrence_for_series(s, dry_run=dry_run)
         created_total += created
+
         if created:
             per_user[s["assign_to_id"]] = per_user.get(s["assign_to_id"], 0) + created
 
@@ -453,7 +542,12 @@ def _generate_recurring_checklists_sync(user_id: int | None = None, dry_run: boo
             )
         )
 
-    return {"created": created_total, "per_user": per_user, "dry_run": dry_run, "user_id": user_id}
+    return {
+        "created": created_total,
+        "per_user": per_user,
+        "dry_run": dry_run,
+        "user_id": user_id,
+    }
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=10)
@@ -468,6 +562,7 @@ def audit_recurring_health(self) -> dict:
         .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
         .distinct()
     )
+
     stuck = 0
     ok = 0
     details = []
@@ -475,6 +570,7 @@ def audit_recurring_health(self) -> dict:
     for s in series:
         has_pending = Checklist.objects.filter(status="Pending", **s).exists()
         has_completed = Checklist.objects.filter(status="Completed", **s).exists()
+
         if not has_pending and not has_completed:
             stuck += 1
             details.append({"series": s, "state": "no_pending_no_completed"})
@@ -482,6 +578,7 @@ def audit_recurring_health(self) -> dict:
             ok += 1
 
     logger.info(_safe_console_text(f"[RECUR AUDIT] OK series: {ok}, Stuck series: {stuck}"))
+
     return {"ok": ok, "stuck": stuck, "details": details}
 
 
@@ -502,6 +599,7 @@ def _sent_key(model: str, obj_id: int, day_ist_str: str) -> str:
 def _claim_send_for_today(model: str, obj_id: int, now_ist: Optional[datetime] = None) -> bool:
     n = now_ist or _now_ist()
     key = _sent_key(model, obj_id, n.date().isoformat())
+
     try:
         return bool(cache.add(key, True, _ttl_until_next_3am_ist(n)))
     except Exception:
@@ -516,19 +614,31 @@ def _claim_emp_digest(user_id: int, now_ist: Optional[datetime] = None) -> bool:
     n = now_ist or _now_ist()
     key = _emp_day_key(user_id, n.date().isoformat())
     ttl_seconds = max(_ttl_until_next_3am_ist(n), 6 * 60 * 60)
+
     try:
         return bool(cache.add(key, True, ttl_seconds))
     except Exception:
         return True
 
 
-def _send_delegation_email(obj: Delegation) -> None:
+def _send_delegation_email(obj: Delegation, check_dt: Optional[datetime] = None) -> None:
     if _is_self_assigned(obj):
         logger.info(_safe_console_text(f"[DUE@10] Delegation {obj.id} skipped: assigner == assignee"))
         return
 
+    check_dt = check_dt or _planned_block_datetime(obj, timezone.now())
+
+    if not _is_task_allowed_for_assignee(obj, check_dt):
+        logger.info(
+            _safe_console_text(
+                f"[DUE@10] Delegation {obj.id} skipped: assignee on leave"
+            )
+        )
+        return
+
     try:
         from .utils import send_delegation_assignment_to_user  # type: ignore
+
         complete_url = f"{SITE_URL}{reverse('tasks:complete_delegation', args=[obj.id])}"
         send_delegation_assignment_to_user(
             delegation=obj,
@@ -536,6 +646,7 @@ def _send_delegation_email(obj: Delegation) -> None:
             subject_prefix=f"Today's Delegation – {obj.task_name} (due 7 PM)",
         )
         logger.info(_safe_console_text(f"[DUE@10] Delegation {obj.id} mailed to user_id={obj.assign_to_id}"))
+
     except Exception as e:
         logger.error(_safe_console_text(f"[DUE@10] Delegation {obj.id} email failure: {e}"))
 
@@ -544,14 +655,19 @@ def _fetch_delegations_due_today(start_dt, end_dt):
     if not _table_exists_for_model(Delegation):
         logger.warning(_safe_console_text("[DUE@10] Delegation skipped: table not found"))
         return []
+
     try:
         qs = Delegation.objects.filter(status="Pending", planned_date__gte=start_dt, planned_date__lte=end_dt)
+
         if hasattr(Delegation, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
+
         return list(qs.select_related("assign_to", "assign_by"))
+
     except (OperationalError, ProgrammingError) as e:
         logger.warning(_safe_console_text(f"[DUE@10] Delegation skipped (DB not ready): {e}"))
         return []
+
     except Exception as e:
         logger.error(_safe_console_text(f"[DUE@10] Delegation fetch failed: {e}"))
         return []
@@ -561,14 +677,19 @@ def _fetch_checklists_due_today(start_dt, end_dt):
     if not _table_exists_for_model(Checklist):
         logger.warning(_safe_console_text("[DUE@10] Checklist skipped: table not found"))
         return []
+
     try:
         qs = Checklist.objects.filter(status="Pending", planned_date__gte=start_dt, planned_date__lte=end_dt)
+
         if hasattr(Checklist, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
+
         return list(qs.select_related("assign_to", "assign_by"))
+
     except (OperationalError, ProgrammingError) as e:
         logger.warning(_safe_console_text(f"[DUE@10] Checklist skipped (DB not ready): {e}"))
         return []
+
     except Exception as e:
         logger.error(_safe_console_text(f"[DUE@10] Checklist fetch failed: {e}"))
         return []
@@ -576,33 +697,39 @@ def _fetch_checklists_due_today(start_dt, end_dt):
 
 def _rows_for_checklists(objs: List[Checklist]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
+
     for obj in objs:
         title = obj.task_name or ""
         desc = (getattr(obj, "message", "") or "").strip()
         title_desc = title if not desc else f"{title} — {desc}"
-        rows.append({
-            "task_id": f"CL-{obj.id}",
-            "task_title": title_desc,
-            "assigned_to": (
-                getattr(getattr(obj, "assign_to", None), "get_full_name", lambda: "")()
-                or getattr(getattr(obj, "assign_to", None), "username", "")
-                or getattr(getattr(obj, "assign_to", None), "email", "")
-                or "-"
-            ),
-            "assigned_by": (
-                getattr(getattr(obj, "assign_by", None), "get_full_name", lambda: "")()
-                or getattr(getattr(obj, "assign_by", None), "username", "")
-                or getattr(getattr(obj, "assign_by", None), "email", "")
-                or "-"
-            ),
-            "due_date": _fmt_dt_date(getattr(obj, "planned_date", None)),
-            "task_type": "Checklist",
-            "status": "Pending",
-        })
+
+        rows.append(
+            {
+                "task_id": f"CL-{obj.id}",
+                "task_title": title_desc,
+                "assigned_to": (
+                    getattr(getattr(obj, "assign_to", None), "get_full_name", lambda: "")()
+                    or getattr(getattr(obj, "assign_to", None), "username", "")
+                    or getattr(getattr(obj, "assign_to", None), "email", "")
+                    or "-"
+                ),
+                "assigned_by": (
+                    getattr(getattr(obj, "assign_by", None), "get_full_name", lambda: "")()
+                    or getattr(getattr(obj, "assign_by", None), "username", "")
+                    or getattr(getattr(obj, "assign_by", None), "email", "")
+                    or "-"
+                ),
+                "due_date": _fmt_dt_date(getattr(obj, "planned_date", None)),
+                "task_type": "Checklist",
+                "status": "Pending",
+            }
+        )
+
     try:
         rows.sort(key=lambda r: (r.get("due_date") or "9999-12-31", r.get("task_id") or ""))
     except Exception:
         pass
+
     return rows
 
 
@@ -610,27 +737,64 @@ def _rows_for_checklists(objs: List[Checklist]) -> List[Dict[str, Any]]:
 def send_due_today_assignments(self) -> dict:
     if not _email_notifications_enabled():
         logger.info(_safe_console_text("[DUE@10] Skipped: email notifications disabled"))
-        return {"sent": 0, "checklists_emails": 0, "checklists_tasks": 0, "delegations": 0, "skipped": True, "reason": "feature_off"}
+        return {
+            "sent": 0,
+            "checklists_emails": 0,
+            "checklists_tasks": 0,
+            "delegations": 0,
+            "skipped": True,
+            "reason": "feature_off",
+        }
 
     now_ist = _now_ist()
     day_iso = _today_ist_iso(now_ist)
 
     if not _is_after_10am_ist(now_ist):
         logger.info(_safe_console_text("[DUE@10] Skipped: before 10:00 IST"))
-        return {"sent": 0, "checklists_emails": 0, "checklists_tasks": 0, "delegations": 0, "skipped_before_10": True}
+        return {
+            "sent": 0,
+            "checklists_emails": 0,
+            "checklists_tasks": 0,
+            "delegations": 0,
+            "skipped_before_10": True,
+        }
 
     if not is_working_day(now_ist.date()):
         logger.info(_safe_console_text(f"[DUE@10] Skipped: {day_iso} is a non-working day"))
         _mark_fanout_done(day_iso, now_ist)
-        return {"sent": 0, "checklists_emails": 0, "checklists_tasks": 0, "delegations": 0, "skipped": True, "reason": "non_working_day", "day": day_iso}
+        return {
+            "sent": 0,
+            "checklists_emails": 0,
+            "checklists_tasks": 0,
+            "delegations": 0,
+            "skipped": True,
+            "reason": "non_working_day",
+            "day": day_iso,
+        }
 
     if _fanout_already_done(day_iso):
         logger.info(_safe_console_text(f"[DUE@10] Skipped: already_done_today ({day_iso})"))
-        return {"sent": 0, "checklists_emails": 0, "checklists_tasks": 0, "delegations": 0, "skipped": True, "reason": "already_done_today", "day": day_iso}
+        return {
+            "sent": 0,
+            "checklists_emails": 0,
+            "checklists_tasks": 0,
+            "delegations": 0,
+            "skipped": True,
+            "reason": "already_done_today",
+            "day": day_iso,
+        }
 
     if not _acquire_fanout_lock(day_iso, seconds=180):
         logger.info(_safe_console_text("[DUE@10] Skipped: already_running"))
-        return {"sent": 0, "checklists_emails": 0, "checklists_tasks": 0, "delegations": 0, "skipped": True, "reason": "already_running", "day": day_iso}
+        return {
+            "sent": 0,
+            "checklists_emails": 0,
+            "checklists_tasks": 0,
+            "delegations": 0,
+            "skipped": True,
+            "reason": "already_running",
+            "day": day_iso,
+        }
 
     try:
         start_dt, end_dt = _ist_day_bounds(now_ist)
@@ -645,9 +809,19 @@ def send_due_today_assignments(self) -> dict:
         for obj in checklists:
             if _is_self_assigned(obj):
                 continue
+
             uid = getattr(obj, "assign_to_id", None)
             if not uid:
                 continue
+
+            if not _is_task_allowed_for_assignee(obj, anchor_dt):
+                logger.info(
+                    _safe_console_text(
+                        f"[DUE@10] Checklist CL-{obj.id} skipped: assignee on leave"
+                    )
+                )
+                continue
+
             per_user.setdefault(uid, []).append(obj)
 
         cl_emails_sent = 0
@@ -656,17 +830,21 @@ def send_due_today_assignments(self) -> dict:
         for uid, items in per_user.items():
             if not items:
                 continue
+
             try:
                 user = items[0].assign_to
             except Exception:
                 user = None
+
             if not user:
                 continue
 
-            try:
-                if not guard_assign(user, anchor_dt):
-                    continue
-            except Exception:
+            if not _is_assignee_available_for_email(user, anchor_dt):
+                logger.info(
+                    _safe_console_text(
+                        f"[DUE@10] Checklist digest skipped for user_id={uid}: user on leave"
+                    )
+                )
                 continue
 
             if not _claim_emp_digest(uid, now_ist):
@@ -674,10 +852,12 @@ def send_due_today_assignments(self) -> dict:
 
             email = (getattr(user, "email", "") or "").strip()
             to_list = _dedupe_emails([email]) if email else []
+
             if not to_list:
                 continue
 
             rows = _rows_for_checklists(items)
+
             if not rows:
                 continue
 
@@ -699,32 +879,41 @@ def send_due_today_assignments(self) -> dict:
                     to=to_list,
                     fail_silently=False,
                 )
+
                 cl_emails_sent += 1
                 cl_tasks_included += len(rows)
                 sent_total += 1
+
                 logger.info(_safe_console_text(f"[DUE@10] Sent digest to user_id={uid} items={len(rows)}"))
+
             except Exception as e:
                 logger.error(_safe_console_text(f"[DUE@10] Digest email failure for user_id={uid}: {e}"))
 
         de_sent = 0
+
         for obj in delegations:
-            try:
-                if not guard_assign(obj.assign_to, anchor_dt):
-                    continue
-            except Exception:
+            if not _is_task_allowed_for_assignee(obj, anchor_dt):
+                logger.info(
+                    _safe_console_text(
+                        f"[DUE@10] Delegation DL-{obj.id} skipped: assignee on leave"
+                    )
+                )
                 continue
 
             if not _claim_send_for_today("Delegation", obj.id, now_ist):
                 continue
 
-            _send_delegation_email(obj)
+            _send_delegation_email(obj, check_dt=anchor_dt)
+
             sent_total += 1
             de_sent += 1
 
-        logger.info(_safe_console_text(
-            f"[DUE@10] Fan-out complete @ {now_ist:%Y-%m-%d %H:%M IST}: "
-            f"cl_emails={cl_emails_sent} (tasks={cl_tasks_included}), delegations={de_sent}"
-        ))
+        logger.info(
+            _safe_console_text(
+                f"[DUE@10] Fan-out complete @ {now_ist:%Y-%m-%d %H:%M IST}: "
+                f"cl_emails={cl_emails_sent} (tasks={cl_tasks_included}), delegations={de_sent}"
+            )
+        )
 
         _mark_fanout_done(day_iso, now_ist)
 
@@ -742,7 +931,7 @@ def send_due_today_assignments(self) -> dict:
 
 
 # -----------------------------------------------------------------------------
-# Delegation reminders (every 5 minutes)
+# Delegation reminders
 # -----------------------------------------------------------------------------
 def _delegation_reminder_lock_key(obj_id: int) -> str:
     return f"delegation_reminder_lock:{obj_id}"
@@ -752,10 +941,14 @@ def _send_delegation_reminder_email(obj: Delegation) -> None:
     if _is_self_assigned(obj):
         return
 
-    try:
-        if not guard_assign(obj.assign_to, _assignment_anchor_for_today_10am_ist()):
-            return
-    except Exception:
+    reminder_check_dt = timezone.now()
+
+    if not _is_task_allowed_for_assignee(obj, reminder_check_dt):
+        logger.info(
+            _safe_console_text(
+                f"[DL REM] Reminder skipped for Delegation {obj.id}: assignee on leave"
+            )
+        )
         return
 
     try:
@@ -765,12 +958,14 @@ def _send_delegation_reminder_email(obj: Delegation) -> None:
 
     try:
         from .utils import send_delegation_assignment_to_user  # type: ignore
+
         send_delegation_assignment_to_user(
             delegation=obj,
             complete_url=complete_url,
             subject_prefix=f"Reminder – Delegation – {obj.task_name}",
         )
         return
+
     except Exception:
         pass
 
@@ -784,6 +979,7 @@ def _send_delegation_reminder_email(obj: Delegation) -> None:
 @shared_task(bind=True, max_retries=1, default_retry_delay=30)
 def dispatch_delegation_reminders(self) -> dict:
     now = timezone.now()
+
     sent = 0
     skipped = 0
     failed = 0
@@ -795,8 +991,10 @@ def dispatch_delegation_reminders(self) -> dict:
         reminder_sent_at__isnull=True,
         reminder_time__lte=now,
     )
+
     if hasattr(Delegation, "is_skipped_due_to_leave"):
         qs = qs.filter(is_skipped_due_to_leave=False)
+
     qs = qs.order_by("reminder_time", "id")
 
     for obj in qs:
@@ -804,7 +1002,17 @@ def dispatch_delegation_reminders(self) -> dict:
             skipped += 1
             continue
 
+        if not _is_task_allowed_for_assignee(obj, timezone.now()):
+            skipped += 1
+            logger.info(
+                _safe_console_text(
+                    f"[DL REM] Delegation {obj.id} skipped before claim: assignee on leave"
+                )
+            )
+            continue
+
         lock_key = _delegation_reminder_lock_key(obj.id)
+
         if not cache.add(lock_key, True, 10 * 60):
             continue
 
@@ -824,13 +1032,25 @@ def dispatch_delegation_reminders(self) -> dict:
             except Exception:
                 pass
 
+            if not _is_task_allowed_for_assignee(obj, timezone.now()):
+                skipped += 1
+                Delegation.objects.filter(id=obj.id, reminder_sent_at=claim_ts).update(reminder_sent_at=None)
+                logger.info(
+                    _safe_console_text(
+                        f"[DL REM] Delegation {obj.id} skipped after claim: assignee on leave"
+                    )
+                )
+                continue
+
             _send_delegation_reminder_email(obj)
+
             sent += 1
             logger.info(_safe_console_text(f"[DL REM] Sent reminder for Delegation {obj.id}"))
 
         except Exception as e:
             failed += 1
             logger.error(_safe_console_text(f"[DL REM] Failed reminder for Delegation {getattr(obj, 'id', '?')}: {e}"))
+
             try:
                 Delegation.objects.filter(id=obj.id, reminder_sent_at=claim_ts).update(reminder_sent_at=None)
             except Exception:
@@ -840,7 +1060,7 @@ def dispatch_delegation_reminders(self) -> dict:
 
 
 # -----------------------------------------------------------------------------
-# Daily Pending Task Summary (Admin Report)
+# Daily Pending Task Summary
 # -----------------------------------------------------------------------------
 def _pending_summary_day_key(day_ist_iso: str) -> str:
     return f"daily_pending_task_summary_sent:{day_ist_iso}"
@@ -860,11 +1080,26 @@ def _is_sunday_or_holiday(d: dt_date) -> bool:
             return True
     except Exception:
         pass
+
     try:
         from apps.settings.models import Holiday
+
         if hasattr(Holiday, "is_holiday"):
             return bool(Holiday.is_holiday(d))
+
         return Holiday.objects.filter(date=d).exists()
+
+    except Exception:
+        return False
+
+
+def _summary_row_allowed(obj) -> bool:
+    """
+    Admin pending summary should not include tasks whose assignee is on leave
+    at the task's planned time.
+    """
+    try:
+        return _is_task_allowed_for_assignee(obj, _planned_block_datetime(obj, timezone.now()))
     except Exception:
         return False
 
@@ -878,22 +1113,31 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
             Checklist.objects.filter(status="Pending")
             .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
         )
+
         if hasattr(Checklist, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
+
         qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
 
         for obj in qs:
+            if not _summary_row_allowed(obj):
+                continue
+
             title = obj.task_name or ""
             desc = (getattr(obj, "message", "") or "").strip()
-            rows.append({
-                "task_id": f"CL-{obj.id}",
-                "task_title": title if not desc else f"{title} — {desc}",
-                "assigned_to": obj.assign_to,
-                "assigned_by": obj.assign_by,
-                "due_date": _fmt_dt_date(getattr(obj, "planned_date", None)),
-                "task_type": "Checklist",
-                "status": "Pending",
-            })
+
+            rows.append(
+                {
+                    "task_id": f"CL-{obj.id}",
+                    "task_title": title if not desc else f"{title} — {desc}",
+                    "assigned_to": obj.assign_to,
+                    "assigned_by": obj.assign_by,
+                    "due_date": _fmt_dt_date(getattr(obj, "planned_date", None)),
+                    "task_type": "Checklist",
+                    "status": "Pending",
+                }
+            )
+
     except Exception as e:
         logger.error(_safe_console_text(f"[PENDING SUMMARY] Checklist fetch failed: {e}"))
 
@@ -902,22 +1146,33 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
             Delegation.objects.filter(status="Pending")
             .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
         )
+
         if hasattr(Delegation, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
+
         qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
 
         for obj in qs:
+            if not _summary_row_allowed(obj):
+                continue
+
             title = obj.task_name or ""
-            desc = (getattr(obj, "message", "") or "").strip() or (getattr(obj, "description", "") or "").strip()
-            rows.append({
-                "task_id": f"DL-{obj.id}",
-                "task_title": title if not desc else f"{title} — {desc}",
-                "assigned_to": obj.assign_to,
-                "assigned_by": obj.assign_by,
-                "due_date": _fmt_dt_date(getattr(obj, "planned_date", None)),
-                "task_type": "Delegation",
-                "status": "Pending",
-            })
+            desc = (getattr(obj, "message", "") or "").strip() or (
+                getattr(obj, "description", "") or ""
+            ).strip()
+
+            rows.append(
+                {
+                    "task_id": f"DL-{obj.id}",
+                    "task_title": title if not desc else f"{title} — {desc}",
+                    "assigned_to": obj.assign_to,
+                    "assigned_by": obj.assign_by,
+                    "due_date": _fmt_dt_date(getattr(obj, "planned_date", None)),
+                    "task_type": "Delegation",
+                    "status": "Pending",
+                }
+            )
+
     except Exception as e:
         logger.error(_safe_console_text(f"[PENDING SUMMARY] Delegation fetch failed: {e}"))
 
@@ -926,20 +1181,28 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
             FMS.objects.filter(status="Pending")
             .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
         )
+
         if hasattr(FMS, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
+
         qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
 
         for obj in qs:
-            rows.append({
-                "task_id": f"FMS-{obj.id}",
-                "task_title": getattr(obj, "task_name", "") or "",
-                "assigned_to": obj.assign_to,
-                "assigned_by": obj.assign_by,
-                "due_date": _fmt_dt_date(getattr(obj, "planned_date", None)),
-                "task_type": "FMS",
-                "status": "Pending",
-            })
+            if not _summary_row_allowed(obj):
+                continue
+
+            rows.append(
+                {
+                    "task_id": f"FMS-{obj.id}",
+                    "task_title": getattr(obj, "task_name", "") or "",
+                    "assigned_to": obj.assign_to,
+                    "assigned_by": obj.assign_by,
+                    "due_date": _fmt_dt_date(getattr(obj, "planned_date", None)),
+                    "task_type": "FMS",
+                    "status": "Pending",
+                }
+            )
+
     except Exception as e:
         logger.error(_safe_console_text(f"[PENDING SUMMARY] FMS fetch failed: {e}"))
 
@@ -948,27 +1211,42 @@ def _build_pending_rows() -> List[Dict[str, Any]]:
             HelpTicket.objects.exclude(status="Closed")
             .filter(Q(planned_date__isnull=True) | Q(planned_date__lte=end_today))
         )
+
         if hasattr(HelpTicket, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
+
         qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
 
         for obj in qs:
+            if not _summary_row_allowed(obj):
+                continue
+
             title = getattr(obj, "title", "") or ""
             desc = (getattr(obj, "description", "") or "").strip()
-            rows.append({
-                "task_id": f"HT-{obj.id}",
-                "task_title": title if not desc else f"{title} — {desc}",
-                "assigned_to": obj.assign_to,
-                "assigned_by": obj.assign_by,
-                "due_date": _fmt_dt_date(getattr(obj, "planned_date", None)),
-                "task_type": "Help Ticket",
-                "status": getattr(obj, "status", "") or "Open",
-            })
+
+            rows.append(
+                {
+                    "task_id": f"HT-{obj.id}",
+                    "task_title": title if not desc else f"{title} — {desc}",
+                    "assigned_to": obj.assign_to,
+                    "assigned_by": obj.assign_by,
+                    "due_date": _fmt_dt_date(getattr(obj, "planned_date", None)),
+                    "task_type": "Help Ticket",
+                    "status": getattr(obj, "status", "") or "Open",
+                }
+            )
+
     except Exception as e:
         logger.error(_safe_console_text(f"[PENDING SUMMARY] HelpTicket fetch failed: {e}"))
 
     try:
-        rows.sort(key=lambda r: (r.get("due_date") or "9999-12-31", r.get("task_type") or "", r.get("task_id") or ""))
+        rows.sort(
+            key=lambda r: (
+                r.get("due_date") or "9999-12-31",
+                r.get("task_type") or "",
+                r.get("task_id") or "",
+            )
+        )
     except Exception:
         pass
 
@@ -984,14 +1262,24 @@ def send_daily_pending_task_summary(self, force: bool = False) -> dict:
     day_iso = now_ist.date().isoformat()
 
     if not force and _is_sunday_or_holiday(now_ist.date()):
-        return {"ok": True, "skipped": True, "reason": "sunday_or_holiday", "day": day_iso}
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "sunday_or_holiday",
+            "day": day_iso,
+        }
 
     cache_key = _pending_summary_day_key(day_iso)
 
     if not force:
         try:
             if not cache.add(cache_key, True, _pending_summary_ttl_seconds(now_ist)):
-                return {"ok": True, "skipped": True, "reason": "already_sent", "day": day_iso}
+                return {
+                    "ok": True,
+                    "skipped": True,
+                    "reason": "already_sent",
+                    "day": day_iso,
+                }
         except Exception:
             pass
 
@@ -1001,10 +1289,17 @@ def send_daily_pending_task_summary(self, force: bool = False) -> dict:
         admins = []
 
     recipients = _dedupe_emails((admins or []))
+
     if not recipients:
-        return {"ok": False, "skipped": True, "reason": "no_recipients", "day": day_iso}
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "no_recipients",
+            "day": day_iso,
+        }
 
     rows = _build_pending_rows()
+
     subject = f"Daily Pending Task Summary - {day_iso}"
     title = f"Daily Pending Task Summary ({day_iso})"
 
@@ -1023,10 +1318,22 @@ def send_daily_pending_task_summary(self, force: bool = False) -> dict:
             to=recipients,
             fail_silently=False,
         )
-        logger.info(_safe_console_text(
-            f"[PENDING SUMMARY] Sent for {day_iso} to {len(recipients)} recipient(s); total_pending={len(rows)}"
-        ))
-        return {"ok": True, "skipped": False, "day": day_iso, "recipients": len(recipients), "total_pending": len(rows)}
+
+        logger.info(
+            _safe_console_text(
+                f"[PENDING SUMMARY] Sent for {day_iso} to {len(recipients)} recipient(s); "
+                f"total_pending={len(rows)}"
+            )
+        )
+
+        return {
+            "ok": True,
+            "skipped": False,
+            "day": day_iso,
+            "recipients": len(recipients),
+            "total_pending": len(rows),
+        }
+
     except Exception as e:
         logger.error(_safe_console_text(f"[PENDING SUMMARY] Send failed for {day_iso}: {e}"))
         raise
@@ -1043,6 +1350,7 @@ def auto_unblock_overdue_dailies(*, user_id: int | None = None, dry_run: bool = 
         planned_date__date__lt=today,
         status="Pending",
     )
+
     if hasattr(Checklist, "is_skipped_due_to_leave"):
         qs = qs.filter(is_skipped_due_to_leave=False)
 
@@ -1050,6 +1358,7 @@ def auto_unblock_overdue_dailies(*, user_id: int | None = None, dry_run: bool = 
         qs = qs.filter(assign_to_id=user_id)
 
     count = qs.count()
+
     if dry_run:
         logger.info(_safe_console_text(f"[UNBLOCK:DRY] Would complete {count} overdue daily rows (user_id={user_id})"))
         return {"affected": count, "user_id": user_id, "dry_run": True}
@@ -1057,6 +1366,7 @@ def auto_unblock_overdue_dailies(*, user_id: int | None = None, dry_run: bool = 
     now = timezone.now()
 
     has_completed_at = False
+
     try:
         has_completed_at = any(getattr(f, "name", None) == "completed_at" for f in Checklist._meta.get_fields())
     except Exception:
@@ -1069,14 +1379,22 @@ def auto_unblock_overdue_dailies(*, user_id: int | None = None, dry_run: bool = 
             updated = qs.update(status="Completed")
 
     logger.info(_safe_console_text(f"[UNBLOCK] Completed {updated} overdue daily rows (user_id={user_id})"))
+
     return {"affected": updated, "user_id": user_id, "dry_run": False}
 
 
 def pre10am_unblock_and_generate(*, user_id: int | None = None) -> dict:
     res_unblock = auto_unblock_overdue_dailies(user_id=user_id, dry_run=False)
     res_gen = _generate_recurring_checklists_sync(user_id=user_id, dry_run=False)
-    out = {"ok": True, "unblock": res_unblock, "generate": res_gen}
+
+    out = {
+        "ok": True,
+        "unblock": res_unblock,
+        "generate": res_gen,
+    }
+
     logger.info(_safe_console_text(f"[PRE10] {out}"))
+
     return out
 
 

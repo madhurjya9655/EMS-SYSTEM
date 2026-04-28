@@ -226,13 +226,15 @@ def _as_ist_aware(dt: datetime) -> datetime:
 # Leave-aware working day shift
 # -----------------------------------------------------------------------------
 def next_working_day_skip_leaves(assign_to: User, d: date) -> date:
-    for _ in range(0, 120):
-        if is_working_day(d):
-            anchor = datetime.combine(d, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE))
-            anchor_ist = IST.localize(anchor)
-            if not is_user_blocked_at(assign_to, anchor_ist):
-                return d
-        d += timedelta(days=1)
+    """
+    Deprecated compatibility helper.
+
+    Do NOT use this for new task creation because the latest production rule says:
+    - Do not shift tasks to another day.
+    - If assignee is on leave or date is non-working, block creation.
+
+    Kept only to avoid breaking old imports/callers.
+    """
     return d
 
 
@@ -716,6 +718,72 @@ def ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
         tz = IST
     return timezone.make_aware(dt, tz)
 
+def _planned_dt_for_leave_check(planned_dt: Optional[datetime]) -> Optional[datetime]:
+    """
+    Normalize planned datetime for exact leave-window checking.
+
+    Business rule:
+    - Full-day leave blocks whole IST day.
+    - Half-day leave blocks exact selected time window.
+    - Therefore we must check the actual planned datetime when available.
+    """
+    if not planned_dt:
+        return None
+
+    planned_dt = ensure_aware(planned_dt)
+
+    try:
+        return planned_dt.astimezone(IST)
+    except Exception:
+        return planned_dt
+
+
+def _assignee_blocked_for_planned_time(assignee, planned_dt: Optional[datetime]) -> bool:
+    """
+    Return True when assignee is on PENDING or APPROVED leave
+    at the exact planned task datetime.
+
+    This depends on apps.tasks.utils.blocking.is_user_blocked_at().
+    That function must use PENDING + APPROVED as blocking statuses.
+    """
+    if not getattr(assignee, "id", None):
+        return False
+
+    check_dt = _planned_dt_for_leave_check(planned_dt)
+    if not check_dt:
+        check_dt = timezone.now().astimezone(IST)
+
+    return bool(is_user_blocked_at(assignee, check_dt))
+
+
+def _leave_block_message() -> str:
+    return "Assigned person is on leave during this time. Please choose another time or another assignee."
+
+
+def _visible_for_current_leave_window(obj) -> bool:
+    """
+    Dashboard/list visibility guard.
+
+    If a pending task belongs to current user and its planned time falls inside
+    the user's PENDING or APPROVED leave window, hide it from dashboard/list.
+
+    This is a runtime safety net. The primary fix is still auto-skip on leave apply.
+    """
+    try:
+        assignee = getattr(obj, "assign_to", None)
+        planned_dt = getattr(obj, "planned_date", None)
+
+        if not getattr(assignee, "id", None):
+            return True
+
+        if not planned_dt:
+            return True
+
+        return not _assignee_blocked_for_planned_time(assignee, planned_dt)
+
+    except Exception:
+        return True
+
 
 # -----------------------------------------------------------------------------
 # NEW: "void" helper
@@ -751,47 +819,71 @@ def _void_task_row(obj) -> None:
 @robust_db_operation()
 def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, start_idx):
     task_objects, errors = [], []
+
     for idx, row in batch_df.iterrows():
+        row_no = start_idx + idx + 1
+
         try:
             task_name = _clean_str(row.get("Task Name"))
             if not task_name:
-                errors.append(f"Row {idx+1}: Missing 'Task Name'")
+                errors.append(f"Row {row_no}: Missing 'Task Name'")
                 continue
 
             assign_to_username = _clean_str(row.get("Assign To"))
             if not assign_to_username:
-                errors.append(f"Row {idx+1}: Missing 'Assign To'")
+                errors.append(f"Row {row_no}: Missing 'Assign To'")
                 continue
+
             assign_to = user_cache.get_user(assign_to_username)
             if not assign_to:
-                errors.append(f"Row {idx+1}: User '{assign_to_username}' not found or inactive")
+                errors.append(f"Row {row_no}: User '{assign_to_username}' not found or inactive")
                 continue
 
             planned_dt = parse_datetime_flexible(row.get("Planned Date"))
             if not planned_dt:
-                errors.append(f"Row {idx+1}: Invalid or missing planned date")
+                errors.append(f"Row {row_no}: Invalid or missing planned date")
                 continue
+
             planned_dt = preserve_first_occurrence_time(planned_dt)
-
-            planned_ist_date = _as_ist_aware(ensure_aware(planned_dt)).date()
-            safe_date = next_working_day_skip_leaves(assign_to, planned_ist_date)
-            if safe_date != planned_ist_date:
-                planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(
-                    timezone.get_current_timezone()
-                )
-
             planned_dt = ensure_aware(planned_dt)
 
+            planned_ist = _as_ist_aware(planned_dt)
+            planned_ist_date = planned_ist.date()
+
+            # Production rule:
+            # Do NOT shift Sunday/holiday tasks to another date.
+            # Block creation.
+            if not is_working_day(planned_ist_date):
+                errors.append(
+                    f"Row {row_no}: Planned date {planned_ist_date} is Sunday/holiday. Task not created."
+                )
+                continue
+
+            # Production rule:
+            # PENDING + APPROVED leave blocks immediately.
+            # Half-day leave blocks only exact planned time.
+            if _assignee_blocked_for_planned_time(assign_to, planned_dt):
+                errors.append(
+                    f"Row {row_no}: Assigned person '{assign_to_username}' is on leave during planned time. Task not created."
+                )
+                continue
+
             message = _clean_str(row.get("Message"))
+
             priority = (_clean_str(row.get("Priority")) or "Low").title()
             if priority not in ["Low", "Medium", "High"]:
                 priority = "Low"
 
             mode, frequency = parse_mode_frequency_from_row(row)
+
             time_per_task = parse_int(row.get("Time per Task (minutes)"), default=0)
+
             remind_before_days = parse_int(
-                row.get("Remind Before Days") or row.get("Reminder Before Days") or
-                row.get("Remind days") or row.get("Remind Before"), default=0
+                row.get("Remind Before Days")
+                or row.get("Reminder Before Days")
+                or row.get("Remind days")
+                or row.get("Remind Before"),
+                default=0,
             )
             if remind_before_days < 0:
                 remind_before_days = 0
@@ -805,11 +897,13 @@ def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, star
             reminder_mode = None
             reminder_frequency = None
             reminder_starting_time = None
+
             if set_reminder:
                 rmode = _clean_str(row.get("Reminder Mode"))
                 rmode = _SYN_MODE.get(rmode.lower(), rmode.title()) if rmode else "Daily"
                 reminder_mode = rmode if rmode in RECURRING_MODES else "Daily"
                 reminder_frequency = parse_int(row.get("Reminder Frequency"), default=1)
+
                 tval = row.get("Reminder Starting Time")
                 if tval:
                     ts = _clean_str(tval)
@@ -849,31 +943,44 @@ def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, star
                 actual_duration_minutes=0,
                 status="Pending",
             )
+
             task_objects.append(checklist)
+
         except Exception as e:
-            errors.append(f"Row {idx+1}: {str(e)}")
+            errors.append(f"Row {row_no}: {str(e)}")
 
     created = []
+
     if task_objects:
         try:
             with transaction.atomic():
                 bs = min(len(task_objects), optimal_batch_size())
-                created = Checklist.objects.bulk_create(task_objects, batch_size=bs, ignore_conflicts=False)
+                created = Checklist.objects.bulk_create(
+                    task_objects,
+                    batch_size=bs,
+                    ignore_conflicts=False,
+                )
+
         except Exception as e:
             logger.error("bulk_create failed; falling back: %s", e)
+
             for i in range(0, len(task_objects), 50):
-                batch = task_objects[i:i+50]
+                batch = task_objects[i:i + 50]
+
                 try:
                     created.extend(Checklist.objects.bulk_create(batch, batch_size=50))
+
                 except Exception:
                     for obj in batch:
                         try:
                             obj.save()
                             created.append(obj)
                         except Exception as save_err:
-                            errors.append(f"Failed to save '{clean_unicode_string(obj.task_name)}': {save_err}")
-    return created, errors
+                            errors.append(
+                                f"Failed to save '{clean_unicode_string(obj.task_name)}': {save_err}"
+                            )
 
+    return created, errors
 
 # -----------------------------------------------------------------------------
 # Bulk upload: Delegation
@@ -881,36 +988,54 @@ def process_checklist_batch_excel_ultra_optimized(batch_df, assign_by_user, star
 @robust_db_operation()
 def process_delegation_batch_excel_ultra_optimized(batch_df, assign_by_user, start_idx):
     task_objects, errors = [], []
+
     for idx, row in batch_df.iterrows():
+        row_no = start_idx + idx + 1
+
         try:
             task_name = _clean_str(row.get("Task Name"))
             if not task_name:
-                errors.append(f"Row {idx+1}: Missing 'Task Name'")
+                errors.append(f"Row {row_no}: Missing 'Task Name'")
                 continue
 
             assign_to_username = _clean_str(row.get("Assign To"))
             if not assign_to_username:
-                errors.append(f"Row {idx+1}: Missing 'Assign To'")
+                errors.append(f"Row {row_no}: Missing 'Assign To'")
                 continue
+
             assign_to = user_cache.get_user(assign_to_username)
             if not assign_to:
-                errors.append(f"Row {idx+1}: User '{assign_to_username}' not found or inactive")
+                errors.append(f"Row {row_no}: User '{assign_to_username}' not found or inactive")
                 continue
 
             planned_dt = parse_datetime_flexible(row.get("Planned Date"))
             if not planned_dt:
-                errors.append(f"Row {idx+1}: Invalid or missing planned date")
+                errors.append(f"Row {row_no}: Invalid or missing planned date")
                 continue
+
             planned_dt = preserve_first_occurrence_time(planned_dt)
-
-            planned_ist_date = _as_ist_aware(ensure_aware(planned_dt)).date()
-            safe_date = next_working_day_skip_leaves(assign_to, planned_ist_date)
-            if safe_date != planned_ist_date:
-                planned_dt = IST.localize(datetime.combine(safe_date, dt_time(19, 0))).astimezone(
-                    timezone.get_current_timezone()
-                )
-
             planned_dt = ensure_aware(planned_dt)
+
+            planned_ist = _as_ist_aware(planned_dt)
+            planned_ist_date = planned_ist.date()
+
+            # Production rule:
+            # Do NOT shift Sunday/holiday tasks to another date.
+            # Block creation.
+            if not is_working_day(planned_ist_date):
+                errors.append(
+                    f"Row {row_no}: Planned date {planned_ist_date} is Sunday/holiday. Task not created."
+                )
+                continue
+
+            # Production rule:
+            # PENDING + APPROVED leave blocks immediately.
+            # Half-day leave blocks only exact planned time.
+            if _assignee_blocked_for_planned_time(assign_to, planned_dt):
+                errors.append(
+                    f"Row {row_no}: Assigned person '{assign_to_username}' is on leave during planned time. Task not created."
+                )
+                continue
 
             priority = (_clean_str(row.get("Priority")) or "Low").title()
             if priority not in ["Low", "Medium", "High"]:
@@ -931,29 +1056,39 @@ def process_delegation_batch_excel_ultra_optimized(batch_df, assign_by_user, sta
                 actual_duration_minutes=0,
                 status="Pending",
             )
+
             task_objects.append(delegation)
+
         except Exception as e:
-            errors.append(f"Row {idx+1}: {str(e)}")
+            errors.append(f"Row {row_no}: {str(e)}")
 
     created = []
+
     if task_objects:
         try:
             with transaction.atomic():
                 bs = min(len(task_objects), optimal_batch_size())
                 created = Delegation.objects.bulk_create(task_objects, batch_size=bs)
+
         except Exception as e:
             logger.error("Delegation bulk_create fallback: %s", e)
+
             for i in range(0, len(task_objects), 50):
-                batch = task_objects[i:i+50]
+                batch = task_objects[i:i + 50]
+
                 try:
                     created.extend(Delegation.objects.bulk_create(batch, batch_size=50))
+
                 except Exception:
                     for obj in batch:
                         try:
                             obj.save()
                             created.append(obj)
                         except Exception as save_err:
-                            errors.append(f"Failed to save delegation '{clean_unicode_string(obj.task_name)}': {save_err}")
+                            errors.append(
+                                f"Failed to save delegation '{clean_unicode_string(obj.task_name)}': {save_err}"
+                            )
+
     return created, errors
 
 
@@ -1300,21 +1435,27 @@ def list_checklist(request):
 def add_checklist(request):
     if request.method == "POST":
         form = ChecklistForm(request.POST, request.FILES)
+
         if form.is_valid():
             planned_date = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
             planned_date = ensure_aware(planned_date)
             assignee = form.cleaned_data.get("assign_to")
 
             ist_day = _as_ist_aware(planned_date).date() if planned_date else None
+
+            # Production rule:
+            # Do NOT allow task creation on Sunday/holiday.
+            # Do NOT shift to next working day.
             if ist_day and not is_working_day(ist_day):
-                messages.error(request, "This day is holiday")
+                messages.error(request, "This day is Sunday/holiday. Task cannot be created.")
                 return render(request, "tasks/add_checklist.html", {"form": form})
 
-            if assignee and ist_day:
-                anchor_ist = IST.localize(datetime.combine(ist_day, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE)))
-                if is_user_blocked_at(assignee, anchor_ist):
-                    messages.error(request, "Assignee is on leave during this period.")
-                    return render(request, "tasks/add_checklist.html", {"form": form})
+            # Production rule:
+            # PENDING + APPROVED leave blocks immediately.
+            # Half-day leave blocks only exact planned time.
+            if assignee and _assignee_blocked_for_planned_time(assignee, planned_date):
+                messages.error(request, _leave_block_message())
+                return render(request, "tasks/add_checklist.html", {"form": form})
 
             obj = form.save(commit=False)
             obj.planned_date = planned_date
@@ -1322,14 +1463,22 @@ def add_checklist(request):
             form.save_m2m()
 
             try:
-                send_checklist_admin_confirmation(task=obj, subject_prefix="Checklist Task Assignment")
+                send_checklist_admin_confirmation(
+                    task=obj,
+                    subject_prefix="Checklist Task Assignment",
+                )
             except Exception as e:
                 logger.error("Admin confirmation email failed: %s", e)
 
-            messages.success(request, f"Checklist task '{obj.task_name}' created and will notify the assignee at 10:00 AM on the due day.")
+            messages.success(
+                request,
+                f"Checklist task '{obj.task_name}' created and will notify the assignee at 10:00 AM on the due day.",
+            )
             return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
+
     else:
         form = ChecklistForm(initial={"assign_by": request.user})
+
     return render(request, "tasks/add_checklist.html", {"form": form})
 
 
@@ -1337,29 +1486,35 @@ def add_checklist(request):
 def edit_checklist(request, pk):
     obj = get_object_or_404(Checklist, pk=pk)
 
-    # Non-admins can only edit tasks assigned to themselves
+    # Non-admins can only edit tasks assigned to themselves.
     if not is_admin_user(request.user) and obj.assign_to_id != request.user.id:
         messages.error(request, "You can only edit tasks assigned to you.")
         return redirect(reverse("tasks:list_checklist"))
 
     old_assignee = obj.assign_to
+
     if request.method == "POST":
         form = ChecklistForm(request.POST, request.FILES, instance=obj)
+
         if form.is_valid():
             planned_date = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
             planned_date = ensure_aware(planned_date)
             assignee = form.cleaned_data.get("assign_to")
 
             ist_day = _as_ist_aware(planned_date).date() if planned_date else None
+
+            # Production rule:
+            # Do NOT allow task update to Sunday/holiday.
             if ist_day and not is_working_day(ist_day):
-                messages.error(request, "This day is holiday")
+                messages.error(request, "This day is Sunday/holiday. Task cannot be updated.")
                 return render(request, "tasks/add_checklist.html", {"form": form})
 
-            if assignee and ist_day:
-                anchor_ist = IST.localize(datetime.combine(ist_day, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE)))
-                if is_user_blocked_at(assignee, anchor_ist):
-                    messages.error(request, "Assignee is on leave during this period.")
-                    return render(request, "tasks/add_checklist.html", {"form": form})
+            # Production rule:
+            # PENDING + APPROVED leave blocks immediately.
+            # Half-day leave blocks only exact planned time.
+            if assignee and _assignee_blocked_for_planned_time(assignee, planned_date):
+                messages.error(request, _leave_block_message())
+                return render(request, "tasks/add_checklist.html", {"form": form})
 
             obj2 = form.save(commit=False)
             obj2.planned_date = planned_date
@@ -1369,16 +1524,28 @@ def edit_checklist(request, pk):
             try:
                 if old_assignee and obj2.assign_to_id != old_assignee.id:
                     send_checklist_unassigned_notice(task=obj2, old_user=old_assignee)
-                    send_checklist_admin_confirmation(task=obj2, subject_prefix="Checklist Task Reassigned")
+                    send_checklist_admin_confirmation(
+                        task=obj2,
+                        subject_prefix="Checklist Task Reassigned",
+                    )
                 else:
-                    send_checklist_admin_confirmation(task=obj2, subject_prefix="Checklist Task Updated")
+                    send_checklist_admin_confirmation(
+                        task=obj2,
+                        subject_prefix="Checklist Task Updated",
+                    )
+
             except Exception as e:
                 logger.error("Update emails failed: %s", e)
 
-            messages.success(request, f"Checklist task '{obj2.task_name}' updated successfully! Assignee will be notified at 10:00 AM on the due day.")
+            messages.success(
+                request,
+                f"Checklist task '{obj2.task_name}' updated successfully! Assignee will be notified at 10:00 AM on the due day.",
+            )
             return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
+
     else:
         form = ChecklistForm(instance=obj)
+
     return render(request, "tasks/add_checklist.html", {"form": form})
 
 
@@ -1405,29 +1572,64 @@ def delete_checklist(request, pk):
 
 @has_permission("list_checklist")
 def reassign_checklist(request, pk):
-    # Only admins can reassign tasks to different employees
+    # Only admins can reassign tasks to different employees.
     if not is_admin_user(request.user):
         messages.error(request, "You do not have permission to reassign tasks.")
         return redirect(reverse("tasks:list_checklist"))
 
     obj = get_object_or_404(Checklist, pk=pk)
+
     if request.method == "POST":
         old_assignee = obj.assign_to
         uid = request.POST.get("assign_to")
-        if uid:
-            obj.assign_to = User.objects.get(pk=uid)
-            obj.save()
 
-            try:
-                if old_assignee and old_assignee.id != obj.assign_to_id:
-                    send_checklist_unassigned_notice(task=obj, old_user=old_assignee)
-                send_checklist_admin_confirmation(task=obj, subject_prefix="Checklist Task Reassigned")
-            except Exception as e:
-                logger.error("Reassignment emails failed: %s", e)
-
-            messages.success(request, f"Task reassigned to {obj.assign_to.get_full_name() or obj.assign_to.username} (assignee will be notified at 10:00 AM on the due day).")
+        if not uid:
+            messages.error(request, "Please select an assignee.")
             return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
-    return render(request, "tasks/reassign_checklist.html", {"object": obj, "all_users": User.objects.filter(is_active=True).order_by("username")})
+
+        try:
+            new_assignee = User.objects.get(pk=uid, is_active=True)
+        except User.DoesNotExist:
+            messages.error(request, "Selected assignee was not found or is inactive.")
+            return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
+
+        # Production rule:
+        # Do not reassign to a person who is on PENDING / APPROVED leave
+        # at the exact planned task time.
+        if _assignee_blocked_for_planned_time(new_assignee, obj.planned_date):
+            messages.error(request, _leave_block_message())
+            return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
+
+        obj.assign_to = new_assignee
+        obj.save(update_fields=["assign_to"])
+
+        try:
+            if old_assignee and old_assignee.id != obj.assign_to_id:
+                send_checklist_unassigned_notice(task=obj, old_user=old_assignee)
+
+            send_checklist_admin_confirmation(
+                task=obj,
+                subject_prefix="Checklist Task Reassigned",
+            )
+
+        except Exception as e:
+            logger.error("Reassignment emails failed: %s", e)
+
+        messages.success(
+            request,
+            f"Task reassigned to {obj.assign_to.get_full_name() or obj.assign_to.username} "
+            f"(assignee will be notified at 10:00 AM on the due day).",
+        )
+        return redirect(request.GET.get("next") or reverse("tasks:list_checklist"))
+
+    return render(
+        request,
+        "tasks/reassign_checklist.html",
+        {
+            "object": obj,
+            "all_users": User.objects.filter(is_active=True).order_by("username"),
+        },
+    )
 
 
 @login_required
@@ -1487,21 +1689,21 @@ def complete_checklist(request, pk):
 def add_delegation(request):
     if request.method == "POST":
         form = DelegationForm(request.POST, request.FILES)
+
         if form.is_valid():
             planned_dt = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
             planned_dt = ensure_aware(planned_dt)
             assignee = form.cleaned_data.get("assign_to")
 
             ist_day = _as_ist_aware(planned_dt).date() if planned_dt else None
+
             if ist_day and not is_working_day(ist_day):
-                messages.error(request, "This day is holiday")
+                messages.error(request, "This day is Sunday/holiday. Task cannot be created.")
                 return render(request, "tasks/add_delegation.html", {"form": form})
 
-            if assignee and ist_day:
-                anchor_ist = IST.localize(datetime.combine(ist_day, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE)))
-                if is_user_blocked_at(assignee, anchor_ist):
-                    messages.error(request, "Assignee is on leave during this period.")
-                    return render(request, "tasks/add_delegation.html", {"form": form})
+            if assignee and _assignee_blocked_for_planned_time(assignee, planned_dt):
+                messages.error(request, _leave_block_message())
+                return render(request, "tasks/add_delegation.html", {"form": form})
 
             obj = form.save(commit=False)
             obj.planned_date = planned_dt
@@ -1509,10 +1711,15 @@ def add_delegation(request):
             obj.frequency = None
             obj.save()
 
-            messages.success(request, f"Delegation task '{obj.task_name}' created. Assignee will be notified appropriately.")
+            messages.success(
+                request,
+                f"Delegation task '{obj.task_name}' created. Assignee will be notified appropriately.",
+            )
             return redirect("tasks:list_delegation")
+
     else:
         form = DelegationForm(initial={"assign_by": request.user})
+
     return render(request, "tasks/add_delegation.html", {"form": form})
 
 
@@ -1590,33 +1797,40 @@ def list_delegation(request):
 @has_permission("add_delegation")
 def edit_delegation(request, pk):
     obj = get_object_or_404(Delegation, pk=pk)
+
     if request.method == "POST":
         form = DelegationForm(request.POST, request.FILES, instance=obj)
+
         if form.is_valid():
             planned_dt = preserve_first_occurrence_time(form.cleaned_data.get("planned_date"))
             planned_dt = ensure_aware(planned_dt)
             assignee = form.cleaned_data.get("assign_to")
 
             ist_day = _as_ist_aware(planned_dt).date() if planned_dt else None
+
             if ist_day and not is_working_day(ist_day):
-                messages.error(request, "This day is holiday")
+                messages.error(request, "This day is Sunday/holiday. Task cannot be updated.")
                 return render(request, "tasks/add_delegation.html", {"form": form})
 
-            if assignee and ist_day:
-                anchor_ist = IST.localize(datetime.combine(ist_day, dt_time(ASSIGN_HOUR, ASSIGN_MINUTE)))
-                if is_user_blocked_at(assignee, anchor_ist):
-                    messages.error(request, "Assignee is on leave during this period.")
-                    return render(request, "tasks/add_delegation.html", {"form": form})
+            if assignee and _assignee_blocked_for_planned_time(assignee, planned_dt):
+                messages.error(request, _leave_block_message())
+                return render(request, "tasks/add_delegation.html", {"form": form})
 
             obj2 = form.save(commit=False)
             obj2.planned_date = planned_dt
             obj2.mode = None
             obj2.frequency = None
             obj2.save()
-            messages.success(request, f"Delegation task '{obj2.task_name}' updated successfully! Assignee will be notified at 10:00 AM on the due day.")
+
+            messages.success(
+                request,
+                f"Delegation task '{obj2.task_name}' updated successfully! Assignee will be notified at 10:00 AM on the due day.",
+            )
             return redirect(request.GET.get("next", reverse("tasks:list_delegation")))
+
     else:
         form = DelegationForm(instance=obj)
+
     return render(request, "tasks/add_delegation.html", {"form": form})
 
 
