@@ -4,15 +4,15 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
 from celery import shared_task
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.db.models import Q
 from django.utils import timezone
-from django.core.cache import cache
 
 from .models import Checklist, Delegation, HelpTicket
 from .utils import (
@@ -22,24 +22,42 @@ from .utils import (
     _dedupe_emails,
 )
 
-# ---- ISSUE 18: central guards (config-driven; no hardcoded IDs) ------------
+# ---------------------------------------------------------------------------
+# Central email guards.
+# These are config-driven guards. If unavailable, fallback keeps mail working.
+# ---------------------------------------------------------------------------
 try:
     from apps.common.email_guard import (
         filter_recipients_for_category,
         strip_rows_to_delegations_only_if_pankaj_target,
     )
-except Exception:  # graceful fallbacks
-    def filter_recipients_for_category(*, category: str, to=None, cc=None, bcc=None, **_) -> Tuple[list, list, list]:
+except Exception:
+    def filter_recipients_for_category(
+        *,
+        category: str,
+        to=None,
+        cc=None,
+        bcc=None,
+        **_,
+    ) -> Tuple[list, list, list]:
         return list(to or []), list(cc or []), list(bcc or [])
 
-    def strip_rows_to_delegations_only_if_pankaj_target(rows: List[dict], *, target_email: str) -> List[dict]:
+    def strip_rows_to_delegations_only_if_pankaj_target(
+        rows: List[dict],
+        *,
+        target_email: str,
+    ) -> List[dict]:
         return rows
-# ---------------------------------------------------------------------------
+
 
 logger = logging.getLogger(__name__)
 
 IST = pytz.timezone(getattr(settings, "TIME_ZONE", "Asia/Kolkata"))
 SITE_URL = getattr(settings, "SITE_URL", "https://ems-system-d26q.onrender.com")
+
+EMPLOYEE_DIGEST_TEMPLATE = "email/user_pending_tasks_digest.html"
+ADMIN_DIGEST_TEMPLATE = "email/daily_pending_tasks_summary.html"
+EMAIL_CATEGORY = "delegation.pending_digest"
 
 
 @dataclass
@@ -53,7 +71,9 @@ class Row:
     status: str = "Pending"
 
 
-# ---------------- IST helpers ----------------
+# ---------------------------------------------------------------------------
+# Date / time helpers
+# ---------------------------------------------------------------------------
 def _now_ist_dt() -> datetime:
     return timezone.now().astimezone(IST)
 
@@ -63,48 +83,151 @@ def _today_ist() -> date:
 
 
 def _ttl_until_next_3am_ist(now_ist: Optional[datetime] = None) -> int:
-    n = now_ist or _now_ist_dt()
-    next3 = (n + timedelta(days=1)).replace(hour=3, minute=0, second=0, microsecond=0)
-    return max(int((next3 - n).total_seconds()), 60)
-# ---------------------------------------------------------------------
+    """
+    Cache TTL until next 3:00 AM IST.
+
+    This keeps idempotency keys alive long enough to avoid duplicate digest mails
+    from Celery retries, duplicate schedules, or worker restarts.
+    """
+    current = now_ist or _now_ist_dt()
+    next_3am = (current + timedelta(days=1)).replace(
+        hour=3,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    return max(int((next_3am - current).total_seconds()), 60)
 
 
-# ---------------- Working-day / holiday helpers (IST) ----------------
-def _is_sunday_ist(d: date) -> bool:
-    return d.weekday() == 6  # Sunday == 6
+# ---------------------------------------------------------------------------
+# Working-day helpers
+# ---------------------------------------------------------------------------
+def _is_sunday_ist(value: date) -> bool:
+    return value.weekday() == 6
 
 
-def _is_holiday_ist(d: date) -> bool:
+def _is_holiday_ist(value: date) -> bool:
+    """
+    Uses Holiday model if available. If unavailable, holidays are ignored.
+    Sundays are handled separately.
+    """
     try:
         from apps.settings.models import Holiday  # type: ignore
-        return Holiday.objects.filter(date=d).exists()
+        return Holiday.objects.filter(date=value).exists()
     except Exception:
-        # If Holiday model not available, treat only Sundays as non-working
         return False
 
 
-def _is_working_day_ist(d: date) -> bool:
-    return (not _is_sunday_ist(d)) and (not _is_holiday_ist(d))
-# ---------------------------------------------------------------------
+def _is_working_day_ist(value: date) -> bool:
+    return (not _is_sunday_ist(value)) and (not _is_holiday_ist(value))
 
 
-def _display_user(u) -> str:
-    if not u:
-        return "-"
+# ---------------------------------------------------------------------------
+# Display / formatting helpers
+# ---------------------------------------------------------------------------
+def _safe_str(value: Any, default: str = "-") -> str:
+    if value is None:
+        return default
+
     try:
-        full = u.get_full_name()
-        if full:
-            return full
+        text = str(value).strip()
+    except Exception:
+        return default
+
+    return text or default
+
+
+def _display_user(user) -> str:
+    """
+    Returns the best readable display value for a user.
+    """
+    if not user:
+        return "-"
+
+    try:
+        full_name = (user.get_full_name() or "").strip()
+        if full_name:
+            return full_name
     except Exception:
         pass
-    return getattr(u, "username", None) or getattr(u, "email", "-") or "-"
+
+    username = (getattr(user, "username", "") or "").strip()
+    if username:
+        return username
+
+    email = (getattr(user, "email", "") or "").strip()
+    if email:
+        return email
+
+    return "-"
 
 
-# --- central leave-aware guard for “suppress mails during leave” ------------
+def _display_user_email(user) -> str:
+    if not user:
+        return ""
+    return (getattr(user, "email", "") or "").strip()
+
+
+def _model_has_field(model, field_name: str) -> bool:
+    try:
+        return any(field.name == field_name for field in model._meta.get_fields())
+    except Exception:
+        return hasattr(model, field_name)
+
+
+def _normalise_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Keeps email templates stable by ensuring every row has all expected keys.
+    """
+    return {
+        "task_id": _safe_str(row.get("task_id")),
+        "task_title": _safe_str(row.get("task_title")),
+        "assigned_to": _safe_str(row.get("assigned_to")),
+        "assigned_by": _safe_str(row.get("assigned_by")),
+        "due_date": _safe_str(row.get("due_date")),
+        "task_type": _safe_str(row.get("task_type")),
+        "status": _safe_str(row.get("status"), "Pending"),
+    }
+
+
+def _sort_rows_for_employee(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    try:
+        return sorted(
+            rows,
+            key=lambda row: (
+                row.get("due_date") or "9999-12-31",
+                row.get("task_type") or "",
+                row.get("task_id") or "",
+            ),
+        )
+    except Exception:
+        return rows
+
+
+def _sort_rows_for_admin(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    try:
+        return sorted(
+            rows,
+            key=lambda row: (
+                row.get("due_date") or "9999-12-31",
+                row.get("assigned_to") or "",
+                row.get("task_type") or "",
+                row.get("task_id") or "",
+            ),
+        )
+    except Exception:
+        return rows
+
+
+# ---------------------------------------------------------------------------
+# Leave-aware guard
+# ---------------------------------------------------------------------------
 def _is_on_leave_today(user) -> bool:
     """
-    True if user is blocked by leave for *today* (IST).
-    Uses shared date-level guard (10:00 IST anchor), with model fallback.
+    Returns True if the user is blocked/on leave today in IST.
+
+    The function tries the central blocking utility first, then falls back to
+    LeaveRequest.is_user_blocked_on if available.
     """
     today = _today_ist()
 
@@ -116,284 +239,390 @@ def _is_on_leave_today(user) -> bool:
 
     try:
         from apps.leave.models import LeaveRequest  # type: ignore
-        fn = getattr(LeaveRequest, "is_user_blocked_on", None)
-        if callable(fn):
-            return bool(fn(user, today))
+        checker = getattr(LeaveRequest, "is_user_blocked_on", None)
+        if callable(checker):
+            return bool(checker(user, today))
     except Exception:
         pass
 
     return False
-# -----------------------------------------------------------------------------
 
 
-# ---------------- Helpers to include ONLY past/today items -------------------
-def _planned_date_to_ist_date(pd) -> Optional[date]:
+# ---------------------------------------------------------------------------
+# Pending-date filtering
+# ---------------------------------------------------------------------------
+def _planned_date_to_ist_date(value) -> Optional[date]:
     """
-    Convert model planned_date (date or datetime or None) to an IST calendar date.
-    Returns None if cannot parse.
+    Converts a planned_date value to an IST date.
+
+    Supported values:
+    - datetime
+    - date
+    - None
+
+    Unknown values return None.
     """
-    if not pd:
+    if not value:
         return None
+
     try:
-        if isinstance(pd, datetime):
-            # timezone.localtime requires aware dt; tolerate naive by forcing current TZ
-            if timezone.is_naive(pd):
-                pd = timezone.make_aware(pd, timezone.get_current_timezone())
-            return timezone.localtime(pd, IST).date()
-        return pd  # already a date
+        if isinstance(value, datetime):
+            dt = value
+            if timezone.is_naive(dt):
+                dt = timezone.make_aware(dt, timezone.get_current_timezone())
+            return timezone.localtime(dt, IST).date()
+
+        if isinstance(value, date):
+            return value
+
     except Exception:
-        try:
-            if isinstance(pd, datetime):
-                return pd.date()
-        except Exception:
-            return None
+        logger.exception(
+            _safe_console_text(
+                f"[PENDING DIGEST] Failed converting planned_date={value!r} to IST date"
+            )
+        )
+
     return None
 
 
 def _include_only_past_and_today(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Keep rows where planned_date <= today IST.
+    Keeps only rows where planned_date <= today IST.
+
+    Rows with no planned date are excluded to prevent future/unknown items from
+    appearing in the pending digest.
     """
     today = _today_ist()
-    out: List[Dict[str, Any]] = []
-    for r in rows:
-        pd = r.get("_planned_date_raw")
-        d = _planned_date_to_ist_date(pd)
-        if d is None:
-            # If no due date, be conservative: exclude from pending digest
+    output: List[Dict[str, Any]] = []
+
+    for row in rows:
+        planned_date = _planned_date_to_ist_date(row.get("_planned_date_raw"))
+
+        if planned_date is None:
             continue
-        if d <= today:
-            out.append(r)
-    return out
-# -----------------------------------------------------------------------------
+
+        if planned_date <= today:
+            output.append(row)
+
+    return output
 
 
-# -----------------------------------------------------------------------------
-# Idempotency keys (cache-backed)
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Idempotency keys
+# ---------------------------------------------------------------------------
 def _emp_digest_key(day_iso: str, user_id: int) -> str:
     return f"pending_digest:emp:{user_id}:{day_iso}"
 
 
 def _admin_digest_key(day_iso: str, target_email: str) -> str:
-    safe = (target_email or "").strip().lower() or "unknown"
-    return f"pending_digest:admin:{safe}:{day_iso}"
+    safe_email = (target_email or "").strip().lower() or "unknown"
+    return f"pending_digest:admin:{safe_email}:{day_iso}"
 
 
 def _try_claim(key: str, ttl: int) -> bool:
     """
-    Atomic claim using cache.add. If cache is unavailable, allow best-effort send.
+    Atomic cache claim. If cache is unavailable, allows best-effort send.
     """
     try:
         return bool(cache.add(key, True, ttl))
     except Exception:
-        logger.warning(_safe_console_text(f"[PENDING DIGEST] Cache claim unavailable for key={key}; continuing best-effort"))
+        logger.warning(
+            _safe_console_text(
+                f"[PENDING DIGEST] Cache claim unavailable for key={key}; continuing best-effort"
+            )
+        )
         return True
-# -----------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Row builders
+# ---------------------------------------------------------------------------
 def _rows_for_user(user) -> List[Dict[str, Any]]:
     """
-    Build rows for a single user.
-    Filters to planned_date <= today IST only.
-    Excludes voided rows (is_skipped_due_to_leave=True) if that field exists.
+    Builds pending task rows for one employee.
+
+    Includes:
+    - Checklist with status Pending
+    - Delegation with status Pending
+    - HelpTicket where status is not Closed
+
+    Excludes:
+    - future planned_date rows
+    - rows skipped due to leave if model has is_skipped_due_to_leave
     """
     rows: List[Dict[str, Any]] = []
 
-    # Checklist (Pending for this user)
+    # Checklist
     try:
         qs = Checklist.objects.filter(status="Pending", assign_to=user)
-        if hasattr(Checklist, "is_skipped_due_to_leave"):
+
+        if _model_has_field(Checklist, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
-        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
+        qs = qs.select_related("assign_to", "assign_by").order_by(
+            "planned_date",
+            "id",
+        )
 
         for obj in qs:
-            title = obj.task_name or ""
-            desc = (getattr(obj, "message", "") or "").strip()
-            title_desc = title if not desc else f"{title} — {desc}"
+            title = _safe_str(getattr(obj, "task_name", ""), "")
+            description = _safe_str(getattr(obj, "message", ""), "")
+            title_description = title if not description else f"{title} - {description}"
+
             rows.append(
                 Row(
                     task_id=f"CL-{obj.id}",
-                    task_title=title_desc,
-                    assigned_to=_display_user(obj.assign_to),
-                    assigned_by=_display_user(obj.assign_by),
+                    task_title=title_description,
+                    assigned_to=_display_user(getattr(obj, "assign_to", None)),
+                    assigned_by=_display_user(getattr(obj, "assign_by", None)),
                     due_date=_fmt_dt_date(getattr(obj, "planned_date", None)),
                     task_type="Checklist",
-                ).__dict__ | {"_planned_date_raw": getattr(obj, "planned_date", None)}
+                    status="Pending",
+                ).__dict__ | {
+                    "_planned_date_raw": getattr(obj, "planned_date", None),
+                }
             )
-    except Exception as e:
-        logger.error(_safe_console_text(f"[PENDING DIGEST] Checklist fetch failed for user {getattr(user,'id','?')}: {e}"))
 
-    # Delegation (Pending for this user)
+    except Exception as exc:
+        logger.error(
+            _safe_console_text(
+                f"[PENDING DIGEST] Checklist fetch failed for user_id={getattr(user, 'id', '?')}: {exc}"
+            )
+        )
+
+    # Delegation
     try:
         qs = Delegation.objects.filter(status="Pending", assign_to=user)
-        if hasattr(Delegation, "is_skipped_due_to_leave"):
+
+        if _model_has_field(Delegation, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
-        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
+        qs = qs.select_related("assign_to", "assign_by").order_by(
+            "planned_date",
+            "id",
+        )
 
         for obj in qs:
-            title = obj.task_name or ""
-            desc = (getattr(obj, "message", "") or "").strip() or (getattr(obj, "description", "") or "").strip()
-            title_desc = title if not desc else f"{title} — {desc}"
+            title = _safe_str(getattr(obj, "task_name", ""), "")
+            description = (
+                _safe_str(getattr(obj, "message", ""), "")
+                or _safe_str(getattr(obj, "description", ""), "")
+            )
+            title_description = title if not description else f"{title} - {description}"
+
             rows.append(
                 Row(
                     task_id=f"DL-{obj.id}",
-                    task_title=title_desc,
-                    assigned_to=_display_user(obj.assign_to),
-                    assigned_by=_display_user(obj.assign_by),
+                    task_title=title_description,
+                    assigned_to=_display_user(getattr(obj, "assign_to", None)),
+                    assigned_by=_display_user(getattr(obj, "assign_by", None)),
                     due_date=_fmt_dt_date(getattr(obj, "planned_date", None)),
                     task_type="Delegation",
-                ).__dict__ | {"_planned_date_raw": getattr(obj, "planned_date", None)}
+                    status="Pending",
+                ).__dict__ | {
+                    "_planned_date_raw": getattr(obj, "planned_date", None),
+                }
             )
-    except Exception as e:
-        logger.error(_safe_console_text(f"[PENDING DIGEST] Delegation fetch failed for user {getattr(user,'id','?')}: {e}"))
 
-    # Help Ticket (not Closed for this user)
+    except Exception as exc:
+        logger.error(
+            _safe_console_text(
+                f"[PENDING DIGEST] Delegation fetch failed for user_id={getattr(user, 'id', '?')}: {exc}"
+            )
+        )
+
+    # Help Ticket
     try:
         qs = HelpTicket.objects.exclude(status="Closed").filter(assign_to=user)
-        if hasattr(HelpTicket, "is_skipped_due_to_leave"):
+
+        if _model_has_field(HelpTicket, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
-        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
+        qs = qs.select_related("assign_to", "assign_by").order_by(
+            "planned_date",
+            "id",
+        )
 
         for obj in qs:
-            title = getattr(obj, "title", "") or ""
-            desc = (getattr(obj, "description", "") or "").strip()
-            title_desc = title if not desc else f"{title} — {desc}"
+            title = _safe_str(getattr(obj, "title", ""), "")
+            description = _safe_str(getattr(obj, "description", ""), "")
+            title_description = title if not description else f"{title} - {description}"
+
             rows.append(
                 Row(
                     task_id=f"HT-{obj.id}",
-                    task_title=title_desc,
-                    assigned_to=_display_user(obj.assign_to),
-                    assigned_by=_display_user(obj.assign_by),
+                    task_title=title_description,
+                    assigned_to=_display_user(getattr(obj, "assign_to", None)),
+                    assigned_by=_display_user(getattr(obj, "assign_by", None)),
                     due_date=_fmt_dt_date(getattr(obj, "planned_date", None)),
                     task_type="Help Ticket",
-                    status=getattr(obj, "status", "Pending") or "Pending",
-                ).__dict__ | {"_planned_date_raw": getattr(obj, "planned_date", None)}
+                    status=_safe_str(getattr(obj, "status", "Pending"), "Pending"),
+                ).__dict__ | {
+                    "_planned_date_raw": getattr(obj, "planned_date", None),
+                }
             )
-    except Exception as e:
-        logger.error(_safe_console_text(f"[PENDING DIGEST] HelpTicket fetch failed for user {getattr(user,'id','?')}: {e}"))
 
-    filtered = _include_only_past_and_today(rows)
+    except Exception as exc:
+        logger.error(
+            _safe_console_text(
+                f"[PENDING DIGEST] HelpTicket fetch failed for user_id={getattr(user, 'id', '?')}: {exc}"
+            )
+        )
 
-    try:
-        filtered.sort(key=lambda r: (r.get("due_date") or "9999-12-31", r.get("task_type") or "", r.get("task_id") or ""))
-    except Exception:
-        pass
+    filtered_rows = _include_only_past_and_today(rows)
 
-    for r in filtered:
-        r.pop("_planned_date_raw", None)
+    for row in filtered_rows:
+        row.pop("_planned_date_raw", None)
 
-    return filtered
+    filtered_rows = [_normalise_row(row) for row in filtered_rows]
+    return _sort_rows_for_employee(filtered_rows)
 
 
 def _rows_for_all_users() -> List[Dict[str, Any]]:
     """
-    Build one big table containing ALL employees’ pending tasks.
-    Filters to planned_date <= today IST only.
-    Excludes voided rows (is_skipped_due_to_leave=True) if that field exists.
+    Builds pending task rows for all employees.
+
+    Used by admin consolidated digest.
     """
     rows: List[Dict[str, Any]] = []
 
     # Checklist
     try:
         qs = Checklist.objects.filter(status="Pending")
-        if hasattr(Checklist, "is_skipped_due_to_leave"):
+
+        if _model_has_field(Checklist, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
-        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
+        qs = qs.select_related("assign_to", "assign_by").order_by(
+            "planned_date",
+            "id",
+        )
+
         for obj in qs:
-            title = obj.task_name or ""
-            desc = (getattr(obj, "message", "") or "").strip()
-            title_desc = title if not desc else f"{title} — {desc}"
+            title = _safe_str(getattr(obj, "task_name", ""), "")
+            description = _safe_str(getattr(obj, "message", ""), "")
+            title_description = title if not description else f"{title} - {description}"
+
             rows.append(
                 Row(
                     task_id=f"CL-{obj.id}",
-                    task_title=title_desc,
-                    assigned_to=_display_user(obj.assign_to),
-                    assigned_by=_display_user(obj.assign_by),
+                    task_title=title_description,
+                    assigned_to=_display_user(getattr(obj, "assign_to", None)),
+                    assigned_by=_display_user(getattr(obj, "assign_by", None)),
                     due_date=_fmt_dt_date(getattr(obj, "planned_date", None)),
                     task_type="Checklist",
-                ).__dict__ | {"_planned_date_raw": getattr(obj, "planned_date", None)}
+                    status="Pending",
+                ).__dict__ | {
+                    "_planned_date_raw": getattr(obj, "planned_date", None),
+                }
             )
-    except Exception as e:
-        logger.error(_safe_console_text(f"[ADMIN DIGEST] Checklist fetch failed: {e}"))
+
+    except Exception as exc:
+        logger.error(
+            _safe_console_text(f"[ADMIN DIGEST] Checklist fetch failed: {exc}")
+        )
 
     # Delegation
     try:
         qs = Delegation.objects.filter(status="Pending")
-        if hasattr(Delegation, "is_skipped_due_to_leave"):
+
+        if _model_has_field(Delegation, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
-        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
+        qs = qs.select_related("assign_to", "assign_by").order_by(
+            "planned_date",
+            "id",
+        )
+
         for obj in qs:
-            title = obj.task_name or ""
-            desc = (getattr(obj, "message", "") or "").strip() or (getattr(obj, "description", "") or "").strip()
-            title_desc = title if not desc else f"{title} — {desc}"
+            title = _safe_str(getattr(obj, "task_name", ""), "")
+            description = (
+                _safe_str(getattr(obj, "message", ""), "")
+                or _safe_str(getattr(obj, "description", ""), "")
+            )
+            title_description = title if not description else f"{title} - {description}"
+
             rows.append(
                 Row(
                     task_id=f"DL-{obj.id}",
-                    task_title=title_desc,
-                    assigned_to=_display_user(obj.assign_to),
-                    assigned_by=_display_user(obj.assign_by),
+                    task_title=title_description,
+                    assigned_to=_display_user(getattr(obj, "assign_to", None)),
+                    assigned_by=_display_user(getattr(obj, "assign_by", None)),
                     due_date=_fmt_dt_date(getattr(obj, "planned_date", None)),
                     task_type="Delegation",
-                ).__dict__ | {"_planned_date_raw": getattr(obj, "planned_date", None)}
+                    status="Pending",
+                ).__dict__ | {
+                    "_planned_date_raw": getattr(obj, "planned_date", None),
+                }
             )
-    except Exception as e:
-        logger.error(_safe_console_text(f"[ADMIN DIGEST] Delegation fetch failed: {e}"))
 
-    # Help Ticket (not Closed)
+    except Exception as exc:
+        logger.error(
+            _safe_console_text(f"[ADMIN DIGEST] Delegation fetch failed: {exc}")
+        )
+
+    # Help Ticket
     try:
         qs = HelpTicket.objects.exclude(status="Closed")
-        if hasattr(HelpTicket, "is_skipped_due_to_leave"):
+
+        if _model_has_field(HelpTicket, "is_skipped_due_to_leave"):
             qs = qs.filter(is_skipped_due_to_leave=False)
-        qs = qs.select_related("assign_to", "assign_by").order_by("planned_date", "id")
+
+        qs = qs.select_related("assign_to", "assign_by").order_by(
+            "planned_date",
+            "id",
+        )
+
         for obj in qs:
-            title = getattr(obj, "title", "") or ""
-            desc = (getattr(obj, "description", "") or "").strip()
-            title_desc = title if not desc else f"{title} — {desc}"
+            title = _safe_str(getattr(obj, "title", ""), "")
+            description = _safe_str(getattr(obj, "description", ""), "")
+            title_description = title if not description else f"{title} - {description}"
+
             rows.append(
                 Row(
                     task_id=f"HT-{obj.id}",
-                    task_title=title_desc,
-                    assigned_to=_display_user(obj.assign_to),
-                    assigned_by=_display_user(obj.assign_by),
+                    task_title=title_description,
+                    assigned_to=_display_user(getattr(obj, "assign_to", None)),
+                    assigned_by=_display_user(getattr(obj, "assign_by", None)),
                     due_date=_fmt_dt_date(getattr(obj, "planned_date", None)),
                     task_type="Help Ticket",
-                    status=getattr(obj, "status", "Pending") or "Pending",
-                ).__dict__ | {"_planned_date_raw": getattr(obj, "planned_date", None)}
+                    status=_safe_str(getattr(obj, "status", "Pending"), "Pending"),
+                ).__dict__ | {
+                    "_planned_date_raw": getattr(obj, "planned_date", None),
+                }
             )
-    except Exception as e:
-        logger.error(_safe_console_text(f"[ADMIN DIGEST] HelpTicket fetch failed: {e}"))
 
-    filtered = _include_only_past_and_today(rows)
-
-    try:
-        filtered.sort(
-            key=lambda r: (
-                r.get("due_date") or "9999-12-31",
-                r.get("assigned_to") or "",
-                r.get("task_type") or "",
-                r.get("task_id") or "",
-            )
+    except Exception as exc:
+        logger.error(
+            _safe_console_text(f"[ADMIN DIGEST] HelpTicket fetch failed: {exc}")
         )
-    except Exception:
-        pass
 
-    for r in filtered:
-        r.pop("_planned_date_raw", None)
+    filtered_rows = _include_only_past_and_today(rows)
 
-    return filtered
+    for row in filtered_rows:
+        row.pop("_planned_date_raw", None)
+
+    filtered_rows = [_normalise_row(row) for row in filtered_rows]
+    return _sort_rows_for_admin(filtered_rows)
 
 
+# ---------------------------------------------------------------------------
+# Feature flag
+# ---------------------------------------------------------------------------
 def _email_notifications_enabled() -> bool:
     try:
-        feats = getattr(settings, "FEATURES", {})
-        if isinstance(feats, dict) and "EMAIL_NOTIFICATIONS" in feats:
-            return bool(feats.get("EMAIL_NOTIFICATIONS", True))
+        features = getattr(settings, "FEATURES", {})
+        if isinstance(features, dict) and "EMAIL_NOTIFICATIONS" in features:
+            return bool(features.get("EMAIL_NOTIFICATIONS", True))
     except Exception:
         pass
+
     return True
 
 
+# ---------------------------------------------------------------------------
+# Employee digest task
+# ---------------------------------------------------------------------------
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def send_daily_employee_pending_digest(
     self,
@@ -403,79 +632,151 @@ def send_daily_employee_pending_digest(
     to_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Sends ONE email per employee containing ALL of THEIR pending tasks (planned_date <= today IST).
-    Skips if user is on leave today (IST), unless force=True.
+    Sends one pending task email per employee.
 
-    Idempotency:
-      - Per user/day cache claim, unless force=True.
+    Rules:
+    - Only planned_date <= today IST is included.
+    - User is skipped if on leave today, unless force=True.
+    - Sundays and holidays are skipped unless force=True.
+    - Idempotency is enforced per user per day unless force=True.
     """
     if not _email_notifications_enabled():
-        logger.info(_safe_console_text("[PENDING DIGEST] Skipped: email notifications disabled"))
-        return {"ok": True, "skipped": True, "reason": "email_notifications_disabled"}
+        logger.info(
+            _safe_console_text(
+                "[PENDING DIGEST] Skipped: email notifications disabled"
+            )
+        )
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "email_notifications_disabled",
+        }
 
     today = _today_ist()
+    day_iso = today.isoformat()
+
     if not force and not _is_working_day_ist(today):
-        logger.info(_safe_console_text(f"[PENDING DIGEST] Skipped (non-working day {today})"))
-        return {"ok": True, "skipped": True, "reason": "non_working_day"}
+        logger.info(
+            _safe_console_text(
+                f"[PENDING DIGEST] Skipped: non-working day {day_iso}"
+            )
+        )
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "non_working_day",
+            "day": day_iso,
+        }
 
     User = get_user_model()
-    base_qs = User.objects.filter(is_active=True)
+
+    users_qs = User.objects.filter(is_active=True)
+
     if username:
-        base_qs = base_qs.filter(Q(username=username) | Q(email__iexact=username))
-    users = base_qs.order_by("id")
+        username_clean = username.strip()
+        users_qs = users_qs.filter(
+            Q(username=username_clean)
+            | Q(email__iexact=username_clean)
+        )
+
+    users_qs = users_qs.order_by("id")
 
     sent = 0
     skipped = 0
-    total_candidates = 0
-    day_iso = today.isoformat()
+    candidates = 0
     ttl = _ttl_until_next_3am_ist(_now_ist_dt())
 
-    for user in users:
-        total_candidates += 1
+    for user in users_qs:
+        candidates += 1
 
         if _is_on_leave_today(user) and not force:
             skipped += 1
-            logger.info(_safe_console_text(f"[PENDING DIGEST] Suppressed for user_id={getattr(user,'id','?')} (on leave today)"))
+            logger.info(
+                _safe_console_text(
+                    f"[PENDING DIGEST] Suppressed for user_id={getattr(user, 'id', '?')} because user is on leave today"
+                )
+            )
             continue
 
-        recips = [to_override] if to_override else _dedupe_emails([getattr(user, "email", "") or ""])
-        recips = [r for r in recips if r]
-        if not recips:
+        if to_override:
+            recipients = _dedupe_emails([to_override])
+        else:
+            recipients = _dedupe_emails([_display_user_email(user)])
+
+        recipients = [email for email in recipients if email]
+
+        if not recipients:
             skipped += 1
-            logger.info(_safe_console_text(f"[PENDING DIGEST] Skip user id={getattr(user,'id','?')} – no email"))
+            logger.info(
+                _safe_console_text(
+                    f"[PENDING DIGEST] Skipped user_id={getattr(user, 'id', '?')} because no email exists"
+                )
+            )
             continue
 
-        # Per-user/day claim to prevent duplicates across celery schedules/retries
         if not force:
             key = _emp_digest_key(day_iso, int(getattr(user, "id", 0) or 0))
             if not _try_claim(key, ttl):
                 skipped += 1
-                logger.info(_safe_console_text(f"[PENDING DIGEST] Already sent/claimed user_id={getattr(user,'id','?')} day={day_iso}"))
+                logger.info(
+                    _safe_console_text(
+                        f"[PENDING DIGEST] Already sent or claimed user_id={getattr(user, 'id', '?')} day={day_iso}"
+                    )
+                )
                 continue
 
         rows = _rows_for_user(user)
-        rows = strip_rows_to_delegations_only_if_pankaj_target(rows, target_email=recips[0])
+
+        try:
+            rows = strip_rows_to_delegations_only_if_pankaj_target(
+                rows,
+                target_email=recipients[0],
+            )
+        except Exception:
+            logger.exception(
+                _safe_console_text(
+                    f"[PENDING DIGEST] Guard row-strip failed for user_id={getattr(user, 'id', '?')}"
+                )
+            )
 
         if not rows and not send_even_if_empty and not force:
             skipped += 1
+            logger.info(
+                _safe_console_text(
+                    f"[PENDING DIGEST] Skipped user_id={getattr(user, 'id', '?')} because no pending rows"
+                )
+            )
             continue
 
-        filt_to, _, _ = filter_recipients_for_category(
-            category="delegation.pending_digest",
-            to=recips,
-        )
-        if not filt_to:
+        try:
+            filtered_to, _, _ = filter_recipients_for_category(
+                category=EMAIL_CATEGORY,
+                to=recipients,
+            )
+        except Exception:
+            logger.exception(
+                _safe_console_text(
+                    f"[PENDING DIGEST] Recipient guard failed for user_id={getattr(user, 'id', '?')}"
+                )
+            )
+            filtered_to = recipients
+
+        if not filtered_to:
             skipped += 1
-            logger.info(_safe_console_text(f"[PENDING DIGEST] Guard filtered recipients; skip user id={getattr(user,'id','?')}"))
+            logger.info(
+                _safe_console_text(
+                    f"[PENDING DIGEST] Guard filtered all recipients for user_id={getattr(user, 'id', '?')}"
+                )
+            )
             continue
 
-        subject = f"Your Pending Tasks – {day_iso}"
+        subject = f"Your Pending Tasks - {day_iso}"
         title = f"Your Pending Tasks ({day_iso})"
 
         try:
             send_html_email(
                 subject=subject,
-                template_name="email/daily_pending_tasks_summary.html",
+                template_name=EMPLOYEE_DIGEST_TEMPLATE,
                 context={
                     "title": title,
                     "report_date": day_iso,
@@ -483,28 +784,51 @@ def send_daily_employee_pending_digest(
                     "has_rows": bool(rows),
                     "items_table": rows,
                     "site_url": SITE_URL,
+                    "recipient_name": _display_user(user),
+                    "employee_name": _display_user(user),
+                    "employee_email": _display_user_email(user),
                 },
-                to=filt_to,
+                to=filtered_to,
                 fail_silently=False,
             )
-            logger.info(_safe_console_text(
-                f"[PENDING DIGEST] Sent to {filt_to[0]} (user_id={getattr(user,'id','?')}, items={len(rows)})"
-            ))
+
+            logger.info(
+                _safe_console_text(
+                    f"[PENDING DIGEST] Sent employee digest to {filtered_to[0]} "
+                    f"user_id={getattr(user, 'id', '?')} items={len(rows)}"
+                )
+            )
             sent += 1
-        except Exception as e:
+
+        except Exception as exc:
             skipped += 1
-            logger.error(_safe_console_text(f"[PENDING DIGEST] Email failure for user_id={getattr(user,'id','?')}: {e}"))
+            logger.error(
+                _safe_console_text(
+                    f"[PENDING DIGEST] Email failure for user_id={getattr(user, 'id', '?')}: {exc}"
+                )
+            )
 
     logger.info(
         _safe_console_text(
             f"[PENDING DIGEST] Completed at {_now_ist_dt():%Y-%m-%d %H:%M IST}: "
-            f"sent={sent}, skipped={skipped}, candidates={total_candidates}, "
-            f"username_filter={'yes' if username else 'no'}, to_override={'yes' if to_override else 'no'}"
+            f"sent={sent}, skipped={skipped}, candidates={candidates}, "
+            f"username_filter={'yes' if username else 'no'}, "
+            f"to_override={'yes' if to_override else 'no'}"
         )
     )
-    return {"ok": True, "sent": sent, "skipped": skipped, "candidates": total_candidates}
+
+    return {
+        "ok": True,
+        "sent": sent,
+        "skipped": skipped,
+        "candidates": candidates,
+        "day": day_iso,
+    }
 
 
+# ---------------------------------------------------------------------------
+# Admin digest task
+# ---------------------------------------------------------------------------
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def send_admin_all_pending_digest(
     self,
@@ -512,59 +836,129 @@ def send_admin_all_pending_digest(
     force: bool = False,
 ) -> Dict[str, Any]:
     """
-    Sends ONE consolidated email containing ALL employees' pending tasks to the admin email.
-    Includes ONLY items with planned_date <= today IST.
-    Skips on non-working days unless force=True.
+    Sends one consolidated pending task email to admin.
 
-    Idempotency:
-      - Per target email/day cache claim, unless force=True.
+    Rules:
+    - Only planned_date <= today IST is included.
+    - Sundays and holidays are skipped unless force=True.
+    - Idempotency is enforced per target email per day unless force=True.
     """
     if not _email_notifications_enabled():
-        logger.info(_safe_console_text("[ADMIN DIGEST] Skipped: email notifications disabled"))
-        return {"ok": True, "skipped": True, "reason": "email_notifications_disabled"}
+        logger.info(
+            _safe_console_text(
+                "[ADMIN DIGEST] Skipped: email notifications disabled"
+            )
+        )
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "email_notifications_disabled",
+        }
 
     today = _today_ist()
+    day_iso = today.isoformat()
+
     if not force and not _is_working_day_ist(today):
-        logger.info(_safe_console_text(f"[ADMIN DIGEST] Skipped (non-working day {today})"))
-        return {"ok": True, "skipped": True, "reason": "non_working_day"}
+        logger.info(
+            _safe_console_text(
+                f"[ADMIN DIGEST] Skipped: non-working day {day_iso}"
+            )
+        )
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "non_working_day",
+            "day": day_iso,
+        }
 
     default_admin = getattr(settings, "ADMIN_PENDING_DIGEST_TO", "")
     target = (to or default_admin or "").strip()
-    if not target:
-        logger.warning(_safe_console_text("[ADMIN DIGEST] No admin recipient; aborting"))
-        return {"ok": False, "skipped": True, "reason": "no_admin_recipient"}
 
-    day_iso = today.isoformat()
+    if not target:
+        logger.warning(
+            _safe_console_text("[ADMIN DIGEST] No admin recipient configured")
+        )
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "no_admin_recipient",
+        }
+
     ttl = _ttl_until_next_3am_ist(_now_ist_dt())
 
     if not force:
         key = _admin_digest_key(day_iso, target)
         if not _try_claim(key, ttl):
-            logger.info(_safe_console_text(f"[ADMIN DIGEST] Already sent/claimed for {target} day={day_iso}"))
-            return {"ok": True, "skipped": True, "reason": "already_sent", "day": day_iso}
+            logger.info(
+                _safe_console_text(
+                    f"[ADMIN DIGEST] Already sent or claimed for {target} day={day_iso}"
+                )
+            )
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "already_sent",
+                "day": day_iso,
+            }
 
     rows = _rows_for_all_users()
-    rows = strip_rows_to_delegations_only_if_pankaj_target(rows, target_email=target)
+
+    try:
+        rows = strip_rows_to_delegations_only_if_pankaj_target(
+            rows,
+            target_email=target,
+        )
+    except Exception:
+        logger.exception(
+            _safe_console_text(
+                f"[ADMIN DIGEST] Guard row-strip failed for target={target}"
+            )
+        )
 
     if not rows and not force:
-        logger.info(_safe_console_text("[ADMIN DIGEST] No pending rows; skipped send"))
-        return {"ok": True, "skipped": True, "reason": "empty"}
+        logger.info(
+            _safe_console_text("[ADMIN DIGEST] No pending rows; skipped send")
+        )
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "empty",
+            "day": day_iso,
+        }
 
-    filt_to, _, _ = filter_recipients_for_category(
-        category="delegation.pending_digest",
-        to=[target],
-    )
-    if not filt_to:
-        logger.info(_safe_console_text("[ADMIN DIGEST] Guard filtered recipient list; no email sent"))
-        return {"ok": True, "skipped": True, "reason": "filtered_by_guard"}
+    try:
+        filtered_to, _, _ = filter_recipients_for_category(
+            category=EMAIL_CATEGORY,
+            to=[target],
+        )
+    except Exception:
+        logger.exception(
+            _safe_console_text(
+                f"[ADMIN DIGEST] Recipient guard failed for target={target}"
+            )
+        )
+        filtered_to = [target]
 
-    subject = f"All Employees – Pending Tasks – {day_iso}"
-    title = f"All Employees – Pending Tasks ({day_iso})"
+    if not filtered_to:
+        logger.info(
+            _safe_console_text(
+                "[ADMIN DIGEST] Guard filtered all recipients; no email sent"
+            )
+        )
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "filtered_by_guard",
+            "day": day_iso,
+        }
+
+    subject = f"All Employees - Pending Tasks - {day_iso}"
+    title = f"All Employees - Pending Tasks ({day_iso})"
 
     try:
         send_html_email(
             subject=subject,
-            template_name="email/daily_pending_tasks_summary.html",
+            template_name=ADMIN_DIGEST_TEMPLATE,
             context={
                 "title": title,
                 "report_date": day_iso,
@@ -572,12 +966,33 @@ def send_admin_all_pending_digest(
                 "has_rows": bool(rows),
                 "items_table": rows,
                 "site_url": SITE_URL,
+                "recipient_name": "Admin",
             },
-            to=filt_to,
+            to=filtered_to,
             fail_silently=False,
         )
-        logger.info(_safe_console_text(f"[ADMIN DIGEST] Sent consolidated pending to {filt_to[0]} items={len(rows)}"))
-        return {"ok": True, "sent": 1, "items": len(rows), "to": filt_to[0]}
-    except Exception as e:
-        logger.error(_safe_console_text(f"[ADMIN DIGEST] Email failure: {e}"))
-        return {"ok": False, "sent": 0, "error": str(e)}
+
+        logger.info(
+            _safe_console_text(
+                f"[ADMIN DIGEST] Sent consolidated pending digest to {filtered_to[0]} items={len(rows)}"
+            )
+        )
+
+        return {
+            "ok": True,
+            "sent": 1,
+            "items": len(rows),
+            "to": filtered_to[0],
+            "day": day_iso,
+        }
+
+    except Exception as exc:
+        logger.error(
+            _safe_console_text(f"[ADMIN DIGEST] Email failure: {exc}")
+        )
+        return {
+            "ok": False,
+            "sent": 0,
+            "error": str(exc),
+            "day": day_iso,
+        }

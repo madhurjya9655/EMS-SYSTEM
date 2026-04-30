@@ -1,4 +1,4 @@
-#E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\utils.py
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\utils.py
 from __future__ import annotations
 
 from typing import Iterable, List, Sequence, Optional, Dict, Any, Tuple
@@ -11,6 +11,7 @@ from django.contrib.auth import get_user_model
 from django.core.mail import EmailMultiAlternatives, send_mail
 from django.template.loader import render_to_string
 from django.utils import timezone
+from django.utils.html import strip_tags
 
 try:
     from zoneinfo import ZoneInfo
@@ -343,6 +344,23 @@ def _render_or_fallback(template_name: str, context: Dict[str, Any], fallback: s
         return fallback
 
 
+def _html_to_plain_text(html: str, *, default: str = "Automated notification.") -> str:
+    """
+    Convert rendered HTML into a readable plain-text fallback.
+
+    This fixes the pending digest mail culprit:
+    previously send_html_email used the HTML as the plain body also.
+    HTML clients worked, but plain-text fallback was poor and could look raw.
+    """
+    try:
+        text = strip_tags(html or "")
+        lines = [line.strip() for line in text.splitlines()]
+        lines = [line for line in lines if line]
+        return "\n".join(lines) or default
+    except Exception:
+        return default
+
+
 def _apply_restrictions_to_primary(
     to_email: str,
     subject: str,
@@ -515,7 +533,12 @@ def send_html_email(
 ) -> None:
     """
     Render and send an HTML email using a Django template, with safe fallbacks.
-    Applies EMAIL_RESTRICTIONS (and legacy strict rule for compatibility).
+    Applies EMAIL_RESTRICTIONS and the legacy strict rule for compatibility.
+
+    FIX:
+    - HTML is attached as text/html.
+    - Plain body is now real plain text generated from HTML.
+    - This prevents raw HTML/system-dump appearance in plain-text fallback.
     """
     to_list = _filter_restricted_from_list(list(to or []), subject, template_name, context)
     cc_list = _filter_restricted_from_list(list(cc or []), subject, template_name, context)
@@ -529,8 +552,10 @@ def send_html_email(
 
     try:
         ctx = dict(context or {})
+
         if isinstance(ctx.get("items"), (list, tuple)):
             ctx["items"] = _fmt_items(ctx["items"])
+
         if isinstance(ctx.get("items_table"), (list, tuple)):
             ctx["items_table"] = _fmt_rows(ctx["items_table"])
 
@@ -540,9 +565,14 @@ def send_html_email(
             f"<html><body><h3>{ctx.get('title', subject)}</h3><p>Automated notification.</p></body></html>",
         )
 
+        plain_message = _html_to_plain_text(
+            html_message,
+            default=f"{ctx.get('title', subject)}\n\nAutomated notification.",
+        )
+
         msg = EmailMultiAlternatives(
             subject=subject,
-            body=html_message,
+            body=plain_message,
             from_email=_from_email(),
             to=to_list or None,
             cc=cc_list or None,
@@ -1125,11 +1155,15 @@ def send_welcome_email(*, user: User, raw_password: str | None = None) -> None:
     """.strip()
 
     html_body = _render_or_fallback("email/welcome_user.html", ctx, fallback_html)
+    text_body = _html_to_plain_text(
+        html_body,
+        default=f"Welcome to EMS\n\nUsername: {username}\nLogin: {SITE_URL}",
+    )
 
     try:
         msg = EmailMultiAlternatives(
-            subject="👋 Welcome to EMS",
-            body=html_body,
+            subject="Welcome to EMS",
+            body=text_body,
             from_email=_from_email(),
             to=[to_email],
         )

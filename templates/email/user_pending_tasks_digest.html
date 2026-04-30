@@ -1,86 +1,285 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>{{ title|default:"Your Pending Tasks" }}</title>
+
   <style>
-    body { font-family: Arial, Helvetica, sans-serif; margin:0; padding:0; background:#f6f7f9; color:#111; }
-    .wrap { max-width: 960px; margin: 24px auto; padding: 0 16px; }
-    .card { background:#fff; border:1px solid #e6e8ec; border-radius:10px; overflow:hidden; }
-    .header { padding:16px 18px; background:#0b1f3a; color:#fff; }
-    .header .brand { font-size:14px; letter-spacing:.4px; opacity:.95; margin:0 0 6px 0; }
-    .header h2 { font-size:18px; margin:0; font-weight:700; }
-    .content { padding:16px 18px; }
-    .meta { margin:0 0 12px 0; padding:10px 12px; background:#f8fafc; border:1px solid #eef2f7; border-radius:8px; font-size:13px; color:#333; display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; }
-    .meta strong { color:#111; }
-    .table-wrap { margin-top:12px; border:1px solid #e6e8ec; border-radius:8px; overflow:hidden; }
-    table { width:100%; border-collapse:collapse; font-size:13px; }
-    thead th { text-align:left; background:#f3f5f7; border-bottom:1px solid #e6e8ec; padding:10px 10px; color:#222; font-weight:700; white-space:nowrap; }
-    tbody td { border-bottom:1px solid #eef2f7; padding:10px 10px; vertical-align:top; color:#111; }
-    tbody tr:last-child td { border-bottom:none; }
-    .muted { color:#667085; font-size:12px; margin-top:14px; line-height:1.5; }
-    .footer { padding:14px 18px; background:#fbfcfe; border-top:1px solid #eef2f7; font-size:12px; color:#667085; line-height:1.5; }
-    .btn { display:inline-block; margin-top:10px; background:#0b1f3a; color:#fff !important; text-decoration:none; padding:10px 14px; border-radius:6px; font-size:13px; font-weight:700; }
-    .right { text-align:right; }
-    @media (max-width: 640px) { .meta { grid-template-columns:1fr; } thead th { white-space:normal; } }
+    body {
+      margin: 0;
+      padding: 0;
+      background: #f6f7f9;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #111111;
+    }
+
+    .outer {
+      width: 100%;
+      background: #f6f7f9;
+      padding: 24px 0;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 960px;
+      background: #ffffff;
+      border: 1px solid #e6e8ec;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .header {
+      background: #0b1f3a;
+      color: #ffffff;
+      padding: 18px 22px;
+    }
+
+    .brand {
+      font-size: 13px;
+      line-height: 1.4;
+      margin: 0 0 4px 0;
+      color: #d9e2f1;
+    }
+
+    .header-title {
+      font-size: 18px;
+      line-height: 1.4;
+      font-weight: 700;
+      margin: 0;
+      color: #ffffff;
+    }
+
+    .content {
+      padding: 22px;
+      font-size: 14px;
+      line-height: 1.6;
+      color: #111111;
+    }
+
+    .summary-table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid #e6e8ec;
+      margin: 0 0 16px 0;
+    }
+
+    .summary-table td {
+      border: 1px solid #e6e8ec;
+      padding: 9px 10px;
+      font-size: 13px;
+      line-height: 1.5;
+      vertical-align: top;
+    }
+
+    .summary-label {
+      width: 30%;
+      background: #f8fafc;
+      font-weight: 700;
+      color: #344054;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #111111;
+      margin: 20px 0 10px 0;
+    }
+
+    .table-wrap {
+      width: 100%;
+      overflow-x: auto;
+      border: 1px solid #e6e8ec;
+      border-radius: 6px;
+    }
+
+    .items-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0;
+    }
+
+    .items-table th,
+    .items-table td {
+      border-bottom: 1px solid #e6e8ec;
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+      font-size: 13px;
+      line-height: 1.5;
+      color: #111111;
+    }
+
+    .items-table th {
+      background: #f8fafc;
+      font-weight: 700;
+      color: #344054;
+      white-space: nowrap;
+    }
+
+    .items-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .empty-state {
+      padding: 14px 16px;
+      background: #f8fafc;
+      border: 1px solid #e6e8ec;
+      font-size: 13px;
+      color: #344054;
+      line-height: 1.6;
+    }
+
+    .button {
+      display: inline-block;
+      margin-top: 16px;
+      background: #0b5cab;
+      color: #ffffff !important;
+      text-decoration: none;
+      padding: 10px 16px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.4;
+    }
+
+    .note {
+      margin-top: 16px;
+      padding: 12px 14px;
+      background: #f8fafc;
+      border: 1px solid #e6e8ec;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #475467;
+    }
+
+    .footer {
+      padding: 14px 22px;
+      background: #fbfcfe;
+      border-top: 1px solid #e6e8ec;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #667085;
+    }
+
+    @media only screen and (max-width: 640px) {
+      .outer {
+        padding: 12px 0;
+      }
+
+      .container {
+        width: 100% !important;
+        border-radius: 0;
+      }
+
+      .content,
+      .header,
+      .footer {
+        padding-left: 16px !important;
+        padding-right: 16px !important;
+      }
+
+      .summary-label {
+        width: 42%;
+      }
+
+      .items-table th,
+      .items-table td {
+        font-size: 12px;
+        padding: 8px;
+      }
+    }
   </style>
 </head>
+
 <body>
-  <div class="wrap">
-    <div class="card">
-      <div class="header">
-        <div class="brand">BOS Lakshya</div>
-        <h2>{{ title|default:"Your Pending Tasks" }}</h2>
-      </div>
-      <div class="content">
-        <div class="meta">
-          <div><strong>Date (IST):</strong> {{ report_date }}</div>
-          <div class="right"><strong>Total Pending:</strong> {{ total_pending }}</div>
-        </div>
+  <table role="presentation" class="outer" width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr>
+      <td align="center">
+        <table role="presentation" class="container" width="100%" cellpadding="0" cellspacing="0" border="0">
 
-        {% if has_rows %}
-          <div class="table-wrap">
-            <table>
-              <thead>
+          <tr>
+            <td class="header">
+              <div class="brand">BOS Lakshya ERP</div>
+              <div class="header-title">{{ title|default:"Your Pending Tasks" }}</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="content">
+              <p style="margin:0 0 14px 0;">
+                Hello,
+              </p>
+
+              <p style="margin:0 0 16px 0;color:#344054;">
+                This is your pending task summary. Please review the open items below and take the required action.
+              </p>
+
+              <table role="presentation" class="summary-table" cellpadding="0" cellspacing="0" border="0">
                 <tr>
-                  <th>Task ID</th>
-                  <th>Task Title / Description</th>
-                  <th>Category</th>
-                  <th>Due Date</th>
-                  <th>Status</th>
+                  <td class="summary-label">Date</td>
+                  <td>{{ report_date|default:"-" }}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {% for row in items_table %}
-                  <tr>
-                    <td>{{ row.task_id }}</td>
-                    <td>{{ row.task_title }}</td>
-                    <td>{{ row.task_type }}</td>
-                    <td>{{ row.due_date }}</td>
-                    <td>{{ row.status }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        {% else %}
-          <p><strong>You're all clear 🎉 — no pending items.</strong></p>
-        {% endif %}
+                <tr>
+                  <td class="summary-label">Total Pending</td>
+                  <td>{{ total_pending|default:"0" }}</td>
+                </tr>
+              </table>
 
-        {% if site_url %}
-          <a class="btn" href="{{ site_url }}">Open Dashboard</a>
-        {% endif %}
+              <div class="section-title">Pending Items</div>
 
-        <div class="muted">
-          This is your end-of-day summary (7:00 PM IST). It includes Checklist, Delegation, and Help Ticket items that are still pending.
-        </div>
-      </div>
-      <div class="footer">
-        Regards,<br/>
-        <strong>BOS Lakshya</strong><br/>
-        This mailbox is not monitored. Please do not reply.
-      </div>
-    </div>
-  </div>
+              {% if has_rows %}
+                <div class="table-wrap">
+                  <table role="presentation" class="items-table" cellpadding="0" cellspacing="0" border="0">
+                    <thead>
+                      <tr>
+                        <th>Task ID</th>
+                        <th>Task Title / Description</th>
+                        <th>Category</th>
+                        <th>Due Date</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {% for row in items_table %}
+                        <tr>
+                          <td>{{ row.task_id|default:"-" }}</td>
+                          <td>{{ row.task_title|default:"-" }}</td>
+                          <td>{{ row.task_type|default:"-" }}</td>
+                          <td>{{ row.due_date|default:"-" }}</td>
+                          <td>{{ row.status|default:"Pending" }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              {% else %}
+                <div class="empty-state">
+                  No pending tasks are currently available for this summary.
+                </div>
+              {% endif %}
+
+              {% if site_url %}
+                <a class="button" href="{{ site_url }}">Open Dashboard</a>
+              {% endif %}
+
+              <div class="note">
+                This is an automated pending task summary generated by BOS Lakshya ERP. It includes Checklist, Delegation, and Help Ticket items that are still pending.
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="footer">
+              BOS Lakshya ERP<br>
+              System generated message. Please do not reply.
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>

@@ -1,113 +1,301 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Single Visit Approval Required</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Visit Approval Required</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: #f6f7f9;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #111111;
+    }
+
+    .outer {
+      width: 100%;
+      background: #f6f7f9;
+      padding: 24px 0;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 640px;
+      background: #ffffff;
+      border: 1px solid #e6e8ec;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .header {
+      background: #0b1f3a;
+      color: #ffffff;
+      padding: 18px 22px;
+    }
+
+    .header-title {
+      font-size: 18px;
+      line-height: 1.4;
+      font-weight: 700;
+      margin: 0;
+    }
+
+    .header-subtitle {
+      font-size: 12px;
+      line-height: 1.5;
+      margin-top: 4px;
+      color: #d9e2f1;
+    }
+
+    .content {
+      padding: 22px;
+      font-size: 14px;
+      line-height: 1.6;
+      color: #111111;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #111111;
+      margin: 20px 0 10px 0;
+    }
+
+    .details-table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid #e6e8ec;
+      margin: 0;
+    }
+
+    .details-table td {
+      border: 1px solid #e6e8ec;
+      padding: 9px 10px;
+      vertical-align: top;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .details-label {
+      width: 34%;
+      background: #f8fafc;
+      font-weight: 700;
+      color: #344054;
+    }
+
+    .details-value {
+      color: #111111;
+    }
+
+    .action-table {
+      margin-top: 14px;
+    }
+
+    .button {
+      display: inline-block;
+      min-width: 116px;
+      text-align: center;
+      padding: 11px 16px;
+      border-radius: 4px;
+      color: #ffffff !important;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.3;
+    }
+
+    .button-approve {
+      background: #0b5cab;
+    }
+
+    .button-reject {
+      background: #b42318;
+    }
+
+    .note {
+      margin-top: 16px;
+      padding: 12px 14px;
+      background: #f8fafc;
+      border: 1px solid #e6e8ec;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #475467;
+    }
+
+    .footer {
+      padding: 14px 22px;
+      background: #fbfcfe;
+      border-top: 1px solid #e6e8ec;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #667085;
+    }
+
+    @media only screen and (max-width: 640px) {
+      .outer {
+        padding: 12px 0;
+      }
+
+      .container {
+        width: 100% !important;
+        border-radius: 0;
+      }
+
+      .content,
+      .header,
+      .footer {
+        padding-left: 16px !important;
+        padding-right: 16px !important;
+      }
+
+      .details-label {
+        width: 40%;
+      }
+
+      .button {
+        min-width: 100px;
+        padding: 10px 12px;
+      }
+    }
+  </style>
 </head>
-<body style="margin:0;padding:0;background-color:#f0f2f5;font-family:Arial,sans-serif;color:#1e293b;">
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#f0f2f5;padding:24px 0;">
-  <tr><td align="center">
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="640"
-           style="width:640px;max-width:640px;background:#fff;border-radius:10px;overflow:hidden;border:1px solid #e2e8f0;">
 
-      <!-- HEADER -->
-      <tr>
-        <td style="background:#1d4ed8;padding:28px 32px;color:#fff;">
-          <div style="font-size:22px;font-weight:700;line-height:1.4;">Single Visit Approval Required</div>
-          <div style="font-size:13px;margin-top:6px;color:#dbeafe;">
-            Visit #{{ plan.id }} submitted by {{ kam_user.get_full_name|default:kam_user.username }}
-          </div>
-        </td>
-      </tr>
+<body>
+  <table role="presentation" class="outer" width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr>
+      <td align="center">
+        <table role="presentation" class="container" width="100%" cellpadding="0" cellspacing="0" border="0">
 
-      <!-- BODY -->
-      <tr>
-        <td style="padding:28px 32px;">
-          <p style="margin:0 0 8px;font-size:15px;color:#1e293b;">
-            Hello <strong>{{ manager_user.get_full_name|default:manager_user.username|default:"Manager" }}</strong>,
-          </p>
-          <p style="margin:0 0 20px;font-size:13px;color:#64748b;line-height:1.6;">
-            A visit plan has been submitted and requires your approval.
-            <strong>Click Approve or Reject below — no login required.</strong>
-          </p>
+          <tr>
+            <td class="header">
+              <div class="header-title">Visit Approval Required</div>
+              <div class="header-subtitle">
+                Visit #{{ plan.id }} submitted by {{ employee_name|default:kam_user.get_full_name|default:kam_user.username|default:"-" }}
+              </div>
+            </td>
+          </tr>
 
-          <!-- Details table -->
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
-                 style="border-collapse:collapse;margin:0 0 24px;border:1px solid #e2e8f0;">
-            <tr>
-              <td style="width:170px;padding:10px 14px;background:#f8fafc;font-size:11px;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:1px solid #e2e8f0;">Visit ID</td>
-              <td style="padding:10px 14px;font-size:13px;color:#1e293b;border-bottom:1px solid #e2e8f0;"><strong>#{{ plan.id }}</strong></td>
-            </tr>
-            <tr>
-              <td style="width:170px;padding:10px 14px;background:#f8fafc;font-size:11px;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:1px solid #e2e8f0;">Employee</td>
-              <td style="padding:10px 14px;font-size:13px;color:#1e293b;border-bottom:1px solid #e2e8f0;">{{ kam_user.get_full_name|default:kam_user.username }} ({{ kam_user.username }})</td>
-            </tr>
-            <tr>
-              <td style="width:170px;padding:10px 14px;background:#f8fafc;font-size:11px;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:1px solid #e2e8f0;">Category</td>
-              <td style="padding:10px 14px;font-size:13px;color:#1e293b;border-bottom:1px solid #e2e8f0;">{{ visit_category_label }}</td>
-            </tr>
-            <tr>
-              <td style="width:170px;padding:10px 14px;background:#f8fafc;font-size:11px;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:1px solid #e2e8f0;">Visit Date</td>
-              <td style="padding:10px 14px;font-size:13px;color:#1e293b;border-bottom:1px solid #e2e8f0;">{{ plan.visit_date }}{% if plan.visit_date_to %} → {{ plan.visit_date_to }}{% endif %}</td>
-            </tr>
-            <tr>
-              <td style="width:170px;padding:10px 14px;background:#f8fafc;font-size:11px;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:1px solid #e2e8f0;">Customer / Entity</td>
-              <td style="padding:10px 14px;font-size:13px;color:#1e293b;border-bottom:1px solid #e2e8f0;">{{ counterparty|default:"—" }}</td>
-            </tr>
-            <tr>
-              <td style="width:170px;padding:10px 14px;background:#f8fafc;font-size:11px;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:1px solid #e2e8f0;">Location</td>
-              <td style="padding:10px 14px;font-size:13px;color:#1e293b;border-bottom:1px solid #e2e8f0;">{{ plan.location|default:"—" }}</td>
-            </tr>
-            <tr>
-              <td style="width:170px;padding:10px 14px;background:#f8fafc;font-size:11px;font-weight:700;text-transform:uppercase;color:#64748b;">Purpose</td>
-              <td style="padding:10px 14px;font-size:13px;color:#1e293b;">{{ plan.purpose|default:"—" }}</td>
-            </tr>
-          </table>
+          <tr>
+            <td class="content">
+              <p style="margin:0 0 10px 0;">
+                Hello <strong>{{ recipient_name|default:manager_user.get_full_name|default:manager_user.username|default:"Manager" }}</strong>,
+              </p>
 
-          <!-- ACTION BUTTONS — direct action, no login -->
-          <p style="margin:0 0 14px;font-size:14px;font-weight:700;color:#1e293b;">Take Action Now:</p>
+              <p style="margin:0 0 16px 0;color:#344054;">
+                A visit plan has been submitted and requires your approval. Please review the details below and take the required action.
+              </p>
 
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;">
-            <tr>
-              <td style="padding-right:14px;">
-                <a href="{{ approve_url }}"
-                   style="background:#059669;color:#fff;text-decoration:none;display:inline-block;
-                          font-size:16px;font-weight:700;padding:16px 32px;border-radius:8px;
-                          letter-spacing:.02em;">
-                  ✓ &nbsp;Approve Visit
-                </a>
-              </td>
-              <td>
-                <a href="{{ reject_url }}"
-                   style="background:#dc2626;color:#fff;text-decoration:none;display:inline-block;
-                          font-size:16px;font-weight:700;padding:16px 32px;border-radius:8px;
-                          letter-spacing:.02em;">
-                  ✕ &nbsp;Reject Visit
-                </a>
-              </td>
-            </tr>
-          </table>
+              <div class="section-title">Details</div>
 
-          <!-- Note -->
-          <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:14px 16px;
-                      font-size:12px;color:#1e40af;line-height:1.7;">
-            <strong>No login required.</strong> Clicking Approve takes immediate effect.
-            Clicking Reject will ask for a reason before finalising.
-            These links expire after <strong>7 days</strong>.
-          </div>
-        </td>
-      </tr>
+              <table role="presentation" class="details-table" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td class="details-label">Visit ID</td>
+                  <td class="details-value">#{{ plan.id }}</td>
+                </tr>
 
-      <!-- FOOTER -->
-      <tr>
-        <td style="padding:14px 32px;background:#f8fafc;font-size:11px;color:#94a3b8;border-top:1px solid #e2e8f0;">
-          BOS Lakshya ERP — Visit Plan Module — Automated notification.
-        </td>
-      </tr>
+                <tr>
+                  <td class="details-label">Employee Name</td>
+                  <td class="details-value">
+                    {{ employee_name|default:kam_user.get_full_name|default:kam_user.username|default:"-" }}
+                  </td>
+                </tr>
 
-    </table>
-  </td></tr>
-</table>
+                <tr>
+                  <td class="details-label">Employee Email</td>
+                  <td class="details-value">
+                    {{ employee_email|default:kam_user.email|default:"-" }}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td class="details-label">KAM Name</td>
+                  <td class="details-value">
+                    {{ kam_name|default:kam_user.get_full_name|default:kam_user.username|default:"-" }}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td class="details-label">Date</td>
+                  <td class="details-value">
+                    {% if visit_date_display %}
+                      {{ visit_date_display }}
+                    {% else %}
+                      {{ plan.visit_date }}
+                      {% if plan.visit_date_to %}
+                        to {{ plan.visit_date_to }}
+                      {% endif %}
+                    {% endif %}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td class="details-label">Customer</td>
+                  <td class="details-value">
+                    {{ counterparty|default:"-" }}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td class="details-label">Location</td>
+                  <td class="details-value">
+                    {{ location|default:plan.location|default:"-" }}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td class="details-label">Category</td>
+                  <td class="details-value">
+                    {{ visit_category_label|default:"-" }}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td class="details-label">Purpose</td>
+                  <td class="details-value">
+                    {{ purpose|default:plan.purpose|default:"-" }}
+                  </td>
+                </tr>
+
+                {% if cc_emails %}
+                <tr>
+                  <td class="details-label">CC</td>
+                  <td class="details-value">
+                    {{ cc_emails|join:", " }}
+                  </td>
+                </tr>
+                {% endif %}
+              </table>
+
+              <div class="section-title">Action Required</div>
+
+              <table role="presentation" class="action-table" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding:0 10px 10px 0;">
+                    <a href="{{ approve_url }}" class="button button-approve">Approve</a>
+                  </td>
+                  <td style="padding:0 0 10px 0;">
+                    <a href="{{ reject_url }}" class="button button-reject">Reject</a>
+                  </td>
+                </tr>
+              </table>
+
+              <div class="note">
+                Clicking Approve will approve the visit. Clicking Reject will open a page to enter the rejection reason. These links expire after 7 days.
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="footer">
+              BOS Lakshya ERP<br>
+              System generated message. Please do not reply.
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>

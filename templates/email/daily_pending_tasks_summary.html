@@ -1,216 +1,293 @@
-<!-- E:\CLIENT PROJECT\employee management system bos\employee_management_system\templates\email\daily_pending_tasks_summary.html -->
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>{{ title|default:"Daily Pending Task Summary" }}</title>
+
   <style>
     body {
-      font-family: Arial, Helvetica, sans-serif;
       margin: 0;
       padding: 0;
       background: #f6f7f9;
-      color: #111;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #111111;
     }
 
-    .wrap {
-      max-width: 960px;
-      margin: 24px auto;
-      padding: 0 16px;
+    .outer {
+      width: 100%;
+      background: #f6f7f9;
+      padding: 24px 0;
     }
 
-    .card {
+    .container {
+      width: 100%;
+      max-width: 1020px;
       background: #ffffff;
       border: 1px solid #e6e8ec;
-      border-radius: 10px;
+      border-radius: 8px;
       overflow: hidden;
     }
 
     .header {
-      padding: 16px 18px;
       background: #0b1f3a;
-      color: #fff;
+      color: #ffffff;
+      padding: 18px 22px;
     }
 
-    .header .brand {
-      font-size: 14px;
-      letter-spacing: 0.4px;
-      opacity: 0.95;
-      margin: 0 0 6px 0;
+    .brand {
+      font-size: 13px;
+      line-height: 1.4;
+      margin: 0 0 4px 0;
+      color: #d9e2f1;
     }
 
-    .header h2 {
+    .header-title {
       font-size: 18px;
-      margin: 0;
+      line-height: 1.4;
       font-weight: 700;
+      margin: 0;
+      color: #ffffff;
     }
 
     .content {
-      padding: 16px 18px;
+      padding: 22px;
+      font-size: 14px;
+      line-height: 1.6;
+      color: #111111;
     }
 
-    .meta {
-      margin: 0 0 12px 0;
-      padding: 10px 12px;
-      background: #f8fafc;
-      border: 1px solid #eef2f7;
-      border-radius: 8px;
+    .summary-table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid #e6e8ec;
+      margin: 0 0 16px 0;
+    }
+
+    .summary-table td {
+      border: 1px solid #e6e8ec;
+      padding: 9px 10px;
       font-size: 13px;
-      color: #333;
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px 12px;
+      line-height: 1.5;
+      vertical-align: top;
     }
 
-    .meta strong {
-      color: #111;
+    .summary-label {
+      width: 30%;
+      background: #f8fafc;
+      font-weight: 700;
+      color: #344054;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #111111;
+      margin: 20px 0 10px 0;
     }
 
     .table-wrap {
-      margin-top: 12px;
+      width: 100%;
+      overflow-x: auto;
       border: 1px solid #e6e8ec;
-      border-radius: 8px;
-      overflow: hidden;
+      border-radius: 6px;
     }
 
-    table {
+    .items-table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 13px;
+      margin: 0;
     }
 
-    thead th {
-      text-align: left;
-      background: #f3f5f7;
+    .items-table th,
+    .items-table td {
       border-bottom: 1px solid #e6e8ec;
-      padding: 10px 10px;
-      color: #222;
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+      font-size: 13px;
+      line-height: 1.5;
+      color: #111111;
+    }
+
+    .items-table th {
+      background: #f8fafc;
       font-weight: 700;
+      color: #344054;
       white-space: nowrap;
     }
 
-    tbody td {
-      border-bottom: 1px solid #eef2f7;
-      padding: 10px 10px;
-      vertical-align: top;
-      color: #111;
-    }
-
-    tbody tr:last-child td {
+    .items-table tr:last-child td {
       border-bottom: none;
     }
 
-    .muted {
-      color: #667085;
+    .empty-state {
+      padding: 14px 16px;
+      background: #f8fafc;
+      border: 1px solid #e6e8ec;
+      font-size: 13px;
+      color: #344054;
+      line-height: 1.6;
+    }
+
+    .button {
+      display: inline-block;
+      margin-top: 16px;
+      background: #0b5cab;
+      color: #ffffff !important;
+      text-decoration: none;
+      padding: 10px 16px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.4;
+    }
+
+    .note {
+      margin-top: 16px;
+      padding: 12px 14px;
+      background: #f8fafc;
+      border: 1px solid #e6e8ec;
       font-size: 12px;
-      margin-top: 14px;
-      line-height: 1.5;
+      line-height: 1.6;
+      color: #475467;
     }
 
     .footer {
-      padding: 14px 18px;
+      padding: 14px 22px;
       background: #fbfcfe;
-      border-top: 1px solid #eef2f7;
+      border-top: 1px solid #e6e8ec;
       font-size: 12px;
-      color: #667085;
       line-height: 1.5;
+      color: #667085;
     }
 
-    .btn {
-      display: inline-block;
-      margin-top: 10px;
-      background: #0b1f3a;
-      color: #ffffff !important;
-      text-decoration: none;
-      padding: 10px 14px;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 700;
-    }
-
-    .right {
-      text-align: right;
-    }
-
-    @media (max-width: 640px) {
-      .meta {
-        grid-template-columns: 1fr;
+    @media only screen and (max-width: 640px) {
+      .outer {
+        padding: 12px 0;
       }
-      thead th {
-        white-space: normal;
+
+      .container {
+        width: 100% !important;
+        border-radius: 0;
+      }
+
+      .content,
+      .header,
+      .footer {
+        padding-left: 16px !important;
+        padding-right: 16px !important;
+      }
+
+      .summary-label {
+        width: 42%;
+      }
+
+      .items-table th,
+      .items-table td {
+        font-size: 12px;
+        padding: 8px;
       }
     }
   </style>
 </head>
+
 <body>
-  <div class="wrap">
-    <div class="card">
-      <div class="header">
-        <div class="brand">BOS Lakshya</div>
-        <h2>{{ title|default:"Daily Pending Task Summary" }}</h2>
-      </div>
+  <table role="presentation" class="outer" width="100%" cellpadding="0" cellspacing="0" border="0">
+    <tr>
+      <td align="center">
+        <table role="presentation" class="container" width="100%" cellpadding="0" cellspacing="0" border="0">
 
-      <div class="content">
-        <div class="meta">
-          <div><strong>Date (IST):</strong> {{ report_date }}</div>
-          <div class="right"><strong>Total Pending:</strong> {{ total_pending }}</div>
-        </div>
+          <tr>
+            <td class="header">
+              <div class="brand">BOS Lakshya ERP</div>
+              <div class="header-title">{{ title|default:"Daily Pending Task Summary" }}</div>
+            </td>
+          </tr>
 
-        {% if has_rows %}
-          <div class="table-wrap">
-            <table>
-              <thead>
+          <tr>
+            <td class="content">
+              <p style="margin:0 0 14px 0;">
+                Hello,
+              </p>
+
+              <p style="margin:0 0 16px 0;color:#344054;">
+                This is the pending task summary generated by BOS Lakshya ERP. Please review the open items below.
+              </p>
+
+              <table role="presentation" class="summary-table" cellpadding="0" cellspacing="0" border="0">
                 <tr>
-                  <th>Task ID</th>
-                  <th>Task Title / Description</th>
-                  <th>Assigned To</th>
-                  <th>Assigned By</th>
-                  <th>Due Date</th>
-                  <th>Task Type</th>
-                  <th>Status</th>
+                  <td class="summary-label">Date</td>
+                  <td>{{ report_date|default:"-" }}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {% for row in items_table %}
-                  <tr>
-                    <td>{{ row.task_id }}</td>
-                    <td>{{ row.task_title }}</td>
+                <tr>
+                  <td class="summary-label">Total Pending</td>
+                  <td>{{ total_pending|default:"0" }}</td>
+                </tr>
+              </table>
 
-                    <!-- ✅ FIX: supports either a User object OR a pre-rendered string -->
-                    <td>
-                      {{ row.assigned_to.get_full_name|default:row.assigned_to.username|default:row.assigned_to.email|default:row.assigned_to|default:"-" }}
-                    </td>
-                    <td>
-                      {{ row.assigned_by.get_full_name|default:row.assigned_by.username|default:row.assigned_by.email|default:row.assigned_by|default:"-" }}
-                    </td>
+              <div class="section-title">Pending Items</div>
 
-                    <td>{{ row.due_date }}</td>
-                    <td>{{ row.task_type }}</td>
-                    <td>{{ row.status }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        {% else %}
-          <p><strong>No pending tasks as of end-of-day.</strong></p>
-        {% endif %}
+              {% if has_rows %}
+                <div class="table-wrap">
+                  <table role="presentation" class="items-table" cellpadding="0" cellspacing="0" border="0">
+                    <thead>
+                      <tr>
+                        <th>Task ID</th>
+                        <th>Task Title / Description</th>
+                        <th>Assigned To</th>
+                        <th>Assigned By</th>
+                        <th>Due Date</th>
+                        <th>Task Type</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
 
-        {% if site_url %}
-          <a class="btn" href="{{ site_url }}">Open Dashboard</a>
-        {% endif %}
+                    <tbody>
+                      {% for row in items_table %}
+                        <tr>
+                          <td>{{ row.task_id|default:"-" }}</td>
+                          <td>{{ row.task_title|default:"-" }}</td>
+                          <td>
+                            {{ row.assigned_to.get_full_name|default:row.assigned_to.username|default:row.assigned_to.email|default:row.assigned_to|default:"-" }}
+                          </td>
+                          <td>
+                            {{ row.assigned_by.get_full_name|default:row.assigned_by.username|default:row.assigned_by.email|default:row.assigned_by|default:"-" }}
+                          </td>
+                          <td>{{ row.due_date|default:"-" }}</td>
+                          <td>{{ row.task_type|default:"-" }}</td>
+                          <td>{{ row.status|default:"Pending" }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              {% else %}
+                <div class="empty-state">
+                  No pending tasks are currently available for this summary.
+                </div>
+              {% endif %}
 
-        <div class="muted">
-          This is an automated end-of-day summary generated by BOS Lakshya.
-        </div>
-      </div>
+              {% if site_url %}
+                <a class="button" href="{{ site_url }}">Open Dashboard</a>
+              {% endif %}
 
-      <div class="footer">
-        Regards,<br/>
-        <strong>BOS Lakshya</strong><br/>
-        This mailbox is not monitored. Please do not reply.
-      </div>
-    </div>
-  </div>
+              <div class="note">
+                This is an automated pending task summary generated by BOS Lakshya ERP. It includes Checklist, Delegation, and Help Ticket items that are still pending.
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="footer">
+              BOS Lakshya ERP<br>
+              System generated message. Please do not reply.
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>
