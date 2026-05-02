@@ -605,6 +605,37 @@ ASSIGNER_CC_FOR_DELEGATION = {
 
 ADMIN_PENDING_DIGEST_TO = os.getenv("ADMIN_PENDING_DIGEST_TO", "pankaj@blueoceansteels.com")
 
+# -----------------------------------------------------------------------------
+# MIS REPORT SETTINGS
+# -----------------------------------------------------------------------------
+MIS_REPORT_TO = env_list(
+    "MIS_REPORT_TO",
+    "pankaj@blueoceansteels.com",
+)
+
+MIS_REPORT_CC = env_list(
+    "MIS_REPORT_CC",
+    "amreen@blueoceansteels.com",
+)
+
+MIS_REPORT_TIME_ZONE = os.getenv("MIS_REPORT_TIME_ZONE", "Asia/Kolkata")
+
+# variance = ((Actual - Planned) / Planned) * 100
+# completion_pct = (Actual / Planned) * 100
+MIS_SCORE_FORMULA = os.getenv("MIS_SCORE_FORMULA", "variance")
+
+# Verified production task models:
+# Checklist  -> status Completed, completed_at
+# Delegation -> status Completed, completed_at
+# HelpTicket -> status Closed, resolved_at
+MIS_TASK_MODEL_NAMES = env_list(
+    "MIS_TASK_MODEL_NAMES",
+    "Checklist,Delegation,HelpTicket",
+)
+
+# Monday 10:30 AM MIS should send previous Monday-Saturday data.
+MIS_REPORT_DEFAULT_WEEK = os.getenv("MIS_REPORT_DEFAULT_WEEK", "last")
+
 PANKAJ_EMAILS = env_list("PANKAJ_EMAILS", "pankaj@blueoceansteels.com")
 PANKAJ_USERNAMES = env_list("PANKAJ_USERNAMES", "pankaj")
 PANKAJ_ALLOWED_CATEGORIES = env_list(
@@ -886,6 +917,18 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.tasks.pending_digest.send_admin_all_pending_digest",
         "schedule": crontab(hour=19, minute=0, day_of_week="1-6"),
     },
+
+    # -------------------------------------------------------------------------
+    # MIS Report
+    # Runs every Monday at 10:30 AM IST.
+    # Sends previous Monday-Saturday employee task performance report.
+    # -------------------------------------------------------------------------
+    "weekly_mis_report_monday_1030am": {
+        "task": "apps.tasks.tasks.send_weekly_mis_report",
+        "schedule": crontab(hour=10, minute=30, day_of_week="1"),
+        "args": (),
+    },
+
     "kam-sync-google-sheet-to-db": {
         "task": "apps.kam.tasks.sync_google_sheet_to_db",
         "schedule": _KAM_SYNC_INTERVAL,

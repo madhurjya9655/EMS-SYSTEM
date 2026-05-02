@@ -212,10 +212,47 @@ def _base_queryset(
     start_dt: datetime,
     end_dt: datetime,
 ) -> QuerySet:
+    """
+    Base MIS queryset.
+
+    Critical production rule:
+        Only active employees are included.
+
+    That means every report generation checks User.is_active from the database.
+    If an employee is inactive, their assigned tasks are excluded from MIS.
+    """
     filters = {
         f"{config.planned_field}__gte": start_dt,
         f"{config.planned_field}__lt": end_dt,
         f"{config.assignee_field}__isnull": False,
+        f"{config.assignee_field}__is_active": True,
+    }
+
+    qs = config.model.objects.filter(**filters)
+
+    if config.skipped_field:
+        qs = qs.filter(**{config.skipped_field: False})
+
+    return qs
+
+
+def _inactive_assignee_queryset(
+    config: TaskModelConfig,
+    *,
+    start_dt: datetime,
+    end_dt: datetime,
+) -> QuerySet:
+    """
+    Audit-only queryset.
+
+    These rows are not included in MIS.
+    This is only to show how many task rows were skipped because assignee is inactive.
+    """
+    filters = {
+        f"{config.planned_field}__gte": start_dt,
+        f"{config.planned_field}__lt": end_dt,
+        f"{config.assignee_field}__isnull": False,
+        f"{config.assignee_field}__is_active": False,
     }
 
     qs = config.model.objects.filter(**filters)
@@ -331,6 +368,14 @@ def _display_name(user: Any, fallback_user_id: int) -> str:
     return f"User #{fallback_user_id}"
 
 
+def _week_number(week_start: date) -> int:
+    return int(week_start.isocalendar().week)
+
+
+def _week_year(week_start: date) -> int:
+    return int(week_start.isocalendar().year)
+
+
 def build_mis_report_dataset(
     *,
     anchor_date: Optional[date] = None,
@@ -343,6 +388,12 @@ def build_mis_report_dataset(
         anchor_date=anchor_date,
         week_selector=week_selector,
     )
+
+    generated_at = timezone.localtime(timezone.now(), IST)
+    report_date = generated_at.date()
+
+    active_employee_count_in_db = User.objects.filter(is_active=True).count()
+    inactive_employee_count_in_db = User.objects.filter(is_active=False).count()
 
     employee_stats: Dict[int, Dict[str, int]] = defaultdict(
         lambda: {
@@ -363,6 +414,12 @@ def build_mis_report_dataset(
             end_dt=end_dt,
         )
 
+        inactive_qs = _inactive_assignee_queryset(
+            config,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+
         completed_qs = _completed_queryset(base_qs, config)
 
         planned_counts = _count_by_assignee(base_qs, config.assignee_field)
@@ -373,6 +430,7 @@ def build_mis_report_dataset(
             "planned": sum(planned_counts.values()),
             "actual": sum(actual_counts.values()),
             "on_time_actual": sum(on_time_counts.values()),
+            "inactive_assignee_tasks_skipped": inactive_qs.count(),
         }
 
         all_user_ids = set(planned_counts) | set(actual_counts) | set(on_time_counts)
@@ -382,11 +440,19 @@ def build_mis_report_dataset(
             employee_stats[user_id]["actual"] += actual_counts.get(user_id, 0)
             employee_stats[user_id]["on_time_actual"] += on_time_counts.get(user_id, 0)
 
-    users_by_id = User.objects.in_bulk(employee_stats.keys())
+    users_by_id = User.objects.filter(
+        id__in=employee_stats.keys(),
+        is_active=True,
+    ).in_bulk()
 
     employees: List[Dict[str, Any]] = []
 
     for user_id, stats in employee_stats.items():
+        user = users_by_id.get(user_id)
+
+        if not user:
+            continue
+
         planned = int(stats["planned"])
         actual = int(stats["actual"])
         on_time_actual = int(stats["on_time_actual"])
@@ -408,7 +474,7 @@ def build_mis_report_dataset(
         employees.append(
             {
                 "employee_id": user_id,
-                "employee_name": _display_name(users_by_id.get(user_id), user_id),
+                "employee_name": _display_name(user, user_id),
                 "planned": planned,
                 "actual": actual,
                 "current_week_score": _format_score(current_week_score),
@@ -436,10 +502,17 @@ def build_mis_report_dataset(
         formula=formula,
     )
 
-    generated_at = timezone.localtime(timezone.now(), IST)
+    inactive_assignee_tasks_skipped_total = sum(
+        item.get("inactive_assignee_tasks_skipped", 0)
+        for item in model_breakdown.values()
+    )
 
     return {
         "title": "MDO",
+        "report_date": report_date,
+        "report_date_display": report_date.strftime("%d-%m-%Y"),
+        "week_number": _week_number(week_start),
+        "week_year": _week_year(week_start),
         "week_start": week_start,
         "week_end": week_end,
         "week_start_display": week_start.strftime("%d-%m-%Y"),
@@ -449,6 +522,9 @@ def build_mis_report_dataset(
         "formula": formula,
         "employees": employees,
         "employee_count": len(employees),
+        "active_employee_count_in_db": active_employee_count_in_db,
+        "inactive_employee_count_in_db": inactive_employee_count_in_db,
+        "inactive_assignee_tasks_skipped_total": inactive_assignee_tasks_skipped_total,
         "totals": {
             "planned": total_planned,
             "actual": total_actual,
@@ -466,7 +542,6 @@ def build_mis_report_excel(report: Dict[str, Any]) -> bytes:
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-        from openpyxl.utils import get_column_letter
     except ImportError as exc:
         raise RuntimeError(
             "openpyxl is required for MIS Excel attachment. "
@@ -576,19 +651,22 @@ def build_mis_report_excel(report: Dict[str, Any]) -> bytes:
     else:
         ws.merge_cells(start_row=row_no, start_column=1, end_row=row_no, end_column=4)
         cell = ws.cell(row=row_no, column=1)
-        cell.value = "No task data found for the selected week."
+        cell.value = "No task data found for active employees in the selected week."
         cell.fill = white_fill
         cell.alignment = center
         cell.border = border
         row_no += 2
 
-    ws.cell(row=row_no, column=1).value = (
+    ws.cell(row=row_no, column=1).value = f"Report Date: {report['report_date_display']}"
+    ws.cell(row=row_no + 1, column=1).value = f"Week Number: {report['week_number']} / {report['week_year']}"
+    ws.cell(row=row_no + 2, column=1).value = (
         f"Report Week: {report['week_start_display']} to {report['week_end_display']}"
     )
-    ws.cell(row=row_no + 1, column=1).value = (
-        f"Generated At: {report['generated_at_display']}"
+    ws.cell(row=row_no + 3, column=1).value = f"Generated At: {report['generated_at_display']}"
+    ws.cell(row=row_no + 4, column=1).value = (
+        "Only active employees are included. Inactive employees are excluded."
     )
-    ws.cell(row=row_no + 2, column=1).value = (
+    ws.cell(row=row_no + 5, column=1).value = (
         "This is a system-generated report from BOS Lakshya ERP."
     )
 
@@ -628,7 +706,7 @@ def send_mis_report_email(
 
     subject = (
         "MIS Report - Employee Task Performance "
-        f"({report['week_start_display']} to {report['week_end_display']})"
+        f"(Week {report['week_number']}, {report['week_start_display']} to {report['week_end_display']})"
     )
 
     to_list = _dedupe_emails(
@@ -640,6 +718,7 @@ def send_mis_report_email(
 
     excel_filename = (
         "MIS_Report_MDO_"
+        f"Week_{report['week_number']}_"
         f"{report['week_start'].strftime('%Y-%m-%d')}_to_"
         f"{report['week_end'].strftime('%Y-%m-%d')}.xlsx"
     )
@@ -652,6 +731,9 @@ def send_mis_report_email(
             "to": to_list,
             "cc": cc_list,
             "employee_count": report["employee_count"],
+            "active_employee_count_in_db": report["active_employee_count_in_db"],
+            "inactive_employee_count_in_db": report["inactive_employee_count_in_db"],
+            "inactive_assignee_tasks_skipped_total": report["inactive_assignee_tasks_skipped_total"],
             "totals": report["totals"],
             "model_breakdown": report["model_breakdown"],
             "excel_attachment": excel_filename,
@@ -685,7 +767,11 @@ def send_mis_report_email(
         _safe_console_text(
             "[MIS] Report email sent. "
             f"week={report['week_start']}..{report['week_end']} "
-            f"employees={report['employee_count']} "
+            f"week_number={report['week_number']} "
+            f"active_employees_in_report={report['employee_count']} "
+            f"active_employees_in_db={report['active_employee_count_in_db']} "
+            f"inactive_employees_in_db={report['inactive_employee_count_in_db']} "
+            f"inactive_assignee_tasks_skipped={report['inactive_assignee_tasks_skipped_total']} "
             f"planned={report['totals']['planned']} "
             f"actual={report['totals']['actual']} "
             f"on_time={report['totals']['on_time_actual']} "
@@ -701,6 +787,11 @@ def send_mis_report_email(
         "to": to_list,
         "cc": cc_list,
         "employee_count": report["employee_count"],
+        "active_employee_count_in_db": report["active_employee_count_in_db"],
+        "inactive_employee_count_in_db": report["inactive_employee_count_in_db"],
+        "inactive_assignee_tasks_skipped_total": report["inactive_assignee_tasks_skipped_total"],
+        "week_number": report["week_number"],
+        "week_year": report["week_year"],
         "week_start": str(report["week_start"]),
         "week_end": str(report["week_end"]),
         "totals": report["totals"],

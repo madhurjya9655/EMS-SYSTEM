@@ -1,4 +1,4 @@
-#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\tasks.py
+# D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\tasks.py
 from __future__ import annotations
 
 import logging
@@ -1401,3 +1401,63 @@ def pre10am_unblock_and_generate(*, user_id: int | None = None) -> dict:
 @shared_task(bind=True, max_retries=1, default_retry_delay=30)
 def run_pre10am_unblock_and_generate(self, user_id: int | None = None) -> dict:
     return pre10am_unblock_and_generate(user_id=user_id)
+
+
+# -----------------------------------------------------------------------------
+# Weekly MIS Report
+# -----------------------------------------------------------------------------
+@shared_task(
+    bind=True,
+    name="apps.tasks.tasks.send_weekly_mis_report",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    max_retries=2,
+)
+def send_weekly_mis_report(self) -> dict:
+    """
+    Weekly MIS report.
+
+    Schedule:
+        Every Monday at 10:30 AM IST through Celery Beat.
+
+    Data window:
+        Previous Monday to Saturday.
+
+    Recipients:
+        TO = settings.MIS_REPORT_TO
+        CC = settings.MIS_REPORT_CC
+
+    Report output:
+        1. HTML table in email body.
+        2. Excel attachment with the same MIS format.
+    """
+    from django.conf import settings
+    from apps.tasks.services.mis_report import send_mis_report_email
+
+    week_selector = getattr(settings, "MIS_REPORT_DEFAULT_WEEK", "last")
+    formula = getattr(settings, "MIS_SCORE_FORMULA", "variance")
+
+    logger.info(
+        _safe_console_text(
+            f"[MIS] Weekly MIS Celery task started. "
+            f"week_selector={week_selector}, formula={formula}"
+        )
+    )
+
+    result = send_mis_report_email(
+        week_selector=week_selector,
+        formula=formula,
+        dry_run=False,
+    )
+
+    logger.info(
+        _safe_console_text(
+            f"[MIS] Weekly MIS Celery task finished. "
+            f"sent={result.get('sent')} "
+            f"employees={result.get('employee_count')} "
+            f"totals={result.get('totals')} "
+            f"attachment={result.get('excel_attachment')}"
+        )
+    )
+
+    return result

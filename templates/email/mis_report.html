@@ -6,6 +6,18 @@
 </head>
 <body style="margin:0; padding:0; font-family:Arial, Helvetica, sans-serif; font-size:10px; color:#000000; background:#ffffff;">
 
+    <p style="margin:0 0 2px 0; font-size:10px; color:#000000; font-family:Arial, Helvetica, sans-serif;">
+        <strong>Report Date:</strong> {{ report_date_display }}
+    </p>
+
+    <p style="margin:0 0 2px 0; font-size:10px; color:#000000; font-family:Arial, Helvetica, sans-serif;">
+        <strong>Week Number:</strong> {{ week_number }} / {{ week_year }}
+    </p>
+
+    <p style="margin:0 0 8px 0; font-size:10px; color:#000000; font-family:Arial, Helvetica, sans-serif;">
+        <strong>Week:</strong> {{ week_start_display }} to {{ week_end_display }}
+    </p>
+
     {% if has_rows %}
         <table cellpadding="2" cellspacing="0" border="1" style="border-collapse:collapse; border:1px solid #000000; width:285px; font-family:Arial, Helvetica, sans-serif; font-size:10px; color:#000000;">
             <tr>
@@ -130,7 +142,7 @@
 
             <tr>
                 <td colspan="4" style="background:#ffffff; color:#000000; text-align:center; border:1px solid #000000; padding:5px; line-height:12px;">
-                    No task data found for the selected week.
+                    No task data found for active employees in the selected week.
                 </td>
             </tr>
         </table>
@@ -141,11 +153,19 @@
     </p>
 
     <p style="margin:2px 0 0 0; font-size:10px; color:#555555; font-family:Arial, Helvetica, sans-serif;">
+        Week Number: {{ week_number }} / {{ week_year }}
+    </p>
+
+    <p style="margin:2px 0 0 0; font-size:10px; color:#555555; font-family:Arial, Helvetica, sans-serif;">
         Generated At: {{ generated_at_display }}
     </p>
 
     <p style="margin:8px 0 0 0; font-size:10px; color:#555555; font-family:Arial, Helvetica, sans-serif;">
-        This is a system-generated email sent from BOS Lakshya EMS.
+        Only active employees are included in this report. Inactive employees are excluded automatically.
+    </p>
+
+    <p style="margin:8px 0 0 0; font-size:10px; color:#555555; font-family:Arial, Helvetica, sans-serif;">
+        This is a system-generated email sent from BOS Lakshya ERP.
     </p>
 
     <p style="margin:2px 0 0 0; font-size:10px; color:#555555; font-family:Arial, Helvetica, sans-serif;">
