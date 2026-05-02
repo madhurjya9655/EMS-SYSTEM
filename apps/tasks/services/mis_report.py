@@ -13,7 +13,7 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.mail import EmailMultiAlternatives
-from django.db.models import Count, QuerySet
+from django.db.models import Count, Q, QuerySet
 from django.template.loader import render_to_string
 from django.utils import timezone
 from django.utils.html import strip_tags
@@ -28,6 +28,11 @@ DEFAULT_PRIMARY_RECIPIENTS = ["pankaj@blueoceansteels.com"]
 DEFAULT_CC_RECIPIENTS = ["amreen@blueoceansteels.com"]
 
 DEFAULT_TASK_MODEL_NAMES = ("Checklist", "Delegation", "HelpTicket")
+
+# These users can receive the email but must not appear inside employee MIS table.
+DEFAULT_EXCLUDE_USERNAMES = ["admin", "pankaj"]
+DEFAULT_EXCLUDE_EMAILS = ["admin@gmail.com", "pankaj@blueoceansteels.com"]
+DEFAULT_EXCLUDE_FULL_NAMES = ["Pankaj Jain", "Pankaj Sir"]
 
 COMPLETED_STATUS_BY_MODEL = {
     "Checklist": ("Completed",),
@@ -64,6 +69,21 @@ def _safe_console_text(value: object) -> str:
         return text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
     except Exception:
         return text
+
+
+def _list_setting(name: str, default: Sequence[str]) -> List[str]:
+    raw = getattr(settings, name, default)
+
+    if raw is None:
+        return list(default)
+
+    if isinstance(raw, str):
+        return [part.strip() for part in raw.split(",") if part.strip()]
+
+    try:
+        return [str(part).strip() for part in raw if str(part).strip()]
+    except Exception:
+        return list(default)
 
 
 def _dedupe_emails(emails: Sequence[str] | None) -> List[str]:
@@ -206,26 +226,122 @@ def get_week_bounds_ist(
     return start_dt, end_dt, week_start, week_end
 
 
+def _case_insensitive_q(field_name: str, values: Sequence[str]) -> Q:
+    q = Q(pk__in=[])
+
+    for value in values:
+        value = (value or "").strip()
+        if value:
+            q |= Q(**{f"{field_name}__iexact": value})
+
+    return q
+
+
+def _display_name(user: Any, fallback_user_id: int) -> str:
+    if not user:
+        return f"User #{fallback_user_id}"
+
+    try:
+        full_name = (user.get_full_name() or "").strip()
+        if full_name:
+            return full_name
+    except Exception:
+        pass
+
+    username = (getattr(user, "username", "") or "").strip()
+    if username:
+        return username
+
+    return f"User #{fallback_user_id}"
+
+
+def _eligible_active_employee_users() -> List[Any]:
+    """
+    MIS employee eligibility.
+
+    Include:
+        - active users only
+
+    Exclude:
+        - superusers by default
+        - optional staff if configured
+        - admin/demo/system usernames
+        - Pankaj Sir from the MIS employee table
+        - configured excluded emails/full names
+
+    Important:
+        Pankaj can still receive email. This only excludes him from the report table.
+    """
+    qs = User.objects.filter(is_active=True)
+
+    if getattr(settings, "MIS_EXCLUDE_SUPERUSERS", True):
+        qs = qs.filter(is_superuser=False)
+
+    if getattr(settings, "MIS_EXCLUDE_STAFF", False):
+        qs = qs.filter(is_staff=False)
+
+    exclude_usernames = _list_setting("MIS_EXCLUDE_USERNAMES", DEFAULT_EXCLUDE_USERNAMES)
+    exclude_emails = _list_setting("MIS_EXCLUDE_EMAILS", DEFAULT_EXCLUDE_EMAILS)
+    exclude_full_names = _list_setting("MIS_EXCLUDE_FULL_NAMES", DEFAULT_EXCLUDE_FULL_NAMES)
+
+    if exclude_usernames:
+        qs = qs.exclude(_case_insensitive_q("username", exclude_usernames))
+
+    if exclude_emails:
+        qs = qs.exclude(_case_insensitive_q("email", exclude_emails))
+
+    users = list(qs.order_by("first_name", "last_name", "username", "id"))
+
+    exclude_full_names_lower = {
+        item.strip().lower()
+        for item in exclude_full_names
+        if item and item.strip()
+    }
+
+    final_users = []
+
+    for user in users:
+        full_name = (user.get_full_name() or "").strip().lower()
+        username = (getattr(user, "username", "") or "").strip().lower()
+        email = (getattr(user, "email", "") or "").strip().lower()
+
+        if full_name and full_name in exclude_full_names_lower:
+            continue
+
+        if username and username in exclude_full_names_lower:
+            continue
+
+        if email and email in exclude_full_names_lower:
+            continue
+
+        final_users.append(user)
+
+    return final_users
+
+
 def _base_queryset(
     config: TaskModelConfig,
     *,
     start_dt: datetime,
     end_dt: datetime,
+    eligible_employee_ids: Sequence[int],
 ) -> QuerySet:
     """
     Base MIS queryset.
 
     Critical production rule:
-        Only active employees are included.
+        Only eligible active employees are counted.
 
-    That means every report generation checks User.is_active from the database.
-    If an employee is inactive, their assigned tasks are excluded from MIS.
+    This excludes:
+        - inactive employees
+        - Pankaj Sir
+        - admin/demo/system accounts
     """
     filters = {
         f"{config.planned_field}__gte": start_dt,
         f"{config.planned_field}__lt": end_dt,
         f"{config.assignee_field}__isnull": False,
-        f"{config.assignee_field}__is_active": True,
+        f"{config.assignee_field}_id__in": list(eligible_employee_ids),
     }
 
     qs = config.model.objects.filter(**filters)
@@ -242,12 +358,6 @@ def _inactive_assignee_queryset(
     start_dt: datetime,
     end_dt: datetime,
 ) -> QuerySet:
-    """
-    Audit-only queryset.
-
-    These rows are not included in MIS.
-    This is only to show how many task rows were skipped because assignee is inactive.
-    """
     filters = {
         f"{config.planned_field}__gte": start_dt,
         f"{config.planned_field}__lt": end_dt,
@@ -256,6 +366,36 @@ def _inactive_assignee_queryset(
     }
 
     qs = config.model.objects.filter(**filters)
+
+    if config.skipped_field:
+        qs = qs.filter(**{config.skipped_field: False})
+
+    return qs
+
+
+def _excluded_active_assignee_queryset(
+    config: TaskModelConfig,
+    *,
+    start_dt: datetime,
+    end_dt: datetime,
+    eligible_employee_ids: Sequence[int],
+) -> QuerySet:
+    """
+    Audit-only queryset.
+
+    Counts rows assigned to active users who were excluded from MIS,
+    such as Pankaj Sir or system/demo users.
+    """
+    filters = {
+        f"{config.planned_field}__gte": start_dt,
+        f"{config.planned_field}__lt": end_dt,
+        f"{config.assignee_field}__isnull": False,
+        f"{config.assignee_field}__is_active": True,
+    }
+
+    qs = config.model.objects.filter(**filters).exclude(
+        **{f"{config.assignee_field}_id__in": list(eligible_employee_ids)}
+    )
 
     if config.skipped_field:
         qs = qs.filter(**{config.skipped_field: False})
@@ -350,24 +490,6 @@ def _format_score(value: Decimal) -> str:
     return str(value)
 
 
-def _display_name(user: Any, fallback_user_id: int) -> str:
-    if not user:
-        return f"User #{fallback_user_id}"
-
-    try:
-        full_name = (user.get_full_name() or "").strip()
-        if full_name:
-            return full_name
-    except Exception:
-        pass
-
-    username = (getattr(user, "username", "") or "").strip()
-    if username:
-        return username
-
-    return f"User #{fallback_user_id}"
-
-
 def _week_number(week_start: date) -> int:
     return int(week_start.isocalendar().week)
 
@@ -395,6 +517,10 @@ def build_mis_report_dataset(
     active_employee_count_in_db = User.objects.filter(is_active=True).count()
     inactive_employee_count_in_db = User.objects.filter(is_active=False).count()
 
+    eligible_users = _eligible_active_employee_users()
+    eligible_employee_ids = [user.id for user in eligible_users]
+    eligible_users_by_id = {user.id: user for user in eligible_users}
+
     employee_stats: Dict[int, Dict[str, int]] = defaultdict(
         lambda: {
             "planned": 0,
@@ -402,6 +528,10 @@ def build_mis_report_dataset(
             "on_time_actual": 0,
         }
     )
+
+    # Show every eligible active employee, even if the selected week has 0 tasks.
+    for user_id in eligible_employee_ids:
+        employee_stats[user_id]
 
     model_breakdown: Dict[str, Dict[str, int]] = {}
 
@@ -412,12 +542,20 @@ def build_mis_report_dataset(
             config,
             start_dt=start_dt,
             end_dt=end_dt,
+            eligible_employee_ids=eligible_employee_ids,
         )
 
         inactive_qs = _inactive_assignee_queryset(
             config,
             start_dt=start_dt,
             end_dt=end_dt,
+        )
+
+        excluded_active_qs = _excluded_active_assignee_queryset(
+            config,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            eligible_employee_ids=eligible_employee_ids,
         )
 
         completed_qs = _completed_queryset(base_qs, config)
@@ -431,24 +569,23 @@ def build_mis_report_dataset(
             "actual": sum(actual_counts.values()),
             "on_time_actual": sum(on_time_counts.values()),
             "inactive_assignee_tasks_skipped": inactive_qs.count(),
+            "excluded_active_assignee_tasks_skipped": excluded_active_qs.count(),
         }
 
         all_user_ids = set(planned_counts) | set(actual_counts) | set(on_time_counts)
 
         for user_id in all_user_ids:
+            if user_id not in eligible_users_by_id:
+                continue
+
             employee_stats[user_id]["planned"] += planned_counts.get(user_id, 0)
             employee_stats[user_id]["actual"] += actual_counts.get(user_id, 0)
             employee_stats[user_id]["on_time_actual"] += on_time_counts.get(user_id, 0)
 
-    users_by_id = User.objects.filter(
-        id__in=employee_stats.keys(),
-        is_active=True,
-    ).in_bulk()
-
     employees: List[Dict[str, Any]] = []
 
     for user_id, stats in employee_stats.items():
-        user = users_by_id.get(user_id)
+        user = eligible_users_by_id.get(user_id)
 
         if not user:
             continue
@@ -507,6 +644,11 @@ def build_mis_report_dataset(
         for item in model_breakdown.values()
     )
 
+    excluded_active_assignee_tasks_skipped_total = sum(
+        item.get("excluded_active_assignee_tasks_skipped", 0)
+        for item in model_breakdown.values()
+    )
+
     return {
         "title": "MDO",
         "report_date": report_date,
@@ -524,7 +666,9 @@ def build_mis_report_dataset(
         "employee_count": len(employees),
         "active_employee_count_in_db": active_employee_count_in_db,
         "inactive_employee_count_in_db": inactive_employee_count_in_db,
+        "eligible_active_employee_count": len(eligible_employee_ids),
         "inactive_assignee_tasks_skipped_total": inactive_assignee_tasks_skipped_total,
+        "excluded_active_assignee_tasks_skipped_total": excluded_active_assignee_tasks_skipped_total,
         "totals": {
             "planned": total_planned,
             "actual": total_actual,
@@ -568,7 +712,7 @@ def build_mis_report_excel(report: Dict[str, Any]) -> bytes:
     ws.merge_cells("A1:D1")
     ws["A1"] = "MDO"
     ws["A1"].fill = grey_fill
-    ws["A1"].font = Font(bold=True, color="000000")
+    ws["A1"].font = Font(bold=True, color="000000", size=14)
     ws["A1"].alignment = center
     ws["A1"].border = border
 
@@ -577,7 +721,7 @@ def build_mis_report_excel(report: Dict[str, Any]) -> bytes:
         cell = ws.cell(row=2, column=col)
         cell.value = header
         cell.fill = yellow_fill
-        cell.font = Font(bold=True, color="000000")
+        cell.font = Font(bold=True, color="000000", size=12)
         cell.alignment = center
         cell.border = border
 
@@ -591,12 +735,12 @@ def build_mis_report_excel(report: Dict[str, Any]) -> bytes:
             ws.cell(row=row_no, column=4).value = row["current_week_score"]
 
             ws.cell(row=row_no, column=1).fill = teal_fill
-            ws.cell(row=row_no, column=1).font = Font(bold=True, color="FFFFFF")
+            ws.cell(row=row_no, column=1).font = Font(bold=True, color="FFFFFF", size=11)
             ws.cell(row=row_no, column=1).alignment = left
 
             for col in range(2, 5):
                 ws.cell(row=row_no, column=col).fill = white_fill
-                ws.cell(row=row_no, column=col).font = Font(color="000000")
+                ws.cell(row=row_no, column=col).font = Font(color="000000", size=11)
                 ws.cell(row=row_no, column=col).alignment = right
 
             for col in range(1, 5):
@@ -612,7 +756,7 @@ def build_mis_report_excel(report: Dict[str, Any]) -> bytes:
             for col in range(1, 5):
                 cell = ws.cell(row=row_no, column=col)
                 cell.fill = white_fill
-                cell.font = Font(color="000000")
+                cell.font = Font(color="000000", size=11)
                 cell.border = border
                 cell.alignment = left if col == 1 else right
 
@@ -629,7 +773,7 @@ def build_mis_report_excel(report: Dict[str, Any]) -> bytes:
         for col in range(1, 5):
             cell = ws.cell(row=row_no, column=col)
             cell.fill = green_fill
-            cell.font = Font(bold=True, color="000000")
+            cell.font = Font(bold=True, color="000000", size=11)
             cell.border = border
             cell.alignment = left if col == 1 else right
 
@@ -643,7 +787,7 @@ def build_mis_report_excel(report: Dict[str, Any]) -> bytes:
         for col in range(1, 5):
             cell = ws.cell(row=row_no, column=col)
             cell.fill = white_fill
-            cell.font = Font(color="000000")
+            cell.font = Font(color="000000", size=11)
             cell.border = border
             cell.alignment = left if col == 1 else right
 
@@ -651,10 +795,11 @@ def build_mis_report_excel(report: Dict[str, Any]) -> bytes:
     else:
         ws.merge_cells(start_row=row_no, start_column=1, end_row=row_no, end_column=4)
         cell = ws.cell(row=row_no, column=1)
-        cell.value = "No task data found for active employees in the selected week."
+        cell.value = "No active eligible employees found for MIS report."
         cell.fill = white_fill
         cell.alignment = center
         cell.border = border
+        cell.font = Font(size=11)
         row_no += 2
 
     ws.cell(row=row_no, column=1).value = f"Report Date: {report['report_date_display']}"
@@ -664,24 +809,22 @@ def build_mis_report_excel(report: Dict[str, Any]) -> bytes:
     )
     ws.cell(row=row_no + 3, column=1).value = f"Generated At: {report['generated_at_display']}"
     ws.cell(row=row_no + 4, column=1).value = (
-        "Only active employees are included. Inactive employees are excluded."
+        "Only active eligible employees are included. Pankaj Sir, inactive users, demo users, and system users are excluded."
     )
     ws.cell(row=row_no + 5, column=1).value = (
         "This is a system-generated report from BOS Lakshya ERP."
     )
 
-    ws.column_dimensions["A"].width = 26
-    ws.column_dimensions["B"].width = 11
-    ws.column_dimensions["C"].width = 11
-    ws.column_dimensions["D"].width = 13
+    for r in range(row_no, row_no + 6):
+        ws.cell(row=r, column=1).font = Font(size=11)
 
-    ws.row_dimensions[1].height = 18
-    ws.row_dimensions[2].height = 32
+    ws.column_dimensions["A"].width = 34
+    ws.column_dimensions["B"].width = 13
+    ws.column_dimensions["C"].width = 13
+    ws.column_dimensions["D"].width = 15
 
-    for row_cells in ws.iter_rows():
-        for cell in row_cells:
-            if cell.value is not None:
-                cell.alignment = cell.alignment.copy(vertical="center")
+    ws.row_dimensions[1].height = 20
+    ws.row_dimensions[2].height = 36
 
     output = BytesIO()
     wb.save(output)
@@ -733,7 +876,9 @@ def send_mis_report_email(
             "employee_count": report["employee_count"],
             "active_employee_count_in_db": report["active_employee_count_in_db"],
             "inactive_employee_count_in_db": report["inactive_employee_count_in_db"],
+            "eligible_active_employee_count": report["eligible_active_employee_count"],
             "inactive_assignee_tasks_skipped_total": report["inactive_assignee_tasks_skipped_total"],
+            "excluded_active_assignee_tasks_skipped_total": report["excluded_active_assignee_tasks_skipped_total"],
             "totals": report["totals"],
             "model_breakdown": report["model_breakdown"],
             "excel_attachment": excel_filename,
@@ -768,10 +913,11 @@ def send_mis_report_email(
             "[MIS] Report email sent. "
             f"week={report['week_start']}..{report['week_end']} "
             f"week_number={report['week_number']} "
-            f"active_employees_in_report={report['employee_count']} "
-            f"active_employees_in_db={report['active_employee_count_in_db']} "
-            f"inactive_employees_in_db={report['inactive_employee_count_in_db']} "
+            f"employees_in_report={report['employee_count']} "
+            f"active_users_in_db={report['active_employee_count_in_db']} "
+            f"inactive_users_in_db={report['inactive_employee_count_in_db']} "
             f"inactive_assignee_tasks_skipped={report['inactive_assignee_tasks_skipped_total']} "
+            f"excluded_active_assignee_tasks_skipped={report['excluded_active_assignee_tasks_skipped_total']} "
             f"planned={report['totals']['planned']} "
             f"actual={report['totals']['actual']} "
             f"on_time={report['totals']['on_time_actual']} "
@@ -789,7 +935,9 @@ def send_mis_report_email(
         "employee_count": report["employee_count"],
         "active_employee_count_in_db": report["active_employee_count_in_db"],
         "inactive_employee_count_in_db": report["inactive_employee_count_in_db"],
+        "eligible_active_employee_count": report["eligible_active_employee_count"],
         "inactive_assignee_tasks_skipped_total": report["inactive_assignee_tasks_skipped_total"],
+        "excluded_active_assignee_tasks_skipped_total": report["excluded_active_assignee_tasks_skipped_total"],
         "week_number": report["week_number"],
         "week_year": report["week_year"],
         "week_start": str(report["week_start"]),

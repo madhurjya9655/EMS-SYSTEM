@@ -102,11 +102,13 @@ DJANGO_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.humanize",
 ]
+
 THIRD_PARTY_APPS = [
     "widget_tweaks",
     "crispy_forms",
     "crispy_bootstrap5",
 ]
+
 LOCAL_APPS = [
     "apps.common",
     "apps.recruitment",
@@ -212,8 +214,6 @@ else:
 # -----------------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
-# Render / production must always use PostgreSQL.
-# Local development may still use SQLite if DATABASE_URL is not set.
 if ON_RENDER or not DEBUG:
     if not DATABASE_URL:
         raise RuntimeError(
@@ -230,7 +230,6 @@ if ON_RENDER or not DEBUG:
         )
     }
 
-    # Optional PostgreSQL connection tuning
     DATABASES["default"].setdefault("OPTIONS", {})
     DATABASES["default"]["OPTIONS"].update({
         "connect_timeout": env_int("DB_CONNECT_TIMEOUT", 10),
@@ -239,11 +238,13 @@ if ON_RENDER or not DEBUG:
 
 else:
     sqlite_path = os.getenv("SQLITE_PATH", "").strip()
+
     if not sqlite_path:
         disk_root = os.getenv("DISK_ROOT", DEFAULT_DISK_ROOT).strip() or DEFAULT_DISK_ROOT
         sqlite_dir = Path(disk_root) / "sqlite"
         sqlite_dir.mkdir(parents=True, exist_ok=True)
         sqlite_path = str(sqlite_dir / "db.sqlite3")
+
     Path(sqlite_path).parent.mkdir(parents=True, exist_ok=True)
 
     DATABASES = {
@@ -266,11 +267,13 @@ DATABASE_CONNECTION_POOLING = False
 def _robust_sqlite_decoder(val):
     if val is None:
         return None
+
     if isinstance(val, memoryview):
         try:
             val = val.tobytes()
         except Exception:
             return str(val)
+
     if isinstance(val, (bytes, bytearray)):
         for enc in ("utf-8", "latin-1", "ascii", "cp1252"):
             try:
@@ -279,12 +282,15 @@ def _robust_sqlite_decoder(val):
                     return s
             except Exception:
                 continue
+
         try:
             return val.decode("utf-8", errors="ignore").strip()
         except Exception:
             return str(val)
+
     if isinstance(val, str):
         return val.strip().replace("\x00", "") or None
+
     try:
         return str(val)
     except Exception:
@@ -292,8 +298,16 @@ def _robust_sqlite_decoder(val):
 
 try:
     for dt_type in [
-        "timestamp", "datetime", "timestamptz", "timestamp with time zone",
-        "date", "time", "TIMESTAMP", "DATETIME", "DATE", "TIME",
+        "timestamp",
+        "datetime",
+        "timestamptz",
+        "timestamp with time zone",
+        "date",
+        "time",
+        "TIMESTAMP",
+        "DATETIME",
+        "DATE",
+        "TIME",
     ]:
         sqlite3.register_converter(dt_type, _robust_sqlite_decoder)
 except Exception:
@@ -307,11 +321,13 @@ def _configure_sqlite_connection(sender, connection, **kwargs):
         def universal_text_factory(data):
             if data is None:
                 return None
+
             if isinstance(data, memoryview):
                 try:
                     data = data.tobytes()
                 except Exception:
                     return str(data)
+
             if isinstance(data, (bytes, bytearray)):
                 for enc in ("utf-8", "latin-1", "ascii", "cp1252"):
                     try:
@@ -320,16 +336,20 @@ def _configure_sqlite_connection(sender, connection, **kwargs):
                             return res
                     except Exception:
                         continue
+
                 try:
                     return data.decode("utf-8", errors="ignore").strip()
                 except Exception:
                     return str(data)
+
             if isinstance(data, str):
                 return data.strip().replace("\x00", "")
+
             try:
                 return str(data)
             except Exception:
                 return ""
+
         connection.connection.text_factory = universal_text_factory
     except Exception:
         pass
@@ -351,17 +371,21 @@ connection_created.connect(_configure_sqlite_connection)
 
 try:
     from django.db.backends.sqlite3.operations import DatabaseOperations  # type: ignore
+
     _orig_convert = DatabaseOperations.convert_datetimefield_value
 
     def safe_convert_datetimefield_value(self, value, expression, connection):
         if value is None:
             return None
+
         if isinstance(value, (bytes, bytearray, memoryview)):
             value = _robust_sqlite_decoder(value)
+
         if isinstance(value, str):
             value = value.strip().replace("\x00", "") or None
             if value is None:
                 return None
+
         try:
             return _orig_convert(self, value, expression, connection)
         except (TypeError, ValueError) as e:
@@ -372,7 +396,9 @@ try:
                         return _orig_convert(self, fixed, expression, connection)
                 except Exception:
                     return None
+
                 return None
+
             raise
 
     DatabaseOperations.convert_datetimefield_value = safe_convert_datetimefield_value
@@ -383,8 +409,10 @@ except Exception:
 # LOGGING
 # -----------------------------------------------------------------------------
 LOGS_DIR = BASE_DIR / "logs"
+
 if not DEBUG and ON_RENDER:
     LOGS_DIR = Path("/tmp/logs")
+
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 _console_handler = {
@@ -411,6 +439,7 @@ else:
     }
 
 _active_handlers: dict = {"console": _console_handler}
+
 if _file_handler is not None:
     _active_handlers["file"] = _file_handler
 
@@ -515,7 +544,10 @@ LOGGING = {
 }
 
 ADMINS = [("Ops", os.getenv("ADMIN_EMAIL", "ops@example.com"))]
-SERVER_EMAIL = os.getenv("SERVER_EMAIL", os.getenv("DEFAULT_FROM_EMAIL", "no-reply@example.com"))
+SERVER_EMAIL = os.getenv(
+    "SERVER_EMAIL",
+    os.getenv("DEFAULT_FROM_EMAIL", "no-reply@example.com"),
+)
 
 # -----------------------------------------------------------------------------
 # I18N / TZ
@@ -526,6 +558,7 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
+
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "Asia/Kolkata"
 USE_I18N = True
@@ -549,8 +582,12 @@ STATICFILES_FINDERS = [
 ]
 
 STORAGES = {
-    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
-    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
 }
 
 MEDIA_URL = "/media/"
@@ -568,24 +605,39 @@ LOGOUT_REDIRECT_URL = "login"
 # -----------------------------------------------------------------------------
 # EMAIL
 # -----------------------------------------------------------------------------
-EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.smtp.EmailBackend",
+)
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = env_int("EMAIL_PORT", 587)
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", False)
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "BOS Lakshya <no-reply@example.com>")
+DEFAULT_FROM_EMAIL = os.getenv(
+    "DEFAULT_FROM_EMAIL",
+    EMAIL_HOST_USER or "BOS Lakshya <no-reply@example.com>",
+)
 
-REIMBURSEMENT_SENDER_EMAIL = os.getenv("REIMBURSEMENT_SENDER_EMAIL", "amreen@blueoceansteels.com")
+REIMBURSEMENT_SENDER_EMAIL = os.getenv(
+    "REIMBURSEMENT_SENDER_EMAIL",
+    "amreen@blueoceansteels.com",
+)
 REIMBURSEMENT_SENDER_NAME = os.getenv("REIMBURSEMENT_SENDER_NAME", "Amreen")
 REIMBURSEMENT_EMAIL_FROM = os.getenv(
     "REIMBURSEMENT_EMAIL_FROM",
     f"{REIMBURSEMENT_SENDER_NAME} <{REIMBURSEMENT_SENDER_EMAIL}>",
 )
 
-REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES = env_int("REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES", 20 * 1024 * 1024)
-REIMBURSEMENT_EMAIL_DUP_WINDOW_SECONDS = env_int("REIMBURSEMENT_EMAIL_DUP_WINDOW_SECONDS", 60)
+REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES = env_int(
+    "REIMBURSEMENT_EMAIL_ATTACHMENTS_MAX_BYTES",
+    20 * 1024 * 1024,
+)
+REIMBURSEMENT_EMAIL_DUP_WINDOW_SECONDS = env_int(
+    "REIMBURSEMENT_EMAIL_DUP_WINDOW_SECONDS",
+    60,
+)
 
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
 EMAIL_FAIL_SILENTLY = env_bool("EMAIL_FAIL_SILENTLY", False if DEBUG else True)
@@ -596,14 +648,20 @@ EMAIL_SUBJECT_PREFIX = os.getenv("EMAIL_SUBJECT_PREFIX", "[BOS Lakshya] ")
 LEAVE_EMAIL_FROM = os.getenv("LEAVE_EMAIL_FROM", DEFAULT_FROM_EMAIL)
 LEAVE_EMAIL_REPLY_TO_EMPLOYEE = env_bool("LEAVE_EMAIL_REPLY_TO_EMPLOYEE", True)
 LEAVE_DECISION_TOKEN_SALT = os.getenv("LEAVE_DECISION_TOKEN_SALT", "leave-action-v1")
-LEAVE_DECISION_TOKEN_MAX_AGE = env_int("LEAVE_DECISION_TOKEN_MAX_AGE", 60 * 60 * 24 * 7)
+LEAVE_DECISION_TOKEN_MAX_AGE = env_int(
+    "LEAVE_DECISION_TOKEN_MAX_AGE",
+    60 * 60 * 24 * 7,
+)
 
 ASSIGNER_CC_FOR_DELEGATION = {
     "emails": env_list("DELEGATION_CC_ASSIGNER_EMAILS", ""),
     "usernames": env_list("DELEGATION_CC_ASSIGNER_USERNAMES", ""),
 }
 
-ADMIN_PENDING_DIGEST_TO = os.getenv("ADMIN_PENDING_DIGEST_TO", "pankaj@blueoceansteels.com")
+ADMIN_PENDING_DIGEST_TO = os.getenv(
+    "ADMIN_PENDING_DIGEST_TO",
+    "pankaj@blueoceansteels.com",
+)
 
 # -----------------------------------------------------------------------------
 # MIS REPORT SETTINGS
@@ -624,10 +682,6 @@ MIS_REPORT_TIME_ZONE = os.getenv("MIS_REPORT_TIME_ZONE", "Asia/Kolkata")
 # completion_pct = (Actual / Planned) * 100
 MIS_SCORE_FORMULA = os.getenv("MIS_SCORE_FORMULA", "variance")
 
-# Verified production task models:
-# Checklist  -> status Completed, completed_at
-# Delegation -> status Completed, completed_at
-# HelpTicket -> status Closed, resolved_at
 MIS_TASK_MODEL_NAMES = env_list(
     "MIS_TASK_MODEL_NAMES",
     "Checklist,Delegation,HelpTicket",
@@ -636,12 +690,33 @@ MIS_TASK_MODEL_NAMES = env_list(
 # Monday 10:30 AM MIS should send previous Monday-Saturday data.
 MIS_REPORT_DEFAULT_WEEK = os.getenv("MIS_REPORT_DEFAULT_WEEK", "last")
 
+# Employee table exclusion rules.
+# Pankaj can receive the report email but should not appear inside the employee MIS table.
+MIS_EXCLUDE_USERNAMES = env_list(
+    "MIS_EXCLUDE_USERNAMES",
+    "admin,pankaj",
+)
+
+MIS_EXCLUDE_EMAILS = env_list(
+    "MIS_EXCLUDE_EMAILS",
+    "admin@gmail.com,pankaj@blueoceansteels.com",
+)
+
+MIS_EXCLUDE_FULL_NAMES = env_list(
+    "MIS_EXCLUDE_FULL_NAMES",
+    "Pankaj Jain,Pankaj Sir",
+)
+
+MIS_EXCLUDE_SUPERUSERS = env_bool("MIS_EXCLUDE_SUPERUSERS", True)
+MIS_EXCLUDE_STAFF = env_bool("MIS_EXCLUDE_STAFF", False)
+
 PANKAJ_EMAILS = env_list("PANKAJ_EMAILS", "pankaj@blueoceansteels.com")
 PANKAJ_USERNAMES = env_list("PANKAJ_USERNAMES", "pankaj")
 PANKAJ_ALLOWED_CATEGORIES = env_list(
     "PANKAJ_ALLOWED_CATEGORIES",
     "delegation.assigned_by,delegation.pending_digest",
 )
+
 EMAIL_RESTRICTIONS = {
     "pankaj": {
         "emails": PANKAJ_EMAILS,
@@ -649,6 +724,7 @@ EMAIL_RESTRICTIONS = {
         "allow": PANKAJ_ALLOWED_CATEGORIES,
     }
 }
+
 HELP_TICKET_ADMIN_EXCLUDE_EMAILS = env_list("HELP_TICKET_ADMIN_EXCLUDE_EMAILS", "")
 
 if ON_RENDER and not os.getenv("EMAIL_HOST_USER"):
@@ -666,7 +742,10 @@ if not DEBUG:
     SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", True)
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = "DENY"
-    SECURE_REFERRER_POLICY = os.getenv("SECURE_REFERRER_POLICY", "strict-origin-when-cross-origin")
+    SECURE_REFERRER_POLICY = os.getenv(
+        "SECURE_REFERRER_POLICY",
+        "strict-origin-when-cross-origin",
+    )
 
 # -----------------------------------------------------------------------------
 # THIRD-PARTY
@@ -677,22 +756,26 @@ CRISPY_TEMPLATE_PACK = "bootstrap5"
 # -----------------------------------------------------------------------------
 # REIMBURSEMENT / GOOGLE INTEGRATIONS
 # -----------------------------------------------------------------------------
-REIMBURSEMENT_SHEET_ID = os.getenv("REIMBURSEMENT_SHEET_ID", "1LOVDkTVMGdEPOP9CQx-WVDv7ZY1TpqiQD82FFCc3t4A")
+REIMBURSEMENT_SHEET_ID = os.getenv(
+    "REIMBURSEMENT_SHEET_ID",
+    "1LOVDkTVMGdEPOP9CQx-WVDv7ZY1TpqiQD82FFCc3t4A",
+)
 REIMBURSEMENT_DRIVE_FOLDER_ID = os.getenv("REIMBURSEMENT_DRIVE_FOLDER_ID")
 REIMBURSEMENT_DRIVE_LINK_SHARING = os.getenv("REIMBURSEMENT_DRIVE_LINK_SHARING", "anyone")
 REIMBURSEMENT_DRIVE_DOMAIN = os.getenv("REIMBURSEMENT_DRIVE_DOMAIN")
 REIMBURSEMENT_DETAIL_URL_TEMPLATE = os.getenv("REIMBURSEMENT_DETAIL_URL_TEMPLATE")
-
 REIMBURSEMENT_SITE_BASE = os.getenv("REIMBURSEMENT_SITE_BASE", SITE_BASE_URL)
 
 REIMBURSEMENT_FINANCE_TEAM = env_list("REIMBURSEMENT_FINANCE_TEAM", "")
+
 REIMBURSEMENT_FINAL_TO = env_list(
     "REIMBURSEMENT_FINAL_TO",
-    "jyothi@gasteels.com,chetan.shah@gasteels.com"
+    "jyothi@gasteels.com,chetan.shah@gasteels.com",
 )
+
 REIMBURSEMENT_FINAL_CC = env_list(
     "REIMBURSEMENT_FINAL_CC",
-    "amreen@blueoceansteels.com,vilas@blueoceansteels.com,akshay@blueoceansteels.com,sharyu@blueoceansteels.com"
+    "amreen@blueoceansteels.com,vilas@blueoceansteels.com,akshay@blueoceansteels.com,sharyu@blueoceansteels.com",
 )
 
 # -----------------------------------------------------------------------------
@@ -753,7 +836,10 @@ else:
                 "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
                 "LOCATION": "ems-fast-cache",
                 "TIMEOUT": 300,
-                "OPTIONS": {"MAX_ENTRIES": 2000, "CULL_FREQUENCY": 3},
+                "OPTIONS": {
+                    "MAX_ENTRIES": 2000,
+                    "CULL_FREQUENCY": 3,
+                },
             },
         }
         SESSION_ENGINE = "django.contrib.sessions.backends.cached_db"
@@ -777,8 +863,10 @@ if ON_RENDER:
 # -----------------------------------------------------------------------------
 if DEBUG:
     INTERNAL_IPS = ["127.0.0.1", "localhost"]
+
     if not os.getenv("EMAIL_HOST_USER"):
         EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
     SECURE_SSL_REDIRECT = False
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
@@ -790,6 +878,7 @@ def validate_email_settings():
     if not DEBUG and EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend":
         if not EMAIL_HOST_USER or not EMAIL_HOST_PASSWORD:
             import warnings
+
             warnings.warn(
                 "Email credentials not configured. Email functionality may not work.",
                 RuntimeWarning,
@@ -797,6 +886,7 @@ def validate_email_settings():
 
 def validate_required_dirs():
     required_dirs = [MEDIA_ROOT, STATIC_ROOT]
+
     for dir_path in required_dirs:
         Path(dir_path).mkdir(parents=True, exist_ok=True)
 
@@ -826,8 +916,17 @@ KAM_DEFAULT_VISITS_PER_WEEK = env_int("KAM_DEFAULT_VISITS_PER_WEEK", 6)
 # -----------------------------------------------------------------------------
 TASK_PRIORITIES = [("Low", "Low"), ("Medium", "Medium"), ("High", "High")]
 TASK_STATUSES = [("Pending", "Pending"), ("Completed", "Completed")]
-RECURRING_MODES = [("Daily", "Daily"), ("Weekly", "Weekly"), ("Monthly", "Monthly"), ("Yearly", "Yearly")]
-HELP_TICKET_STATUSES = [("Open", "Open"), ("In Progress", "In Progress"), ("Closed", "Closed")]
+RECURRING_MODES = [
+    ("Daily", "Daily"),
+    ("Weekly", "Weekly"),
+    ("Monthly", "Monthly"),
+    ("Yearly", "Yearly"),
+]
+HELP_TICKET_STATUSES = [
+    ("Open", "Open"),
+    ("In Progress", "In Progress"),
+    ("Closed", "Closed"),
+]
 
 # -----------------------------------------------------------------------------
 # LEAVE ROUTING FILE
@@ -853,13 +952,18 @@ ENABLE_CELERY_EMAIL = env_bool("ENABLE_CELERY_EMAIL", False)
 
 def _redis_db(url: str, db: int) -> str:
     u = (url or "").strip()
+
     if not u:
         return u
+
     parts = u.rsplit("/", 1)
+
     if len(parts) == 2 and parts[1].isdigit():
         return f"{parts[0]}/{db}"
+
     if u.endswith("/"):
         return f"{u}{db}"
+
     return f"{u}/{db}"
 
 REDIS_URL_FOR_CELERY = os.getenv("REDIS_URL", "").strip()
@@ -868,6 +972,7 @@ CELERY_BROKER_URL = (
     os.getenv("CELERY_BROKER_URL", "").strip()
     or (_redis_db(REDIS_URL_FOR_CELERY, 0) if REDIS_URL_FOR_CELERY else "redis://127.0.0.1:6379/0")
 )
+
 CELERY_RESULT_BACKEND = (
     os.getenv("CELERY_RESULT_BACKEND", "").strip()
     or (_redis_db(REDIS_URL_FOR_CELERY, 1) if REDIS_URL_FOR_CELERY else "redis://127.0.0.1:6379/1")
@@ -917,18 +1022,11 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.tasks.pending_digest.send_admin_all_pending_digest",
         "schedule": crontab(hour=19, minute=0, day_of_week="1-6"),
     },
-
-    # -------------------------------------------------------------------------
-    # MIS Report
-    # Runs every Monday at 10:30 AM IST.
-    # Sends previous Monday-Saturday employee task performance report.
-    # -------------------------------------------------------------------------
     "weekly_mis_report_monday_1030am": {
         "task": "apps.tasks.tasks.send_weekly_mis_report",
         "schedule": crontab(hour=10, minute=30, day_of_week="1"),
         "args": (),
     },
-
     "kam-sync-google-sheet-to-db": {
         "task": "apps.kam.tasks.sync_google_sheet_to_db",
         "schedule": _KAM_SYNC_INTERVAL,
@@ -945,4 +1043,5 @@ REIMBURSEMENT_ALLOWED_EXTENSIONS = env_list(
     "REIMBURSEMENT_ALLOWED_EXTENSIONS",
     ".jpg,.jpeg,.png,.pdf,.xls,.xlsx",
 )
+
 REIMBURSEMENT_MAX_RECEIPT_MB = env_int("REIMBURSEMENT_MAX_RECEIPT_MB", 8)
