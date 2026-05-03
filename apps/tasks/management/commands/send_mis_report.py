@@ -1,4 +1,4 @@
-#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\management\commands\send_mis_report.py
+# D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\management\commands\send_mis_report.py
 from __future__ import annotations
 
 import json
@@ -12,14 +12,19 @@ from apps.tasks.services.mis_report import send_mis_report_email
 
 
 class Command(BaseCommand):
-    help = "Send employee-wise MIS task performance report."
+    help = "Send team-wise MIS task performance report."
 
     def add_arguments(self, parser):
         parser.add_argument(
             "--week",
             choices=["current", "last"],
-            default="current",
-            help="Report week. current = this Monday to Saturday. last = previous Monday to Saturday.",
+            default="last",
+            help=(
+                "Report week. "
+                "current = this Monday to Saturday. "
+                "last = previous Monday to Saturday. "
+                "For Monday 10:30 AM scheduled MIS, use last."
+            ),
         )
 
         parser.add_argument(
@@ -71,17 +76,21 @@ class Command(BaseCommand):
         raw_date = options.get("date")
         if raw_date:
             anchor_date = parse_date(raw_date)
+
             if not anchor_date:
                 raise CommandError("--date must be in YYYY-MM-DD format.")
 
-        result = send_mis_report_email(
-            anchor_date=anchor_date,
-            week_selector=options["week"],
-            formula=options.get("formula"),
-            to=options.get("to"),
-            cc=options.get("cc"),
-            dry_run=options["dry_run"],
-        )
+        try:
+            result = send_mis_report_email(
+                anchor_date=anchor_date,
+                week_selector=options["week"],
+                formula=options.get("formula"),
+                to=options.get("to"),
+                cc=options.get("cc"),
+                dry_run=options["dry_run"],
+            )
+        except Exception as exc:
+            raise CommandError(f"MIS report failed: {exc}") from exc
 
         if options["dry_run"]:
             self.stdout.write(self.style.WARNING("DRY RUN - email not sent"))

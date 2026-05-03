@@ -1,4 +1,4 @@
-#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\services\mis_report.py
+# D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\services\mis_report.py
 from __future__ import annotations
 
 import logging
@@ -28,6 +28,42 @@ DEFAULT_PRIMARY_RECIPIENTS = ["pankaj@blueoceansteels.com"]
 DEFAULT_CC_RECIPIENTS = ["amreen@blueoceansteels.com"]
 
 DEFAULT_TASK_MODEL_NAMES = ("Checklist", "Delegation", "HelpTicket")
+
+# ---------------------------------------------------------------------
+# MIS TEAM GROUPING CONFIG
+# ---------------------------------------------------------------------
+# Presentation-only grouping.
+# These names should match the database display names from user.get_full_name().
+# This mapping does NOT affect MIS aggregation, planned count, actual count,
+# on-time count, score formula, task query filters, or email data flow.
+# ---------------------------------------------------------------------
+MIS_TEAM_MAPPING = {
+    "MDO Team": [
+        "Akshay Barangule",
+        "Saurabh Kumavat",
+        "Amreen Mulla",
+        "Kajal Adagale",
+        "Vaishnavi Lavand",
+        "Dnyaneshwar Kumavat",
+        "Rohit Gujar",
+        "Smruti Lokhande",
+    ],
+    "Purchase & Logistics Team": [
+        "Rahul Nevase",
+        "Sharyu Patil",
+        "Yogesh Shinde",
+        "Shrikant Gawalwad",
+    ],
+    "Marketing Team": [
+        "Pratik Khandke",
+        "Sushant Nanaware",
+        "Manoj Dhole",
+        "Dinesh Kokate",
+        "Gauri Thorat",
+    ],
+}
+
+OTHER_ACTIVE_USERS_GROUP_NAME = "Other Active Users / Unassigned Team"
 
 # These users can receive the email but must not appear inside employee MIS table.
 DEFAULT_EXCLUDE_USERNAMES = ["admin", "pankaj"]
@@ -255,17 +291,93 @@ def _display_name(user: Any, fallback_user_id: int) -> str:
     return f"User #{fallback_user_id}"
 
 
+def _normalize_person_name(value: object) -> str:
+    """
+    Normalize employee/team names for safe display grouping.
+
+    Example:
+        " Akshay Barangule " -> "akshay barangule"
+        "AKSHAY BARANGULE"   -> "akshay barangule"
+
+    Presentation-only helper.
+    Does not affect MIS aggregation.
+    """
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _group_employees_by_team(
+    employees: Sequence[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Group already-computed employee MIS rows into hardcoded teams.
+
+    Production safety:
+        - Does not query tasks again.
+        - Does not recalculate planned.
+        - Does not recalculate actual.
+        - Does not recalculate on-time.
+        - Does not recalculate scores.
+        - Does not remove active employees silently.
+
+    Users not present in MIS_TEAM_MAPPING are returned separately as
+    other_active_users / unmapped_employees for presentation.
+    """
+    employees_by_name: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+
+    for row in employees:
+        key = _normalize_person_name(row.get("employee_name"))
+        if key:
+            employees_by_name[key].append(row)
+
+    used_employee_ids = set()
+    team_groups: List[Dict[str, Any]] = []
+
+    for team_name, configured_names in MIS_TEAM_MAPPING.items():
+        team_rows: List[Dict[str, Any]] = []
+
+        for configured_name in configured_names:
+            key = _normalize_person_name(configured_name)
+
+            for row in employees_by_name.get(key, []):
+                employee_id = row.get("employee_id")
+
+                if employee_id in used_employee_ids:
+                    continue
+
+                team_rows.append(row)
+                used_employee_ids.add(employee_id)
+
+        team_groups.append(
+            {
+                "team_name": team_name,
+                "employees": team_rows,
+                "employee_count": len(team_rows),
+                "has_rows": bool(team_rows),
+            }
+        )
+
+    other_active_users = [
+        row
+        for row in employees
+        if row.get("employee_id") not in used_employee_ids
+    ]
+
+    return team_groups, other_active_users
+
+
 def _eligible_active_employee_users() -> List[Any]:
     """
     MIS employee eligibility.
 
     Include:
         - active users only
+        - superusers if settings.MIS_EXCLUDE_SUPERUSERS is False
+        - staff users if settings.MIS_EXCLUDE_STAFF is False
 
     Exclude:
-        - superusers by default
+        - optional superusers if configured
         - optional staff if configured
-        - admin/demo/system usernames
+        - configured admin/system usernames
         - Pankaj Sir from the MIS employee table
         - configured excluded emails/full names
 
@@ -335,7 +447,7 @@ def _base_queryset(
     This excludes:
         - inactive employees
         - Pankaj Sir
-        - admin/demo/system accounts
+        - configured admin/system accounts
     """
     filters = {
         f"{config.planned_field}__gte": start_dt,
@@ -384,7 +496,7 @@ def _excluded_active_assignee_queryset(
     Audit-only queryset.
 
     Counts rows assigned to active users who were excluded from MIS,
-    such as Pankaj Sir or system/demo users.
+    such as Pankaj Sir or configured admin/system users.
     """
     filters = {
         f"{config.planned_field}__gte": start_dt,
@@ -623,6 +735,9 @@ def build_mis_report_dataset(
 
     employees.sort(key=lambda item: item["employee_name"].lower())
 
+    # Presentation-only grouping. Existing employee rows and totals remain unchanged.
+    team_groups, other_active_users = _group_employees_by_team(employees)
+
     total_planned = sum(row["planned"] for row in employees)
     total_actual = sum(row["actual"] for row in employees)
     total_on_time_actual = sum(row["on_time_actual"] for row in employees)
@@ -662,7 +777,22 @@ def build_mis_report_dataset(
         "generated_at": generated_at,
         "generated_at_display": generated_at.strftime("%d-%m-%Y %I:%M %p"),
         "formula": formula,
+
+        # Existing flat list preserved for backward compatibility.
         "employees": employees,
+
+        # Team-wise presentation grouping.
+        "team_groups": team_groups,
+
+        # Preferred presentation name.
+        "other_active_users": other_active_users,
+        "has_other_active_users": bool(other_active_users),
+        "other_active_users_group_name": OTHER_ACTIVE_USERS_GROUP_NAME,
+
+        # Backward-compatible aliases. Kept so older templates/debug scripts do not break.
+        "unmapped_employees": other_active_users,
+        "has_unmapped_employees": bool(other_active_users),
+
         "employee_count": len(employees),
         "active_employee_count_in_db": active_employee_count_in_db,
         "inactive_employee_count_in_db": inactive_employee_count_in_db,
@@ -728,42 +858,121 @@ def build_mis_report_excel(report: Dict[str, Any]) -> bytes:
     row_no = 3
 
     if report.get("employees"):
-        for row in report["employees"]:
-            ws.cell(row=row_no, column=1).value = row["employee_name"]
-            ws.cell(row=row_no, column=2).value = row["planned"]
-            ws.cell(row=row_no, column=3).value = row["actual"]
-            ws.cell(row=row_no, column=4).value = row["current_week_score"]
+        groups = report.get("team_groups") or [
+            {
+                "team_name": "Employees",
+                "employees": report.get("employees", []),
+            }
+        ]
 
-            ws.cell(row=row_no, column=1).fill = teal_fill
-            ws.cell(row=row_no, column=1).font = Font(bold=True, color="FFFFFF", size=11)
-            ws.cell(row=row_no, column=1).alignment = left
+        for group in groups:
+            group_rows = group.get("employees") or []
 
-            for col in range(2, 5):
-                ws.cell(row=row_no, column=col).fill = white_fill
-                ws.cell(row=row_no, column=col).font = Font(color="000000", size=11)
-                ws.cell(row=row_no, column=col).alignment = right
+            if not group_rows:
+                continue
+
+            ws.merge_cells(start_row=row_no, start_column=1, end_row=row_no, end_column=4)
+            team_cell = ws.cell(row=row_no, column=1)
+            team_cell.value = group.get("team_name") or "Team"
+            team_cell.fill = grey_fill
+            team_cell.font = Font(bold=True, color="000000", size=12)
+            team_cell.alignment = left
+            team_cell.border = border
 
             for col in range(1, 5):
                 ws.cell(row=row_no, column=col).border = border
 
             row_no += 1
 
-            ws.cell(row=row_no, column=1).value = "work done on time ----->"
-            ws.cell(row=row_no, column=2).value = row["on_time_planned"]
-            ws.cell(row=row_no, column=3).value = row["on_time_actual"]
-            ws.cell(row=row_no, column=4).value = row["on_time_score"]
+            for row in group_rows:
+                ws.cell(row=row_no, column=1).value = row["employee_name"]
+                ws.cell(row=row_no, column=2).value = row["planned"]
+                ws.cell(row=row_no, column=3).value = row["actual"]
+                ws.cell(row=row_no, column=4).value = row["current_week_score"]
+
+                ws.cell(row=row_no, column=1).fill = teal_fill
+                ws.cell(row=row_no, column=1).font = Font(bold=True, color="FFFFFF", size=11)
+                ws.cell(row=row_no, column=1).alignment = left
+
+                for col in range(2, 5):
+                    ws.cell(row=row_no, column=col).fill = white_fill
+                    ws.cell(row=row_no, column=col).font = Font(color="000000", size=11)
+                    ws.cell(row=row_no, column=col).alignment = right
+
+                for col in range(1, 5):
+                    ws.cell(row=row_no, column=col).border = border
+
+                row_no += 1
+
+                ws.cell(row=row_no, column=1).value = "work done on time ----->"
+                ws.cell(row=row_no, column=2).value = row["on_time_planned"]
+                ws.cell(row=row_no, column=3).value = row["on_time_actual"]
+                ws.cell(row=row_no, column=4).value = row["on_time_score"]
+
+                for col in range(1, 5):
+                    cell = ws.cell(row=row_no, column=col)
+                    cell.fill = white_fill
+                    cell.font = Font(color="000000", size=11)
+                    cell.border = border
+                    cell.alignment = left if col == 1 else right
+
+                row_no += 1
+
+                ws.row_dimensions[row_no].height = 8
+                row_no += 1
+
+        other_active_users = report.get("other_active_users") or report.get("unmapped_employees") or []
+
+        if other_active_users:
+            ws.merge_cells(start_row=row_no, start_column=1, end_row=row_no, end_column=4)
+            other_cell = ws.cell(row=row_no, column=1)
+            other_cell.value = report.get("other_active_users_group_name") or OTHER_ACTIVE_USERS_GROUP_NAME
+            other_cell.fill = grey_fill
+            other_cell.font = Font(bold=True, color="000000", size=12)
+            other_cell.alignment = left
+            other_cell.border = border
 
             for col in range(1, 5):
-                cell = ws.cell(row=row_no, column=col)
-                cell.fill = white_fill
-                cell.font = Font(color="000000", size=11)
-                cell.border = border
-                cell.alignment = left if col == 1 else right
+                ws.cell(row=row_no, column=col).border = border
 
             row_no += 1
 
-            ws.row_dimensions[row_no].height = 8
-            row_no += 1
+            for row in other_active_users:
+                ws.cell(row=row_no, column=1).value = row["employee_name"]
+                ws.cell(row=row_no, column=2).value = row["planned"]
+                ws.cell(row=row_no, column=3).value = row["actual"]
+                ws.cell(row=row_no, column=4).value = row["current_week_score"]
+
+                ws.cell(row=row_no, column=1).fill = teal_fill
+                ws.cell(row=row_no, column=1).font = Font(bold=True, color="FFFFFF", size=11)
+                ws.cell(row=row_no, column=1).alignment = left
+
+                for col in range(2, 5):
+                    ws.cell(row=row_no, column=col).fill = white_fill
+                    ws.cell(row=row_no, column=col).font = Font(color="000000", size=11)
+                    ws.cell(row=row_no, column=col).alignment = right
+
+                for col in range(1, 5):
+                    ws.cell(row=row_no, column=col).border = border
+
+                row_no += 1
+
+                ws.cell(row=row_no, column=1).value = "work done on time ----->"
+                ws.cell(row=row_no, column=2).value = row["on_time_planned"]
+                ws.cell(row=row_no, column=3).value = row["on_time_actual"]
+                ws.cell(row=row_no, column=4).value = row["on_time_score"]
+
+                for col in range(1, 5):
+                    cell = ws.cell(row=row_no, column=col)
+                    cell.fill = white_fill
+                    cell.font = Font(color="000000", size=11)
+                    cell.border = border
+                    cell.alignment = left if col == 1 else right
+
+                row_no += 1
+
+                ws.row_dimensions[row_no].height = 8
+                row_no += 1
 
         ws.cell(row=row_no, column=1).value = "Total"
         ws.cell(row=row_no, column=2).value = report["totals"]["planned"]
@@ -809,7 +1018,8 @@ def build_mis_report_excel(report: Dict[str, Any]) -> bytes:
     )
     ws.cell(row=row_no + 3, column=1).value = f"Generated At: {report['generated_at_display']}"
     ws.cell(row=row_no + 4, column=1).value = (
-        "Only active eligible employees are included. Pankaj Sir, inactive users, demo users, and system users are excluded."
+        "Only active eligible employees are included. "
+        "Pankaj Sir, inactive users, and configured admin/system users are excluded."
     )
     ws.cell(row=row_no + 5, column=1).value = (
         "This is a system-generated report from BOS Lakshya ERP."

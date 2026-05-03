@@ -707,7 +707,7 @@ MIS_EXCLUDE_FULL_NAMES = env_list(
     "Pankaj Jain,Pankaj Sir",
 )
 
-MIS_EXCLUDE_SUPERUSERS = env_bool("MIS_EXCLUDE_SUPERUSERS", True)
+MIS_EXCLUDE_SUPERUSERS = env_bool("MIS_EXCLUDE_SUPERUSERS", False)
 MIS_EXCLUDE_STAFF = env_bool("MIS_EXCLUDE_STAFF", False)
 
 PANKAJ_EMAILS = env_list("PANKAJ_EMAILS", "pankaj@blueoceansteels.com")
