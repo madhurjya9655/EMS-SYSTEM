@@ -212,51 +212,95 @@ else:
 # -----------------------------------------------------------------------------
 # DATABASE
 # -----------------------------------------------------------------------------
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
 
-if ON_RENDER or not DEBUG:
-    if not DATABASE_URL:
-        raise RuntimeError(
-            "DATABASE_URL is required in production/Render. "
-            "Configure your Render PostgreSQL database and set DATABASE_URL."
-        )
 
-    DATABASES = {
-        "default": dj_database_url.config(
-            default=DATABASE_URL,
-            conn_max_age=600,
-            conn_health_checks=True,
-            ssl_require=True,
-        )
-    }
+def _sqlite_database_config() -> dict:
+    """
+    Local/development fallback only.
 
-    DATABASES["default"].setdefault("OPTIONS", {})
-    DATABASES["default"]["OPTIONS"].update({
-        "connect_timeout": env_int("DB_CONNECT_TIMEOUT", 10),
-        "application_name": os.getenv("DB_APPLICATION_NAME", "bos-lakshya-web"),
-    })
-
-else:
-    sqlite_path = os.getenv("SQLITE_PATH", "").strip()
+    IMPORTANT:
+    Do not silently use SQLite on Render production. BOS Lakshya ERP production
+    data must come from PostgreSQL through DATABASE_URL.
+    """
+    sqlite_path = os.environ.get("SQLITE_PATH", "").strip()
 
     if not sqlite_path:
-        disk_root = os.getenv("DISK_ROOT", DEFAULT_DISK_ROOT).strip() or DEFAULT_DISK_ROOT
+        disk_root = os.environ.get("DISK_ROOT", DEFAULT_DISK_ROOT).strip() or DEFAULT_DISK_ROOT
         sqlite_dir = Path(disk_root) / "sqlite"
         sqlite_dir.mkdir(parents=True, exist_ok=True)
         sqlite_path = str(sqlite_dir / "db.sqlite3")
 
     Path(sqlite_path).parent.mkdir(parents=True, exist_ok=True)
 
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": sqlite_path,
-            "CONN_MAX_AGE": 0,
-            "OPTIONS": {
-                "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
-                "timeout": 30,
-            },
+    return {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": sqlite_path,
+        "CONN_MAX_AGE": 0,
+        "OPTIONS": {
+            "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+            "timeout": 30,
         },
+    }
+
+
+def _postgres_database_config(database_url: str) -> dict:
+    """
+    Production PostgreSQL config for Render.
+
+    DATABASE_URL is parsed with dj_database_url.parse(), then hardened with
+    timeout and application_name options for easier production debugging.
+    """
+    config = dj_database_url.parse(
+        database_url,
+        conn_max_age=600,
+        conn_health_checks=True,
+        ssl_require=True,
+    )
+
+    config.setdefault("OPTIONS", {})
+    config["OPTIONS"].update(
+        {
+            "connect_timeout": env_int("DB_CONNECT_TIMEOUT", 10),
+            "application_name": os.environ.get(
+                "DB_APPLICATION_NAME",
+                "bos-lakshya-erp",
+            ),
+        }
+    )
+
+    return config
+
+
+if DATABASE_URL:
+    DATABASES = {
+        "default": _postgres_database_config(DATABASE_URL),
+    }
+
+elif ON_RENDER or not DEBUG:
+    raise RuntimeError(
+        "\n"
+        "DATABASE_URL is missing in production/Render.\n"
+        "\n"
+        "Django cannot start because the BOS Lakshya ERP production database "
+        "is not configured.\n"
+        "\n"
+        "Fix this in Render Dashboard:\n"
+        "1. Open your Render PostgreSQL database.\n"
+        "2. Copy the Internal Database URL.\n"
+        "3. Open the Web Service -> Environment Variables.\n"
+        "4. Add DATABASE_URL using the Internal Database URL.\n"
+        "5. Open the Cron Job -> Environment Variables.\n"
+        "6. Add the same DATABASE_URL there also.\n"
+        "7. Redeploy the Web Service and re-run the Cron Job.\n"
+        "\n"
+        "Important: SQLite fallback is intentionally disabled on Render "
+        "production to prevent reports from reading the wrong database.\n"
+    )
+
+else:
+    DATABASES = {
+        "default": _sqlite_database_config(),
     }
 
 DATABASE_CONNECTION_POOLING = False
