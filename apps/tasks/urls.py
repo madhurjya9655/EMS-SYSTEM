@@ -87,4 +87,10 @@ urlpatterns = [
 
     path("internal/cron/pre10am-unblock/<str:token>/", pre10am_unblock_and_generate_hook, name="cron_pre10_with_token"),
     path("internal/cron/pre10am-unblock/",             pre10am_unblock_and_generate_hook, name="cron_pre10"),
+
+    path(
+    "checklist/unique-series/",
+    views.list_checklist_unique_series,
+    name="list_checklist_unique_series",
+),
 ]

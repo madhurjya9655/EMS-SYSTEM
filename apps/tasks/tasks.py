@@ -240,6 +240,9 @@ def _table_exists_for_model(model) -> bool:
 # -----------------------------------------------------------------------------
 # Recurrence generator
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Recurrence generator
+# -----------------------------------------------------------------------------
 def _should_send_recur_email_now() -> bool:
     if not SEND_EMAILS_FOR_AUTO_RECUR:
         return False
@@ -248,104 +251,280 @@ def _should_send_recur_email_now() -> bool:
     return True
 
 
+def _checklist_has_field(field_name: str) -> bool:
+    """
+    Safe model field checker.
+
+    Allows this task engine to run during phased deployment before/after
+    is_deleted/is_active fields exist.
+    """
+    try:
+        Checklist._meta.get_field(field_name)
+        return True
+    except Exception:
+        return False
+
+
 def _series_q_for_frequency(
     assign_to_id: int,
     task_name: str,
     mode: str,
     freq_norm: int,
     group_name: str | None,
+    *,
+    active_only: bool = True,
 ):
-    freq_set = [freq_norm, None]
+    """
+    Build recurring series query.
 
+    Series identity:
+        assign_to + task_name + mode + frequency + group_name
+
+    active_only=True excludes:
+        deleted rows
+        inactive rows
+        leave/holiday skipped rows
+    """
     q = Q(
         assign_to_id=assign_to_id,
         task_name=task_name,
         mode=mode,
+        frequency__in=[freq_norm, None],
     )
 
     if group_name:
         q &= Q(group_name=group_name)
+    else:
+        q &= Q(group_name__in=["", None])
 
-    q &= Q(frequency__in=freq_set)
+    if active_only:
+        if _checklist_has_field("is_deleted"):
+            q &= Q(is_deleted=False)
 
-    if hasattr(Checklist, "is_skipped_due_to_leave"):
-        q &= Q(is_skipped_due_to_leave=False)
+        if _checklist_has_field("is_active"):
+            q &= Q(is_active=True)
+
+        if _checklist_has_field("is_skipped_due_to_leave"):
+            q &= Q(is_skipped_due_to_leave=False)
 
     return q
 
 
-def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False) -> int:
+def _series_is_deleted(series: dict, *, freq_norm: int) -> bool:
     """
-    Create next strictly-future recurring checklist occurrence.
+    Deleted recurring series must NEVER regenerate.
 
-    Strict production rules:
-    - Do not create if any Pending row exists in the series.
-    - Do not create beyond recurrence_end_date.
-    - Do not create for today.
-    - Do not shift Sunday/holiday to another day.
-    - Do not create if assignee is on PENDING / APPROVED leave at planned time.
+    If is_deleted field exists:
+        any row in the series with is_deleted=True means the series is stopped.
+
+    If field does not exist:
+        fallback is current legacy behavior.
     """
-    now = timezone.now()
-    now_ist = _now_ist()
-    today_ist = now_ist.date()
+    if not _checklist_has_field("is_deleted"):
+        return False
 
-    freq_norm = max(int(series.get("frequency") or 1), 1)
-
-    pending_q = Q(
-        assign_to_id=series["assign_to_id"],
-        task_name=series["task_name"],
-        mode=series["mode"],
-        frequency__in=[freq_norm, None],
-        status="Pending",
-    )
-
-    if series.get("group_name"):
-        pending_q &= Q(group_name=series["group_name"])
-
-    if Checklist.objects.filter(pending_q).exists():
-        return 0
-
-    q_series = _series_q_for_frequency(
+    q = _series_q_for_frequency(
         assign_to_id=series["assign_to_id"],
         task_name=series["task_name"],
         mode=series["mode"],
         freq_norm=freq_norm,
         group_name=series.get("group_name"),
+        active_only=False,
     )
 
-    completed = (
-        Checklist.objects.filter(status="Completed")
-        .filter(q_series)
+    return Checklist.objects.filter(q, is_deleted=True).exists()
+
+
+def _active_pending_exists_for_series(series: dict, *, freq_norm: int) -> bool:
+    """
+    Only active visible pending rows block generation.
+
+    Leave/holiday skipped rows should not block next-working-day generation.
+    Deleted rows are handled separately by _series_is_deleted().
+    """
+    q = _series_q_for_frequency(
+        assign_to_id=series["assign_to_id"],
+        task_name=series["task_name"],
+        mode=series["mode"],
+        freq_norm=freq_norm,
+        group_name=series.get("group_name"),
+        active_only=True,
+    )
+
+    return Checklist.objects.filter(q, status="Pending").exists()
+
+
+def _get_recurrence_end_date_for_series(series: dict, *, freq_norm: int) -> Optional[dt_date]:
+    if not _checklist_has_field("recurrence_end_date"):
+        return None
+
+    q = _series_q_for_frequency(
+        assign_to_id=series["assign_to_id"],
+        task_name=series["task_name"],
+        mode=series["mode"],
+        freq_norm=freq_norm,
+        group_name=series.get("group_name"),
+        active_only=False,
+    )
+
+    try:
+        agg = (
+            Checklist.objects
+            .filter(q)
+            .exclude(recurrence_end_date__isnull=True)
+            .aggregate(earliest=Min("recurrence_end_date"))
+        )
+        return agg.get("earliest")
+    except Exception as e:
+        logger.warning(_safe_console_text(f"[RECUR GEN] recurrence_end_date lookup failed: {e}"))
+        return None
+
+
+def _latest_completed_source_for_series(series: dict, *, freq_norm: int):
+    """
+    Latest completed active row is the source for next recurrence.
+
+    Deleted/skipped/inactive rows are not allowed to become source.
+    """
+    q = _series_q_for_frequency(
+        assign_to_id=series["assign_to_id"],
+        task_name=series["task_name"],
+        mode=series["mode"],
+        freq_norm=freq_norm,
+        group_name=series.get("group_name"),
+        active_only=True,
+    )
+
+    return (
+        Checklist.objects
+        .filter(q, status="Completed")
+        .select_related("assign_by", "assign_to", "assign_pc", "notify_to", "auditor")
         .order_by("-planned_date", "-id")
         .first()
     )
 
+
+def _next_allowed_working_datetime(
+    candidate_dt: datetime,
+    *,
+    assignee,
+    recurrence_end_date: Optional[dt_date],
+    max_days: int = 90,
+) -> Optional[datetime]:
+    """
+    Shift recurrence to next valid working day.
+
+    Final business rule:
+      - Leave/holiday/Sunday should not permanently stop recurrence.
+      - It should move to next working day.
+      - Deleted recurring series is handled separately.
+    """
+    if not candidate_dt:
+        return None
+
+    candidate_dt = _ensure_aware_project(candidate_dt)
+    candidate_ist = candidate_dt.astimezone(IST)
+    original_time = candidate_ist.timetz().replace(tzinfo=None)
+
+    for offset in range(0, max_days + 1):
+        d = candidate_ist.date() + timedelta(days=offset)
+
+        if recurrence_end_date is not None and d > recurrence_end_date:
+            return None
+
+        if not is_working_day(d):
+            continue
+
+        test_ist = IST.localize(datetime.combine(d, original_time))
+
+        if not _is_assignee_available_for_email(assignee, test_ist):
+            continue
+
+        return test_ist.astimezone(timezone.get_current_timezone())
+
+    logger.warning(
+        _safe_console_text(
+            f"[RECUR GEN] No valid working date found within {max_days} days "
+            f"for assignee_id={getattr(assignee, 'id', None)}"
+        )
+    )
+    return None
+
+
+def _pending_duplicate_exists(series: dict, *, freq_norm: int, planned_dt: datetime) -> bool:
+    planned_dt = _ensure_aware_project(planned_dt)
+    planned_date_ist = planned_dt.astimezone(IST).date()
+
+    q = _series_q_for_frequency(
+        assign_to_id=series["assign_to_id"],
+        task_name=series["task_name"],
+        mode=series["mode"],
+        freq_norm=freq_norm,
+        group_name=series.get("group_name"),
+        active_only=True,
+    )
+
+    return (
+        Checklist.objects
+        .filter(q, status="Pending", planned_date__date=planned_date_ist)
+        .exists()
+    )
+
+
+def _apply_lifecycle_defaults(data: dict) -> dict:
+    if _checklist_has_field("is_deleted"):
+        data["is_deleted"] = False
+
+    if _checklist_has_field("is_active"):
+        data["is_active"] = True
+
+    if _checklist_has_field("is_skipped_due_to_leave"):
+        data["is_skipped_due_to_leave"] = False
+
+    if _checklist_has_field("skip_reason"):
+        data["skip_reason"] = ""
+
+    if _checklist_has_field("delete_reason"):
+        data["delete_reason"] = ""
+
+    return data
+
+
+def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False) -> int:
+    """
+    Create next recurring checklist occurrence.
+
+    Final ERP rules:
+      1. Deleted recurring series: never regenerate.
+      2. Leave/holiday/Sunday: shift to next working day.
+      3. Active pending row exists: do not duplicate.
+      4. Completed history can remain in DB.
+    """
+    now = timezone.now()
+
+    try:
+        freq_norm = max(int(series.get("frequency") or 1), 1)
+    except Exception:
+        freq_norm = 1
+
+    if _series_is_deleted(series, freq_norm=freq_norm):
+        logger.info(
+            _safe_console_text(
+                f"[RECUR GEN] Deleted series skipped permanently: "
+                f"{series.get('task_name')} assign_to_id={series.get('assign_to_id')}"
+            )
+        )
+        return 0
+
+    if _active_pending_exists_for_series(series, freq_norm=freq_norm):
+        return 0
+
+    completed = _latest_completed_source_for_series(series, freq_norm=freq_norm)
+
     if not completed or not getattr(completed, "planned_date", None):
         return 0
 
-    recurrence_end_date: Optional[dt_date] = None
-
-    try:
-        if hasattr(Checklist, "recurrence_end_date"):
-            end_q = Q(
-                assign_to_id=series["assign_to_id"],
-                task_name=series["task_name"],
-                mode=series["mode"],
-                frequency__in=[freq_norm, None],
-            )
-
-            if series.get("group_name"):
-                end_q &= Q(group_name=series["group_name"])
-
-            agg = (
-                Checklist.objects.filter(end_q)
-                .exclude(recurrence_end_date__isnull=True)
-                .aggregate(earliest=Min("recurrence_end_date"))
-            )
-            recurrence_end_date = agg.get("earliest")
-
-    except Exception as e:
-        logger.warning(_safe_console_text(f"[RECUR GEN] recurrence_end_date lookup failed: {e}"))
+    recurrence_end_date = _get_recurrence_end_date_for_series(series, freq_norm=freq_norm)
 
     next_dt = get_next_planned_date(completed.planned_date, series["mode"], freq_norm)
 
@@ -357,115 +536,72 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
     if not next_dt:
         return 0
 
-    try:
-        next_dt = _ensure_aware_project(next_dt)
-        next_dt_ist = next_dt.astimezone(IST)
-        next_date_ist = next_dt_ist.date()
+    allowed_dt = _next_allowed_working_datetime(
+        next_dt,
+        assignee=completed.assign_to,
+        recurrence_end_date=recurrence_end_date,
+        max_days=90,
+    )
 
-        if not is_working_day(next_date_ist):
-            logger.info(
-                _safe_console_text(
-                    f"[RECUR GEN] Skipped '{series['task_name']}' on {next_date_ist} "
-                    f"for assign_to_id={series['assign_to_id']}: holiday_or_sunday"
-                )
-            )
-            return 0
-
-        assignee = getattr(completed, "assign_to", None)
-
-        if not _is_assignee_available_for_email(assignee, next_dt_ist):
-            logger.info(
-                _safe_console_text(
-                    f"[RECUR GEN] Skipped '{series['task_name']}' on {next_date_ist} "
-                    f"for assign_to_id={series['assign_to_id']}: leave"
-                )
-            )
-            return 0
-
-    except Exception as e:
-        logger.error(_safe_console_text(f"[RECUR GEN] Working-day/leave guard failed: {e}"))
-        return 0
-
-    try:
-        if next_dt.astimezone(IST).date() == today_ist:
-            logger.info(
-                _safe_console_text(
-                    f"[RECUR GEN] Suppressed TODAY creation for '{series['task_name']}' "
-                    f"(assign_to_id={series['assign_to_id']})"
-                )
-            )
-            return 0
-    except Exception:
+    if not allowed_dt:
         return 0
 
     if recurrence_end_date is not None:
-        try:
-            next_date_ist = next_dt.astimezone(IST).date()
+        allowed_date_ist = allowed_dt.astimezone(IST).date()
 
-            if next_date_ist > recurrence_end_date:
-                logger.info(
-                    _safe_console_text(
-                        f"[RECUR GEN] Blocked: '{series['task_name']}' next date "
-                        f"{next_date_ist} > recurrence_end_date {recurrence_end_date} "
-                        f"for assign_to_id={series['assign_to_id']}"
-                    )
+        if allowed_date_ist > recurrence_end_date:
+            logger.info(
+                _safe_console_text(
+                    f"[RECUR GEN] Blocked: '{series['task_name']}' next date "
+                    f"{allowed_date_ist} > recurrence_end_date {recurrence_end_date}"
                 )
-                return 0
-
-        except Exception as e:
-            logger.error(_safe_console_text(f"[RECUR GEN] recurrence_end_date comparison failed: {e}"))
+            )
             return 0
 
-    dupe = (
-        Checklist.objects.filter(status="Pending")
-        .filter(q_series)
-        .filter(
-            planned_date__gte=next_dt - timedelta(minutes=1),
-            planned_date__lt=next_dt + timedelta(minutes=1),
-        )
-        .exists()
-    )
-
-    if dupe:
+    if _pending_duplicate_exists(series, freq_norm=freq_norm, planned_dt=allowed_dt):
         return 0
 
     if dry_run:
         logger.info(
             _safe_console_text(
-                f"[DRY RUN] Would create next checklist '{series['task_name']}' "
-                f"for user_id={series['assign_to_id']} at {next_dt.astimezone(IST):%Y-%m-%d %H:%M IST}"
+                f"[DRY RUN] Would create recurring checklist '{series['task_name']}' "
+                f"for user_id={series['assign_to_id']} at "
+                f"{allowed_dt.astimezone(IST):%Y-%m-%d %H:%M IST}"
             )
         )
         return 0
 
+    create_data = {
+        "assign_by": completed.assign_by,
+        "task_name": completed.task_name,
+        "message": getattr(completed, "message", "") or "",
+        "assign_to": completed.assign_to,
+        "planned_date": allowed_dt,
+        "priority": getattr(completed, "priority", None),
+        "attachment_mandatory": getattr(completed, "attachment_mandatory", False),
+        "mode": completed.mode,
+        "frequency": freq_norm,
+        "recurrence_end_date": recurrence_end_date,
+        "time_per_task_minutes": getattr(completed, "time_per_task_minutes", 0) or 0,
+        "remind_before_days": getattr(completed, "remind_before_days", 0) or 0,
+        "assign_pc": getattr(completed, "assign_pc", None),
+        "notify_to": getattr(completed, "notify_to", None),
+        "auditor": getattr(completed, "auditor", None),
+        "set_reminder": getattr(completed, "set_reminder", False),
+        "reminder_mode": getattr(completed, "reminder_mode", None),
+        "reminder_frequency": getattr(completed, "reminder_frequency", None),
+        "reminder_starting_time": getattr(completed, "reminder_starting_time", None),
+        "checklist_auto_close": getattr(completed, "checklist_auto_close", False),
+        "checklist_auto_close_days": getattr(completed, "checklist_auto_close_days", 0) or 0,
+        "group_name": getattr(completed, "group_name", "") or "",
+        "actual_duration_minutes": 0,
+        "status": "Pending",
+    }
+
+    create_data = _apply_lifecycle_defaults(create_data)
+
     with transaction.atomic():
-        obj = Checklist.objects.create(
-            assign_by=completed.assign_by,
-            task_name=completed.task_name,
-            message=getattr(completed, "message", "") or "",
-            assign_to=completed.assign_to,
-            planned_date=next_dt,
-            priority=getattr(completed, "priority", None),
-            attachment_mandatory=getattr(completed, "attachment_mandatory", False),
-            mode=completed.mode,
-            frequency=freq_norm,
-            recurrence_end_date=recurrence_end_date,
-            time_per_task_minutes=getattr(completed, "time_per_task_minutes", 0) or 0,
-            remind_before_days=getattr(completed, "remind_before_days", 0) or 0,
-            assign_pc=getattr(completed, "assign_pc", None),
-            notify_to=getattr(completed, "notify_to", None),
-            auditor=getattr(completed, "auditor", None),
-            set_reminder=getattr(completed, "set_reminder", False),
-            reminder_mode=getattr(completed, "reminder_mode", None),
-            reminder_frequency=getattr(completed, "reminder_frequency", None),
-            reminder_starting_time=getattr(completed, "reminder_starting_time", None),
-            checklist_auto_close=getattr(completed, "checklist_auto_close", False),
-            checklist_auto_close_days=getattr(completed, "checklist_auto_close_days", 0) or 0,
-            group_name=getattr(completed, "group_name", None),
-            actual_duration_minutes=0,
-            status="Pending",
-            is_skipped_due_to_leave=False,
-        )
+        obj = Checklist.objects.create(**create_data)
 
     if _should_send_recur_email_now():
         try:
@@ -473,6 +609,7 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
 
             if _is_assignee_available_for_email(obj.assign_to, email_check_dt):
                 complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
+
                 send_checklist_assignment_to_user(
                     task=obj,
                     complete_url=complete_url,
@@ -490,9 +627,9 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
 
     logger.info(
         _safe_console_text(
-            f"[RECUR GEN] Created next CL-{obj.id} '{obj.task_name}' "
-            f"for user_id={series['assign_to_id']} "
-            f"at {obj.planned_date.astimezone(IST):%Y-%m-%d %H:%M IST}"
+            f"[RECUR GEN] Created CL-{obj.id} '{obj.task_name}' "
+            f"user_id={series['assign_to_id']} "
+            f"planned={obj.planned_date.astimezone(IST):%Y-%m-%d %H:%M IST}"
         )
     )
 
@@ -500,17 +637,29 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
 
 
 def _generate_recurring_checklists_sync(user_id: int | None = None, dry_run: bool = False) -> dict:
-    filters = {"mode__in": RECURRING_MODES}
+    """
+    Generate recurring checklist tasks.
 
-    if hasattr(Checklist, "is_skipped_due_to_leave"):
-        filters["is_skipped_due_to_leave"] = False
+    Uses active recurring series only.
+    Deleted recurring series is skipped permanently.
+    Leave/holiday skipped occurrence does not kill the series.
+    """
+    qs = Checklist.objects.filter(mode__in=RECURRING_MODES)
+
+    if _checklist_has_field("is_deleted"):
+        qs = qs.filter(is_deleted=False)
+
+    if _checklist_has_field("is_active"):
+        qs = qs.filter(is_active=True)
+
+    if _checklist_has_field("is_skipped_due_to_leave"):
+        qs = qs.filter(is_skipped_due_to_leave=False)
 
     if user_id:
-        filters["assign_to_id"] = user_id
+        qs = qs.filter(assign_to_id=user_id)
 
     seeds = (
-        Checklist.objects.filter(**filters)
-        .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
+        qs.values("assign_to_id", "task_name", "mode", "frequency", "group_name")
         .distinct()
     )
 
@@ -523,10 +672,14 @@ def _generate_recurring_checklists_sync(user_id: int | None = None, dry_run: boo
         if m not in RECURRING_MODES:
             continue
 
-        freq_norm = max(int(s.get("frequency") or 1), 1)
+        try:
+            freq_norm = max(int(s.get("frequency") or 1), 1)
+        except Exception:
+            freq_norm = 1
 
         s["mode"] = m
         s["frequency"] = freq_norm
+        s["group_name"] = s.get("group_name") or ""
 
         created = _ensure_future_occurrence_for_series(s, dry_run=dry_run)
         created_total += created
@@ -537,7 +690,7 @@ def _generate_recurring_checklists_sync(user_id: int | None = None, dry_run: boo
     if not per_user:
         logger.info(
             _safe_console_text(
-                f"[RECUR GEN] No new items created @ {_now_ist():%Y-%m-%d %H:%M IST} "
+                f"[RECUR GEN] No new checklist items created @ {_now_ist():%Y-%m-%d %H:%M IST} "
                 f"(dry_run={dry_run}, user_id={user_id})"
             )
         )
@@ -557,9 +710,24 @@ def generate_recurring_checklists(self, user_id: int | None = None, dry_run: boo
 
 @shared_task(bind=True)
 def audit_recurring_health(self) -> dict:
+    """
+    Recurring health audit.
+
+    Counts active, non-deleted recurring series.
+    """
+    qs = Checklist.objects.filter(mode__in=RECURRING_MODES)
+
+    if _checklist_has_field("is_deleted"):
+        qs = qs.filter(is_deleted=False)
+
+    if _checklist_has_field("is_active"):
+        qs = qs.filter(is_active=True)
+
+    if _checklist_has_field("is_skipped_due_to_leave"):
+        qs = qs.filter(is_skipped_due_to_leave=False)
+
     series = (
-        Checklist.objects.filter(mode__in=RECURRING_MODES)
-        .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
+        qs.values("assign_to_id", "task_name", "mode", "frequency", "group_name")
         .distinct()
     )
 
@@ -568,18 +736,36 @@ def audit_recurring_health(self) -> dict:
     details = []
 
     for s in series:
-        has_pending = Checklist.objects.filter(status="Pending", **s).exists()
-        has_completed = Checklist.objects.filter(status="Completed", **s).exists()
+        try:
+            freq_norm = max(int(s.get("frequency") or 1), 1)
+        except Exception:
+            freq_norm = 1
+
+        q = _series_q_for_frequency(
+            assign_to_id=s["assign_to_id"],
+            task_name=s["task_name"],
+            mode=normalize_mode(s["mode"]),
+            freq_norm=freq_norm,
+            group_name=s.get("group_name") or "",
+            active_only=True,
+        )
+
+        has_pending = Checklist.objects.filter(q, status="Pending").exists()
+        has_completed = Checklist.objects.filter(q, status="Completed").exists()
 
         if not has_pending and not has_completed:
             stuck += 1
-            details.append({"series": s, "state": "no_pending_no_completed"})
+            details.append({"series": s, "state": "no_active_pending_no_active_completed"})
         else:
             ok += 1
 
     logger.info(_safe_console_text(f"[RECUR AUDIT] OK series: {ok}, Stuck series: {stuck}"))
 
-    return {"ok": ok, "stuck": stuck, "details": details}
+    return {
+        "ok": ok,
+        "stuck": stuck,
+        "details": details,
+    }
 
 
 # -----------------------------------------------------------------------------

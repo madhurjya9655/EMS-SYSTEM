@@ -23,7 +23,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.staticfiles import finders
 from django.core.paginator import Paginator
 from django.db import transaction, OperationalError, connection, close_old_connections
-from django.db.models import Q, Sum
+from django.db.models import Q, Sum, Count, Min, Max
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -104,6 +104,19 @@ def is_admin_user(user) -> bool:
 # Keep backward-compat alias used in many places below
 can_create = is_admin_user
 
+
+def checklist_has_field(field_name: str) -> bool:
+    """
+    Safe field checker.
+
+    This lets the code work both before and after adding future lifecycle fields
+    like is_deleted / is_active / deleted_at / deleted_by.
+    """
+    try:
+        Checklist._meta.get_field(field_name)
+        return True
+    except Exception:
+        return False
 
 # -----------------------------------------------------------------------------
 # Threads / utilities
@@ -305,24 +318,66 @@ def _checklist_series_queryset(obj, *, include_skipped: bool = True):
     return qs.filter(**_checklist_series_filter_kwargs(obj))
 
 
-def _void_checklist_entry(obj) -> int:
+def _void_checklist_entry(obj, *, deleted_by=None) -> int:
     """
-    Checklist delete behaviour:
-      - recurring checklist row => void ENTIRE series (all statuses)
-      - one-time checklist row  => void only that row
+    Production-safe checklist delete/archive behavior.
+
+    Final business meaning:
+
+    1. Admin/user deletes recurring task:
+       - Keep old rows in database.
+       - Hide from main checklist.
+       - Stop recurring regeneration for that series.
+
+    2. Leave/holiday skip:
+       - Should NOT mean deleted.
+       - It should only skip that occurrence.
+       - Recurring engine should continue on next working day.
+
+    Backward compatibility:
+    Current DB still uses is_skipped_due_to_leave for hiding rows.
+    So this function sets is_skipped_due_to_leave=True also, until proper
+    is_deleted/is_active fields are fully available everywhere.
     """
     if not obj:
         return 0
 
+    now = timezone.now()
+
+    update_data = {}
+
+    # Future clean lifecycle fields.
+    if checklist_has_field("is_deleted"):
+        update_data["is_deleted"] = True
+
+    if checklist_has_field("is_active"):
+        update_data["is_active"] = False
+
+    if checklist_has_field("deleted_at"):
+        update_data["deleted_at"] = now
+
+    if checklist_has_field("deleted_by") and deleted_by is not None:
+        update_data["deleted_by"] = deleted_by
+
+    if checklist_has_field("delete_reason"):
+        update_data["delete_reason"] = "Deleted from checklist"
+
+    # Backward compatibility with current UI/query behavior.
+    if checklist_has_field("is_skipped_due_to_leave"):
+        update_data["is_skipped_due_to_leave"] = True
+
     if _is_recurring_checklist_obj(obj):
-        qs = _checklist_series_queryset(obj, include_skipped=False)
-        if hasattr(Checklist, "is_skipped_due_to_leave"):
-            return qs.update(is_skipped_due_to_leave=True)
+        # Include skipped rows also so the whole recurring series is stopped.
+        qs = _checklist_series_queryset(obj, include_skipped=True)
+
+        if update_data:
+            return qs.update(**update_data)
+
         deleted, _ = qs.delete()
         return int(deleted or 0)
 
-    if hasattr(Checklist, "is_skipped_due_to_leave"):
-        return Checklist.objects.filter(pk=obj.pk, is_skipped_due_to_leave=False).update(is_skipped_due_to_leave=True)
+    if update_data:
+        return Checklist.objects.filter(pk=obj.pk).update(**update_data)
 
     obj.delete()
     return 1
@@ -330,14 +385,20 @@ def _void_checklist_entry(obj) -> int:
 
 def _build_checklist_base_queryset(base_qs):
     """
-    Checklist list page must show BASE TASKS / SERIES only.
+    Admin/base-series helper only.
 
-    Since recurring instances currently live in the same Checklist table,
-    derive one visible row per recurring series using:
+    Do NOT use this for the main checklist action screen.
+
+    This function collapses recurring generated rows into one row per series:
       assign_to + task_name + mode + frequency + group_name
 
-    We keep the earliest surviving row in each recurring series.
-    One-time rows remain 1 row = 1 task.
+    Correct use:
+      - admin unique task series view
+      - base recurring setup/report view
+
+    Incorrect use:
+      - employee main checklist
+      - active actionable doer task screen
     """
     recurring_qs = base_qs.filter(mode__in=RECURRING_MODES)
     one_time_qs = base_qs.exclude(mode__in=RECURRING_MODES)
@@ -1206,33 +1267,45 @@ def _active_checklist_action_queryset(request, *, is_admin: bool):
     """
     MAIN CHECKLIST VISIBILITY RULE.
 
-    The main checklist page is an ACTION SCREEN.
+    Main checklist is an ACTION SCREEN.
 
-    It must show only:
+    It answers:
+        What should employee do now?
+
+    It shows only:
       - Pending tasks
-      - Not deleted / not skipped rows
-      - Tasks planned for today or earlier
+      - Not skipped due to leave/holiday
+      - Not deleted
+      - Active rows
+      - Today or overdue rows
       - Current active recurrence cycle rows
-      - Role-scoped rows:
-          Admin/Manager/EA/CEO/Superuser -> all employees
-          Normal employee -> only own tasks
 
-    It must NOT show:
-      - Completed tasks
-      - Historical completed recurring rows
-      - Soft-deleted/skipped rows
+    It does NOT show:
+      - Completed history
+      - Old recurring history
       - Future tasks
-      - Expired recurrence rows
+      - Deleted/archived tasks
+      - Leave/holiday skipped tasks
     """
     today = timezone.localdate()
 
+    filters = {
+        "status": "Pending",
+        "planned_date__date__lte": today,
+    }
+
+    if checklist_has_field("is_skipped_due_to_leave"):
+        filters["is_skipped_due_to_leave"] = False
+
+    if checklist_has_field("is_deleted"):
+        filters["is_deleted"] = False
+
+    if checklist_has_field("is_active"):
+        filters["is_active"] = True
+
     qs = (
         Checklist.objects
-        .filter(
-            status="Pending",
-            is_skipped_due_to_leave=False,
-            planned_date__date__lte=today,
-        )
+        .filter(**filters)
         .filter(
             Q(recurrence_end_date__isnull=True) |
             Q(recurrence_end_date__gte=today)
@@ -1245,7 +1318,6 @@ def _active_checklist_action_queryset(request, *, is_admin: bool):
         qs = qs.filter(assign_to=request.user)
 
     return qs
-
 
 # =============================================================================
 # Checklist views
@@ -1294,7 +1366,7 @@ def list_checklist(request):
                 messages.error(request, "You can only delete tasks assigned to you.")
                 return redirect(return_url)
 
-            deleted = _void_checklist_entry(obj)
+            deleted = _void_checklist_entry(obj, deleted_by=request.user)
 
             if _is_recurring_checklist_obj(obj):
                 messages.success(
@@ -1537,6 +1609,116 @@ def list_checklist(request):
 
     return render(request, "tasks/list_checklist.html", ctx)
 
+@has_permission("list_checklist")
+def list_checklist_unique_series(request):
+    """
+    Admin-only unique checklist task series view.
+
+    This is NOT the employee action checklist.
+
+    It answers admin's question:
+        Which unique checklist tasks have been assigned till now,
+        except deleted tasks?
+
+    One row = one unique task series:
+        assign_to + task_name + mode + frequency + group_name
+    """
+    if not is_admin_user(request.user):
+        messages.error(request, "You do not have permission to view unique checklist task series.")
+        return redirect(reverse("tasks:list_checklist"))
+
+    qs = Checklist.objects.select_related("assign_to", "assign_by")
+
+    # Exclude true deleted rows when fields exist.
+    if checklist_has_field("is_deleted"):
+        qs = qs.filter(is_deleted=False)
+    else:
+        # Current fallback: deleted/archive and leave/holiday skip are mixed.
+        # This is not perfect, but safest with the current schema.
+        if checklist_has_field("is_skipped_due_to_leave"):
+            qs = qs.filter(is_skipped_due_to_leave=False)
+
+    employee_id = (request.GET.get("assign_to") or "").strip()
+    if employee_id:
+        try:
+            qs = qs.filter(assign_to_id=int(employee_id))
+        except (ValueError, TypeError):
+            pass
+
+    keyword = (request.GET.get("keyword") or "").strip()
+    if keyword:
+        qs = qs.filter(task_name__icontains=keyword)
+
+    mode = (request.GET.get("mode") or "").strip()
+    if mode:
+        qs = qs.filter(mode=mode)
+
+    group_name = (request.GET.get("group_name") or "").strip()
+    if group_name:
+        qs = qs.filter(group_name__icontains=group_name)
+
+    grouped = (
+        qs.values(
+            "assign_to_id",
+            "assign_to__first_name",
+            "assign_to__last_name",
+            "assign_to__username",
+            "assign_to__email",
+            "task_name",
+            "mode",
+            "frequency",
+            "group_name",
+        )
+        .annotate(
+            total_rows=Count("id"),
+            pending_rows=Count("id", filter=Q(status="Pending")),
+            completed_rows=Count("id", filter=Q(status="Completed")),
+            first_planned=Min("planned_date"),
+            last_planned=Max("planned_date"),
+        )
+        .order_by(
+            "assign_to__first_name",
+            "assign_to__last_name",
+            "assign_to__username",
+            "task_name",
+            "mode",
+            "frequency",
+            "group_name",
+        )
+    )
+
+    paginator = Paginator(grouped, 50)
+    page_obj = paginator.get_page(request.GET.get("page"))
+
+    users = (
+        User.objects
+        .filter(is_active=True)
+        .order_by("first_name", "last_name", "username")
+    )
+
+    group_names = (
+        Checklist.objects
+        .exclude(group_name__isnull=True)
+        .exclude(group_name__exact="")
+        .values_list("group_name", flat=True)
+        .distinct()
+        .order_by("group_name")
+    )
+
+    ctx = {
+        "items": page_obj.object_list,
+        "page_obj": page_obj,
+        "is_paginated": page_obj.has_other_pages(),
+        "users": users,
+        "group_names": group_names,
+        "mode_choices": RECURRING_MODES,
+        "current_tab": "checklist_unique_series",
+        "total_assigned": paginator.count,
+        "is_admin": True,
+    }
+
+    return render(request, "tasks/list_checklist_unique_series.html", ctx)
+
 
 @has_permission("add_checklist")
 def add_checklist(request):
@@ -1667,7 +1849,7 @@ def delete_checklist(request, pk):
 
     if request.method == "POST":
         task_name = obj.task_name
-        deleted = _void_checklist_entry(obj)
+        deleted = _void_checklist_entry(obj, deleted_by=request.user)
         request.session["suppress_auto_recur"] = True
         if _is_recurring_checklist_obj(obj):
             messages.success(request, f"Deleted checklist series '{task_name}' ({deleted} row(s)).")
