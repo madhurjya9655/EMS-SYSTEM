@@ -18,7 +18,9 @@
        href="#filterPanel"
        role="button"
        aria-expanded="true">
-    <span>FILTER</span>
+    <span>
+      <i class="fas fa-filter me-2"></i> FILTER
+    </span>
     <i class="fas fa-minus"></i>
   </div>
 
@@ -59,8 +61,13 @@
         </div>
 
         <div class="col-12 text-end">
-          <button type="submit" class="btn btn-primary">FILTER</button>
-          <a href="{% url 'reports:doer_tasks' %}?reset=1" class="btn btn-warning">RESET FILTER</a>
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-filter me-1"></i> FILTER
+          </button>
+
+          <a href="{% url 'reports:doer_tasks' %}?reset=1" class="btn btn-warning">
+            <i class="fas fa-undo me-1"></i> RESET FILTER
+          </a>
         </div>
 
       </form>
@@ -115,14 +122,16 @@
           {% for item in items %}
             <tr>
               <td>
-                <input type="checkbox" class="row-check" name="sel" value="{{ item.id }}">
+                <input type="checkbox" class="row-check" name="sel" value="{{ item.id }}"
+                       {% if item.is_deleted or item.is_skipped_due_to_leave %}disabled{% endif %}>
               </td>
 
               <td>{{ item.assign_to.get_full_name|default:item.assign_to.username }}</td>
 
               <td>
                 {{ item.task_name }}
-                {% if item.is_skipped_due_to_leave %}
+
+                {% if item.is_deleted or item.is_skipped_due_to_leave %}
                   <span class="badge bg-secondary ms-1">Deleted / Archived</span>
                 {% endif %}
               </td>
@@ -140,7 +149,7 @@
               <td>{{ item.planned_date|date:"Y-m-d H:i" }}</td>
 
               <td>
-                {% if item.is_skipped_due_to_leave %}
+                {% if item.is_deleted or item.is_skipped_due_to_leave %}
                   <span class="badge bg-secondary">Deleted / Archived</span>
                 {% elif item.status == "Pending" %}
                   <span class="badge bg-warning text-dark">Pending</span>
@@ -161,13 +170,13 @@
                         data-assigned-to="{{ item.assign_to.get_full_name|default:item.assign_to.username|escape }}"
                         data-planned="{{ item.planned_date|date:'d M, Y H:i' }}"
                         data-message="{{ item.message|default_if_none:''|striptags|escape }}"
-                        data-status="{% if item.is_skipped_due_to_leave %}Deleted / Archived{% else %}{{ item.status|default_if_none:''|escape }}{% endif %}"
-                        data-complete-url="{% if item.status == 'Pending' and not item.is_skipped_due_to_leave %}{% url 'tasks:complete_checklist' item.id %}?next={{ request.get_full_path|urlencode }}{% endif %}"
+                        data-status="{% if item.is_deleted or item.is_skipped_due_to_leave %}Deleted / Archived{% else %}{{ item.status|default_if_none:''|escape }}{% endif %}"
+                        data-complete-url="{% if item.status == 'Pending' and not item.is_deleted and not item.is_skipped_due_to_leave %}{% url 'tasks:complete_checklist' item.id %}?next={{ request.get_full_path|urlencode }}{% endif %}"
                         title="View Details">
                   <i class="fas fa-eye"></i>
                 </button>
 
-                {% if not item.is_skipped_due_to_leave %}
+                {% if not item.is_deleted and not item.is_skipped_due_to_leave %}
                   <button type="button"
                           class="btn btn-sm btn-outline-danger ms-1 delete-one"
                           data-pk="{{ item.id }}"
@@ -179,7 +188,7 @@
             </tr>
           {% empty %}
             <tr>
-              <td colspan="8" class="text-center text-muted">
+              <td colspan="8" class="text-center text-muted py-4">
                 No tasks found for these criteria.
               </td>
             </tr>
@@ -320,7 +329,9 @@
       var checks = getRowChecks();
 
       for (var i = 0; i < checks.length; i++) {
-        checks[i].checked = selectAll.checked;
+        if (!checks[i].disabled) {
+          checks[i].checked = selectAll.checked;
+        }
       }
     });
   }
@@ -333,14 +344,14 @@
       var any = false;
 
       for (var i = 0; i < checks.length; i++) {
-        if (checks[i].checked) {
+        if (!checks[i].disabled && checks[i].checked) {
           any = true;
           break;
         }
       }
 
       if (!any) {
-        alert('Please select at least one row on this page.');
+        alert('Please select at least one active row on this page.');
         return;
       }
 

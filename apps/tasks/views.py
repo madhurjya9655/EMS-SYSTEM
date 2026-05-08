@@ -385,20 +385,24 @@ def _void_checklist_entry(obj, *, deleted_by=None) -> int:
 
 def _build_checklist_base_queryset(base_qs):
     """
-    Admin/base-series helper only.
+    Admin List Checklist helper.
 
-    Do NOT use this for the main checklist action screen.
+    Purpose:
+    Show one row per unique checklist task series.
 
-    This function collapses recurring generated rows into one row per series:
+    This is for ADMIN checklist/master view.
+
+    One recurring series is identified by:
       assign_to + task_name + mode + frequency + group_name
 
-    Correct use:
-      - admin unique task series view
-      - base recurring setup/report view
+    For recurring tasks:
+      show the latest non-deleted row from that series.
 
-    Incorrect use:
-      - employee main checklist
-      - active actionable doer task screen
+    For one-time tasks:
+      show each one-time row separately.
+
+    Do NOT use this for employee active checklist.
+    Employees should see only actionable current tasks.
     """
     recurring_qs = base_qs.filter(mode__in=RECURRING_MODES)
     one_time_qs = base_qs.exclude(mode__in=RECURRING_MODES)
@@ -406,30 +410,54 @@ def _build_checklist_base_queryset(base_qs):
     if connection.vendor == "postgresql":
         recurring_ids = (
             recurring_qs
-            .order_by("assign_to_id", "task_name", "mode", "frequency", "group_name", "planned_date", "id")
-            .distinct("assign_to_id", "task_name", "mode", "frequency", "group_name")
+            .order_by(
+                "assign_to_id",
+                "task_name",
+                "mode",
+                "frequency",
+                "group_name",
+                "-planned_date",
+                "-id",
+            )
+            .distinct(
+                "assign_to_id",
+                "task_name",
+                "mode",
+                "frequency",
+                "group_name",
+            )
             .values("pk")
         )
-        one_time_ids = one_time_qs.values("pk")
-        return base_qs.filter(Q(pk__in=one_time_ids) | Q(pk__in=recurring_ids))
 
+        one_time_ids = one_time_qs.values("pk")
+
+        return base_qs.filter(
+            Q(pk__in=one_time_ids) |
+            Q(pk__in=recurring_ids)
+        )
+
+    # SQLite/local fallback.
     seen = set()
     keep_ids = []
-    for obj in base_qs.order_by("planned_date", "id").iterator(chunk_size=1000):
+
+    for obj in base_qs.order_by("-planned_date", "-id").iterator(chunk_size=1000):
         if _is_recurring_checklist_obj(obj):
             key = (
                 getattr(obj, "assign_to_id", None),
                 getattr(obj, "task_name", None),
                 _normalized_checklist_mode(getattr(obj, "mode", None)),
                 int(getattr(obj, "frequency", None) or 1),
-                getattr(obj, "group_name", None),
+                getattr(obj, "group_name", None) or "",
             )
         else:
             key = ("single", getattr(obj, "pk", None))
+
         if key in seen:
             continue
+
         seen.add(key)
         keep_ids.append(obj.pk)
+
     return base_qs.filter(pk__in=keep_ids)
 
 
@@ -1265,27 +1293,24 @@ def send_admin_bulk_summary_async(*, title: str, rows, exclude_assigner_email: O
 
 def _active_checklist_action_queryset(request, *, is_admin: bool):
     """
-    MAIN CHECKLIST VISIBILITY RULE.
+    Employee active checklist queue.
 
-    Main checklist is an ACTION SCREEN.
+    This answers:
+        What should the employee do now?
 
-    It answers:
-        What should employee do now?
-
-    It shows only:
-      - Pending tasks
-      - Not skipped due to leave/holiday
-      - Not deleted
+    Shows only:
+      - Pending rows
       - Active rows
+      - Not deleted
+      - Not skipped due to leave/holiday
       - Today or overdue rows
-      - Current active recurrence cycle rows
+      - Current recurring generated instances
 
-    It does NOT show:
+    Does NOT show:
       - Completed history
-      - Old recurring history
-      - Future tasks
-      - Deleted/archived tasks
-      - Leave/holiday skipped tasks
+      - Old recurring generated rows
+      - Future rows
+      - Deleted/archived rows
     """
     today = timezone.localdate()
 
@@ -1318,7 +1343,6 @@ def _active_checklist_action_queryset(request, *, is_admin: bool):
         qs = qs.filter(assign_to=request.user)
 
     return qs
-
 # =============================================================================
 # Checklist views
 # =============================================================================
@@ -1326,30 +1350,27 @@ def _active_checklist_action_queryset(request, *, is_admin: bool):
 @has_permission("list_checklist")
 def list_checklist(request):
     """
-    CHECKLIST LIST PAGE = ACTIVE ACTION QUEUE ONLY.
+    CHECKLIST LIST PAGE.
 
-    Final ERP rule:
-    Employees should see only actionable checklist tasks.
+    Final role-based behavior:
 
-    This page shows:
-      - Pending tasks
-      - Today or overdue tasks
-      - Current generated recurring task instances
-      - Not deleted / not skipped rows
+    ADMIN:
+      - Shows all unique non-deleted checklist task series assigned till now.
+      - This is the checklist/master view.
+      - One recurring series appears once.
 
-    This page does NOT show:
-      - Completed tasks
-      - Old completed recurring instances
-      - Historical report rows
-      - Soft-deleted/skipped rows
-      - Future tasks
-      - Expired recurring rows
+    EMPLOYEE:
+      - Shows only current active actionable checklist tasks.
+      - No completed history.
+      - No old recurring instances.
+      - No deleted/skipped rows.
 
-    Completed/history belongs in Reports, not in this checklist page.
+    REPORTS:
+      - Completed / pending / missed / historical rows belong in Reports → Doer Tasks.
     """
 
     # ------------------------------------------------------------------
-    # POST: bulk / series delete actions
+    # POST: delete/archive actions
     # ------------------------------------------------------------------
     if request.method == "POST":
         return_url = request.POST.get("return_url") or reverse("tasks:list_checklist")
@@ -1371,12 +1392,13 @@ def list_checklist(request):
             if _is_recurring_checklist_obj(obj):
                 messages.success(
                     request,
-                    f"Deleted checklist series '{obj.task_name}' ({deleted} row(s))."
+                    f"Deleted/archived checklist series '{obj.task_name}' ({deleted} row(s)). "
+                    "It will not regenerate again."
                 )
             else:
                 messages.success(
                     request,
-                    f"Deleted checklist task '{obj.task_name}'."
+                    f"Deleted/archived checklist task '{obj.task_name}'."
                 )
 
             request.session["suppress_auto_recur"] = True
@@ -1394,7 +1416,7 @@ def list_checklist(request):
                 scoped_qs = scoped_qs.filter(assign_to=request.user)
 
             for obj in scoped_qs.select_related("assign_to"):
-                deleted = _void_checklist_entry(obj)
+                deleted = _void_checklist_entry(obj, deleted_by=request.user)
 
                 if not deleted:
                     continue
@@ -1417,46 +1439,60 @@ def list_checklist(request):
 
                 messages.success(
                     request,
-                    f"Deleted {' and '.join(parts)} ({total_deleted} row(s) updated)."
+                    f"Deleted/archived {' and '.join(parts)}. "
+                    f"{total_deleted} row(s) updated. Deleted recurring tasks will not regenerate."
                 )
             else:
-                messages.info(request, "Nothing was deleted.")
+                messages.info(request, "Nothing was deleted/archived.")
 
             request.session["suppress_auto_recur"] = True
 
         return redirect(return_url)
 
     # ------------------------------------------------------------------
-    # GET — determine role once
+    # GET role
     # ------------------------------------------------------------------
     is_admin = is_admin_user(request.user)
 
     # ------------------------------------------------------------------
-    # ACTIVE ACTION QUERYSET
+    # ADMIN: unique checklist master view
+    # EMPLOYEE: active actionable queue
     # ------------------------------------------------------------------
-    # IMPORTANT:
-    # Do not use _build_checklist_base_queryset() here.
-    #
-    # Reason:
-    # Main checklist is not a base-task management page anymore.
-    # It is an employee action queue.
-    #
-    # It must show current pending generated task instances,
-    # not old recurring base/history rows.
-    # ------------------------------------------------------------------
-    base_qs = _active_checklist_action_queryset(request, is_admin=is_admin)
+    if is_admin:
+        base_qs = (
+            Checklist.objects
+            .select_related("assign_by", "assign_to", "assign_pc", "notify_to", "auditor")
+            .defer("media_upload", "doer_file")
+        )
 
-    # Main checklist always means pending actionable tasks only.
-    status_filter = "Pending"
+        if checklist_has_field("is_deleted"):
+            base_qs = base_qs.filter(is_deleted=False)
+        else:
+            # Legacy fallback before is_deleted existed.
+            if checklist_has_field("is_skipped_due_to_leave"):
+                base_qs = base_qs.filter(is_skipped_due_to_leave=False)
 
-    # Count active tasks only.
+        if checklist_has_field("is_active"):
+            base_qs = base_qs.filter(is_active=True)
+
+        # Admin list checklist = unique task series.
+        base_qs = _build_checklist_base_queryset(base_qs)
+
+        status_filter = request.GET.get("status", "all").strip() or "all"
+
+    else:
+        base_qs = _active_checklist_action_queryset(request, is_admin=False)
+
+        # Employee checklist is always active pending queue.
+        status_filter = "Pending"
+
     total_assigned = base_qs.count()
 
-    # ------------------------------------------------------------------
-    # FILTERS
-    # ------------------------------------------------------------------
     qs = base_qs
 
+    # ------------------------------------------------------------------
+    # Filters
+    # ------------------------------------------------------------------
     kw = request.GET.get("keyword", "").strip()
     if kw:
         qs = qs.filter(
@@ -1470,6 +1506,16 @@ def list_checklist(request):
             qs = qs.filter(assign_to_id=int(assign_to_id))
         except (ValueError, TypeError):
             pass
+
+    # Admin can filter by status.
+    # Employee cannot, because employee page is active queue only.
+    if is_admin:
+        if status_filter == "Pending":
+            qs = qs.filter(status="Pending")
+        elif status_filter == "Completed":
+            qs = qs.filter(status="Completed")
+    else:
+        qs = qs.filter(status="Pending")
 
     priority_val = request.GET.get("priority", "").strip()
     if priority_val:
@@ -1487,127 +1533,110 @@ def list_checklist(request):
     if end_date_val:
         qs = qs.filter(planned_date__date__lte=end_date_val)
 
-    if request.GET.get("today_only"):
-        today = timezone.localdate()
-        qs = qs.filter(planned_date__date=today)
+    today_only = request.GET.get("today_only")
+    if today_only:
+        qs = qs.filter(planned_date__date=timezone.localdate())
 
-    ordered_qs = qs.order_by(
-        "planned_date",
-        "priority",
-        "task_name",
-        "assign_to__first_name",
-        "assign_to__last_name",
-        "id",
+    qs = qs.order_by("assign_to__first_name", "assign_to__last_name", "task_name", "-planned_date", "-id")
+
+    # ------------------------------------------------------------------
+    # CSV download
+    # ------------------------------------------------------------------
+    if request.GET.get("download") == "1":
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = 'attachment; filename="checklist_tasks.csv"'
+
+        writer = csv.writer(response)
+        writer.writerow([
+            "Task Name",
+            "Message",
+            "Assign To",
+            "Frequency",
+            "Planned Date",
+            "Priority",
+            "Remind Before Days",
+            "Reminder",
+            "Status",
+        ])
+
+        for obj in qs.iterator(chunk_size=500):
+            assign_to_name = (
+                obj.assign_to.get_full_name()
+                or obj.assign_to.username
+                or obj.assign_to.email
+            )
+
+            if obj.mode and obj.frequency:
+                frequency_text = f"Every {obj.frequency} {obj.mode}"
+            else:
+                frequency_text = "One-time"
+
+            reminder_text = ""
+            if getattr(obj, "set_reminder", False):
+                reminder_text = getattr(obj, "reminder_mode", "") or ""
+                if getattr(obj, "reminder_frequency", None):
+                    reminder_text += f" ({obj.reminder_frequency})"
+                if getattr(obj, "reminder_starting_time", None):
+                    reminder_text += f" @ {obj.reminder_starting_time}"
+
+            writer.writerow([
+                obj.task_name,
+                obj.message,
+                assign_to_name,
+                frequency_text,
+                timezone.localtime(obj.planned_date).strftime("%Y-%m-%d %H:%M") if obj.planned_date else "",
+                obj.priority,
+                obj.remind_before_days or 0,
+                reminder_text,
+                obj.status,
+            ])
+
+        return response
+
+    # ------------------------------------------------------------------
+    # Pagination
+    # ------------------------------------------------------------------
+    per_page = getattr(settings, "TASK_LIST_PAGE_SIZE", 50)
+    paginator = Paginator(qs, per_page)
+    page_obj = paginator.get_page(request.GET.get("page"))
+    items = list(page_obj.object_list)
+
+    # ------------------------------------------------------------------
+    # Filter dropdown data
+    # ------------------------------------------------------------------
+    users = (
+        User.objects
+        .filter(is_active=True)
+        .order_by("first_name", "last_name", "username")
     )
 
-    # ------------------------------------------------------------------
-    # CSV DOWNLOAD — active checklist only
-    # ------------------------------------------------------------------
-    if request.GET.get("download"):
-        resp = HttpResponse(content_type="text/csv")
-        resp["Content-Disposition"] = 'attachment; filename="active_checklist_tasks.csv"'
+    priority_choices = Checklist._meta.get_field("priority").choices
 
-        w = csv.writer(resp)
-
-        if is_admin:
-            w.writerow([
-                "Task Name",
-                "Assigned By",
-                "Assigned To",
-                "Planned Date",
-                "Priority",
-                "Group Name",
-                "Status",
-                "Mode",
-                "Frequency",
-            ])
-
-            for itm in ordered_qs.iterator(chunk_size=500):
-                assigned_by = ""
-                assigned_to = ""
-
-                if itm.assign_by:
-                    assigned_by = itm.assign_by.get_full_name() or itm.assign_by.username
-
-                if itm.assign_to:
-                    assigned_to = itm.assign_to.get_full_name() or itm.assign_to.username
-
-                w.writerow([
-                    clean_unicode_string(itm.task_name),
-                    assigned_by,
-                    assigned_to,
-                    itm.planned_date.strftime("%Y-%m-%d %H:%M") if itm.planned_date else "",
-                    itm.priority,
-                    itm.group_name,
-                    itm.status,
-                    itm.mode or "",
-                    itm.frequency or "",
-                ])
-        else:
-            w.writerow([
-                "Task Name",
-                "Planned Date",
-                "Status",
-                "Mode",
-                "Frequency",
-            ])
-
-            for itm in ordered_qs.iterator(chunk_size=500):
-                w.writerow([
-                    clean_unicode_string(itm.task_name),
-                    itm.planned_date.strftime("%Y-%m-%d %H:%M") if itm.planned_date else "",
-                    itm.status,
-                    itm.mode or "",
-                    itm.frequency or "",
-                ])
-
-        return resp
-
-    # ------------------------------------------------------------------
-    # PAGINATION
-    # ------------------------------------------------------------------
-    paginator = Paginator(ordered_qs, 25)
-    page_number = request.GET.get("page")
-    page_obj = paginator.get_page(page_number)
-    items = page_obj.object_list
-
-    # ------------------------------------------------------------------
-    # GROUP NAMES — active checklist only
-    # ------------------------------------------------------------------
     group_names = (
-        base_qs
+        Checklist.objects
         .exclude(group_name__isnull=True)
         .exclude(group_name__exact="")
-        .order_by("group_name")
         .values_list("group_name", flat=True)
         .distinct()
+        .order_by("group_name")
     )
 
-    # ------------------------------------------------------------------
-    # CONTEXT
-    # ------------------------------------------------------------------
-    ctx = {
+    context = {
         "items": items,
-        "page_obj": page_obj,
-        "is_paginated": page_obj.has_other_pages(),
-        "priority_choices": Checklist._meta.get_field("priority").choices,
+        "users": users,
+        "priority_choices": priority_choices,
         "group_names": group_names,
-        "current_tab": "checklist",
         "total_assigned": total_assigned,
-        "current_status": status_filter,
         "is_admin": is_admin,
-        "users": (
-            User.objects
-            .filter(is_active=True)
-            .order_by("first_name", "last_name", "username")
-            if is_admin else []
-        ),
+        "current_status": status_filter,
+        "is_paginated": page_obj.has_other_pages(),
+        "page_obj": page_obj,
+        "paginator": paginator,
+        "current_tab": "list_checklist",
+        "checklist_view_mode": "unique_admin" if is_admin else "active_employee",
     }
 
-    if request.GET.get("partial"):
-        return render(request, "tasks/partial_list_checklist.html", ctx)
-
-    return render(request, "tasks/list_checklist.html", ctx)
+    return render(request, "tasks/list_checklist.html", context)
 
 @has_permission("list_checklist")
 def list_checklist_unique_series(request):

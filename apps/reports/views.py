@@ -12,7 +12,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.paginator import Paginator
 from django.db import connection
-from django.db.models import Sum, F, Q
+from django.db.models import Sum, F, Count, Min, Max, Q
 from django.http import HttpResponse
 from django.shortcuts import render, redirect
 from django.template.loader import render_to_string
@@ -25,7 +25,35 @@ from apps.tasks.models import Checklist, Delegation
 User = get_user_model()
 logger = logging.getLogger("apps.reports")
 
+
+
 RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
+
+
+def checklist_has_field(field_name: str) -> bool:
+    """
+    Safe field checker for phased deployments.
+    """
+    try:
+        Checklist._meta.get_field(field_name)
+        return True
+    except Exception:
+        return False
+
+
+def can_view_unique_assigned_tasks(user) -> bool:
+    """
+    Admin/management report access.
+
+    This report answers:
+        What unique tasks have been assigned till now, except deleted?
+    """
+    if user.is_superuser:
+        return True
+
+    allowed_groups = {"Admin", "Manager", "EA", "CEO"}
+
+    return user.groups.filter(name__in=allowed_groups).exists()
 
 
 # -------- date helpers --------
@@ -94,48 +122,56 @@ def _checklist_series_filter_kwargs(obj) -> dict:
     }
 
 
-def _void_checklist_for_report(obj) -> int:
+def _void_checklist_for_report(obj, *, deleted_by=None) -> int:
     """
-    Recurring-safe delete for reports.
+    Recurring-safe archive/delete for Reports → Doer Tasks.
 
-    IMPORTANT:
-    Do not use obj.delete() for recurring checklist rows.
-
-    Why:
-    If only one generated row is hard-deleted, the recurring source/series may
-    still remain and the generator may recreate the task later.
-
-    Existing production-safe flag in this project:
-      is_skipped_due_to_leave=True
-
-    This flag is already used by checklist visibility queries to hide rows.
-    It also allows reports/audit to still track old rows.
+    Important:
+    - Do not hard-delete history rows.
+    - Mark as deleted/archived.
+    - Recurring series must not regenerate.
+    - Reports can still show deleted rows when Deleted filter is selected.
     """
     if not obj:
         return 0
 
+    now = timezone.now()
+
+    update_data = {}
+
+    if checklist_has_field("is_deleted"):
+        update_data["is_deleted"] = True
+
+    if checklist_has_field("is_active"):
+        update_data["is_active"] = False
+
+    if checklist_has_field("deleted_at"):
+        update_data["deleted_at"] = now
+
+    if checklist_has_field("deleted_by") and deleted_by is not None:
+        update_data["deleted_by"] = deleted_by
+
+    if checklist_has_field("delete_reason"):
+        update_data["delete_reason"] = "Deleted from doer task report"
+
+    # Backward compatibility with old hide logic.
+    if checklist_has_field("is_skipped_due_to_leave"):
+        update_data["is_skipped_due_to_leave"] = True
+
     if _is_recurring_checklist_obj(obj):
         qs = Checklist.objects.filter(**_checklist_series_filter_kwargs(obj))
 
-        if hasattr(Checklist, "is_skipped_due_to_leave"):
-            return qs.filter(is_skipped_due_to_leave=False).update(
-                is_skipped_due_to_leave=True
-            )
+        if update_data:
+            return qs.update(**update_data)
 
         deleted, _ = qs.delete()
         return int(deleted or 0)
 
-    if hasattr(Checklist, "is_skipped_due_to_leave"):
-        return Checklist.objects.filter(
-            pk=obj.pk,
-            is_skipped_due_to_leave=False,
-        ).update(
-            is_skipped_due_to_leave=True
-        )
+    if update_data:
+        return Checklist.objects.filter(pk=obj.pk).update(**update_data)
 
     obj.delete()
     return 1
-
 
 # -------- time helpers --------
 def calculate_checklist_total_time(qs) -> int:
@@ -176,20 +212,21 @@ def list_doer_tasks(request):
     """
     Doer Tasks Report.
 
-    Production rule:
     This is a REPORT/HISTORY screen.
 
-    It may show:
+    It shows generated task rows, not unique checklist series.
+
+    Available filters:
+      - All
       - Pending
       - Completed
       - Missed
       - Historical
       - Deleted / Archived
 
-    It is intentionally different from the main checklist page.
-
-    Main checklist page = active actionable queue only.
-    Reports page = history, tracking, audit, and management review.
+    Main Checklist is separate:
+      - Admin sees unique non-deleted checklist tasks.
+      - Employees see active actionable checklist tasks only.
     """
     FILTER_SESSION_KEY = "reports__doer_tasks_filter"
     FILTER_KEYS = {"doer", "department", "date_from", "date_to", "status"}
@@ -197,7 +234,9 @@ def list_doer_tasks(request):
     total_start = perf_counter()
     initial_query_count = len(connection.queries) if settings.DEBUG else 0
 
-    # ---- handle deletes (POST) ----
+    # ------------------------------------------------------------------
+    # POST delete/archive
+    # ------------------------------------------------------------------
     if request.method == "POST":
         action = request.POST.get("action", "")
         return_url = request.POST.get("return_url") or request.META.get("HTTP_REFERER")
@@ -210,21 +249,21 @@ def list_doer_tasks(request):
                 return redirect(return_url or "reports:doer_tasks")
 
             try:
-                total_updated = 0
                 selected_count = 0
+                total_updated = 0
 
                 for obj in Checklist.objects.filter(pk__in=ids).select_related("assign_to"):
                     selected_count += 1
-                    total_updated += _void_checklist_for_report(obj)
+                    total_updated += _void_checklist_for_report(obj, deleted_by=request.user)
 
                 if total_updated:
                     messages.success(
                         request,
                         f"Deleted/archived {selected_count} selected task(s). "
-                        f"{total_updated} row(s) were hidden from active checklist visibility."
+                        f"{total_updated} row(s) updated. Recurring deleted tasks will not regenerate."
                     )
                 else:
-                    messages.info(request, "No active task rows were deleted/archived.")
+                    messages.info(request, "No active rows were deleted/archived.")
 
             except Exception as e:
                 logger.exception("Error during doer task bulk delete")
@@ -238,25 +277,28 @@ def list_doer_tasks(request):
             if pk:
                 try:
                     obj = Checklist.objects.get(pk=pk)
-                    updated = _void_checklist_for_report(obj)
+                    updated = _void_checklist_for_report(obj, deleted_by=request.user)
 
                     if updated:
                         messages.success(
                             request,
-                            "Task deleted/archived safely. Recurring task will not reappear from this series."
+                            "Task deleted/archived safely. It will not reappear in active checklist."
                         )
                     else:
                         messages.info(request, "Task was already deleted/archived.")
 
                 except Checklist.DoesNotExist:
                     messages.warning(request, "The task no longer exists.")
+
                 except Exception as e:
                     logger.exception("Error deleting doer task")
                     messages.error(request, f"Error deleting task: {e}")
 
             return redirect(return_url or "reports:doer_tasks")
 
-    # ---- filtering (GET) with session persistence ----
+    # ------------------------------------------------------------------
+    # GET filter persistence
+    # ------------------------------------------------------------------
     if request.method == "GET" and request.GET.get("reset") == "1":
         request.session.pop(FILTER_SESSION_KEY, None)
         return redirect("reports:doer_tasks")
@@ -284,29 +326,37 @@ def list_doer_tasks(request):
         .order_by("-planned_date", "-id")
     )
 
-    # ---- report status filters ----
     today = timezone.localdate()
+
     status_source = effective_get if effective_get is not None else request.GET
     status = (status_source.get("status") or "").strip() if status_source else ""
 
+    # ------------------------------------------------------------------
+    # Report status filters
+    # ------------------------------------------------------------------
     if status == "Pending":
-        items_qs = items_qs.filter(
-            status="Pending",
-            is_skipped_due_to_leave=False,
-        )
+        items_qs = items_qs.filter(status="Pending")
+
+        if checklist_has_field("is_deleted"):
+            items_qs = items_qs.filter(is_deleted=False)
 
     elif status == "Completed":
-        items_qs = items_qs.filter(
-            status="Completed",
-            is_skipped_due_to_leave=False,
-        )
+        items_qs = items_qs.filter(status="Completed")
+
+        if checklist_has_field("is_deleted"):
+            items_qs = items_qs.filter(is_deleted=False)
 
     elif status == "Missed":
         items_qs = items_qs.filter(
             status="Pending",
-            is_skipped_due_to_leave=False,
             planned_date__date__lt=today,
         )
+
+        if checklist_has_field("is_deleted"):
+            items_qs = items_qs.filter(is_deleted=False)
+
+        if checklist_has_field("is_skipped_due_to_leave"):
+            items_qs = items_qs.filter(is_skipped_due_to_leave=False)
 
     elif status == "Historical":
         items_qs = items_qs.filter(
@@ -316,11 +366,16 @@ def list_doer_tasks(request):
         )
 
     elif status == "Deleted":
-        items_qs = items_qs.filter(
-            is_skipped_due_to_leave=True,
-        )
+        if checklist_has_field("is_deleted"):
+            items_qs = items_qs.filter(is_deleted=True)
+        else:
+            items_qs = items_qs.filter(is_skipped_due_to_leave=True)
 
-    # ---- normal form filters ----
+    # status blank / All = show all report rows.
+
+    # ------------------------------------------------------------------
+    # Normal form filters
+    # ------------------------------------------------------------------
     if form.is_valid():
         d = form.cleaned_data
 
@@ -344,13 +399,13 @@ def list_doer_tasks(request):
 
     query_build_time = perf_counter() - query_build_start
 
-    # ---- pagination ----
+    # ------------------------------------------------------------------
+    # Pagination
+    # ------------------------------------------------------------------
     per_page = getattr(settings, "TASK_LIST_PAGE_SIZE", 50)
     paginator = Paginator(items_qs, per_page)
-    page_number = request.GET.get("page")
-    page_obj = paginator.get_page(page_number)
+    page_obj = paginator.get_page(request.GET.get("page"))
 
-    # Evaluate only current page rows
     fetch_start = perf_counter()
     page_items = list(page_obj.object_list)
     fetch_time = perf_counter() - fetch_start
