@@ -4,116 +4,153 @@
 {% block title %}Doer Tasks Report{% endblock %}
 
 {% block content %}
-  <div class="page-header">
-    <h1 class="page-title">Doer Tasks Report</h1>
+
+<div class="page-header">
+  <h1 class="page-title">Doer Tasks Report</h1>
+  <p class="text-muted mb-0">
+    Reports show completed, pending, missed, historical, and deleted checklist task records.
+  </p>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
+       data-bs-toggle="collapse"
+       href="#filterPanel"
+       role="button"
+       aria-expanded="true">
+    <span>FILTER</span>
+    <i class="fas fa-minus"></i>
   </div>
 
-  <div class="card mb-4">
-    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center"
-         data-bs-toggle="collapse" href="#filterPanel" role="button" aria-expanded="true">
-      <span>FILTER</span>
-      <i class="fas fa-minus"></i>
-    </div>
-    <div id="filterPanel" class="collapse show">
-      <div class="card-body">
-        <form method="get" class="row g-3">
-          <div class="col-md-3">
-            {{ form.doer.label_tag }}
-            {{ form.doer|add_class:"form-select" }}
-          </div>
-          <div class="col-md-3">
-            {{ form.department.label_tag }}
-            {{ form.department|add_class:"form-select" }}
-          </div>
-          <div class="col-md-3">
-            {{ form.date_from.label_tag }}
-            {{ form.date_from|add_class:"form-control" }}
-          </div>
-          <div class="col-md-3">
-            {{ form.date_to.label_tag }}
-            {{ form.date_to|add_class:"form-control" }}
-          </div>
+  <div id="filterPanel" class="collapse show">
+    <div class="card-body">
+      <form method="get" class="row g-3">
 
-          <div class="col-md-3">
-            <label for="id_status" class="form-label">Status</label>
-            <select id="id_status" name="status" class="form-select">
-              <option value="" {% if not current_status %}selected{% endif %}>All</option>
-              <option value="Pending" {% if current_status == "Pending" %}selected{% endif %}>Pending</option>
-              <option value="Completed" {% if current_status == "Completed" %}selected{% endif %}>Completed</option>
-            </select>
-          </div>
+        <div class="col-md-3">
+          {{ form.doer.label_tag }}
+          {{ form.doer|add_class:"form-select" }}
+        </div>
 
-          <div class="col-12 text-end">
-            <button type="submit" class="btn btn-primary">FILTER</button>
-            <a href="{% url 'reports:doer_tasks' %}?reset=1" class="btn btn-warning">RESET FILTER</a>
-          </div>
-        </form>
-      </div>
+        <div class="col-md-3">
+          {{ form.department.label_tag }}
+          {{ form.department|add_class:"form-select" }}
+        </div>
+
+        <div class="col-md-3">
+          {{ form.date_from.label_tag }}
+          {{ form.date_from|add_class:"form-control" }}
+        </div>
+
+        <div class="col-md-3">
+          {{ form.date_to.label_tag }}
+          {{ form.date_to|add_class:"form-control" }}
+        </div>
+
+        <div class="col-md-3">
+          <label for="id_status" class="form-label">Status</label>
+          <select id="id_status" name="status" class="form-select">
+            <option value="" {% if not current_status %}selected{% endif %}>All</option>
+            <option value="Pending" {% if current_status == "Pending" %}selected{% endif %}>Pending</option>
+            <option value="Completed" {% if current_status == "Completed" %}selected{% endif %}>Completed</option>
+            <option value="Missed" {% if current_status == "Missed" %}selected{% endif %}>Missed</option>
+            <option value="Historical" {% if current_status == "Historical" %}selected{% endif %}>Historical</option>
+            <option value="Deleted" {% if current_status == "Deleted" %}selected{% endif %}>Deleted / Archived</option>
+          </select>
+        </div>
+
+        <div class="col-12 text-end">
+          <button type="submit" class="btn btn-primary">FILTER</button>
+          <a href="{% url 'reports:doer_tasks' %}?reset=1" class="btn btn-warning">RESET FILTER</a>
+        </div>
+
+      </form>
     </div>
   </div>
+</div>
 
-  <form id="bulkForm" method="post" novalidate>
-    {% csrf_token %}
-    <input type="hidden" name="action" id="bulkAction" value="">
-    <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
+<form id="bulkForm" method="post" novalidate>
+  {% csrf_token %}
+  <input type="hidden" name="action" id="bulkAction" value="">
+  <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
 
-    <div class="card">
-      <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-        <div>
-          <label class="form-check m-0">
-            <input class="form-check-input" type="checkbox" id="selectAll">
-            <span class="form-check-label">Select All On This Page</span>
-          </label>
-        </div>
-        <div class="d-flex align-items-center gap-2">
-          {% if is_paginated %}
-            <span class="text-muted small">
-              Page {{ page_obj.number }} of {{ paginator.num_pages }} |
-              Total rows: {{ paginator.count }}
-            </span>
-          {% endif %}
-          <button type="button" class="btn btn-danger" id="bulkDeleteBtn">
-            <i class="fas fa-trash-alt"></i> Bulk Delete
-          </button>
-        </div>
+  <div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <div>
+        <label class="form-check m-0">
+          <input class="form-check-input" type="checkbox" id="selectAll">
+          <span class="form-check-label">Select All On This Page</span>
+        </label>
       </div>
 
-      <div class="table-responsive">
-        <table class="table table-hover mb-0 align-middle">
-          <thead>
-            <tr>
-              <th style="width:40px;"></th>
-              <th>Doer</th>
-              <th>Task Name</th>
-              <th>Task Type</th>
-              <th>Assigned By</th>
-              <th>Planned Date</th>
-              <th>Status</th>
-              <th style="width:140px;">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for item in items %}
+      <div class="d-flex align-items-center gap-2">
+        {% if is_paginated %}
+          <span class="text-muted small">
+            Page {{ page_obj.number }} of {{ paginator.num_pages }} |
+            Total rows: {{ paginator.count }}
+          </span>
+        {% endif %}
+
+        <button type="button" class="btn btn-danger" id="bulkDeleteBtn">
+          <i class="fas fa-trash-alt"></i> Delete / Archive Selected
+        </button>
+      </div>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table table-hover mb-0 align-middle">
+        <thead>
+          <tr>
+            <th style="width:40px;"></th>
+            <th>Doer</th>
+            <th>Task Name</th>
+            <th>Task Type</th>
+            <th>Assigned By</th>
+            <th>Planned Date</th>
+            <th>Status</th>
+            <th style="width:150px;">Action</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {% for item in items %}
             <tr>
               <td>
                 <input type="checkbox" class="row-check" name="sel" value="{{ item.id }}">
               </td>
+
               <td>{{ item.assign_to.get_full_name|default:item.assign_to.username }}</td>
-              <td>{{ item.task_name }}</td>
+
+              <td>
+                {{ item.task_name }}
+                {% if item.is_skipped_due_to_leave %}
+                  <span class="badge bg-secondary ms-1">Deleted / Archived</span>
+                {% endif %}
+              </td>
+
               <td>
                 {% if item.mode %}
-                  <span class="badge bg-info">Checklist</span>
+                  <span class="badge bg-info">Checklist Recurring</span>
                 {% else %}
                   <span class="badge bg-secondary">One-time</span>
                 {% endif %}
               </td>
+
               <td>{{ item.assign_by.get_full_name|default:item.assign_by.username }}</td>
+
               <td>{{ item.planned_date|date:"Y-m-d H:i" }}</td>
+
               <td>
-                <span class="badge bg-{% if item.status == 'Pending' %}warning{% elif item.status == 'Completed' %}success{% else %}primary{% endif %}">
-                  {{ item.status }}
-                </span>
+                {% if item.is_skipped_due_to_leave %}
+                  <span class="badge bg-secondary">Deleted / Archived</span>
+                {% elif item.status == "Pending" %}
+                  <span class="badge bg-warning text-dark">Pending</span>
+                {% elif item.status == "Completed" %}
+                  <span class="badge bg-success">Completed</span>
+                {% else %}
+                  <span class="badge bg-primary">{{ item.status }}</span>
+                {% endif %}
               </td>
+
               <td class="text-nowrap">
                 <button type="button"
                         class="btn btn-sm btn-outline-info view-details"
@@ -124,30 +161,34 @@
                         data-assigned-to="{{ item.assign_to.get_full_name|default:item.assign_to.username|escape }}"
                         data-planned="{{ item.planned_date|date:'d M, Y H:i' }}"
                         data-message="{{ item.message|default_if_none:''|striptags|escape }}"
-                        data-status="{{ item.status|default_if_none:''|escape }}"
-                        data-complete-url="{% if item.status == 'Pending' %}{% url 'tasks:complete_checklist' item.id %}?next={{ request.get_full_path|urlencode }}{% endif %}"
+                        data-status="{% if item.is_skipped_due_to_leave %}Deleted / Archived{% else %}{{ item.status|default_if_none:''|escape }}{% endif %}"
+                        data-complete-url="{% if item.status == 'Pending' and not item.is_skipped_due_to_leave %}{% url 'tasks:complete_checklist' item.id %}?next={{ request.get_full_path|urlencode }}{% endif %}"
                         title="View Details">
                   <i class="fas fa-eye"></i>
                 </button>
 
-                <button type="button"
-                        class="btn btn-sm btn-outline-danger ms-1 delete-one"
-                        data-pk="{{ item.id }}"
-                        title="Delete">
-                  <i class="fas fa-trash-alt"></i>
-                </button>
+                {% if not item.is_skipped_due_to_leave %}
+                  <button type="button"
+                          class="btn btn-sm btn-outline-danger ms-1 delete-one"
+                          data-pk="{{ item.id }}"
+                          title="Delete / Archive">
+                    <i class="fas fa-trash-alt"></i>
+                  </button>
+                {% endif %}
               </td>
             </tr>
-            {% empty %}
+          {% empty %}
             <tr>
-              <td colspan="8" class="text-center text-muted">No tasks found for these criteria.</td>
+              <td colspan="8" class="text-center text-muted">
+                No tasks found for these criteria.
+              </td>
             </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
 
-      {% if is_paginated %}
+    {% if is_paginated %}
       <div class="card-footer d-flex justify-content-between align-items-center flex-wrap gap-2">
         <div class="text-muted small">
           Showing page {{ page_obj.number }} of {{ paginator.num_pages }} ({{ paginator.count }} total tasks)
@@ -155,12 +196,20 @@
 
         <nav aria-label="Doer tasks pagination">
           <ul class="pagination pagination-sm mb-0">
+
             {% if page_obj.has_previous %}
               <li class="page-item">
-                <a class="page-link" href="?page=1{% if request.GET.doer %}&doer={{ request.GET.doer }}{% endif %}{% if request.GET.department %}&department={{ request.GET.department|urlencode }}{% endif %}{% if request.GET.date_from %}&date_from={{ request.GET.date_from }}{% endif %}{% if request.GET.date_to %}&date_to={{ request.GET.date_to }}{% endif %}{% if current_status %}&status={{ current_status|urlencode }}{% endif %}">First</a>
+                <a class="page-link"
+                   href="?page=1{% if request.GET.doer %}&doer={{ request.GET.doer }}{% endif %}{% if request.GET.department %}&department={{ request.GET.department|urlencode }}{% endif %}{% if request.GET.date_from %}&date_from={{ request.GET.date_from }}{% endif %}{% if request.GET.date_to %}&date_to={{ request.GET.date_to }}{% endif %}{% if current_status %}&status={{ current_status|urlencode }}{% endif %}">
+                  First
+                </a>
               </li>
+
               <li class="page-item">
-                <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if request.GET.doer %}&doer={{ request.GET.doer }}{% endif %}{% if request.GET.department %}&department={{ request.GET.department|urlencode }}{% endif %}{% if request.GET.date_from %}&date_from={{ request.GET.date_from }}{% endif %}{% if request.GET.date_to %}&date_to={{ request.GET.date_to }}{% endif %}{% if current_status %}&status={{ current_status|urlencode }}{% endif %}">Previous</a>
+                <a class="page-link"
+                   href="?page={{ page_obj.previous_page_number }}{% if request.GET.doer %}&doer={{ request.GET.doer }}{% endif %}{% if request.GET.department %}&department={{ request.GET.department|urlencode }}{% endif %}{% if request.GET.date_from %}&date_from={{ request.GET.date_from }}{% endif %}{% if request.GET.date_to %}&date_to={{ request.GET.date_to }}{% endif %}{% if current_status %}&status={{ current_status|urlencode }}{% endif %}">
+                  Previous
+                </a>
               </li>
             {% endif %}
 
@@ -170,163 +219,195 @@
 
             {% if page_obj.has_next %}
               <li class="page-item">
-                <a class="page-link" href="?page={{ page_obj.next_page_number }}{% if request.GET.doer %}&doer={{ request.GET.doer }}{% endif %}{% if request.GET.department %}&department={{ request.GET.department|urlencode }}{% endif %}{% if request.GET.date_from %}&date_from={{ request.GET.date_from }}{% endif %}{% if request.GET.date_to %}&date_to={{ request.GET.date_to }}{% endif %}{% if current_status %}&status={{ current_status|urlencode }}{% endif %}">Next</a>
+                <a class="page-link"
+                   href="?page={{ page_obj.next_page_number }}{% if request.GET.doer %}&doer={{ request.GET.doer }}{% endif %}{% if request.GET.department %}&department={{ request.GET.department|urlencode }}{% endif %}{% if request.GET.date_from %}&date_from={{ request.GET.date_from }}{% endif %}{% if request.GET.date_to %}&date_to={{ request.GET.date_to }}{% endif %}{% if current_status %}&status={{ current_status|urlencode }}{% endif %}">
+                  Next
+                </a>
               </li>
+
               <li class="page-item">
-                <a class="page-link" href="?page={{ paginator.num_pages }}{% if request.GET.doer %}&doer={{ request.GET.doer }}{% endif %}{% if request.GET.department %}&department={{ request.GET.department|urlencode }}{% endif %}{% if request.GET.date_from %}&date_from={{ request.GET.date_from }}{% endif %}{% if request.GET.date_to %}&date_to={{ request.GET.date_to }}{% endif %}{% if current_status %}&status={{ current_status|urlencode }}{% endif %}">Last</a>
+                <a class="page-link"
+                   href="?page={{ paginator.num_pages }}{% if request.GET.doer %}&doer={{ request.GET.doer }}{% endif %}{% if request.GET.department %}&department={{ request.GET.department|urlencode }}{% endif %}{% if request.GET.date_from %}&date_from={{ request.GET.date_from }}{% endif %}{% if request.GET.date_to %}&date_to={{ request.GET.date_to }}{% endif %}{% if current_status %}&status={{ current_status|urlencode }}{% endif %}">
+                  Last
+                </a>
               </li>
             {% endif %}
+
           </ul>
         </nav>
       </div>
-      {% endif %}
-    </div>
-  </form>
+    {% endif %}
+  </div>
+</form>
 
-  <form id="singleDeleteForm" method="post" class="d-none">
-    {% csrf_token %}
-    <input type="hidden" name="action" value="delete_one">
-    <input type="hidden" name="pk" id="singleDeletePk">
-    <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
-  </form>
+<form id="singleDeleteForm" method="post" class="d-none">
+  {% csrf_token %}
+  <input type="hidden" name="action" value="delete_one">
+  <input type="hidden" name="pk" id="singleDeletePk">
+  <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
+</form>
 
-  <!-- Single reusable modal -->
-  <div class="modal fade" id="doerTaskDetailsModal" tabindex="-1" aria-labelledby="doerTaskDetailsModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h5 class="modal-title" id="doerTaskDetailsModalLabel">
-            <i class="fas fa-user-check"></i> Task Details
-          </h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-        </div>
-        <div class="modal-body">
-          <p><strong>Task Name:</strong> <span id="modalTaskName"></span></p>
-          <p><strong>Assigned By:</strong> <span id="modalAssignedBy"></span></p>
-          <p><strong>Assigned To:</strong> <span id="modalAssignedTo"></span></p>
-          <p><strong>Planned:</strong> <span id="modalPlanned"></span></p>
-          <p><strong>Status:</strong> <span id="modalStatus"></span></p>
-          <div id="modalMessageWrap" class="mt-3 d-none">
-            <p class="mb-1"><strong>Message:</strong></p>
-            <div id="modalMessage" class="border rounded p-2 bg-light"></div>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <a href="#" id="modalCompleteBtn" class="btn btn-success d-none">
-            <i class="fas fa-check"></i> Complete Task
-          </a>
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+<div class="modal fade"
+     id="doerTaskDetailsModal"
+     tabindex="-1"
+     aria-labelledby="doerTaskDetailsModalLabel"
+     aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+
+      <div class="modal-header">
+        <h5 class="modal-title" id="doerTaskDetailsModalLabel">
+          <i class="fas fa-user-check"></i> Task Details
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+
+      <div class="modal-body">
+        <p><strong>Task Name:</strong> <span id="modalTaskName"></span></p>
+        <p><strong>Assigned By:</strong> <span id="modalAssignedBy"></span></p>
+        <p><strong>Assigned To:</strong> <span id="modalAssignedTo"></span></p>
+        <p><strong>Planned:</strong> <span id="modalPlanned"></span></p>
+        <p><strong>Status:</strong> <span id="modalStatus"></span></p>
+
+        <div id="modalMessageWrap" class="mt-3 d-none">
+          <p class="mb-1"><strong>Message:</strong></p>
+          <div id="modalMessage" class="border rounded p-2 bg-light"></div>
         </div>
       </div>
+
+      <div class="modal-footer">
+        <a href="#" id="modalCompleteBtn" class="btn btn-success d-none">
+          <i class="fas fa-check"></i> Complete Task
+        </a>
+
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+          Close
+        </button>
+      </div>
+
     </div>
   </div>
+</div>
 
-  <script>
-  (function () {
-    var toggles = document.querySelectorAll('[data-bs-toggle="collapse"]');
-    for (var i = 0; i < toggles.length; i++) {
-      toggles[i].addEventListener('click', function () {
-        var icon = this.querySelector('i');
-        if (!icon) return;
-        if (icon.classList.contains('fa-minus')) {
-          icon.classList.remove('fa-minus');
-          icon.classList.add('fa-plus');
-        } else {
-          icon.classList.remove('fa-plus');
-          icon.classList.add('fa-minus');
+<script>
+(function () {
+  var toggles = document.querySelectorAll('[data-bs-toggle="collapse"]');
+
+  for (var i = 0; i < toggles.length; i++) {
+    toggles[i].addEventListener('click', function () {
+      var icon = this.querySelector('i');
+
+      if (!icon) return;
+
+      if (icon.classList.contains('fa-minus')) {
+        icon.classList.remove('fa-minus');
+        icon.classList.add('fa-plus');
+      } else {
+        icon.classList.remove('fa-plus');
+        icon.classList.add('fa-minus');
+      }
+    });
+  }
+
+  function getRowChecks() {
+    return document.getElementsByClassName('row-check');
+  }
+
+  var selectAll = document.getElementById('selectAll');
+
+  if (selectAll) {
+    selectAll.addEventListener('change', function () {
+      var checks = getRowChecks();
+
+      for (var i = 0; i < checks.length; i++) {
+        checks[i].checked = selectAll.checked;
+      }
+    });
+  }
+
+  var bulkBtn = document.getElementById('bulkDeleteBtn');
+
+  if (bulkBtn) {
+    bulkBtn.addEventListener('click', function () {
+      var checks = getRowChecks();
+      var any = false;
+
+      for (var i = 0; i < checks.length; i++) {
+        if (checks[i].checked) {
+          any = true;
+          break;
         }
-      });
-    }
+      }
 
-    function getRowChecks() {
-      return document.getElementsByClassName('row-check');
-    }
+      if (!any) {
+        alert('Please select at least one row on this page.');
+        return;
+      }
 
-    var selectAll = document.getElementById('selectAll');
-    if (selectAll) {
-      selectAll.addEventListener('change', function () {
-        var checks = getRowChecks();
-        for (var i = 0; i < checks.length; i++) {
-          checks[i].checked = selectAll.checked;
-        }
-      });
-    }
+      if (confirm('Delete/archive selected tasks? Recurring checklist rows will be hidden safely and should not return to the main checklist.')) {
+        document.getElementById('bulkAction').value = 'bulk_delete';
+        document.getElementById('bulkForm').submit();
+      }
+    });
+  }
 
-    var bulkBtn = document.getElementById('bulkDeleteBtn');
-    if (bulkBtn) {
-      bulkBtn.addEventListener('click', function () {
-        var checks = getRowChecks();
-        var any = false;
-        for (var i = 0; i < checks.length; i++) {
-          if (checks[i].checked) {
-            any = true;
-            break;
-          }
-        }
-        if (!any) {
-          alert('Please select at least one row on this page.');
-          return;
-        }
-        if (confirm('Delete selected tasks? This cannot be undone.')) {
-          document.getElementById('bulkAction').value = 'bulk_delete';
-          document.getElementById('bulkForm').submit();
-        }
-      });
-    }
+  var delBtns = document.getElementsByClassName('delete-one');
 
-    var delBtns = document.getElementsByClassName('delete-one');
-    for (var j = 0; j < delBtns.length; j++) {
-      delBtns[j].addEventListener('click', function () {
-        var pk = this.getAttribute('data-pk');
-        if (!confirm('Delete this task?')) return;
-        document.getElementById('singleDeletePk').value = pk;
-        document.getElementById('singleDeleteForm').submit();
-      });
-    }
+  for (var j = 0; j < delBtns.length; j++) {
+    delBtns[j].addEventListener('click', function () {
+      var pk = this.getAttribute('data-pk');
 
-    var detailBtns = document.getElementsByClassName('view-details');
-    var modalTaskName = document.getElementById('modalTaskName');
-    var modalAssignedBy = document.getElementById('modalAssignedBy');
-    var modalAssignedTo = document.getElementById('modalAssignedTo');
-    var modalPlanned = document.getElementById('modalPlanned');
-    var modalStatus = document.getElementById('modalStatus');
-    var modalMessageWrap = document.getElementById('modalMessageWrap');
-    var modalMessage = document.getElementById('modalMessage');
-    var modalCompleteBtn = document.getElementById('modalCompleteBtn');
+      if (!confirm('Delete/archive this task?')) return;
 
-    for (var k = 0; k < detailBtns.length; k++) {
-      detailBtns[k].addEventListener('click', function () {
-        var taskName = this.getAttribute('data-task-name') || '';
-        var assignedBy = this.getAttribute('data-assigned-by') || '';
-        var assignedTo = this.getAttribute('data-assigned-to') || '';
-        var planned = this.getAttribute('data-planned') || '';
-        var status = this.getAttribute('data-status') || '';
-        var message = this.getAttribute('data-message') || '';
-        var completeUrl = this.getAttribute('data-complete-url') || '';
+      document.getElementById('singleDeletePk').value = pk;
+      document.getElementById('singleDeleteForm').submit();
+    });
+  }
 
-        modalTaskName.textContent = taskName;
-        modalAssignedBy.textContent = assignedBy;
-        modalAssignedTo.textContent = assignedTo;
-        modalPlanned.textContent = planned;
-        modalStatus.textContent = status;
+  var detailBtns = document.getElementsByClassName('view-details');
+  var modalTaskName = document.getElementById('modalTaskName');
+  var modalAssignedBy = document.getElementById('modalAssignedBy');
+  var modalAssignedTo = document.getElementById('modalAssignedTo');
+  var modalPlanned = document.getElementById('modalPlanned');
+  var modalStatus = document.getElementById('modalStatus');
+  var modalMessageWrap = document.getElementById('modalMessageWrap');
+  var modalMessage = document.getElementById('modalMessage');
+  var modalCompleteBtn = document.getElementById('modalCompleteBtn');
 
-        if (message.trim()) {
-          modalMessage.textContent = message;
-          modalMessageWrap.classList.remove('d-none');
-        } else {
-          modalMessage.textContent = '';
-          modalMessageWrap.classList.add('d-none');
-        }
+  for (var k = 0; k < detailBtns.length; k++) {
+    detailBtns[k].addEventListener('click', function () {
+      var taskName = this.getAttribute('data-task-name') || '';
+      var assignedBy = this.getAttribute('data-assigned-by') || '';
+      var assignedTo = this.getAttribute('data-assigned-to') || '';
+      var planned = this.getAttribute('data-planned') || '';
+      var status = this.getAttribute('data-status') || '';
+      var message = this.getAttribute('data-message') || '';
+      var completeUrl = this.getAttribute('data-complete-url') || '';
 
-        if (completeUrl.trim()) {
-          modalCompleteBtn.setAttribute('href', completeUrl);
-          modalCompleteBtn.classList.remove('d-none');
-        } else {
-          modalCompleteBtn.setAttribute('href', '#');
-          modalCompleteBtn.classList.add('d-none');
-        }
-      });
-    }
-  })();
-  </script>
+      modalTaskName.textContent = taskName;
+      modalAssignedBy.textContent = assignedBy;
+      modalAssignedTo.textContent = assignedTo;
+      modalPlanned.textContent = planned;
+      modalStatus.textContent = status;
+
+      if (message.trim()) {
+        modalMessage.textContent = message;
+        modalMessageWrap.classList.remove('d-none');
+      } else {
+        modalMessage.textContent = '';
+        modalMessageWrap.classList.add('d-none');
+      }
+
+      if (completeUrl.trim()) {
+        modalCompleteBtn.setAttribute('href', completeUrl);
+        modalCompleteBtn.classList.remove('d-none');
+      } else {
+        modalCompleteBtn.setAttribute('href', '#');
+        modalCompleteBtn.classList.add('d-none');
+      }
+    });
+  }
+})();
+</script>
+
 {% endblock %}

@@ -1,4 +1,5 @@
-#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\reports\views.py
+# D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\reports\views.py
+
 from datetime import date, datetime, time, timedelta
 from time import perf_counter
 from typing import Tuple
@@ -11,7 +12,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.paginator import Paginator
 from django.db import connection
-from django.db.models import Sum, F
+from django.db.models import Sum, F, Q
 from django.http import HttpResponse
 from django.shortcuts import render, redirect
 from django.template.loader import render_to_string
@@ -23,6 +24,8 @@ from apps.tasks.models import Checklist, Delegation
 
 User = get_user_model()
 logger = logging.getLogger("apps.reports")
+
+RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
 
 
 # -------- date helpers --------
@@ -58,6 +61,80 @@ def span_bounds(d_from: date, d_to_inclusive: date):
     s, _ = day_bounds(d_from)
     _, e = day_bounds(d_to_inclusive)
     return s, e
+
+
+# -------- recurring-safe delete helpers --------
+def _is_recurring_checklist_obj(obj) -> bool:
+    """
+    Returns True if checklist row belongs to a recurring checklist series.
+    """
+    return (getattr(obj, "mode", None) or "") in RECURRING_MODES
+
+
+def _checklist_series_filter_kwargs(obj) -> dict:
+    """
+    Builds a safe recurring-series identity.
+
+    Current project stores generated recurring checklist instances in the same
+    Checklist table, so we identify a series using the same fields used by the
+    checklist module:
+      assign_to + task_name + mode + frequency + group_name
+    """
+    try:
+        frequency = int(getattr(obj, "frequency", None) or 1)
+    except (TypeError, ValueError):
+        frequency = 1
+
+    return {
+        "assign_to_id": getattr(obj, "assign_to_id", None),
+        "task_name": getattr(obj, "task_name", None),
+        "mode": getattr(obj, "mode", None),
+        "frequency": frequency,
+        "group_name": getattr(obj, "group_name", None),
+    }
+
+
+def _void_checklist_for_report(obj) -> int:
+    """
+    Recurring-safe delete for reports.
+
+    IMPORTANT:
+    Do not use obj.delete() for recurring checklist rows.
+
+    Why:
+    If only one generated row is hard-deleted, the recurring source/series may
+    still remain and the generator may recreate the task later.
+
+    Existing production-safe flag in this project:
+      is_skipped_due_to_leave=True
+
+    This flag is already used by checklist visibility queries to hide rows.
+    It also allows reports/audit to still track old rows.
+    """
+    if not obj:
+        return 0
+
+    if _is_recurring_checklist_obj(obj):
+        qs = Checklist.objects.filter(**_checklist_series_filter_kwargs(obj))
+
+        if hasattr(Checklist, "is_skipped_due_to_leave"):
+            return qs.filter(is_skipped_due_to_leave=False).update(
+                is_skipped_due_to_leave=True
+            )
+
+        deleted, _ = qs.delete()
+        return int(deleted or 0)
+
+    if hasattr(Checklist, "is_skipped_due_to_leave"):
+        return Checklist.objects.filter(
+            pk=obj.pk,
+            is_skipped_due_to_leave=False,
+        ).update(
+            is_skipped_due_to_leave=True
+        )
+
+    obj.delete()
+    return 1
 
 
 # -------- time helpers --------
@@ -97,14 +174,22 @@ def percent_not_completed(planned: int, completed: int) -> float:
 @login_required
 def list_doer_tasks(request):
     """
-    Optimized report of checklist tasks.
+    Doer Tasks Report.
 
-    Fixes:
-    - session-persisted filters retained
-    - pagination added
-    - only current page rows rendered
-    - per-request timing logs added
-    - template context kept backward-compatible
+    Production rule:
+    This is a REPORT/HISTORY screen.
+
+    It may show:
+      - Pending
+      - Completed
+      - Missed
+      - Historical
+      - Deleted / Archived
+
+    It is intentionally different from the main checklist page.
+
+    Main checklist page = active actionable queue only.
+    Reports page = history, tracking, audit, and management review.
     """
     FILTER_SESSION_KEY = "reports__doer_tasks_filter"
     FILTER_KEYS = {"doer", "department", "date_from", "date_to", "status"}
@@ -119,30 +204,56 @@ def list_doer_tasks(request):
 
         if action == "bulk_delete":
             ids = request.POST.getlist("sel")
+
             if not ids:
                 messages.warning(request, "No rows selected.")
                 return redirect(return_url or "reports:doer_tasks")
+
             try:
-                deleted, _ = Checklist.objects.filter(pk__in=ids).delete()
-                if deleted:
-                    messages.success(request, f"Deleted {deleted} task(s).")
+                total_updated = 0
+                selected_count = 0
+
+                for obj in Checklist.objects.filter(pk__in=ids).select_related("assign_to"):
+                    selected_count += 1
+                    total_updated += _void_checklist_for_report(obj)
+
+                if total_updated:
+                    messages.success(
+                        request,
+                        f"Deleted/archived {selected_count} selected task(s). "
+                        f"{total_updated} row(s) were hidden from active checklist visibility."
+                    )
                 else:
-                    messages.info(request, "No tasks were deleted.")
+                    messages.info(request, "No active task rows were deleted/archived.")
+
             except Exception as e:
+                logger.exception("Error during doer task bulk delete")
                 messages.error(request, f"Error during bulk delete: {e}")
+
             return redirect(return_url or "reports:doer_tasks")
 
         if action == "delete_one":
             pk = request.POST.get("pk")
+
             if pk:
                 try:
                     obj = Checklist.objects.get(pk=pk)
-                    obj.delete()
-                    messages.success(request, "Task deleted.")
+                    updated = _void_checklist_for_report(obj)
+
+                    if updated:
+                        messages.success(
+                            request,
+                            "Task deleted/archived safely. Recurring task will not reappear from this series."
+                        )
+                    else:
+                        messages.info(request, "Task was already deleted/archived.")
+
                 except Checklist.DoesNotExist:
                     messages.warning(request, "The task no longer exists.")
                 except Exception as e:
+                    logger.exception("Error deleting doer task")
                     messages.error(request, f"Error deleting task: {e}")
+
             return redirect(return_url or "reports:doer_tasks")
 
     # ---- filtering (GET) with session persistence ----
@@ -151,8 +262,10 @@ def list_doer_tasks(request):
         return redirect("reports:doer_tasks")
 
     effective_get = None
+
     if request.method == "GET":
         incoming = {k: v for k, v in request.GET.items() if k in FILTER_KEYS and v}
+
         if incoming:
             request.session[FILTER_SESSION_KEY] = incoming
             effective_get = incoming
@@ -168,28 +281,63 @@ def list_doer_tasks(request):
     items_qs = (
         Checklist.objects
         .select_related("assign_by", "assign_to")
-        .order_by("planned_date", "id")
+        .order_by("-planned_date", "-id")
     )
 
-    # Optional status filter
+    # ---- report status filters ----
+    today = timezone.localdate()
     status_source = effective_get if effective_get is not None else request.GET
     status = (status_source.get("status") or "").strip() if status_source else ""
-    valid_status = {"Pending", "Completed"}
-    if status in valid_status:
-        items_qs = items_qs.filter(status=status)
 
+    if status == "Pending":
+        items_qs = items_qs.filter(
+            status="Pending",
+            is_skipped_due_to_leave=False,
+        )
+
+    elif status == "Completed":
+        items_qs = items_qs.filter(
+            status="Completed",
+            is_skipped_due_to_leave=False,
+        )
+
+    elif status == "Missed":
+        items_qs = items_qs.filter(
+            status="Pending",
+            is_skipped_due_to_leave=False,
+            planned_date__date__lt=today,
+        )
+
+    elif status == "Historical":
+        items_qs = items_qs.filter(
+            Q(status="Completed") |
+            Q(planned_date__date__lt=today) |
+            Q(is_skipped_due_to_leave=True)
+        )
+
+    elif status == "Deleted":
+        items_qs = items_qs.filter(
+            is_skipped_due_to_leave=True,
+        )
+
+    # ---- normal form filters ----
     if form.is_valid():
         d = form.cleaned_data
+
         if d.get("doer"):
             items_qs = items_qs.filter(assign_to=d["doer"])
+
         if d.get("department"):
             items_qs = items_qs.filter(assign_to__groups__name=d["department"]).distinct()
+
         if d.get("date_from") and d.get("date_to"):
             s, e = span_bounds(d["date_from"], d["date_to"])
             items_qs = items_qs.filter(planned_date__gte=s, planned_date__lt=e)
+
         elif d.get("date_from"):
             s, _ = day_bounds(d["date_from"])
             items_qs = items_qs.filter(planned_date__gte=s)
+
         elif d.get("date_to"):
             _, e = day_bounds(d["date_to"])
             items_qs = items_qs.filter(planned_date__lt=e)
@@ -244,21 +392,28 @@ def list_doer_tasks(request):
 def list_fms_tasks(request):
     form = PCReportFilterForm(request.GET or None, user=request.user)
     items = Delegation.objects.select_related("assign_by", "assign_to").order_by("planned_date", "id")
+
     if form.is_valid():
         d = form.cleaned_data
+
         if d.get("doer"):
             items = items.filter(assign_to=d["doer"])
+
         if d.get("department"):
             items = items.filter(assign_by__groups__name__icontains=d["department"]).distinct()
+
         if d.get("date_from") and d.get("date_to"):
             s, e = span_bounds(d["date_from"], d["date_to"])
             items = items.filter(planned_date__gte=s, planned_date__lt=e)
+
         elif d.get("date_from"):
             s, _ = day_bounds(d["date_from"])
             items = items.filter(planned_date__gte=s)
+
         elif d.get("date_to"):
             _, e = day_bounds(d["date_to"])
             items = items.filter(planned_date__lt=e)
+
     return render(request, "reports/list_fms_tasks.html", {"form": form, "items": items})
 
 
@@ -274,10 +429,10 @@ def weekly_mis_score(request):
     avg_scores = None
     pending_checklist = pending_delegation = 0
     delayed_checklist = delayed_delegation = 0
-    time_checklist = "00:00"          # planned/assigned
-    time_delegation = "00:00"         # planned/assigned
-    actual_time_checklist = "00:00"   # actual
-    actual_time_delegation = "00:00"  # actual
+    time_checklist = "00:00"
+    time_delegation = "00:00"
+    actual_time_checklist = "00:00"
+    actual_time_delegation = "00:00"
     this_week_commitment = None
     last_week_commitment = None
 
@@ -297,10 +452,13 @@ def weekly_mis_score(request):
 
         if request.method == "POST" and "update_commitment" in request.POST:
             commitment_form = WeeklyMISCommitmentForm(request.POST)
+
             if commitment_form.is_valid():
                 cleaned = commitment_form.cleaned_data
+
                 if not this_week_commitment:
                     this_week_commitment = WeeklyCommitment(user=doer, week_start=frm)
+
                 this_week_commitment.checklist = cleaned.get("checklist") or 0
                 this_week_commitment.checklist_desc = cleaned.get("checklist_desc") or ""
                 this_week_commitment.checklist_ontime = cleaned.get("checklist_ontime") or 0
@@ -314,10 +472,13 @@ def weekly_mis_score(request):
                 this_week_commitment.audit = cleaned.get("audit") or 0
                 this_week_commitment.audit_desc = cleaned.get("audit_desc") or ""
                 this_week_commitment.save()
+
                 commitment_message = "Commitment updated successfully."
                 return redirect(request.path + "?" + request.META.get("QUERY_STRING", ""))
+
         else:
             initial = {}
+
             if this_week_commitment:
                 initial = {
                     "checklist": this_week_commitment.checklist,
@@ -333,13 +494,58 @@ def weekly_mis_score(request):
                     "audit": this_week_commitment.audit,
                     "audit_desc": this_week_commitment.audit_desc,
                 }
+
             commitment_form = WeeklyMISCommitmentForm(initial=initial)
 
         for Model, label in [(Checklist, "Checklist"), (Delegation, "Delegation")]:
-            planned = Model.objects.filter(assign_to=doer, planned_date__gte=s_this, planned_date__lt=e_this).count()
-            planned_last = Model.objects.filter(assign_to=doer, planned_date__gte=s_prev, planned_date__lt=e_prev).count()
-            completed = Model.objects.filter(assign_to=doer, planned_date__gte=s_this, planned_date__lt=e_this, status="Completed").count()
-            completed_last = Model.objects.filter(assign_to=doer, planned_date__gte=s_prev, planned_date__lt=e_prev, status="Completed").count()
+            planned = Model.objects.filter(
+                assign_to=doer,
+                planned_date__gte=s_this,
+                planned_date__lt=e_this,
+                is_skipped_due_to_leave=False if Model is Checklist else False,
+            ).count() if Model is Checklist else Model.objects.filter(
+                assign_to=doer,
+                planned_date__gte=s_this,
+                planned_date__lt=e_this,
+            ).count()
+
+            planned_last = Model.objects.filter(
+                assign_to=doer,
+                planned_date__gte=s_prev,
+                planned_date__lt=e_prev,
+                is_skipped_due_to_leave=False if Model is Checklist else False,
+            ).count() if Model is Checklist else Model.objects.filter(
+                assign_to=doer,
+                planned_date__gte=s_prev,
+                planned_date__lt=e_prev,
+            ).count()
+
+            completed = Model.objects.filter(
+                assign_to=doer,
+                planned_date__gte=s_this,
+                planned_date__lt=e_this,
+                status="Completed",
+                is_skipped_due_to_leave=False if Model is Checklist else False,
+            ).count() if Model is Checklist else Model.objects.filter(
+                assign_to=doer,
+                planned_date__gte=s_this,
+                planned_date__lt=e_this,
+                status="Completed",
+            ).count()
+
+            completed_last = Model.objects.filter(
+                assign_to=doer,
+                planned_date__gte=s_prev,
+                planned_date__lt=e_prev,
+                status="Completed",
+                is_skipped_due_to_leave=False if Model is Checklist else False,
+            ).count() if Model is Checklist else Model.objects.filter(
+                assign_to=doer,
+                planned_date__gte=s_prev,
+                planned_date__lt=e_prev,
+                status="Completed",
+            ).count()
+
             rows.append({
                 "category": label,
                 "last_pct": percent_not_completed(planned_last, completed_last),
@@ -348,8 +554,18 @@ def weekly_mis_score(request):
                 "percent": percent_not_completed(planned, completed),
             })
 
-        checklist_qs = Checklist.objects.filter(assign_to=doer, planned_date__gte=s_this, planned_date__lt=e_this).select_related("assign_to")
-        delegation_qs = Delegation.objects.filter(assign_to=doer, planned_date__gte=s_this, planned_date__lt=e_this).select_related("assign_to")
+        checklist_qs = Checklist.objects.filter(
+            assign_to=doer,
+            planned_date__gte=s_this,
+            planned_date__lt=e_this,
+            is_skipped_due_to_leave=False,
+        ).select_related("assign_to")
+
+        delegation_qs = Delegation.objects.filter(
+            assign_to=doer,
+            planned_date__gte=s_this,
+            planned_date__lt=e_this,
+        ).select_related("assign_to")
 
         actual_checklist_minutes = calculate_checklist_total_time(checklist_qs)
         actual_delegation_minutes = calculate_delegation_total_time(delegation_qs)
@@ -364,25 +580,30 @@ def weekly_mis_score(request):
 
         checklist_planned = rows[0]["planned"]
         checklist_completed = rows[0]["completed"]
+
         checklist_ontime = Checklist.objects.filter(
             assign_to=doer,
             planned_date__gte=s_this,
             planned_date__lt=e_this,
             status="Completed",
-            completed_at__lte=F("planned_date")
+            completed_at__lte=F("planned_date"),
+            is_skipped_due_to_leave=False,
         ).count()
+
         checklist_pct = percent_not_completed(checklist_planned, checklist_completed)
         checklist_ontime_pct = percent_not_completed(checklist_planned, checklist_ontime)
 
         delegation_planned = rows[1]["planned"]
         delegation_completed = rows[1]["completed"]
+
         delegation_ontime = Delegation.objects.filter(
             assign_to=doer,
             planned_date__gte=s_this,
             planned_date__lt=e_this,
             status="Completed",
-            completed_at__lte=F("planned_date")
+            completed_at__lte=F("planned_date"),
         ).count()
+
         delegation_pct = percent_not_completed(delegation_planned, delegation_completed)
         delegation_ontime_pct = percent_not_completed(delegation_planned, delegation_ontime)
 
@@ -395,20 +616,46 @@ def weekly_mis_score(request):
             "average_ontime": round((checklist_ontime_pct + delegation_ontime_pct) / 2, 2),
         }
 
-        pending_checklist = Checklist.objects.filter(assign_to=doer, planned_date__lt=s_this, status="Pending").count()
-        pending_delegation = Delegation.objects.filter(assign_to=doer, planned_date__lt=s_this, status="Pending").count()
-        delayed_checklist = Checklist.objects.filter(assign_to=doer, completed_at__gte=s_this, completed_at__lt=e_this, completed_at__gt=F("planned_date")).count()
-        delayed_delegation = Delegation.objects.filter(assign_to=doer, completed_at__gte=s_this, completed_at__lt=e_this, completed_at__gt=F("planned_date")).count()
+        pending_checklist = Checklist.objects.filter(
+            assign_to=doer,
+            planned_date__lt=s_this,
+            status="Pending",
+            is_skipped_due_to_leave=False,
+        ).count()
+
+        pending_delegation = Delegation.objects.filter(
+            assign_to=doer,
+            planned_date__lt=s_this,
+            status="Pending",
+        ).count()
+
+        delayed_checklist = Checklist.objects.filter(
+            assign_to=doer,
+            completed_at__gte=s_this,
+            completed_at__lt=e_this,
+            completed_at__gt=F("planned_date"),
+            is_skipped_due_to_leave=False,
+        ).count()
+
+        delayed_delegation = Delegation.objects.filter(
+            assign_to=doer,
+            completed_at__gte=s_this,
+            completed_at__lt=e_this,
+            completed_at__gt=F("planned_date"),
+        ).count()
 
         full_name = (doer.get_full_name() or doer.username or "").upper()
+
         try:
             phone = getattr(getattr(doer, "profile", None), "phone", "") or ""
         except ObjectDoesNotExist:
             phone = ""
+
         try:
             dept = getattr(getattr(doer, "profile", None), "department", "") or ""
         except ObjectDoesNotExist:
             dept = ""
+
         header = f"{full_name} ({phone}) – {frm:%d %b, %Y} to {to:%d %b, %Y} [{dept}]"
 
     return render(request, "reports/weekly_mis_score.html", {
@@ -444,7 +691,8 @@ def performance_score(request):
     time_delegation = "00:00"
     total_hours = "00:00"
     week_start = None
-    pending_checklist = pending_delegation = delayed_checklist = delayed_delegation = 0
+    pending_checklist = pending_delegation = 0
+    delayed_checklist = delayed_delegation = 0
 
     if form.is_valid() and (form.cleaned_data.get("doer") or not request.user.is_staff):
         doer = form.cleaned_data.get("doer") or request.user
@@ -453,8 +701,18 @@ def performance_score(request):
         week_start = frm
         s_this, e_this = span_bounds(frm, to)
 
-        checklist_qs = Checklist.objects.filter(assign_to=doer, planned_date__gte=s_this, planned_date__lt=e_this).select_related("assign_to")
-        delegation_qs = Delegation.objects.filter(assign_to=doer, planned_date__gte=s_this, planned_date__lt=e_this).select_related("assign_to")
+        checklist_qs = Checklist.objects.filter(
+            assign_to=doer,
+            planned_date__gte=s_this,
+            planned_date__lt=e_this,
+            is_skipped_due_to_leave=False,
+        ).select_related("assign_to")
+
+        delegation_qs = Delegation.objects.filter(
+            assign_to=doer,
+            planned_date__gte=s_this,
+            planned_date__lt=e_this,
+        ).select_related("assign_to")
 
         total_checklist_minutes = calculate_checklist_total_time(checklist_qs)
         total_delegation_minutes = calculate_delegation_total_time(delegation_qs)
@@ -468,8 +726,14 @@ def performance_score(request):
         p = checklist_qs.count()
         completed = checklist_qs.filter(status="Completed").count()
         score_not = percent_not_completed(p, completed)
-        on_time = checklist_qs.filter(status="Completed", completed_at__lte=F("planned_date")).count()
+
+        on_time = checklist_qs.filter(
+            status="Completed",
+            completed_at__lte=F("planned_date"),
+        ).count()
+
         score_on = percent_not_completed(p, on_time)
+
         checklist_data = [
             {
                 "task_type": "All work should be done",
@@ -492,8 +756,14 @@ def performance_score(request):
         p2 = delegation_qs.count()
         completed2 = delegation_qs.filter(status="Completed").count()
         score2_not = percent_not_completed(p2, completed2)
-        on_time2 = delegation_qs.filter(status="Completed", completed_at__lte=F("planned_date")).count()
+
+        on_time2 = delegation_qs.filter(
+            status="Completed",
+            completed_at__lte=F("planned_date"),
+        ).count()
+
         score2_on = percent_not_completed(p2, on_time2)
+
         delegation_data = [
             {
                 "task_type": "All work should be done",
@@ -522,20 +792,46 @@ def performance_score(request):
             "overall_ontime": round((score_on + score2_on) / 2, 2),
         }
 
-        pending_checklist = Checklist.objects.filter(assign_to=doer, planned_date__lt=s_this, status="Pending").count()
-        pending_delegation = Delegation.objects.filter(assign_to=doer, planned_date__lt=s_this, status="Pending").count()
-        delayed_checklist = Checklist.objects.filter(assign_to=doer, completed_at__gte=s_this, completed_at__lt=e_this, completed_at__gt=F("planned_date")).count()
-        delayed_delegation = Delegation.objects.filter(assign_to=doer, completed_at__gte=s_this, completed_at__lt=e_this, completed_at__gt=F("planned_date")).count()
+        pending_checklist = Checklist.objects.filter(
+            assign_to=doer,
+            planned_date__lt=s_this,
+            status="Pending",
+            is_skipped_due_to_leave=False,
+        ).count()
+
+        pending_delegation = Delegation.objects.filter(
+            assign_to=doer,
+            planned_date__lt=s_this,
+            status="Pending",
+        ).count()
+
+        delayed_checklist = Checklist.objects.filter(
+            assign_to=doer,
+            completed_at__gte=s_this,
+            completed_at__lt=e_this,
+            completed_at__gt=F("planned_date"),
+            is_skipped_due_to_leave=False,
+        ).count()
+
+        delayed_delegation = Delegation.objects.filter(
+            assign_to=doer,
+            completed_at__gte=s_this,
+            completed_at__lt=e_this,
+            completed_at__gt=F("planned_date"),
+        ).count()
 
         full_name = (doer.get_full_name() or doer.username or "").upper()
+
         try:
             phone = getattr(getattr(doer, "profile", None), "phone", "") or ""
         except ObjectDoesNotExist:
             phone = ""
+
         try:
             dept = getattr(getattr(doer, "profile", None), "department", "") or ""
         except ObjectDoesNotExist:
             dept = ""
+
         header = f"{full_name} ({phone}) – {frm:%d %b, %Y} to {to:%d %b, %Y} [{dept}]"
 
     return render(request, "reports/performance_score.html", {
