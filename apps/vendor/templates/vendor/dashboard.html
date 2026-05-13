@@ -7,70 +7,128 @@
 {% block page_title %}Vendor Payments{% endblock %}
 
 {% block page_actions %}
-  <a href="{% url 'vendor:new_request' %}" class="btn btn-primary btn-sm">
-    <i class="fa-solid fa-plus"></i> New Request
-  </a>
+  {% if can_create %}
+    <a href="{% url 'vendor:new_request' %}" class="btn btn-primary btn-sm">
+      <i class="fa-solid fa-plus"></i>
+      New Request
+    </a>
+  {% endif %}
 {% endblock %}
 
 {% block content %}
 <div class="dash-grid" style="margin-bottom:28px">
-  <a href="{% url 'vendor:new_request' %}" class="dash-card">
-    <div class="dc-icon green"><i class="fa-solid fa-file-invoice-dollar"></i></div>
-    <div class="dc-body">
-      <div class="dc-title">New Request</div>
-      <div class="dc-desc">Submit a new vendor payment request</div>
-    </div>
-    <div class="dc-footer">
-      <span class="dc-stat">Create</span>
-      <div class="dc-arrow"><i class="fa-solid fa-arrow-right"></i></div>
-    </div>
-    <div class="dc-deco green"></div>
-  </a>
+
+  {% if can_create %}
+    <a href="{% url 'vendor:new_request' %}" class="dash-card">
+      <div class="dc-icon green">
+        <i class="fa-solid fa-file-invoice-dollar"></i>
+      </div>
+
+      <div class="dc-body">
+        <div class="dc-title">New Request</div>
+        <div class="dc-desc">Submit a new vendor payment request</div>
+      </div>
+
+      <div class="dc-footer">
+        <span class="dc-stat">Create</span>
+        <div class="dc-arrow">
+          <i class="fa-solid fa-arrow-right"></i>
+        </div>
+      </div>
+
+      <div class="dc-deco green"></div>
+    </a>
+  {% endif %}
 
   <a href="{% url 'vendor:my_requests' %}" class="dash-card">
-    <div class="dc-icon"><i class="fa-solid fa-list-alt"></i></div>
+    <div class="dc-icon">
+      <i class="fa-solid fa-list-alt"></i>
+    </div>
+
     <div class="dc-body">
       <div class="dc-title">My Requests</div>
-      <div class="dc-desc">Track your submitted payment requests</div>
+      <div class="dc-desc">
+        {% if user.is_superuser %}
+          Track all submitted payment requests
+        {% else %}
+          Track your submitted payment requests
+        {% endif %}
+      </div>
     </div>
+
     <div class="dc-footer">
       <span class="dc-stat">{{ my_count }} total</span>
-      <div class="dc-arrow"><i class="fa-solid fa-arrow-right"></i></div>
+      <div class="dc-arrow">
+        <i class="fa-solid fa-arrow-right"></i>
+      </div>
     </div>
+
     <div class="dc-deco"></div>
   </a>
 
-  {% if is_finance or is_senior %}
-  <a href="{% url 'vendor:approval_queue' %}" class="dash-card">
-    <div class="dc-icon amber"><i class="fa-solid fa-check-circle"></i></div>
-    <div class="dc-body">
-      <div class="dc-title">Approval Queue</div>
-      <div class="dc-desc">Review and approve pending requests</div>
-    </div>
-    <div class="dc-footer">
-      <span class="dc-stat">
-        {% if is_finance %}{{ pending_finance }} pending{% endif %}
-        {% if is_senior %} / {{ pending_senior }} final{% endif %}
-      </span>
-      <div class="dc-arrow"><i class="fa-solid fa-arrow-right"></i></div>
-    </div>
-    <div class="dc-deco amber"></div>
-  </a>
+  {% if is_finance or is_senior or is_vendor_admin %}
+    <a href="{% url 'vendor:approval_queue' %}" class="dash-card">
+      <div class="dc-icon amber">
+        <i class="fa-solid fa-check-circle"></i>
+      </div>
+
+      <div class="dc-body">
+        <div class="dc-title">
+          {% if is_vendor_admin %}
+            Admin Review
+          {% else %}
+            Approval Queue
+          {% endif %}
+        </div>
+
+        <div class="dc-desc">
+          {% if is_vendor_admin %}
+            Review and track all requests
+          {% else %}
+            Review and approve pending requests
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="dc-footer">
+        <span class="dc-stat">
+          {% if is_vendor_admin %}
+            Full Access
+          {% else %}
+            {% if is_finance %}{{ pending_finance }} pending{% endif %}
+            {% if is_senior %} / {{ pending_senior }} final{% endif %}
+          {% endif %}
+        </span>
+
+        <div class="dc-arrow">
+          <i class="fa-solid fa-arrow-right"></i>
+        </div>
+      </div>
+
+      <div class="dc-deco amber"></div>
+    </a>
   {% endif %}
 
-  {% if user.is_superuser %}
-  <a href="{% url 'vendor:admin_setup' %}" class="dash-card">
-    <div class="dc-icon violet"><i class="fa-solid fa-gear"></i></div>
-    <div class="dc-body">
-      <div class="dc-title">Admin Setup</div>
-      <div class="dc-desc">Configure approvers, vendors and CC emails</div>
-    </div>
-    <div class="dc-footer">
-      <span class="dc-stat">Admin</span>
-      <div class="dc-arrow"><i class="fa-solid fa-arrow-right"></i></div>
-    </div>
-    <div class="dc-deco violet"></div>
-  </a>
+  {% if is_vendor_admin %}
+    <a href="{% url 'vendor:admin_setup' %}" class="dash-card">
+      <div class="dc-icon violet">
+        <i class="fa-solid fa-gear"></i>
+      </div>
+
+      <div class="dc-body">
+        <div class="dc-title">Admin Setup</div>
+        <div class="dc-desc">Configure approvers, vendors and CC emails</div>
+      </div>
+
+      <div class="dc-footer">
+        <span class="dc-stat">Admin</span>
+        <div class="dc-arrow">
+          <i class="fa-solid fa-arrow-right"></i>
+        </div>
+      </div>
+
+      <div class="dc-deco violet"></div>
+    </a>
   {% endif %}
 </div>
 {% endblock %}

@@ -15,29 +15,47 @@
 {% block content %}
 <div class="card" style="max-width:900px">
   <div class="card-header">
-    <span><i class="fa-solid fa-file-invoice-dollar me-2 text-primary"></i>Vendor Payment Entry</span>
+    <span>
+      <i class="fa-solid fa-file-invoice-dollar me-2 text-primary"></i>
+      Vendor Payment Entry
+    </span>
   </div>
+
   <div class="card-body">
     <form method="post" enctype="multipart/form-data" id="vpForm">
       {% csrf_token %}
 
       {% if form.non_field_errors %}
-        <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+        <div class="alert alert-danger">
+          {{ form.non_field_errors }}
+        </div>
       {% endif %}
 
       <div class="row g-3 mb-3">
         <div class="col-md-6">
-          <label class="form-label">Vendor</label>
+          <label class="form-label">
+            Vendor <span class="text-danger">*</span>
+          </label>
           {{ form.vendor }}
-          {% if form.vendor.errors %}<div class="form-text text-danger">{{ form.vendor.errors }}</div>{% endif %}
+
+          {% if form.vendor.errors %}
+            <div class="form-text text-danger">
+              {{ form.vendor.errors }}
+            </div>
+          {% endif %}
+
+          <div class="form-text text-muted">
+            Select vendor from Vendor Master only.
+          </div>
         </div>
-        <div class="col-md-6" id="manualVendorWrapper" style="display:none">
-          <label class="form-label">Vendor Name (Others)</label>
-          {{ form.vendor_name_manual }}
-        </div>
+
         <div class="col-md-6">
           <label class="form-label">Vendor Type</label>
-          {{ form.vendor_type }}
+          {{ form.vendor_type_display }}
+
+          <div class="form-text text-muted">
+            Auto-filled from Vendor Setup. User cannot edit this.
+          </div>
         </div>
       </div>
 
@@ -45,14 +63,34 @@
         <div class="col-md-4">
           <label class="form-label">Invoice Date</label>
           {{ form.invoice_date }}
+
+          {% if form.invoice_date.errors %}
+            <div class="form-text text-danger">
+              {{ form.invoice_date.errors }}
+            </div>
+          {% endif %}
         </div>
+
         <div class="col-md-4">
           <label class="form-label">Invoice Number</label>
           {{ form.invoice_number }}
+
+          {% if form.invoice_number.errors %}
+            <div class="form-text text-danger">
+              {{ form.invoice_number.errors }}
+            </div>
+          {% endif %}
         </div>
+
         <div class="col-md-4">
           <label class="form-label">Bill Type</label>
           {{ form.bill_type }}
+
+          {% if form.bill_type.errors %}
+            <div class="form-text text-danger">
+              {{ form.bill_type.errors }}
+            </div>
+          {% endif %}
         </div>
       </div>
 
@@ -60,34 +98,116 @@
         <div class="col-md-4">
           <label class="form-label">Base Amount (₹)</label>
           {{ form.base_amount }}
+
+          {% if form.base_amount.errors %}
+            <div class="form-text text-danger">
+              {{ form.base_amount.errors }}
+            </div>
+          {% endif %}
         </div>
+
         <div class="col-md-4">
           <label class="form-label">GST Amount (₹)</label>
           {{ form.gst_amount }}
+
+          {% if form.gst_amount.errors %}
+            <div class="form-text text-danger">
+              {{ form.gst_amount.errors }}
+            </div>
+          {% endif %}
         </div>
+
         <div class="col-md-4">
           <label class="form-label">Total Amount (₹)</label>
-          <input type="text" class="form-control" id="totalDisplay" readonly placeholder="Auto-calculated">
+          <input
+            type="text"
+            class="form-control"
+            id="totalDisplay"
+            readonly
+            placeholder="Auto-calculated"
+          >
         </div>
       </div>
 
       <div class="mb-3">
         <label class="form-label">Description</label>
         {{ form.description }}
+
+        {% if form.description.errors %}
+          <div class="form-text text-danger">
+            {{ form.description.errors }}
+          </div>
+        {% endif %}
       </div>
 
       <div class="mb-3">
-        <label class="form-label">Attachment <small class="text-muted">(PDF/Image — auto compressed)</small></label>
-        <input type="file" name="attachment" class="form-control" accept=".pdf,.jpg,.jpeg,.png,.webp">
-        {% if form.attachment.errors %}<div class="form-text text-danger">{{ form.attachment.errors }}</div>{% endif %}
+        <label class="form-label">
+          Invoice Attachment
+          <small class="text-muted">(PDF/Image — auto compressed)</small>
+        </label>
+
+        <input
+          type="file"
+          name="attachment"
+          class="form-control"
+          accept=".pdf,.jpg,.jpeg,.png,.webp"
+        >
+
+        {% if form.attachment.errors %}
+          <div class="form-text text-danger">
+            {{ form.attachment.errors }}
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">
+          Bank Details Attachment
+          <small class="text-muted">(PDF/Image)</small>
+        </label>
+
+        <input
+          type="file"
+          name="bank_attachment"
+          class="form-control"
+          accept=".pdf,.jpg,.jpeg,.png,.webp"
+        >
+
+        {% if form.bank_attachment.errors %}
+          <div class="form-text text-danger">
+            {{ form.bank_attachment.errors }}
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">
+          Bank Details
+          <small class="text-muted">(Optional written details)</small>
+        </label>
+
+        {{ form.bank_details_text }}
+
+        {% if form.bank_details_text.errors %}
+          <div class="form-text text-danger">
+            {{ form.bank_details_text.errors }}
+          </div>
+        {% endif %}
+
+        <div class="form-text text-muted">
+          Example: Account Holder Name, Bank Name, Account Number, IFSC.
+        </div>
       </div>
 
       <div class="d-flex gap-2 mt-4">
         <button type="submit" name="action" value="draft" class="btn btn-light">
-          <i class="fa-regular fa-floppy-disk"></i> Save Draft
+          <i class="fa-regular fa-floppy-disk"></i>
+          Save Draft
         </button>
+
         <button type="submit" name="action" value="submit" class="btn btn-primary">
-          <i class="fa-solid fa-paper-plane"></i> Submit for Approval
+          <i class="fa-solid fa-paper-plane"></i>
+          Submit for Approval
         </button>
       </div>
     </form>
@@ -98,29 +218,88 @@
 {% block extra_js %}
 <script>
 (function () {
+  'use strict';
+
   var vendorSelect = document.getElementById('id_vendor');
-  var manualWrapper = document.getElementById('manualVendorWrapper');
+  var vendorTypeDisplay = document.getElementById('id_vendor_type_display');
+
   var base = document.getElementById('id_base_amount');
   var gst = document.getElementById('id_gst_amount');
   var total = document.getElementById('totalDisplay');
 
-  function toggleManual() {
-    var opt = vendorSelect ? vendorSelect.options[vendorSelect.selectedIndex] : null;
-    var isOther = opt && opt.text.toLowerCase().includes('other');
-    if (manualWrapper) manualWrapper.style.display = isOther ? '' : 'none';
-  }
-
   function calcTotal() {
-    var b = parseFloat(base ? base.value : 0) || 0;
-    var g = parseFloat(gst ? gst.value : 0) || 0;
-    if (total) total.value = '₹ ' + (b + g).toFixed(2);
+    var baseAmount = parseFloat(base ? base.value : 0) || 0;
+    var gstAmount = parseFloat(gst ? gst.value : 0) || 0;
+
+    if (total) {
+      total.value = '₹ ' + (baseAmount + gstAmount).toFixed(2);
+    }
   }
 
-  if (vendorSelect) vendorSelect.addEventListener('change', toggleManual);
-  if (base) base.addEventListener('input', calcTotal);
-  if (gst) gst.addEventListener('input', calcTotal);
-  toggleManual();
+  function clearVendorType() {
+    if (!vendorTypeDisplay) {
+      return;
+    }
+
+    vendorTypeDisplay.value = '';
+    vendorTypeDisplay.placeholder = 'Auto-filled after selecting vendor';
+  }
+
+  function fetchVendorType() {
+    if (!vendorSelect || !vendorTypeDisplay) {
+      return;
+    }
+
+    var vendorId = vendorSelect.value;
+
+    if (!vendorId) {
+      clearVendorType();
+      return;
+    }
+
+    vendorTypeDisplay.value = 'Loading...';
+
+    var urlTemplate = "{% url 'vendor:vendor_type_api' 999999 %}";
+    var url = urlTemplate.replace('999999', vendorId);
+
+    fetch(url, {
+      method: 'GET',
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      credentials: 'same-origin'
+    })
+    .then(function (response) {
+      if (!response.ok) {
+        throw new Error('Unable to fetch vendor type');
+      }
+
+      return response.json();
+    })
+    .then(function (data) {
+      vendorTypeDisplay.value = data.type_display || '';
+    })
+    .catch(function () {
+      vendorTypeDisplay.value = '';
+      vendorTypeDisplay.placeholder = 'Unable to load vendor type';
+    });
+  }
+
+  if (vendorSelect) {
+    vendorSelect.addEventListener('change', fetchVendorType);
+  }
+
+  if (base) {
+    base.addEventListener('input', calcTotal);
+  }
+
+  if (gst) {
+    gst.addEventListener('input', calcTotal);
+  }
+
+  fetchVendorType();
   calcTotal();
-})();
+
+}());
 </script>
 {% endblock %}

@@ -8,34 +8,52 @@
 
 {% block page_actions %}
   <a href="{% url 'vendor:new_request' %}" class="btn btn-primary btn-sm">
-    <i class="fa-solid fa-plus"></i> New Request
+    <i class="fa-solid fa-plus"></i>
+    New Request
   </a>
 {% endblock %}
 
 {% block content %}
+
+{% if is_admin_view %}
+  <div class="alert alert-info mb-3">
+    Admin view: showing all vendor payment requests.
+  </div>
+{% endif %}
+
 <div class="dt-card">
   <div class="dt-toolbar">
     <div class="dt-toolbar-l">
       <span class="dt-title">Payment Requests</span>
       <span class="dt-count">{{ requests.count }}</span>
     </div>
+
     <div class="dt-toolbar-r">
       <form method="get" class="d-flex gap-2">
-        <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+        <select
+          name="status"
+          class="form-select form-select-sm"
+          onchange="this.form.submit()"
+        >
           <option value="">All Status</option>
+
           {% for val, label in status_choices %}
-            <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>{{ label }}</option>
+            <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>
+              {{ label }}
+            </option>
           {% endfor %}
         </select>
       </form>
     </div>
   </div>
+
   <div class="data-table-wrap">
     <table class="data-table">
       <thead>
         <tr>
           <th>Request ID</th>
           <th>Vendor</th>
+          <th>Vendor Type</th>
           <th>Invoice No</th>
           <th>Total</th>
           <th>Bill Type</th>
@@ -44,22 +62,44 @@
           <th></th>
         </tr>
       </thead>
+
       <tbody>
         {% for r in requests %}
-        <tr>
-          <td><strong>{{ r.request_id }}</strong></td>
-          <td>{{ r.vendor_display_name }}</td>
-          <td>{{ r.invoice_number }}</td>
-          <td>₹{{ r.total_amount|floatformat:2 }}</td>
-          <td>{{ r.get_bill_type_display }}</td>
-          <td><span class="status-badge {{ r.get_status_badge }}">{{ r.get_status_display }}</span></td>
-          <td>{{ r.created_at|date:"d M Y" }}</td>
-          <td class="action-cell">
-            <a href="{% url 'vendor:detail' r.pk %}" class="btn btn-sm btn-light">View</a>
-          </td>
-        </tr>
+          <tr>
+            <td>
+              <strong>{{ r.request_id }}</strong>
+            </td>
+
+            <td>{{ r.vendor_display_name }}</td>
+
+            <td>{{ r.vendor_type_display_safe }}</td>
+
+            <td>{{ r.invoice_number }}</td>
+
+            <td>₹{{ r.total_amount|floatformat:2 }}</td>
+
+            <td>{{ r.get_bill_type_display }}</td>
+
+            <td>
+              <span class="status-badge {{ r.get_status_badge }}">
+                {{ r.get_status_display }}
+              </span>
+            </td>
+
+            <td>{{ r.created_at|date:"d M Y" }}</td>
+
+            <td class="action-cell">
+              <a href="{% url 'vendor:detail' r.pk %}" class="btn btn-sm btn-light">
+                View
+              </a>
+            </td>
+          </tr>
         {% empty %}
-        <tr><td colspan="8" class="empty-state">No requests found.</td></tr>
+          <tr>
+            <td colspan="9" class="empty-state">
+              No requests found.
+            </td>
+          </tr>
         {% endfor %}
       </tbody>
     </table>

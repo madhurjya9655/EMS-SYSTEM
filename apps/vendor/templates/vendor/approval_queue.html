@@ -10,44 +10,135 @@
 <div class="dt-card">
   <div class="dt-toolbar">
     <div class="dt-toolbar-l">
-      <span class="dt-title">Pending Approvals</span>
+      <span class="dt-title">
+        {% if is_admin %}
+          All Vendor Payment Requests
+        {% else %}
+          Pending Approvals
+        {% endif %}
+      </span>
+
       <span class="dt-count">{{ requests.count }}</span>
     </div>
+
     <div class="dt-toolbar-r">
-      {% if is_finance %}<span class="badge bg-primary">Finance Approver</span>{% endif %}
-      {% if is_senior %}<span class="badge bg-success">Senior Approver</span>{% endif %}
+      {% if is_admin %}
+        <span class="badge bg-dark">Admin Full Access</span>
+      {% endif %}
+
+      {% if is_finance %}
+        <span class="badge bg-primary">Finance Approver</span>
+      {% endif %}
+
+      {% if is_senior %}
+        <span class="badge bg-success">Senior Approver</span>
+      {% endif %}
+
+      {% if is_admin %}
+        <form method="get" class="d-inline-flex gap-2 ms-2">
+          <select
+            name="status"
+            class="form-select form-select-sm"
+            onchange="this.form.submit()"
+          >
+            <option value="">All Status</option>
+
+            {% for val, label in status_choices %}
+              <option value="{{ val }}" {% if status_filter == val %}selected{% endif %}>
+                {{ label }}
+              </option>
+            {% endfor %}
+          </select>
+        </form>
+      {% endif %}
     </div>
   </div>
+
   <div class="data-table-wrap">
     <table class="data-table">
       <thead>
         <tr>
           <th>Request ID</th>
           <th>Vendor</th>
+          <th>Vendor Type</th>
           <th>Invoice No</th>
           <th>Total</th>
           <th>Submitted By</th>
           <th>Status</th>
+          <th>Invoice</th>
+          <th>Bank</th>
           <th>Date</th>
           <th></th>
         </tr>
       </thead>
+
       <tbody>
         {% for r in requests %}
-        <tr>
-          <td><strong>{{ r.request_id }}</strong></td>
-          <td>{{ r.vendor_display_name }}</td>
-          <td>{{ r.invoice_number }}</td>
-          <td>₹{{ r.total_amount|floatformat:2 }}</td>
-          <td>{{ r.created_by.get_full_name|default:r.created_by.username }}</td>
-          <td><span class="status-badge {{ r.get_status_badge }}">{{ r.get_status_display }}</span></td>
-          <td>{{ r.created_at|date:"d M Y" }}</td>
-          <td class="action-cell">
-            <a href="{% url 'vendor:detail' r.pk %}" class="btn btn-sm btn-primary">Review</a>
-          </td>
-        </tr>
+          <tr>
+            <td>
+              <strong>{{ r.request_id }}</strong>
+            </td>
+
+            <td>{{ r.vendor_display_name }}</td>
+
+            <td>{{ r.vendor_type_display_safe }}</td>
+
+            <td>{{ r.invoice_number }}</td>
+
+            <td>₹{{ r.total_amount|floatformat:2 }}</td>
+
+            <td>
+              {{ r.created_by.get_full_name|default:r.created_by.username }}
+            </td>
+
+            <td>
+              <span class="status-badge {{ r.get_status_badge }}">
+                {{ r.get_status_display }}
+              </span>
+            </td>
+
+            <td>
+              {% if r.attachment %}
+                <a
+                  href="{{ r.attachment.url }}"
+                  target="_blank"
+                  class="btn btn-sm btn-light"
+                >
+                  View
+                </a>
+              {% else %}
+                —
+              {% endif %}
+            </td>
+
+            <td>
+              {% if r.bank_attachment %}
+                <a
+                  href="{{ r.bank_attachment.url }}"
+                  target="_blank"
+                  class="btn btn-sm btn-light"
+                >
+                  View
+                </a>
+              {% else %}
+                —
+              {% endif %}
+            </td>
+
+            <td>{{ r.created_at|date:"d M Y" }}</td>
+
+            <td class="action-cell">
+              <a href="{% url 'vendor:detail' r.pk %}" class="btn btn-sm btn-primary">
+                Review
+              </a>
+            </td>
+          </tr>
         {% empty %}
-        <tr><td colspan="8" class="empty-state">No pending approvals.</td></tr>
+          <tr>
+            <td colspan="11" class="empty-state">
+              No requests found.
+            </td>
+          </tr>
         {% endfor %}
       </tbody>
     </table>
