@@ -86,6 +86,7 @@ from .models import (
     CollectionPlan,
     VisitBatch,
     KamManagerMapping,
+    KAMAssignment,
 )
 
 from . import sheets
@@ -719,15 +720,73 @@ def _active_cc_for_kam(kam_user: User) -> List[User]:
         return []
 
 def _kams_managed_by_manager(manager_user: User) -> List[int]:
+    """
+    Return all active KAM / employee user IDs visible to a manager.
+
+    Sources checked:
+      1. KamManagerMapping.manager -> kam
+      2. ApproverMapping.reporting_person -> employee
+      3. User.profile.reporting_officer -> employee
+
+    This function is intentionally centralized because Plan Visit,
+    approval screens, visit history, and customer dropdowns must all
+    resolve manager team members in the same way.
+    """
     if not manager_user or not getattr(manager_user, "id", None):
         return []
+
     if _is_admin(manager_user):
-        return list(User.objects.filter(is_active=True).values_list("id", flat=True))
-    return list(
-        KamManagerMapping.objects.filter(manager=manager_user, active=True)
-        .values_list("kam_id", flat=True)
-        .distinct()
-    )
+        return list(
+            User.objects
+            .filter(is_active=True)
+            .values_list("id", flat=True)
+        )
+
+    kam_ids = set()
+
+    # 1. Explicit KAM manager mapping
+    try:
+        kam_ids.update(
+            KamManagerMapping.objects
+            .filter(manager=manager_user, active=True)
+            .values_list("kam_id", flat=True)
+        )
+    except Exception:
+        logger.exception(
+            "_kams_managed_by_manager: KamManagerMapping lookup failed for manager_id=%s",
+            getattr(manager_user, "id", None),
+        )
+
+    # 2. Leave / approval reporting hierarchy
+    try:
+        from apps.leave.models import ApproverMapping
+
+        kam_ids.update(
+            ApproverMapping.objects
+            .filter(reporting_person=manager_user)
+            .values_list("employee_id", flat=True)
+        )
+    except Exception:
+        logger.exception(
+            "_kams_managed_by_manager: ApproverMapping lookup failed for manager_id=%s",
+            getattr(manager_user, "id", None),
+        )
+
+    # 3. Employee profile reporting officer hierarchy
+    try:
+        kam_ids.update(
+            User.objects
+            .filter(profile__reporting_officer=manager_user, is_active=True)
+            .values_list("id", flat=True)
+        )
+    except Exception:
+        logger.exception(
+            "_kams_managed_by_manager: profile reporting_officer lookup failed for manager_id=%s",
+            getattr(manager_user, "id", None),
+        )
+
+    # Remove None/blank values and return stable sorted list.
+    return sorted({int(k) for k in kam_ids if k})
 
 def _can_manager_approve_visit(manager_user: User, plan: "VisitPlan") -> bool:
     if _is_admin(manager_user):
@@ -784,26 +843,35 @@ def _is_kam_candidate(u: User, codes: Optional[set] = None) -> bool:
 
 def _customer_qs_for_user(user: User):
     """
-    Canonical customer scope for KAM Plan Visit and customer APIs.
+    Canonical customer scope for KAM dashboard, Plan Visit, and customer APIs.
 
     Visibility rules:
       Admin   -> all valid customers
-      Manager -> customers owned by mapped/team KAMs
+      Manager -> customers belonging to all reporting/team KAMs
       KAM     -> own customers only
 
-    Sources used:
-      1. Customer.kam / Customer.primary_kam
-      2. KAMAssignment
-      3. InvoiceFact.kam
-      4. LeadFact.kam
-      5. CollectionTxn.kam
+    Source rule:
+      Customer list comes from PostgreSQL Customer records, which are
+      populated by Google Sheets sync from the Customer Details tab.
 
     Important:
-      Sheet-synced customers may have kam/primary_kam NULL, so related facts
-      and assignment table are also considered.
+      This function must NOT read Google Sheets directly.
+      Google Sheets -> sync -> PostgreSQL -> views/dropdowns.
     """
     if not user or not getattr(user, "is_authenticated", False):
         return Customer.objects.none()
+
+    # Defensive import:
+    # This prevents NameError even if global import is accidentally missed
+    # during deploy/merge.
+    try:
+        from .models import KAMAssignment as _KAMAssignment
+    except Exception:
+        logger.exception(
+            "_customer_qs_for_user: KAMAssignment model import failed. "
+            "Customer assignment mapping will be skipped."
+        )
+        _KAMAssignment = None
 
     base_qs = (
         Customer.objects
@@ -812,11 +880,28 @@ def _customer_qs_for_user(user: User):
     )
 
     if _is_admin(user):
-        return base_qs.distinct()
+        return base_qs.distinct().order_by("name", "code")
 
     def _customers_for_kam_ids(kam_ids):
-        kam_ids = [int(k) for k in kam_ids or [] if k]
+        """
+        Resolve customers for one or more KAM user IDs.
+
+        Customer may be connected to a KAM through:
+          1. Customer.kam
+          2. Customer.primary_kam
+          3. KAMAssignment
+          4. InvoiceFact.kam
+          5. LeadFact.kam
+          6. CollectionTxn.kam
+        """
+        kam_ids = sorted({int(k) for k in (kam_ids or []) if k})
+
         if not kam_ids:
+            logger.warning(
+                "_customers_for_kam_ids called with no KAM IDs. user_id=%s username=%s",
+                getattr(user, "id", None),
+                getattr(user, "username", None),
+            )
             return Customer.objects.none()
 
         invoice_customer_ids = (
@@ -837,57 +922,58 @@ def _customer_qs_for_user(user: User):
             .values_list("customer_id", flat=True)
         )
 
-        assignment_customer_ids = (
-            KAMAssignment.objects
-            .filter(kam_id__in=kam_ids)
-            .filter(Q(active_to__isnull=True) | Q(active_to__gte=timezone.localdate()))
-            .values_list("customer_id", flat=True)
+        q_obj = (
+            Q(kam_id__in=kam_ids)
+            | Q(primary_kam_id__in=kam_ids)
+            | Q(id__in=invoice_customer_ids)
+            | Q(id__in=lead_customer_ids)
+            | Q(id__in=collection_customer_ids)
         )
 
-        return (
-            base_qs
-            .filter(
-                Q(kam_id__in=kam_ids)
-                | Q(primary_kam_id__in=kam_ids)
-                | Q(id__in=invoice_customer_ids)
-                | Q(id__in=lead_customer_ids)
-                | Q(id__in=collection_customer_ids)
-                | Q(id__in=assignment_customer_ids)
+        if _KAMAssignment is not None:
+            assignment_customer_ids = (
+                _KAMAssignment.objects
+                .filter(kam_id__in=kam_ids)
+                .filter(
+                    Q(active_to__isnull=True)
+                    | Q(active_to__gte=timezone.localdate())
+                )
+                .values_list("customer_id", flat=True)
             )
+
+            q_obj = q_obj | Q(id__in=assignment_customer_ids)
+
+        qs = (
+            base_qs
+            .filter(q_obj)
             .distinct()
+            .order_by("name", "code")
         )
+
+        logger.info(
+            "Customer scope resolved. user_id=%s username=%s kam_ids=%s count=%s",
+            getattr(user, "id", None),
+            getattr(user, "username", None),
+            kam_ids,
+            qs.count(),
+        )
+
+        return qs
 
     if _is_manager(user):
-        kam_ids = set(_kams_managed_by_manager(user))
+        kam_ids = _kams_managed_by_manager(user)
 
-        try:
-            from apps.leave.models import ApproverMapping
-            kam_ids.update(
-                ApproverMapping.objects
-                .filter(reporting_person=user)
-                .values_list("employee_id", flat=True)
-            )
-        except Exception:
-            logger.exception(
-                "_customer_qs_for_user: ApproverMapping lookup failed for manager_id=%s",
+        if not kam_ids:
+            logger.warning(
+                "Manager has no reporting/team KAM IDs. manager_id=%s username=%s",
                 getattr(user, "id", None),
+                getattr(user, "username", None),
             )
+            return Customer.objects.none()
 
-        try:
-            kam_ids.update(
-                User.objects
-                .filter(profile__reporting_officer=user, is_active=True)
-                .values_list("id", flat=True)
-            )
-        except Exception:
-            logger.exception(
-                "_customer_qs_for_user: profile reporting officer lookup failed for manager_id=%s",
-                getattr(user, "id", None),
-            )
+        return _customers_for_kam_ids(kam_ids)
 
-        return _customers_for_kam_ids(kam_ids).order_by("name", "code")
-
-    return _customers_for_kam_ids([user.id]).order_by("name", "code")
+    return _customers_for_kam_ids([user.id])
 
 def _visitbatch_qs_for_user(user: User):
     qs = VisitBatch.objects.select_related("kam")
