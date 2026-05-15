@@ -6,7 +6,9 @@
 {% block content %}
 <style>
   /* ─── General ─────────────────────────────────────────────────────── */
-  .kam-form .form-label { font-weight: 600; }
+  .kam-form .form-label {
+    font-weight: 600;
+  }
 
   .kam-remarks-compact {
     resize: vertical;
@@ -20,11 +22,15 @@
   .kam-scroll-table {
     max-height: 520px;
     overflow: auto;
-    border: 1px solid rgba(0,0,0,.08);
+    border: 1px solid rgba(0, 0, 0, .08);
     border-radius: 8px;
     background: #fff;
   }
-  .kam-scroll-table table { margin-bottom: 0; }
+
+  .kam-scroll-table table {
+    margin-bottom: 0;
+  }
+
   .kam-scroll-table thead th {
     position: sticky;
     top: 0;
@@ -34,42 +40,67 @@
     white-space: nowrap;
   }
 
-  .table-sm > :not(caption) > * > * { padding: .45rem .55rem; }
+  .table-sm > :not(caption) > * > * {
+    padding: .45rem .55rem;
+  }
 
   /* ─── Hint / section cards ────────────────────────────────────────── */
   .kam-hint {
     background: #f8f9fa;
-    border: 1px dashed rgba(0,0,0,.2);
+    border: 1px dashed rgba(0, 0, 0, .2);
     border-radius: 8px;
     padding: 16px;
-    color: rgba(0,0,0,.65);
+    color: rgba(0, 0, 0, .65);
   }
 
   .kam-section-card {
-    border: 1px solid rgba(0,0,0,.08);
+    border: 1px solid rgba(0, 0, 0, .08);
     border-radius: 10px;
     background: #fff;
   }
-  .kam-section-card .card-body { padding: 1rem; }
+
+  .kam-section-card .card-body {
+    padding: 1rem;
+  }
 
   /* ─── Global date window banner ─────────────────────────────────── */
   .kam-global-window {
-    border: 1px solid rgba(13,110,253,.18);
-    background: rgba(13,110,253,.04);
+    border: 1px solid rgba(13, 110, 253, .18);
+    background: rgba(13, 110, 253, .04);
     border-radius: 8px;
     padding: .75rem .9rem;
   }
-  .kam-global-window .kam-window-label { font-size: .875rem; color: #495057; }
-  .kam-global-window .kam-window-value { font-weight: 600; color: #212529; }
+
+  .kam-global-window .kam-window-label {
+    font-size: .875rem;
+    color: #495057;
+  }
+
+  .kam-global-window .kam-window-value {
+    font-weight: 600;
+    color: #212529;
+  }
 
   /* ─── Table input widths ─────────────────────────────────────────── */
-  .kam-table-input      { min-width: 140px; }
-  .kam-table-input-wide { min-width: 220px; }
-  .kam-table-input-num  { min-width: 160px; text-align: right; }
+  .kam-table-input {
+    min-width: 140px;
+  }
 
-  .kam-muted-note { font-size: .875rem; color: #6c757d; }
+  .kam-table-input-wide {
+    min-width: 220px;
+  }
 
-  /* ─── Status badges (this-week table) ───────────────────────────── */
+  .kam-table-input-num {
+    min-width: 160px;
+    text-align: right;
+  }
+
+  .kam-muted-note {
+    font-size: .875rem;
+    color: #6c757d;
+  }
+
+  /* ─── Status badges ──────────────────────────────────────────────── */
   .status-badge {
     display: inline-block;
     padding: 2px 8px;
@@ -78,14 +109,37 @@
     font-weight: 700;
     text-transform: uppercase;
   }
-  .status-badge-draft    { background: #f3f4f6; color: #6b7280; }
-  .status-badge-pending  { background: #fef3c7; color: #d97706; }
-  .status-badge-approved { background: #dcfce7; color: #16a34a; }
-  .status-badge-rejected { background: #fee2e2; color: #dc2626; }
+
+  .status-badge-draft {
+    background: #f3f4f6;
+    color: #6b7280;
+  }
+
+  .status-badge-pending {
+    background: #fef3c7;
+    color: #d97706;
+  }
+
+  .status-badge-approved {
+    background: #dcfce7;
+    color: #16a34a;
+  }
+
+  .status-badge-rejected {
+    background: #fee2e2;
+    color: #dc2626;
+  }
 
   /* ─── Manual-customer toggle UI ─────────────────────────────────── */
-  .cust-mode-toggle .btn-check:checked + .btn-outline-primary { background: #0d6efd; color: #fff; }
-  .cust-mode-toggle .btn-check:checked + .btn-outline-success { background: #198754; color: #fff; }
+  .cust-mode-toggle .btn-check:checked + .btn-outline-primary {
+    background: #0d6efd;
+    color: #fff;
+  }
+
+  .cust-mode-toggle .btn-check:checked + .btn-outline-success {
+    background: #198754;
+    color: #fff;
+  }
 
   .manual-preview-box {
     display: none;
@@ -97,7 +151,22 @@
     color: #065f46;
     margin-top: 6px;
   }
-  .manual-preview-box.visible { display: flex; align-items: center; gap: 6px; }
+
+  .manual-preview-box.visible {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .customer-empty-warning {
+    border: 1px dashed #ffc107;
+    background: #fff8e1;
+    color: #7a5b00;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+    margin-top: 6px;
+  }
 </style>
 
 <div class="container-fluid kam-form">
@@ -110,13 +179,18 @@
         Submit visit plans for manager approval. Any active employee can apply.
       </div>
     </div>
+
     <div class="d-flex align-items-center gap-2 flex-wrap">
-      <a class="btn btn-sm btn-outline-primary"   href="{% url 'kam:single_visit_list' %}">My Visits</a>
-      <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:visit_batches' %}">View Batches</a>
+      <a class="btn btn-sm btn-outline-primary" href="{% url 'kam:single_visit_list' %}">
+        My Visits
+      </a>
+      <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:visit_batches' %}">
+        View Batches
+      </a>
     </div>
   </div>
 
- <!-- Flash messages are rendered by base.html (.page-messages). No duplicate block here. -->
+  <!-- Flash messages are rendered by base.html (.page-messages). No duplicate block here. -->
 
   <!-- ── Migration warning ────────────────────────────────────────── -->
   {% if not visitplan_schema_ready %}
@@ -129,18 +203,27 @@
   <!-- ── Tabs ─────────────────────────────────────────────────────── -->
   <ul class="nav nav-tabs" id="planTabs" role="tablist">
     <li class="nav-item" role="presentation">
-      <a class="nav-link active" id="single-tab"
-         data-toggle="tab" data-bs-toggle="tab"
-         href="#single" role="tab"
-         aria-controls="single" aria-selected="true">
+      <a class="nav-link active"
+         id="single-tab"
+         data-toggle="tab"
+         data-bs-toggle="tab"
+         href="#single"
+         role="tab"
+         aria-controls="single"
+         aria-selected="true">
         Single Visit
       </a>
     </li>
+
     <li class="nav-item" role="presentation">
-      <a class="nav-link" id="batch-tab"
-         data-toggle="tab" data-bs-toggle="tab"
-         href="#batch" role="tab"
-         aria-controls="batch" aria-selected="false">
+      <a class="nav-link"
+         id="batch-tab"
+         data-toggle="tab"
+         data-bs-toggle="tab"
+         href="#batch"
+         role="tab"
+         aria-controls="batch"
+         aria-selected="false">
         Batch Visit
       </a>
     </li>
@@ -172,7 +255,9 @@
 
         {% if single_form.non_field_errors %}
           <div class="alert alert-danger">
-            {% for err in single_form.non_field_errors %}<div>{{ err }}</div>{% endfor %}
+            {% for err in single_form.non_field_errors %}
+              <div>{{ err }}</div>
+            {% endfor %}
           </div>
         {% endif %}
 
@@ -200,7 +285,7 @@
             {% endif %}
           </div>
 
-          <!-- ── Customer Block (shown for Customer Visit) ──────────── -->
+          <!-- Customer Block -->
           <div class="col-12 col-md-6" id="singleCustomerWrap">
             <label class="form-label mb-1">
               Customer <span class="text-danger">*</span>
@@ -208,14 +293,21 @@
 
             <!-- Toggle: Select existing vs Enter new -->
             <div class="btn-group btn-group-sm mb-2 cust-mode-toggle" role="group" id="singleCustToggleGroup">
-              <input type="radio" class="btn-check" name="single_cust_input_mode"
-                     id="singleCustModeSelect" value="select" checked>
+              <input type="radio"
+                     class="btn-check"
+                     name="single_cust_input_mode"
+                     id="singleCustModeSelect"
+                     value="select"
+                     checked>
               <label class="btn btn-outline-primary" for="singleCustModeSelect">
-                <i class="fas fa-list me-1"></i>Select Existing
+                <i class="fas fa-list me-1"></i>Select Existing Customer
               </label>
 
-              <input type="radio" class="btn-check" name="single_cust_input_mode"
-                     id="singleCustModeManual" value="manual">
+              <input type="radio"
+                     class="btn-check"
+                     name="single_cust_input_mode"
+                     id="singleCustModeManual"
+                     value="manual">
               <label class="btn btn-outline-success" for="singleCustModeManual">
                 <i class="fas fa-pen me-1"></i>Enter New Customer
               </label>
@@ -224,9 +316,17 @@
             <!-- Existing dropdown -->
             <div id="singleCustDropdownWrap">
               {{ single_form.customer }}
+
               {% if single_form.customer.errors %}
                 <div class="text-danger small mt-1">{{ single_form.customer.errors }}</div>
               {% endif %}
+
+              {% if single_form.fields.customer.queryset.count == 0 %}
+                <div class="customer-empty-warning">
+                  No customers are available for your role. Please check customer sync and KAM mapping.
+                </div>
+              {% endif %}
+
               <div class="form-text text-muted">
                 Can't find your customer?
                 <a href="#" id="singleSwitchToManual">Enter manually &rarr;</a>
@@ -241,19 +341,21 @@
                      class="form-control form-control-sm"
                      placeholder="Type new customer name…"
                      autocomplete="off" />
+
               <div class="form-text text-muted">
                 A new customer record will be created automatically if this name does not already exist.
                 <a href="#" id="singleSwitchToDropdown">Select from list instead &rarr;</a>
               </div>
+
               <div class="manual-preview-box" id="singleManualPreview">
                 <i class="fas fa-check-circle"></i>
                 Customer "<strong id="singleManualCustName"></strong>" will be created on save.
               </div>
             </div>
           </div>
-          <!-- ── End Customer Block ─────────────────────────────────── -->
+          <!-- End Customer Block -->
 
-          <!-- Counterparty (non-customer categories) -->
+          <!-- Counterparty for non-customer categories -->
           <div class="col-12 col-md-6" id="singleCounterpartyWrap" style="display:none;">
             <label class="form-label mb-1" for="{{ single_form.counterparty_name.id_for_label }}">
               Vendor / Supplier / Warehouse Name <span class="text-danger">*</span>
@@ -286,17 +388,23 @@
             {% endif %}
           </div>
 
-        </div>{# /row #}
+        </div>
 
         <div class="d-flex gap-2 mt-4 flex-wrap align-items-center">
-          <button type="submit" class="btn btn-outline-secondary"
-                  name="submit_action" value="save_draft">
+          <button type="submit"
+                  class="btn btn-outline-secondary"
+                  name="submit_action"
+                  value="save_draft">
             <i class="fas fa-save me-1"></i> Save Draft
           </button>
-          <button type="submit" class="btn btn-primary"
-                  name="submit_action" value="submit_to_manager">
+
+          <button type="submit"
+                  class="btn btn-primary"
+                  name="submit_action"
+                  value="submit_to_manager">
             <i class="fas fa-paper-plane me-1"></i> Submit to Manager
           </button>
+
           <span class="kam-muted-note ms-2">
             <i class="fas fa-lock me-1"></i> Manager is auto-assigned from your reporting officer
           </span>
@@ -315,7 +423,7 @@
         {% csrf_token %}
         <input type="hidden" name="mode" value="batch" />
 
-        <!-- ── Top row: Category / From / To / Remarks ──────────── -->
+        <!-- Top row: Category / From / To / Remarks -->
         <div class="row g-3 align-items-end mt-1">
           <div class="col-12 col-lg-3">
             <label class="form-label mb-1">Visit Category</label>
@@ -354,20 +462,20 @@
         <div class="kam-global-window mt-3" id="globalDateInfo">
           <div class="d-flex flex-wrap align-items-center gap-2">
             <span class="kam-window-label">Batch date window:</span>
-            <span class="kam-window-value" id="globalDateInfoText">Select From Date and To Date above.</span>
+            <span class="kam-window-value" id="globalDateInfoText">
+              Select From Date and To Date above.
+            </span>
           </div>
         </div>
 
         <hr class="my-3" />
 
-        <!-- Category hint (shown when no category selected) -->
+        <!-- Category hint -->
         <div id="categoryHint" class="kam-hint">
           Select a <b>Visit Category</b> above to continue.
         </div>
 
-        <!-- ══════════════════════════════════════════════════════════
-             CUSTOMER BATCH SECTION
-        ══════════════════════════════════════════════════════════ -->
+        <!-- Customer batch section -->
         <div id="customerBatchSection" style="display:none;">
           <div class="kam-section-card">
             <div class="card-body">
@@ -375,24 +483,32 @@
               <!-- Search / filter bar -->
               <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
                 <div class="d-flex gap-2 flex-wrap">
-                  <input class="form-control form-control-sm" style="width:260px"
+                  <input class="form-control form-control-sm"
+                         style="width:260px"
                          id="custSearch"
                          placeholder="Search customers (name/code/mobile)" />
+
                   <select class="form-select form-select-sm" style="width:180px" id="custSource">
                     <option value="">All Sources</option>
                     <option value="SHEET">SHEET</option>
                     <option value="MANUAL">MANUAL</option>
                   </select>
+
                   <button type="button" class="btn btn-sm btn-outline-primary" id="btnRefreshCustomers">
                     <i class="fas fa-sync-alt me-1"></i>Refresh
                   </button>
                 </div>
+
                 <div class="d-flex gap-2 align-items-center flex-wrap">
-                  <button type="button" class="btn btn-sm btn-outline-success"
-                          data-toggle="modal" data-bs-toggle="modal"
-                          data-target="#manualCustomerModal" data-bs-target="#manualCustomerModal">
+                  <button type="button"
+                          class="btn btn-sm btn-outline-success"
+                          data-toggle="modal"
+                          data-bs-toggle="modal"
+                          data-target="#manualCustomerModal"
+                          data-bs-target="#manualCustomerModal">
                     + Manual Customer
                   </button>
+
                   <span class="badge bg-secondary" id="selCount">0 selected</span>
                 </div>
               </div>
@@ -402,16 +518,18 @@
                 <strong>To Date</strong> shown above.
               </div>
 
-              <!-- ── Batch Manual Customer Entry ─────────────────── -->
+              <!-- Batch Manual Customer Entry -->
               <div class="card mb-3 border-success-subtle">
                 <div class="card-header bg-success-subtle d-flex align-items-center justify-content-between py-2">
                   <span class="fw-semibold text-success-emphasis small">
                     <i class="fas fa-pen me-1"></i>Add New Customer to Batch (Manual Entry)
                   </span>
+
                   <button type="button" class="btn btn-sm btn-outline-success" id="batchAddManualBtn">
                     <i class="fas fa-plus me-1"></i>Add
                   </button>
                 </div>
+
                 <div class="card-body py-2">
                   <div class="row g-2 align-items-end">
                     <div class="col-12 col-md-5">
@@ -424,6 +542,7 @@
                              placeholder="e.g. ABC New Traders"
                              autocomplete="off" />
                     </div>
+
                     <div class="col-12 col-md-4">
                       <label class="form-label mb-1 small fw-semibold">Purpose (optional)</label>
                       <input type="text"
@@ -431,19 +550,20 @@
                              class="form-control form-control-sm"
                              placeholder="Purpose / notes" />
                     </div>
+
                     <div class="col-12 col-md-3">
                       <div class="form-text text-muted mb-0">
                         Customer is created automatically if the name doesn't exist yet.
                       </div>
                     </div>
                   </div>
+
                   <div class="manual-preview-box mt-2" id="batchManualPreview">
                     <i class="fas fa-check-circle"></i>
                     Customer "<strong id="batchManualCustNamePreview"></strong>" will be added to batch.
                   </div>
                 </div>
               </div>
-              <!-- ── End Batch Manual Customer Entry ─────────────── -->
 
               <!-- Customer table -->
               <div class="kam-scroll-table">
@@ -460,6 +580,7 @@
                       <th style="width:90px;">Source</th>
                     </tr>
                   </thead>
+
                   <tbody id="custTbody">
                     <tr>
                       <td colspan="6" class="text-muted">
@@ -478,19 +599,18 @@
                 <button type="submit" name="action" value="save_draft" class="btn btn-outline-secondary">
                   <i class="fas fa-save me-1"></i> Save Draft Batch
                 </button>
+
                 <button type="submit" name="action" value="proceed" class="btn btn-primary">
                   <i class="fas fa-paper-plane me-1"></i> Proceed to Manager
                 </button>
               </div>
 
-            </div><!-- /card-body -->
-          </div><!-- /kam-section-card -->
+            </div>
+          </div>
         </div>
         <!-- /customerBatchSection -->
 
-        <!-- ══════════════════════════════════════════════════════════
-             NON-CUSTOMER BATCH SECTION (Supplier / Vendor / Warehouse)
-        ══════════════════════════════════════════════════════════ -->
+        <!-- Non-customer batch section -->
         <div id="nonCustomerSection" style="display:none;">
           <div class="kam-section-card">
             <div class="card-body">
@@ -498,6 +618,7 @@
                 <div class="text-muted small">
                   Add one or more lines for supplier / warehouse / vendor batch planning.
                 </div>
+
                 <button type="button" class="btn btn-sm btn-outline-primary" id="addNonCustomerLine">
                   + Add line
                 </button>
@@ -521,6 +642,7 @@
                 <button type="submit" name="action" value="save_draft" class="btn btn-outline-secondary">
                   <i class="fas fa-save me-1"></i> Save Draft Batch
                 </button>
+
                 <button type="submit" name="action" value="proceed" class="btn btn-primary">
                   <i class="fas fa-paper-plane me-1"></i> Proceed to Manager
                 </button>
@@ -534,17 +656,18 @@
     </div>
     <!-- /batch tab pane -->
 
-  </div><!-- /tab-content -->
+  </div>
+  <!-- /tab-content -->
 
 
-  <!-- ═══════════════════════════════════════════════════════════════
-       THIS WEEK'S PLANS TABLE
-  ════════════════════════════════════════════════════════════════ -->
+  <!-- This Week's Plans Table -->
   <hr class="my-4" />
 
   <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
     <h5 class="mb-0">This Week's Visit Plans</h5>
-    <a href="{% url 'kam:single_visit_list' %}" class="btn btn-sm btn-outline-primary">View All</a>
+    <a href="{% url 'kam:single_visit_list' %}" class="btn btn-sm btn-outline-primary">
+      View All
+    </a>
   </div>
 
   <div class="table-responsive">
@@ -560,21 +683,33 @@
           <th>Actions</th>
         </tr>
       </thead>
+
       <tbody>
         {% for p in plans %}
           <tr>
             <td class="text-muted small">{{ p.id }}</td>
+
             <td>
               {{ p.visit_date }}
-              {% if p.visit_date_to %} &rarr; {{ p.visit_date_to }}{% endif %}
-            </td>
-            <td>
-              {% if p.customer %}{{ p.customer.name }}
-              {% else %}{{ p.counterparty_name|default:"&mdash;" }}
+              {% if p.visit_date_to %}
+                &rarr; {{ p.visit_date_to }}
               {% endif %}
             </td>
+
+            <td>
+              {% if p.customer %}
+                {{ p.customer.name }}
+              {% else %}
+                {{ p.counterparty_name|default:"&mdash;" }}
+              {% endif %}
+            </td>
+
             <td>{{ p.get_visit_category_display }}</td>
-            <td class="text-muted small">{{ p.location|default:"&mdash;" }}</td>
+
+            <td class="text-muted small">
+              {{ p.location|default:"&mdash;" }}
+            </td>
+
             <td>
               {% if p.approval_status == "DRAFT" %}
                 <span class="status-badge status-badge-draft">Draft</span>
@@ -588,12 +723,14 @@
                 <span class="status-badge status-badge-draft">{{ p.approval_status }}</span>
               {% endif %}
             </td>
+
             <td>
               <a href="{% url 'kam:single_visit_detail' p.id %}"
                  class="btn btn-xs btn-outline-secondary"
                  style="font-size:12px;padding:2px 8px;">
                 View
               </a>
+
               {% if p.approval_status == "DRAFT" or p.approval_status == "REJECTED" %}
                 <a href="{% url 'kam:single_visit_edit' p.id %}"
                    class="btn btn-xs btn-outline-primary ms-1"
@@ -614,252 +751,514 @@
     </table>
   </div>
 
-</div><!-- /container-fluid -->
+</div>
+<!-- /container-fluid -->
 
 
-<!-- ═══════════════════════════════════════════════════════════════
-     MODAL — Quick Manual Customer (Batch tab "Manual Customer" button)
-════════════════════════════════════════════════════════════════ -->
+<!-- Manual Customer Modal -->
 <div class="modal fade" id="manualCustomerModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
+
       <div class="modal-header">
         <h5 class="modal-title">Add Manual Customer</h5>
-        <button type="button" class="btn-close"
-                data-dismiss="modal" data-bs-dismiss="modal" aria-label="Close"></button>
+        <button type="button"
+                class="btn-close"
+                data-dismiss="modal"
+                data-bs-dismiss="modal"
+                aria-label="Close"></button>
       </div>
+
       <div class="modal-body">
         <div class="row g-3">
           <div class="col-12 col-md-6">
             <label class="form-label mb-1">Name <span class="text-danger">*</span></label>
             <input class="form-control form-control-sm" id="mc_name" placeholder="Customer name" />
           </div>
+
           <div class="col-12 col-md-6">
             <label class="form-label mb-1">Mobile</label>
             <input class="form-control form-control-sm" id="mc_mobile" placeholder="Mobile number" />
           </div>
+
           <div class="col-12">
             <label class="form-label mb-1">Address</label>
             <input class="form-control form-control-sm" id="mc_address" placeholder="Full address" />
           </div>
+
           <div class="col-12 col-md-6">
             <label class="form-label mb-1">Email</label>
             <input class="form-control form-control-sm" id="mc_email" placeholder="email@example.com" />
           </div>
+
           <div class="col-12 col-md-6">
             <label class="form-label mb-1">GST Number</label>
             <input class="form-control form-control-sm" id="mc_gst" placeholder="GST number" />
           </div>
+
           <div class="col-12 col-md-4">
             <label class="form-label mb-1">Pincode</label>
             <input class="form-control form-control-sm" id="mc_pincode" placeholder="Pincode" />
           </div>
         </div>
+
         <div class="small text-muted mt-2">
           Manual customers are editable/deletable; sheet customers are read-only.
         </div>
+
         <div class="text-danger small mt-2" id="mc_err" style="display:none;"></div>
-        <div class="text-success small mt-2" id="mc_ok"  style="display:none;"></div>
+        <div class="text-success small mt-2" id="mc_ok" style="display:none;"></div>
       </div>
+
       <div class="modal-footer">
-        <button class="btn btn-outline-secondary" type="button"
-                data-dismiss="modal" data-bs-dismiss="modal">Close</button>
-        <button class="btn btn-success" type="button" id="mc_save">Save Customer</button>
+        <button class="btn btn-outline-secondary"
+                type="button"
+                data-dismiss="modal"
+                data-bs-dismiss="modal">
+          Close
+        </button>
+
+        <button class="btn btn-success" type="button" id="mc_save">
+          Save Customer
+        </button>
       </div>
+
     </div>
   </div>
 </div>
 
 
-<!-- ═══════════════════════════════════════════════════════════════
-     JAVASCRIPT
-════════════════════════════════════════════════════════════════ -->
 <script>
 (function () {
   "use strict";
 
   /* ─── Utilities ─────────────────────────────────────────────────── */
-  function qs(sel, ctx) { return (ctx || document).querySelector(sel); }
+  function qs(sel, ctx) {
+    return (ctx || document).querySelector(sel);
+  }
+
+  function qsa(sel, ctx) {
+    return Array.prototype.slice.call((ctx || document).querySelectorAll(sel));
+  }
 
   function getCookie(name) {
     var v = null;
+
     if (document.cookie) {
-      document.cookie.split(";").forEach(function(c) {
+      document.cookie.split(";").forEach(function (c) {
         c = c.trim();
-        if (c.startsWith(name + "=")) v = decodeURIComponent(c.slice(name.length + 1));
+        if (c.startsWith(name + "=")) {
+          v = decodeURIComponent(c.slice(name.length + 1));
+        }
       });
     }
+
     return v;
   }
 
   function esc(s) {
-    return (s || "")
+    return String(s || "")
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 
-  function isCustomerCat(v) { return String(v || "").toUpperCase() === "CUSTOMER"; }
-  function hasCat(v)        { return String(v || "").trim() !== ""; }
+  function isCustomerCat(v) {
+    return String(v || "").toUpperCase() === "CUSTOMER";
+  }
+
+  function hasCat(v) {
+    return String(v || "").trim() !== "";
+  }
 
   var csrftoken = getCookie("csrftoken");
-  var apiUrl    = "{% url 'kam:customers_api' %}";
+  var apiUrl = "{% url 'kam:customers_api' %}";
 
   /* ─── Apply Bootstrap classes to Django-rendered form widgets ───── */
   function applyBootstrap() {
-    ["#batchForm", "#singleForm"].forEach(function(formSel) {
+    ["#batchForm", "#singleForm"].forEach(function (formSel) {
       var form = qs(formSel);
       if (!form) return;
-      form.querySelectorAll("select").forEach(function(el) {
-        if (!el.classList.contains("form-select"))
+
+      qsa("select", form).forEach(function (el) {
+        if (!el.classList.contains("form-select")) {
           el.classList.add("form-select", "form-select-sm");
+        }
       });
-      form.querySelectorAll('input[type="date"]').forEach(function(el) {
-        if (!el.classList.contains("form-control"))
+
+      qsa('input[type="date"]', form).forEach(function (el) {
+        if (!el.classList.contains("form-control")) {
           el.classList.add("form-control", "form-control-sm");
+        }
       });
-      form.querySelectorAll("input:not([type='hidden']):not([type='checkbox']):not([type='radio'])").forEach(function(el) {
-        if (!el.classList.contains("form-control"))
+
+      qsa("input:not([type='hidden']):not([type='checkbox']):not([type='radio'])", form).forEach(function (el) {
+        if (!el.classList.contains("form-control")) {
           el.classList.add("form-control", "form-control-sm");
+        }
       });
-      form.querySelectorAll("textarea").forEach(function(el) {
-        if (!el.classList.contains("form-control"))
+
+      qsa("textarea", form).forEach(function (el) {
+        if (!el.classList.contains("form-control")) {
           el.classList.add("form-control", "form-control-sm");
+        }
       });
     });
-    // Compact batch remarks textarea
+
     var purpose = qs('#batchForm textarea[name$="purpose"]');
-    if (purpose) purpose.classList.add("kam-remarks-compact");
+    if (purpose) {
+      purpose.classList.add("kam-remarks-compact");
+    }
   }
 
 
   /* ════════════════════════════════════════════════════════════════
-     SECTION A — SINGLE VISIT: category toggle + manual customer
+     SECTION A — SINGLE VISIT
   ════════════════════════════════════════════════════════════════ */
 
-  var singleCategoryEl    = qs('#singleForm select[name$="visit_category"]');
-  var singleCustomerWrap  = qs("#singleCustomerWrap");
-  var singleCpWrap        = qs("#singleCounterpartyWrap");
+  var singleCategoryEl = qs('#singleForm select[name$="visit_category"]');
+  var singleCustomerWrap = qs("#singleCustomerWrap");
+  var singleCpWrap = qs("#singleCounterpartyWrap");
 
-  var singleCustModeSelect  = qs("#singleCustModeSelect");
-  var singleCustModeManual  = qs("#singleCustModeManual");
-  var singleCustDropWrap    = qs("#singleCustDropdownWrap");
-  var singleCustManualWrap  = qs("#singleCustManualWrap");
-  var singleManualInput     = qs("#singleManualCustomerInput");
-  var singleManualPreview   = qs("#singleManualPreview");
-  var singleManualCustName  = qs("#singleManualCustName");
-  var singleSwitchToManual  = qs("#singleSwitchToManual");
-  var singleSwitchToDrop    = qs("#singleSwitchToDropdown");
-  var singleDropSelect      = singleCustDropWrap && singleCustDropWrap.querySelector("select");
+  var singleCustModeSelect = qs("#singleCustModeSelect");
+  var singleCustModeManual = qs("#singleCustModeManual");
+  var singleCustDropWrap = qs("#singleCustDropdownWrap");
+  var singleCustManualWrap = qs("#singleCustManualWrap");
+  var singleManualInput = qs("#singleManualCustomerInput");
+  var singleManualPreview = qs("#singleManualPreview");
+  var singleManualCustName = qs("#singleManualCustName");
+  var singleSwitchToManual = qs("#singleSwitchToManual");
+  var singleSwitchToDrop = qs("#singleSwitchToDropdown");
+  var singleDropSelect = singleCustDropWrap && singleCustDropWrap.querySelector("select");
 
   function singleActivateManual() {
-    if (singleCustDropWrap)   singleCustDropWrap.style.display   = "none";
-    if (singleCustManualWrap) singleCustManualWrap.style.display = "";
-    if (singleCustModeManual) singleCustModeManual.checked = true;
-    if (singleDropSelect)     singleDropSelect.disabled = true;
-    if (singleManualInput)    singleManualInput.focus();
+    if (singleCustDropWrap) {
+      singleCustDropWrap.style.display = "none";
+    }
+
+    if (singleCustManualWrap) {
+      singleCustManualWrap.style.display = "";
+    }
+
+    if (singleCustModeManual) {
+      singleCustModeManual.checked = true;
+    }
+
+    if (singleDropSelect) {
+      singleDropSelect.disabled = true;
+      singleDropSelect.value = "";
+    }
+
+    if (singleManualInput) {
+      singleManualInput.focus();
+    }
   }
 
   function singleActivateDropdown() {
-    if (singleCustDropWrap)   singleCustDropWrap.style.display   = "";
-    if (singleCustManualWrap) singleCustManualWrap.style.display = "none";
-    if (singleCustModeSelect) singleCustModeSelect.checked = true;
-    if (singleDropSelect)     singleDropSelect.disabled = false;
-    if (singleManualInput)    singleManualInput.value = "";
-    if (singleManualPreview)  singleManualPreview.classList.remove("visible");
+    if (singleCustDropWrap) {
+      singleCustDropWrap.style.display = "";
+    }
+
+    if (singleCustManualWrap) {
+      singleCustManualWrap.style.display = "none";
+    }
+
+    if (singleCustModeSelect) {
+      singleCustModeSelect.checked = true;
+    }
+
+    if (singleDropSelect) {
+      singleDropSelect.disabled = false;
+    }
+
+    if (singleManualInput) {
+      singleManualInput.value = "";
+    }
+
+    if (singleManualPreview) {
+      singleManualPreview.classList.remove("visible");
+    }
   }
 
-  if (singleCustModeSelect) singleCustModeSelect.addEventListener("change", singleActivateDropdown);
-  if (singleCustModeManual) singleCustModeManual.addEventListener("change", singleActivateManual);
-  if (singleSwitchToManual) singleSwitchToManual.addEventListener("click", function(e) { e.preventDefault(); singleActivateManual(); });
-  if (singleSwitchToDrop)   singleSwitchToDrop.addEventListener("click",   function(e) { e.preventDefault(); singleActivateDropdown(); });
+  if (singleCustModeSelect) {
+    singleCustModeSelect.addEventListener("change", singleActivateDropdown);
+  }
+
+  if (singleCustModeManual) {
+    singleCustModeManual.addEventListener("change", singleActivateManual);
+  }
+
+  if (singleSwitchToManual) {
+    singleSwitchToManual.addEventListener("click", function (e) {
+      e.preventDefault();
+      singleActivateManual();
+    });
+  }
+
+  if (singleSwitchToDrop) {
+    singleSwitchToDrop.addEventListener("click", function (e) {
+      e.preventDefault();
+      singleActivateDropdown();
+    });
+  }
 
   if (singleManualInput) {
-    singleManualInput.addEventListener("input", function() {
+    singleManualInput.addEventListener("input", function () {
       var val = (singleManualInput.value || "").trim();
+
       if (val.length > 1) {
-        if (singleManualCustName) singleManualCustName.textContent = val;
-        if (singleManualPreview)  singleManualPreview.classList.add("visible");
+        if (singleManualCustName) {
+          singleManualCustName.textContent = val;
+        }
+
+        if (singleManualPreview) {
+          singleManualPreview.classList.add("visible");
+        }
       } else {
-        if (singleManualPreview) singleManualPreview.classList.remove("visible");
+        if (singleManualPreview) {
+          singleManualPreview.classList.remove("visible");
+        }
       }
     });
   }
 
   function toggleSingleFields() {
-    var v      = singleCategoryEl ? singleCategoryEl.value : "";
+    var v = singleCategoryEl ? singleCategoryEl.value : "";
     var isCust = isCustomerCat(v);
-    if (singleCustomerWrap) singleCustomerWrap.style.display = isCust ? "" : "none";
-    if (singleCpWrap)       singleCpWrap.style.display       = isCust ? "none" : "";
-    if (!isCust) singleActivateDropdown();
+
+    if (singleCustomerWrap) {
+      singleCustomerWrap.style.display = isCust ? "" : "none";
+    }
+
+    if (singleCpWrap) {
+      singleCpWrap.style.display = isCust ? "none" : "";
+    }
+
+    if (!isCust) {
+      singleActivateDropdown();
+    }
   }
 
-  if (singleCategoryEl) singleCategoryEl.addEventListener("change", toggleSingleFields);
+  if (singleCategoryEl) {
+    singleCategoryEl.addEventListener("change", toggleSingleFields);
+  }
 
-  // Before submitting single form: clean up the unused input
   var singleFormEl = qs("#singleForm");
   if (singleFormEl) {
-    singleFormEl.addEventListener("submit", function() {
+    singleFormEl.addEventListener("submit", function () {
       var isManual = singleCustModeManual && singleCustModeManual.checked;
+
       if (isManual) {
-        // Don't send dropdown value — view will use manual_customer instead
-        if (singleDropSelect) singleDropSelect.disabled = true;
+        if (singleDropSelect) {
+          singleDropSelect.disabled = true;
+          singleDropSelect.value = "";
+        }
       } else {
-        // Don't send manual value — view will use dropdown instead
-        if (singleManualInput) singleManualInput.value = "";
+        if (singleDropSelect) {
+          singleDropSelect.disabled = false;
+        }
+
+        if (singleManualInput) {
+          singleManualInput.value = "";
+        }
       }
     });
   }
 
 
   /* ════════════════════════════════════════════════════════════════
-     SECTION B — BATCH VISIT: category sections + customer API
+     SECTION B — BATCH VISIT
   ════════════════════════════════════════════════════════════════ */
 
-  var batchCategoryEl      = qs('#batchForm select[name$="visit_category"]');
-  var batchFromEl          = qs('#batchForm input[type="date"][name$="from_date"]');
-  var batchToEl            = qs('#batchForm input[type="date"][name$="to_date"]');
-  var categoryHint         = qs("#categoryHint");
+  var batchCategoryEl = qs('#batchForm select[name$="visit_category"]');
+  var batchFromEl = qs('#batchForm input[type="date"][name$="from_date"]');
+  var batchToEl = qs('#batchForm input[type="date"][name$="to_date"]');
+
+  var categoryHint = qs("#categoryHint");
   var customerBatchSection = qs("#customerBatchSection");
-  var nonCustomerSection   = qs("#nonCustomerSection");
-  var globalDateInfoText   = qs("#globalDateInfoText");
+  var nonCustomerSection = qs("#nonCustomerSection");
+  var globalDateInfoText = qs("#globalDateInfoText");
 
-  var custTbody        = qs("#custTbody");
-  var custSearch       = qs("#custSearch");
-  var custSourceEl     = qs("#custSource");
-  var btnRefresh       = qs("#btnRefreshCustomers");
-  var selectAllCust    = qs("#selectAllCust");
-  var selCountBadge    = qs("#selCount");
-  var selectedHidden   = qs("#selectedHiddenInputs");
+  var custTbody = qs("#custTbody");
+  var custSearch = qs("#custSearch");
+  var custSourceEl = qs("#custSource");
+  var btnRefresh = qs("#btnRefreshCustomers");
+  var selectAllCust = qs("#selectAllCust");
+  var selCountBadge = qs("#selCount");
+  var selectedHidden = qs("#selectedHiddenInputs");
   var nonCustomerTbody = qs("#nonCustomerTbody");
-  var addLineBtn       = qs("#addNonCustomerLine");
+  var addLineBtn = qs("#addNonCustomerLine");
 
-  /* ── Batch manual customer entry elements ─────────────────────── */
   var batchManualCustNameInput = qs("#batchManualCustName");
-  var batchManualCustPurpose   = qs("#batchManualCustPurpose");
-  var batchAddManualBtn        = qs("#batchAddManualBtn");
-  var batchManualPreview       = qs("#batchManualPreview");
-  var batchManualCustNamePrev  = qs("#batchManualCustNamePreview");
-  var batchManualInputsDiv     = qs("#batchManualCustomerInputs");
+  var batchManualCustPurpose = qs("#batchManualCustPurpose");
+  var batchAddManualBtn = qs("#batchAddManualBtn");
+  var batchManualPreview = qs("#batchManualPreview");
+  var batchManualCustNamePrev = qs("#batchManualCustNamePreview");
+  var batchManualInputsDiv = qs("#batchManualCustomerInputs");
 
-  var batchManualCustomers = []; // Array of { name, purpose }
+  var batchManualCustomers = [];
+  var selectedSet = new Set();
+  var customerCache = [];
 
-  if (batchManualCustNameInput) {
-    batchManualCustNameInput.addEventListener("input", function() {
-      var val = (batchManualCustNameInput.value || "").trim();
-      if (val.length > 1) {
-        if (batchManualCustNamePrev) batchManualCustNamePrev.textContent = val;
-        if (batchManualPreview) batchManualPreview.classList.add("visible");
-      } else {
-        if (batchManualPreview) batchManualPreview.classList.remove("visible");
+  function updateGlobalDateInfo() {
+    if (!globalDateInfoText) return;
+
+    var f = (batchFromEl && batchFromEl.value) || "";
+    var t = (batchToEl && batchToEl.value) || "";
+
+    if (f && t) {
+      globalDateInfoText.textContent = f + " → " + t;
+    } else if (f) {
+      globalDateInfoText.textContent = f + " → (select To Date)";
+    } else if (t) {
+      globalDateInfoText.textContent = "(select From Date) → " + t;
+    } else {
+      globalDateInfoText.textContent = "Select From Date and To Date above.";
+    }
+  }
+
+  function updateSelectedCount() {
+    var checks = qsa(".cust-check");
+    var cnt = 0;
+
+    checks.forEach(function (ch) {
+      if (ch.checked) {
+        cnt++;
       }
     });
+
+    if (selCountBadge) {
+      selCountBadge.textContent = cnt + " selected";
+    }
+
+    if (selectAllCust) {
+      selectAllCust.checked = checks.length > 0 && cnt === checks.length;
+      selectAllCust.indeterminate = cnt > 0 && cnt < checks.length;
+    }
+  }
+
+  function renderCustomers() {
+    if (!custTbody) return;
+
+    if (!customerCache.length) {
+      custTbody.innerHTML =
+        '<tr><td colspan="6" class="text-muted text-center py-3">No customers found.</td></tr>';
+      updateSelectedCount();
+      return;
+    }
+
+    var rows = customerCache.map(function (c) {
+      var cid = String(c.id || "");
+      var checked = selectedSet.has(cid) ? "checked" : "";
+      var displayName = c.text || c.name || "";
+
+      return '' +
+        '<tr>' +
+          '<td>' +
+            '<input class="form-check-input cust-check" type="checkbox" data-cid="' + esc(cid) + '" ' + checked + '>' +
+          '</td>' +
+          '<td>' +
+            '<div class="fw-semibold">' + esc(displayName) + '</div>' +
+            '<div class="small text-muted">' +
+              esc(c.code || "") +
+              (c.mobile ? " &bull; " + esc(c.mobile) : "") +
+            '</div>' +
+          '</td>' +
+          '<td>' +
+            '<input class="form-control form-control-sm kam-table-input-wide" type="text" name="purpose_' + esc(cid) + '" placeholder="Optional">' +
+          '</td>' +
+          '<td>' +
+            '<input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_sales_mt_' + esc(cid) + '" placeholder="e.g. 12.5">' +
+          '</td>' +
+          '<td>' +
+            '<input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_collection_' + esc(cid) + '" placeholder="e.g. 250000">' +
+          '</td>' +
+          '<td>' +
+            '<span class="badge bg-light text-dark border">' + esc((c.source || "").toUpperCase()) + '</span>' +
+          '</td>' +
+        '</tr>';
+    }).join("");
+
+    custTbody.innerHTML = rows;
+
+    qsa(".cust-check").forEach(function (ch) {
+      ch.addEventListener("change", function () {
+        var cid = String(ch.getAttribute("data-cid") || "");
+
+        if (cid) {
+          if (ch.checked) {
+            selectedSet.add(cid);
+          } else {
+            selectedSet.delete(cid);
+          }
+        }
+
+        updateSelectedCount();
+      });
+    });
+
+    updateSelectedCount();
+  }
+
+  function loadCustomers() {
+    if (!custTbody) return;
+
+    var manualRows = Array.from(custTbody.querySelectorAll("tr[data-manual-idx]"));
+
+    qsa(".cust-check[data-cid]").forEach(function (ch) {
+      var cid = String(ch.getAttribute("data-cid") || "");
+
+      if (cid && ch.checked) {
+        selectedSet.add(cid);
+      } else if (cid) {
+        selectedSet.delete(cid);
+      }
+    });
+
+    custTbody.innerHTML =
+      '<tr><td colspan="6" class="text-muted text-center py-3">' +
+      '<span class="spinner-border spinner-border-sm me-2"></span>Loading…</td></tr>';
+
+    var q = encodeURIComponent((custSearch && custSearch.value) || "");
+    var src = encodeURIComponent((custSourceEl && custSourceEl.value) || "");
+
+    fetch(apiUrl + "?q=" + q + "&source=" + src, {
+      headers: {
+        Accept: "application/json"
+      }
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (!data.ok) {
+          throw new Error(data.error || "Failed to load customers");
+        }
+
+        customerCache = data.customers || [];
+        renderCustomers();
+
+        manualRows.forEach(function (r) {
+          custTbody.appendChild(r);
+        });
+
+        updateSelectedCount();
+      })
+      .catch(function (err) {
+        custTbody.innerHTML =
+          '<tr><td colspan="6" class="text-danger text-center py-3">Error: ' + esc(err.message) + '</td></tr>';
+
+        manualRows.forEach(function (r) {
+          custTbody.appendChild(r);
+        });
+      });
   }
 
   function addBatchManualCustomer() {
-    var name    = (batchManualCustNameInput && batchManualCustNameInput.value || "").trim();
-    var purpose = (batchManualCustPurpose   && batchManualCustPurpose.value   || "").trim();
+    var name = (batchManualCustNameInput && batchManualCustNameInput.value || "").trim();
+    var purpose = (batchManualCustPurpose && batchManualCustPurpose.value || "").trim();
 
     if (!name) {
       if (batchManualCustNameInput) {
@@ -868,277 +1267,323 @@
       }
       return;
     }
-    if (batchManualCustNameInput) batchManualCustNameInput.classList.remove("is-invalid");
 
-    if (batchManualCustomers.some(function(c) { return c.name.toLowerCase() === name.toLowerCase(); })) {
+    if (batchManualCustNameInput) {
+      batchManualCustNameInput.classList.remove("is-invalid");
+    }
+
+    if (batchManualCustomers.some(function (c) {
+      return c.name.toLowerCase() === name.toLowerCase();
+    })) {
       alert('"' + name + '" is already in the list.');
       return;
     }
 
-    batchManualCustomers.push({ name: name, purpose: purpose });
+    batchManualCustomers.push({
+      name: name,
+      purpose: purpose
+    });
 
     if (custTbody) {
       var idx = batchManualCustomers.length - 1;
-      var tr  = document.createElement("tr");
+      var tr = document.createElement("tr");
+
       tr.setAttribute("data-manual-idx", idx);
+
       tr.innerHTML =
-        '<td><input class="form-check-input cust-check" type="checkbox"' +
-        ' data-cid="" data-manual-idx="' + idx + '" checked></td>' +
-        '<td><div class="fw-semibold">' + esc(name) + '</div>' +
-        '<div class="small text-success"><i class="fas fa-pen me-1"></i>New manual entry</div></td>' +
-        '<td><input class="form-control form-control-sm kam-table-input-wide" type="text"' +
-        ' name="manual_purpose_' + idx + '" value="' + esc(purpose) + '" placeholder="Optional" /></td>' +
-        '<td><input class="form-control form-control-sm kam-table-input-num" type="text"' +
-        ' name="manual_expected_sales_mt_' + idx + '" placeholder="e.g. 12.5" /></td>' +
-        '<td><input class="form-control form-control-sm kam-table-input-num" type="text"' +
-        ' name="manual_expected_collection_' + idx + '" placeholder="e.g. 250000" /></td>' +
+        '<td><input class="form-check-input cust-check" type="checkbox" data-cid="" data-manual-idx="' + idx + '" checked></td>' +
+        '<td>' +
+          '<div class="fw-semibold">' + esc(name) + '</div>' +
+          '<div class="small text-success"><i class="fas fa-pen me-1"></i>New manual entry</div>' +
+        '</td>' +
+        '<td><input class="form-control form-control-sm kam-table-input-wide" type="text" name="manual_purpose_' + idx + '" value="' + esc(purpose) + '" placeholder="Optional" /></td>' +
+        '<td><input class="form-control form-control-sm kam-table-input-num" type="text" name="manual_expected_sales_mt_' + idx + '" placeholder="e.g. 12.5" /></td>' +
+        '<td><input class="form-control form-control-sm kam-table-input-num" type="text" name="manual_expected_collection_' + idx + '" placeholder="e.g. 250000" /></td>' +
         '<td><span class="badge bg-success border">MANUAL</span></td>';
+
       custTbody.appendChild(tr);
-      tr.querySelector(".cust-check").addEventListener("change", updateSelectedCount);
+
+      var check = tr.querySelector(".cust-check");
+      if (check) {
+        check.addEventListener("change", updateSelectedCount);
+      }
     }
 
-    if (batchManualCustNameInput) batchManualCustNameInput.value = "";
-    if (batchManualCustPurpose)   batchManualCustPurpose.value   = "";
-    if (batchManualPreview) batchManualPreview.classList.remove("visible");
+    if (batchManualCustNameInput) {
+      batchManualCustNameInput.value = "";
+    }
+
+    if (batchManualCustPurpose) {
+      batchManualCustPurpose.value = "";
+    }
+
+    if (batchManualPreview) {
+      batchManualPreview.classList.remove("visible");
+    }
 
     updateSelectedCount();
   }
 
-  if (batchAddManualBtn) batchAddManualBtn.addEventListener("click", addBatchManualCustomer);
   if (batchManualCustNameInput) {
-    batchManualCustNameInput.addEventListener("keydown", function(e) {
-      if (e.key === "Enter") { e.preventDefault(); addBatchManualCustomer(); }
-    });
-  }
+    batchManualCustNameInput.addEventListener("input", function () {
+      var val = (batchManualCustNameInput.value || "").trim();
 
-  /* ── Date window info banner ──────────────────────────────────── */
-  function updateGlobalDateInfo() {
-    if (!globalDateInfoText) return;
-    var f = (batchFromEl && batchFromEl.value) || "";
-    var t = (batchToEl   && batchToEl.value)   || "";
-    if (f && t)      globalDateInfoText.textContent = f + " \u2192 " + t;
-    else if (f)      globalDateInfoText.textContent = f + " \u2192 (select To Date)";
-    else if (t)      globalDateInfoText.textContent = "(select From Date) \u2192 " + t;
-    else             globalDateInfoText.textContent = "Select From Date and To Date above.";
-  }
-
-  /* ── Customer API + table rendering ──────────────────────────── */
-  var selectedSet   = new Set();
-  var customerCache = [];
-
-  function updateSelectedCount() {
-    var checks = document.querySelectorAll(".cust-check");
-    var cnt = 0;
-    checks.forEach(function(ch) { if (ch.checked) cnt++; });
-    if (selCountBadge) selCountBadge.textContent = cnt + " selected";
-    if (selectAllCust) {
-      selectAllCust.checked       = checks.length > 0 && cnt === checks.length;
-      selectAllCust.indeterminate = cnt > 0 && cnt < checks.length;
-    }
-  }
-
-  function loadCustomers() {
-    if (!custTbody) return;
-    var manualRows = Array.from(custTbody.querySelectorAll("tr[data-manual-idx]"));
-
-    document.querySelectorAll(".cust-check[data-cid]").forEach(function(ch) {
-      var cid = String(ch.getAttribute("data-cid"));
-      if (cid && ch.checked) selectedSet.add(cid);
-      else if (cid)          selectedSet.delete(cid);
-    });
-
-    custTbody.innerHTML =
-      '<tr><td colspan="6" class="text-muted text-center py-3">' +
-      '<span class="spinner-border spinner-border-sm me-2"></span>Loading\u2026</td></tr>';
-
-    var q   = encodeURIComponent((custSearch   && custSearch.value)   || "");
-    var src = encodeURIComponent((custSourceEl && custSourceEl.value) || "");
-
-    fetch(apiUrl + "?q=" + q + "&source=" + src, { headers: { Accept: "application/json" } })
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        if (!data.ok) throw new Error(data.error || "Failed to load customers");
-        customerCache = data.customers || [];
-        renderCustomers();
-        manualRows.forEach(function(r) { custTbody.appendChild(r); });
-        updateSelectedCount();
-      })
-      .catch(function(err) {
-        custTbody.innerHTML =
-          '<tr><td colspan="6" class="text-danger text-center py-3">Error: ' + esc(err.message) + '</td></tr>';
-        manualRows.forEach(function(r) { custTbody.appendChild(r); });
-      });
-  }
-
-  function renderCustomers() {
-    if (!custTbody) return;
-    if (!customerCache.length) {
-      custTbody.innerHTML =
-        '<tr><td colspan="6" class="text-muted text-center py-3">No customers found.</td></tr>';
-      updateSelectedCount();
-      return;
-    }
-    var rows = customerCache.map(function(c) {
-      var cid     = String(c.id);
-      var checked = selectedSet.has(cid) ? "checked" : "";
-      return '<tr>' +
-        '<td><input class="form-check-input cust-check" type="checkbox" data-cid="' + esc(cid) + '" ' + checked + '></td>' +
-        '<td><div class="fw-semibold">' + esc(c.name) + '</div>' +
-        '<div class="small text-muted">' + esc(c.code || "") + (c.mobile ? " &bull; " + esc(c.mobile) : "") + '</div></td>' +
-        '<td><input class="form-control form-control-sm kam-table-input-wide" type="text" name="purpose_' + esc(cid) + '" placeholder="Optional"></td>' +
-        '<td><input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_sales_mt_' + esc(cid) + '" placeholder="e.g. 12.5"></td>' +
-        '<td><input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_collection_' + esc(cid) + '" placeholder="e.g. 250000"></td>' +
-        '<td><span class="badge bg-light text-dark border">' + esc((c.source || "").toUpperCase()) + '</span></td>' +
-        '</tr>';
-    }).join("");
-    custTbody.innerHTML = rows;
-
-    document.querySelectorAll(".cust-check").forEach(function(ch) {
-      ch.addEventListener("change", function() {
-        var cid = String(ch.getAttribute("data-cid") || "");
-        if (cid) {
-          if (ch.checked) selectedSet.add(cid);
-          else            selectedSet.delete(cid);
+      if (val.length > 1) {
+        if (batchManualCustNamePrev) {
+          batchManualCustNamePrev.textContent = val;
         }
-        updateSelectedCount();
-      });
+
+        if (batchManualPreview) {
+          batchManualPreview.classList.add("visible");
+        }
+      } else {
+        if (batchManualPreview) {
+          batchManualPreview.classList.remove("visible");
+        }
+      }
     });
-    updateSelectedCount();
+
+    batchManualCustNameInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        addBatchManualCustomer();
+      }
+    });
+  }
+
+  if (batchAddManualBtn) {
+    batchAddManualBtn.addEventListener("click", addBatchManualCustomer);
   }
 
   if (selectAllCust) {
-    selectAllCust.addEventListener("change", function() {
-      document.querySelectorAll(".cust-check").forEach(function(ch) {
+    selectAllCust.addEventListener("change", function () {
+      qsa(".cust-check").forEach(function (ch) {
         ch.checked = selectAllCust.checked;
-        var cid    = String(ch.getAttribute("data-cid") || "");
+
+        var cid = String(ch.getAttribute("data-cid") || "");
+
         if (cid) {
-          if (ch.checked) selectedSet.add(cid);
-          else            selectedSet.delete(cid);
+          if (ch.checked) {
+            selectedSet.add(cid);
+          } else {
+            selectedSet.delete(cid);
+          }
         }
       });
+
       updateSelectedCount();
     });
   }
 
-  /* ── Batch form submit: inject hidden inputs ─────────────────── */
   var batchFormEl = qs("#batchForm");
   if (batchFormEl) {
-    batchFormEl.addEventListener("submit", function() {
-      // 1) Existing customers → customers_selected[]
+    batchFormEl.addEventListener("submit", function () {
       if (selectedHidden) {
         selectedHidden.innerHTML = "";
-        document.querySelectorAll(".cust-check[data-cid]").forEach(function(ch) {
+
+        qsa(".cust-check[data-cid]").forEach(function (ch) {
           var cid = (ch.getAttribute("data-cid") || "").trim();
+
           if (!ch.checked || !cid) return;
-          var inp    = document.createElement("input");
-          inp.type   = "hidden";
-          inp.name   = "customers_selected[]";
-          inp.value  = cid;
+
+          var inp = document.createElement("input");
+          inp.type = "hidden";
+          inp.name = "customers_selected[]";
+          inp.value = cid;
+
           selectedHidden.appendChild(inp);
         });
       }
-      // 2) Manually added customers → batch_manual_customer[]
+
       if (batchManualInputsDiv) {
         batchManualInputsDiv.innerHTML = "";
-        document.querySelectorAll(".cust-check[data-manual-idx]").forEach(function(ch) {
+
+        qsa(".cust-check[data-manual-idx]").forEach(function (ch) {
           if (!ch.checked) return;
+
           var idx = ch.getAttribute("data-manual-idx");
-          var mc  = batchManualCustomers[idx];
+          var mc = batchManualCustomers[idx];
+
           if (!mc) return;
-          var inp   = document.createElement("input");
-          inp.type  = "hidden";
-          inp.name  = "batch_manual_customer[]";
+
+          var inp = document.createElement("input");
+          inp.type = "hidden";
+          inp.name = "batch_manual_customer[]";
           inp.value = mc.name;
+
           batchManualInputsDiv.appendChild(inp);
         });
       }
     });
   }
 
-  /* ── Show/hide batch sections based on category ─────────────── */
   function toggleBatchSections() {
     var v = batchCategoryEl ? batchCategoryEl.value : "";
+
     if (!hasCat(v)) {
-      if (categoryHint)         categoryHint.style.display         = "";
-      if (customerBatchSection) customerBatchSection.style.display = "none";
-      if (nonCustomerSection)   nonCustomerSection.style.display   = "none";
+      if (categoryHint) {
+        categoryHint.style.display = "";
+      }
+
+      if (customerBatchSection) {
+        customerBatchSection.style.display = "none";
+      }
+
+      if (nonCustomerSection) {
+        nonCustomerSection.style.display = "none";
+      }
+
       return;
     }
-    if (categoryHint) categoryHint.style.display = "none";
+
+    if (categoryHint) {
+      categoryHint.style.display = "none";
+    }
+
     if (isCustomerCat(v)) {
-      if (customerBatchSection) customerBatchSection.style.display = "";
-      if (nonCustomerSection)   nonCustomerSection.style.display   = "none";
+      if (customerBatchSection) {
+        customerBatchSection.style.display = "";
+      }
+
+      if (nonCustomerSection) {
+        nonCustomerSection.style.display = "none";
+      }
+
       loadCustomers();
     } else {
-      if (customerBatchSection) customerBatchSection.style.display = "none";
-      if (nonCustomerSection)   nonCustomerSection.style.display   = "";
-      if (nonCustomerTbody && !nonCustomerTbody.children.length) addNonCustomerLine();
+      if (customerBatchSection) {
+        customerBatchSection.style.display = "none";
+      }
+
+      if (nonCustomerSection) {
+        nonCustomerSection.style.display = "";
+      }
+
+      if (nonCustomerTbody && !nonCustomerTbody.children.length) {
+        addNonCustomerLine();
+      }
     }
   }
 
-  /* ── Non-customer batch lines ────────────────────────────────── */
   function addNonCustomerLine() {
     if (!nonCustomerTbody) return;
+
     var tr = document.createElement("tr");
+
     tr.innerHTML =
       '<td><input class="form-control form-control-sm" name="counterparty_name[]" placeholder="Name *"></td>' +
       '<td><input class="form-control form-control-sm" name="counterparty_location[]" placeholder="Location"></td>' +
       '<td><input class="form-control form-control-sm" name="counterparty_purpose[]" placeholder="Purpose"></td>' +
       '<td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger">Remove</button></td>';
-    tr.querySelector("button").addEventListener("click", function() { tr.remove(); });
+
+    var btn = tr.querySelector("button");
+    if (btn) {
+      btn.addEventListener("click", function () {
+        tr.remove();
+      });
+    }
+
     nonCustomerTbody.appendChild(tr);
   }
 
-  /* ── Modal: full manual customer creation (API) ──────────────── */
   var mcSave = qs("#mc_save");
-  var mcErr  = qs("#mc_err");
-  var mcOk   = qs("#mc_ok");
+  var mcErr = qs("#mc_err");
+  var mcOk = qs("#mc_ok");
+
   if (mcSave) {
-    mcSave.addEventListener("click", function() {
+    mcSave.addEventListener("click", function () {
       var payload = new URLSearchParams();
+
       [
-        ["name",       "mc_name"],
-        ["mobile",     "mc_mobile"],
-        ["address",    "mc_address"],
-        ["email",      "mc_email"],
+        ["name", "mc_name"],
+        ["mobile", "mc_mobile"],
+        ["address", "mc_address"],
+        ["email", "mc_email"],
         ["gst_number", "mc_gst"],
-        ["pincode",    "mc_pincode"],
-      ].forEach(function(pair) {
+        ["pincode", "mc_pincode"]
+      ].forEach(function (pair) {
         var el = qs("#" + pair[1]);
         payload.append(pair[0], (el && el.value) || "");
       });
 
       fetch("{% url 'kam:customer_create_manual' %}", {
         method: "POST",
-        headers: { "X-CSRFToken": csrftoken, Accept: "application/json" },
-        body: payload,
+        headers: {
+          "X-CSRFToken": csrftoken,
+          Accept: "application/json"
+        },
+        body: payload
       })
-        .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, json: j }; }); })
-        .then(function(res) {
-          if (!res.ok || !res.json.ok) throw new Error(res.json.error || "Failed");
-          if (mcErr) mcErr.style.display = "none";
-          if (mcOk)  { mcOk.style.display = ""; mcOk.textContent = "Saved. Refreshing customer list\u2026"; }
+        .then(function (r) {
+          return r.json().then(function (j) {
+            return {
+              ok: r.ok,
+              json: j
+            };
+          });
+        })
+        .then(function (res) {
+          if (!res.ok || !res.json.ok) {
+            throw new Error(res.json.error || "Failed");
+          }
+
+          if (mcErr) {
+            mcErr.style.display = "none";
+          }
+
+          if (mcOk) {
+            mcOk.style.display = "";
+            mcOk.textContent = "Saved. Refreshing customer list…";
+          }
+
           loadCustomers();
         })
-        .catch(function(err) {
-          if (mcOk)  mcOk.style.display  = "none";
-          if (mcErr) { mcErr.style.display = ""; mcErr.textContent = err.message; }
+        .catch(function (err) {
+          if (mcOk) {
+            mcOk.style.display = "none";
+          }
+
+          if (mcErr) {
+            mcErr.style.display = "";
+            mcErr.textContent = err.message;
+          }
         });
     });
   }
 
   /* ── Wire events ─────────────────────────────────────────────── */
-  if (btnRefresh)    btnRefresh.addEventListener("click", loadCustomers);
-  if (custSourceEl)  custSourceEl.addEventListener("change", loadCustomers);
+  if (btnRefresh) {
+    btnRefresh.addEventListener("click", loadCustomers);
+  }
+
+  if (custSourceEl) {
+    custSourceEl.addEventListener("change", loadCustomers);
+  }
+
   if (custSearch) {
-    custSearch.addEventListener("keydown", function(e) {
-      if (e.key === "Enter") { e.preventDefault(); loadCustomers(); }
+    custSearch.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        loadCustomers();
+      }
     });
   }
-  if (addLineBtn)    addLineBtn.addEventListener("click", addNonCustomerLine);
-  if (batchCategoryEl) batchCategoryEl.addEventListener("change", toggleBatchSections);
-  if (batchFromEl)   batchFromEl.addEventListener("change", updateGlobalDateInfo);
-  if (batchToEl)     batchToEl.addEventListener("change", updateGlobalDateInfo);
+
+  if (addLineBtn) {
+    addLineBtn.addEventListener("click", addNonCustomerLine);
+  }
+
+  if (batchCategoryEl) {
+    batchCategoryEl.addEventListener("change", toggleBatchSections);
+  }
+
+  if (batchFromEl) {
+    batchFromEl.addEventListener("change", updateGlobalDateInfo);
+  }
+
+  if (batchToEl) {
+    batchToEl.addEventListener("change", updateGlobalDateInfo);
+  }
 
   /* ─── Init ───────────────────────────────────────────────────── */
   applyBootstrap();
