@@ -332,36 +332,40 @@ def _send_safe_mail(
     """
     Production-safe email sender for KAM workflows.
 
-    This sender:
-    - sends proper HTML email when body contains HTML
-    - also sends plain-text fallback using EmailMultiAlternatives
-    - keeps TO and CC clean
-    - removes duplicate emails
-    - prevents same email appearing in both TO and CC
-    - logs failures instead of hiding them silently
+    Required behavior:
+    - Uses Django EmailMessage.
+    - Does NOT use send_mail.
+    - Supports TO and CC.
+    - Removes duplicate emails.
+    - Prevents the same email from appearing in both TO and CC.
+    - Uses fail_silently=False.
+    - Logs recipient resolution, success, and exceptions.
     """
+
+    def _email_from_user(user) -> str:
+        return (getattr(user, "email", "") or "").strip()
+
+    def _uniq_email_list(emails: List[str]) -> List[str]:
+        seen = set()
+        output = []
+
+        for email in emails or []:
+            clean = (email or "").strip()
+
+            if not clean:
+                continue
+
+            key = clean.lower()
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+            output.append(clean)
+
+        return output
+
     try:
-        def _email_from_user(user) -> str:
-            return (getattr(user, "email", "") or "").strip()
-
-        def _uniq_email_list(emails: List[str]) -> List[str]:
-            seen = set()
-            output = []
-
-            for email in emails:
-                clean = (email or "").strip()
-                if not clean:
-                    continue
-
-                key = clean.lower()
-                if key in seen:
-                    continue
-
-                seen.add(key)
-                output.append(clean)
-
-            return output
-
         to_emails = _uniq_email_list([
             _email_from_user(user)
             for user in (to_users or [])
@@ -374,70 +378,62 @@ def _send_safe_mail(
             if _email_from_user(user)
         ])
 
-        # Do not keep the same email in both TO and CC.
+        # Do not keep same email in both TO and CC.
         to_email_keys = {email.lower() for email in to_emails}
+
         cc_emails = [
             email
             for email in cc_emails
             if email.lower() not in to_email_keys
         ]
 
-        if not to_emails and not cc_emails:
+        logger.info(
+            "KAM Mail Recipient Resolution -> subject=%r to_user_ids=%s to_emails=%s cc_user_ids=%s cc_emails=%s",
+            subject,
+            [getattr(user, "id", None) for user in (to_users or [])],
+            to_emails,
+            [getattr(user, "id", None) for user in (cc_users or [])],
+            cc_emails,
+        )
+
+        if not to_emails:
             logger.warning(
-                "KAM email skipped because no valid recipients were found. subject=%r",
+                "KAM email skipped because no valid TO recipient was found. subject=%r to_user_ids=%s",
                 subject,
+                [getattr(user, "id", None) for user in (to_users or [])],
             )
             return False
-
-        # If only CC exists, move CC to TO so email delivery still works.
-        final_to = to_emails or cc_emails
-        final_cc = cc_emails if to_emails else []
 
         from_email = (
             getattr(settings, "DEFAULT_FROM_EMAIL", None)
             or getattr(settings, "EMAIL_HOST_USER", None)
         )
 
-        is_html = "<html" in (body or "").lower()
-
-        if is_html:
-            plain_body = strip_tags(body or "")
-            plain_body = "\n".join(
-                line.strip()
-                for line in plain_body.splitlines()
-                if line.strip()
+        if not from_email:
+            logger.warning(
+                "KAM email sender is missing. DEFAULT_FROM_EMAIL and EMAIL_HOST_USER are both empty. subject=%r",
+                subject,
             )
-            if not plain_body:
-                plain_body = "BOS Lakshya ERP notification."
-        else:
-            plain_body = body or "BOS Lakshya ERP notification."
 
-        logger.info(
-            "KAM Mail Debug -> subject=%r TO=%s CC=%s is_html=%s",
-            subject,
-            final_to,
-            final_cc,
-            is_html,
-        )
-
-        email = EmailMultiAlternatives(
+        email = EmailMessage(
             subject=subject,
-            body=plain_body,
+            body=body or "BOS Lakshya ERP notification.",
             from_email=from_email,
-            to=final_to,
-            cc=final_cc,
+            to=to_emails,
+            cc=cc_emails,
         )
 
-        if is_html:
-            email.attach_alternative(body, "text/html")
+        # If body is HTML, send it as HTML.
+        if "<html" in (body or "").lower():
+            email.content_subtype = "html"
 
         sent_count = email.send(fail_silently=False)
 
         logger.info(
-            "KAM email send attempted. subject=%r to=%s cc=%s sent_count=%s",
+            "KAM email sent successfully. subject=%r to=%s cc=%s sent_count=%s",
             subject,
-            final_to,
-            final_cc,
+            to_emails,
+            cc_emails,
             sent_count,
         )
 
@@ -445,13 +441,12 @@ def _send_safe_mail(
 
     except Exception:
         logger.exception(
-            "KAM email send failed. subject=%r to_users=%s cc_users=%s",
+            "KAM email send failed. subject=%r to_user_ids=%s cc_user_ids=%s",
             subject,
-            [getattr(user, "username", None) for user in (to_users or [])],
-            [getattr(user, "username", None) for user in (cc_users or [])],
+            [getattr(user, "id", None) for user in (to_users or [])],
+            [getattr(user, "id", None) for user in (cc_users or [])],
         )
         return False
-
 
 def _visitplan_workflow_schema_ready() -> bool:
     table_name = VisitPlan._meta.db_table
@@ -2352,7 +2347,6 @@ def manager_kpis(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # PLAN VISIT — Single + Batch
 # =====================================================================
-@login_required(login_url="/accounts/login/")
 def weekly_plan(request: HttpRequest) -> HttpResponse:
     schema_ready = _visitplan_workflow_schema_ready()
     user = request.user
@@ -2765,6 +2759,52 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                 else VisitBatch.DRAFT
             )
 
+            mgr_user = None
+            cc_users: List[User] = []
+
+            if proceed_flag:
+                mgr_user = _active_manager_for_kam(user)
+
+                if not mgr_user:
+                    logger.warning(
+                        "KAM batch submit blocked: reporting manager not resolved. employee_id=%s employee_email=%s",
+                        getattr(user, "id", None),
+                        getattr(user, "email", None),
+                    )
+                    messages.error(
+                        request,
+                        "No reporting officer is assigned to your profile. "
+                        "Please contact admin to set your Reporting Officer.",
+                    )
+                    return redirect(reverse("kam:plan"))
+
+                manager_email = (getattr(mgr_user, "email", "") or "").strip()
+
+                if not manager_email:
+                    logger.warning(
+                        "KAM batch submit blocked: reporting manager has blank email. employee_id=%s manager_id=%s manager_username=%s",
+                        getattr(user, "id", None),
+                        getattr(mgr_user, "id", None),
+                        getattr(mgr_user, "username", None),
+                    )
+                    messages.error(
+                        request,
+                        "Your reporting officer does not have an email address. "
+                        "Please contact admin to update the manager email.",
+                    )
+                    return redirect(reverse("kam:plan"))
+
+                cc_users = _active_cc_for_kam(user)
+
+                logger.info(
+                    "KAM batch submit manager resolved. employee_id=%s employee_email=%s manager_id=%s manager_email=%s cc_emails=%s",
+                    getattr(user, "id", None),
+                    getattr(user, "email", None),
+                    getattr(mgr_user, "id", None),
+                    manager_email,
+                    [(getattr(cc_user, "email", "") or "").strip() for cc_user in cc_users],
+                )
+
             with transaction.atomic():
                 batch = VisitBatch.objects.create(
                     kam=user,
@@ -2877,10 +2917,105 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     actor_ip=_get_ip(request),
                 )
 
+                if proceed_flag:
+                    batch_id = batch.id
+                    selected_customer_ids_for_email = [
+                        customer.id
+                        for customer in valid_selected_customers
+                    ]
+                    counterparty_names_for_email = [
+                        line_form.cleaned_data["counterparty_name"]
+                        for line_form in non_customer_lines
+                    ]
+
+                    def _send_batch_approval_after_commit():
+                        try:
+                            fresh_batch = (
+                                VisitBatch.objects
+                                .select_related("kam")
+                                .get(id=batch_id)
+                            )
+
+                            email_customers = list(
+                                Customer.objects
+                                .filter(id__in=selected_customer_ids_for_email)
+                                .order_by("name", "code")
+                            )
+
+                            approve_url = request.build_absolute_uri(
+                                reverse(
+                                    "kam:direct_batch_approve",
+                                    args=[_make_batch_token(fresh_batch.id, "APPROVE")],
+                                )
+                            )
+
+                            reject_url = request.build_absolute_uri(
+                                reverse(
+                                    "kam:direct_batch_reject",
+                                    args=[_make_batch_token(fresh_batch.id, "REJECT")],
+                                )
+                            )
+
+                            visit_category_label = _VISIT_CATEGORY_LABELS.get(
+                                fresh_batch.visit_category,
+                                fresh_batch.visit_category,
+                            )
+
+                            subject = (
+                                f"[KAM] Approval Required: Batch #{fresh_batch.id} "
+                                f"({fresh_batch.from_date}..{fresh_batch.to_date}) - "
+                                f"{user.get_full_name() or user.username}"
+                            )
+
+                            html_body = _build_batch_approval_email(
+                                request=request,
+                                batch=fresh_batch,
+                                kam_user=user,
+                                visit_category_label=visit_category_label,
+                                remarks=remarks,
+                                approve_url=approve_url,
+                                reject_url=reject_url,
+                                customers=email_customers,
+                                counterparty_names=counterparty_names_for_email,
+                                manager_user=mgr_user,
+                                cc_users=cc_users,
+                            )
+
+                            sent_ok = _send_safe_mail(
+                                subject,
+                                html_body,
+                                [mgr_user],
+                                cc_users,
+                            )
+
+                            if sent_ok:
+                                logger.info(
+                                    "KAM batch approval email triggered successfully. batch_id=%s manager_id=%s manager_email=%s",
+                                    fresh_batch.id,
+                                    getattr(mgr_user, "id", None),
+                                    getattr(mgr_user, "email", None),
+                                )
+                            else:
+                                logger.warning(
+                                    "KAM batch approval email returned False. batch_id=%s manager_id=%s manager_email=%s",
+                                    fresh_batch.id,
+                                    getattr(mgr_user, "id", None),
+                                    getattr(mgr_user, "email", None),
+                                )
+
+                        except Exception:
+                            logger.exception(
+                                "KAM batch approval email trigger failed after DB commit. batch_id=%s",
+                                batch_id,
+                            )
+
+                    transaction.on_commit(_send_batch_approval_after_commit)
+
             if proceed_flag:
                 messages.success(
                     request,
-                    f"Batch submitted to Manager: {created_lines} lines (Batch #{batch.id}).",
+                    f"Batch submitted to Manager: {created_lines} lines (Batch #{batch.id}). "
+                    "Approval email has been triggered.",
                 )
             else:
                 messages.success(
