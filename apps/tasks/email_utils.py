@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 from django.core.mail import EmailMultiAlternatives, send_mail
 from django.template.loader import render_to_string
 from django.utils import timezone
-
+from apps.tasks.services.holiday_guard import is_holiday_for_user
 try:
     from zoneinfo import ZoneInfo
 except Exception:  # pragma: no cover
@@ -465,6 +465,30 @@ def send_checklist_assignment_to_user(
     detail_url: Optional[str] = None,
     subject_prefix: str = "Checklist Assigned",
 ) -> None:
+    """
+    Send checklist assignment email.
+
+    BOS Lakshya protection:
+    - tombstoned/deleted task -> no email
+    - self-assigned task -> no email
+    - Sunday/Holiday planned date -> no email
+    """
+    if _is_tombstoned(task):
+        return
+
+    if _is_self_assigned(task):
+        return
+
+    if is_holiday_for_user(
+        getattr(task, "assign_to", None),
+        getattr(task, "planned_date", None),
+    ):
+        logger.info(
+            "Checklist email skipped for CL-%s: planned date is Sunday/holiday",
+            getattr(task, "id", None),
+        )
+        return
+
     to_email = getattr(getattr(task, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
@@ -497,12 +521,8 @@ def send_checklist_assignment_to_user(
         "attachment_required": getattr(task, "attachment_mandatory", False),
         "remind_before_days": getattr(task, "remind_before_days", 0) or 0,
         "site_url": SITE_URL,
-        "is_recurring": bool(
-            getattr(task, "mode", None) and getattr(task, "frequency", None)
-        ),
+        "is_recurring": bool(getattr(task, "mode", None) and getattr(task, "frequency", None)),
         "task_id": task.id,
-        "assigner_email": (getattr(getattr(task, "assign_by", None), "email", "") or "").strip(),
-        "assigner_username": (getattr(getattr(task, "assign_by", None), "username", "") or "").strip(),
     }
 
     _send_unified_assignment_email(
@@ -511,14 +531,39 @@ def send_checklist_assignment_to_user(
         context=ctx,
     )
 
-
 def send_delegation_assignment_to_user(
     *,
     delegation,
     complete_url: Optional[str] = None,
     detail_url: Optional[str] = None,
     subject_prefix: str = "Delegation Assigned",
+    cc_users: Optional[Sequence[User]] = None,
+    cc_emails: Optional[Sequence[str]] = None,
 ) -> None:
+    """
+    Send delegation assignment email.
+
+    BOS Lakshya protection:
+    - tombstoned/deleted delegation -> no email
+    - self-assigned delegation -> no email
+    - Sunday/Holiday planned date -> no email
+    """
+    if _is_tombstoned(delegation):
+        return
+
+    if _is_self_assigned(delegation):
+        return
+
+    if is_holiday_for_user(
+        getattr(delegation, "assign_to", None),
+        getattr(delegation, "planned_date", None),
+    ):
+        logger.info(
+            "Delegation email skipped for DL-%s: planned date is Sunday/holiday",
+            getattr(delegation, "id", None),
+        )
+        return
+
     to_email = getattr(getattr(delegation, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
@@ -527,6 +572,53 @@ def send_delegation_assignment_to_user(
 
     task_title = getattr(delegation, "task_name", "Delegation")
     subject = _build_subject(subject_prefix, task_title)
+
+    cc_pool: List[str] = []
+
+    for u in cc_users or []:
+        try:
+            em = (getattr(u, "email", "") or "").strip()
+            if em:
+                cc_pool.append(em)
+        except Exception:
+            continue
+
+    for raw in cc_emails or []:
+        em = (raw or "").strip()
+        if em:
+            cc_pool.append(em)
+
+    if hasattr(delegation, "cc_users"):
+        try:
+            for u in delegation.cc_users.all():
+                em = (getattr(u, "email", "") or "").strip()
+                if em:
+                    cc_pool.append(em)
+        except Exception:
+            pass
+
+    if hasattr(delegation, "cc_emails"):
+        try:
+            raw_str = getattr(delegation, "cc_emails", "") or ""
+            for part in str(raw_str).split(","):
+                em = part.strip()
+                if em:
+                    cc_pool.append(em)
+        except Exception:
+            pass
+
+    assigner_email = ""
+
+    try:
+        assigner_email = (
+            getattr(getattr(delegation, "assign_by", None), "email", "") or ""
+        ).strip()
+    except Exception:
+        assigner_email = ""
+
+    cc_final = _dedupe_emails(
+        _without_emails(cc_pool, [assigner_email] if assigner_email else [])
+    )
 
     ctx = {
         "kind": "Delegation",
@@ -538,34 +630,27 @@ def send_delegation_assignment_to_user(
         "assignee_name": _display_name(getattr(delegation, "assign_to", None)),
         "complete_url": action_url,
         "detail_url": action_url,
-        "cta_text": "Open the task and mark it complete when done.",
-        "instructions": getattr(delegation, "message", "") or "",
-        "task_frequency": (
-            f"{getattr(delegation, 'mode', '')} (Every {getattr(delegation, 'frequency', '')})"
-            if getattr(delegation, "mode", None) and getattr(delegation, "frequency", None)
-            else "One-time task"
+        "cta_text": "Open the delegation and mark it complete when done.",
+        "task_message": (
+            getattr(delegation, "message", None)
+            or getattr(delegation, "description", "")
+            or ""
         ),
-        "task_time_minutes": getattr(delegation, "time_per_task_minutes", 0) or 0,
-        "attachment_required": getattr(delegation, "attachment_mandatory", False),
+        "instructions": (
+            getattr(delegation, "message", None)
+            or getattr(delegation, "description", "")
+            or ""
+        ),
         "site_url": SITE_URL,
-        "is_recurring": bool(
-            getattr(delegation, "mode", None) and getattr(delegation, "frequency", None)
-        ),
         "task_id": delegation.id,
-        "assigner_email": (getattr(getattr(delegation, "assign_by", None), "email", "") or "").strip(),
-        "assigner_username": (getattr(getattr(delegation, "assign_by", None), "username", "") or "").strip(),
     }
-
-    cc_list = _should_cc_assigner_for_delegation(getattr(delegation, "assign_by", None))
 
     _send_unified_assignment_email(
         subject=subject,
         to_email=to_email,
         context=ctx,
-        cc=cc_list,
+        cc=cc_final,
     )
-
-
 def send_help_ticket_assignment_to_user(
     *,
     ticket,
@@ -835,6 +920,20 @@ def send_help_ticket_unassigned_notice(*, ticket, old_user) -> None:
 
 
 def send_task_reminder_email(*, task, task_type: str = "Checklist") -> None:
+    """
+    Send reminder email for Checklist / Delegation / other task-like objects.
+
+    BOS Lakshya protection:
+    - tombstoned/deleted task -> no reminder
+    - self-assigned task -> no reminder
+    - Sunday/Holiday planned date -> no reminder
+    """
+    if _is_tombstoned(task):
+        return
+
+    if _is_self_assigned(task):
+        return
+
     to_email = getattr(getattr(task, "assign_to", None), "email", "") or ""
     if not to_email.strip():
         return
@@ -842,44 +941,60 @@ def send_task_reminder_email(*, task, task_type: str = "Checklist") -> None:
     pd_raw = getattr(task, "planned_date", None)
     if not pd_raw:
         return
-    if isinstance(pd_raw, datetime):
-        pd_date = timezone.localtime(pd_raw, IST or timezone.get_current_timezone()).date()
-    else:
-        pd_date = pd_raw
-    today = timezone.localdate()
-    if pd_date > today:
+
+    if is_holiday_for_user(getattr(task, "assign_to", None), pd_raw):
+        logger.info(
+            "%s reminder email skipped for task_id=%s: planned date is Sunday/holiday",
+            task_type,
+            getattr(task, "id", None),
+        )
+        return
+
+    try:
+        if isinstance(pd_raw, datetime):
+            pd_date = timezone.localtime(
+                pd_raw,
+                IST or timezone.get_current_timezone(),
+            ).date()
+        else:
+            pd_date = pd_raw
+    except Exception:
+        return
+
+    today_ist = _ist_today()
+
+    if pd_date > today_ist:
         return
 
     kind = (task_type or "").strip().lower()
     status_val = getattr(task, "status", None)
+
     if kind in {"checklist", "delegation"} and status_val and status_val != "Pending":
         return
 
-    if getattr(task, "planned_date", None):
-        pd = getattr(task, "planned_date")
-        if isinstance(pd, datetime):
-            pd_date = timezone.localtime(pd, IST or timezone.get_current_timezone()).date()
-        else:
-            pd_date = pd
-        days_until = (pd_date - timezone.localdate()).days
-        if days_until < 0:
-            urgency = "OVERDUE"
-        elif days_until == 0:
-            urgency = "DUE TODAY"
-        elif days_until == 1:
-            urgency = "DUE TOMORROW"
-        else:
-            urgency = f"DUE IN {days_until} DAYS"
-    else:
+    try:
+        days_until = (pd_date - today_ist).days
+    except Exception:
         days_until = None
-        urgency = "NO DUE DATE"
+
+    if days_until is None:
+        urgency = "DUE"
+    elif days_until < 0:
+        urgency = "OVERDUE"
+    elif days_until == 0:
+        urgency = "DUE TODAY"
+    elif days_until == 1:
+        urgency = "DUE TOMORROW"
+    else:
+        urgency = f"DUE IN {days_until} DAYS"
 
     task_name = getattr(task, "task_name", None) or getattr(task, "title", "Task")
+    task_code = f"{task_type[:2].upper()}-{task.id}"
 
     ctx = {
         "kind": task_type,
         "task_title": task_name,
-        "task_code": f"{task_type[:2].upper()}-{task.id}",
+        "task_code": task_code,
         "planned_date_display": _fmt_dt_date(getattr(task, "planned_date", None)),
         "priority_display": getattr(task, "priority", "") or "Low",
         "assign_by_display": _display_name(getattr(task, "assign_by", None)),
@@ -891,22 +1006,13 @@ def send_task_reminder_email(*, task, task_type: str = "Checklist") -> None:
         "cta_text": "Please review and complete this item.",
         "complete_url": SITE_URL,
         "detail_url": SITE_URL,
-        "assigner_email": (getattr(getattr(task, "assign_by", None), "email", "") or "").strip(),
-        "assigner_username": (getattr(getattr(task, "assign_by", None), "username", "") or "").strip(),
     }
-
-    cc_list: List[str] = []
-    if (task_type or "").strip().lower() == "delegation":
-        cc_list = _should_cc_assigner_for_delegation(getattr(task, "assign_by", None))
 
     _send_unified_assignment_email(
         subject=f"Reminder: {urgency} - {task_name}",
         to_email=to_email,
         context=ctx,
-        cc=cc_list,
     )
-
-
 def send_admin_bulk_summary(
     *, title: str, rows: Sequence[dict], exclude_assigner_email: Optional[str] = None
 ) -> None:

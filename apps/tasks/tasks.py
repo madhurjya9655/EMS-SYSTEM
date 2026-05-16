@@ -31,6 +31,7 @@ from .utils import (
     _fmt_dt_date,
 )
 from apps.tasks.services.blocking import guard_assign
+from apps.tasks.services.holiday_guard import is_holiday_for_user, holiday_skip_reason
 
 logger = logging.getLogger(__name__)
 
@@ -140,12 +141,26 @@ def _is_assignee_available_for_email(user, check_dt: datetime) -> bool:
 def _is_task_allowed_for_assignee(obj, check_dt: Optional[datetime] = None) -> bool:
     """
     Common task visibility/email guard.
+
+    False means:
+    - do not assign
+    - do not email
+    - do not show as actionable
     """
     user = getattr(obj, "assign_to", None)
     if not getattr(user, "id", None):
         return False
 
     when_dt = check_dt or _planned_block_datetime(obj)
+
+    if is_holiday_for_user(user, when_dt):
+        logger.info(
+            _safe_console_text(
+                f"[TASK GUARD] Blocked task_id={getattr(obj, 'id', None)} "
+                f"because planned date is Sunday/holiday"
+            )
+        )
+        return False
 
     return _is_assignee_available_for_email(user, when_dt)
 
@@ -412,43 +427,55 @@ def _next_allowed_working_datetime(
     max_days: int = 90,
 ) -> Optional[datetime]:
     """
-    Shift recurrence to next valid working day.
+    BOS Lakshya strict recurring rule.
 
-    Final business rule:
-      - Leave/holiday/Sunday should not permanently stop recurrence.
-      - It should move to next working day.
-      - Deleted recurring series is handled separately.
+    IMPORTANT:
+    This function name is kept same to avoid breaking existing callers.
+
+    Correct rule:
+    - Calculate next recurring date.
+    - If that date is Sunday / Holiday Master / leave-blocked:
+        return None
+    - Do NOT shift to next working day.
+    - Do NOT create task.
+    - Do NOT send email.
     """
     if not candidate_dt:
         return None
 
     candidate_dt = _ensure_aware_project(candidate_dt)
     candidate_ist = candidate_dt.astimezone(IST)
-    original_time = candidate_ist.timetz().replace(tzinfo=None)
+    candidate_date_ist = candidate_ist.date()
 
-    for offset in range(0, max_days + 1):
-        d = candidate_ist.date() + timedelta(days=offset)
-
-        if recurrence_end_date is not None and d > recurrence_end_date:
-            return None
-
-        if not is_working_day(d):
-            continue
-
-        test_ist = IST.localize(datetime.combine(d, original_time))
-
-        if not _is_assignee_available_for_email(assignee, test_ist):
-            continue
-
-        return test_ist.astimezone(timezone.get_current_timezone())
-
-    logger.warning(
-        _safe_console_text(
-            f"[RECUR GEN] No valid working date found within {max_days} days "
-            f"for assignee_id={getattr(assignee, 'id', None)}"
+    if recurrence_end_date is not None and candidate_date_ist > recurrence_end_date:
+        logger.info(
+            _safe_console_text(
+                f"[RECUR GEN] Blocked: candidate date {candidate_date_ist} "
+                f"> recurrence_end_date {recurrence_end_date}"
+            )
         )
-    )
-    return None
+        return None
+
+    if is_holiday_for_user(assignee, candidate_ist):
+        reason = holiday_skip_reason(candidate_ist)
+        logger.info(
+            _safe_console_text(
+                f"[RECUR GEN] Skipped '{candidate_date_ist}' for "
+                f"user_id={getattr(assignee, 'id', None)} because {reason or 'off_day'}"
+            )
+        )
+        return None
+
+    if not _is_assignee_available_for_email(assignee, candidate_ist):
+        logger.info(
+            _safe_console_text(
+                f"[RECUR GEN] Skipped '{candidate_date_ist}' for "
+                f"user_id={getattr(assignee, 'id', None)} because assignee is blocked/on leave"
+            )
+        )
+        return None
+
+    return candidate_dt
 
 
 def _pending_duplicate_exists(series: dict, *, freq_norm: int, planned_dt: datetime) -> bool:
@@ -494,11 +521,12 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
     """
     Create next recurring checklist occurrence.
 
-    Final ERP rules:
+    Final BOS Lakshya rules:
       1. Deleted recurring series: never regenerate.
-      2. Leave/holiday/Sunday: shift to next working day.
-      3. Active pending row exists: do not duplicate.
-      4. Completed history can remain in DB.
+      2. Sunday/Holiday/Leave: skip occurrence completely.
+      3. Do NOT shift invalid occurrence to next working day.
+      4. Active pending row exists: do not duplicate.
+      5. Completed history can remain in DB.
     """
     now = timezone.now()
 
@@ -600,6 +628,19 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
 
     create_data = _apply_lifecycle_defaults(create_data)
 
+    # Final safety before DB write.
+    # Even if some earlier logic changes in future, holiday task must not be created.
+    if is_holiday_for_user(completed.assign_to, allowed_dt):
+        reason = holiday_skip_reason(allowed_dt)
+        logger.info(
+            _safe_console_text(
+                f"[RECUR GEN] Final create blocked for '{completed.task_name}' "
+                f"user_id={getattr(completed.assign_to, 'id', None)} "
+                f"date={allowed_dt.astimezone(IST).date()} reason={reason or 'off_day'}"
+            )
+        )
+        return 0
+
     with transaction.atomic():
         obj = Checklist.objects.create(**create_data)
 
@@ -607,7 +648,14 @@ def _ensure_future_occurrence_for_series(series: dict, *, dry_run: bool = False)
         try:
             email_check_dt = _planned_block_datetime(obj, timezone.now())
 
-            if _is_assignee_available_for_email(obj.assign_to, email_check_dt):
+            if is_holiday_for_user(obj.assign_to, email_check_dt):
+                logger.info(
+                    _safe_console_text(
+                        f"[RECUR GEN] Email blocked for CL-{obj.id}: planned date is Sunday/holiday"
+                    )
+                )
+
+            elif _is_assignee_available_for_email(obj.assign_to, email_check_dt):
                 complete_url = f"{SITE_URL}{reverse('tasks:complete_checklist', args=[obj.id])}"
 
                 send_checklist_assignment_to_user(
@@ -945,8 +993,8 @@ def send_due_today_assignments(self) -> dict:
             "skipped_before_10": True,
         }
 
-    if not is_working_day(now_ist.date()):
-        logger.info(_safe_console_text(f"[DUE@10] Skipped: {day_iso} is a non-working day"))
+    if is_holiday_for_user(None, now_ist):
+        logger.info(_safe_console_text(f"[DUE@10] Skipped: {day_iso} is Sunday/holiday"))
         _mark_fanout_done(day_iso, now_ist)
         return {
             "sent": 0,

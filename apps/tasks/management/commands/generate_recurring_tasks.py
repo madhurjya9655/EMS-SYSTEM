@@ -1,4 +1,4 @@
-#E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\management\commands\generate_recurring_tasks.py
+# E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\tasks\management\commands\generate_recurring_tasks.py
 from __future__ import annotations
 
 import logging
@@ -20,6 +20,7 @@ from apps.tasks.recurrence_utils import (
     normalize_mode,
 )
 from apps.tasks.services.blocking import guard_assign
+from apps.tasks.services.holiday_guard import is_holiday_for_user, holiday_skip_reason
 from apps.tasks.utils import send_delegation_assignment_to_user
 from apps.tasks.utils.blocking import is_user_blocked_at
 
@@ -47,19 +48,23 @@ def _safe_console_text(s: object) -> str:
 
 def _to_ist(dt: datetime) -> datetime:
     tz = timezone.get_current_timezone()
+
     if timezone.is_naive(dt):
         dt = timezone.make_aware(dt, tz)
+
     return dt.astimezone(IST)
 
 
 def _after_10am_today(now_ist: datetime | None = None) -> bool:
     now_ist = (now_ist or timezone.now()).astimezone(IST)
+
     anchor = now_ist.replace(
         hour=ASSIGN_ANCHOR_T.hour,
         minute=ASSIGN_ANCHOR_T.minute,
         second=0,
         microsecond=0,
     )
+
     return now_ist >= anchor
 
 
@@ -78,6 +83,7 @@ def _is_holiday_or_sunday(d: date) -> bool:
             return bool(Holiday.is_holiday(d))
         except Exception:
             return Holiday.objects.filter(date=d).exists()
+
     except Exception:
         logger.exception("Holiday check failed for date=%s", d)
         return False
@@ -87,6 +93,7 @@ def _get_user(user_id: int):
     from django.contrib.auth import get_user_model
 
     User = get_user_model()
+
     return User.objects.filter(id=user_id, is_active=True).first()
 
 
@@ -94,17 +101,19 @@ def _is_user_blocked_on_date_at_10am(user_id: int, d: date) -> bool:
     """
     Leave anchor for recurring generation: 10:00 IST.
 
-    New production rule:
+    Production rule:
     - PENDING leave blocks immediately after apply.
     - APPROVED leave blocks.
     - Half-day leave blocks only if it overlaps 10:00 IST.
     - Full-day leave blocks full date.
     """
     user = _get_user(user_id)
+
     if not user:
         return False
 
     anchor_ist = datetime.combine(d, ASSIGN_ANCHOR_T, tzinfo=IST)
+
     return bool(is_user_blocked_at(user, anchor_ist))
 
 
@@ -114,26 +123,41 @@ def _should_skip_recurring_date(user_id: int, d: date) -> tuple[bool, str | None
 
     Recurring tasks must NOT generate on:
     - Sunday
-    - Admin holiday
-    - Approved leave day
+    - Holiday Master date
+    - Leave blocked date
 
     Important:
-    We SKIP the occurrence. We do NOT push it to the next working day.
+    We SKIP the occurrence.
+    We do NOT push it to the next working day.
     """
     if _is_holiday_or_sunday(d):
         return True, "holiday_or_sunday"
 
     if _is_user_blocked_on_date_at_10am(user_id, d):
-        return True, "approved_leave"
+        return True, "leave_blocked"
 
     return False, None
 
 
-def _series_q(assign_to_id: int, task_name: str, mode: str, frequency: int | None, group_name: str | None):
+def _series_q(
+    assign_to_id: int,
+    task_name: str,
+    mode: str,
+    frequency: int | None,
+    group_name: str | None,
+):
     """
-    Legacy-tolerant grouping:
-    - Treat NULL frequency as 1.
-    - Exclude tombstoned/skipped rows.
+    Legacy-tolerant grouping.
+
+    Series identity:
+    - assign_to
+    - task_name
+    - mode
+    - frequency
+    - group_name
+
+    Treat NULL frequency as 1.
+    Exclude leave-skipped rows.
     """
     freq = max(int(frequency or 1), 1)
 
@@ -146,6 +170,8 @@ def _series_q(assign_to_id: int, task_name: str, mode: str, frequency: int | Non
 
     if group_name:
         q &= Q(group_name=group_name)
+    else:
+        q &= Q(group_name__in=["", None])
 
     q &= Q(frequency__in=[freq, None])
 
@@ -154,7 +180,11 @@ def _series_q(assign_to_id: int, task_name: str, mode: str, frequency: int | Non
 
 def _is_self_assigned(obj) -> bool:
     try:
-        return bool(obj.assign_by_id and obj.assign_to_id and obj.assign_by_id == obj.assign_to_id)
+        return bool(
+            obj.assign_by_id
+            and obj.assign_to_id
+            and obj.assign_by_id == obj.assign_to_id
+        )
     except Exception:
         return False
 
@@ -163,7 +193,7 @@ def _send_delegation_10am_emails(today_ist: date, user_id: int | None, dry_run: 
     """
     Delegations:
     - Send day-of reminder after 10:00 IST.
-    - Respect leave/self-assign guards.
+    - Respect holiday/leave/self-assign guards.
 
     Checklist day-of emails are handled by consolidated 10:00 IST digest:
     apps/tasks/tasks.py::send_due_today_assignments
@@ -171,6 +201,18 @@ def _send_delegation_10am_emails(today_ist: date, user_id: int | None, dry_run: 
     This command does NOT email checklists.
     """
     if not SEND_EMAILS_FOR_AUTO_RECUR:
+        return 0
+
+    # BOS Lakshya hard rule:
+    # Sunday/Holiday = complete off day.
+    # No delegation reminder email should go out.
+    if is_holiday_for_user(None, today_ist):
+        logger.info(
+            _safe_console_text(
+                f"Skip delegation 10AM emails for {today_ist}: "
+                f"{holiday_skip_reason(today_ist) or 'off_day'}"
+            )
+        )
         return 0
 
     if SEND_RECUR_EMAILS_ONLY_AT_10AM and not _after_10am_today():
@@ -183,7 +225,8 @@ def _send_delegation_10am_emails(today_ist: date, user_id: int | None, dry_run: 
     end_proj = end_today_ist.astimezone(timezone.get_current_timezone())
 
     qs = (
-        Delegation.objects.filter(
+        Delegation.objects
+        .filter(
             status="Pending",
             planned_date__gte=start_proj,
             planned_date__lte=end_proj,
@@ -206,8 +249,20 @@ def _send_delegation_10am_emails(today_ist: date, user_id: int | None, dry_run: 
             )
             continue
 
+        # Final per-object protection.
+        # Even if today-level check is bypassed, holiday planned_date blocks email.
+        if is_holiday_for_user(obj.assign_to, obj.planned_date):
+            logger.info(
+                _safe_console_text(
+                    f"Skip delegation 10AM email for DL-{obj.id}: "
+                    f"planned date is Sunday/holiday"
+                )
+            )
+            continue
+
         try:
             p_ist = _to_ist(obj.planned_date)
+
             anchor_ist = p_ist.replace(
                 hour=ASSIGN_ANCHOR_T.hour,
                 minute=ASSIGN_ANCHOR_T.minute,
@@ -218,7 +273,8 @@ def _send_delegation_10am_emails(today_ist: date, user_id: int | None, dry_run: 
             if not guard_assign(obj.assign_to, anchor_ist):
                 logger.info(
                     _safe_console_text(
-                        f"Skip delegation 10AM email for DL-{obj.id}: assignee blocked at 10:00 IST"
+                        f"Skip delegation 10AM email for DL-{obj.id}: "
+                        f"assignee blocked at 10:00 IST"
                     )
                 )
                 continue
@@ -251,7 +307,11 @@ def _send_delegation_10am_emails(today_ist: date, user_id: int | None, dry_run: 
             )
 
     if sent:
-        logger.info(_safe_console_text(f"Sent {sent} Delegation reminders for {today_ist}"))
+        logger.info(
+            _safe_console_text(
+                f"Sent {sent} Delegation reminders for {today_ist}"
+            )
+        )
 
     return sent
 
@@ -262,16 +322,30 @@ class Command(BaseCommand):
         "STRICT RULES:\n"
         "• Next checklist occurrence spawns ONLY after completion.\n"
         "• If ANY Pending exists in the series, DO NOT generate.\n"
-        "• Recurring Checklist occurrence is SKIPPED if planned date is Sunday, admin holiday, or approved leave.\n"
+        "• Recurring Checklist occurrence is SKIPPED if planned date is Sunday, admin holiday, or leave-blocked.\n"
         "• This command DOES NOT push invalid occurrences to the next allowed date.\n"
         "• Checklist emails are NOT sent here when using consolidated 10:00 IST digest.\n"
-        "• Delegations are one-time; send 10:00 IST day-of reminders only with leave/self-assign guards."
+        "• Delegations are one-time; send 10:00 IST day-of reminders only with holiday/leave/self-assign guards."
     )
 
     def add_arguments(self, parser):
-        parser.add_argument("--user-id", type=int, help="Limit to a specific assignee user id.")
-        parser.add_argument("--dry-run", action="store_true", help="Print actions without writing to DB.")
-        parser.add_argument("--no-email", action="store_true", help="Skip sending 10:00 reminders for delegations.")
+        parser.add_argument(
+            "--user-id",
+            type=int,
+            help="Limit to a specific assignee user id.",
+        )
+
+        parser.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="Print actions without writing to DB.",
+        )
+
+        parser.add_argument(
+            "--no-email",
+            action="store_true",
+            help="Skip sending 10:00 reminders for delegations.",
+        )
 
     def handle(self, *args, **opts):
         user_id = opts.get("user_id")
@@ -295,14 +369,22 @@ class Command(BaseCommand):
             filters["assign_to_id"] = user_id
 
         seeds = (
-            Checklist.objects.filter(**filters)
-            .values("assign_to_id", "task_name", "mode", "frequency", "group_name")
+            Checklist.objects
+            .filter(**filters)
+            .values(
+                "assign_to_id",
+                "task_name",
+                "mode",
+                "frequency",
+                "group_name",
+            )
             .distinct()
         )
 
         logger.info(
             _safe_console_text(
-                f"[RECUR] Starting @ {now_ist:%Y-%m-%d %H:%M IST} | seeds={seeds.count()}"
+                f"[RECUR] Starting @ {now_ist:%Y-%m-%d %H:%M IST} "
+                f"| seeds={seeds.count()}"
             )
         )
 
@@ -326,7 +408,8 @@ class Command(BaseCommand):
                 continue
 
             base = (
-                Checklist.objects.filter(status="Completed")
+                Checklist.objects
+                .filter(status="Completed")
                 .filter(q_series)
                 .order_by("-planned_date", "-id")
                 .first()
@@ -335,7 +418,11 @@ class Command(BaseCommand):
             if not base or not base.planned_date:
                 continue
 
-            next_dt = get_next_planned_date(base.planned_date, mode_norm, freq_norm)
+            next_dt = get_next_planned_date(
+                base.planned_date,
+                mode_norm,
+                freq_norm,
+            )
 
             if not next_dt:
                 continue
@@ -351,7 +438,7 @@ class Command(BaseCommand):
                 continue
 
             # HARD BUSINESS RULE:
-            # Do not generate recurring tasks on Sunday/holiday/approved leave.
+            # Do not generate recurring tasks on Sunday/holiday/leave.
             # Do not push the occurrence to another day.
             should_skip, skip_reason = _should_skip_recurring_date(
                 user_id=s["assign_to_id"],
@@ -361,29 +448,35 @@ class Command(BaseCommand):
             if should_skip:
                 logger.info(
                     _safe_console_text(
-                        f"[RECUR] Skipped '{s['task_name']}' for user_id={s['assign_to_id']} "
+                        f"[RECUR] Skipped '{s['task_name']}' "
+                        f"for user_id={s['assign_to_id']} "
                         f"on {next_date}: {skip_reason}"
                     )
                 )
                 continue
 
             # Existing safety:
-            # Suppress today creation because today reminders/visibility are handled separately.
+            # Suppress today creation because today reminders/visibility
+            # are handled separately.
             try:
                 if _to_ist(next_dt).date() == today_ist:
                     logger.info(
                         _safe_console_text(
-                            f"[RECUR] Suppressed TODAY creation for '{s['task_name']}' "
-                            f"user_id={s['assign_to_id']} @ {_to_ist(next_dt):%Y-%m-%d %H:%M IST}"
+                            f"[RECUR] Suppressed TODAY creation for "
+                            f"'{s['task_name']}' "
+                            f"user_id={s['assign_to_id']} "
+                            f"@ {_to_ist(next_dt):%Y-%m-%d %H:%M IST}"
                         )
                     )
                     continue
+
             except Exception:
                 logger.exception("Today suppression check failed for series=%s", s)
                 continue
 
             dupe = (
-                Checklist.objects.filter(status="Pending")
+                Checklist.objects
+                .filter(status="Pending")
                 .filter(q_series)
                 .filter(
                     planned_date__gte=next_dt - timedelta(minutes=1),
@@ -397,17 +490,34 @@ class Command(BaseCommand):
 
             if dry_run:
                 created_total += 1
-                per_user_created[s["assign_to_id"]] = per_user_created.get(s["assign_to_id"], 0) + 1
+                per_user_created[s["assign_to_id"]] = (
+                    per_user_created.get(s["assign_to_id"], 0) + 1
+                )
 
                 logger.info(
                     _safe_console_text(
-                        f"[DRY RUN] Would create '{s['task_name']}' for user_id={s['assign_to_id']} "
+                        f"[DRY RUN] Would create '{s['task_name']}' "
+                        f"for user_id={s['assign_to_id']} "
                         f"at {_to_ist(next_dt):%Y-%m-%d %H:%M IST}"
                     )
                 )
                 continue
 
             try:
+                # Final DB-create guard.
+                # Even if future logic changes above, holiday tasks must not be created.
+                if is_holiday_for_user(base.assign_to, next_dt):
+                    logger.info(
+                        _safe_console_text(
+                            f"[RECUR] Final create blocked for "
+                            f"'{base.task_name}' "
+                            f"user_id={getattr(base.assign_to, 'id', None)} "
+                            f"date={_to_ist(next_dt).date()} "
+                            f"reason={holiday_skip_reason(next_dt) or 'off_day'}"
+                        )
+                    )
+                    continue
+
                 with transaction.atomic():
                     obj = Checklist.objects.create(
                         assign_by=base.assign_by,
@@ -437,20 +547,31 @@ class Command(BaseCommand):
                     )
 
                 created_total += 1
-                per_user_created[s["assign_to_id"]] = per_user_created.get(s["assign_to_id"], 0) + 1
+                per_user_created[s["assign_to_id"]] = (
+                    per_user_created.get(s["assign_to_id"], 0) + 1
+                )
 
                 logger.info(
                     _safe_console_text(
-                        f"✅ Created next CL-{obj.id} '{obj.task_name}' for user_id={s['assign_to_id']} "
+                        f"Created next CL-{obj.id} '{obj.task_name}' "
+                        f"for user_id={s['assign_to_id']} "
                         f"at {_to_ist(obj.planned_date):%Y-%m-%d %H:%M IST}"
                     )
                 )
 
             except Exception as e:
-                logger.exception("Failed creating next occurrence for %s: %s", s, e)
+                logger.exception(
+                    "Failed creating next occurrence for %s: %s",
+                    s,
+                    e,
+                )
 
         if send_emails:
-            email_total += _send_delegation_10am_emails(today_ist, user_id, dry_run)
+            email_total += _send_delegation_10am_emails(
+                today_ist,
+                user_id,
+                dry_run,
+            )
 
         if per_user_created:
             for uid, count in per_user_created.items():
@@ -459,8 +580,13 @@ class Command(BaseCommand):
                         f"[RECUR GEN] user_id={uid} → created {count} occurrence(s)"
                     )
                 )
+
         else:
-            logger.info(_safe_console_text("[RECUR GEN] No new occurrences were needed today."))
+            logger.info(
+                _safe_console_text(
+                    "[RECUR GEN] No new occurrences were needed today."
+                )
+            )
 
         parts = [f"Created {created_total} checklist occurrence(s)"]
 
@@ -468,6 +594,11 @@ class Command(BaseCommand):
             parts.append(f"Emailed {email_total} delegation reminder(s)")
 
         if dry_run:
-            self.stdout.write(self.style.WARNING("[DRY RUN] " + ", ".join(parts)))
+            self.stdout.write(
+                self.style.WARNING("[DRY RUN] " + ", ".join(parts))
+            )
+
         else:
-            self.stdout.write(self.style.SUCCESS(", ".join(parts)))
+            self.stdout.write(
+                self.style.SUCCESS(", ".join(parts))
+            )
