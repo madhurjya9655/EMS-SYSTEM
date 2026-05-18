@@ -2076,104 +2076,154 @@ class ApproverMappingAdminView(
                 "managers", "finance_users"
             )
         }
+
         for u in self._all_users_for_select():
-            rows.append({"user": u, "mapping": mappings.get(u.id)})
+            rows.append(
+                {
+                    "user": u,
+                    "mapping": mappings.get(u.id),
+                }
+            )
+
         return rows
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
+
         settings_obj = ReimbursementSettings.get_solo()
+
         ctx["settings_form"] = ReimbursementSettingsForm(instance=settings_obj)
         ctx["bulk_form"] = ApproverMappingBulkForm()
         ctx["rows"] = self._rows()
         ctx["all_users_for_select"] = self._all_users_for_select()
+
         return ctx
 
     def post(self, request, *args, **kwargs):
         if "save_settings" in request.POST:
             return self._handle_save_settings(request)
+
         if "apply_bulk" in request.POST:
             return self._handle_apply_bulk(request)
+
         if "save_mappings" in request.POST:
             return self._handle_save_mappings(request)
+
         messages.error(request, "Unknown action.")
         return redirect(request.path)
 
     def _handle_save_settings(self, request):
         obj = ReimbursementSettings.get_solo()
         form = ReimbursementSettingsForm(request.POST, instance=obj)
+
         if form.is_valid():
             form.save()
             messages.success(request, "Settings saved.")
         else:
             messages.error(request, "Please fix the errors in settings.")
+
         return redirect(request.path)
 
     def _handle_apply_bulk(self, request):
         form = ApproverMappingBulkForm(request.POST)
+
         if not form.is_valid():
             messages.error(request, "Please fix the errors in bulk form.")
             return redirect(request.path)
 
-        apply_manager = form.cleaned_data.get("apply_manager_to_all")
-        apply_finance = form.cleaned_data.get("apply_finance_to_all")
+        apply_manager = form.cleaned_data.get("apply_manager_to_all", False)
+        apply_finance = form.cleaned_data.get("apply_finance_to_all", False)
+
         managers_for_all = form.cleaned_data.get("managers_for_all")
         finance_for_all = form.cleaned_data.get("finance_for_all")
 
+        if not apply_manager and not apply_finance:
+            messages.warning(request, "No bulk mapping option selected.")
+            return redirect(request.path)
+
         users = self._all_users_for_select()
         processed = 0
-        for u in users:
-            mapping, _ = ReimbursementApproverMapping.objects.get_or_create(employee=u)
-            changed = False
-            if apply_manager:
-                mapping.managers.set(manager_for_all or [])
-                changed = True
-            if apply_finance:
-                mapping.finance_users.set(finance_for_all or [])
-                changed = True
-            if changed:
-                mapping.save()
-                processed += 1
+
+        with transaction.atomic():
+            for u in users:
+                mapping, _ = ReimbursementApproverMapping.objects.get_or_create(
+                    employee=u
+                )
+
+                changed = False
+
+                if apply_manager:
+                    mapping.managers.set(managers_for_all or [])
+                    changed = True
+
+                if apply_finance:
+                    mapping.finance_users.set(finance_for_all or [])
+                    changed = True
+
+                if changed:
+                    processed += 1
 
         messages.success(
-            request, f"Bulk mapping applied. Rows updated: {processed}."
+            request,
+            f"Bulk mapping applied successfully. Rows updated: {processed}.",
         )
+
         return redirect(request.path)
 
     def _handle_save_mappings(self, request):
-       users = self._all_users_for_select()
-       id_to_user = {u.id: u for u in users}
-       processed = 0
+        users = self._all_users_for_select()
+        id_to_user = {u.id: u for u in users}
+        processed = 0
 
-       for u in users:
-        manager_ids = [
-            int(x) for x in request.POST.getlist(f"managers_{u.id}")
-            if str(x).isdigit() and int(x) in id_to_user
-        ]
-        finance_user_ids = [
-            int(x) for x in request.POST.getlist(f"finance_users_{u.id}")
-            if str(x).isdigit() and int(x) in id_to_user
-        ]
+        with transaction.atomic():
+            for u in users:
+                manager_ids = [
+                    int(x)
+                    for x in request.POST.getlist(f"managers_{u.id}")
+                    if str(x).isdigit() and int(x) in id_to_user
+                ]
 
-        mapping, _ = ReimbursementApproverMapping.objects.get_or_create(employee=u)
+                finance_user_ids = [
+                    int(x)
+                    for x in request.POST.getlist(f"finance_users_{u.id}")
+                    if str(x).isdigit() and int(x) in id_to_user
+                ]
 
-        current_manager_ids = set(mapping.managers.values_list("id", flat=True))
-        current_finance_ids = set(mapping.finance_users.values_list("id", flat=True))
+                mapping, _ = ReimbursementApproverMapping.objects.get_or_create(
+                    employee=u
+                )
 
-        new_manager_ids = set(manager_ids)
-        new_finance_ids = set(finance_user_ids)
+                current_manager_ids = set(
+                    mapping.managers.values_list("id", flat=True)
+                )
 
-        if current_manager_ids != new_manager_ids or current_finance_ids != new_finance_ids:
-            mapping.managers.set([id_to_user[mid] for mid in manager_ids])
-            mapping.finance_users.set([id_to_user[fid] for fid in finance_user_ids])
-            processed += 1
+                current_finance_ids = set(
+                    mapping.finance_users.values_list("id", flat=True)
+                )
+
+                new_manager_ids = set(manager_ids)
+                new_finance_ids = set(finance_user_ids)
+
+                if (
+                    current_manager_ids != new_manager_ids
+                    or current_finance_ids != new_finance_ids
+                ):
+                    mapping.managers.set(
+                        [id_to_user[mid] for mid in manager_ids]
+                    )
+
+                    mapping.finance_users.set(
+                        [id_to_user[fid] for fid in finance_user_ids]
+                    )
+
+                    processed += 1
 
         messages.success(
-        request,
-        f"Per-employee mappings saved. Rows processed: {processed}.",
+            request,
+            f"Per-employee mappings saved. Rows processed: {processed}.",
         )
-        return redirect(request.path)
 
+        return redirect(request.path)
 
 class ReimbursementExportCSVView(
     LoginRequiredMixin, PermissionRequiredMixin, TemplateView

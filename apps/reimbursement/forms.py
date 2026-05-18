@@ -584,97 +584,136 @@ class ApproverMappingForm(forms.ModelForm):
 # ---------------------------------------------------------------------------
 
 class ApproverMappingBulkForm(forms.Form):
-    """
-    Admin helper: apply the same managers / finance users to ALL employees at once.
-    Both fields are ModelMultipleChoiceField — hold Ctrl/⌘ to select multiple.
-    """
-
     apply_manager_to_all = forms.BooleanField(
         required=False,
-        initial=False,
+        label="Apply selected managers to all employees",
         widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
-        label="Apply managers to all employees",
     )
-    # UPDATED: ModelMultipleChoiceField + SelectMultiple
+
     managers_for_all = forms.ModelMultipleChoiceField(
         queryset=User.objects.filter(is_active=True).order_by(
-            "first_name", "last_name", "username"
+            "first_name",
+            "last_name",
+            "username",
         ),
         required=False,
-        widget=forms.SelectMultiple(
-            attrs={
-                "class": "form-select",
-                "size": "5",
-                "title": "Hold Ctrl / ⌘ to select multiple",
-            }
-        ),
-        label="Manager(s) for all",
-        help_text="Hold Ctrl / ⌘ to select multiple.",
+        label="Managers for all employees",
+        widget=forms.SelectMultiple(attrs={"class": "form-select"}),
     )
 
     apply_finance_to_all = forms.BooleanField(
         required=False,
-        initial=False,
+        label="Apply selected finance users to all employees",
         widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
-        label="Apply finance users to all employees",
-    )
-    # UPDATED: ModelMultipleChoiceField + SelectMultiple
-    finance_for_all = forms.ModelMultipleChoiceField(
-        queryset=User.objects.filter(is_active=True).order_by(
-            "first_name", "last_name", "username"
-        ),
-        required=False,
-        widget=forms.SelectMultiple(
-            attrs={
-                "class": "form-select",
-                "size": "5",
-                "title": "Hold Ctrl / ⌘ to select multiple",
-            }
-        ),
-        label="Finance user(s) for all",
-        help_text="Hold Ctrl / ⌘ to select multiple.",
     )
 
-    def __init__(self, *args, user=None, **kwargs):
-        self.user = user
-        super().__init__(*args, **kwargs)
+    finance_for_all = forms.ModelMultipleChoiceField(
+        queryset=User.objects.filter(is_active=True).order_by(
+            "first_name",
+            "last_name",
+            "username",
+        ),
+        required=False,
+        label="Finance users for all employees",
+        widget=forms.SelectMultiple(attrs={"class": "form-select"}),
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+
+        apply_manager = cleaned_data.get("apply_manager_to_all", False)
+        apply_finance = cleaned_data.get("apply_finance_to_all", False)
+
+        managers_for_all = cleaned_data.get("managers_for_all")
+        finance_for_all = cleaned_data.get("finance_for_all")
+
+        if apply_manager and not managers_for_all:
+            self.add_error(
+                "managers_for_all",
+                "Please select at least one manager.",
+            )
+
+        if apply_finance and not finance_for_all:
+            self.add_error(
+                "finance_for_all",
+                "Please select at least one finance user.",
+            )
+
+        if not apply_manager and not apply_finance:
+            raise forms.ValidationError(
+                "Please select at least one bulk apply option."
+            )
+
+        return cleaned_data
 
     def save(self) -> int:
         """
-        Apply selected managers/finance users to all active employees via M2M .set().
-        Returns number of mapping rows updated.
+        Apply selected managers/finance users to all active employees.
+
+        Returns:
+            int: number of mapping rows updated
         """
+
         if not hasattr(self, "cleaned_data"):
             raise ValueError("Call is_valid() before save().")
 
-        apply_mgr = self.cleaned_data.get("apply_manager_to_all")
-        apply_fin = self.cleaned_data.get("apply_finance_to_all")
-        managers_qs = self.cleaned_data.get("managers_for_all")   # QuerySet or empty
-        finance_qs = self.cleaned_data.get("finance_for_all")     # QuerySet or empty
+        apply_manager = self.cleaned_data.get(
+            "apply_manager_to_all",
+            False,
+        )
 
-        if not apply_mgr and not apply_fin:
+        apply_finance = self.cleaned_data.get(
+            "apply_finance_to_all",
+            False,
+        )
+
+        managers_for_all = self.cleaned_data.get(
+            "managers_for_all"
+        )
+
+        finance_for_all = self.cleaned_data.get(
+            "finance_for_all"
+        )
+
+        if not apply_manager and not apply_finance:
             return 0
 
         processed = 0
-        employees = User.objects.filter(is_active=True)
 
-        for emp in employees:
-            mapping, _ = ReimbursementApproverMapping.objects.get_or_create(employee=emp)
-            changed = False
+        employees = User.objects.filter(
+            is_active=True
+        ).order_by(
+            "first_name",
+            "last_name",
+            "username",
+        )
 
-            if apply_mgr and managers_qs is not None:
-                mapping.managers.set(managers_qs)
-                changed = True
+        with transaction.atomic():
+            for employee in employees:
+                mapping, _ = (
+                    ReimbursementApproverMapping.objects.get_or_create(
+                        employee=employee
+                    )
+                )
 
-            if apply_fin and finance_qs is not None:
-                mapping.finance_users.set(finance_qs)
-                changed = True
+                changed = False
 
-            if changed:
-                processed += 1
+                if apply_manager:
+                    mapping.managers.set(
+                        managers_for_all or []
+                    )
+                    changed = True
+
+                if apply_finance:
+                    mapping.finance_users.set(
+                        finance_for_all or []
+                    )
+                    changed = True
+
+                if changed:
+                    processed += 1
 
         return processed
-
 
 class ApproverDefaultsForm(forms.Form):
     """
