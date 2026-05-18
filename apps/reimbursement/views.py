@@ -1083,15 +1083,17 @@ class ManagerQueueView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
 
     def get_queryset(self):
         user = self.request.user
+
         return (
             ReimbursementRequest.objects.filter(
                 status=ReimbursementRequest.Status.PENDING_MANAGER
             )
             .filter(
                 Q(manager=user)
-                | Q(created_by__reimbursement_approver_mapping__manager=user)
+                | Q(created_by__reimbursement_approver_mapping__managers=user)
             )
             .select_related("created_by", "manager", "management")
+            .distinct()
             .order_by("-created_at")
         )
 
@@ -1105,15 +1107,17 @@ class ManagerReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateView)
 
     def get_queryset(self):
         user = self.request.user
+
         return (
             ReimbursementRequest.objects.filter(
                 status=ReimbursementRequest.Status.PENDING_MANAGER
             )
             .filter(
                 Q(manager=user)
-                | Q(created_by__reimbursement_approver_mapping__manager=user)
+                | Q(created_by__reimbursement_approver_mapping__managers=user)
             )
             .select_related("created_by", "manager", "management")
+            .distinct()
         )
 
     def get_context_data(self, **kwargs):
