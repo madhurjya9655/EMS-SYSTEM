@@ -223,33 +223,44 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
     """
     Soft-skip already-created tasks that fall inside a PENDING or APPROVED leave window.
 
-    Production rule:
-    - Leave blocks immediately after apply.
+    New production rule:
+    - Leave blocks tasks immediately after apply.
     - PENDING + APPROVED leave blocks tasks.
-    - REJECTED / CANCELLED leave does not block.
-    - Full-day leave blocks all tasks on covered IST dates.
-    - Half-day leave blocks only tasks whose planned_date falls inside exact leave window.
-    - Never hard-delete production tasks; mark is_skipped_due_to_leave=True.
+    - REJECTED leave does not block tasks.
+    - Deleted leave does not block tasks.
+    - Full-day leave blocks tasks on covered IST dates.
+    - Half-day leave blocks tasks inside exact leave time window.
+    - Never hard-delete tasks.
+    - Only set is_skipped_due_to_leave=True.
     """
     counts = {"checklist": 0, "delegation": 0, "help_ticket": 0, "fms": 0}
 
     try:
-        if getattr(leave, "status", None) not in (LeaveStatus.PENDING, LeaveStatus.APPROVED):
+        leave_status = getattr(leave, "status", None)
+
+        if leave_status not in ACTIVE_DEDUCTION_STATUSES:
             logger.info(
-                "Auto-skip ignored for leave %s because status is %s",
+                "Auto-skip ignored for leave %s because status=%s is not active.",
                 getattr(leave, "id", None),
-                getattr(leave, "status", None),
+                leave_status,
             )
             return counts
 
         if not getattr(leave, "employee_id", None):
+            logger.warning(
+                "Auto-skip ignored for leave %s because employee_id is missing.",
+                getattr(leave, "id", None),
+            )
             return counts
 
         start_at = getattr(leave, "start_at", None)
         end_at = getattr(leave, "end_at", None)
 
         if not (start_at and end_at):
-            logger.warning("Auto-skip skipped for leave %s because start_at/end_at missing", getattr(leave, "id", None))
+            logger.warning(
+                "Auto-skip ignored for leave %s because start_at/end_at missing.",
+                getattr(leave, "id", None),
+            )
             return counts
 
         start_ist = timezone.localtime(start_at, IST)
@@ -277,24 +288,24 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
                     .filter(leave_request=leave, is_active=True)
                     .only("task_type", "original_task_id")
                 )
+
                 for ho in handovers:
                     task_type = str(getattr(ho, "task_type", "") or "")
                     if task_type in exclude_ids:
                         exclude_ids[task_type].append(ho.original_task_id)
+
             except Exception:
                 logger.exception(
-                    "Could not resolve handover exclusions for leave %s",
+                    "Could not resolve handover exclusions for leave %s.",
                     getattr(leave, "id", None),
                 )
 
         if is_half_day:
-            # Exact half-day time window.
             datetime_window = Q(planned_date__gte=start_ist) & Q(planned_date__lt=end_ist)
         else:
-            # Full-day / multi-day leave. Use IST date range.
             datetime_window = Q(planned_date__date__gte=start_date) & Q(planned_date__date__lte=end_date)
 
-        q = (
+        checklist_qs = (
             Checklist.objects
             .filter(
                 assign_to=leave.employee,
@@ -303,11 +314,15 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
             )
             .filter(datetime_window)
         )
-        if exclude_ids["checklist"]:
-            q = q.exclude(id__in=exclude_ids["checklist"])
-        counts["checklist"] = int(q.update(is_skipped_due_to_leave=True))
 
-        q = (
+        if exclude_ids["checklist"]:
+            checklist_qs = checklist_qs.exclude(id__in=exclude_ids["checklist"])
+
+        counts["checklist"] = int(
+            checklist_qs.update(is_skipped_due_to_leave=True)
+        )
+
+        delegation_qs = (
             Delegation.objects
             .filter(
                 assign_to=leave.employee,
@@ -316,11 +331,15 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
             )
             .filter(datetime_window)
         )
-        if exclude_ids["delegation"]:
-            q = q.exclude(id__in=exclude_ids["delegation"])
-        counts["delegation"] = int(q.update(is_skipped_due_to_leave=True))
 
-        q = (
+        if exclude_ids["delegation"]:
+            delegation_qs = delegation_qs.exclude(id__in=exclude_ids["delegation"])
+
+        counts["delegation"] = int(
+            delegation_qs.update(is_skipped_due_to_leave=True)
+        )
+
+        help_ticket_qs = (
             HelpTicket.objects
             .filter(
                 assign_to=leave.employee,
@@ -329,15 +348,14 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
             .exclude(status__in=["Closed", "COMPLETED", "Completed", "Done"])
             .filter(datetime_window)
         )
-        if exclude_ids["help_ticket"]:
-            q = q.exclude(id__in=exclude_ids["help_ticket"])
-        counts["help_ticket"] = int(q.update(is_skipped_due_to_leave=True))
 
-        # FMS planned_date is DateField in production.
-        # DateField cannot support exact half-day time windows.
-        # Therefore:
-        # - Full-day leave: skip FMS on date range.
-        # - Half-day leave: do not auto-skip FMS here unless FMS becomes DateTimeField.
+        if exclude_ids["help_ticket"]:
+            help_ticket_qs = help_ticket_qs.exclude(id__in=exclude_ids["help_ticket"])
+
+        counts["help_ticket"] = int(
+            help_ticket_qs.update(is_skipped_due_to_leave=True)
+        )
+
         try:
             if not is_half_day:
                 counts["fms"] = int(
@@ -351,21 +369,145 @@ def _auto_skip_tasks_for_leave(leave: LeaveRequest, *, exclude_handover: bool = 
                     .update(is_skipped_due_to_leave=True)
                 )
         except Exception:
-            logger.exception("FMS auto-skip failed for leave %s", getattr(leave, "id", None))
+            logger.exception(
+                "FMS auto-skip failed for leave %s.",
+                getattr(leave, "id", None),
+            )
 
         logger.info(
-            "Auto-skip applied for leave %s status=%s half_day=%s counts=%s",
+            "Auto-skip applied for leave %s status=%s half_day=%s counts=%s.",
             getattr(leave, "id", None),
-            getattr(leave, "status", None),
+            leave_status,
             is_half_day,
             counts,
         )
 
     except Exception:
-        logger.exception("Auto-skip failed for leave %s", getattr(leave, "id", None))
+        logger.exception(
+            "Auto-skip failed for leave %s.",
+            getattr(leave, "id", None),
+        )
 
     return counts
 
+def _restore_leave_skips_for_employee(employee) -> Dict[str, int]:
+    """
+    Restore tasks previously skipped due to leave for one employee.
+
+    Simple meaning:
+    - Set is_skipped_due_to_leave=False
+    - Only for this employee
+    - This prepares system for fresh recalculation
+    """
+    counts = {"checklist": 0, "delegation": 0, "help_ticket": 0, "fms": 0}
+
+    try:
+        if not employee:
+            return counts
+
+        from apps.tasks.models import Checklist, Delegation, FMS, HelpTicket
+
+        counts["checklist"] = int(
+            Checklist.objects
+            .filter(assign_to=employee, is_skipped_due_to_leave=True)
+            .update(is_skipped_due_to_leave=False)
+        )
+
+        counts["delegation"] = int(
+            Delegation.objects
+            .filter(assign_to=employee, is_skipped_due_to_leave=True)
+            .update(is_skipped_due_to_leave=False)
+        )
+
+        counts["help_ticket"] = int(
+            HelpTicket.objects
+            .filter(assign_to=employee, is_skipped_due_to_leave=True)
+            .update(is_skipped_due_to_leave=False)
+        )
+
+        counts["fms"] = int(
+            FMS.objects
+            .filter(assign_to=employee, is_skipped_due_to_leave=True)
+            .update(is_skipped_due_to_leave=False)
+        )
+
+        logger.info(
+            "Restored leave-skipped tasks for employee %s counts=%s.",
+            getattr(employee, "id", None),
+            counts,
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed to restore leave-skipped tasks for employee %s.",
+            getattr(employee, "id", None),
+        )
+
+    return counts
+
+
+def _resync_leave_task_skips_for_employee(employee, *, exclude_handover: bool = True) -> Dict[str, object]:
+    """
+    Recalculate leave-based task skipping for one employee.
+
+    Simple meaning:
+    Step 1: Bring back all tasks skipped because of leave.
+    Step 2: Look at current active leaves.
+    Step 3: Skip tasks again for active leave periods.
+
+    Active leaves:
+    - PENDING
+    - APPROVED
+
+    Inactive leaves:
+    - REJECTED
+    - deleted
+    """
+    result = {
+        "restored": {"checklist": 0, "delegation": 0, "help_ticket": 0, "fms": 0},
+        "applied": {},
+        "active_leave_ids": [],
+    }
+
+    try:
+        if not employee:
+            return result
+
+        restored_counts = _restore_leave_skips_for_employee(employee)
+        result["restored"] = restored_counts
+
+        active_leaves = (
+            LeaveRequest.objects
+            .filter(
+                employee=employee,
+                status__in=ACTIVE_DEDUCTION_STATUSES,
+            )
+            .select_related("employee")
+            .order_by("start_at", "id")
+        )
+
+        for active_leave in active_leaves:
+            skip_counts = _auto_skip_tasks_for_leave(
+                active_leave,
+                exclude_handover=exclude_handover,
+            )
+            result["applied"][active_leave.id] = skip_counts
+            result["active_leave_ids"].append(active_leave.id)
+
+        logger.info(
+            "Re-synced leave task skips for employee %s active_leave_ids=%s result=%s.",
+            getattr(employee, "id", None),
+            result["active_leave_ids"],
+            result,
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed to re-sync leave task skips for employee %s.",
+            getattr(employee, "id", None),
+        )
+
+    return result
 
 def _datespan_ist(start_dt, end_dt) -> List[date]:
     if not (start_dt and end_dt):
@@ -656,7 +798,8 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
 
                             skip_counts = _auto_skip_tasks_for_leave(lr, exclude_handover=True)
                             logger.info(
-                            "Leave %s applied. Task auto-skip will run only after approval.",
+                            "Leave %s applied with status=%s. Immediate task auto-skip counts=%s.",
+                            getattr(lr, "status", None),
                             lr.id,
                             skip_counts,
                                )
@@ -830,7 +973,10 @@ def approval_page(request: HttpRequest, pk: int) -> HttpResponse:
 @require_POST
 @transaction.atomic
 def manager_decide_approve(request: HttpRequest, pk: int) -> HttpResponse:
-    leave = get_object_or_404(LeaveRequest.objects.select_for_update(), pk=pk)
+    leave = get_object_or_404(
+        LeaveRequest.objects.select_for_update(),
+        pk=pk,
+    )
 
     if not _can_manage(request.user, leave):
         messages.error(request, "Only the assigned Reporting Person can approve this leave.")
@@ -843,21 +989,21 @@ def manager_decide_approve(request: HttpRequest, pk: int) -> HttpResponse:
     comment = (request.POST.get("decision_comment") or "").strip()
 
     try:
-        leave.approve(by_user=request.user, comment=comment)
+        employee_id = getattr(leave, "employee_id", None)
+        leave_id = getattr(leave, "id", None)
+
+        leave.approve(
+            by_user=request.user,
+            comment=comment,
+        )
 
         def _after_approval_commit():
-            try:
-                skip_counts = _auto_skip_tasks_for_leave(leave, exclude_handover=True)
-                logger.info(
-                    "Post-approval auto-skip for leave %s: %s",
-                    leave.id,
-                    skip_counts,
-                )
-            except Exception:
-                logger.exception(
-                    "Post-approval auto-skip failed for leave %s",
-                    getattr(leave, "id", None),
-                )
+            logger.info(
+                "Leave %s approved by user %s for employee %s. Task skip re-sync is handled by leave signals.",
+                leave_id,
+                getattr(request.user, "id", None),
+                employee_id,
+            )
 
         transaction.on_commit(_after_approval_commit)
 
@@ -868,11 +1014,10 @@ def manager_decide_approve(request: HttpRequest, pk: int) -> HttpResponse:
             messages.error(request, msg)
 
     except Exception:
-        logger.exception("Approve failed for leave %s", leave.pk)
+        logger.exception("Approve failed for leave %s", getattr(leave, "pk", None))
         messages.error(request, "Could not approve the leave. Please try again.")
 
     return redirect(_safe_next_url(request, "leave:manager_pending"))
-
 
 @has_permission("leave_pending_manager")
 @login_required
@@ -890,7 +1035,30 @@ def manager_decide_reject(request: HttpRequest, pk: int) -> HttpResponse:
 
     comment = (request.POST.get("decision_comment") or "").strip() or "Rejected by manager."
     try:
+        employee = leave.employee
+
         leave.reject(by_user=request.user, comment=comment)
+
+        def _after_reject_commit():
+            try:
+                resync_counts = _resync_leave_task_skips_for_employee(
+                    employee,
+                    exclude_handover=True,
+                )
+                logger.info(
+                    "Leave %s rejected. Task skip state re-synced for employee %s result=%s.",
+                    leave.id,
+                    getattr(employee, "id", None),
+                    resync_counts,
+                )
+            except Exception:
+                logger.exception(
+                    "Post-reject task skip re-sync failed for leave %s.",
+                    getattr(leave, "id", None),
+                )
+
+        transaction.on_commit(_after_reject_commit)
+
         messages.success(request, "Leave rejected.")
     except ValidationError as e:
         for msg in e.messages:
@@ -919,7 +1087,31 @@ def delete_leave(request: HttpRequest, pk: int) -> HttpResponse:
     start_date = timezone.localtime(leave.start_at, IST).strftime("%B %d, %Y")
 
     try:
+        employee = leave.employee
+        leave_id = leave.id
+
         leave.delete()
+
+        def _after_delete_commit():
+            try:
+                resync_counts = _resync_leave_task_skips_for_employee(
+                    employee,
+                    exclude_handover=True,
+                )
+                logger.info(
+                    "Leave %s deleted. Task skip state re-synced for employee %s result=%s.",
+                    leave_id,
+                    getattr(employee, "id", None),
+                    resync_counts,
+                )
+            except Exception:
+                logger.exception(
+                    "Post-delete task skip re-sync failed for leave %s.",
+                    leave_id,
+                )
+
+        transaction.on_commit(_after_delete_commit)
+
         messages.success(request, f"Successfully deleted {leave_type} leave request for {start_date}.")
     except Exception:
         logger.exception("Failed to delete leave request %s", pk)
@@ -934,23 +1126,34 @@ def delete_leave(request: HttpRequest, pk: int) -> HttpResponse:
 @transaction.atomic
 def bulk_delete_leaves(request: HttpRequest) -> HttpResponse:
     leave_ids = request.POST.getlist("leave_ids")
+
     if not leave_ids:
         messages.error(request, "No leave requests selected for deletion.")
         return redirect("leave:dashboard")
 
     try:
-        leave_ids = [int(id_str) for id_str in leave_ids if id_str.isdigit()]
+        leave_ids = [
+            int(id_str)
+            for id_str in leave_ids
+            if str(id_str).isdigit()
+        ]
+
         if not leave_ids:
             messages.error(request, "Invalid leave request IDs provided.")
             return redirect("leave:dashboard")
 
-        leaves_to_delete = LeaveRequest.objects.select_for_update().filter(
-            pk__in=leave_ids,
-            employee=request.user,
-            status=LeaveStatus.PENDING,
+        leaves_to_delete = (
+            LeaveRequest.objects
+            .select_for_update()
+            .filter(
+                pk__in=leave_ids,
+                employee=request.user,
+                status=LeaveStatus.PENDING,
+            )
         )
 
         deleted_count = leaves_to_delete.count()
+
         if deleted_count == 0:
             messages.warning(
                 request,
@@ -958,26 +1161,56 @@ def bulk_delete_leaves(request: HttpRequest) -> HttpResponse:
             )
             return redirect("leave:dashboard")
 
+        deleted_leave_ids = list(
+            leaves_to_delete.values_list("id", flat=True)
+        )
+
+        affected_employee_ids = list(
+            leaves_to_delete
+            .values_list("employee_id", flat=True)
+            .distinct()
+        )
+
         leaves_to_delete.delete()
+
+        def _after_bulk_delete_commit():
+            logger.info(
+                "Bulk leave delete completed. deleted_leave_ids=%s affected_employee_ids=%s deleted_count=%s. Task skip re-sync is handled by leave signals.",
+                deleted_leave_ids,
+                affected_employee_ids,
+                deleted_count,
+            )
+
+        transaction.on_commit(_after_bulk_delete_commit)
 
         if deleted_count == 1:
             messages.success(request, "Successfully deleted 1 leave request.")
         else:
-            messages.success(request, f"Successfully deleted {deleted_count} leave requests.")
+            messages.success(
+                request,
+                f"Successfully deleted {deleted_count} leave requests.",
+            )
 
         total_requested = len(leave_ids)
+
         if deleted_count < total_requested:
             skipped = total_requested - deleted_count
-            messages.info(request, f"{skipped} request(s) were skipped (only pending requests can be deleted).")
+            messages.info(
+                request,
+                f"{skipped} request(s) were skipped because only pending requests can be deleted.",
+            )
 
     except ValueError:
         messages.error(request, "Invalid leave request IDs provided.")
+
     except Exception:
         logger.exception("Failed to bulk delete leave requests")
-        messages.error(request, "Failed to delete leave requests. Please try again.")
+        messages.error(
+            request,
+            "Failed to delete leave requests. Please try again.",
+        )
 
     return redirect("leave:dashboard")
-
 
 class TokenDecisionView(View):
     template_confirm = "leave/email_decision_confirm.html"
@@ -1101,10 +1334,46 @@ class TokenDecisionView(View):
             decider_user = leave.reporting_person
 
         try:
+            employee = leave.employee
+
             if new_status == LeaveStatus.APPROVED:
-             leave.approve(by_user=decider_user, comment="Email decision: APPROVED by Reporting Person.")
+                leave.approve(
+                    by_user=decider_user,
+                    comment="Email decision: APPROVED by Reporting Person.",
+                )
             else:
-             leave.reject(by_user=decider_user, comment="Email decision: REJECTED by Reporting Person.")
+                leave.reject(
+                    by_user=decider_user,
+                    comment="Email decision: REJECTED by Reporting Person.",
+                )
+
+            def _after_token_decision_commit():
+                try:
+                    resync_counts = _resync_leave_task_skips_for_employee(
+                        employee,
+                        exclude_handover=True,
+                    )
+                    logger.info(
+                        "Email decision completed for leave %s new_status=%s. Task skip state re-synced for employee %s result=%s.",
+                        leave.id,
+                        new_status,
+                        getattr(employee, "id", None),
+                        resync_counts,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Post-email-decision task skip re-sync failed for leave %s.",
+                        getattr(leave, "id", None),
+                    )
+
+            transaction.on_commit(_after_token_decision_commit)
+
+        except ValidationError as e:
+            msg = next(iter(e.messages), "Action blocked.") if getattr(e, "messages", None) else "Action blocked."
+            return render(request, self.template_error, {"message": msg}, status=400)
+        except Exception:
+            logger.exception("Token decision failed for leave %s", leave.pk)
+            return render(request, self.template_error, {"message": "Could not complete the action."}, status=400)
         except ValidationError as e:
             msg = next(iter(e.messages), "Action blocked.") if getattr(e, "messages", None) else "Action blocked."
             return render(request, self.template_error, {"message": msg}, status=400)
