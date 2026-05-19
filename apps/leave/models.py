@@ -1075,11 +1075,32 @@ def _safe_send_handover_emails(leave: LeaveRequest) -> None:
 
 
 def _safe_send_decision_email(leave: LeaveRequest) -> None:
+    """
+    Send approval/rejection decision email.
+
+    IMPORTANT:
+    - Request email is handled in apps/leave/signals.py
+    - Handover email is handled in apps/leave/signals.py
+    - APPLIED audit is handled in apps/leave/signals.py
+    - Decision email stays here because approve() and reject() call this helper.
+    """
     try:
         from apps.leave.services.notifications import send_leave_decision_email
+
         send_leave_decision_email(leave)
+
+        logger.info(
+            "Leave decision email sent for leave %s status=%s.",
+            getattr(leave, "id", None),
+            getattr(leave, "status", None),
+        )
+
     except Exception:
-        logger.exception("Failed to send leave decision email")
+        logger.exception(
+            "Failed to send leave decision email for leave %s status=%s.",
+            getattr(leave, "id", None),
+            getattr(leave, "status", None),
+        )
 
 
 def _balance_specs_for_leave_instance(leave: LeaveRequest) -> List[Tuple[int, date, date]]:
@@ -1095,7 +1116,14 @@ def _balance_specs_for_leave_instance(leave: LeaveRequest) -> List[Tuple[int, da
         or not getattr(leave, "end_date", None)
     ):
         return []
-    return [(leave.employee_id, leave.start_date, leave.end_date)]
+
+    return [
+        (
+            leave.employee_id,
+            leave.start_date,
+            leave.end_date,
+        )
+    ]
 
 
 def _balance_specs_for_previous_state(instance: LeaveRequest) -> List[Tuple[int, date, date]]:
@@ -1103,20 +1131,47 @@ def _balance_specs_for_previous_state(instance: LeaveRequest) -> List[Tuple[int,
     status = getattr(instance, "_balance_prev_status", None)
     start_date = getattr(instance, "_balance_prev_start_date", None)
     end_date = getattr(instance, "_balance_prev_end_date", None)
-    if not employee_id or status not in [LeaveStatus.APPROVED, LeaveStatus.PENDING] or not start_date or not end_date:
+
+    if (
+        not employee_id
+        or status not in [LeaveStatus.APPROVED, LeaveStatus.PENDING]
+        or not start_date
+        or not end_date
+    ):
         return []
-    return [(employee_id, start_date, end_date)]
+
+    return [
+        (
+            employee_id,
+            start_date,
+            end_date,
+        )
+    ]
 
 
 def _dedupe_balance_specs(specs: List[Tuple[int, date, date]]) -> List[Tuple[int, date, date]]:
     seen = set()
     out: List[Tuple[int, date, date]] = []
+
     for employee_id, start_date, end_date in specs:
-        key = (employee_id, start_date, end_date)
+        key = (
+            employee_id,
+            start_date,
+            end_date,
+        )
+
         if key in seen:
             continue
+
         seen.add(key)
-        out.append((employee_id, start_date, end_date))
+        out.append(
+            (
+                employee_id,
+                start_date,
+                end_date,
+            )
+        )
+
     return out
 
 
@@ -1131,26 +1186,50 @@ def _run_leave_balance_sync(specs: List[Tuple[int, date, date]]) -> None:
 
     for employee_id, start_date, end_date in specs:
         user_ids.add(employee_id)
+
         if employee_id not in grouped:
-            grouped[employee_id] = (start_date, end_date)
+            grouped[employee_id] = (
+                start_date,
+                end_date,
+            )
             continue
+
         current_start, current_end = grouped[employee_id]
-        grouped[employee_id] = (min(current_start, start_date), max(current_end, end_date))
+
+        grouped[employee_id] = (
+            min(current_start, start_date),
+            max(current_end, end_date),
+        )
 
     users = {
         user.id: user
         for user in User.objects.filter(id__in=list(user_ids))
     }
 
-    for employee_id, (range_start, range_end) in grouped.items():
+    for employee_id, date_range in grouped.items():
+        range_start, range_end = date_range
         employee = users.get(employee_id)
+
         if not employee:
             continue
+
         try:
-            sync_employee_leave_balance_for_range(employee=employee, range_start=range_start, range_end=range_end)
+            sync_employee_leave_balance_for_range(
+                employee=employee,
+                range_start=range_start,
+                range_end=range_end,
+            )
+
+            logger.info(
+                "Leave balance synced for employee_id=%s range=%s..%s.",
+                employee_id,
+                range_start,
+                range_end,
+            )
+
         except Exception:
             logger.exception(
-                "Failed to sync leave balance for employee_id=%s range=%s..%s",
+                "Failed to sync leave balance for employee_id=%s range=%s..%s.",
                 employee_id,
                 range_start,
                 range_end,
@@ -1159,52 +1238,57 @@ def _run_leave_balance_sync(specs: List[Tuple[int, date, date]]) -> None:
 
 @receiver(pre_save, sender=LeaveRequest)
 def _capture_previous_leave_state(sender, instance: LeaveRequest, **kwargs) -> None:
+    """
+    Capture previous leave state before saving.
+
+    This is needed so balance sync can handle:
+    - apply leave
+    - approve leave
+    - reject leave
+    - cancel leave
+    - date change
+    - delete
+    """
     if not instance.pk:
+        instance._balance_prev_employee_id = None
+        instance._balance_prev_status = None
+        instance._balance_prev_start_date = None
+        instance._balance_prev_end_date = None
         return
+
     try:
         previous = (
-            LeaveRequest.objects.only("employee_id", "status", "start_date", "end_date")
+            LeaveRequest.objects
+            .only(
+                "employee_id",
+                "status",
+                "start_date",
+                "end_date",
+            )
             .get(pk=instance.pk)
         )
+
         instance._balance_prev_employee_id = previous.employee_id
         instance._balance_prev_status = previous.status
         instance._balance_prev_start_date = previous.start_date
         instance._balance_prev_end_date = previous.end_date
+
     except LeaveRequest.DoesNotExist:
         instance._balance_prev_employee_id = None
         instance._balance_prev_status = None
         instance._balance_prev_start_date = None
         instance._balance_prev_end_date = None
+
     except Exception:
-        logger.exception("Failed to capture previous leave state for leave %s", getattr(instance, "pk", None))
+        logger.exception(
+            "Failed to capture previous leave state for leave %s.",
+            getattr(instance, "pk", None),
+        )
 
-
-@receiver(post_save, sender=LeaveRequest)
-def _on_leave_created(sender, instance: LeaveRequest, created: bool, **kwargs) -> None:
-    if not created:
-        return
-
-    def _after_commit():
-        try:
-            LeaveDecisionAudit.log(instance, DecisionAction.APPLIED)
-        except Exception:
-            logger.exception("Failed to log APPLIED for leave %s", getattr(instance, "id", None))
-
-        try:
-            _safe_send_request_email(instance)
-        except Exception:
-            logger.exception("Failed to send request email for leave %s", getattr(instance, "id", None))
-
-        try:
-            if LeaveHandover.objects.filter(leave_request=instance).exists():
-                _safe_send_handover_emails(instance)
-        except Exception:
-            logger.exception("Failed to send handover emails for leave %s", getattr(instance, "id", None))
-
-    try:
-        transaction.on_commit(_after_commit)
-    except Exception:
-        _after_commit()
+        instance._balance_prev_employee_id = None
+        instance._balance_prev_status = None
+        instance._balance_prev_start_date = None
+        instance._balance_prev_end_date = None
 
 
 @receiver(post_save, sender=LeaveRequest)
@@ -1212,13 +1296,17 @@ def _sync_leave_balances_after_save(sender, instance: LeaveRequest, created: boo
     """
     Balance rules:
     - Apply leave -> deduct
-    - Approve leave -> keep deducted
-    - Reject leave -> add back
-    - Cancel leave -> add back
+    - Pending leave -> remains deducted
+    - Approved leave -> remains deducted
+    - Rejected leave -> add back
+    - Cancelled leave -> add back
+    - Date change -> recalculate old and new ranges
     """
     specs = _dedupe_balance_specs(
-        _balance_specs_for_previous_state(instance) + _balance_specs_for_leave_instance(instance)
+        _balance_specs_for_previous_state(instance)
+        + _balance_specs_for_leave_instance(instance)
     )
+
     if not specs:
         return
 
@@ -1228,12 +1316,24 @@ def _sync_leave_balances_after_save(sender, instance: LeaveRequest, created: boo
     try:
         transaction.on_commit(_after_commit)
     except Exception:
+        logger.exception(
+            "transaction.on_commit failed for leave balance sync after save for leave %s.",
+            getattr(instance, "id", None),
+        )
         _after_commit()
 
 
 @receiver(post_delete, sender=LeaveRequest)
 def _sync_leave_balances_after_delete(sender, instance: LeaveRequest, **kwargs) -> None:
-    specs = _dedupe_balance_specs(_balance_specs_for_leave_instance(instance))
+    """
+    Sync leave balance after delete.
+
+    If a pending/approved leave is deleted, balance must be recalculated.
+    """
+    specs = _dedupe_balance_specs(
+        _balance_specs_for_leave_instance(instance)
+    )
+
     if not specs:
         return
 
@@ -1243,4 +1343,8 @@ def _sync_leave_balances_after_delete(sender, instance: LeaveRequest, **kwargs) 
     try:
         transaction.on_commit(_after_commit)
     except Exception:
+        logger.exception(
+            "transaction.on_commit failed for leave balance sync after delete for leave %s.",
+            getattr(instance, "id", None),
+        )
         _after_commit()
