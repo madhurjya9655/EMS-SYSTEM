@@ -1,6 +1,6 @@
 {% extends "tasks/tasks_base.html" %}
 
-{% block title %}Unique Checklist Task Series{% endblock %}
+{% block title %}Checklist Master Task Series{% endblock %}
 
 {% block tab_content %}
 
@@ -9,7 +9,7 @@
     <div class="card border-primary text-center shadow-sm">
       <div class="card-body py-2 px-3">
         <h3 class="mb-0 text-primary fw-bold">{{ total_assigned }}</h3>
-        <small class="text-muted">Unique Checklist Task Series</small>
+        <small class="text-muted">Checklist Master Task Series</small>
       </div>
     </div>
   </div>
@@ -17,9 +17,15 @@
 
 <div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center border-0">
-    <h5 class="mb-0">Unique Checklist Task Series — Admin View</h5>
+    <div>
+      <h5 class="mb-0">Checklist Master Task Series</h5>
+      <small class="text-muted">
+        One row per checklist task configuration. Generated recurring occurrences are not shown here.
+      </small>
+    </div>
+
     <a href="{% url 'tasks:list_checklist' %}" class="btn btn-sm btn-outline-primary">
-      Back to Active Checklist
+      Back to Checklist Master
     </a>
   </div>
 
@@ -43,7 +49,7 @@
       </div>
 
       <div class="col-md-2">
-        <label class="form-label">Mode</label>
+        <label class="form-label">Frequency</label>
         <select name="mode" class="form-select">
           <option value="">All</option>
           {% for m in mode_choices %}
@@ -74,42 +80,46 @@
   <table class="table table-bordered table-hover align-middle">
     <thead class="table-light">
       <tr>
-        <th>Employee</th>
         <th>Task Name</th>
-        <th>Mode</th>
+        <th>Assigned User</th>
         <th>Frequency</th>
-        <th>Group</th>
-        <th>Total Rows</th>
-        <th>Pending</th>
-        <th>Completed</th>
-        <th>First Planned</th>
-        <th>Last Planned</th>
+        <th>Number Of Tasks Assigned</th>
       </tr>
     </thead>
+
     <tbody>
-      {% for item in items %}
+      {% for row in items %}
         <tr>
+          <td><strong>{{ row.task_name }}</strong></td>
+
           <td>
-            {% if item.assign_to__first_name or item.assign_to__last_name %}
-              {{ item.assign_to__first_name }} {{ item.assign_to__last_name }}
+            {% if row.assign_to__first_name or row.assign_to__last_name %}
+              {{ row.assign_to__first_name }} {{ row.assign_to__last_name }}
+            {% elif row.assign_to__username %}
+              {{ row.assign_to__username }}
+            {% elif row.assign_to__email %}
+              {{ row.assign_to__email }}
             {% else %}
-              {{ item.assign_to__username|default:item.assign_to__email }}
+              -
             {% endif %}
           </td>
-          <td><strong>{{ item.task_name }}</strong></td>
-          <td>{{ item.mode|default:"One-time" }}</td>
-          <td>{{ item.frequency|default:"—" }}</td>
-          <td>{{ item.group_name|default:"—" }}</td>
-          <td>{{ item.total_rows }}</td>
-          <td>{{ item.pending_rows }}</td>
-          <td>{{ item.completed_rows }}</td>
-          <td>{{ item.first_planned|date:"d M, Y h:i A" }}</td>
-          <td>{{ item.last_planned|date:"d M, Y h:i A" }}</td>
+
+          <td>
+            {% if row.mode and row.frequency %}
+              Every {{ row.frequency }} {{ row.mode }}
+            {% elif row.mode %}
+              {{ row.mode }}
+            {% else %}
+              One-time
+            {% endif %}
+          </td>
+
+          <td>{{ row.total_rows }}</td>
         </tr>
       {% empty %}
         <tr>
-          <td colspan="10" class="text-center text-muted py-4">
-            No unique checklist task series found.
+          <td colspan="4" class="text-center text-muted py-4">
+            No checklist master task series found.
           </td>
         </tr>
       {% endfor %}
@@ -122,7 +132,10 @@
   <ul class="pagination justify-content-center">
     {% if page_obj.has_previous %}
       <li class="page-item">
-        <a class="page-link" href="?page={{ page_obj.previous_page_number }}">Previous</a>
+        <a class="page-link"
+           href="?page={{ page_obj.previous_page_number }}{% if request.GET.assign_to %}&assign_to={{ request.GET.assign_to }}{% endif %}{% if request.GET.keyword %}&keyword={{ request.GET.keyword|urlencode }}{% endif %}{% if request.GET.mode %}&mode={{ request.GET.mode|urlencode }}{% endif %}{% if request.GET.group_name %}&group_name={{ request.GET.group_name|urlencode }}{% endif %}">
+          Previous
+        </a>
       </li>
     {% endif %}
 
@@ -132,7 +145,10 @@
 
     {% if page_obj.has_next %}
       <li class="page-item">
-        <a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a>
+        <a class="page-link"
+           href="?page={{ page_obj.next_page_number }}{% if request.GET.assign_to %}&assign_to={{ request.GET.assign_to }}{% endif %}{% if request.GET.keyword %}&keyword={{ request.GET.keyword|urlencode }}{% endif %}{% if request.GET.mode %}&mode={{ request.GET.mode|urlencode }}{% endif %}{% if request.GET.group_name %}&group_name={{ request.GET.group_name|urlencode }}{% endif %}">
+          Next
+        </a>
       </li>
     {% endif %}
   </ul>

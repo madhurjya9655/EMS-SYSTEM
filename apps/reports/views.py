@@ -205,28 +205,90 @@ def percent_not_completed(planned: int, completed: int) -> float:
         return 0.0
     return -round(((planned - completed) / planned) * 100, 2)
 
+def _build_logical_doer_task_queryset(base_qs):
+    """
+    Doer Task logical queryset.
+
+    Purpose:
+    - Show one logical row per recurring checklist task series.
+    - Keep one-time tasks as individual rows.
+    - Use latest/current row to represent current task status.
+    - Do not delete or alter historical generated rows.
+
+    Series identity:
+        assign_to + task_name + mode + frequency + group_name
+    """
+    recurring_qs = base_qs.filter(mode__in=RECURRING_MODES)
+    one_time_qs = base_qs.exclude(mode__in=RECURRING_MODES)
+
+    if connection.vendor == "postgresql":
+        recurring_ids = (
+            recurring_qs
+            .order_by(
+                "assign_to_id",
+                "task_name",
+                "mode",
+                "frequency",
+                "group_name",
+                "-planned_date",
+                "-id",
+            )
+            .distinct(
+                "assign_to_id",
+                "task_name",
+                "mode",
+                "frequency",
+                "group_name",
+            )
+            .values("pk")
+        )
+
+        one_time_ids = one_time_qs.values("pk")
+
+        return base_qs.filter(
+            Q(pk__in=one_time_ids) |
+            Q(pk__in=recurring_ids)
+        )
+
+    seen = set()
+    keep_ids = []
+
+    for obj in base_qs.order_by("-planned_date", "-id").iterator(chunk_size=1000):
+        if _is_recurring_checklist_obj(obj):
+            try:
+                frequency = int(getattr(obj, "frequency", None) or 1)
+            except (TypeError, ValueError):
+                frequency = 1
+
+            key = (
+                getattr(obj, "assign_to_id", None),
+                getattr(obj, "task_name", None),
+                getattr(obj, "mode", None),
+                frequency,
+                getattr(obj, "group_name", None) or "",
+            )
+        else:
+            key = ("single", getattr(obj, "pk", None))
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        keep_ids.append(obj.pk)
+
+    return base_qs.filter(pk__in=keep_ids)
+
 
 # ----------------- REPORTS -----------------
 @login_required
 def list_doer_tasks(request):
     """
-    Doer Tasks Report.
+    DOER TASK = USER TASK MANAGEMENT VIEW.
 
-    This is a REPORT/HISTORY screen.
-
-    It shows generated task rows, not unique checklist series.
-
-    Available filters:
-      - All
-      - Pending
-      - Completed
-      - Missed
-      - Historical
-      - Deleted / Archived
-
-    Main Checklist is separate:
-      - Admin sees unique non-deleted checklist tasks.
-      - Employees see active actionable checklist tasks only.
+    Final business behavior:
+    - Default / Pending / In Progress / Completed / Missed = one logical row per task series.
+    - Historical / Deleted = report/audit modes and may show raw generated rows.
+    - Dashboard remains generated actionable execution view.
     """
     FILTER_SESSION_KEY = "reports__doer_tasks_filter"
     FILTER_KEYS = {"doer", "department", "date_from", "date_to", "status"}
@@ -320,19 +382,17 @@ def list_doer_tasks(request):
 
     query_build_start = perf_counter()
 
-    items_qs = (
-        Checklist.objects
-        .select_related("assign_by", "assign_to")
-        .order_by("-planned_date", "-id")
-    )
+    items_qs = Checklist.objects.select_related("assign_by", "assign_to")
 
     today = timezone.localdate()
 
     status_source = effective_get if effective_get is not None else request.GET
     status = (status_source.get("status") or "").strip() if status_source else ""
 
+    raw_history_mode = status in {"Historical", "Deleted"}
+
     # ------------------------------------------------------------------
-    # Report status filters
+    # Status filters
     # ------------------------------------------------------------------
     if status == "Pending":
         items_qs = items_qs.filter(status="Pending")
@@ -340,11 +400,26 @@ def list_doer_tasks(request):
         if checklist_has_field("is_deleted"):
             items_qs = items_qs.filter(is_deleted=False)
 
+        if checklist_has_field("is_skipped_due_to_leave"):
+            items_qs = items_qs.filter(is_skipped_due_to_leave=False)
+
+    elif status == "In Progress":
+        items_qs = items_qs.filter(status="In Progress")
+
+        if checklist_has_field("is_deleted"):
+            items_qs = items_qs.filter(is_deleted=False)
+
+        if checklist_has_field("is_skipped_due_to_leave"):
+            items_qs = items_qs.filter(is_skipped_due_to_leave=False)
+
     elif status == "Completed":
         items_qs = items_qs.filter(status="Completed")
 
         if checklist_has_field("is_deleted"):
             items_qs = items_qs.filter(is_deleted=False)
+
+        if checklist_has_field("is_skipped_due_to_leave"):
+            items_qs = items_qs.filter(is_skipped_due_to_leave=False)
 
     elif status == "Missed":
         items_qs = items_qs.filter(
@@ -371,7 +446,15 @@ def list_doer_tasks(request):
         else:
             items_qs = items_qs.filter(is_skipped_due_to_leave=True)
 
-    # status blank / All = show all report rows.
+    else:
+        if checklist_has_field("is_deleted"):
+            items_qs = items_qs.filter(is_deleted=False)
+
+        if checklist_has_field("is_skipped_due_to_leave"):
+            items_qs = items_qs.filter(is_skipped_due_to_leave=False)
+
+    if checklist_has_field("is_active") and status != "Deleted":
+        items_qs = items_qs.filter(is_active=True)
 
     # ------------------------------------------------------------------
     # Normal form filters
@@ -397,6 +480,21 @@ def list_doer_tasks(request):
             _, e = day_bounds(d["date_to"])
             items_qs = items_qs.filter(planned_date__lt=e)
 
+    # ------------------------------------------------------------------
+    # Logical grouping for normal Doer Task views.
+    # Historical / Deleted stay row-level audit views.
+    # ------------------------------------------------------------------
+    if not raw_history_mode:
+        items_qs = _build_logical_doer_task_queryset(items_qs)
+
+    items_qs = items_qs.order_by(
+        "assign_to__first_name",
+        "assign_to__last_name",
+        "task_name",
+        "-planned_date",
+        "-id",
+    )
+
     query_build_time = perf_counter() - query_build_start
 
     # ------------------------------------------------------------------
@@ -417,6 +515,7 @@ def list_doer_tasks(request):
         "paginator": paginator,
         "is_paginated": page_obj.has_other_pages(),
         "current_status": status,
+        "raw_history_mode": raw_history_mode,
     }
 
     template_start = perf_counter()
@@ -441,7 +540,6 @@ def list_doer_tasks(request):
     )
 
     return HttpResponse(html)
-
 
 @login_required
 def list_fms_tasks(request):

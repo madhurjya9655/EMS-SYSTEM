@@ -1,9 +1,7 @@
 {% extends "tasks/tasks_base.html" %}
 {% load static %}
 
-{% block title %}
-  {% if is_admin %}Unique Checklist Tasks{% else %}Active Checklist Tasks{% endif %}
-{% endblock %}
+{% block title %}Checklist Master Tasks{% endblock %}
 
 {% block tab_content %}
 
@@ -12,12 +10,7 @@
     <div class="card border-primary text-center shadow-sm">
       <div class="card-body py-2 px-3">
         <h3 class="mb-0 text-primary fw-bold">{{ total_assigned }}</h3>
-
-        {% if is_admin %}
-          <small class="text-muted">Unique Non-Deleted Checklist Tasks</small>
-        {% else %}
-          <small class="text-muted">My Active Checklist Tasks</small>
-        {% endif %}
+        <small class="text-muted">Checklist Master Tasks</small>
       </div>
     </div>
   </div>
@@ -26,21 +19,7 @@
 <div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center border-0">
     <div>
-      <h5 class="mb-0">
-        {% if is_admin %}
-          Unique Checklist Tasks — All Employees
-        {% else %}
-          My Active Checklist Tasks
-        {% endif %}
-      </h5>
-
-      <small class="text-muted">
-        {% if is_admin %}
-          One recurring checklist series appears once. Deleted / archived tasks are excluded.
-        {% else %}
-          Showing only current active pending tasks assigned to you.
-        {% endif %}
-      </small>
+      <h5 class="mb-0">Checklist Master Task Configuration</h5>
     </div>
 
     <div class="d-flex gap-2">
@@ -84,7 +63,7 @@
                  name="keyword"
                  class="form-control"
                  value="{{ request.GET.keyword|default:'' }}"
-                 placeholder="Search task name...">
+                 placeholder="Search task/message...">
         </div>
 
         {% if is_admin %}
@@ -103,18 +82,15 @@
         {% endif %}
 
         <div class="col-md-2">
-          <label for="fltStatus" class="form-label">Status</label>
-
-          {% if is_admin %}
-            <select id="fltStatus" name="status" class="form-select">
-              <option value="all" {% if current_status == "all" %}selected{% endif %}>All</option>
-              <option value="Pending" {% if current_status == "Pending" %}selected{% endif %}>Pending</option>
-              <option value="Completed" {% if current_status == "Completed" %}selected{% endif %}>Completed</option>
-            </select>
-          {% else %}
-            <input id="fltStatus" type="text" class="form-control" value="Pending / Active Only" readonly>
-            <input type="hidden" name="status" value="Pending">
-          {% endif %}
+          <label for="fltMode" class="form-label">Frequency</label>
+          <select id="fltMode" name="mode" class="form-select">
+            <option value="">All</option>
+            {% for m in mode_choices %}
+              <option value="{{ m }}" {% if request.GET.mode == m %}selected{% endif %}>
+                {{ m }}
+              </option>
+            {% endfor %}
+          </select>
         </div>
 
         <div class="col-md-2">
@@ -161,18 +137,6 @@
                  value="{{ request.GET.end_date|default:'' }}">
         </div>
 
-        <div class="col-md-2 d-flex align-items-end">
-          <div class="form-check mb-2">
-            <input class="form-check-input"
-                   type="checkbox"
-                   name="today_only"
-                   id="fltToday"
-                   value="1"
-                   {% if request.GET.today_only %}checked{% endif %}>
-            <label class="form-check-label" for="fltToday">Today Only</label>
-          </div>
-        </div>
-
         <div class="col-12 text-end">
           <button type="submit" class="btn btn-primary">
             <i class="fas fa-filter me-1" aria-hidden="true"></i> FILTER
@@ -198,9 +162,7 @@
     <input type="hidden" name="return_url" value="{{ request.get_full_path }}">
 
     <table class="table table-bordered table-hover align-middle">
-      <caption class="visually-hidden">
-        {% if is_admin %}Unique checklist task list{% else %}Active checklist task list{% endif %}
-      </caption>
+      <caption class="visually-hidden">Checklist master task list</caption>
 
       <thead class="table-light">
         <tr>
@@ -211,23 +173,14 @@
           {% endif %}
 
           <th scope="col">Task Name</th>
-
-          {% if is_admin %}
-            <th scope="col">Message</th>
-            <th scope="col">Assign To</th>
-            <th scope="col">Frequency</th>
-            <th scope="col">Planned Date</th>
-            <th scope="col">Priority</th>
-            <th scope="col">Remind Before Days</th>
-            <th scope="col">Reminder</th>
-            <th scope="col">Status</th>
-            <th scope="col" style="width:300px;">Action</th>
-          {% else %}
-            <th scope="col">Planned Date</th>
-            <th scope="col">Priority</th>
-            <th scope="col">Status</th>
-            <th scope="col" style="width:130px;">Action</th>
-          {% endif %}
+          <th scope="col">Message</th>
+          <th scope="col">Assign To</th>
+          <th scope="col">Frequency</th>
+          <th scope="col">Planned Date</th>
+          <th scope="col">Priority</th>
+          <th scope="col">Remind Before Days</th>
+          <th scope="col">Reminder</th>
+          <th scope="col" style="width:210px;">Action</th>
         </tr>
       </thead>
 
@@ -248,71 +201,61 @@
 
               <td><strong>{{ obj.task_name }}</strong></td>
 
-              {% if is_admin %}
-                <td style="max-width:240px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
-                    title="{{ obj.message|default:'-' }}">
-                  {{ obj.message|default:"—"|truncatechars:60 }}
-                </td>
+              <td style="max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
+                  title="{{ obj.message|default:'-' }}">
+                {{ obj.message|default:"—"|truncatechars:70 }}
+              </td>
 
-                <td>{{ obj.assign_to.get_full_name|default:obj.assign_to.username }}</td>
+              <td>{{ obj.assign_to.get_full_name|default:obj.assign_to.username }}</td>
 
-                <td>
-                  {% if obj.mode and obj.frequency %}
-                    Every {{ obj.frequency }} {{ obj.mode }}
-                  {% elif obj.mode %}
-                    {{ obj.mode }}
-                  {% else %}
-                    One-time
-                  {% endif %}
-                </td>
+              <td>
+                {% if obj.mode and obj.frequency %}
+                  Every {{ obj.frequency }} {{ obj.mode }}
+                {% elif obj.mode %}
+                  {{ obj.mode }}
+                {% else %}
+                  One-time
+                {% endif %}
+              </td>
 
-                <td title="{{ obj.planned_date|date:'Y-m-d H:i' }}">
-                  {{ obj.planned_date|date:"d M, Y h:i A" }}
-                </td>
+              <td title="{{ obj.planned_date|date:'Y-m-d H:i' }}">
+                {{ obj.planned_date|date:"d M, Y h:i A" }}
+              </td>
 
-                <td>
-                  {% if obj.priority == "High" %}
-                    <span class="badge bg-danger">{{ obj.priority }}</span>
-                  {% elif obj.priority == "Medium" %}
-                    <span class="badge bg-warning text-dark">{{ obj.priority }}</span>
-                  {% else %}
-                    <span class="badge bg-secondary">{{ obj.priority }}</span>
-                  {% endif %}
-                </td>
+              <td>
+                {% if obj.priority == "High" %}
+                  <span class="badge bg-danger">{{ obj.priority }}</span>
+                {% elif obj.priority == "Medium" %}
+                  <span class="badge bg-warning text-dark">{{ obj.priority }}</span>
+                {% else %}
+                  <span class="badge bg-secondary">{{ obj.priority }}</span>
+                {% endif %}
+              </td>
 
-                <td>{{ obj.remind_before_days|default:"0" }}</td>
+              <td>{{ obj.remind_before_days|default:"0" }}</td>
 
-                <td>
-                  {% if obj.set_reminder %}
-                    {{ obj.reminder_mode|default:"" }}
-                    {% if obj.reminder_frequency %}({{ obj.reminder_frequency }}){% endif %}
-                    {% if obj.reminder_starting_time %}@ {{ obj.reminder_starting_time|time:"h:i A" }}{% endif %}
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
+              <td>
+                {% if obj.set_reminder %}
+                  {{ obj.reminder_mode|default:"" }}
+                  {% if obj.reminder_frequency %}({{ obj.reminder_frequency }}){% endif %}
+                  {% if obj.reminder_starting_time %}@ {{ obj.reminder_starting_time|time:"h:i A" }}{% endif %}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
 
-                <td>
-                  {% if obj.status == "Completed" %}
-                    <span class="badge bg-success">Completed</span>
-                  {% elif obj.status == "Pending" %}
-                    <span class="badge bg-warning text-dark">Pending</span>
-                  {% else %}
-                    <span class="badge bg-primary">{{ obj.status }}</span>
-                  {% endif %}
-                </td>
+              <td class="text-nowrap">
+                <button type="button"
+                        class="btn btn-sm btn-outline-info js-checklist-detail"
+                        data-bs-toggle="modal"
+                        data-bs-target="#checklistDetailsModal"
+                        data-detail-url="{% url 'tasks:checklist_detail' obj.id %}"
+                        title="View Details"
+                        aria-label="View details for {{ obj.task_name }}">
+                  <i class="fas fa-eye" aria-hidden="true"></i>
+                </button>
 
-                <td class="text-nowrap">
-                  <button type="button"
-                          class="btn btn-sm btn-outline-info js-checklist-detail"
-                          data-bs-toggle="modal"
-                          data-bs-target="#checklistDetailsModal"
-                          data-detail-url="{% url 'tasks:checklist_detail' obj.id %}"
-                          title="View Details"
-                          aria-label="View details for {{ obj.task_name }}">
-                    <i class="fas fa-eye" aria-hidden="true"></i>
-                  </button>
-
+                {% if is_admin %}
                   <a href="{% url 'tasks:edit_checklist' obj.id %}?next={{ request.get_full_path|urlencode }}"
                      class="btn btn-sm btn-outline-secondary"
                      title="Edit">
@@ -324,63 +267,19 @@
                      title="Delete task or recurring series">
                     <i class="fas fa-trash-alt" aria-hidden="true"></i>
                   </a>
-                </td>
-
-              {% else %}
-
-                <td title="{{ obj.planned_date|date:'Y-m-d H:i' }}">
-                  {{ obj.planned_date|date:"d M, Y h:i A" }}
-                </td>
-
-                <td>
-                  {% if obj.priority == "High" %}
-                    <span class="badge bg-danger">{{ obj.priority }}</span>
-                  {% elif obj.priority == "Medium" %}
-                    <span class="badge bg-warning text-dark">{{ obj.priority }}</span>
-                  {% else %}
-                    <span class="badge bg-secondary">{{ obj.priority }}</span>
-                  {% endif %}
-                </td>
-
-                <td>
-                  <span class="badge bg-warning text-dark">Pending</span>
-                </td>
-
-                <td class="text-nowrap">
-                  <button type="button"
-                          class="btn btn-sm btn-outline-info js-checklist-detail"
-                          data-bs-toggle="modal"
-                          data-bs-target="#checklistDetailsModal"
-                          data-detail-url="{% url 'tasks:checklist_detail' obj.id %}"
-                          title="View Details"
-                          aria-label="View details for {{ obj.task_name }}">
-                    <i class="fas fa-eye" aria-hidden="true"></i>
-                  </button>
-
-                  <a href="{% url 'tasks:complete_checklist' obj.id %}?next={{ request.get_full_path|urlencode }}"
-                     class="btn btn-sm btn-success"
-                     title="Mark as Done">
-                    <i class="fas fa-check" aria-hidden="true"></i> Done
-                  </a>
-                </td>
-
-              {% endif %}
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
         {% else %}
           <tr>
             {% if is_admin %}
-              <td colspan="11" class="text-center py-4 text-muted">
+              <td colspan="10" class="text-center py-4 text-muted">
             {% else %}
-              <td colspan="5" class="text-center py-4 text-muted">
+              <td colspan="9" class="text-center py-4 text-muted">
             {% endif %}
                 <i class="fas fa-inbox fa-2x mb-2 d-block" aria-hidden="true"></i>
-
-                {% if is_admin %}
-                  No unique checklist tasks found for the selected filters.
-                {% else %}
-                  No active pending checklist tasks found.
-                {% endif %}
+                No checklist master tasks found for the selected filters.
               </td>
           </tr>
         {% endif %}
@@ -412,14 +311,14 @@
     {% if page_obj.has_previous %}
       <li class="page-item">
         <a class="page-link"
-           href="?page=1{% if request.GET.keyword %}&keyword={{ request.GET.keyword|urlencode }}{% endif %}{% if request.GET.assign_to %}&assign_to={{ request.GET.assign_to|urlencode }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status|urlencode }}{% endif %}{% if request.GET.priority %}&priority={{ request.GET.priority|urlencode }}{% endif %}{% if request.GET.group_name %}&group_name={{ request.GET.group_name|urlencode }}{% endif %}{% if request.GET.start_date %}&start_date={{ request.GET.start_date|urlencode }}{% endif %}{% if request.GET.end_date %}&end_date={{ request.GET.end_date|urlencode }}{% endif %}{% if request.GET.today_only %}&today_only={{ request.GET.today_only|urlencode }}{% endif %}">
+           href="?page=1{% if request.GET.keyword %}&keyword={{ request.GET.keyword|urlencode }}{% endif %}{% if request.GET.assign_to %}&assign_to={{ request.GET.assign_to|urlencode }}{% endif %}{% if request.GET.mode %}&mode={{ request.GET.mode|urlencode }}{% endif %}{% if request.GET.priority %}&priority={{ request.GET.priority|urlencode }}{% endif %}{% if request.GET.group_name %}&group_name={{ request.GET.group_name|urlencode }}{% endif %}{% if request.GET.start_date %}&start_date={{ request.GET.start_date|urlencode }}{% endif %}{% if request.GET.end_date %}&end_date={{ request.GET.end_date|urlencode }}{% endif %}">
           First
         </a>
       </li>
 
       <li class="page-item">
         <a class="page-link"
-           href="?page={{ page_obj.previous_page_number }}{% if request.GET.keyword %}&keyword={{ request.GET.keyword|urlencode }}{% endif %}{% if request.GET.assign_to %}&assign_to={{ request.GET.assign_to|urlencode }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status|urlencode }}{% endif %}{% if request.GET.priority %}&priority={{ request.GET.priority|urlencode }}{% endif %}{% if request.GET.group_name %}&group_name={{ request.GET.group_name|urlencode }}{% endif %}{% if request.GET.start_date %}&start_date={{ request.GET.start_date|urlencode }}{% endif %}{% if request.GET.end_date %}&end_date={{ request.GET.end_date|urlencode }}{% endif %}{% if request.GET.today_only %}&today_only={{ request.GET.today_only|urlencode }}{% endif %}">
+           href="?page={{ page_obj.previous_page_number }}{% if request.GET.keyword %}&keyword={{ request.GET.keyword|urlencode }}{% endif %}{% if request.GET.assign_to %}&assign_to={{ request.GET.assign_to|urlencode }}{% endif %}{% if request.GET.mode %}&mode={{ request.GET.mode|urlencode }}{% endif %}{% if request.GET.priority %}&priority={{ request.GET.priority|urlencode }}{% endif %}{% if request.GET.group_name %}&group_name={{ request.GET.group_name|urlencode }}{% endif %}{% if request.GET.start_date %}&start_date={{ request.GET.start_date|urlencode }}{% endif %}{% if request.GET.end_date %}&end_date={{ request.GET.end_date|urlencode }}{% endif %}">
           Previous
         </a>
       </li>
@@ -435,14 +334,14 @@
     {% if page_obj.has_next %}
       <li class="page-item">
         <a class="page-link"
-           href="?page={{ page_obj.next_page_number }}{% if request.GET.keyword %}&keyword={{ request.GET.keyword|urlencode }}{% endif %}{% if request.GET.assign_to %}&assign_to={{ request.GET.assign_to|urlencode }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status|urlencode }}{% endif %}{% if request.GET.priority %}&priority={{ request.GET.priority|urlencode }}{% endif %}{% if request.GET.group_name %}&group_name={{ request.GET.group_name|urlencode }}{% endif %}{% if request.GET.start_date %}&start_date={{ request.GET.start_date|urlencode }}{% endif %}{% if request.GET.end_date %}&end_date={{ request.GET.end_date|urlencode }}{% endif %}{% if request.GET.today_only %}&today_only={{ request.GET.today_only|urlencode }}{% endif %}">
+           href="?page={{ page_obj.next_page_number }}{% if request.GET.keyword %}&keyword={{ request.GET.keyword|urlencode }}{% endif %}{% if request.GET.assign_to %}&assign_to={{ request.GET.assign_to|urlencode }}{% endif %}{% if request.GET.mode %}&mode={{ request.GET.mode|urlencode }}{% endif %}{% if request.GET.priority %}&priority={{ request.GET.priority|urlencode }}{% endif %}{% if request.GET.group_name %}&group_name={{ request.GET.group_name|urlencode }}{% endif %}{% if request.GET.start_date %}&start_date={{ request.GET.start_date|urlencode }}{% endif %}{% if request.GET.end_date %}&end_date={{ request.GET.end_date|urlencode }}{% endif %}">
           Next
         </a>
       </li>
 
       <li class="page-item">
         <a class="page-link"
-           href="?page={{ page_obj.paginator.num_pages }}{% if request.GET.keyword %}&keyword={{ request.GET.keyword|urlencode }}{% endif %}{% if request.GET.assign_to %}&assign_to={{ request.GET.assign_to|urlencode }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status|urlencode }}{% endif %}{% if request.GET.priority %}&priority={{ request.GET.priority|urlencode }}{% endif %}{% if request.GET.group_name %}&group_name={{ request.GET.group_name|urlencode }}{% endif %}{% if request.GET.start_date %}&start_date={{ request.GET.start_date|urlencode }}{% endif %}{% if request.GET.end_date %}&end_date={{ request.GET.end_date|urlencode }}{% endif %}{% if request.GET.today_only %}&today_only={{ request.GET.today_only|urlencode }}{% endif %}">
+           href="?page={{ page_obj.paginator.num_pages }}{% if request.GET.keyword %}&keyword={{ request.GET.keyword|urlencode }}{% endif %}{% if request.GET.assign_to %}&assign_to={{ request.GET.assign_to|urlencode }}{% endif %}{% if request.GET.mode %}&mode={{ request.GET.mode|urlencode }}{% endif %}{% if request.GET.priority %}&priority={{ request.GET.priority|urlencode }}{% endif %}{% if request.GET.group_name %}&group_name={{ request.GET.group_name|urlencode }}{% endif %}{% if request.GET.start_date %}&start_date={{ request.GET.start_date|urlencode }}{% endif %}{% if request.GET.end_date %}&end_date={{ request.GET.end_date|urlencode }}{% endif %}">
           Last
         </a>
       </li>

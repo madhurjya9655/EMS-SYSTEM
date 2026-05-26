@@ -50,10 +50,70 @@ SERVE_MEDIA = env_bool("SERVE_MEDIA", True if ON_RENDER else False)
 
 ADMIN_URL = os.getenv("ADMIN_URL", "super-secret-admin/")
 
-ALLOWED_HOSTS = env_list(
+# -----------------------------------------------------------------------------
+# HOST / ORIGIN SECURITY
+# -----------------------------------------------------------------------------
+# SECURITY RULE:
+# In production, ALLOWED_HOSTS must contain ONLY real production hostnames.
+#
+# GOOD production examples:
+#   ALLOWED_HOSTS=ems-system-d26q.onrender.com
+#   ALLOWED_HOSTS=erp.blueoceansteels.com,ems-system-d26q.onrender.com
+#
+# BAD production examples:
+#   ALLOWED_HOSTS=*
+#   ALLOWED_HOSTS=.onrender.com
+#   ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,testserver
+#   ALLOWED_HOSTS=https://ems-system-d26q.onrender.com
+#
+# IMPORTANT:
+# ALLOWED_HOSTS must NOT include https:// or http://.
+# CSRF_TRUSTED_ORIGINS must include https://.
+PRODUCTION_ALLOWED_HOSTS = env_list(
     "ALLOWED_HOSTS",
-    "ems-system-d26q.onrender.com,.onrender.com,localhost,127.0.0.1,0.0.0.0,testserver",
+    "ems-system-d26q.onrender.com",
 )
+
+LOCAL_ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "testserver",
+]
+
+ALLOWED_HOSTS = PRODUCTION_ALLOWED_HOSTS.copy()
+
+if DEBUG:
+    for local_host in LOCAL_ALLOWED_HOSTS:
+        if local_host not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(local_host)
+
+# Final production safety check.
+# If a dangerous host is accidentally added in Render env, Django must fail fast.
+if not DEBUG:
+    forbidden_allowed_hosts = {"*", ".onrender.com", "localhost", "127.0.0.1", "0.0.0.0", "testserver"}
+    dangerous_hosts = [host for host in ALLOWED_HOSTS if host in forbidden_allowed_hosts]
+
+    scheme_hosts = [
+        host for host in ALLOWED_HOSTS
+        if host.startswith("http://") or host.startswith("https://")
+    ]
+
+    if dangerous_hosts:
+        raise RuntimeError(
+            "Unsafe ALLOWED_HOSTS value in production: "
+            f"{dangerous_hosts}. "
+            "Use only exact production hostnames, for example: "
+            "ems-system-d26q.onrender.com or erp.blueoceansteels.com"
+        )
+
+    if scheme_hosts:
+        raise RuntimeError(
+            "Invalid ALLOWED_HOSTS value in production: "
+            f"{scheme_hosts}. "
+            "ALLOWED_HOSTS must not include http:// or https://. "
+            "Example: ems-system-d26q.onrender.com"
+        )
 
 CSRF_TRUSTED_ORIGINS = env_list(
     "CSRF_TRUSTED_ORIGINS",
