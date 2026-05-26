@@ -26,7 +26,6 @@ User = get_user_model()
 logger = logging.getLogger("apps.reports")
 
 
-
 RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
 
 
@@ -173,6 +172,7 @@ def _void_checklist_for_report(obj, *, deleted_by=None) -> int:
     obj.delete()
     return 1
 
+
 # -------- time helpers --------
 def calculate_checklist_total_time(qs) -> int:
     # sum of actual time taken (minutes)
@@ -204,6 +204,7 @@ def percent_not_completed(planned: int, completed: int) -> float:
     if planned == 0:
         return 0.0
     return -round(((planned - completed) / planned) * 100, 2)
+
 
 def _build_logical_doer_task_queryset(base_qs):
     """
@@ -279,6 +280,57 @@ def _build_logical_doer_task_queryset(base_qs):
     return base_qs.filter(pk__in=keep_ids)
 
 
+def _doer_task_frequency_display(task) -> str:
+    """
+    Display Doer Task frequency using existing Checklist recurrence metadata.
+
+    Source of truth:
+    - Base/parent recurring task when a relation exists
+    - Otherwise current Checklist row
+
+    Existing recurrence fields:
+    - mode
+    - frequency
+
+    Do NOT use Task Type badge text for recurrence frequency.
+    Do NOT create duplicate recurrence logic.
+    """
+
+    base_task = (
+        getattr(task, "base_task", None)
+        or getattr(task, "parent_task", None)
+        or getattr(task, "recurring_parent", None)
+        or task
+    )
+
+    mode = (getattr(base_task, "mode", None) or "").strip()
+    raw_frequency = getattr(base_task, "frequency", None)
+
+    if not mode:
+        return "One-time"
+
+    try:
+        frequency = max(int(raw_frequency or 1), 1)
+    except (TypeError, ValueError):
+        frequency = 1
+
+    if frequency == 1:
+        return mode
+
+    if mode == "Daily":
+        unit = "Day"
+    elif mode == "Weekly":
+        unit = "Week"
+    elif mode == "Monthly":
+        unit = "Month"
+    elif mode == "Yearly":
+        unit = "Year"
+    else:
+        unit = mode.rstrip("s")
+
+    return f"Every {frequency} {unit}s"
+
+
 # ----------------- REPORTS -----------------
 @login_required
 def list_doer_tasks(request):
@@ -289,6 +341,12 @@ def list_doer_tasks(request):
     - Default / Pending / In Progress / Completed / Missed = one logical row per task series.
     - Historical / Deleted = report/audit modes and may show raw generated rows.
     - Dashboard remains generated actionable execution view.
+
+    Frequency behavior:
+    - Display base/checklist recurrence metadata from existing mode + frequency fields.
+    - Do not alter recurring engine.
+    - Do not alter checklist generator.
+    - Do not alter completion flow.
     """
     FILTER_SESSION_KEY = "reports__doer_tasks_filter"
     FILTER_KEYS = {"doer", "department", "date_from", "date_to", "status"}
@@ -508,6 +566,12 @@ def list_doer_tasks(request):
     page_items = list(page_obj.object_list)
     fetch_time = perf_counter() - fetch_start
 
+    # ------------------------------------------------------------------
+    # Frequency display metadata
+    # ------------------------------------------------------------------
+    for item in page_items:
+        item.frequency_display = _doer_task_frequency_display(item)
+
     context = {
         "form": form,
         "items": page_items,
@@ -540,6 +604,7 @@ def list_doer_tasks(request):
     )
 
     return HttpResponse(html)
+
 
 @login_required
 def list_fms_tasks(request):

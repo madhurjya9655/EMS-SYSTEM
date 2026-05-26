@@ -110,6 +110,7 @@
             <th style="width:40px;"></th>
             <th>Doer</th>
             <th>Task Name</th>
+            <th>Frequency</th>
             <th>Task Type</th>
             <th>Assigned By</th>
             <th>Planned Date</th>
@@ -137,6 +138,10 @@
                 {% if item.is_deleted or item.is_skipped_due_to_leave %}
                   <span class="badge bg-secondary ms-1">Deleted / Archived</span>
                 {% endif %}
+              </td>
+
+              <td>
+                {{ item.frequency_display|default:"One-time" }}
               </td>
 
               <td>
@@ -171,6 +176,7 @@
                         data-bs-toggle="modal"
                         data-bs-target="#doerTaskDetailsModal"
                         data-task-name="{{ item.task_name|default_if_none:''|escape }}"
+                        data-frequency="{{ item.frequency_display|default:'One-time'|escape }}"
                         data-assigned-by="{{ item.assign_by.get_full_name|default:item.assign_by.username|escape }}"
                         data-assigned-to="{{ item.assign_to.get_full_name|default:item.assign_to.username|escape }}"
                         data-planned="{{ item.planned_date|date:'d M, Y H:i' }}"
@@ -193,7 +199,7 @@
             </tr>
           {% empty %}
             <tr>
-              <td colspan="8" class="text-center text-muted py-4">
+              <td colspan="9" class="text-center text-muted py-4">
                 No tasks found for these criteria.
               </td>
             </tr>
@@ -278,6 +284,7 @@
 
       <div class="modal-body">
         <p><strong>Task Name:</strong> <span id="modalTaskName"></span></p>
+        <p><strong>Frequency:</strong> <span id="modalFrequency"></span></p>
         <p><strong>Assigned By:</strong> <span id="modalAssignedBy"></span></p>
         <p><strong>Assigned To:</strong> <span id="modalAssignedTo"></span></p>
         <p><strong>Planned:</strong> <span id="modalPlanned"></span></p>
@@ -384,6 +391,7 @@
   for (var k = 0; k < detailButtons.length; k++) {
     detailButtons[k].addEventListener('click', function () {
       var taskName = this.getAttribute('data-task-name') || '';
+      var frequency = this.getAttribute('data-frequency') || 'One-time';
       var assignedBy = this.getAttribute('data-assigned-by') || '';
       var assignedTo = this.getAttribute('data-assigned-to') || '';
       var planned = this.getAttribute('data-planned') || '';
@@ -392,6 +400,7 @@
       var completeUrl = this.getAttribute('data-complete-url') || '';
 
       document.getElementById('modalTaskName').textContent = taskName;
+      document.getElementById('modalFrequency').textContent = frequency;
       document.getElementById('modalAssignedBy').textContent = assignedBy;
       document.getElementById('modalAssignedTo').textContent = assignedTo;
       document.getElementById('modalPlanned').textContent = planned;
