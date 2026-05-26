@@ -3,6 +3,7 @@ import os
 import sqlite3
 from pathlib import Path
 from typing import List
+from urllib.parse import urlparse
 
 import dj_database_url  # type: ignore
 from dotenv import load_dotenv
@@ -54,7 +55,12 @@ ADMIN_URL = os.getenv("ADMIN_URL", "super-secret-admin/")
 # HOST / ORIGIN SECURITY
 # -----------------------------------------------------------------------------
 # SECURITY RULE:
-# In production, ALLOWED_HOSTS must contain ONLY real production hostnames.
+# In production, ALLOWED_HOSTS must contain real production hostnames only.
+#
+# Render issue protection:
+# If Render environment accidentally contains:
+#   ALLOWED_HOSTS=localhost,127.0.0.1
+# this block filters those unsafe values and keeps safe production hosts.
 #
 # GOOD production examples:
 #   ALLOWED_HOSTS=ems-system-d26q.onrender.com
@@ -69,10 +75,11 @@ ADMIN_URL = os.getenv("ADMIN_URL", "super-secret-admin/")
 # IMPORTANT:
 # ALLOWED_HOSTS must NOT include https:// or http://.
 # CSRF_TRUSTED_ORIGINS must include https://.
-PRODUCTION_ALLOWED_HOSTS = env_list(
-    "ALLOWED_HOSTS",
+
+DEFAULT_PRODUCTION_ALLOWED_HOSTS = [
     "ems-system-d26q.onrender.com",
-)
+    "erp.blueoceansteels.com",
+]
 
 LOCAL_ALLOWED_HOSTS = [
     "localhost",
@@ -81,44 +88,121 @@ LOCAL_ALLOWED_HOSTS = [
     "testserver",
 ]
 
-ALLOWED_HOSTS = PRODUCTION_ALLOWED_HOSTS.copy()
+FORBIDDEN_PRODUCTION_ALLOWED_HOSTS = {
+    "*",
+    ".onrender.com",
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "testserver",
+}
+
+
+def _host_from_url(value: str) -> str:
+    """
+    Convert URL-like host values into plain hostnames.
+
+    Examples:
+      https://ems-system-d26q.onrender.com -> ems-system-d26q.onrender.com
+      ems-system-d26q.onrender.com         -> ems-system-d26q.onrender.com
+    """
+    value = (value or "").strip()
+
+    if not value:
+        return ""
+
+    if value.startswith("http://") or value.startswith("https://"):
+        parsed = urlparse(value)
+        return (parsed.netloc or "").strip()
+
+    return value
+
+
+def _clean_allowed_hosts(raw_hosts: list[str], allow_local: bool = False) -> list[str]:
+    """
+    Normalize and clean ALLOWED_HOSTS.
+
+    Production:
+      - removes localhost / 127.0.0.1 / 0.0.0.0 / testserver
+      - removes wildcard values
+      - removes URL schemes
+      - keeps exact hostnames only
+
+    Debug:
+      - local hosts are allowed
+    """
+    cleaned: list[str] = []
+
+    for raw in raw_hosts:
+        host = _host_from_url(raw)
+
+        if not host:
+            continue
+
+        if not allow_local and host in FORBIDDEN_PRODUCTION_ALLOWED_HOSTS:
+            continue
+
+        if host not in cleaned:
+            cleaned.append(host)
+
+    return cleaned
+
+
+_raw_allowed_hosts = env_list("ALLOWED_HOSTS", "")
 
 if DEBUG:
+    ALLOWED_HOSTS = _clean_allowed_hosts(
+        _raw_allowed_hosts or DEFAULT_PRODUCTION_ALLOWED_HOSTS,
+        allow_local=True,
+    )
+
     for local_host in LOCAL_ALLOWED_HOSTS:
         if local_host not in ALLOWED_HOSTS:
             ALLOWED_HOSTS.append(local_host)
 
-# Final production safety check.
-# If a dangerous host is accidentally added in Render env, Django must fail fast.
-if not DEBUG:
-    forbidden_allowed_hosts = {"*", ".onrender.com", "localhost", "127.0.0.1", "0.0.0.0", "testserver"}
-    dangerous_hosts = [host for host in ALLOWED_HOSTS if host in forbidden_allowed_hosts]
+else:
+    ALLOWED_HOSTS = _clean_allowed_hosts(
+        _raw_allowed_hosts,
+        allow_local=False,
+    )
 
-    scheme_hosts = [
-        host for host in ALLOWED_HOSTS
-        if host.startswith("http://") or host.startswith("https://")
-    ]
+    # Always keep safe production defaults available.
+    for production_host in DEFAULT_PRODUCTION_ALLOWED_HOSTS:
+        if production_host not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(production_host)
 
-    if dangerous_hosts:
+    if not ALLOWED_HOSTS:
         raise RuntimeError(
-            "Unsafe ALLOWED_HOSTS value in production: "
-            f"{dangerous_hosts}. "
-            "Use only exact production hostnames, for example: "
+            "ALLOWED_HOSTS is empty in production. "
+            "Set ALLOWED_HOSTS to exact production hostnames, for example: "
             "ems-system-d26q.onrender.com or erp.blueoceansteels.com"
         )
 
-    if scheme_hosts:
-        raise RuntimeError(
-            "Invalid ALLOWED_HOSTS value in production: "
-            f"{scheme_hosts}. "
-            "ALLOWED_HOSTS must not include http:// or https://. "
-            "Example: ems-system-d26q.onrender.com"
-        )
 
-CSRF_TRUSTED_ORIGINS = env_list(
-    "CSRF_TRUSTED_ORIGINS",
-    "https://ems-system-d26q.onrender.com",
-)
+_raw_csrf_origins = env_list("CSRF_TRUSTED_ORIGINS", "")
+
+if _raw_csrf_origins:
+    CSRF_TRUSTED_ORIGINS = []
+
+    for origin in _raw_csrf_origins:
+        origin = (origin or "").strip()
+
+        if not origin:
+            continue
+
+        if origin.startswith("http://") or origin.startswith("https://"):
+            safe_origin = origin
+        else:
+            safe_origin = f"https://{origin}"
+
+        if safe_origin not in CSRF_TRUSTED_ORIGINS:
+            CSRF_TRUSTED_ORIGINS.append(safe_origin)
+
+else:
+    CSRF_TRUSTED_ORIGINS = [
+        "https://ems-system-d26q.onrender.com",
+        "https://erp.blueoceansteels.com",
+    ]
 
 if DEBUG:
     for local_origin in (
@@ -1147,5 +1231,3 @@ REIMBURSEMENT_ALLOWED_EXTENSIONS = env_list(
     "REIMBURSEMENT_ALLOWED_EXTENSIONS",
     ".jpg,.jpeg,.png,.pdf,.xls,.xlsx",
 )
-
-REIMBURSEMENT_MAX_RECEIPT_MB = env_int("REIMBURSEMENT_MAX_RECEIPT_MB", 8)
