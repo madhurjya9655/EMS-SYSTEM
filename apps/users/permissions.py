@@ -74,7 +74,7 @@ PERMISSIONS_STRUCTURE = {
         ("kam_customers", "Customers"),
         ("kam_targets", "Targets – Header"),
         ("kam_targets_lines", "Targets – Lines"),
-        ("kam_reports", "Reports"),
+        ("kam_reports", "Reports / Individual Performance Analytics"),
         ("kam_collections_plan", "Collections Plan"),
         ("kam_export_kpi_csv", "Export KPI CSV"),
         ("kam_sync_now", "Sync Now"),
@@ -239,7 +239,7 @@ def _expand_synonyms(codes: Set[str]) -> Set[str]:
 def _codes_from_groups(user) -> Set[str]:
     """
     Map Django auth groups to implied permission codes.
-    Keeps Profile permissions as the source of truth; this just adds grants.
+    Profile permissions remain the source of truth.
     """
     try:
         names = {n.strip().lower() for n in user.groups.values_list("name", flat=True)}
@@ -248,17 +248,23 @@ def _codes_from_groups(user) -> Set[str]:
 
     grants: Set[str] = set()
 
-    # If a user is in "Manager", grant the leave-approval queue permission,
-    # and allow seeing reimbursement analytics.
     if "manager" in names:
         grants.add("leave_pending_manager")
         grants.add("reimbursement_analytics")
 
-    # Finance should also be able to see analytics.
+        # Allow Manager group to open KAM Individual Report page.
+        # Actual KAM visibility is restricted in apps.kam.views.py
+        # through KamManagerMapping.
+        grants.add("kam_reports")
+
+    if "admin" in names:
+        # Allow Admin group to open KAM Individual Report page.
+        # Actual all-KAM access is controlled in apps.kam.views.py.
+        grants.add("kam_reports")
+
     if "finance" in names:
         grants.add("reimbursement_analytics")
 
-    # Add other group → code mappings here as your org evolves.
     return grants
 
 

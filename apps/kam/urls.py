@@ -114,6 +114,7 @@ urlpatterns = [
 
     # ── Reports ────────────────────────────────────────────────────────
     path("reports/", views.reports, name="reports"),
+    path("reports/performance-api/", views.kam_performance_report_api, name="kam_performance_report_api"),
     path("reports/export-csv/", views.export_kpi_csv, name="export_kpi_csv"),
 
     # ── Sync ───────────────────────────────────────────────────────────

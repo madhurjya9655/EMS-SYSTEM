@@ -1,749 +1,786 @@
-{# FILE: templates/kam/reports.html #}
-{# PURPOSE: KAM Reports — last 4 weeks analytics with Chart.js trend charts + detail tables #}
-{# UPDATED: 2026-04-14 #}
 {% extends "base.html" %}
 {% load humanize %}
 
-{% block title %}KAM Reports — BOS Lakshya{% endblock %}
-{% block breadcrumb %}KAM Reports{% endblock %}
+{% block title %}KAM Performance Analytics — BOS Lakshya{% endblock %}
+{% block breadcrumb %}KAM Performance Analytics{% endblock %}
 
 {% block head_extra %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
 <style>
-  .chart-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 1.25rem;
-    height: 100%;
+  .kam-analytics-page {
+    padding-bottom: 24px;
   }
 
-  .chart-title {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--subtle);
-    margin-bottom: 0.75rem;
+  .analytics-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
   }
 
-  .chart-wrap {
-    position: relative;
-    height: 220px;
+  .filter-card,
+  .analytics-card,
+  .section-card {
+    background: var(--surface, #ffffff);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: var(--radius, 14px);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
   }
 
-  .chart-empty {
-    position: absolute;
-    inset: 0;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    color: var(--subtle);
-    font-size: 13px;
-    font-weight: 600;
+  .filter-card {
+    padding: 16px;
+    margin-bottom: 18px;
+  }
+
+  .analytics-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 0;
+  }
+
+  @media (max-width: 1200px) {
+    .analytics-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 768px) {
+    .analytics-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .analytics-card {
     padding: 16px;
   }
 
-  .metric-tab {
-    padding: 6px 16px;
-    border-radius: 999px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--text-secondary);
-    text-decoration: none;
-    transition: all 0.14s ease;
+  .card-title-sm {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--muted, #64748b);
+    font-weight: 800;
+    margin-bottom: 8px;
   }
 
-  .metric-tab:hover {
-    background: var(--surface-alt);
-    color: var(--text);
-    text-decoration: none;
+  .metric-value {
+    font-size: 25px;
+    line-height: 1.1;
+    font-weight: 900;
+    color: var(--text, #0f172a);
+    word-break: break-word;
   }
 
-  .metric-tab.active {
-    background: var(--primary);
-    color: #fff;
-    border-color: var(--primary);
+  .metric-sub {
+    color: var(--subtle, #64748b);
+    font-size: 12px;
+    margin-top: 7px;
   }
 
-  .report-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+  .section-card {
     overflow: hidden;
+    margin-bottom: 18px;
   }
 
-  .report-card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+  .section-header {
     padding: 13px 16px;
-    border-bottom: 1px solid var(--border-light);
-    font-size: 13px;
-    font-weight: 700;
+    border-bottom: 1px solid var(--border-light, #eef2f7);
+    display: flex;
+    justify-content: space-between;
     gap: 10px;
+    align-items: center;
     flex-wrap: wrap;
   }
 
-  .badge-count {
-    display: inline-flex;
+  .section-title {
+    font-size: 14px;
+    font-weight: 900;
+    margin: 0;
+    color: var(--text, #0f172a);
+  }
+
+  .section-body {
+    padding: 16px;
+  }
+
+  .info-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  @media (max-width: 992px) {
+    .info-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 576px) {
+    .info-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .info-item {
+    border: 1px solid var(--border-light, #eef2f7);
+    border-radius: 10px;
+    padding: 12px;
+    background: var(--surface-alt, #f8fafc);
+  }
+
+  .info-label {
+    font-size: 11px;
+    color: var(--muted, #64748b);
+    text-transform: uppercase;
+    font-weight: 800;
+    letter-spacing: .05em;
+    margin-bottom: 5px;
+  }
+
+  .info-value {
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--text, #0f172a);
+    word-break: break-word;
+  }
+
+  .score-box {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+
+  .score-circle {
+    width: 116px;
+    height: 116px;
+    border-radius: 999px;
+    border: 10px solid var(--primary, #2563eb);
+    display: flex;
     align-items: center;
     justify-content: center;
-    min-width: 22px;
-    height: 22px;
-    padding: 0 6px;
+    font-size: 30px;
+    font-weight: 900;
+    color: var(--text, #0f172a);
+    background: #fff;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
     border-radius: 999px;
-    background: var(--primary);
-    color: #fff;
-    font-size: 11px;
-    font-weight: 700;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 900;
+    background: var(--primary-soft, #eff6ff);
+    color: var(--primary, #2563eb);
+    border: 1px solid var(--primary-border, #bfdbfe);
   }
 
-  .report-table th {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--muted);
+  .status-pill.danger {
+    background: #fef2f2;
+    color: #b91c1c;
+    border-color: #fecaca;
   }
 
-  .report-table td {
+  .chart-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+  }
+
+  @media (max-width: 992px) {
+    .chart-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .chart-wrap {
+    height: 270px;
+    position: relative;
+  }
+
+  .loading-state,
+  .empty-state {
+    padding: 42px 20px;
+    text-align: center;
+    color: var(--subtle, #64748b);
+    font-size: 14px;
+    font-weight: 700;
+    background: var(--surface, #fff);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: var(--radius, 14px);
+  }
+
+  .table-sm td,
+  .table-sm th {
     font-size: 13px;
     vertical-align: middle;
   }
 
-  .success-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11.5px;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 999px;
+  .score-table {
+    min-width: 340px;
   }
 
-  .success-badge.yes {
-    background: #ecfdf5;
-    color: var(--success);
+  .score-table td {
+    padding: 6px 10px;
   }
 
-  .success-badge.no {
-    background: #fef2f2;
-    color: var(--danger);
-  }
-
-  .range-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    background: var(--primary-soft);
-    border: 1px solid var(--primary-border);
-    color: var(--primary);
-    font-size: 12px;
-    font-weight: 600;
-    padding: 3px 10px;
-    border-radius: 999px;
-  }
-
-  .empty-state {
-    padding: 40px 20px;
-    text-align: center;
-    color: var(--subtle);
-    font-size: 13px;
-  }
-
-  .empty-state i {
-    font-size: 2rem;
-    margin-bottom: 10px;
-    display: block;
+  .btn-primary {
+    font-weight: 800;
   }
 </style>
 {% endblock %}
 
 {% block content %}
 
-{{ weeks_trend|default:"[]"|json_script:"trendDataJson" }}
+<div class="kam-analytics-page">
 
-{# ── PAGE HEADER ─────────────────────────────────────────────────────── #}
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:6px;">
-  <div>
-    <h1 class="page-title">KAM Reports</h1>
-    {% if range_label %}
-      <div class="mt-2">
-        <span class="range-pill">
-          <i class="fas fa-calendar-range"></i>{{ range_label }}
-        </span>
+  <div class="analytics-header">
+    <div>
+      <h1 class="page-title mb-1">KAM Performance Analytics</h1>
+      <div class="text-muted small">
+        Individual KAM report card using live ERP sales, leads, visits, calls, collections, targets and overdue data.
+      </div>
+    </div>
+
+    {% if report %}
+      <div class="status-pill">
+        Selected: {{ report.basic.name }}
+      </div>
+    {% elif selected_kam %}
+      <div class="status-pill">
+        Selected:
+        {% if selected_kam.get_full_name %}
+          {{ selected_kam.get_full_name }}
+        {% else %}
+          {{ selected_kam.username }}
+        {% endif %}
       </div>
     {% endif %}
   </div>
-  <div class="d-flex gap-2">
-    <a href="{% url 'kam:export_kpi_csv' %}?from={{ filter_from }}&to={{ filter_to }}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
-       class="btn btn-sm btn-outline-secondary">
-      <i class="fas fa-download me-1"></i>Export CSV
-    </a>
-    <a href="{% url 'kam:dashboard' %}" class="btn btn-sm btn-outline-secondary">
-      <i class="fas fa-arrow-left me-1"></i>Dashboard
-    </a>
-  </div>
-</div>
 
-{# ── FILTER BAR ───────────────────────────────────────────────────────── #}
-<form method="get"
-      class="d-flex align-items-end gap-2 flex-wrap mb-3 p-3 border rounded"
-      style="background:var(--surface);"
-      id="reportsFilterForm">
-  <input type="hidden" name="metric" value="{{ metric }}">
+  <div class="filter-card">
+    <form method="get" id="reportFilterForm" class="row g-3 align-items-end">
 
-  <div class="d-flex flex-column gap-1">
-    <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--subtle);">From</span>
-    <input type="date"
-           name="from"
-           value="{% firstof request.GET.from filter_from %}"
-           class="form-control form-control-sm"
-           style="min-width:140px;">
-  </div>
+      <div class="col-lg-3 col-md-6">
+        <label class="form-label fw-bold small">Select KAM</label>
+        <select name="kam_id" id="kamSelect" class="form-select" {% if not can_choose_kam %}disabled{% endif %}>
+          {% for kam in kam_options %}
+            <option value="{{ kam.id }}" {% if selected_kam and selected_kam.id == kam.id %}selected{% endif %}>
+              {% if kam.get_full_name %}
+                {{ kam.get_full_name }}
+              {% else %}
+                {{ kam.username }}
+              {% endif %}
+            </option>
+          {% endfor %}
+        </select>
 
-  <div class="d-flex flex-column gap-1">
-    <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--subtle);">To</span>
-    <input type="date"
-           name="to"
-           value="{% firstof request.GET.to filter_to %}"
-           class="form-control form-control-sm"
-           style="min-width:140px;">
-  </div>
-
-  {% if can_choose_kam %}
-  <div class="d-flex flex-column gap-1">
-    <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--subtle);">KAM</span>
-    <select name="user" class="form-select form-select-sm" style="min-width:140px;">
-      <option value="" {% if not request.GET.user %}selected{% endif %}>ALL KAMs</option>
-      {% for uname in kam_options %}
-        <option value="{{ uname }}" {% if request.GET.user == uname %}selected{% endif %}>{{ uname }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  {% endif %}
-
-  <div class="d-flex gap-2 align-items-end">
-    <button class="btn btn-primary btn-sm" type="submit">
-      <i class="fas fa-filter me-1"></i>Apply
-    </button>
-    <a class="btn btn-outline-secondary btn-sm"
-       href="{% url 'kam:reports' %}?metric={{ metric }}">
-      <i class="fas fa-rotate-left me-1"></i>Reset
-    </a>
-  </div>
-</form>
-
-{# ── 4-WEEK TREND CHARTS ──────────────────────────────────────────────── #}
-<div class="mb-4">
-  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
-    <h5 class="fw-bold m-0">Last 4 Weeks Analytics</h5>
-    <span class="text-muted small">Scope: {{ scope_label|default:"ALL" }}</span>
-  </div>
-
-  <div class="row g-3">
-
-    <div class="col-md-6 col-xl-4">
-      <div class="chart-card">
-        <div class="chart-title"><i class="fas fa-boxes-stacked me-1"></i>Sales Trend (MT)</div>
-        <div class="chart-wrap">
-          <canvas id="chartSales"></canvas>
-          <div class="chart-empty" id="emptyChartSales">No sales trend data</div>
-        </div>
+        {% if not can_choose_kam and selected_kam %}
+          <input type="hidden" name="kam_id" value="{{ selected_kam.id }}">
+        {% endif %}
       </div>
-    </div>
 
-    <div class="col-md-6 col-xl-4">
-      <div class="chart-card">
-        <div class="chart-title"><i class="fas fa-route me-1"></i>Visits Trend</div>
-        <div class="chart-wrap">
-          <canvas id="chartVisits"></canvas>
-          <div class="chart-empty" id="emptyChartVisits">No visits trend data</div>
-        </div>
+      <div class="col-lg-2 col-md-6">
+        <label class="form-label fw-bold small">Date Range</label>
+        <select name="range" id="rangeSelect" class="form-select">
+          <option value="" {% if not request.GET.range %}selected{% endif %}>Fiscal YTD</option>
+          <option value="today" {% if request.GET.range == "today" %}selected{% endif %}>Today</option>
+          <option value="this_week" {% if request.GET.range == "this_week" %}selected{% endif %}>This Week</option>
+          <option value="this_month" {% if request.GET.range == "this_month" or request.GET.range == "month" %}selected{% endif %}>This Month</option>
+          <option value="last30" {% if request.GET.range == "last30" %}selected{% endif %}>Last 30 Days</option>
+          <option value="all" {% if request.GET.range == "all" %}selected{% endif %}>All</option>
+        </select>
       </div>
-    </div>
 
-    <div class="col-md-6 col-xl-4">
-      <div class="chart-card">
-        <div class="chart-title"><i class="fas fa-phone-volume me-1"></i>Calls Trend</div>
-        <div class="chart-wrap">
-          <canvas id="chartCalls"></canvas>
-          <div class="chart-empty" id="emptyChartCalls">No calls trend data</div>
-        </div>
+      <div class="col-lg-2 col-md-6">
+        <label class="form-label fw-bold small">From</label>
+        <input type="date" name="from" id="fromDate" class="form-control" value="{{ filter_from }}">
       </div>
-    </div>
 
-    <div class="col-md-6 col-xl-6">
-      <div class="chart-card">
-        <div class="chart-title"><i class="fas fa-bullseye me-1"></i>Leads Trend</div>
-        <div class="chart-wrap">
-          <canvas id="chartLeads"></canvas>
-          <div class="chart-empty" id="emptyChartLeads">No leads trend data</div>
-        </div>
+      <div class="col-lg-2 col-md-6">
+        <label class="form-label fw-bold small">To</label>
+        <input type="date" name="to" id="toDate" class="form-control" value="{{ filter_to }}">
       </div>
-    </div>
 
-    <div class="col-md-6 col-xl-6">
-      <div class="chart-card">
-        <div class="chart-title"><i class="fas fa-money-bill-wave me-1"></i>Collections Trend (₹)</div>
-        <div class="chart-wrap">
-          <canvas id="chartCollections"></canvas>
-          <div class="chart-empty" id="emptyChartCollections">No collections trend data</div>
-        </div>
+      <div class="col-lg-3 col-md-12">
+        <button class="btn btn-primary w-100" type="submit">
+          <i class="fas fa-chart-line me-1"></i>
+          View Report Card
+        </button>
       </div>
-    </div>
 
+    </form>
   </div>
+
+  <div id="reportRoot">
+    {% if not selected_kam %}
+      <div class="empty-state">
+        No KAM available for your role.
+      </div>
+    {% elif not report %}
+      <div class="empty-state">
+        Select a KAM to view report card.
+      </div>
+    {% else %}
+      {{ report|json_script:"initialReportJson" }}
+      <div id="reportContent"></div>
+    {% endif %}
+  </div>
+
 </div>
 
-{# ── 4-week raw table ─────────────────────────────────────────────────── #}
-<div class="report-card mb-4">
-  <div class="report-card-header">
-    <span><i class="fas fa-table me-1 text-muted"></i>4-Week Trend Data</span>
-  </div>
-
-  {% if weeks_trend %}
-  <div class="table-responsive">
-    <table class="table table-sm report-table mb-0">
-      <thead>
-        <tr>
-          <th>Week</th>
-          <th class="text-end">Sales (MT)</th>
-          <th class="text-end">Visits</th>
-          <th class="text-end">Calls</th>
-          <th class="text-end">Leads</th>
-          <th class="text-end">Collections (₹)</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in weeks_trend %}
-        <tr>
-          <td class="fw-semibold">{{ row.week }}</td>
-          <td class="text-end">{{ row.sales_mt|floatformat:3 }}</td>
-          <td class="text-end">{{ row.visits }}</td>
-          <td class="text-end">{{ row.calls }}</td>
-          <td class="text-end">{{ row.leads }}</td>
-          <td class="text-end">₹ {{ row.collections|floatformat:0|intcomma }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <div class="empty-state">
-    <i class="fas fa-chart-line"></i>No 4-week trend data available.
-  </div>
-  {% endif %}
-</div>
-
-{# ── METRIC TABS ──────────────────────────────────────────────────────── #}
-<div class="d-flex gap-2 flex-wrap mb-3">
-  <a href="?metric=sales{% if request.GET.from %}&from={{ request.GET.from }}{% endif %}{% if request.GET.to %}&to={{ request.GET.to }}{% endif %}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
-     class="metric-tab {% if metric == 'sales' %}active{% endif %}">
-    <i class="fas fa-boxes-stacked me-1"></i>Sales
-  </a>
-
-  <a href="?metric=calls{% if request.GET.from %}&from={{ request.GET.from }}{% endif %}{% if request.GET.to %}&to={{ request.GET.to }}{% endif %}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
-     class="metric-tab {% if metric == 'calls' %}active{% endif %}">
-    <i class="fas fa-phone-volume me-1"></i>Calls
-  </a>
-
-  <a href="?metric=visits{% if request.GET.from %}&from={{ request.GET.from }}{% endif %}{% if request.GET.to %}&to={{ request.GET.to }}{% endif %}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
-     class="metric-tab {% if metric == 'visits' %}active{% endif %}">
-    <i class="fas fa-route me-1"></i>Visits
-  </a>
-
-  <a href="?metric=leads{% if request.GET.from %}&from={{ request.GET.from }}{% endif %}{% if request.GET.to %}&to={{ request.GET.to }}{% endif %}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
-     class="metric-tab {% if metric == 'leads' %}active{% endif %}">
-    <i class="fas fa-bullseye me-1"></i>Leads
-  </a>
-
-  <a href="?metric=collections{% if request.GET.from %}&from={{ request.GET.from }}{% endif %}{% if request.GET.to %}&to={{ request.GET.to }}{% endif %}{% if request.GET.user %}&user={{ request.GET.user }}{% endif %}"
-     class="metric-tab {% if metric == 'collections' %}active{% endif %}">
-    <i class="fas fa-money-bill-wave me-1"></i>Collections
-  </a>
-</div>
-
-{# ── SALES TABLE ──────────────────────────────────────────────────────── #}
-{% if metric == 'sales' %}
-<div class="report-card">
-  <div class="report-card-header">
-    <span><i class="fas fa-boxes-stacked me-1 text-muted"></i>Sales by Customer
-      <span class="badge-count ms-2">{{ rows|length }}</span>
-    </span>
-    {% if rows %}<span style="font-size:12px;color:var(--muted);">Top 300 by MT</span>{% endif %}
-  </div>
-
-  {% if rows %}
-  <div class="table-responsive">
-    <table class="table table-sm report-table align-middle mb-0">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Customer</th>
-          <th>KAM</th>
-          <th class="text-end">Sales (MT)</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in rows %}
-        <tr>
-          <td style="color:var(--subtle);font-size:11px;">{{ forloop.counter }}</td>
-          <td style="font-weight:600;">{{ row.customer_name|default:"—" }}</td>
-          <td>
-            {% if row.kam_username %}
-              <span style="background:var(--primary-soft);color:var(--primary);font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:4px;">
-                {{ row.kam_username }}
-              </span>
-            {% else %}
-              <span style="color:var(--subtle);">—</span>
-            {% endif %}
-          </td>
-          <td class="text-end" style="font-weight:700;">{{ row.mt|floatformat:2 }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <div class="empty-state">
-    <i class="fas fa-boxes-stacked"></i>No sales data for this period.
-  </div>
-  {% endif %}
-</div>
-{% endif %}
-
-{# ── CALLS TABLE ──────────────────────────────────────────────────────── #}
-{% if metric == 'calls' %}
-<div class="report-card">
-  <div class="report-card-header">
-    <span><i class="fas fa-phone-volume me-1 text-muted"></i>Calls Log
-      <span class="badge-count ms-2">{{ rows|length }}</span>
-    </span>
-    {% if rows %}<span style="font-size:12px;color:var(--muted);">Latest 500 calls</span>{% endif %}
-  </div>
-
-  {% if rows %}
-  <div class="table-responsive">
-    <table class="table table-sm report-table align-middle mb-0">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Customer</th>
-          <th>KAM</th>
-          <th>Date &amp; Time</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in rows %}
-        <tr>
-          <td style="color:var(--subtle);font-size:11px;">{{ forloop.counter }}</td>
-          <td style="font-weight:600;">{{ row.customer_name|default:"—" }}</td>
-          <td>
-            {% if row.kam_username %}
-              <span style="background:var(--primary-soft);color:var(--primary);font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:4px;">
-                {{ row.kam_username }}
-              </span>
-            {% else %}
-              <span style="color:var(--subtle);">—</span>
-            {% endif %}
-          </td>
-          <td style="color:var(--muted);font-size:12.5px;">
-            {{ row.call_datetime|date:"d M Y, H:i" }}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <div class="empty-state">
-    <i class="fas fa-phone-slash"></i>No calls recorded for this period.
-  </div>
-  {% endif %}
-</div>
-{% endif %}
-
-{# ── VISITS TABLE ─────────────────────────────────────────────────────── #}
-{% if metric == 'visits' %}
-<div class="report-card">
-  <div class="report-card-header">
-    <span><i class="fas fa-route me-1 text-muted"></i>Visits Log
-      <span class="badge-count ms-2">{{ rows|length }}</span>
-    </span>
-    {% if rows %}<span style="font-size:12px;color:var(--muted);">Latest 500 visits</span>{% endif %}
-  </div>
-
-  {% if rows %}
-  <div class="table-responsive">
-    <table class="table table-sm report-table align-middle mb-0">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Customer</th>
-          <th>KAM</th>
-          <th>Visit Date</th>
-          <th class="text-center">Outcome</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in rows %}
-        <tr>
-          <td style="color:var(--subtle);font-size:11px;">{{ forloop.counter }}</td>
-          <td style="font-weight:600;">{{ row.customer_name|default:"—" }}</td>
-          <td>
-            {% if row.kam_username %}
-              <span style="background:var(--primary-soft);color:var(--primary);font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:4px;">
-                {{ row.kam_username }}
-              </span>
-            {% else %}
-              <span style="color:var(--subtle);">—</span>
-            {% endif %}
-          </td>
-          <td style="color:var(--muted);font-size:12.5px;">
-            {{ row.visit_date|date:"d M Y" }}
-          </td>
-          <td class="text-center">
-            {% if row.successful is True %}
-              <span class="success-badge yes"><i class="fas fa-check"></i>Success</span>
-            {% elif row.successful is False %}
-              <span class="success-badge no"><i class="fas fa-xmark"></i>Not done</span>
-            {% else %}
-              <span style="color:var(--subtle);font-size:12px;">—</span>
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <div class="empty-state">
-    <i class="fas fa-route"></i>No visits recorded for this period.
-  </div>
-  {% endif %}
-</div>
-{% endif %}
-
-{# ── LEADS TABLE ──────────────────────────────────────────────────────── #}
-{% if metric == 'leads' %}
-<div class="report-card">
-  <div class="report-card-header">
-    <span><i class="fas fa-bullseye me-1 text-muted"></i>Leads Log
-      <span class="badge-count ms-2">{{ rows|length }}</span>
-    </span>
-    {% if rows %}<span style="font-size:12px;color:var(--muted);">Latest 500 leads</span>{% endif %}
-  </div>
-
-  {% if rows %}
-  <div class="table-responsive">
-    <table class="table table-sm report-table align-middle mb-0">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Customer</th>
-          <th>KAM</th>
-          <th>Date</th>
-          <th>Status</th>
-          <th class="text-end">Qty (MT)</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in rows %}
-        <tr>
-          <td style="color:var(--subtle);font-size:11px;">{{ forloop.counter }}</td>
-          <td style="font-weight:600;">{{ row.customer_name|default:"—" }}</td>
-          <td>
-            {% if row.kam_username %}
-              <span style="background:var(--primary-soft);color:var(--primary);font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:4px;">
-                {{ row.kam_username }}
-              </span>
-            {% else %}
-              <span style="color:var(--subtle);">—</span>
-            {% endif %}
-          </td>
-          <td style="color:var(--muted);font-size:12.5px;">{{ row.doe|date:"d M Y" }}</td>
-          <td>{{ row.status|default:"—" }}</td>
-          <td class="text-end" style="font-weight:700;">{{ row.qty_mt|floatformat:3 }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <div class="empty-state">
-    <i class="fas fa-bullseye"></i>No leads recorded for this period.
-  </div>
-  {% endif %}
-</div>
-{% endif %}
-
-{# ── COLLECTIONS TABLE ────────────────────────────────────────────────── #}
-{% if metric == 'collections' %}
-<div class="report-card">
-  <div class="report-card-header">
-    <span><i class="fas fa-money-bill-wave me-1 text-muted"></i>Collections Log
-      <span class="badge-count ms-2">{{ rows|length }}</span>
-    </span>
-    {% if rows %}<span style="font-size:12px;color:var(--muted);">Latest 500 collection entries</span>{% endif %}
-  </div>
-
-  {% if rows %}
-  <div class="table-responsive">
-    <table class="table table-sm report-table align-middle mb-0">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Customer</th>
-          <th>KAM</th>
-          <th>Date &amp; Time</th>
-          <th class="text-end">Amount (₹)</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in rows %}
-        <tr>
-          <td style="color:var(--subtle);font-size:11px;">{{ forloop.counter }}</td>
-          <td style="font-weight:600;">{{ row.customer_name|default:"—" }}</td>
-          <td>
-            {% if row.kam_username %}
-              <span style="background:var(--primary-soft);color:var(--primary);font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:4px;">
-                {{ row.kam_username }}
-              </span>
-            {% else %}
-              <span style="color:var(--subtle);">—</span>
-            {% endif %}
-          </td>
-          <td style="color:var(--muted);font-size:12.5px;">{{ row.txn_datetime|date:"d M Y, H:i" }}</td>
-          <td class="text-end" style="font-weight:700;">₹ {{ row.amount|floatformat:0|intcomma }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <div class="empty-state">
-    <i class="fas fa-money-bill-wave"></i>No collections recorded for this period.
-  </div>
-  {% endif %}
-</div>
-{% endif %}
-
-{% endblock %}
-
-{% block extra_js %}
 <script>
-(function () {
-  function getTrendData() {
-    var node = document.getElementById('trendDataJson');
-    if (!node) return [];
-    try {
-      return JSON.parse(node.textContent || '[]');
-    } catch (err) {
-      console.error('Failed to parse trendDataJson:', err);
-      return [];
-    }
-  }
+  const API_URL = "{% url 'kam:kam_performance_report_api' %}";
 
-  var trendData = getTrendData();
+  let weeklyChart = null;
+  let monthlyChart = null;
+  let collectionChart = null;
+  let leadChart = null;
 
-  var labels = trendData.map(function (r) { return r.week || ''; });
-  var salesData = trendData.map(function (r) { return Number(r.sales_mt || 0); });
-  var visitsData = trendData.map(function (r) { return Number(r.visits || 0); });
-  var callsData = trendData.map(function (r) { return Number(r.calls || 0); });
-  var leadsData = trendData.map(function (r) { return Number(r.leads || 0); });
-  var collData = trendData.map(function (r) { return Number(r.collections || 0); });
-
-  function hasAnyValue(arr) {
-    if (!Array.isArray(arr) || !arr.length) return false;
-    return arr.some(function (v) { return Number(v || 0) !== 0; });
-  }
-
-  function showEmpty(canvasId, emptyId, shouldShow) {
-    var canvas = document.getElementById(canvasId);
-    var empty = document.getElementById(emptyId);
-    if (!canvas || !empty) return;
-
-    if (shouldShow) {
-      canvas.style.display = 'none';
-      empty.style.display = 'flex';
-    } else {
-      canvas.style.display = 'block';
-      empty.style.display = 'none';
-    }
-  }
-
-  var baseOpts = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { display: false },
-      tooltip: { mode: 'index', intersect: false }
-    },
-    interaction: {
-      mode: 'index',
-      intersect: false
-    },
-    scales: {
-      x: {
-        grid: { display: false },
-        ticks: { font: { size: 11 } }
-      },
-      y: {
-        beginAtZero: true,
-        grid: { color: 'rgba(0,0,0,.05)' },
-        ticks: {
-          font: { size: 11 },
-          precision: 0
-        }
-      }
-    }
-  };
-
-  function makeLineChart(id, emptyId, label, data, color) {
-    var el = document.getElementById(id);
-    if (!el) return;
-
-    if (!labels.length || !hasAnyValue(data)) {
-      showEmpty(id, emptyId, true);
-      return;
-    }
-
-    showEmpty(id, emptyId, false);
-
-    new Chart(el, {
-      type: 'line',
-      data: {
-        labels: labels,
-        datasets: [{
-          label: label,
-          data: data,
-          borderColor: color,
-          backgroundColor: color.replace('rgb(', 'rgba(').replace(')', ', 0.10)'),
-          fill: true,
-          tension: 0.35,
-          pointRadius: 4,
-          pointHoverRadius: 5,
-          pointBackgroundColor: color,
-          pointBorderColor: '#fff',
-          pointBorderWidth: 2,
-          borderWidth: 2
-        }]
-      },
-      options: JSON.parse(JSON.stringify(baseOpts))
+  function money(value) {
+    value = Number(value || 0);
+    return "₹" + value.toLocaleString("en-IN", {
+      maximumFractionDigits: 2
     });
   }
 
-  makeLineChart('chartSales', 'emptyChartSales', 'Sales (MT)', salesData, 'rgb(59, 130, 246)');
-  makeLineChart('chartVisits', 'emptyChartVisits', 'Visits', visitsData, 'rgb(34, 197, 94)');
-  makeLineChart('chartCalls', 'emptyChartCalls', 'Calls', callsData, 'rgb(168, 85, 247)');
-  makeLineChart('chartLeads', 'emptyChartLeads', 'Leads', leadsData, 'rgb(249, 115, 22)');
-  makeLineChart('chartCollections', 'emptyChartCollections', 'Collections (₹)', collData, 'rgb(20, 184, 166)');
-})();
+  function mt(value) {
+    value = Number(value || 0);
+    return value.toLocaleString("en-IN", {
+      maximumFractionDigits: 2
+    }) + " MT";
+  }
+
+  function pct(value) {
+    value = Number(value || 0);
+    return value.toLocaleString("en-IN", {
+      maximumFractionDigits: 2
+    }) + "%";
+  }
+
+  function num(value) {
+    value = Number(value || 0);
+    return value.toLocaleString("en-IN");
+  }
+
+  function safe(value) {
+    if (value === null || value === undefined || value === "") return "-";
+    return value;
+  }
+
+  function metricCard(title, value, sub) {
+    return `
+      <div class="analytics-card">
+        <div class="card-title-sm">${title}</div>
+        <div class="metric-value">${value}</div>
+        <div class="metric-sub">${sub || ""}</div>
+      </div>
+    `;
+  }
+
+  function infoItem(label, value) {
+    return `
+      <div class="info-item">
+        <div class="info-label">${label}</div>
+        <div class="info-value">${safe(value)}</div>
+      </div>
+    `;
+  }
+
+  function destroyChart(chart) {
+    if (chart) {
+      chart.destroy();
+    }
+  }
+
+  function getScoreClass(status) {
+    if (status === "Needs Improvement") return "danger";
+    return "";
+  }
+
+  function updateSelectedBadge(report) {
+    const badge = document.querySelector(".analytics-header .status-pill");
+    if (badge && report && report.basic && report.basic.name) {
+      badge.textContent = "Selected: " + report.basic.name;
+    }
+  }
+
+  function renderReport(report) {
+    const root = document.getElementById("reportContent");
+
+    if (!root) return;
+
+    updateSelectedBadge(report);
+
+    const scoreClass = getScoreClass(report.score.status);
+
+    const taskHtml = report.tasks.available ? `
+      ${metricCard("Planned Tasks", num(report.tasks.planned_tasks), "Total assigned tasks")}
+      ${metricCard("Completed Tasks", num(report.tasks.completed_tasks), "Completion: " + pct(report.tasks.achievement_pct))}
+      ${metricCard("Pending Tasks", num(report.tasks.pending_tasks), "Missed: " + num(report.tasks.missed_tasks))}
+      ${metricCard("On-Time Completion", pct(report.tasks.on_time_completion_pct), "Task timing quality")}
+    ` : `
+      <div class="analytics-card" style="grid-column:1/-1;">
+        <div class="card-title-sm">Task Performance</div>
+        <div class="metric-value" style="font-size:18px;">Task module not connected</div>
+        <div class="metric-sub">
+          No fake task metrics shown. Connect your real task model in apps/kam/analytics/services.py.
+        </div>
+      </div>
+    `;
+
+    root.innerHTML = `
+      <div class="section-card">
+        <div class="section-header">
+          <h2 class="section-title">Section 1 — Basic Info</h2>
+          <span class="status-pill">${report.date_range.from} → ${report.date_range.to}</span>
+        </div>
+        <div class="section-body">
+          <div class="info-grid">
+            ${infoItem("KAM Name", report.basic.name)}
+            ${infoItem("Department", report.basic.department)}
+            ${infoItem("Manager", report.basic.manager)}
+            ${infoItem("Joining Date", report.basic.joining_date)}
+            ${infoItem("Region / Territory", report.basic.region)}
+            ${infoItem("Email", report.basic.email)}
+            ${infoItem("Username", report.basic.username)}
+            ${infoItem("Target Source", report.targets.source)}
+          </div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-header">
+          <h2 class="section-title">Section 9 — Overall Performance Score</h2>
+          <span class="status-pill ${scoreClass}">${report.score.status}</span>
+        </div>
+        <div class="section-body">
+          <div class="score-box">
+            <div class="score-circle">${Number(report.score.overall_score || 0).toFixed(0)}</div>
+
+            <div class="score-table">
+              <div class="fw-bold mb-2">Weighted KPI Score</div>
+              <table class="table table-sm mb-0">
+                <tbody>
+                  <tr>
+                    <td>Sales</td>
+                    <td class="fw-bold">${pct(report.score.component_scores.sales)}</td>
+                    <td>Weight 30%</td>
+                  </tr>
+                  <tr>
+                    <td>Visits</td>
+                    <td class="fw-bold">${pct(report.score.component_scores.visits)}</td>
+                    <td>Weight 20%</td>
+                  </tr>
+                  <tr>
+                    <td>Collections</td>
+                    <td class="fw-bold">${pct(report.score.component_scores.collections)}</td>
+                    <td>Weight 25%</td>
+                  </tr>
+                  <tr>
+                    <td>Tasks</td>
+                    <td class="fw-bold">${pct(report.score.component_scores.tasks)}</td>
+                    <td>Weight 15%</td>
+                  </tr>
+                  <tr>
+                    <td>Calls</td>
+                    <td class="fw-bold">${pct(report.score.component_scores.calls)}</td>
+                    <td>Weight 10%</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-header">
+          <h2 class="section-title">Section 2 — Sales Performance</h2>
+        </div>
+        <div class="section-body">
+          <div class="analytics-grid">
+            ${metricCard("Total Sales MT", mt(report.sales.total_sales_mt), "Invoice count: " + num(report.sales.invoice_count))}
+            ${metricCard("Won MT", mt(report.sales.won_mt), "Converted source: Sales (F)")}
+            ${metricCard("Conversion %", pct(report.sales.conversion_pct), "Sales MT / Lead MT")}
+            ${metricCard("Target vs Achievement", pct(report.sales.achievement_pct), "Target: " + mt(report.sales.target_mt))}
+          </div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-header">
+          <h2 class="section-title">Section 3 — Leads / Enquiry Performance</h2>
+        </div>
+        <div class="section-body">
+          <div class="analytics-grid">
+            ${metricCard("Total Leads", num(report.leads.total_leads), "Lead Qty: " + mt(report.leads.total_qty_mt))}
+            ${metricCard("Converted Leads", num(report.leads.converted_leads), "Converted Qty: " + mt(report.leads.converted_qty_mt))}
+            ${metricCard("Pending Leads", num(report.leads.pending_leads), "Open / In progress")}
+            ${metricCard("Lost Leads", num(report.leads.lost_leads), "Conversion: " + pct(report.leads.conversion_ratio))}
+          </div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-header">
+          <h2 class="section-title">Section 4 — Visit Performance</h2>
+        </div>
+        <div class="section-body">
+          <div class="analytics-grid">
+            ${metricCard("Planned Visits", num(report.visits.planned_visits), "Target: " + num(report.visits.target_visits))}
+            ${metricCard("Actual Visits", num(report.visits.actual_visits), "Achievement: " + pct(report.visits.achievement_pct))}
+            ${metricCard("Visit Success %", pct(report.visits.visit_success_pct), "Successful visits: " + num(report.visits.successful_visits))}
+            ${metricCard("Missed Visits", num(report.visits.missed_visits), "On-time: " + pct(report.visits.on_time_visit_pct))}
+            ${metricCard("Customer Coverage", pct(report.visits.customer_coverage), num(report.visits.visited_customers) + " / " + num(report.visits.assigned_customers))}
+          </div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-header">
+          <h2 class="section-title">Section 5 — Call Performance</h2>
+        </div>
+        <div class="section-body">
+          <div class="analytics-grid">
+            ${metricCard("Total Calls", num(report.calls.total_calls), "Target: " + num(report.calls.target_calls))}
+            ${metricCard("Productive Calls", num(report.calls.productive_calls), "Productive: " + pct(report.calls.productive_pct))}
+            ${metricCard("Follow-ups", num(report.calls.followups), "Follow-up calls")}
+            ${metricCard("Conversion From Calls", pct(report.calls.conversion_from_calls_pct), "Customers converted: " + num(report.calls.converted_from_calls))}
+          </div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-header">
+          <h2 class="section-title">Section 6 — Collection Performance</h2>
+        </div>
+        <div class="section-body">
+          <div class="analytics-grid">
+            ${metricCard("Total Overdue", money(report.collections.total_overdue), "Collection plan overdue")}
+            ${metricCard("Total Collected", money(report.collections.total_collected), "Actual collection")}
+            ${metricCard("Pending Collection", money(report.collections.pending_collection), "Pending accounts: " + num(report.collections.pending_count))}
+            ${metricCard("Collection Efficiency", pct(report.collections.collection_efficiency_pct), "Target: " + money(report.collections.target_amount))}
+          </div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-header">
+          <h2 class="section-title">Section 7 — Task Performance</h2>
+        </div>
+        <div class="section-body">
+          <div class="analytics-grid">
+            ${taskHtml}
+          </div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-header">
+          <h2 class="section-title">Section 8 — Overdue & Risk</h2>
+          <span class="status-pill">Snapshot: ${safe(report.risk.snapshot_date)}</span>
+        </div>
+        <div class="section-body">
+          <div class="analytics-grid">
+            ${metricCard("Risk Customers", num(report.risk.risk_customers), "Customers with overdue")}
+            ${metricCard("Exposure", money(report.risk.exposure), "Total exposure")}
+            ${metricCard("Credit Limit Usage", pct(report.risk.credit_limit_usage_pct), "Limit: " + money(report.risk.credit_limit))}
+            ${metricCard("Delayed Collections", money(report.risk.delayed_collections), "90+ ageing")}
+          </div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-header">
+          <h2 class="section-title">Charts / Analytics</h2>
+        </div>
+        <div class="section-body">
+          <div class="chart-grid">
+            <div class="analytics-card">
+              <div class="card-title-sm">Weekly Sales Trend</div>
+              <div class="chart-wrap">
+                <canvas id="weeklyTrendChart"></canvas>
+              </div>
+            </div>
+
+            <div class="analytics-card">
+              <div class="card-title-sm">Monthly Sales Trend</div>
+              <div class="chart-wrap">
+                <canvas id="monthlyTrendChart"></canvas>
+              </div>
+            </div>
+
+            <div class="analytics-card">
+              <div class="card-title-sm">Collection Trend</div>
+              <div class="chart-wrap">
+                <canvas id="collectionTrendChart"></canvas>
+              </div>
+            </div>
+
+            <div class="analytics-card">
+              <div class="card-title-sm">Lead Conversion Trend</div>
+              <div class="chart-wrap">
+                <canvas id="leadTrendChart"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    renderCharts(report);
+  }
+
+  function renderCharts(report) {
+    destroyChart(weeklyChart);
+    destroyChart(monthlyChart);
+    destroyChart(collectionChart);
+    destroyChart(leadChart);
+
+    const weekly = report.charts.weekly_trend || [];
+    const monthly = report.charts.monthly_trend || [];
+
+    const commonOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: true
+        }
+      },
+      scales: {
+        y: {
+          beginAtZero: true
+        }
+      }
+    };
+
+    weeklyChart = new Chart(document.getElementById("weeklyTrendChart"), {
+      type: "line",
+      data: {
+        labels: weekly.map(x => x.label),
+        datasets: [{
+          label: "Sales MT",
+          data: weekly.map(x => Number(x.sales_mt || 0)),
+          tension: .3
+        }]
+      },
+      options: commonOptions
+    });
+
+    monthlyChart = new Chart(document.getElementById("monthlyTrendChart"), {
+      type: "bar",
+      data: {
+        labels: monthly.map(x => x.label),
+        datasets: [{
+          label: "Sales MT",
+          data: monthly.map(x => Number(x.sales_mt || 0))
+        }]
+      },
+      options: commonOptions
+    });
+
+    collectionChart = new Chart(document.getElementById("collectionTrendChart"), {
+      type: "line",
+      data: {
+        labels: weekly.map(x => x.label),
+        datasets: [{
+          label: "Collections",
+          data: weekly.map(x => Number(x.collections || 0)),
+          tension: .3
+        }]
+      },
+      options: commonOptions
+    });
+
+    leadChart = new Chart(document.getElementById("leadTrendChart"), {
+      type: "bar",
+      data: {
+        labels: monthly.map(x => x.label),
+        datasets: [{
+          label: "Lead Conversion %",
+          data: monthly.map(x => Number(x.lead_conversion_pct || 0))
+        }]
+      },
+      options: commonOptions
+    });
+  }
+
+  async function fetchReport() {
+    const form = document.getElementById("reportFilterForm");
+    const root = document.getElementById("reportContent");
+
+    if (!form || !root) return;
+
+    const params = new URLSearchParams(new FormData(form));
+
+    root.innerHTML = `
+      <div class="loading-state">
+        Loading KAM performance analytics...
+      </div>
+    `;
+
+    try {
+      const response = await fetch(`${API_URL}?${params.toString()}`, {
+        headers: {
+          "X-Requested-With": "XMLHttpRequest"
+        }
+      });
+
+      const data = await response.json();
+
+      if (!data.ok) {
+        root.innerHTML = `
+          <div class="empty-state">
+            ${data.error || "Unable to load report."}
+          </div>
+        `;
+        return;
+      }
+
+      renderReport(data.report);
+    } catch (error) {
+      root.innerHTML = `
+        <div class="empty-state">
+          Unable to load report. Please refresh and try again.
+        </div>
+      `;
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    const initial = document.getElementById("initialReportJson");
+
+    if (initial) {
+      renderReport(JSON.parse(initial.textContent));
+    }
+
+    const form = document.getElementById("reportFilterForm");
+    const kamSelect = document.getElementById("kamSelect");
+    const rangeSelect = document.getElementById("rangeSelect");
+
+    if (form) {
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+        fetchReport();
+      });
+    }
+
+    if (kamSelect && !kamSelect.disabled) {
+      kamSelect.addEventListener("change", fetchReport);
+    }
+
+    if (rangeSelect) {
+      rangeSelect.addEventListener("change", fetchReport);
+    }
+  });
 </script>
+
 {% endblock %}

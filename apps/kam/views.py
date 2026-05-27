@@ -1,8 +1,4 @@
 # FILE: apps/kam/views.py
-# FIXES APPLIED:
-#   FIX 2 — All datetime objects made timezone-aware via timezone.make_aware()
-#   FIX 3 — Customer 404 replaced with safe fallback (never crash on invalid ?id=)
-#   FIX 5 — All @login_required use explicit login_url='/accounts/login/'
 from __future__ import annotations
 
 import logging
@@ -36,6 +32,7 @@ from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
+from apps.kam.analytics.services import build_kam_performance_report
 
 # FIX 5 — explicit login_url on all login_required decorators
 from django.contrib.auth.decorators import login_required as _django_login_required
@@ -1233,57 +1230,100 @@ def _get_period(request: HttpRequest) -> Tuple[str, timezone.datetime, timezone.
 
 def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timezone.datetime, str]:
     now = timezone.now()
+    today_local = timezone.localtime(now).replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow = today_local + timezone.timedelta(days=1)
+
     range_shortcut = (request.GET.get("range") or "").strip().lower()
+
     if range_shortcut:
-        today_local = timezone.localtime(now).replace(hour=0, minute=0, second=0, microsecond=0)
-        tomorrow = today_local + timezone.timedelta(days=1)
+        if range_shortcut in ("today", "day"):
+            return today_local, tomorrow, f"{today_local.date()} → {today_local.date()}"
+
+        if range_shortcut in ("this_week", "week"):
+            monday = today_local - timezone.timedelta(days=today_local.weekday())
+            saturday_exclusive = monday + timezone.timedelta(days=6)
+            return monday, saturday_exclusive, f"{monday.date()} → {(saturday_exclusive - timezone.timedelta(days=1)).date()}"
+
         if range_shortcut in ("last7", "7d", "7days"):
             start = today_local - timezone.timedelta(days=7)
             return start, tomorrow, f"{start.date()} → {today_local.date()}"
+
         if range_shortcut in ("last30", "30d", "30days"):
             start = today_local - timezone.timedelta(days=30)
             return start, tomorrow, f"{start.date()} → {today_local.date()}"
+
         if range_shortcut in ("last60", "60d"):
             start = today_local - timezone.timedelta(days=60)
             return start, tomorrow, f"{start.date()} → {today_local.date()}"
+
         if range_shortcut in ("last90", "90d", "90days", "3m"):
             start = today_local - timezone.timedelta(days=90)
             return start, tomorrow, f"{start.date()} → {today_local.date()}"
+
         if range_shortcut in ("thismonth", "this_month", "month"):
             ws, we, _ = _month_bounds(now)
             return ws, we, f"{ws.date()} → {(we - timezone.timedelta(days=1)).date()}"
+
         if range_shortcut in ("thisquarter", "this_quarter", "quarter"):
             ws, we, _ = _quarter_bounds(now)
             return ws, we, f"{ws.date()} → {(we - timezone.timedelta(days=1)).date()}"
+
         if range_shortcut in ("thisyear", "this_year", "year"):
             ws, we, _ = _year_bounds(now)
             return ws, we, f"{ws.date()} → {(we - timezone.timedelta(days=1)).date()}"
+
         if range_shortcut in ("all", "*"):
-            # FIX 2: timezone-aware boundary datetimes
-            s = timezone.make_aware(timezone.datetime(2000, 1, 1))
-            e = timezone.make_aware(timezone.datetime(2100, 1, 1))
+            s = timezone.make_aware(timezone.datetime(2000, 1, 1, 0, 0, 0))
+            e = timezone.make_aware(timezone.datetime(2100, 1, 1, 0, 0, 0))
             return s, e, "ALL"
 
-    from_s = _first_query_value(request, "from", "from_date", "start_date", "date_from", "fromDate", "startDate", "dateFrom")
-    to_s = _first_query_value(request, "to", "to_date", "end_date", "date_to", "toDate", "endDate", "dateTo")
+    from_s = _first_query_value(
+        request,
+        "from",
+        "from_date",
+        "start_date",
+        "date_from",
+        "fromDate",
+        "startDate",
+        "dateFrom",
+    )
+    to_s = _first_query_value(
+        request,
+        "to",
+        "to_date",
+        "end_date",
+        "date_to",
+        "toDate",
+        "endDate",
+        "dateTo",
+    )
+
     from_d = _parse_iso_date(from_s)
     to_d = _parse_iso_date(to_s)
 
     if from_d and to_d and from_d <= to_d:
-        # FIX 2: make_aware on all constructed datetimes
-        start = timezone.make_aware(timezone.datetime(from_d.year, from_d.month, from_d.day, 0, 0, 0))
-        end = timezone.make_aware(timezone.datetime(to_d.year, to_d.month, to_d.day, 0, 0, 0)) + timezone.timedelta(days=1)
+        start = timezone.make_aware(
+            timezone.datetime(from_d.year, from_d.month, from_d.day, 0, 0, 0)
+        )
+        end = timezone.make_aware(
+            timezone.datetime(to_d.year, to_d.month, to_d.day, 0, 0, 0)
+        ) + timezone.timedelta(days=1)
         return start, end, f"{from_d} → {to_d}"
+
     if from_d and not to_d:
-        start = timezone.make_aware(timezone.datetime(from_d.year, from_d.month, from_d.day, 0, 0, 0))
+        start = timezone.make_aware(
+            timezone.datetime(from_d.year, from_d.month, from_d.day, 0, 0, 0)
+        )
         return start, start + timezone.timedelta(days=1), f"{from_d} → {from_d}"
 
-    today_local = timezone.localtime(now).replace(hour=0, minute=0, second=0, microsecond=0)
     m, y = today_local.month, today_local.year
     fy_start_year = y if m >= 4 else y - 1
-    # FIX 2: make_aware for fiscal year start
-    fy_start = timezone.make_aware(timezone.datetime(fy_start_year, 4, 1, 0, 0, 0))
+
+    fy_start = timezone.make_aware(
+        timezone.datetime(fy_start_year, 4, 1, 0, 0, 0)
+    )
     fy_end = today_local + timezone.timedelta(days=1)
+
     return fy_start, fy_end, f"{fy_start.date()} → {today_local.date()} (Fiscal YTD)"
 
 
@@ -4653,6 +4693,133 @@ def targets(request: HttpRequest) -> HttpResponse:
 def targets_lines(request: HttpRequest) -> HttpResponse:
     return redirect(reverse("kam:targets"))
 
+def _kam_ids_with_real_kam_data() -> List[int]:
+    kam_ids = set()
+
+    kam_ids.update(
+        KamManagerMapping.objects
+        .filter(active=True)
+        .exclude(kam__is_superuser=True)
+        .values_list("kam_id", flat=True)
+    )
+
+    kam_ids.update(
+        InvoiceFact.objects
+        .filter(source_tab="Sales (F)")
+        .exclude(kam_id__isnull=True)
+        .exclude(kam__is_superuser=True)
+        .values_list("kam_id", flat=True)
+        .distinct()
+    )
+
+    kam_ids.update(
+        LeadFact.objects
+        .exclude(kam_id__isnull=True)
+        .exclude(kam__is_superuser=True)
+        .values_list("kam_id", flat=True)
+        .distinct()
+    )
+
+    kam_ids.update(
+        VisitPlan.objects
+        .exclude(kam_id__isnull=True)
+        .exclude(kam__is_superuser=True)
+        .values_list("kam_id", flat=True)
+        .distinct()
+    )
+
+    kam_ids.update(
+        CallLog.objects
+        .exclude(kam_id__isnull=True)
+        .exclude(kam__is_superuser=True)
+        .values_list("kam_id", flat=True)
+        .distinct()
+    )
+
+    kam_ids.update(
+        CollectionPlan.objects
+        .exclude(kam_id__isnull=True)
+        .exclude(kam__is_superuser=True)
+        .values_list("kam_id", flat=True)
+        .distinct()
+    )
+
+    kam_ids.update(
+        CollectionTxn.objects
+        .exclude(kam_id__isnull=True)
+        .exclude(kam__is_superuser=True)
+        .values_list("kam_id", flat=True)
+        .distinct()
+    )
+
+    kam_ids.update(
+        TargetSetting.objects
+        .exclude(kam_id__isnull=True)
+        .exclude(kam__is_superuser=True)
+        .values_list("kam_id", flat=True)
+        .distinct()
+    )
+
+    return sorted([int(k) for k in kam_ids if k])
+
+
+def _kam_options_for_performance_report(user: User) -> List[User]:
+    real_kam_ids = _kam_ids_with_real_kam_data()
+
+    base_qs = (
+        User.objects
+        .filter(is_active=True, id__in=real_kam_ids)
+        .exclude(is_superuser=True)
+        .exclude(username__iexact="admin")
+        .exclude(email__icontains="admin")
+        .order_by("first_name", "last_name", "username")
+    )
+
+    if _is_admin(user):
+        return list(base_qs)
+
+    if _is_manager(user):
+        managed_ids = set(_kams_managed_by_manager(user))
+        allowed_ids = sorted(set(real_kam_ids).intersection(managed_ids))
+        return list(base_qs.filter(id__in=allowed_ids))
+
+    if user.id in real_kam_ids and not user.is_superuser:
+        return list(base_qs.filter(id=user.id))
+
+    return []
+
+
+def _resolve_selected_kam_for_performance_report(request: HttpRequest) -> Optional[User]:
+    actor = request.user
+    kam_options = _kam_options_for_performance_report(actor)
+
+    if not kam_options:
+        return None
+
+    allowed_ids = {u.id for u in kam_options}
+
+    raw_kam_id = _first_query_value(request, "kam_id", "kam", "user_id")
+
+    if raw_kam_id and str(raw_kam_id).isdigit():
+        requested_kam_id = int(raw_kam_id)
+
+        if requested_kam_id not in allowed_ids:
+            return None
+
+        return (
+            User.objects
+            .filter(id=requested_kam_id, is_active=True)
+            .exclude(is_superuser=True)
+            .exclude(username__iexact="admin")
+            .exclude(email__icontains="admin")
+            .first()
+        )
+
+    if not _is_manager(actor):
+        if actor.id in allowed_ids and not actor.is_superuser:
+            return actor
+
+    return kam_options[0]
 
 # =====================================================================
 # REPORTS
@@ -4661,184 +4828,60 @@ def targets_lines(request: HttpRequest) -> HttpResponse:
 @require_kam_code("kam_reports")
 def reports(request: HttpRequest) -> HttpResponse:
     start_dt, end_dt, range_label = _get_dashboard_range(request)
-    scope_kam_id, scope_label = _resolve_scope(request, request.user)
 
-    anchor_end = _last_completed_ms_week_end(timezone.now())
-    weeks_trend: List[Dict] = []
+    kam_options = _kam_options_for_performance_report(request.user)
+    selected_kam = _resolve_selected_kam_for_performance_report(request)
 
-    for k in (3, 2, 1, 0):
-        week_end = anchor_end - timezone.timedelta(days=7 * k)
-        week_start = week_end - timezone.timedelta(days=7)
-        _, __, week_label = _ms_week_bounds(week_start)
+    report = None
 
-        inv_qs = _filter_qs_by_kam_scope(
-            InvoiceFact.objects.filter(
-                invoice_date__gte=week_start.date(),
-                invoice_date__lt=week_end.date(),
-            ),
-            request.user,
-            scope_kam_id,
-            "kam_id",
-        )
-        inv_qs = _preferred_inv_qs(inv_qs)
-
-        visit_actual_qs = _filter_qs_by_kam_scope(
-            VisitActual.objects.filter(
-                plan__visit_date__gte=week_start.date(),
-                plan__visit_date__lt=week_end.date(),
-            ),
-            request.user,
-            scope_kam_id,
-            "plan__kam_id",
-        )
-
-        call_qs = _filter_qs_by_kam_scope(
-            CallLog.objects.filter(
-                call_datetime__gte=week_start,
-                call_datetime__lt=week_end,
-            ),
-            request.user,
-            scope_kam_id,
-            "kam_id",
-        )
-
-        lead_qs = _filter_qs_by_kam_scope(
-            LeadFact.objects.filter(
-                doe__gte=week_start.date(),
-                doe__lt=week_end.date(),
-            ),
-            request.user,
-            scope_kam_id,
-            "kam_id",
-        )
-
-        collection_qs = _filter_qs_by_kam_scope(
-            CollectionTxn.objects.filter(
-                txn_datetime__gte=week_start,
-                txn_datetime__lt=week_end,
-            ),
-            request.user,
-            scope_kam_id,
-            "kam_id",
-        )
-
-        weeks_trend.append({
-            "week": week_label,
-            "sales_mt": float(_safe_decimal(inv_qs.aggregate(mt=Sum("qty_mt")).get("mt"))),
-            "visits": int(visit_actual_qs.count()),
-            "calls": int(call_qs.count()),
-            "leads": int(lead_qs.count()),
-            "collections": float(_safe_decimal(collection_qs.aggregate(a=Sum("amount")).get("a"))),
-        })
-
-    metric = (request.GET.get("metric") or "sales").strip().lower()
-    rows = []
-
-    if metric == "sales":
-        qs = InvoiceFact.objects.filter(
-            invoice_date__gte=start_dt.date(),
-            invoice_date__lt=end_dt.date(),
-        )
-        if scope_kam_id is not None:
-            qs = qs.filter(kam_id=scope_kam_id)
-        qs = _sales_converted_qs(qs)
-
-        rows = list(
-            qs.values(
-                customer_name=F("customer__name"),
-                kam_username=F("kam__username"),
-            )
-            .annotate(mt=Sum("qty_mt"))
-            .order_by("-mt")[:300]
-        )
-
-    elif metric == "calls":
-        qs = CallLog.objects.filter(
-            call_datetime__gte=start_dt,
-            call_datetime__lt=end_dt,
-        )
-        if scope_kam_id is not None:
-            qs = qs.filter(kam_id=scope_kam_id)
-
-        rows = list(
-            qs.values(
-                "id",
-                "call_datetime",
-                kam_username=F("kam__username"),
-                customer_name=F("customer__name"),
-            ).order_by("-call_datetime")[:500]
-        )
-
-    elif metric == "visits":
-        qs = VisitActual.objects.filter(
-            plan__visit_date__gte=start_dt.date(),
-            plan__visit_date__lt=end_dt.date(),
-        )
-        if scope_kam_id is not None:
-            qs = qs.filter(plan__kam_id=scope_kam_id)
-
-        rows = list(
-            qs.values(
-                "id",
-                "successful",
-                visit_date=F("plan__visit_date"),
-                kam_username=F("plan__kam__username"),
-                customer_name=F("plan__customer__name"),
-            ).order_by("-visit_date")[:500]
-        )
-
-    elif metric == "leads":
-        qs = LeadFact.objects.filter(
-            doe__isnull=False,
-            doe__gte=start_dt.date(),
-            doe__lt=end_dt.date(),
-        )
-        if scope_kam_id is not None:
-            qs = qs.filter(kam_id=scope_kam_id)
-
-        rows = list(
-            qs.values(
-                "id",
-                "doe",
-                "status",
-                "qty_mt",
-                kam_username=F("kam__username"),
-                customer_name=F("customer__name"),
-            ).order_by("-doe")[:500]
-        )
-
-    elif metric == "collections":
-        qs = CollectionTxn.objects.filter(
-            txn_datetime__gte=start_dt,
-            txn_datetime__lt=end_dt,
-        )
-        if scope_kam_id is not None:
-            qs = qs.filter(kam_id=scope_kam_id)
-
-        rows = list(
-            qs.values(
-                "id",
-                "txn_datetime",
-                "amount",
-                kam_username=F("kam__username"),
-                customer_name=F("customer__name"),
-            ).order_by("-txn_datetime")[:500]
+    if selected_kam:
+        report = build_kam_performance_report(
+            kam_id=selected_kam.id,
+            start_dt=start_dt,
+            end_dt=end_dt,
         )
 
     ctx = {
-        "page_title": "KAM Reports",
-        "metric": metric,
+        "page_title": "KAM Performance Analytics",
         "range_label": range_label,
-        "scope_label": scope_label,
-        "can_choose_kam": _is_manager(request.user),
-        "kam_options": _kam_options_for_user(request.user),
-        "rows": rows,
-        "weeks_trend": weeks_trend,
         "filter_from": start_dt.date().isoformat(),
         "filter_to": (end_dt - timezone.timedelta(days=1)).date().isoformat(),
+        "kam_options": kam_options,
+        "selected_kam": selected_kam,
+        "report": report,
+        "can_choose_kam": _is_manager(request.user),
     }
+
     return render(request, "kam/reports.html", ctx)
 
+@login_required(login_url="/accounts/login/")
+@require_kam_code("kam_reports")
+def kam_performance_report_api(request: HttpRequest) -> JsonResponse:
+    start_dt, end_dt, range_label = _get_dashboard_range(request)
+    selected_kam = _resolve_selected_kam_for_performance_report(request)
+
+    if not selected_kam:
+        return JsonResponse(
+            {
+                "ok": False,
+                "error": "You are not allowed to view this KAM report.",
+            },
+            status=403,
+        )
+
+    report = build_kam_performance_report(
+        kam_id=selected_kam.id,
+        start_dt=start_dt,
+        end_dt=end_dt,
+    )
+
+    return JsonResponse(
+        {
+            "ok": True,
+            "range_label": range_label,
+            "report": report,
+        }
+    )
 # =====================================================================
 # CSV export
 # =====================================================================

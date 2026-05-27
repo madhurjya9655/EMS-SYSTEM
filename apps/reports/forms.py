@@ -9,46 +9,59 @@ User = get_user_model()
 class PCReportFilterForm(forms.Form):
     """
     Filter form used across reports pages.
-    - Staff/Admin can select any user; others default to themselves.
-    - Department options come from Django Groups.
-    - Date range is optional; if empty, views fall back to current week.
     """
     doer = forms.ModelChoiceField(
-        queryset=User.objects.none(),   # set in __init__
+        queryset=User.objects.none(),
         required=False,
-        label="Doer Name",
-        widget=forms.Select(attrs={"class": "form-select"})
+        label="Employee",
+        empty_label="All Employees",
+        widget=forms.Select(
+            attrs={
+                "class": "form-select select2-employee",
+                "id": "doerFilter",
+                "data-placeholder": "All Employees",
+            }
+        ),
     )
+
     department = forms.ChoiceField(
-        choices=[],                     # set in __init__
+        choices=[],
         required=False,
         label="Department Name",
-        widget=forms.Select(attrs={"class": "form-select"})
+        widget=forms.Select(attrs={"class": "form-select"}),
     )
+
     date_from = forms.DateField(
         required=False,
         label="From",
-        widget=forms.DateInput(attrs={"type": "date", "class": "form-control"})
+        widget=forms.DateInput(attrs={"type": "date", "class": "form-control"}),
     )
+
     date_to = forms.DateField(
         required=False,
         label="To",
-        widget=forms.DateInput(attrs={"type": "date", "class": "form-control"})
+        widget=forms.DateInput(attrs={"type": "date", "class": "form-control"}),
     )
 
     def __init__(self, *args, **kwargs):
         user = kwargs.pop("user", None)
+        doer_queryset = kwargs.pop("doer_queryset", None)
+
         super().__init__(*args, **kwargs)
 
-        # Doer options
-        if user and (user.is_staff or user.is_superuser):
-            self.fields["doer"].queryset = User.objects.all().order_by("username")
+        if doer_queryset is not None:
+            self.fields["doer"].queryset = doer_queryset
+        elif user and (user.is_staff or user.is_superuser):
+            self.fields["doer"].queryset = User.objects.filter(is_active=True).order_by(
+                "first_name",
+                "last_name",
+                "username",
+            )
         elif user:
-            self.fields["doer"].queryset = User.objects.filter(pk=user.pk)
+            self.fields["doer"].queryset = User.objects.filter(pk=user.pk, is_active=True)
         else:
             self.fields["doer"].queryset = User.objects.none()
 
-        # Department options from Group names
         group_names = Group.objects.order_by("name").values_list("name", "name")
         self.fields["department"].choices = [("", "All")] + list(group_names)
 

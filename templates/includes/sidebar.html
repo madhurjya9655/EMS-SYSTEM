@@ -136,11 +136,11 @@
             {% endif %}
 
             {# ══ SALES / KAM ══════════════════════════════════════════════════ #}
-            {% if user|has_any_permission:"kam_dashboard,kam_plan,kam_visits,kam_customers,kam_reports,kam_manager" or user.is_superuser %}
+            {% if user|has_any_permission:"kam_dashboard,kam_plan,kam_visits,kam_customers,kam_reports,kam_manager,kam_targets,kam_targets_lines,kam_collections_plan,kam_sync_now,kam_sync_trigger,kam_sync_step" or user.is_superuser %}
             <div class="sidebar-group">
                 <div class="sidebar-group-label">Sales</div>
 
-                {% if user|has_permission:"kam_dashboard" %}
+                {% if user|has_permission:"kam_dashboard" or user.is_superuser %}
                 <a href="{% url 'kam:dashboard' %}"
                    class="sidebar-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'dashboard' %}active{% endif %}">
                     <i class="fa-solid fa-chart-line"></i>
@@ -148,7 +148,7 @@
                 </a>
                 {% endif %}
 
-                {% if user|has_permission:"kam_plan" %}
+                {% if user|has_permission:"kam_plan" or user.is_superuser %}
                 <a href="{% url 'kam:plan' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'plan' %}active{% endif %}">
                     <i class="fa-solid fa-calendar-plus"></i>
@@ -164,7 +164,7 @@
                 </a>
                 {% endif %}
 
-                {% if user|has_any_permissions:"kam_visits,kam_call_new,kam_collection_new" %}
+                {% if user|has_any_permission:"kam_visits,kam_call_new,kam_collection_new" or user.is_superuser %}
                 <a href="{% url 'kam:visits' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'visits' %}active{% endif %}">
                     <i class="fa-solid fa-phone-volume"></i>
@@ -185,7 +185,7 @@
                 </a>
                 {% endif %}
 
-                {% if user|has_permission:"kam_customers" %}
+                {% if user|has_permission:"kam_customers" or user.is_superuser %}
                 <a href="{% url 'kam:customers' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'customers' %}active{% endif %}">
                     <i class="fa-solid fa-address-book"></i>
@@ -193,7 +193,7 @@
                 </a>
                 {% endif %}
 
-                {% if user|has_any_permissions:"kam_targets,kam_targets_lines" %}
+                {% if user|has_any_permission:"kam_targets,kam_targets_lines" or user.is_superuser %}
                 <a href="{% url 'kam:targets' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'targets' %}active{% endif %}">
                     <i class="fa-solid fa-bullseye"></i>
@@ -201,15 +201,21 @@
                 </a>
                 {% endif %}
 
-                {% if user|has_permission:"kam_reports" %}
+                {% if user|has_permission:"kam_reports" or user.is_superuser %}
                 <a href="{% url 'kam:reports' %}?metric=sales"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'reports' and request.resolver_match.app_name == 'kam' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.url_name == 'reports' and request.resolver_match.app_name == 'kam' and request.GET.metric %}active{% endif %}">
                     <i class="fa-solid fa-file-lines"></i>
                     <span>KAM Reports</span>
                 </a>
+
+                <a href="{% url 'kam:reports' %}"
+                   class="sidebar-link {% if request.resolver_match.url_name == 'reports' and request.resolver_match.app_name == 'kam' and not request.GET.metric %}active{% endif %}">
+                    <i class="fa-solid fa-user-chart"></i>
+                    <span>KAM Individual Reports</span>
+                </a>
                 {% endif %}
 
-                {% if user|has_permission:"kam_collections_plan" %}
+                {% if user|has_permission:"kam_collections_plan" or user.is_superuser %}
                 <a href="{% url 'kam:collections_plan' %}"
                    class="sidebar-link {% if request.resolver_match.url_name == 'collections_plan' %}active{% endif %}">
                     <i class="fa-solid fa-money-bill-wave"></i>
@@ -225,7 +231,7 @@
                 </a>
                 {% endif %}
 
-                {% if user|has_any_permissions:"kam_sync_now,kam_sync_trigger,kam_sync_step" %}
+                {% if user|has_any_permission:"kam_sync_now,kam_sync_trigger,kam_sync_step" or user.is_superuser %}
                 <a href="{% url 'kam:sync_now' %}" class="sidebar-link">
                     <i class="fa-solid fa-rotate"></i>
                     <span>Sync Now</span>
@@ -251,95 +257,115 @@
             {% endif %}
 
             {# ══ FINANCE ══════════════════════════════════════════════════════ #}
-            {% if user|has_any_permission:"petty_cash_list,petty_cash_apply,reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin,vendor_create,vendor_view_own,vendor_finance_approve,vendor_final_approve,vendor_admin" or user|has_group:"Manager" or user|has_group:"Finance" %}
+            {% if user|has_any_permission:"petty_cash_list,petty_cash_apply,reimbursement_apply,reimbursement_list,reimbursement_manager_pending,reimbursement_finance_pending,reimbursement_admin,vendor_create,vendor_view_own,vendor_finance_approve,vendor_final_approve,vendor_admin" or user|has_group:"Manager" or user|has_group:"Finance" or user.is_superuser %}
             <div class="sidebar-group">
                 <div class="sidebar-group-label">Finance</div>
 
-                {# ── Vendor Payments — permission-gated ──────────────────────── #}
                 {% if user|has_any_permission:"vendor_create,vendor_view_own,vendor_finance_approve,vendor_final_approve,vendor_admin" or user.is_superuser %}
 
-                {% if user|has_any_permission:"vendor_create" or user.is_superuser %}
-                <a href="{% url 'vendor:new_request' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'new_request' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
-                    <i class="fa-solid fa-file-invoice-dollar"></i>
-                    <span>New Vendor Payment</span>
-                </a>
+                    {% if user|has_any_permission:"vendor_create" or user.is_superuser %}
+                    <a href="{% url 'vendor:new_request' %}"
+                       class="sidebar-link {% if request.resolver_match.app_name == 'vendor' and request.resolver_match.url_name == 'new_request' %}active{% endif %}">
+                        <i class="fa-solid fa-file-invoice-dollar"></i>
+                        <span>New Vendor Payment</span>
+                    </a>
+                    {% endif %}
+
+                    {% if user|has_any_permission:"vendor_create,vendor_view_own" or user.is_superuser %}
+                    <a href="{% url 'vendor:my_requests' %}"
+                       class="sidebar-link {% if request.resolver_match.app_name == 'vendor' and request.resolver_match.url_name == 'my_requests' %}active{% endif %}">
+                        <i class="fa-solid fa-list-alt"></i>
+                        <span>My Vendor Requests</span>
+                    </a>
+                    {% endif %}
+
+                    {% if user|has_any_permission:"vendor_finance_approve,vendor_final_approve" or user.is_superuser %}
+                    <a href="{% url 'vendor:approval_queue' %}"
+                       class="sidebar-link {% if request.resolver_match.app_name == 'vendor' and request.resolver_match.url_name == 'approval_queue' %}active{% endif %}">
+                        <i class="fa-solid fa-check-circle"></i>
+                        <span>Vendor Approvals</span>
+                    </a>
+                    {% endif %}
+
+                    {% if user|has_any_permission:"vendor_admin" or user.is_superuser %}
+                    <a href="{% url 'vendor:admin_setup' %}"
+                       class="sidebar-link {% if request.resolver_match.app_name == 'vendor' and request.resolver_match.url_name == 'admin_setup' %}active{% endif %}">
+                        <i class="fa-solid fa-gear"></i>
+                        <span>Vendor Setup</span>
+                    </a>
+                    {% endif %}
+
                 {% endif %}
 
-                {% if user|has_any_permission:"vendor_create,vendor_view_own" or user.is_superuser %}
-                <a href="{% url 'vendor:my_requests' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'my_requests' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
-                    <i class="fa-solid fa-list-alt"></i>
-                    <span>My Vendor Requests</span>
-                </a>
-                {% endif %}
-
-                {% if user|has_any_permission:"vendor_finance_approve,vendor_final_approve" or user.is_superuser %}
-                <a href="{% url 'vendor:approval_queue' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'approval_queue' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
-                    <i class="fa-solid fa-check-circle"></i>
-                    <span>Vendor Approvals</span>
-                </a>
-                {% endif %}
-
-                {% if user|has_any_permission:"vendor_admin" or user.is_superuser %}
-                <a href="{% url 'vendor:admin_setup' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'admin_setup' and request.resolver_match.app_name == 'vendor' %}active{% endif %}">
-                    <i class="fa-solid fa-gear"></i>
-                    <span>Vendor Setup</span>
-                </a>
-                {% endif %}
-
-                {% endif %}
-                {# ── END Vendor Payments ─────────────────────────────────────── #}
-
-                {# ── Petty Cash ────────────────────────────────────────────── #}
-                {% if user|has_permission:"petty_cash_list" %}
+                {% if user|has_permission:"petty_cash_list" or user.is_superuser %}
                 <a href="{% url 'petty_cash:list_requests' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'list_requests' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'list_requests' %}active{% endif %}">
                     <i class="fa-solid fa-file-invoice-dollar"></i>
                     <span>Petty Cash Requests</span>
                 </a>
                 {% endif %}
 
-                {% if user|has_permission:"petty_cash_apply" or user|has_group:"EA" %}
+                {% if user|has_permission:"petty_cash_apply" or user|has_group:"EA" or user.is_superuser %}
                 <a href="{% url 'petty_cash:apply_request' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'apply_request' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'petty_cash' and request.resolver_match.url_name == 'apply_request' %}active{% endif %}">
                     <i class="fa-solid fa-plus-circle"></i>
                     <span>New Petty Cash</span>
                 </a>
                 {% endif %}
 
-                {# ── Reimbursement ─────────────────────────────────────────── #}
-                {% if user|has_permission:"reimbursement_apply" %}
+                {% if user|has_permission:"reimbursement_apply" or user.is_superuser %}
                 <a href="{% url 'reimbursement:expense_inbox' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'expense_inbox' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'expense_inbox' %}active{% endif %}">
                     <i class="fa-solid fa-receipt"></i>
                     <span>Upload Expenses</span>
                 </a>
                 {% endif %}
 
-                {% if user|has_any_permission:"reimbursement_apply,reimbursement_list" %}
+                {% if user|has_any_permission:"reimbursement_apply,reimbursement_list" or user.is_superuser %}
                 <a href="{% url 'reimbursement:my_reimbursements' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'my_reimbursements' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'my_reimbursements' %}active{% endif %}">
                     <i class="fa-solid fa-file-medical"></i>
                     <span>My Reimbursements</span>
                 </a>
                 {% endif %}
 
-                {% if user|has_permission:"reimbursement_manager_pending" %}
+                {% if user|has_permission:"reimbursement_manager_pending" or user.is_superuser %}
                 <a href="{% url 'reimbursement:manager_pending' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'manager_pending' and request.resolver_match.app_name == 'reimbursement' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'manager_pending' %}active{% endif %}">
                     <i class="fa-solid fa-check-square"></i>
                     <span>Manager Approvals</span>
                 </a>
                 {% endif %}
 
-                {% if user|has_permission:"reimbursement_finance_pending" %}
+                {% if user|has_permission:"reimbursement_finance_pending" or user.is_superuser %}
                 <a href="{% url 'reimbursement:finance_pending' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'finance_pending' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_pending' %}active{% endif %}">
                     <i class="fa-solid fa-wallet"></i>
                     <span>Finance Approvals</span>
+                </a>
+                {% endif %}
+
+                {% if user|has_permission:"reimbursement_finance_review" or user.is_superuser %}
+                <a href="{% url 'reimbursement:finance_review_queue' %}"
+                   class="sidebar-link {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_review_queue' %}active{% endif %}">
+                    <i class="fa-solid fa-magnifying-glass-dollar"></i>
+                    <span>Finance Review</span>
+                </a>
+                {% endif %}
+
+                {% if user|has_permission:"reimbursement_finance_review" or user.is_superuser %}
+                <a href="{% url 'reimbursement:finance_rejected_bills_queue' %}"
+                   class="sidebar-link {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'finance_rejected_bills_queue' %}active{% endif %}">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                    <span>Rejected Bills</span>
+                </a>
+                {% endif %}
+
+                {% if user|has_permission:"reimbursement_admin" or user.is_superuser %}
+                <a href="{% url 'reimbursement:admin_dashboard' %}"
+                   class="sidebar-link {% if request.resolver_match.app_name == 'reimbursement' and request.resolver_match.url_name == 'admin_dashboard' %}active{% endif %}">
+                    <i class="fa-solid fa-sliders"></i>
+                    <span>Reimbursement Admin</span>
                 </a>
                 {% endif %}
             </div>
@@ -350,25 +376,25 @@
             <div class="sidebar-group">
                 <div class="sidebar-group-label">Reports</div>
 
-                {% if user|has_permission:"doer_tasks" %}
+                {% if user|has_permission:"doer_tasks" or user.is_superuser %}
                 <a href="{% url 'reports:doer_tasks' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'doer_tasks' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'doer_tasks' %}active{% endif %}">
                     <i class="fa-solid fa-list-check"></i>
                     <span>Doer Tasks</span>
                 </a>
                 {% endif %}
 
-                {% if user|has_permission:"weekly_mis_score" %}
+                {% if user|has_permission:"weekly_mis_score" or user.is_superuser %}
                 <a href="{% url 'reports:weekly_mis_score' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'weekly_mis_score' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'weekly_mis_score' %}active{% endif %}">
                     <i class="fa-solid fa-calendar-week"></i>
                     <span>BOS Weekly Pulse</span>
                 </a>
                 {% endif %}
 
-                {% if user|has_permission:"performance_score" %}
+                {% if user|has_permission:"performance_score" or user.is_superuser %}
                 <a href="{% url 'reports:performance_score' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'performance_score' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'reports' and request.resolver_match.url_name == 'performance_score' %}active{% endif %}">
                     <i class="fa-solid fa-percent"></i>
                     <span>Performance Score</span>
                 </a>
@@ -383,7 +409,7 @@
 
                 {% if user|has_permission:"list_users" or user.is_superuser %}
                 <a href="{% url 'users:list_users' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'list_users' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'list_users' %}active{% endif %}">
                     <i class="fa-solid fa-list"></i>
                     <span>List Users</span>
                 </a>
@@ -391,7 +417,7 @@
 
                 {% if user|has_permission:"add_user" or user.is_superuser %}
                 <a href="{% url 'users:add_user' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'add_user' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'users' and request.resolver_match.url_name == 'add_user' %}active{% endif %}">
                     <i class="fa-solid fa-user-plus"></i>
                     <span>Add User</span>
                 </a>
@@ -399,7 +425,7 @@
 
                 {% if user.is_superuser %}
                 <a href="{% url 'settings:system_settings' %}"
-                   class="sidebar-link {% if request.resolver_match.url_name == 'system_settings' %}active{% endif %}">
+                   class="sidebar-link {% if request.resolver_match.app_name == 'settings' and request.resolver_match.url_name == 'system_settings' %}active{% endif %}">
                     <i class="fa-solid fa-sliders"></i>
                     <span>System Settings</span>
                 </a>

@@ -1,9 +1,10 @@
-# D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\reports\views.py
+# apps/reports/views.py
 
 from datetime import date, datetime, time, timedelta
 from time import perf_counter
 from typing import Tuple
 import logging
+import csv
 
 from django.conf import settings
 from django.contrib import messages
@@ -12,11 +13,12 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.paginator import Paginator
 from django.db import connection
-from django.db.models import Sum, F, Count, Min, Max, Q
+from django.db.models import Sum, F, Count, Q
 from django.http import HttpResponse
 from django.shortcuts import render, redirect
 from django.template.loader import render_to_string
 from django.utils import timezone
+from django.apps import apps
 
 from .forms_reports import PCReportFilterForm, WeeklyMISCommitmentForm
 from .models import WeeklyCommitment
@@ -25,14 +27,10 @@ from apps.tasks.models import Checklist, Delegation
 User = get_user_model()
 logger = logging.getLogger("apps.reports")
 
-
 RECURRING_MODES = ["Daily", "Weekly", "Monthly", "Yearly"]
 
 
 def checklist_has_field(field_name: str) -> bool:
-    """
-    Safe field checker for phased deployments.
-    """
     try:
         Checklist._meta.get_field(field_name)
         return True
@@ -41,37 +39,265 @@ def checklist_has_field(field_name: str) -> bool:
 
 
 def can_view_unique_assigned_tasks(user) -> bool:
-    """
-    Admin/management report access.
-
-    This report answers:
-        What unique tasks have been assigned till now, except deleted?
-    """
     if user.is_superuser:
         return True
 
     allowed_groups = {"Admin", "Manager", "EA", "CEO"}
-
     return user.groups.filter(name__in=allowed_groups).exists()
 
 
-# -------- date helpers --------
+def _get_user_profile(user):
+    if not user or not user.is_authenticated:
+        return None
+
+    try:
+        profile = getattr(user, "profile", None)
+        if profile:
+            return profile
+    except ObjectDoesNotExist:
+        pass
+    except Exception:
+        pass
+
+    try:
+        Profile = apps.get_model("users", "Profile")
+        return Profile.objects.filter(user=user).first()
+    except Exception:
+        return None
+
+
+def _profile_role(user) -> str:
+    profile = _get_user_profile(user)
+
+    if not profile:
+        return ""
+
+    return (getattr(profile, "role", "") or "").strip()
+
+
+def _has_group(user, group_name: str) -> bool:
+    if not user or not user.is_authenticated:
+        return False
+
+    return user.groups.filter(name__iexact=group_name).exists()
+
+
+def _is_report_admin(user) -> bool:
+    if not user or not user.is_authenticated:
+        return False
+
+    role = _profile_role(user).lower()
+
+    return bool(
+        user.is_superuser
+        or _has_group(user, "Admin")
+        or role in {
+            "admin",
+            "administrator",
+            "super admin",
+            "superadmin",
+            "ceo",
+            "ea",
+        }
+    )
+
+
+def _is_report_manager(user) -> bool:
+    if not user or not user.is_authenticated:
+        return False
+
+    role = _profile_role(user).lower()
+
+    return bool(
+        _has_group(user, "Manager")
+        or role in {
+            "manager",
+            "team leader",
+            "team_leader",
+            "teamlead",
+            "reporting officer",
+            "reporting_officer",
+        }
+        or bool(_manager_mapped_employee_ids(user))
+    )
+
+
+def _manager_mapped_employee_ids(manager_user) -> list[int]:
+    if not manager_user or not manager_user.is_authenticated:
+        return []
+
+    employee_ids = set()
+
+    try:
+        Profile = apps.get_model("users", "Profile")
+    except LookupError:
+        Profile = None
+
+    if Profile:
+        profile_fields = {field.name: field for field in Profile._meta.get_fields()}
+
+        for field_name in ("team_leader", "reporting_officer"):
+            field = profile_fields.get(field_name)
+
+            if not field:
+                continue
+
+            try:
+                if getattr(field, "remote_field", None) and field.remote_field:
+                    employee_ids.update(
+                        Profile.objects
+                        .filter(**{field_name: manager_user})
+                        .filter(user__is_active=True)
+                        .values_list("user_id", flat=True)
+                    )
+                else:
+                    lookup_values = [
+                        manager_user.email,
+                        manager_user.username,
+                        manager_user.get_full_name(),
+                    ]
+                    lookup_values = [value for value in lookup_values if value]
+
+                    if lookup_values:
+                        employee_ids.update(
+                            Profile.objects
+                            .filter(**{f"{field_name}__in": lookup_values})
+                            .filter(user__is_active=True)
+                            .values_list("user_id", flat=True)
+                        )
+            except Exception:
+                logger.exception(
+                    "Failed resolving manager mapping through Profile.%s",
+                    field_name,
+                )
+
+    if hasattr(manager_user, "team_members"):
+        try:
+            team_members_qs = manager_user.team_members.all()
+
+            if hasattr(team_members_qs.model, "user"):
+                employee_ids.update(
+                    team_members_qs
+                    .filter(user__is_active=True)
+                    .values_list("user_id", flat=True)
+                )
+            else:
+                employee_ids.update(
+                    team_members_qs
+                    .filter(is_active=True)
+                    .values_list("id", flat=True)
+                )
+        except Exception:
+            logger.exception("Failed resolving manager mapping through User.team_members")
+
+    return sorted(employee_ids)
+
+
+def _report_visible_employees(user):
+    base_qs = User.objects.filter(is_active=True)
+
+    if _is_report_admin(user):
+        return base_qs.order_by("first_name", "last_name", "username")
+
+    if _is_report_manager(user):
+        mapped_ids = _manager_mapped_employee_ids(user)
+        return base_qs.filter(id__in=mapped_ids).order_by(
+            "first_name",
+            "last_name",
+            "username",
+        )
+
+    return base_qs.filter(id=user.id).order_by(
+        "first_name",
+        "last_name",
+        "username",
+    )
+
+
+def _recurring_report_is_admin(user) -> bool:
+    if not user or not user.is_authenticated:
+        return False
+
+    role = _profile_role(user).lower()
+
+    return bool(
+        user.is_superuser
+        or user.is_staff
+        or _has_group(user, "Admin")
+        or role in {
+            "admin",
+            "administrator",
+            "super admin",
+            "superadmin",
+            "ceo",
+            "ea",
+        }
+    )
+
+
+def _recurring_report_is_manager(user) -> bool:
+    if not user or not user.is_authenticated:
+        return False
+
+    role = _profile_role(user).lower()
+
+    return bool(
+        _has_group(user, "Manager")
+        or role in {
+            "manager",
+            "team leader",
+            "team_leader",
+            "teamlead",
+            "reporting officer",
+            "reporting_officer",
+        }
+        or bool(_manager_mapped_employee_ids(user))
+    )
+
+
+def _recurring_report_visible_employees(user):
+    base_qs = User.objects.filter(is_active=True)
+
+    if _recurring_report_is_admin(user):
+        return base_qs.order_by("first_name", "last_name", "username")
+
+    if _recurring_report_is_manager(user):
+        mapped_ids = _manager_mapped_employee_ids(user)
+        return base_qs.filter(id__in=mapped_ids).order_by(
+            "first_name",
+            "last_name",
+            "username",
+        )
+
+    return base_qs.filter(id=user.id).order_by(
+        "first_name",
+        "last_name",
+        "username",
+    )
+
+
+def _recurring_report_health(total_count: int, completed_count: int, pending_count: int) -> str:
+    if completed_count > 0 and pending_count > 0:
+        return "Healthy"
+
+    if completed_count > 0 and pending_count == 0:
+        return "Stuck"
+
+    return "Empty"
+
+
 def get_week_dates(frm: date | None, to: date | None) -> Tuple[date, date]:
-    """
-    Robust range builder:
-    - If both dates given, return them in ascending order.
-    - If only frm, make a 7-day window [frm, frm+6].
-    - If only to,   make a 7-day window [to-6, to].
-    - If neither,   current local week (Mon..Sun).
-    """
     if frm and to:
         if frm > to:
             frm, to = to, frm
         return frm, to
+
     if frm and not to:
         return frm, frm + timedelta(days=6)
+
     if to and not frm:
         return to - timedelta(days=6), to
+
     today = timezone.localdate()
     start = today - timedelta(days=today.weekday())
     return start, start + timedelta(days=6)
@@ -90,23 +316,11 @@ def span_bounds(d_from: date, d_to_inclusive: date):
     return s, e
 
 
-# -------- recurring-safe delete helpers --------
 def _is_recurring_checklist_obj(obj) -> bool:
-    """
-    Returns True if checklist row belongs to a recurring checklist series.
-    """
     return (getattr(obj, "mode", None) or "") in RECURRING_MODES
 
 
 def _checklist_series_filter_kwargs(obj) -> dict:
-    """
-    Builds a safe recurring-series identity.
-
-    Current project stores generated recurring checklist instances in the same
-    Checklist table, so we identify a series using the same fields used by the
-    checklist module:
-      assign_to + task_name + mode + frequency + group_name
-    """
     try:
         frequency = int(getattr(obj, "frequency", None) or 1)
     except (TypeError, ValueError):
@@ -122,20 +336,10 @@ def _checklist_series_filter_kwargs(obj) -> dict:
 
 
 def _void_checklist_for_report(obj, *, deleted_by=None) -> int:
-    """
-    Recurring-safe archive/delete for Reports → Doer Tasks.
-
-    Important:
-    - Do not hard-delete history rows.
-    - Mark as deleted/archived.
-    - Recurring series must not regenerate.
-    - Reports can still show deleted rows when Deleted filter is selected.
-    """
     if not obj:
         return 0
 
     now = timezone.now()
-
     update_data = {}
 
     if checklist_has_field("is_deleted"):
@@ -153,7 +357,6 @@ def _void_checklist_for_report(obj, *, deleted_by=None) -> int:
     if checklist_has_field("delete_reason"):
         update_data["delete_reason"] = "Deleted from doer task report"
 
-    # Backward compatibility with old hide logic.
     if checklist_has_field("is_skipped_due_to_leave"):
         update_data["is_skipped_due_to_leave"] = True
 
@@ -173,19 +376,15 @@ def _void_checklist_for_report(obj, *, deleted_by=None) -> int:
     return 1
 
 
-# -------- time helpers --------
 def calculate_checklist_total_time(qs) -> int:
-    # sum of actual time taken (minutes)
     return sum(task.actual_duration_minutes or 0 for task in qs)
 
 
 def calculate_delegation_total_time(qs) -> int:
-    # sum of actual time taken (minutes)
     return qs.aggregate(total=Sum("actual_duration_minutes"))["total"] or 0
 
 
 def calculate_assigned_total_time(qs) -> int:
-    # sum of planned/assigned minutes
     return qs.aggregate(total=Sum("time_per_task_minutes"))["total"] or 0
 
 
@@ -195,30 +394,14 @@ def minutes_to_hhmm(minutes: int) -> str:
     return f"{h:02d}:{m:02d}"
 
 
-# -------- percentage helpers --------
 def percent_not_completed(planned: int, completed: int) -> float:
-    """
-    Return NEGATIVE percentage for 'not completed'.
-    Example: planned=5, completed=2 -> -(3/5*100) = -60.0
-    """
     if planned == 0:
         return 0.0
+
     return -round(((planned - completed) / planned) * 100, 2)
 
 
 def _build_logical_doer_task_queryset(base_qs):
-    """
-    Doer Task logical queryset.
-
-    Purpose:
-    - Show one logical row per recurring checklist task series.
-    - Keep one-time tasks as individual rows.
-    - Use latest/current row to represent current task status.
-    - Do not delete or alter historical generated rows.
-
-    Series identity:
-        assign_to + task_name + mode + frequency + group_name
-    """
     recurring_qs = base_qs.filter(mode__in=RECURRING_MODES)
     one_time_qs = base_qs.exclude(mode__in=RECURRING_MODES)
 
@@ -281,21 +464,6 @@ def _build_logical_doer_task_queryset(base_qs):
 
 
 def _doer_task_frequency_display(task) -> str:
-    """
-    Display Doer Task frequency using existing Checklist recurrence metadata.
-
-    Source of truth:
-    - Base/parent recurring task when a relation exists
-    - Otherwise current Checklist row
-
-    Existing recurrence fields:
-    - mode
-    - frequency
-
-    Do NOT use Task Type badge text for recurrence frequency.
-    Do NOT create duplicate recurrence logic.
-    """
-
     base_task = (
         getattr(task, "base_task", None)
         or getattr(task, "parent_task", None)
@@ -331,32 +499,19 @@ def _doer_task_frequency_display(task) -> str:
     return f"Every {frequency} {unit}s"
 
 
-# ----------------- REPORTS -----------------
 @login_required
 def list_doer_tasks(request):
-    """
-    DOER TASK = USER TASK MANAGEMENT VIEW.
-
-    Final business behavior:
-    - Default / Pending / In Progress / Completed / Missed = one logical row per task series.
-    - Historical / Deleted = report/audit modes and may show raw generated rows.
-    - Dashboard remains generated actionable execution view.
-
-    Frequency behavior:
-    - Display base/checklist recurrence metadata from existing mode + frequency fields.
-    - Do not alter recurring engine.
-    - Do not alter checklist generator.
-    - Do not alter completion flow.
-    """
     FILTER_SESSION_KEY = "reports__doer_tasks_filter"
     FILTER_KEYS = {"doer", "department", "date_from", "date_to", "status"}
 
     total_start = perf_counter()
     initial_query_count = len(connection.queries) if settings.DEBUG else 0
 
-    # ------------------------------------------------------------------
-    # POST delete/archive
-    # ------------------------------------------------------------------
+    visible_employees = _report_visible_employees(request.user)
+    visible_employee_ids = list(visible_employees.values_list("id", flat=True))
+
+    show_employee_filter = _is_report_admin(request.user) or _is_report_manager(request.user)
+
     if request.method == "POST":
         action = request.POST.get("action", "")
         return_url = request.POST.get("return_url") or request.META.get("HTTP_REFERER")
@@ -372,7 +527,12 @@ def list_doer_tasks(request):
                 selected_count = 0
                 total_updated = 0
 
-                for obj in Checklist.objects.filter(pk__in=ids).select_related("assign_to"):
+                selected_qs = Checklist.objects.filter(pk__in=ids).select_related("assign_to")
+
+                if not _is_report_admin(request.user):
+                    selected_qs = selected_qs.filter(assign_to_id__in=visible_employee_ids)
+
+                for obj in selected_qs:
                     selected_count += 1
                     total_updated += _void_checklist_for_report(obj, deleted_by=request.user)
 
@@ -396,7 +556,12 @@ def list_doer_tasks(request):
 
             if pk:
                 try:
-                    obj = Checklist.objects.get(pk=pk)
+                    obj_qs = Checklist.objects.filter(pk=pk)
+
+                    if not _is_report_admin(request.user):
+                        obj_qs = obj_qs.filter(assign_to_id__in=visible_employee_ids)
+
+                    obj = obj_qs.get()
                     updated = _void_checklist_for_report(obj, deleted_by=request.user)
 
                     if updated:
@@ -416,9 +581,6 @@ def list_doer_tasks(request):
 
             return redirect(return_url or "reports:doer_tasks")
 
-    # ------------------------------------------------------------------
-    # GET filter persistence
-    # ------------------------------------------------------------------
     if request.method == "GET" and request.GET.get("reset") == "1":
         request.session.pop(FILTER_SESSION_KEY, None)
         return redirect("reports:doer_tasks")
@@ -436,11 +598,18 @@ def list_doer_tasks(request):
             if saved:
                 effective_get = saved
 
-    form = PCReportFilterForm(effective_get or (request.GET or None), user=request.user)
+    form = PCReportFilterForm(
+        effective_get or (request.GET or None),
+        user=request.user,
+        doer_queryset=visible_employees if show_employee_filter else User.objects.none(),
+    )
 
     query_build_start = perf_counter()
 
     items_qs = Checklist.objects.select_related("assign_by", "assign_to")
+
+    if not _is_report_admin(request.user):
+        items_qs = items_qs.filter(assign_to_id__in=visible_employee_ids)
 
     today = timezone.localdate()
 
@@ -449,9 +618,6 @@ def list_doer_tasks(request):
 
     raw_history_mode = status in {"Historical", "Deleted"}
 
-    # ------------------------------------------------------------------
-    # Status filters
-    # ------------------------------------------------------------------
     if status == "Pending":
         items_qs = items_qs.filter(status="Pending")
 
@@ -514,9 +680,6 @@ def list_doer_tasks(request):
     if checklist_has_field("is_active") and status != "Deleted":
         items_qs = items_qs.filter(is_active=True)
 
-    # ------------------------------------------------------------------
-    # Normal form filters
-    # ------------------------------------------------------------------
     if form.is_valid():
         d = form.cleaned_data
 
@@ -538,10 +701,6 @@ def list_doer_tasks(request):
             _, e = day_bounds(d["date_to"])
             items_qs = items_qs.filter(planned_date__lt=e)
 
-    # ------------------------------------------------------------------
-    # Logical grouping for normal Doer Task views.
-    # Historical / Deleted stay row-level audit views.
-    # ------------------------------------------------------------------
     if not raw_history_mode:
         items_qs = _build_logical_doer_task_queryset(items_qs)
 
@@ -555,9 +714,6 @@ def list_doer_tasks(request):
 
     query_build_time = perf_counter() - query_build_start
 
-    # ------------------------------------------------------------------
-    # Pagination
-    # ------------------------------------------------------------------
     per_page = getattr(settings, "TASK_LIST_PAGE_SIZE", 50)
     paginator = Paginator(items_qs, per_page)
     page_obj = paginator.get_page(request.GET.get("page"))
@@ -566,9 +722,6 @@ def list_doer_tasks(request):
     page_items = list(page_obj.object_list)
     fetch_time = perf_counter() - fetch_start
 
-    # ------------------------------------------------------------------
-    # Frequency display metadata
-    # ------------------------------------------------------------------
     for item in page_items:
         item.frequency_display = _doer_task_frequency_display(item)
 
@@ -580,6 +733,8 @@ def list_doer_tasks(request):
         "is_paginated": page_obj.has_other_pages(),
         "current_status": status,
         "raw_history_mode": raw_history_mode,
+        "show_employee_filter": show_employee_filter,
+        "visible_employee_count": len(visible_employee_ids),
     }
 
     template_start = perf_counter()
@@ -604,6 +759,247 @@ def list_doer_tasks(request):
     )
 
     return HttpResponse(html)
+
+
+@login_required
+def recurring_tasks_report(request):
+    visible_employees = _recurring_report_visible_employees(request.user)
+    visible_employee_ids = list(visible_employees.values_list("id", flat=True))
+
+    is_report_admin = _recurring_report_is_admin(request.user)
+    is_report_manager = _recurring_report_is_manager(request.user)
+    show_employee_filter = is_report_admin or is_report_manager
+
+    selected_employee_id = (
+        request.GET.get("employee")
+        or request.GET.get("assign_to")
+        or request.GET.get("employee_id")
+        or ""
+    ).strip()
+
+    selected_mode = (request.GET.get("mode") or "").strip()
+    selected_health = (
+        request.GET.get("health")
+        or request.GET.get("health_status")
+        or ""
+    ).strip()
+
+    base_qs = (
+        Checklist.objects
+        .select_related("assign_to")
+        .filter(mode__in=RECURRING_MODES)
+    )
+
+    checklist_field_names = {field.name for field in Checklist._meta.get_fields()}
+
+    if "is_active" in checklist_field_names:
+        base_qs = base_qs.filter(is_active=True)
+
+    if not is_report_admin:
+        base_qs = base_qs.filter(assign_to_id__in=visible_employee_ids)
+
+    if selected_employee_id:
+        try:
+            selected_employee_pk = int(selected_employee_id)
+        except (TypeError, ValueError):
+            selected_employee_pk = None
+
+        if selected_employee_pk and selected_employee_pk in visible_employee_ids:
+            base_qs = base_qs.filter(assign_to_id=selected_employee_pk)
+        else:
+            selected_employee_id = ""
+
+    if selected_mode in RECURRING_MODES:
+        base_qs = base_qs.filter(mode=selected_mode)
+    else:
+        selected_mode = ""
+
+    if "is_deleted" in checklist_field_names:
+        deleted_filter = Q(is_deleted=True)
+    elif "is_skipped_due_to_leave" in checklist_field_names:
+        deleted_filter = Q(is_skipped_due_to_leave=True)
+    else:
+        deleted_filter = Q(pk__isnull=True)
+
+    active_filter = Q()
+
+    if "is_deleted" in checklist_field_names:
+        active_filter &= Q(is_deleted=False)
+
+    if "is_skipped_due_to_leave" in checklist_field_names:
+        active_filter &= Q(is_skipped_due_to_leave=False)
+
+    grouped_qs = (
+        base_qs
+        .values(
+            "assign_to_id",
+            "assign_to__first_name",
+            "assign_to__last_name",
+            "assign_to__username",
+            "assign_to__email",
+            "task_name",
+            "mode",
+            "frequency",
+            "group_name",
+        )
+        .annotate(
+            total=Count("id"),
+            completed=Count("id", filter=Q(status="Completed") & active_filter),
+            pending=Count("id", filter=Q(status__in=["Pending", "In Progress"]) & active_filter),
+            deleted=Count("id", filter=deleted_filter),
+        )
+        .order_by(
+            "assign_to__first_name",
+            "assign_to__last_name",
+            "assign_to__username",
+            "task_name",
+            "mode",
+            "frequency",
+            "group_name",
+        )
+    )
+
+    series_rows = []
+    total_series = 0
+    completed_occurrences = 0
+    pending_occurrences = 0
+    stuck_series = 0
+
+    for row in grouped_qs:
+        health = _recurring_report_health(
+            row["total"],
+            row["completed"],
+            row["pending"],
+        )
+
+        if selected_health and selected_health != health:
+            continue
+
+        first_name = row.get("assign_to__first_name") or ""
+        last_name = row.get("assign_to__last_name") or ""
+        username = row.get("assign_to__username") or ""
+        email = row.get("assign_to__email") or ""
+
+        employee_name = f"{first_name} {last_name}".strip() or username or email
+
+        frequency = row.get("frequency") or 1
+
+        try:
+            frequency = int(frequency)
+        except (TypeError, ValueError):
+            frequency = 1
+
+        series_row = {
+            "assign_to_id": row["assign_to_id"],
+            "employee_id": row["assign_to_id"],
+            "employee_name": employee_name,
+            "employee_email": email or username,
+            "assign_to__first_name": first_name,
+            "assign_to__last_name": last_name,
+            "assign_to__username": username,
+            "assign_to__email": email,
+            "task_name": row["task_name"],
+            "mode": row["mode"],
+            "frequency": frequency,
+            "frequency_text": f"Every {frequency}",
+            "group_name": row["group_name"] or "",
+            "total": row["total"],
+            "total_rows": row["total"],
+            "completed": row["completed"],
+            "completed_rows": row["completed"],
+            "pending": row["pending"],
+            "pending_rows": row["pending"],
+            "deleted": row["deleted"],
+            "deleted_rows": row["deleted"],
+            "health": health,
+            "health_status": health,
+        }
+
+        series_rows.append(series_row)
+
+        total_series += 1
+        completed_occurrences += row["completed"]
+        pending_occurrences += row["pending"]
+
+        if health == "Stuck":
+            stuck_series += 1
+
+    if request.GET.get("download") == "1":
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = 'attachment; filename="recurring_tasks_report.csv"'
+
+        writer = csv.writer(response)
+        writer.writerow([
+            "Employee",
+            "Email",
+            "Task Name",
+            "Mode",
+            "Frequency",
+            "Group",
+            "Total",
+            "Completed",
+            "Pending",
+            "Deleted",
+            "Health",
+        ])
+
+        for row in series_rows:
+            writer.writerow([
+                row["employee_name"],
+                row["employee_email"],
+                row["task_name"],
+                row["mode"],
+                row["frequency_text"],
+                row["group_name"],
+                row["total"],
+                row["completed"],
+                row["pending"],
+                row["deleted"],
+                row["health"],
+            ])
+
+        return response
+
+    context = {
+        "employees": visible_employees,
+        "users": visible_employees,
+        "employee_options": visible_employees,
+        "employee_list": visible_employees,
+        "employee_qs": visible_employees,
+        "all_employees": visible_employees,
+
+        "selected_employee_id": selected_employee_id,
+        "selected_employee": selected_employee_id,
+        "employee_id": selected_employee_id,
+
+        "mode_choices": RECURRING_MODES,
+        "selected_mode": selected_mode,
+        "current_mode": selected_mode,
+
+        "health_choices": ["Healthy", "Stuck", "Empty"],
+        "selected_health": selected_health,
+        "selected_health_status": selected_health,
+        "current_health": selected_health,
+
+        "series_rows": series_rows,
+        "series": series_rows,
+        "items": series_rows,
+        "rows": series_rows,
+
+        "total_series": total_series,
+        "total_count": total_series,
+        "total_series_count": total_series,
+        "completed_occurrences": completed_occurrences,
+        "pending_occurrences": pending_occurrences,
+        "stuck_series": stuck_series,
+
+        "show_employee_filter": show_employee_filter,
+        "is_report_admin": is_report_admin,
+        "is_report_manager": is_report_manager,
+        "visible_employee_count": len(visible_employee_ids),
+    }
+
+    return render(request, "reports/recurring_tasks_report.html", context)
 
 
 @login_required
@@ -716,53 +1112,62 @@ def weekly_mis_score(request):
             commitment_form = WeeklyMISCommitmentForm(initial=initial)
 
         for Model, label in [(Checklist, "Checklist"), (Delegation, "Delegation")]:
-            planned = Model.objects.filter(
-                assign_to=doer,
-                planned_date__gte=s_this,
-                planned_date__lt=e_this,
-                is_skipped_due_to_leave=False if Model is Checklist else False,
-            ).count() if Model is Checklist else Model.objects.filter(
-                assign_to=doer,
-                planned_date__gte=s_this,
-                planned_date__lt=e_this,
-            ).count()
+            if Model is Checklist:
+                planned = Model.objects.filter(
+                    assign_to=doer,
+                    planned_date__gte=s_this,
+                    planned_date__lt=e_this,
+                    is_skipped_due_to_leave=False,
+                ).count()
 
-            planned_last = Model.objects.filter(
-                assign_to=doer,
-                planned_date__gte=s_prev,
-                planned_date__lt=e_prev,
-                is_skipped_due_to_leave=False if Model is Checklist else False,
-            ).count() if Model is Checklist else Model.objects.filter(
-                assign_to=doer,
-                planned_date__gte=s_prev,
-                planned_date__lt=e_prev,
-            ).count()
+                planned_last = Model.objects.filter(
+                    assign_to=doer,
+                    planned_date__gte=s_prev,
+                    planned_date__lt=e_prev,
+                    is_skipped_due_to_leave=False,
+                ).count()
 
-            completed = Model.objects.filter(
-                assign_to=doer,
-                planned_date__gte=s_this,
-                planned_date__lt=e_this,
-                status="Completed",
-                is_skipped_due_to_leave=False if Model is Checklist else False,
-            ).count() if Model is Checklist else Model.objects.filter(
-                assign_to=doer,
-                planned_date__gte=s_this,
-                planned_date__lt=e_this,
-                status="Completed",
-            ).count()
+                completed = Model.objects.filter(
+                    assign_to=doer,
+                    planned_date__gte=s_this,
+                    planned_date__lt=e_this,
+                    status="Completed",
+                    is_skipped_due_to_leave=False,
+                ).count()
 
-            completed_last = Model.objects.filter(
-                assign_to=doer,
-                planned_date__gte=s_prev,
-                planned_date__lt=e_prev,
-                status="Completed",
-                is_skipped_due_to_leave=False if Model is Checklist else False,
-            ).count() if Model is Checklist else Model.objects.filter(
-                assign_to=doer,
-                planned_date__gte=s_prev,
-                planned_date__lt=e_prev,
-                status="Completed",
-            ).count()
+                completed_last = Model.objects.filter(
+                    assign_to=doer,
+                    planned_date__gte=s_prev,
+                    planned_date__lt=e_prev,
+                    status="Completed",
+                    is_skipped_due_to_leave=False,
+                ).count()
+            else:
+                planned = Model.objects.filter(
+                    assign_to=doer,
+                    planned_date__gte=s_this,
+                    planned_date__lt=e_this,
+                ).count()
+
+                planned_last = Model.objects.filter(
+                    assign_to=doer,
+                    planned_date__gte=s_prev,
+                    planned_date__lt=e_prev,
+                ).count()
+
+                completed = Model.objects.filter(
+                    assign_to=doer,
+                    planned_date__gte=s_this,
+                    planned_date__lt=e_this,
+                    status="Completed",
+                ).count()
+
+                completed_last = Model.objects.filter(
+                    assign_to=doer,
+                    planned_date__gte=s_prev,
+                    planned_date__lt=e_prev,
+                    status="Completed",
+                ).count()
 
             rows.append({
                 "category": label,

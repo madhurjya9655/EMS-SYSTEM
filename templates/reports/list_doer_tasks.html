@@ -27,10 +27,24 @@
     <div class="card-body">
       <form method="get" class="row g-3 align-items-end" role="search" aria-label="Doer Task Filters">
 
-        <div class="col-md-3">
-          {{ form.doer.label_tag }}
-          {{ form.doer|add_class:"form-select" }}
-        </div>
+        {% if show_employee_filter %}
+          <div class="col-md-3">
+            <label for="doerFilter" class="form-label">Employee</label>
+            {{ form.doer|add_class:"form-select select2-employee" }}
+
+            {% if form.doer.errors %}
+              <div class="text-danger small mt-1">
+                {{ form.doer.errors|striptags }}
+              </div>
+            {% endif %}
+
+            {% if visible_employee_count == 0 %}
+              <div class="text-muted small mt-1">
+                No mapped employees found.
+              </div>
+            {% endif %}
+          </div>
+        {% endif %}
 
         <div class="col-md-3">
           {{ form.department.label_tag }}
@@ -325,6 +339,18 @@
       filterIcon.classList.remove('fa-minus');
       filterIcon.classList.add('fa-plus');
     });
+  }
+
+  if (window.jQuery) {
+    var $employeeDropdown = window.jQuery('#doerFilter');
+
+    if ($employeeDropdown.length && window.jQuery.fn && window.jQuery.fn.select2) {
+      $employeeDropdown.select2({
+        width: '100%',
+        placeholder: $employeeDropdown.data('placeholder') || 'All Employees',
+        allowClear: true
+      });
+    }
   }
 
   function getRowChecks() {
