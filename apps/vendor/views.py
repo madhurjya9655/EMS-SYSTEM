@@ -1,7 +1,12 @@
-#D:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\vendor\views.py
+# apps/vendor/views.py
+from __future__ import annotations
+
+import logging
+
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
+from django.core.exceptions import ValidationError
 from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
 from django.conf import settings
@@ -10,6 +15,31 @@ from django.http import JsonResponse
 from .models import Vendor, VendorPaymentRequest, VendorApprovalConfig
 from .forms import VendorPaymentRequestForm, VendorApprovalConfigForm
 from apps.users.permissions import _user_permission_codes
+
+logger = logging.getLogger(__name__)
+
+
+# ── Google Sheet Sync helper ─────────────────────────────────────────────────
+
+def _sync_vendor_payment_sheet(obj: VendorPaymentRequest) -> None:
+    """
+    Production-safe Vendor Payment Google Sheet sync trigger.
+
+    Same principle as Reimbursement:
+    - View saves database object first.
+    - Sync service runs after DB commit.
+    - Google errors must not break ERP workflow.
+    - If integration file/env is missing, workflow still continues.
+    """
+    try:
+        from apps.vendor.integrations.sheets import sync_request
+
+        sync_request(obj)
+    except Exception:
+        logger.exception(
+            "Vendor Payment Google Sheet sync trigger failed for request pk=%s",
+            getattr(obj, "pk", None),
+        )
 
 
 # ── Permission helpers ────────────────────────────────────────────────────────
@@ -218,7 +248,10 @@ def _send_submission_email(request, obj):
             to=to_list,
         ).send(fail_silently=True)
     except Exception:
-        pass
+        logger.exception(
+            "Vendor submission email failed for request pk=%s",
+            getattr(obj, "pk", None),
+        )
 
 
 def _send_finance_approved_email(request, obj):
@@ -248,7 +281,10 @@ def _send_finance_approved_email(request, obj):
             to=[config.senior_authority.email],
         ).send(fail_silently=True)
     except Exception:
-        pass
+        logger.exception(
+            "Vendor finance-approved email failed for request pk=%s",
+            getattr(obj, "pk", None),
+        )
 
 
 def _send_final_approval_email(request, obj):
@@ -261,10 +297,13 @@ def _send_final_approval_email(request, obj):
 
     subject = f"Vendor Payment Approved — {obj.request_id}"
 
-    body = render_to_string("vendor/email/final_approval.txt", {
-        "obj": obj,
-        "site_url": request.build_absolute_uri("/"),
-    })
+    body = render_to_string(
+        "vendor/email/final_approval.txt",
+        {
+            "obj": obj,
+            "site_url": request.build_absolute_uri("/"),
+        },
+    )
 
     try:
         EmailMessage(
@@ -275,7 +314,10 @@ def _send_final_approval_email(request, obj):
             cc=cc_list,
         ).send(fail_silently=True)
     except Exception:
-        pass
+        logger.exception(
+            "Vendor final approval email failed for request pk=%s",
+            getattr(obj, "pk", None),
+        )
 
 
 def _send_rejection_email(request, obj):
@@ -302,7 +344,10 @@ def _send_rejection_email(request, obj):
             to=[obj.created_by.email],
         ).send(fail_silently=True)
     except Exception:
-        pass
+        logger.exception(
+            "Vendor rejection email failed for request pk=%s",
+            getattr(obj, "pk", None),
+        )
 
 
 # ── API Views ────────────────────────────────────────────────────────────────
@@ -320,12 +365,14 @@ def vendor_type_api(request, vendor_id):
 
     vendor = get_object_or_404(Vendor, pk=vendor_id, is_active=True)
 
-    return JsonResponse({
-        "id": vendor.pk,
-        "name": vendor.name,
-        "type": vendor.type,
-        "type_display": vendor.get_type_display(),
-    })
+    return JsonResponse(
+        {
+            "id": vendor.pk,
+            "name": vendor.name,
+            "type": vendor.type,
+            "type_display": vendor.get_type_display(),
+        }
+    )
 
 
 # ── Main Views ───────────────────────────────────────────────────────────────
@@ -335,7 +382,10 @@ def dashboard(request):
     user = request.user
 
     if not _can_access_vendor(user):
-        messages.error(request, "You do not have access to the Vendor Payments module.")
+        messages.error(
+            request,
+            "You do not have access to the Vendor Payments module.",
+        )
         return redirect("dashboard:home")
 
     is_vendor_admin = _is_vendor_admin(user)
@@ -359,21 +409,35 @@ def dashboard(request):
         else 0
     )
 
-    return render(request, "vendor/dashboard.html", {
-        "my_count": my_count,
-        "pending_finance": pending_finance,
-        "pending_senior": pending_senior,
-        "is_finance": is_finance,
-        "is_senior": is_senior,
-        "can_create": _can_create(user),
-        "is_vendor_admin": is_vendor_admin,
-    })
+    paid_count = (
+        VendorPaymentRequest.objects.filter(status="paid").count()
+        if is_finance or is_vendor_admin
+        else 0
+    )
+
+    return render(
+        request,
+        "vendor/dashboard.html",
+        {
+            "my_count": my_count,
+            "pending_finance": pending_finance,
+            "pending_senior": pending_senior,
+            "paid_count": paid_count,
+            "is_finance": is_finance,
+            "is_senior": is_senior,
+            "can_create": _can_create(user),
+            "is_vendor_admin": is_vendor_admin,
+        },
+    )
 
 
 @login_required
 def new_request(request):
     if not _can_create(request.user):
-        messages.error(request, "You do not have permission to create vendor payment requests.")
+        messages.error(
+            request,
+            "You do not have permission to create vendor payment requests.",
+        )
         return redirect("vendor:dashboard")
 
     if request.method == "POST":
@@ -395,6 +459,11 @@ def new_request(request):
 
             obj.save()
 
+            # Google Sheet sync:
+            # Create row for draft/submitted request.
+            # Same row will be updated later using request_id.
+            _sync_vendor_payment_sheet(obj)
+
             if obj.status == "submitted":
                 _send_submission_email(request, obj)
                 messages.success(
@@ -411,9 +480,13 @@ def new_request(request):
     else:
         form = VendorPaymentRequestForm()
 
-    return render(request, "vendor/new_request.html", {
-        "form": form,
-    })
+    return render(
+        request,
+        "vendor/new_request.html",
+        {
+            "form": form,
+        },
+    )
 
 
 @login_required
@@ -430,27 +503,35 @@ def my_requests(request):
             "created_by",
             "finance_approved_by",
             "final_approved_by",
+            "paid_by",
         )
     else:
         if not _can_view_own(request.user):
-            messages.error(request, "You do not have permission to view vendor requests.")
+            messages.error(
+                request,
+                "You do not have permission to view vendor requests.",
+            )
             return redirect("vendor:dashboard")
 
         qs = VendorPaymentRequest.objects.filter(
             created_by=request.user
-        ).select_related("vendor")
+        ).select_related("vendor", "paid_by")
 
     status_filter = request.GET.get("status", "")
 
     if status_filter:
         qs = qs.filter(status=status_filter)
 
-    return render(request, "vendor/my_requests.html", {
-        "requests": qs,
-        "status_filter": status_filter,
-        "status_choices": VendorPaymentRequest.STATUS_CHOICES,
-        "is_admin_view": is_admin_view,
-    })
+    return render(
+        request,
+        "vendor/my_requests.html",
+        {
+            "requests": qs,
+            "status_filter": status_filter,
+            "status_choices": VendorPaymentRequest.STATUS_CHOICES,
+            "is_admin_view": is_admin_view,
+        },
+    )
 
 
 @login_required
@@ -470,6 +551,7 @@ def approval_queue(request):
         "created_by",
         "finance_approved_by",
         "final_approved_by",
+        "paid_by",
     )
 
     status_filter = request.GET.get("status", "")
@@ -479,23 +561,28 @@ def approval_queue(request):
         if status_filter:
             qs = qs.filter(status=status_filter)
     elif is_fin and is_sen:
-        qs = qs.filter(status__in=["submitted", "finance_approved"])
+        qs = qs.filter(status__in=["submitted", "finance_approved", "final_approved"])
         status_filter = ""
     elif is_fin:
-        qs = qs.filter(status="submitted")
-        status_filter = "submitted"
+        # Finance handles first approval and final payment.
+        qs = qs.filter(status__in=["submitted", "final_approved"])
+        status_filter = ""
     else:
         qs = qs.filter(status="finance_approved")
         status_filter = "finance_approved"
 
-    return render(request, "vendor/approval_queue.html", {
-        "requests": qs,
-        "is_finance": is_fin,
-        "is_senior": is_sen,
-        "is_admin": is_admin,
-        "status_choices": VendorPaymentRequest.STATUS_CHOICES,
-        "status_filter": status_filter,
-    })
+    return render(
+        request,
+        "vendor/approval_queue.html",
+        {
+            "requests": qs,
+            "is_finance": is_fin,
+            "is_senior": is_sen,
+            "is_admin": is_admin,
+            "status_choices": VendorPaymentRequest.STATUS_CHOICES,
+            "status_filter": status_filter,
+        },
+    )
 
 
 @login_required
@@ -506,6 +593,7 @@ def detail(request, pk):
             "created_by",
             "finance_approved_by",
             "final_approved_by",
+            "paid_by",
         ),
         pk=pk,
     )
@@ -525,13 +613,18 @@ def detail(request, pk):
         messages.error(request, "Access denied.")
         return redirect("vendor:dashboard")
 
-    return render(request, "vendor/detail.html", {
-        "obj": obj,
-        "can_finance_action": is_fin and obj.status == "submitted",
-        "can_senior_action": is_sen and obj.status == "finance_approved",
-        "can_resubmit": obj.created_by == request.user and obj.status == "draft",
-        "is_admin": is_admin,
-    })
+    return render(
+        request,
+        "vendor/detail.html",
+        {
+            "obj": obj,
+            "can_finance_action": is_fin and obj.status == "submitted",
+            "can_senior_action": is_sen and obj.status == "finance_approved",
+            "can_mark_paid": is_fin and obj.status == "final_approved",
+            "can_resubmit": obj.created_by == request.user and obj.status == "draft",
+            "is_admin": is_admin,
+        },
+    )
 
 
 @login_required
@@ -550,6 +643,10 @@ def resubmit(request, pk):
         obj.vendor_name_manual = ""
 
     obj.save()
+
+    # Google Sheet sync:
+    # Update existing draft row to Submitted.
+    _sync_vendor_payment_sheet(obj)
 
     _send_submission_email(request, obj)
 
@@ -581,6 +678,10 @@ def finance_action(request, pk):
         obj.remarks = remarks
         obj.save()
 
+        # Google Sheet sync:
+        # Update same row to Finance Approved.
+        _sync_vendor_payment_sheet(obj)
+
         _send_finance_approved_email(request, obj)
 
         messages.success(
@@ -593,9 +694,16 @@ def finance_action(request, pk):
         obj.remarks = remarks
         obj.save()
 
+        # Google Sheet sync:
+        # Update same row to Rejected.
+        _sync_vendor_payment_sheet(obj)
+
         _send_rejection_email(request, obj)
 
         messages.warning(request, f"{obj.request_id} rejected.")
+
+    else:
+        messages.error(request, "Invalid finance action.")
 
     return redirect("vendor:approval_queue")
 
@@ -620,6 +728,10 @@ def senior_action(request, pk):
         obj.remarks = remarks
         obj.save()
 
+        # Google Sheet sync:
+        # Update same row to Final Approved.
+        _sync_vendor_payment_sheet(obj)
+
         _send_final_approval_email(request, obj)
 
         messages.success(
@@ -632,11 +744,104 @@ def senior_action(request, pk):
         obj.remarks = remarks
         obj.save()
 
+        # Google Sheet sync:
+        # Update same row to Rejected.
+        _sync_vendor_payment_sheet(obj)
+
         _send_rejection_email(request, obj)
 
         messages.warning(request, f"{obj.request_id} rejected.")
 
+    else:
+        messages.error(request, "Invalid senior action.")
+
     return redirect("vendor:approval_queue")
+
+
+@login_required
+def mark_paid(request, pk):
+    """
+    Finance marks a final-approved Vendor Payment Request as Paid.
+
+    This is intentionally separate from finance approval:
+    - finance_action: submitted -> finance_approved
+    - senior_action: finance_approved -> final_approved
+    - mark_paid: final_approved -> paid
+
+    After payment, Google Sheet updates the same row using request_id.
+    """
+    if request.method != "POST":
+        return redirect("vendor:detail", pk=pk)
+
+    obj = get_object_or_404(
+        VendorPaymentRequest.objects.select_related(
+            "vendor",
+            "created_by",
+            "finance_approved_by",
+            "final_approved_by",
+            "paid_by",
+        ),
+        pk=pk,
+    )
+
+    if not _is_finance(request.user):
+        messages.error(request, "Only Finance can mark vendor payment as Paid.")
+        return redirect("vendor:detail", pk=pk)
+
+    if obj.status != "final_approved":
+        messages.error(
+            request,
+            "Only Final Approved vendor payments can be marked as Paid.",
+        )
+        return redirect("vendor:detail", pk=pk)
+
+    reference = (
+        request.POST.get("payment_reference")
+        or request.POST.get("reference")
+        or ""
+    ).strip()
+    remarks = request.POST.get("remarks", "").strip()
+
+    if not reference:
+        messages.error(request, "Payment reference is required.")
+        return redirect("vendor:detail", pk=pk)
+
+    try:
+        if hasattr(obj, "mark_paid"):
+            obj.mark_paid(
+                actor=request.user,
+                reference=reference,
+                remarks=remarks,
+            )
+        else:
+            obj.status = "paid"
+            obj.payment_reference = reference
+            obj.paid_by = request.user
+            if remarks:
+                obj.remarks = remarks
+            obj.save()
+
+    except ValidationError as exc:
+        messages.error(request, exc.messages[0] if hasattr(exc, "messages") else str(exc))
+        return redirect("vendor:detail", pk=pk)
+    except Exception:
+        logger.exception(
+            "Vendor Payment mark_paid failed for request pk=%s",
+            getattr(obj, "pk", None),
+        )
+        messages.error(request, "Unable to mark this vendor payment as Paid.")
+        return redirect("vendor:detail", pk=pk)
+
+    # Google Sheet sync:
+    # Update same row to Paid.
+    _sync_vendor_payment_sheet(obj)
+
+    messages.success(
+        request,
+        f"{obj.request_id} marked as Paid.",
+    )
+
+    return redirect("vendor:detail", pk=pk)
 
 
 # ── Admin: Approval Config ───────────────────────────────────────────────────
@@ -664,14 +869,18 @@ def admin_setup(request):
     config = VendorApprovalConfig.get_config()
     vendors = Vendor.objects.all().order_by("name")
 
-    return render(request, "vendor/admin_setup.html", {
-        "form": form,
-        "vendors": vendors,
-        "vendor_type_choices": Vendor.VENDOR_TYPE_CHOICES,
-        "config": config,
-        "finance_manual_emails_val": config.finance_manual_emails or "",
-        "mumbai_manual_emails_val": config.mumbai_manual_emails or "",
-    })
+    return render(
+        request,
+        "vendor/admin_setup.html",
+        {
+            "form": form,
+            "vendors": vendors,
+            "vendor_type_choices": Vendor.VENDOR_TYPE_CHOICES,
+            "config": config,
+            "finance_manual_emails_val": config.finance_manual_emails or "",
+            "mumbai_manual_emails_val": config.mumbai_manual_emails or "",
+        },
+    )
 
 
 # ── Admin: Vendor CRUD ───────────────────────────────────────────────────────

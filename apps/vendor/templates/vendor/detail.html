@@ -15,7 +15,7 @@
 
 {% block content %}
 <div class="card" style="max-width:1000px">
-  <div class="card-header">
+  <div class="card-header d-flex justify-content-between align-items-center">
     <span>
       <i class="fa-solid fa-file-invoice-dollar me-2 text-primary"></i>
       Request {{ obj.request_id }}
@@ -120,7 +120,7 @@
       </div>
 
       <div class="col-md-6">
-        <div class="text-muted small">Bank Details Attachment</div>
+        <div class="text-muted small">Copy of Cancelled Cheque / Bank Attachment</div>
 
         {% if obj.bank_attachment %}
           <a href="{{ obj.bank_attachment.url }}" target="_blank" class="btn btn-sm btn-light mt-1">
@@ -175,6 +175,44 @@
         <strong>{{ obj.updated_at|date:"d M Y, h:i A" }}</strong>
       </div>
     </div>
+
+    {% if obj.status == "paid" %}
+      <div class="alert alert-success mb-4">
+        <div class="fw-semibold mb-2">
+          <i class="fa-solid fa-circle-check"></i>
+          Payment Completed
+        </div>
+
+        <div class="row g-3">
+          <div class="col-md-4">
+            <div class="text-muted small">Payment Reference</div>
+            <strong>{{ obj.payment_reference|default:"—" }}</strong>
+          </div>
+
+          <div class="col-md-4">
+            <div class="text-muted small">Paid At</div>
+            <strong>
+              {% if obj.paid_at %}
+                {{ obj.paid_at|date:"d M Y, h:i A" }}
+              {% else %}
+                —
+              {% endif %}
+            </strong>
+          </div>
+
+          <div class="col-md-4">
+            <div class="text-muted small">Paid By</div>
+            <strong>
+              {% if obj.paid_by %}
+                {{ obj.paid_by.get_full_name|default:obj.paid_by.username }}
+              {% else %}
+                —
+              {% endif %}
+            </strong>
+          </div>
+        </div>
+      </div>
+    {% endif %}
 
     {% if obj.remarks %}
       <div class="mb-4">
@@ -235,6 +273,53 @@
             <i class="fa-solid fa-xmark"></i>
             Reject
           </button>
+        </div>
+      </form>
+    {% endif %}
+
+    {% if can_mark_paid %}
+      <form method="post" action="{% url 'vendor:mark_paid' obj.pk %}" class="mt-4">
+        {% csrf_token %}
+
+        <div class="card border-success">
+          <div class="card-header bg-success text-white">
+            <i class="fa-solid fa-money-bill-transfer me-2"></i>
+            Mark Vendor Payment as Paid
+          </div>
+
+          <div class="card-body">
+            <div class="alert alert-warning">
+              This action will mark this vendor payment as <strong>Paid</strong> and update the same row in the Google Sheet.
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">
+                Payment Reference <span class="text-danger">*</span>
+              </label>
+              <input
+                type="text"
+                name="payment_reference"
+                class="form-control"
+                placeholder="Enter UTR / bank reference / cheque number"
+                required
+              >
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">Payment Remarks</label>
+              <textarea
+                name="remarks"
+                rows="3"
+                class="form-control"
+                placeholder="Optional payment note"
+              ></textarea>
+            </div>
+
+            <button class="btn btn-success">
+              <i class="fa-solid fa-circle-check"></i>
+              Mark as Paid
+            </button>
+          </div>
         </div>
       </form>
     {% endif %}
