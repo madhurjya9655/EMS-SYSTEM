@@ -1,4 +1,4 @@
-#D:\CLIENT PROJECT\employee management system bos\employee_management_system\employee_management\urls.py
+# employee_management/urls.py
 from __future__ import annotations
 
 from django.conf import settings
@@ -33,7 +33,9 @@ def healthcheck(_request):
     return HttpResponse("ok", content_type="text/plain")
 
 
+# ---------------------------------------------------------------------
 # Minimal robots.txt
+# ---------------------------------------------------------------------
 @require_GET
 def robots_txt(_request):
     return HttpResponse("User-agent: *\nDisallow:\n", content_type="text/plain")
@@ -43,7 +45,7 @@ def robots_txt(_request):
 # URL patterns
 # ---------------------------------------------------------------------
 urlpatterns = [
-    # Admin (hardened path from settings.ADMIN_URL)
+    # Admin hardened path from settings.ADMIN_URL
     path(settings.ADMIN_URL, admin.site.urls),
 
     # Auth
@@ -51,55 +53,113 @@ urlpatterns = [
     path("accounts/", include("django.contrib.auth.urls")),
 
     # Apps
-    path("leave/",         include(("apps.leave.urls",         "leave"),         namespace="leave")),
-    path("petty_cash/",    include(("apps.petty_cash.urls",    "petty_cash"),    namespace="petty_cash")),
-    path("sales/",         include(("apps.sales.urls",         "sales"),         namespace="sales")),
-    path("reimbursement/", include(("apps.reimbursement.urls", "reimbursement"), namespace="reimbursement")),
-    path("tasks/",         include(("apps.tasks.urls",         "tasks"),         namespace="tasks")),
-    path("reports/",       include(("apps.reports.urls",       "reports"),       namespace="reports")),
-    path("users/",         include(("apps.users.urls",         "users"),         namespace="users")),
-    path("dashboard/",     include(("dashboard.urls",          "dashboard"),     namespace="dashboard")),
-    path("settings/",      include(("apps.settings.urls",      "settings"),      namespace="settings")),
+    path(
+        "leave/",
+        include(("apps.leave.urls", "leave"), namespace="leave"),
+    ),
+    path(
+        "petty_cash/",
+        include(("apps.petty_cash.urls", "petty_cash"), namespace="petty_cash"),
+    ),
+    path(
+        "sales/",
+        include(("apps.sales.urls", "sales"), namespace="sales"),
+    ),
+    path(
+        "reimbursement/",
+        include(("apps.reimbursement.urls", "reimbursement"), namespace="reimbursement"),
+    ),
+    path(
+        "tasks/",
+        include(("apps.tasks.urls", "tasks"), namespace="tasks"),
+    ),
+    path(
+        "reports/",
+        include(("apps.reports.urls", "reports"), namespace="reports"),
+    ),
+    path(
+        "users/",
+        include(("apps.users.urls", "users"), namespace="users"),
+    ),
+    path(
+        "dashboard/",
+        include(("dashboard.urls", "dashboard"), namespace="dashboard"),
+    ),
+    path(
+        "settings/",
+        include(("apps.settings.urls", "settings"), namespace="settings"),
+    ),
 
     # Recruitment
-    path("recruitment/",   include(("apps.recruitment.urls",   "recruitment"),   namespace="recruitment")),
+    path(
+        "recruitment/",
+        include(("apps.recruitment.urls", "recruitment"), namespace="recruitment"),
+    ),
 
-    # KAM (Performance) module
-    path("kam/", include(("apps.kam.urls", "kam"), namespace="kam")),
+    # KAM Performance module
+    path(
+        "kam/",
+        include(("apps.kam.urls", "kam"), namespace="kam"),
+    ),
 
-    # Compatibility alias (non-namespaced reverse)
-    # NOTE: use visit_batches_page because that is what apps/kam/urls.py exposes
+    # Compatibility alias: non-namespaced reverse
     path("kam/batches/", kam_views.visit_batches_page, name="visit_batches"),
 
-    # Root → dashboard
-    path("", RedirectView.as_view(pattern_name="dashboard:home", permanent=False), name="site-root"),
+    # Vendor Payments
+    path(
+        "vendor/",
+        include(("apps.vendor.urls", "vendor"), namespace="vendor"),
+    ),
 
-    path('vendor/', include('apps.vendor.urls', namespace='vendor')),
+    # Root to dashboard
+    path(
+        "",
+        RedirectView.as_view(pattern_name="dashboard:home", permanent=False),
+        name="site-root",
+    ),
 
     # Healthcheck aliases
-    path("up",  healthcheck, name="healthcheck-no-slash"),
+    path("up", healthcheck, name="healthcheck-no-slash"),
     path("up/", healthcheck, name="healthcheck"),
     path("healthz", healthcheck),
     path("healthz/", healthcheck),
 
-    # Robots + favicon
+    # Robots and favicon
     path("robots.txt", robots_txt),
-    re_path(r"^favicon\.ico$", RedirectView.as_view(url=f"{settings.STATIC_URL}favicon.ico", permanent=False)),
+    re_path(
+        r"^favicon\.ico$",
+        RedirectView.as_view(
+            url=f"{settings.STATIC_URL}favicon.ico",
+            permanent=False,
+        ),
+    ),
 
-    # Internal cron endpoints (protected by CRON_SECRET)
-    path("internal/cron/due-today/", new_cron_views.due_today_assignments_hook, name="cron-due-today"),
-    path("internal/cron/pending-7pm/", legacy_cron_views.pending_summary_7pm, name="cron-pending-7pm"),
-    path("internal/cron/employee-digest/", legacy_cron_views.employee_digest, name="cron-employee-digest"),
+    # Internal cron endpoints protected by CRON_SECRET inside the views
+    path(
+        "internal/cron/due-today/",
+        new_cron_views.due_today_assignments_hook,
+        name="cron-due-today",
+    ),
+    path(
+        "internal/cron/pending-7pm/",
+        legacy_cron_views.pending_summary_7pm,
+        name="cron-pending-7pm",
+    ),
+    path(
+        "internal/cron/employee-digest/",
+        legacy_cron_views.employee_digest,
+        name="cron-employee-digest",
+    ),
 ]
 
-# ---------------------------------------------------------------------
-# Serve MEDIA in ALL environments (Render needs this)
-# ---------------------------------------------------------------------
-urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
+# ---------------------------------------------------------------------
 # Optional: Django Debug Toolbar
+# ---------------------------------------------------------------------
 if "debug_toolbar" in settings.INSTALLED_APPS:
-    urlpatterns = [path("__debug__/", include("debug_toolbar.urls"))] + urlpatterns
+    urlpatterns = [
+        path("__debug__/", include("debug_toolbar.urls")),
+    ] + urlpatterns
 
 
 # ---------------------------------------------------------------------
@@ -108,19 +168,39 @@ if "debug_toolbar" in settings.INSTALLED_APPS:
 def _plain(status: int, msg: str):
     return HttpResponse(msg, content_type="text/plain", status=status)
 
-def bad_request(request, exception=None):        # 400
+
+def bad_request(request, exception=None):
     return _plain(400, "Bad Request")
 
-def permission_denied(request, exception=None):  # 403
+
+def permission_denied(request, exception=None):
     return _plain(403, "Permission Denied")
 
-def page_not_found(request, exception=None):     # 404
+
+def page_not_found(request, exception=None):
     return _plain(404, "Page Not Found")
 
-def server_error(request):                       # 500
+
+def server_error(request):
     return _plain(500, "Server Error")
+
 
 handler400 = bad_request
 handler403 = permission_denied
 handler404 = page_not_found
 handler500 = server_error
+
+
+# ---------------------------------------------------------------------
+# Serve uploaded MEDIA files on Render
+#
+# Required because:
+# - Vendor invoice files are stored under settings.MEDIA_ROOT
+# - Google Sheet links point to settings.MEDIA_URL
+# - DEBUG is False in production
+#
+# Current production values:
+# MEDIA_URL  = /media/
+# MEDIA_ROOT = /opt/render/project/src/db
+# ---------------------------------------------------------------------
+urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
