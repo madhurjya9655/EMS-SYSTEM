@@ -1,0 +1,28 @@
+Hello {{ employee_name }},
+
+Your leave request has been submitted successfully.
+
+Leave Details
+-------------
+Leave ID: {{ leave_id }}
+Type: {{ leave_type }}
+Status: {{ status }}
+Duration: {% if is_half_day %}Half-day (0.5 day){% else %}{{ duration_days }} days{% endif %}
+From (IST): {{ start_at_ist }}
+To (IST):   {{ end_at_ist }}
+{% if reason %}Reason: {{ reason }}{% endif %}
+
+Leave Balance After This Application
+------------------------------------
+Total Paid Leave Quota: {{ total_paid_leaves }}
+Used Paid Leaves: {{ paid_leaves_taken }}
+Available Leave: {{ available_leave_after_application }}
+Unpaid Leaves: {{ unpaid_leaves }}
+
+Note:
+Pending and approved full-day leaves are counted in used paid leaves.
+Half-day leave is shown as 0.5 day in leave history, but currently does not reduce your paid leave balance.
+
+{% if site_url %}Open EMS: {{ site_url }}{% endif %}
+
+— BOS Lakshya

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en" style="margin:0;padding:0;background:#f6f8fb;">
+<head>
+  <meta charset="utf-8">
+  <meta name="x-apple-disable-message-reformatting">
+  <meta name="color-scheme" content="light only">
+  <title>Leave Submitted — #{{ leave_id }}</title>
+</head>
+
+<body style="margin:0;padding:0;background:#f6f8fb;">
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f6f8fb;">
+    <tr>
+      <td align="center" style="padding:24px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="640" style="max-width:640px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5eaf0;">
+
+          <tr>
+            <td style="background:#0b5ed7;color:#ffffff;padding:22px 24px 18px 24px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+              <div style="font-size:20px;font-weight:800;line-height:1.25;">
+                Leave Request Submitted
+              </div>
+              <div style="font-size:13px;opacity:.9;margin-top:4px;">
+                Reference: #{{ leave_id }}
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:20px 24px 8px 24px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
+              <p style="margin:0 0 12px 0;font-size:15px;line-height:1.7;">
+                Hello <strong>{{ employee_name }}</strong>,
+              </p>
+              <p style="margin:0 0 12px 0;font-size:15px;line-height:1.7;">
+                Your leave request has been submitted successfully.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 24px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border:1px solid #e5eaf0;border-radius:10px;overflow:hidden;">
+                <tr>
+                  <td style="background:#f8fafc;padding:10px 14px;font-weight:800;font-size:13px;color:#334155;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+                    Leave Details
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:12px 14px;font-size:14px;color:#0f172a;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.7;">
+                    <div><strong>Type:</strong> {{ leave_type }}</div>
+                    <div><strong>Status:</strong> {{ status }}</div>
+                    <div>
+                      <strong>Duration:</strong>
+                      {% if is_half_day %}
+                        Half-day (0.5 day)
+                      {% else %}
+                        {{ duration_days }} days
+                      {% endif %}
+                    </div>
+                    <div><strong>From (IST):</strong> {{ start_at_ist }}</div>
+                    <div><strong>To (IST):</strong> {{ end_at_ist }}</div>
+
+                    {% if reason %}
+                      <div style="margin-top:6px;"><strong>Reason:</strong> {{ reason }}</div>
+                    {% endif %}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr><td style="height:12px"></td></tr>
+
+          <tr>
+            <td style="padding:0 24px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border:1px solid #bbf7d0;border-radius:10px;overflow:hidden;">
+                <tr>
+                  <td style="background:#f0fdf4;padding:10px 14px;font-weight:800;font-size:13px;color:#166534;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+                    Leave Balance After This Application
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:12px 14px;font-size:14px;color:#0f172a;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.8;">
+                    <div><strong>Total Paid Leave Quota:</strong> {{ total_paid_leaves }}</div>
+                    <div><strong>Used Paid Leaves:</strong> {{ paid_leaves_taken }}</div>
+
+                    <div style="font-size:18px;margin-top:8px;color:#166534;">
+                      <strong>Available Leave:</strong> {{ available_leave_after_application }}
+                    </div>
+
+                    <div><strong>Unpaid Leaves:</strong> {{ unpaid_leaves }}</div>
+
+                    <div style="margin-top:10px;font-size:12px;color:#64748b;line-height:1.6;">
+                      Pending and approved full-day leaves are counted in used paid leaves.
+                      Half-day leave is shown as 0.5 day in leave history, but currently does not reduce your paid leave balance.
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:16px 24px 22px 24px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7280;font-size:12px;line-height:1.6;">
+              <div>This message was sent by BOS Lakshya.</div>
+
+              {% if site_url %}
+                <div style="margin-top:6px;">
+                  <a href="{{ site_url }}" style="color:#0b5ed7;text-decoration:none;">
+                    Open EMS
+                  </a>
+                </div>
+              {% endif %}
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

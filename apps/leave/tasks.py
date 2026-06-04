@@ -1,4 +1,4 @@
-# File: apps/leave/tasks.py
+# apps/leave/tasks.py
 from __future__ import annotations
 
 import logging
@@ -33,6 +33,7 @@ def send_delegation_reminders(self):
         )
 
         count = 0
+
         for reminder in reminders_to_send:
             try:
                 if reminder.should_send_reminder():
@@ -52,9 +53,9 @@ def send_delegation_reminders(self):
                                 },
                             )
                 else:
-                    # Deactivate if task is completed or leave ended
                     if not reminder.leave_handover.is_currently_active:
                         reminder.deactivate()
+
             except Exception as e:
                 logger.error("Failed to process reminder #%s: %s", reminder.id, e)
 
@@ -63,7 +64,6 @@ def send_delegation_reminders(self):
 
     except Exception as exc:
         logger.error("Error in send_delegation_reminders task: %s", exc)
-        # Retry with exponential backoff
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
@@ -77,7 +77,8 @@ def cleanup_expired_handovers(self):
 
         count = deactivate_expired_handovers()
         logger.info("Deactivated %s expired handover(s).", count)
-        return f"Deactivated {count} expired handovers"
+
+        return f"Deactivated {count} handovers"
 
     except Exception as exc:
         logger.error("Error in cleanup_expired_handovers task: %s", exc)
@@ -88,51 +89,97 @@ def cleanup_expired_handovers(self):
 def send_leave_emails_async(self, leave_id: int):
     """
     Send leave request emails asynchronously.
-    Respects employee-selected CCs and admin default CCs (multi) + legacy single CC.
+
+    Production behavior:
+    1. Manager / reporting person receives leave request email with approve/reject links.
+    2. Employee receives separate confirmation email showing available leave balance
+       after application.
+
+    Current leave balance rule preserved:
+    - Pending + Approved full-day leaves reduce paid balance.
+    - Half-day leave displays as 0.5 day but does not reduce paid balance.
     """
     try:
         from .models import LeaveRequest, LeaveDecisionAudit, DecisionAction
-        from .services.notifications import send_leave_request_email
+        from .services.notifications import (
+            send_leave_request_email,
+            send_leave_applied_confirmation_email,
+        )
 
         leave = (
-            LeaveRequest.objects.select_related("employee", "reporting_person", "cc_person", "leave_type")
+            LeaveRequest.objects.select_related(
+                "employee",
+                "reporting_person",
+                "cc_person",
+                "leave_type",
+            )
             .prefetch_related("cc_users")
             .get(id=leave_id)
         )
 
-        # CC from M2M + admin-managed default CCs + legacy single CC snapshot
-        # 1) employee-selected CCs
-        user_cc_emails = [u.email for u in leave.cc_users.all() if getattr(u, "email", None)]
+        # 1) Employee-selected CCs
+        user_cc_emails = [
+            u.email
+            for u in leave.cc_users.all()
+            if getattr(u, "email", None)
+        ]
 
-        # 2) admin-managed defaults (multi) via resolver
+        # 2) Admin-managed default CCs via resolver
         admin_multi_cc: List[str] = []
         try:
             _rp, cc_users = LeaveRequest.resolve_routing_multi_for(leave.employee)
-            admin_multi_cc = [u.email for u in cc_users if getattr(u, "email", None)]
+            admin_multi_cc = [
+                u.email
+                for u in cc_users
+                if getattr(u, "email", None)
+            ]
         except Exception:
             admin_multi_cc = []
 
-        # 3) legacy single snapshot on the row
-        legacy_cc = [leave.cc_person.email] if getattr(leave.cc_person, "email", None) else []
+        # 3) Legacy single CC snapshot on leave row
+        legacy_cc = [
+            leave.cc_person.email
+        ] if getattr(leave.cc_person, "email", None) else []
 
-        # merge & dedupe (case-insensitive)
+        # Merge and dedupe case-insensitively
         seen = set()
         all_cc: List[str] = []
-        for e in (admin_multi_cc + legacy_cc + user_cc_emails):
+
+        for e in admin_multi_cc + legacy_cc + user_cc_emails:
             low = (e or "").strip().lower()
             if low and low not in seen:
                 seen.add(low)
                 all_cc.append(e)
 
-        manager_email = leave.reporting_person.email if getattr(leave.reporting_person, "email", None) else None
+        manager_email = (
+            leave.reporting_person.email
+            if getattr(leave.reporting_person, "email", None)
+            else None
+        )
 
-        send_leave_request_email(leave, manager_email=manager_email, cc_list=all_cc)
+        # Manager / RP email with approval links.
+        send_leave_request_email(
+            leave,
+            manager_email=manager_email,
+            cc_list=all_cc,
+        )
+
+        # Employee confirmation email with available balance after application.
+        send_leave_applied_confirmation_email(leave)
 
         if LeaveDecisionAudit and DecisionAction:
-            LeaveDecisionAudit.log(leave, DecisionAction.EMAIL_SENT)
+            LeaveDecisionAudit.log(
+                leave,
+                DecisionAction.EMAIL_SENT,
+                extra={"kind": "request_bundle"},
+            )
 
-        logger.info("Sent leave request email for leave #%s", leave_id)
-        return f"Sent leave request email for leave {leave_id}"
+        logger.info(
+            "Sent leave request + employee confirmation emails for leave #%s",
+            leave_id,
+        )
+
+        return f"Sent leave request + employee confirmation emails for leave {leave_id}"
 
     except Exception as exc:
         logger.error("Error sending leave emails for #%s: %s", leave_id, exc)
@@ -140,7 +187,11 @@ def send_leave_emails_async(self, leave_id: int):
 
 
 @shared_task(bind=True, max_retries=3, name="leave.send_handover_emails_async")
-def send_handover_emails_async(self, leave_id: int, handover_ids: Optional[Iterable[int]] = None):
+def send_handover_emails_async(
+    self,
+    leave_id: int,
+    handover_ids: Optional[Iterable[int]] = None,
+):
     """
     Send handover emails asynchronously.
 
@@ -162,16 +213,19 @@ def send_handover_emails_async(self, leave_id: int, handover_ids: Optional[Itera
         leave = LeaveRequest.objects.get(id=leave_id)
 
         qs = LeaveHandover.objects.filter(leave_request=leave).select_related(
-            "new_assignee", "original_assignee"
+            "new_assignee",
+            "original_assignee",
         )
+
         if handover_ids:
             qs = qs.filter(id__in=list(handover_ids))
 
-        # Group by assignee (skip rows without a valid assignee)
         by_assignee: dict[int, List[LeaveHandover]] = {}
+
         for ho in qs:
             if not getattr(ho, "new_assignee_id", None):
                 continue
+
             by_assignee.setdefault(ho.new_assignee_id, []).append(ho)
 
         if not by_assignee:
@@ -179,9 +233,11 @@ def send_handover_emails_async(self, leave_id: int, handover_ids: Optional[Itera
             return "No handover emails to send"
 
         sent_to = 0
+
         for assignee_id, items in by_assignee.items():
             try:
                 assignee = items[0].new_assignee
+
                 send_handover_email(leave, assignee, items)
                 sent_to += 1
 
@@ -192,7 +248,6 @@ def send_handover_emails_async(self, leave_id: int, handover_ids: Optional[Itera
                         extra={"assignee_id": assignee_id},
                     )
 
-                # Ensure reminders exist (default every 2 days)
                 for ho in items:
                     try:
                         DelegationReminder.objects.get_or_create(
@@ -204,11 +259,25 @@ def send_handover_emails_async(self, leave_id: int, handover_ids: Optional[Itera
                             },
                         )
                     except Exception as e:
-                        logger.error("Failed to create reminder for handover #%s: %s", ho.id, e)
-            except Exception as e:
-                logger.error("Failed to send handover email to assignee #%s: %s", assignee_id, e)
+                        logger.error(
+                            "Failed to create reminder for handover #%s: %s",
+                            ho.id,
+                            e,
+                        )
 
-        logger.info("Sent handover emails to %s assignee(s) for leave #%s", sent_to, leave_id)
+            except Exception as e:
+                logger.error(
+                    "Failed to send handover email to assignee #%s: %s",
+                    assignee_id,
+                    e,
+                )
+
+        logger.info(
+            "Sent handover emails to %s assignee(s) for leave #%s",
+            sent_to,
+            leave_id,
+        )
+
         return f"Sent handover emails to {sent_to} assignees"
 
     except Exception as exc:
@@ -219,13 +288,21 @@ def send_handover_emails_async(self, leave_id: int, handover_ids: Optional[Itera
 @shared_task(bind=True, max_retries=3, name="leave.send_leave_decision_email_async")
 def send_leave_decision_email_async(self, leave_id: int):
     """
-    Send leave decision email (approve/reject) asynchronously.
+    Send leave decision email after approve/reject.
     """
     try:
         from .models import LeaveRequest
         from .services.notifications import send_leave_decision_email
 
-        leave = LeaveRequest.objects.select_related("employee", "approver", "leave_type").get(id=leave_id)
+        leave = (
+            LeaveRequest.objects.select_related(
+                "employee",
+                "approver",
+                "leave_type",
+            )
+            .get(id=leave_id)
+        )
+
         send_leave_decision_email(leave)
 
         logger.info("Sent leave decision email for leave #%s", leave_id)
