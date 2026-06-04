@@ -576,39 +576,65 @@ def _leave_balances_for_user(user) -> Tuple[List[BalanceRow], float]:
     """
     Per-leave-type display rows used on dashboard.
 
-    MATCHED TO NEW BUSINESS RULE:
-    - Deduct on apply
-    - Count PENDING + APPROVED
-    - Half-day does NOT deduct from yearly quota
-    - Rejected leave automatically does not count
+    CURRENT BUSINESS RULE PRESERVED:
+    - Deduct on apply.
+    - PENDING + APPROVED count.
+    - Half-day does NOT deduct from yearly quota.
+
+    IMPORTANT:
+    Master annual available balance comes from:
+        get_employee_leave_balance_summary(user)
+
+    This function is kept only for old template compatibility where the dashboard
+    expects "balances" rows by leave type.
+
+    Do not use this function as source of truth for final available leave.
     """
     year = now_ist().year
     rows: List[BalanceRow] = []
-    types = list(LeaveType.objects.filter(name__in=ALLOWED_LEAVE_TYPE_NAMES).order_by("name"))
+
+    types = list(
+        LeaveType.objects
+        .filter(name__in=ALLOWED_LEAVE_TYPE_NAMES)
+        .order_by("name")
+    )
 
     active_leaves = (
-        LeaveRequest.objects.filter(
+        LeaveRequest.objects
+        .filter(
             employee=user,
             status__in=ACTIVE_DEDUCTION_STATUSES,
         )
         .select_related("leave_type")
-        .only("start_at", "end_at", "is_half_day", "leave_type_id", "status")
+        .only(
+            "start_at",
+            "end_at",
+            "is_half_day",
+            "leave_type_id",
+            "status",
+        )
     )
 
     used_by_type: Dict[int, float] = {}
+
     for lr in active_leaves:
         if not lr.leave_type_id:
             continue
+
         used = _blocked_days_in_year_ist(lr, year)
+
         if used <= 0:
             continue
+
         used_by_type[lr.leave_type_id] = used_by_type.get(lr.leave_type_id, 0.0) + used
 
     total_remaining = 0.0
+
     for lt in types:
         used = used_by_type.get(lt.id, 0.0)
         remaining = max(float(lt.default_days) - used, 0.0)
         total_remaining += remaining
+
         rows.append(
             BalanceRow(
                 type_name=lt.name,
@@ -617,8 +643,8 @@ def _leave_balances_for_user(user) -> Tuple[List[BalanceRow], float]:
                 remaining_days=remaining,
             )
         )
-    return rows, total_remaining
 
+    return rows, total_remaining
 
 @has_permission("leave_list")
 @login_required
@@ -637,17 +663,27 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 
     if is_admin_or_manager:
         User = get_user_model()
+
         all_users = list(
-            User.objects.filter(is_active=True)
+            User.objects
+            .filter(is_active=True)
             .only("id", "first_name", "last_name", "username", "email")
             .order_by("first_name", "last_name", "username")
         )
+
         raw_uid = (request.GET.get("user_id") or "").strip()
         selected_user_id = raw_uid
+
         if raw_uid:
             try:
                 viewed_user = get_object_or_404(
-                    User.objects.only("id", "first_name", "last_name", "username", "email"),
+                    User.objects.only(
+                        "id",
+                        "first_name",
+                        "last_name",
+                        "username",
+                        "email",
+                    ),
                     pk=int(raw_uid),
                     is_active=True,
                 )
@@ -658,7 +694,8 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     is_viewing_other = viewed_user.pk != request.user.pk
 
     leaves = (
-        LeaveRequest.objects.filter(employee=viewed_user)
+        LeaveRequest.objects
+        .filter(employee=viewed_user)
         .select_related("leave_type", "approver", "reporting_person")
         .order_by("-applied_at", "-id")
     )
@@ -671,6 +708,7 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             setattr(lr, "blocked_days", _blocked_days_total_ist(lr))
 
     pending_count = approved_count = rejected_count = 0
+
     for lr in leaves:
         if lr.status == LeaveStatus.PENDING:
             pending_count += 1
@@ -679,8 +717,19 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         elif lr.status == LeaveStatus.REJECTED:
             rejected_count += 1
 
-    balances, _ = _leave_balances_for_user(viewed_user)
+    # Old per-leave-type rows retained for backward template compatibility.
+    # Do NOT treat this as source of truth for final available balance.
+    balances, _legacy_total_remaining = _leave_balances_for_user(viewed_user)
+
+    # Source of truth for dashboard available leave.
+    # This uses EmployeeLeaveBalance + carry_forward_adjustment.
     annual_leave_balance = get_employee_leave_balance_summary(viewed_user)
+
+    available_leave_balance = annual_leave_balance.remaining_paid_leaves
+    total_paid_leaves = annual_leave_balance.total_paid_leaves
+    paid_leaves_taken = annual_leave_balance.paid_leaves_taken
+    unpaid_leaves = annual_leave_balance.unpaid_leaves
+    carry_forward_adjustment = annual_leave_balance.carry_forward_adjustment
 
     return render(
         request,
@@ -688,8 +737,18 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         {
             "employee_header": header,
             "leaves": leaves,
+
+            # Existing context keys retained.
             "balances": balances,
             "annual_leave_balance": annual_leave_balance,
+
+            # New explicit balance keys for templates.
+            "available_leave_balance": available_leave_balance,
+            "total_paid_leaves": total_paid_leaves,
+            "paid_leaves_taken": paid_leaves_taken,
+            "unpaid_leaves": unpaid_leaves,
+            "carry_forward_adjustment": carry_forward_adjustment,
+
             "now_ist": now,
             "is_admin_or_manager": is_admin_or_manager,
             "is_viewing_other": is_viewing_other,
@@ -701,7 +760,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             "rejected_count": rejected_count,
         },
     )
-
 
 @has_permission("leave_apply")
 @login_required
@@ -883,20 +941,29 @@ def apply_leave(request: HttpRequest) -> HttpResponse:
 @login_required
 def my_leaves(request: HttpRequest) -> HttpResponse:
     leaves = (
-        LeaveRequest.objects.filter(employee=request.user)
+        LeaveRequest.objects
+        .filter(employee=request.user)
         .select_related("leave_type", "approver")
         .order_by("-applied_at", "-id")
     )
+
     annual_leave_balance = get_employee_leave_balance_summary(request.user)
+
     return render(
         request,
         "leave/my_leaves.html",
         {
             "leaves": leaves,
             "annual_leave_balance": annual_leave_balance,
+
+            # Explicit balance keys for template safety.
+            "available_leave_balance": annual_leave_balance.remaining_paid_leaves,
+            "total_paid_leaves": annual_leave_balance.total_paid_leaves,
+            "paid_leaves_taken": annual_leave_balance.paid_leaves_taken,
+            "unpaid_leaves": annual_leave_balance.unpaid_leaves,
+            "carry_forward_adjustment": annual_leave_balance.carry_forward_adjustment,
         },
     )
-
 
 @has_permission("leave_pending_manager")
 @login_required
@@ -932,18 +999,31 @@ def manager_pending(request: HttpRequest) -> HttpResponse:
 def _build_approval_context(leave: LeaveRequest) -> Dict[str, object]:
     emp = leave.employee
     designation = ""
+
     try:
         Profile = django_apps.get_model("users", "Profile")
+
         if Profile:
             prof = Profile.objects.filter(user=emp).first()
+
             if prof and getattr(prof, "designation", None):
                 designation = prof.designation or ""
+
     except Exception:
         designation = ""
 
+    annual_leave_balance = get_employee_leave_balance_summary(
+        emp,
+        leave.start_date,
+    )
+
     return {
         "leave": leave,
-        "employee_full_name": (getattr(emp, "get_full_name", lambda: "")() or emp.username or "").strip(),
+        "employee_full_name": (
+            getattr(emp, "get_full_name", lambda: "")()
+            or emp.username
+            or ""
+        ).strip(),
         "employee_designation": designation,
         "employee_email": (emp.email or "").strip(),
         "leave_type_name": getattr(leave.leave_type, "name", str(leave.leave_type)),
@@ -952,7 +1032,14 @@ def _build_approval_context(leave: LeaveRequest) -> Dict[str, object]:
         "is_half_day": bool(leave.is_half_day),
         "reason": leave.reason or "",
         "attachment": getattr(leave, "attachment", None),
-        "annual_leave_balance": get_employee_leave_balance_summary(emp, leave.start_date),
+
+        # Source of truth for manager approval page.
+        "annual_leave_balance": annual_leave_balance,
+        "available_leave_balance": annual_leave_balance.remaining_paid_leaves,
+        "total_paid_leaves": annual_leave_balance.total_paid_leaves,
+        "paid_leaves_taken": annual_leave_balance.paid_leaves_taken,
+        "unpaid_leaves": annual_leave_balance.unpaid_leaves,
+        "carry_forward_adjustment": annual_leave_balance.carry_forward_adjustment,
     }
 
 
