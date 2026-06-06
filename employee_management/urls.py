@@ -77,9 +77,15 @@ urlpatterns = [
 
     # Apps
     path("leave/", include(("apps.leave.urls", "leave"), namespace="leave")),
-    path("petty_cash/", include(("apps.petty_cash.urls", "petty_cash"), namespace="petty_cash")),
+    path(
+        "petty_cash/",
+        include(("apps.petty_cash.urls", "petty_cash"), namespace="petty_cash"),
+    ),
     path("sales/", include(("apps.sales.urls", "sales"), namespace="sales")),
-    path("reimbursement/", include(("apps.reimbursement.urls", "reimbursement"), namespace="reimbursement")),
+    path(
+        "reimbursement/",
+        include(("apps.reimbursement.urls", "reimbursement"), namespace="reimbursement"),
+    ),
     path("tasks/", include(("apps.tasks.urls", "tasks"), namespace="tasks")),
     path("reports/", include(("apps.reports.urls", "reports"), namespace="reports")),
     path("users/", include(("apps.users.urls", "users"), namespace="users")),
@@ -87,7 +93,10 @@ urlpatterns = [
     path("settings/", include(("apps.settings.urls", "settings"), namespace="settings")),
 
     # Recruitment
-    path("recruitment/", include(("apps.recruitment.urls", "recruitment"), namespace="recruitment")),
+    path(
+        "recruitment/",
+        include(("apps.recruitment.urls", "recruitment"), namespace="recruitment"),
+    ),
 
     # KAM Performance module
     path("kam/", include(("apps.kam.urls", "kam"), namespace="kam")),
@@ -99,7 +108,11 @@ urlpatterns = [
     path("vendor/", include(("apps.vendor.urls", "vendor"), namespace="vendor")),
 
     # Root to dashboard
-    path("", RedirectView.as_view(pattern_name="dashboard:home", permanent=False), name="site-root"),
+    path(
+        "",
+        RedirectView.as_view(pattern_name="dashboard:home", permanent=False),
+        name="site-root",
+    ),
 
     # Healthcheck aliases
     path("up", healthcheck, name="healthcheck-no-slash"),
@@ -135,13 +148,20 @@ urlpatterns = [
     ),
 
     # -----------------------------------------------------------------
-    # Serve uploaded MEDIA files on Render even when DEBUG=False
+    # Serve uploaded MEDIA files.
     #
-    # Required for:
+    # Required for email attachment buttons:
     # /media/vendor_payments/invoices/...
+    # /media/vendor_payments/bank_details/...
     #
-    # MEDIA_URL  = /media/
-    # MEDIA_ROOT = /opt/render/project/src/db
+    # IMPORTANT:
+    # On Render, MEDIA_ROOT must point to persistent disk storage.
+    # Example:
+    # MEDIA_URL = "/media/"
+    # MEDIA_ROOT = "/opt/render/project/src/db"
+    #
+    # If MEDIA_ROOT points to temporary filesystem, uploaded files may
+    # disappear after deploy/restart.
     # -----------------------------------------------------------------
     re_path(
         r"^media/(?P<path>.*)$",

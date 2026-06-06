@@ -1,0 +1,56 @@
+Vendor Payment Approval Required
+
+A new vendor payment request has been submitted and requires review.
+
+Request Information
+
+Request ID:
+{{ obj.request_id }}
+
+Vendor:
+{{ obj.vendor_display_name }}
+
+Vendor Type:
+{{ obj.vendor_type_display_safe }}
+
+Invoice Number:
+{{ obj.invoice_number }}
+
+Invoice Date:
+{{ obj.invoice_date|date:"d-m-Y" }}
+
+Base Amount:
+INR {{ obj.base_amount }}
+
+GST Amount:
+INR {{ obj.gst_amount }}
+
+Total Amount:
+INR {{ obj.total_amount }}
+
+Submitted By:
+{{ submitted_by }}
+
+Description:
+{{ obj.description }}
+
+Invoice Attachment:
+{% if invoice_available %}Available{% else %}Not Available{% endif %}
+
+Bank Details Attachment:
+{% if bank_attachment_available %}Available{% else %}Not Available{% endif %}
+
+Review Request:
+{{ review_url }}
+
+{% if invoice_url %}
+Open Invoice Attachment:
+{{ invoice_url }}
+{% endif %}
+
+{% if bank_attachment_url %}
+Open Bank Details Attachment:
+{{ bank_attachment_url }}
+{% endif %}
+
+This is a system-generated email from BOS Lakshya ERP.

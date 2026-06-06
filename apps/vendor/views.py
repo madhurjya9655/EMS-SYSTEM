@@ -14,6 +14,7 @@ from django.http import JsonResponse
 
 from .models import Vendor, VendorPaymentRequest, VendorApprovalConfig
 from .forms import VendorPaymentRequestForm, VendorApprovalConfigForm
+from .services import send_vendor_payment_submission_email
 from apps.users.permissions import _user_permission_codes
 
 logger = logging.getLogger(__name__)
@@ -221,37 +222,15 @@ def _is_admin_user(user):
 # ── Email helpers ─────────────────────────────────────────────────────────────
 
 def _send_submission_email(request, obj):
-    config = VendorApprovalConfig.get_config()
-    to_list = config.get_finance_email_list()
+    """
+    Backward-compatible wrapper.
 
-    if not to_list:
-        return
+    Keep this function name because new_request() and resubmit()
+    already call _send_submission_email().
 
-    subject = f"New Vendor Payment Request — {obj.request_id}"
-
-    body = (
-        f"A new vendor payment request has been submitted and requires finance approval.\n\n"
-        f"Request ID   : {obj.request_id}\n"
-        f"Vendor       : {obj.vendor_display_name}\n"
-        f"Vendor Type  : {obj.vendor_type_display_safe}\n"
-        f"Invoice No   : {obj.invoice_number}\n"
-        f"Total Amount : INR {obj.total_amount}\n"
-        f"Submitted By : {obj.created_by.get_full_name() or obj.created_by.username}\n\n"
-        f"Please log in to review and approve.\n{request.build_absolute_uri('/')}"
-    )
-
-    try:
-        EmailMessage(
-            subject=subject,
-            body=body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            to=to_list,
-        ).send(fail_silently=True)
-    except Exception:
-        logger.exception(
-            "Vendor submission email failed for request pk=%s",
-            getattr(obj, "pk", None),
-        )
+    Actual production email logic is now inside apps/vendor/services.py.
+    """
+    send_vendor_payment_submission_email(request, obj)
 
 
 def _send_finance_approved_email(request, obj):
@@ -822,7 +801,10 @@ def mark_paid(request, pk):
             obj.save()
 
     except ValidationError as exc:
-        messages.error(request, exc.messages[0] if hasattr(exc, "messages") else str(exc))
+        messages.error(
+            request,
+            exc.messages[0] if hasattr(exc, "messages") else str(exc),
+        )
         return redirect("vendor:detail", pk=pk)
     except Exception:
         logger.exception(

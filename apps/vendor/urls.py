@@ -25,6 +25,7 @@ urlpatterns = [
     path("approval-queue/", views.approval_queue, name="approval_queue"),
 
     # Detail page
+    # Used by the approval email Review Request button.
     path("detail/<int:pk>/", views.detail, name="detail"),
 
     # Workflow actions
