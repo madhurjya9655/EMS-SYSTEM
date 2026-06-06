@@ -1630,61 +1630,36 @@ def _dedupe_balance_specs(specs: List[Tuple[int, date, date]]) -> List[Tuple[int
 
 
 def _run_leave_balance_sync(specs: List[Tuple[int, date, date]]) -> None:
+    """
+    Finalized leave balance protection.
+
+    Earlier behavior:
+        LeaveRequest save/delete triggered recalculation of EmployeeLeaveBalance
+        from live leave records.
+
+    New production behavior:
+        Management-approved EmployeeLeaveBalance rows are the source of truth.
+        LeaveRequest records must not overwrite finalized balance rows.
+
+    This keeps:
+        - LeaveRequest history
+        - approval workflow
+        - task blocking
+        - handover logic
+
+    But stops:
+        - automatic balance overwrite
+        - dashboard mismatch after Excel import
+    """
     if not specs:
         return
 
-    from .utils import sync_employee_leave_balance_for_range
+    logger.info(
+        "Leave balance auto-sync skipped. EmployeeLeaveBalance is finalized source of truth. specs=%s",
+        specs,
+    )
 
-    grouped: Dict[int, Tuple[date, date]] = {}
-    user_ids = set()
-
-    for employee_id, start_date, end_date in specs:
-        user_ids.add(employee_id)
-
-        if employee_id not in grouped:
-            grouped[employee_id] = (start_date, end_date)
-            continue
-
-        current_start, current_end = grouped[employee_id]
-
-        grouped[employee_id] = (
-            min(current_start, start_date),
-            max(current_end, end_date),
-        )
-
-    users = {
-        user.id: user
-        for user in User.objects.filter(id__in=list(user_ids))
-    }
-
-    for employee_id, date_range in grouped.items():
-        range_start, range_end = date_range
-        employee = users.get(employee_id)
-
-        if not employee:
-            continue
-
-        try:
-            sync_employee_leave_balance_for_range(
-                employee=employee,
-                range_start=range_start,
-                range_end=range_end,
-            )
-
-            logger.info(
-                "Leave balance synced for employee_id=%s range=%s..%s.",
-                employee_id,
-                range_start,
-                range_end,
-            )
-
-        except Exception:
-            logger.exception(
-                "Failed to sync leave balance for employee_id=%s range=%s..%s.",
-                employee_id,
-                range_start,
-                range_end,
-            )
+    return
 
 
 @receiver(pre_save, sender=LeaveRequest)

@@ -281,7 +281,7 @@ def apply_master_available_balance(
     - Existing LeaveRequest history is not modified.
 
     It updates only EmployeeLeaveBalance.carry_forward_adjustment in a way
-    that the existing sync formula produces the requested final available value.
+    that the existing formula produces the requested final available value.
     """
     leave_year_start, leave_year_end = get_leave_year_bounds(target_date)
 
@@ -329,13 +329,9 @@ def apply_master_available_balance(
         ]
     )
 
-    # Re-run the normal sync so the row is consistent with the existing
-    # production calculation path.
-    return sync_employee_leave_balance(
-        employee,
-        leave_year_start,
-        leave_year_end,
-    )
+    # Do not re-sync from LeaveRequest here.
+    # For finalized balances, EmployeeLeaveBalance is source of truth.
+    return balance
 
 
 @transaction.atomic
@@ -346,20 +342,9 @@ def apply_master_available_balances(
     strict: bool = True,
 ) -> List[EmployeeLeaveBalance]:
     """
-    Bulk apply finalized master available balances.
+    Bulk apply finalized available balances only.
 
-    name_to_balance example:
-        {
-            "Dnyaneshwar Kumavat": "31",
-            "Ganesh Malave": "39",
-        }
-
-    Matching strategy:
-    - first_name + last_name
-    - username exact
-
-    If strict=True:
-        Missing or ambiguous users raise an exception before updating.
+    This keeps old compatibility for final available balance imports.
     """
     prepared = []
     errors = []
@@ -450,6 +435,155 @@ def find_employee_by_display_name(full_name: str):
 
 
 # =============================================================================
+# FINALIZED BALANCE ROW HELPERS
+# =============================================================================
+
+@transaction.atomic
+def apply_finalized_leave_balance_row(
+    *,
+    employee,
+    carry_forward_adjustment,
+    total_paid_leaves,
+    paid_leaves_taken,
+    remaining_paid_leaves,
+    unpaid_leaves=Decimal("0.0"),
+    target_date: date | None = None,
+) -> EmployeeLeaveBalance:
+    """
+    Store one management-approved finalized yearly balance row exactly as provided.
+
+    This is used when the approved balance sheet is the source of truth for:
+    - carry_forward_adjustment
+    - total_paid_leaves / Base + CF
+    - paid_leaves_taken / Used
+    - remaining_paid_leaves / Available
+
+    It does not edit LeaveRequest history.
+    """
+    leave_year_start, leave_year_end = get_leave_year_bounds(target_date)
+
+    balance, _created = EmployeeLeaveBalance.objects.get_or_create(
+        employee=employee,
+        leave_year_start=leave_year_start,
+        leave_year_end=leave_year_end,
+        defaults={
+            "total_paid_leaves": Decimal(str(total_paid_leaves)),
+            "paid_leaves_taken": Decimal(str(paid_leaves_taken)),
+            "unpaid_leaves": Decimal(str(unpaid_leaves)),
+            "remaining_paid_leaves": Decimal(str(remaining_paid_leaves)),
+            "carry_forward_adjustment": Decimal(str(carry_forward_adjustment)),
+        },
+    )
+
+    balance.carry_forward_adjustment = Decimal(str(carry_forward_adjustment))
+    balance.total_paid_leaves = Decimal(str(total_paid_leaves))
+    balance.paid_leaves_taken = Decimal(str(paid_leaves_taken))
+    balance.unpaid_leaves = Decimal(str(unpaid_leaves))
+    balance.remaining_paid_leaves = Decimal(str(remaining_paid_leaves))
+
+    balance.save(
+        update_fields=[
+            "carry_forward_adjustment",
+            "total_paid_leaves",
+            "paid_leaves_taken",
+            "unpaid_leaves",
+            "remaining_paid_leaves",
+            "updated_at",
+        ]
+    )
+
+    return balance
+
+
+@transaction.atomic
+def apply_finalized_leave_balance_rows(
+    *,
+    name_to_row: dict,
+    target_date: date | None = None,
+    strict: bool = True,
+) -> List[EmployeeLeaveBalance]:
+    """
+    Bulk store management-approved finalized balance rows.
+
+    name_to_row example:
+        {
+            "Arvind Sangamnerkar": {
+                "cf": 8,
+                "base_cf": 32,
+                "used": 1,
+                "available": 31,
+            }
+        }
+
+    Tuple format is also supported:
+        {"Arvind Sangamnerkar": (8, 32, 1, 31)}
+    """
+    prepared = []
+    errors = []
+
+    for employee_name, row in name_to_row.items():
+        user = find_employee_by_display_name(employee_name)
+
+        if user is None:
+            errors.append(
+                {
+                    "name": employee_name,
+                    "error": "not_found",
+                    "matches": [],
+                }
+            )
+            continue
+
+        if isinstance(user, list):
+            errors.append(
+                {
+                    "name": employee_name,
+                    "error": "ambiguous",
+                    "matches": [
+                        {
+                            "id": u.id,
+                            "username": getattr(u, "username", ""),
+                            "email": getattr(u, "email", ""),
+                            "first_name": getattr(u, "first_name", ""),
+                            "last_name": getattr(u, "last_name", ""),
+                        }
+                        for u in user
+                    ],
+                }
+            )
+            continue
+
+        if isinstance(row, dict):
+            cf = row.get("cf")
+            base_cf = row.get("base_cf")
+            used = row.get("used")
+            available = row.get("available")
+        else:
+            cf, base_cf, used, available = row
+
+        prepared.append((user, employee_name, cf, base_cf, used, available))
+
+    if errors and strict:
+        raise ValueError(f"Employee matching errors: {errors}")
+
+    updated_rows: List[EmployeeLeaveBalance] = []
+
+    for user, _employee_name, cf, base_cf, used, available in prepared:
+        updated_rows.append(
+            apply_finalized_leave_balance_row(
+                employee=user,
+                carry_forward_adjustment=cf,
+                total_paid_leaves=base_cf,
+                paid_leaves_taken=used,
+                remaining_paid_leaves=available,
+                target_date=target_date,
+            )
+        )
+
+    return updated_rows
+
+
+# =============================================================================
 # BALANCE CALCULATION
 # =============================================================================
 
@@ -461,11 +595,8 @@ def calculate_leave_balance_for_period(
     """
     Compute one employee's leave balance for one leave year.
 
-    CURRENT PRODUCTION RULES PRESERVED:
-    - Deduct on apply: PENDING + APPROVED count.
-    - Half-day does not deduct from yearly paid leave.
-    - Rejected / Cancelled do not count.
-    - carry_forward_adjustment changes effective yearly quota.
+    This function is kept for investigation/reporting.
+    Dashboard read path should use stored EmployeeLeaveBalance.
     """
     total_taken = calculate_current_deductible_days_for_period(
         employee=employee,
@@ -506,48 +637,31 @@ def sync_employee_leave_balance(
     leave_year_end: date,
 ) -> EmployeeLeaveBalance:
     """
-    Create or update the yearly balance row for one employee.
+    Return the stored yearly balance row without recalculating it from LeaveRequest.
 
-    IMPORTANT:
-    carry_forward_adjustment is preserved from DB and never overwritten here.
+    Production rule for finalized FY balances:
+    EmployeeLeaveBalance is the source of truth after management approval.
 
-    This means master balance imports remain safe.
+    This intentionally does not overwrite:
+    - total_paid_leaves
+    - paid_leaves_taken
+    - unpaid_leaves
+    - remaining_paid_leaves
+    - carry_forward_adjustment
+
+    LeaveRequest history is preserved separately for audit and reporting.
     """
-    summary = calculate_leave_balance_for_period(
-        employee,
-        leave_year_start,
-        leave_year_end,
-    )
-
-    balance, created = EmployeeLeaveBalance.objects.get_or_create(
+    balance, _created = EmployeeLeaveBalance.objects.get_or_create(
         employee=employee,
         leave_year_start=leave_year_start,
         leave_year_end=leave_year_end,
         defaults={
-            "total_paid_leaves": summary.total_paid_leaves,
-            "paid_leaves_taken": summary.paid_leaves_taken,
-            "unpaid_leaves": summary.unpaid_leaves,
-            "remaining_paid_leaves": summary.remaining_paid_leaves,
+            "total_paid_leaves": ANNUAL_PAID_LEAVE_QUOTA,
+            "paid_leaves_taken": Decimal("0.0"),
+            "unpaid_leaves": Decimal("0.0"),
+            "remaining_paid_leaves": ANNUAL_PAID_LEAVE_QUOTA,
             "carry_forward_adjustment": Decimal("0.0"),
         },
-    )
-
-    if created:
-        return balance
-
-    balance.total_paid_leaves = summary.total_paid_leaves
-    balance.paid_leaves_taken = summary.paid_leaves_taken
-    balance.unpaid_leaves = summary.unpaid_leaves
-    balance.remaining_paid_leaves = summary.remaining_paid_leaves
-
-    balance.save(
-        update_fields=[
-            "total_paid_leaves",
-            "paid_leaves_taken",
-            "unpaid_leaves",
-            "remaining_paid_leaves",
-            "updated_at",
-        ]
     )
 
     return balance
@@ -559,7 +673,8 @@ def sync_employee_leave_balance_for_range(
     range_end: date | None,
 ) -> List[EmployeeLeaveBalance]:
     """
-    Sync leave balance for every leave year touched by the given date range.
+    Return stored leave balance rows for every leave year touched by date range.
+    Does not recalculate finalized balances from LeaveRequest.
     """
     if not range_start or not range_end:
         current_start, current_end = get_leave_year_bounds()
@@ -597,7 +712,8 @@ def get_or_sync_employee_leave_balance(
     target_date: date | None = None,
 ) -> EmployeeLeaveBalance:
     """
-    Return the synced yearly balance row for the leave year containing target_date.
+    Return the stored yearly balance row for the leave year containing target_date.
+    Does not recalculate finalized balances from LeaveRequest.
     """
     leave_year_start, leave_year_end = get_leave_year_bounds(target_date)
 
@@ -613,10 +729,10 @@ def get_employee_leave_balance_summary(
     target_date: date | None = None,
 ) -> LeaveBalanceSummary:
     """
-    Return a fresh LeaveBalanceSummary for the employee for the leave year
-    containing target_date.
+    Return stored yearly leave balance for dashboard and approval pages.
 
-    Dashboard uses this path.
+    Management-approved EmployeeLeaveBalance rows are the source of truth.
+    Do not recalculate from LeaveRequest on read.
     """
     leave_year_start, leave_year_end = get_leave_year_bounds(target_date)
 
@@ -647,10 +763,8 @@ def get_admin_leave_balance_rows(
     target_date: date | None = None,
 ) -> List[EmployeeLeaveBalance]:
     """
-    Return one synced leave balance row per active user for the leave year
-    containing target_date.
-
-    Used by admin / manager views.
+    Return stored leave balance rows for admin / manager views.
+    Does not recalculate finalized balances from LeaveRequest.
     """
     if users is None:
         users = User.objects.filter(is_active=True).order_by(
@@ -659,15 +773,24 @@ def get_admin_leave_balance_rows(
             "username",
         )
 
+    leave_year_start, leave_year_end = get_leave_year_bounds(target_date)
+
     rows: List[EmployeeLeaveBalance] = []
 
     for user in users:
-        rows.append(
-            get_or_sync_employee_leave_balance(
-                user,
-                target_date,
-            )
+        balance, _created = EmployeeLeaveBalance.objects.get_or_create(
+            employee=user,
+            leave_year_start=leave_year_start,
+            leave_year_end=leave_year_end,
+            defaults={
+                "total_paid_leaves": ANNUAL_PAID_LEAVE_QUOTA,
+                "paid_leaves_taken": Decimal("0.0"),
+                "unpaid_leaves": Decimal("0.0"),
+                "remaining_paid_leaves": ANNUAL_PAID_LEAVE_QUOTA,
+                "carry_forward_adjustment": Decimal("0.0"),
+            },
         )
+        rows.append(balance)
 
     return rows
 
