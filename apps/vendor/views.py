@@ -228,7 +228,7 @@ def _send_submission_email(request, obj):
     Keep this function name because new_request() and resubmit()
     already call _send_submission_email().
 
-    Actual production email logic is now inside apps/vendor/services.py.
+    Actual production email logic is inside apps/vendor/services.py.
     """
     send_vendor_payment_submission_email(request, obj)
 
@@ -242,11 +242,12 @@ def _send_finance_approved_email(request, obj):
     subject = f"Vendor Payment Ready for Final Approval — {obj.request_id}"
 
     body = (
-        f"A vendor payment has cleared finance review and awaits your final approval.\n\n"
+        "A vendor payment has cleared finance review and awaits your final approval.\n\n"
         f"Request ID       : {obj.request_id}\n"
         f"Vendor           : {obj.vendor_display_name}\n"
         f"Vendor Type      : {obj.vendor_type_display_safe}\n"
         f"Invoice No       : {obj.invoice_number}\n"
+        f"GST Type         : {obj.get_bill_type_display()}\n"
         f"Total Amount     : INR {obj.total_amount}\n"
         f"Finance Approved : {obj.finance_approved_by.get_full_name() or obj.finance_approved_by.username}\n\n"
         f"Please log in to give final approval.\n{request.build_absolute_uri('/')}"
@@ -306,10 +307,12 @@ def _send_rejection_email(request, obj):
     subject = f"Vendor Payment Request Rejected — {obj.request_id}"
 
     body = (
-        f"Your vendor payment request has been rejected.\n\n"
+        "Your vendor payment request has been rejected.\n\n"
         f"Request ID : {obj.request_id}\n"
         f"Vendor     : {obj.vendor_display_name}\n"
         f"Vendor Type: {obj.vendor_type_display_safe}\n"
+        f"Invoice No : {obj.invoice_number}\n"
+        f"GST Type   : {obj.get_bill_type_display()}\n"
         f"Amount     : INR {obj.total_amount}\n"
         f"Remarks    : {obj.remarks or '—'}\n\n"
         f"Please contact your approver for details.\n{request.build_absolute_uri('/')}"

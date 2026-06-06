@@ -42,6 +42,27 @@ def _absolute_file_url(request, file_field) -> str:
         return ""
 
 
+def _file_display_name(file_field) -> str:
+    """
+    Return only the uploaded file name from FileField path.
+
+    Example:
+    vendor_payments/invoices/2026/06/invoice.pdf
+
+    becomes:
+    invoice.pdf
+    """
+    if not file_field:
+        return ""
+
+    file_name = getattr(file_field, "name", "")
+
+    if not file_name:
+        return ""
+
+    return file_name.split("/")[-1]
+
+
 def _attach_file_if_possible(email, file_field, label: str) -> None:
     """
     Attach file physically to the email when local file path is available.
@@ -122,6 +143,9 @@ def send_vendor_payment_submission_email(request, obj) -> None:
     invoice_url = _absolute_file_url(request, obj.attachment)
     bank_attachment_url = _absolute_file_url(request, obj.bank_attachment)
 
+    invoice_name = _file_display_name(obj.attachment)
+    bank_attachment_name = _file_display_name(obj.bank_attachment)
+
     submitted_by = ""
     if getattr(obj, "created_by_id", None):
         submitted_by = obj.created_by.get_full_name() or obj.created_by.username
@@ -134,6 +158,9 @@ def send_vendor_payment_submission_email(request, obj) -> None:
         "submitted_by": submitted_by,
         "invoice_available": bool(obj.attachment),
         "bank_attachment_available": bool(obj.bank_attachment),
+        "invoice_name": invoice_name,
+        "bank_attachment_name": bank_attachment_name,
+        "bill_type": obj.get_bill_type_display(),
     }
 
     text_body = render_to_string(

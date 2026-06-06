@@ -13,8 +13,14 @@ Vendor:
 Vendor Type:
 {{ obj.vendor_type_display_safe }}
 
+Invoice Name:
+{% if invoice_name %}{{ invoice_name }}{% else %}Not Available{% endif %}
+
 Invoice Number:
 {{ obj.invoice_number }}
+
+GST Type:
+{{ bill_type }}
 
 Invoice Date:
 {{ obj.invoice_date|date:"d-m-Y" }}
@@ -34,22 +40,26 @@ Submitted By:
 Description:
 {{ obj.description }}
 
+Attachments
+
 Invoice Attachment:
-{% if invoice_available %}Available{% else %}Not Available{% endif %}
+{% if invoice_available %}Available{% if invoice_name %} - {{ invoice_name }}{% endif %}{% else %}Not Available{% endif %}
 
 Bank Details Attachment:
-{% if bank_attachment_available %}Available{% else %}Not Available{% endif %}
+{% if bank_attachment_available %}Available{% if bank_attachment_name %} - {{ bank_attachment_name }}{% endif %}{% else %}Not Available{% endif %}
+
+Actions
 
 Review Request:
 {{ review_url }}
 
 {% if invoice_url %}
-Open Invoice Attachment:
+Open Invoice:
 {{ invoice_url }}
 {% endif %}
 
 {% if bank_attachment_url %}
-Open Bank Details Attachment:
+Open Bank Details:
 {{ bank_attachment_url }}
 {% endif %}
 
