@@ -567,7 +567,18 @@ def new_request(request):
         messages.error(request, "Please fix the errors below.")
     else:
         form = VendorPaymentRequestForm()
-        formset = VendorPaymentInvoiceFormSet(prefix="invoices")
+
+        # Important:
+        # Because formset extra=0 in forms.py, we manually create exactly
+        # one blank invoice row on the new request page.
+        formset = VendorPaymentInvoiceFormSet(
+            prefix="invoices",
+            initial=[
+                {
+                    "gst_amount": 0,
+                }
+            ],
+        )
 
     return render(
         request,
@@ -578,7 +589,6 @@ def new_request(request):
             "is_edit": False,
         },
     )
-
 
 @login_required
 def edit_request(request, pk):

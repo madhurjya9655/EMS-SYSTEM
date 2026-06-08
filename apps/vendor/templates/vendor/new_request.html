@@ -24,7 +24,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="card" style="max-width:1200px">
+<div class="card">
   <div class="card-header">
     <span>
       <i class="fa-solid fa-file-invoice-dollar me-2 text-primary"></i>
@@ -102,14 +102,14 @@
           </button>
         </div>
 
-        <div class="alert alert-info">
+        <div class="alert alert-light border">
           Add all invoices for this vendor payment request. The system will calculate the grand total automatically.
         </div>
 
         {{ formset.management_form }}
 
-        <div class="table-responsive">
-          <table class="table table-bordered align-middle" id="invoiceTable">
+        <div class="table-responsive" style="overflow-x:auto;">
+          <table class="table table-bordered align-middle" id="invoiceTable" style="min-width:1450px;">
             <thead>
               <tr>
                 <th style="min-width:150px">Invoice Date</th>
@@ -118,8 +118,8 @@
                 <th style="min-width:140px">Base Amount</th>
                 <th style="min-width:140px">GST Amount</th>
                 <th style="min-width:140px">Total Amount</th>
-                <th style="min-width:220px">Description</th>
-                <th style="min-width:220px">Invoice Attachment</th>
+                <th style="min-width:240px">Description</th>
+                <th style="min-width:240px">Invoice Attachment</th>
                 <th style="min-width:90px">Remove</th>
               </tr>
             </thead>
