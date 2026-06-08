@@ -12,6 +12,15 @@ urlpatterns = [
     # New payment request
     path("new/", views.new_request, name="new_request"),
 
+    # Edit payment request
+    # Used for draft/rejected requests before approval locking.
+    # Supports:
+    # - add invoice
+    # - remove invoice
+    # - update invoice
+    # - submit after editing
+    path("detail/<int:pk>/edit/", views.edit_request, name="edit_request"),
+
     # My requests
     # IMPORTANT:
     # Keep /vendor/my/ because your system/browser is already calling it.

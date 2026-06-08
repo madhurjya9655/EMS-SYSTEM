@@ -1,10 +1,21 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}New Vendor Payment{% endblock %}
-{% block navbar_title %}New Vendor Payment{% endblock %}
-{% block breadcrumb %}Vendor Payments / New Request{% endblock %}
-{% block page_title %}New Payment Request{% endblock %}
+{% block title %}
+  {% if is_edit %}Edit Vendor Payment{% else %}New Vendor Payment{% endif %}
+{% endblock %}
+
+{% block navbar_title %}
+  {% if is_edit %}Edit Vendor Payment{% else %}New Vendor Payment{% endif %}
+{% endblock %}
+
+{% block breadcrumb %}
+  Vendor Payments / {% if is_edit %}Edit Request{% else %}New Request{% endif %}
+{% endblock %}
+
+{% block page_title %}
+  {% if is_edit %}Edit Payment Request{% else %}New Payment Request{% endif %}
+{% endblock %}
 
 {% block page_actions %}
   <a href="{% url 'vendor:my_requests' %}" class="btn btn-light btn-sm">
@@ -13,11 +24,15 @@
 {% endblock %}
 
 {% block content %}
-<div class="card" style="max-width:900px">
+<div class="card" style="max-width:1200px">
   <div class="card-header">
     <span>
       <i class="fa-solid fa-file-invoice-dollar me-2 text-primary"></i>
-      Vendor Payment Entry
+      {% if is_edit %}
+        Edit Vendor Payment Entry
+      {% else %}
+        Vendor Payment Entry
+      {% endif %}
     </span>
   </div>
 
@@ -31,171 +46,296 @@
         </div>
       {% endif %}
 
-      <div class="row g-3 mb-3">
-        <div class="col-md-6">
+      {% if formset.non_form_errors %}
+        <div class="alert alert-danger">
+          {{ formset.non_form_errors }}
+        </div>
+      {% endif %}
+
+      <div class="mb-4">
+        <h5 class="mb-3">
+          <i class="fa-solid fa-building me-2 text-primary"></i>
+          Step 1: Vendor Details
+        </h5>
+
+        <div class="row g-3 mb-3">
+          <div class="col-md-6">
+            <label class="form-label">
+              Vendor <span class="text-danger">*</span>
+            </label>
+            {{ form.vendor }}
+
+            {% if form.vendor.errors %}
+              <div class="form-text text-danger">
+                {{ form.vendor.errors }}
+              </div>
+            {% endif %}
+
+            <div class="form-text text-muted">
+              Select vendor from Vendor Master only.
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">Vendor Type</label>
+            {{ form.vendor_type_display }}
+
+            <div class="form-text text-muted">
+              Auto-filled from Vendor Setup. User cannot edit this.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <hr>
+
+      <div class="mb-4">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0">
+            <i class="fa-solid fa-receipt me-2 text-primary"></i>
+            Step 2: Invoice Details
+          </h5>
+
+          <button type="button" class="btn btn-primary btn-sm" id="addInvoiceRow">
+            <i class="fa-solid fa-plus"></i>
+            Add Invoice
+          </button>
+        </div>
+
+        <div class="alert alert-info">
+          Add all invoices for this vendor payment request. The system will calculate the grand total automatically.
+        </div>
+
+        {{ formset.management_form }}
+
+        <div class="table-responsive">
+          <table class="table table-bordered align-middle" id="invoiceTable">
+            <thead>
+              <tr>
+                <th style="min-width:150px">Invoice Date</th>
+                <th style="min-width:160px">Invoice Number</th>
+                <th style="min-width:130px">Bill Type</th>
+                <th style="min-width:140px">Base Amount</th>
+                <th style="min-width:140px">GST Amount</th>
+                <th style="min-width:140px">Total Amount</th>
+                <th style="min-width:220px">Description</th>
+                <th style="min-width:220px">Invoice Attachment</th>
+                <th style="min-width:90px">Remove</th>
+              </tr>
+            </thead>
+
+            <tbody id="invoiceFormsetBody">
+              {% for invoice_form in formset.forms %}
+                <tr class="invoice-row">
+                  <td>
+                    {{ invoice_form.id }}
+                    {{ invoice_form.invoice_date }}
+
+                    {% if invoice_form.invoice_date.errors %}
+                      <div class="form-text text-danger">
+                        {{ invoice_form.invoice_date.errors }}
+                      </div>
+                    {% endif %}
+                  </td>
+
+                  <td>
+                    {{ invoice_form.invoice_number }}
+
+                    {% if invoice_form.invoice_number.errors %}
+                      <div class="form-text text-danger">
+                        {{ invoice_form.invoice_number.errors }}
+                      </div>
+                    {% endif %}
+                  </td>
+
+                  <td>
+                    {{ invoice_form.bill_type }}
+
+                    {% if invoice_form.bill_type.errors %}
+                      <div class="form-text text-danger">
+                        {{ invoice_form.bill_type.errors }}
+                      </div>
+                    {% endif %}
+                  </td>
+
+                  <td>
+                    {{ invoice_form.base_amount }}
+
+                    {% if invoice_form.base_amount.errors %}
+                      <div class="form-text text-danger">
+                        {{ invoice_form.base_amount.errors }}
+                      </div>
+                    {% endif %}
+                  </td>
+
+                  <td>
+                    {{ invoice_form.gst_amount }}
+
+                    {% if invoice_form.gst_amount.errors %}
+                      <div class="form-text text-danger">
+                        {{ invoice_form.gst_amount.errors }}
+                      </div>
+                    {% endif %}
+                  </td>
+
+                  <td>
+                    <input
+                      type="text"
+                      class="form-control invoice-row-total"
+                      readonly
+                      placeholder="₹ 0.00"
+                    >
+                  </td>
+
+                  <td>
+                    {{ invoice_form.description }}
+
+                    {% if invoice_form.description.errors %}
+                      <div class="form-text text-danger">
+                        {{ invoice_form.description.errors }}
+                      </div>
+                    {% endif %}
+                  </td>
+
+                  <td>
+                    {{ invoice_form.invoice_attachment }}
+
+                    {% if invoice_form.invoice_attachment.errors %}
+                      <div class="form-text text-danger">
+                        {{ invoice_form.invoice_attachment.errors }}
+                      </div>
+                    {% endif %}
+                  </td>
+
+                  <td class="text-center">
+                    {% if invoice_form.DELETE %}
+                      <span class="d-none delete-field">
+                        {{ invoice_form.DELETE }}
+                      </span>
+                    {% endif %}
+
+                    <button type="button" class="btn btn-sm btn-danger remove-invoice-row">
+                      <i class="fa-solid fa-trash"></i>
+                    </button>
+                  </td>
+                </tr>
+
+                {% if invoice_form.non_field_errors %}
+                  <tr>
+                    <td colspan="9">
+                      <div class="alert alert-danger mb-0">
+                        {{ invoice_form.non_field_errors }}
+                      </div>
+                    </td>
+                  </tr>
+                {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <template id="emptyInvoiceFormTemplate">
+          <tr class="invoice-row">
+            <td>
+              {{ formset.empty_form.id }}
+              {{ formset.empty_form.invoice_date }}
+            </td>
+
+            <td>
+              {{ formset.empty_form.invoice_number }}
+            </td>
+
+            <td>
+              {{ formset.empty_form.bill_type }}
+            </td>
+
+            <td>
+              {{ formset.empty_form.base_amount }}
+            </td>
+
+            <td>
+              {{ formset.empty_form.gst_amount }}
+            </td>
+
+            <td>
+              <input
+                type="text"
+                class="form-control invoice-row-total"
+                readonly
+                placeholder="₹ 0.00"
+              >
+            </td>
+
+            <td>
+              {{ formset.empty_form.description }}
+            </td>
+
+            <td>
+              {{ formset.empty_form.invoice_attachment }}
+            </td>
+
+            <td class="text-center">
+              <span class="d-none delete-field">
+                {{ formset.empty_form.DELETE }}
+              </span>
+
+              <button type="button" class="btn btn-sm btn-danger remove-invoice-row">
+                <i class="fa-solid fa-trash"></i>
+              </button>
+            </td>
+          </tr>
+        </template>
+
+        <div class="d-flex justify-content-end mt-3">
+          <div class="p-3 rounded" style="background:var(--surface-alt,#f8f9fa);border:1px solid var(--border,#ddd);min-width:280px">
+            <div class="text-muted small">Grand Total</div>
+            <div class="fs-4 fw-bold">
+              ₹ <span id="grandTotalDisplay">0.00</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <hr>
+
+      <div class="mb-4">
+        <h5 class="mb-3">
+          <i class="fa-solid fa-building-columns me-2 text-primary"></i>
+          Step 3: Bank Details
+        </h5>
+
+        <div class="mb-3">
           <label class="form-label">
-            Vendor <span class="text-danger">*</span>
+            Bank Details Attachment
+            <small class="text-muted">(PDF/Image)</small>
           </label>
-          {{ form.vendor }}
 
-          {% if form.vendor.errors %}
+          {{ form.bank_attachment }}
+
+          {% if form.bank_attachment.errors %}
             <div class="form-text text-danger">
-              {{ form.vendor.errors }}
+              {{ form.bank_attachment.errors }}
+            </div>
+          {% endif %}
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">
+            Bank Details
+            <small class="text-muted">(Optional written details)</small>
+          </label>
+
+          {{ form.bank_details_text }}
+
+          {% if form.bank_details_text.errors %}
+            <div class="form-text text-danger">
+              {{ form.bank_details_text.errors }}
             </div>
           {% endif %}
 
           <div class="form-text text-muted">
-            Select vendor from Vendor Master only.
+            Example: Account Holder Name, Bank Name, Account Number, IFSC.
           </div>
-        </div>
-
-        <div class="col-md-6">
-          <label class="form-label">Vendor Type</label>
-          {{ form.vendor_type_display }}
-
-          <div class="form-text text-muted">
-            Auto-filled from Vendor Setup. User cannot edit this.
-          </div>
-        </div>
-      </div>
-
-      <div class="row g-3 mb-3">
-        <div class="col-md-4">
-          <label class="form-label">Invoice Date</label>
-          {{ form.invoice_date }}
-
-          {% if form.invoice_date.errors %}
-            <div class="form-text text-danger">
-              {{ form.invoice_date.errors }}
-            </div>
-          {% endif %}
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">Invoice Number</label>
-          {{ form.invoice_number }}
-
-          {% if form.invoice_number.errors %}
-            <div class="form-text text-danger">
-              {{ form.invoice_number.errors }}
-            </div>
-          {% endif %}
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">Bill Type</label>
-          {{ form.bill_type }}
-
-          {% if form.bill_type.errors %}
-            <div class="form-text text-danger">
-              {{ form.bill_type.errors }}
-            </div>
-          {% endif %}
-        </div>
-      </div>
-
-      <div class="row g-3 mb-3">
-        <div class="col-md-4">
-          <label class="form-label">Base Amount (₹)</label>
-          {{ form.base_amount }}
-
-          {% if form.base_amount.errors %}
-            <div class="form-text text-danger">
-              {{ form.base_amount.errors }}
-            </div>
-          {% endif %}
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">GST Amount (₹)</label>
-          {{ form.gst_amount }}
-
-          {% if form.gst_amount.errors %}
-            <div class="form-text text-danger">
-              {{ form.gst_amount.errors }}
-            </div>
-          {% endif %}
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">Total Amount (₹)</label>
-          <input
-            type="text"
-            class="form-control"
-            id="totalDisplay"
-            readonly
-            placeholder="Auto-calculated"
-          >
-        </div>
-      </div>
-
-      <div class="mb-3">
-        <label class="form-label">Description</label>
-        {{ form.description }}
-
-        {% if form.description.errors %}
-          <div class="form-text text-danger">
-            {{ form.description.errors }}
-          </div>
-        {% endif %}
-      </div>
-
-      <div class="mb-3">
-        <label class="form-label">
-          Invoice Attachment
-          <small class="text-muted">(PDF/Image — auto compressed)</small>
-        </label>
-
-        <input
-          type="file"
-          name="attachment"
-          class="form-control"
-          accept=".pdf,.jpg,.jpeg,.png,.webp"
-        >
-
-        {% if form.attachment.errors %}
-          <div class="form-text text-danger">
-            {{ form.attachment.errors }}
-          </div>
-        {% endif %}
-      </div>
-
-      <div class="mb-3">
-        <label class="form-label">
-          Bank Details Attachment
-          <small class="text-muted">(PDF/Image)</small>
-        </label>
-
-        <input
-          type="file"
-          name="bank_attachment"
-          class="form-control"
-          accept=".pdf,.jpg,.jpeg,.png,.webp"
-        >
-
-        {% if form.bank_attachment.errors %}
-          <div class="form-text text-danger">
-            {{ form.bank_attachment.errors }}
-          </div>
-        {% endif %}
-      </div>
-
-      <div class="mb-3">
-        <label class="form-label">
-          Bank Details
-          <small class="text-muted">(Optional written details)</small>
-        </label>
-
-        {{ form.bank_details_text }}
-
-        {% if form.bank_details_text.errors %}
-          <div class="form-text text-danger">
-            {{ form.bank_details_text.errors }}
-          </div>
-        {% endif %}
-
-        <div class="form-text text-muted">
-          Example: Account Holder Name, Bank Name, Account Number, IFSC.
         </div>
       </div>
 
@@ -223,17 +363,20 @@
   var vendorSelect = document.getElementById('id_vendor');
   var vendorTypeDisplay = document.getElementById('id_vendor_type_display');
 
-  var base = document.getElementById('id_base_amount');
-  var gst = document.getElementById('id_gst_amount');
-  var total = document.getElementById('totalDisplay');
+  var addInvoiceRowButton = document.getElementById('addInvoiceRow');
+  var invoiceFormsetBody = document.getElementById('invoiceFormsetBody');
+  var emptyInvoiceFormTemplate = document.getElementById('emptyInvoiceFormTemplate');
+  var grandTotalDisplay = document.getElementById('grandTotalDisplay');
 
-  function calcTotal() {
-    var baseAmount = parseFloat(base ? base.value : 0) || 0;
-    var gstAmount = parseFloat(gst ? gst.value : 0) || 0;
+  var totalFormsInput = document.getElementById('id_invoices-TOTAL_FORMS');
 
-    if (total) {
-      total.value = '₹ ' + (baseAmount + gstAmount).toFixed(2);
-    }
+  function parseMoney(value) {
+    var parsed = parseFloat(value || '0');
+    return isNaN(parsed) ? 0 : parsed;
+  }
+
+  function formatMoney(value) {
+    return value.toFixed(2);
   }
 
   function clearVendorType() {
@@ -285,20 +428,144 @@
     });
   }
 
+  function getVisibleRows() {
+    return Array.prototype.slice.call(
+      invoiceFormsetBody.querySelectorAll('.invoice-row')
+    ).filter(function (row) {
+      return row.style.display !== 'none';
+    });
+  }
+
+  function calculateTotals() {
+    var grandTotal = 0;
+
+    var rows = invoiceFormsetBody.querySelectorAll('.invoice-row');
+
+    rows.forEach(function (row) {
+      var deleteCheckbox = row.querySelector('input[type="checkbox"][name$="-DELETE"]');
+
+      if (deleteCheckbox && deleteCheckbox.checked) {
+        return;
+      }
+
+      var baseInput = row.querySelector('.base-amount');
+      var gstInput = row.querySelector('.gst-amount');
+      var totalInput = row.querySelector('.invoice-row-total');
+      var billTypeInput = row.querySelector('.bill-type');
+
+      var baseAmount = parseMoney(baseInput ? baseInput.value : 0);
+      var gstAmount = parseMoney(gstInput ? gstInput.value : 0);
+
+      if (billTypeInput && billTypeInput.value === 'non_gst') {
+        gstAmount = 0;
+
+        if (gstInput) {
+          gstInput.value = '0.00';
+        }
+      }
+
+      var rowTotal = baseAmount + gstAmount;
+
+      if (totalInput) {
+        totalInput.value = '₹ ' + formatMoney(rowTotal);
+      }
+
+      grandTotal += rowTotal;
+    });
+
+    if (grandTotalDisplay) {
+      grandTotalDisplay.textContent = formatMoney(grandTotal);
+    }
+  }
+
+  function updateRemoveButtons() {
+    var visibleRows = getVisibleRows();
+
+    visibleRows.forEach(function (row) {
+      var button = row.querySelector('.remove-invoice-row');
+
+      if (button) {
+        button.disabled = visibleRows.length <= 1;
+      }
+    });
+  }
+
+  function wireInvoiceRow(row) {
+    var baseInput = row.querySelector('.base-amount');
+    var gstInput = row.querySelector('.gst-amount');
+    var billTypeInput = row.querySelector('.bill-type');
+    var removeButton = row.querySelector('.remove-invoice-row');
+
+    if (baseInput) {
+      baseInput.addEventListener('input', calculateTotals);
+    }
+
+    if (gstInput) {
+      gstInput.addEventListener('input', calculateTotals);
+    }
+
+    if (billTypeInput) {
+      billTypeInput.addEventListener('change', calculateTotals);
+    }
+
+    if (removeButton) {
+      removeButton.addEventListener('click', function () {
+        var deleteCheckbox = row.querySelector('input[type="checkbox"][name$="-DELETE"]');
+
+        if (getVisibleRows().length <= 1) {
+          alert('At least one invoice row is required.');
+          return;
+        }
+
+        if (deleteCheckbox) {
+          deleteCheckbox.checked = true;
+          row.style.display = 'none';
+        } else {
+          row.remove();
+        }
+
+        calculateTotals();
+        updateRemoveButtons();
+      });
+    }
+  }
+
+  function addInvoiceRow() {
+    if (!totalFormsInput || !emptyInvoiceFormTemplate || !invoiceFormsetBody) {
+      return;
+    }
+
+    var formIndex = parseInt(totalFormsInput.value, 10);
+    var newHtml = emptyInvoiceFormTemplate.innerHTML.replace(/__prefix__/g, formIndex);
+
+    invoiceFormsetBody.insertAdjacentHTML('beforeend', newHtml);
+    totalFormsInput.value = formIndex + 1;
+
+    var newRow = invoiceFormsetBody.querySelector('.invoice-row:last-child');
+
+    if (newRow) {
+      wireInvoiceRow(newRow);
+    }
+
+    calculateTotals();
+    updateRemoveButtons();
+  }
+
   if (vendorSelect) {
     vendorSelect.addEventListener('change', fetchVendorType);
   }
 
-  if (base) {
-    base.addEventListener('input', calcTotal);
+  if (addInvoiceRowButton) {
+    addInvoiceRowButton.addEventListener('click', addInvoiceRow);
   }
 
-  if (gst) {
-    gst.addEventListener('input', calcTotal);
-  }
+  invoiceFormsetBody.querySelectorAll('.invoice-row').forEach(function (row) {
+    wireInvoiceRow(row);
+  });
 
   fetchVendorType();
-  calcTotal();
+  calculateTotals();
+  updateRemoveButtons();
 
 }());
 </script>

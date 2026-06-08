@@ -54,9 +54,8 @@
           <th>Request ID</th>
           <th>Vendor</th>
           <th>Vendor Type</th>
-          <th>Invoice No</th>
-          <th>Total</th>
-          <th>Bill Type</th>
+          <th>Invoice Count</th>
+          <th>Grand Total</th>
           <th>Status</th>
           <th>Date</th>
           <th></th>
@@ -74,11 +73,15 @@
 
             <td>{{ r.vendor_type_display_safe }}</td>
 
-            <td>{{ r.invoice_number }}</td>
+            <td>
+              <span class="badge bg-light text-dark">
+                {{ r.invoice_count }}
+              </span>
+            </td>
 
-            <td>₹{{ r.total_amount|floatformat:2 }}</td>
-
-            <td>{{ r.get_bill_type_display }}</td>
+            <td>
+              <strong>₹{{ r.payment_total|floatformat:2 }}</strong>
+            </td>
 
             <td>
               <span class="status-badge {{ r.get_status_badge }}">
@@ -92,11 +95,17 @@
               <a href="{% url 'vendor:detail' r.pk %}" class="btn btn-sm btn-light">
                 View
               </a>
+
+              {% if r.created_by == request.user and not r.invoices_locked %}
+                <a href="{% url 'vendor:edit_request' r.pk %}" class="btn btn-sm btn-primary">
+                  Edit
+                </a>
+              {% endif %}
             </td>
           </tr>
         {% empty %}
           <tr>
-            <td colspan="9" class="empty-state">
+            <td colspan="8" class="empty-state">
               No requests found.
             </td>
           </tr>

@@ -13,54 +13,77 @@ Vendor:
 Vendor Type:
 {{ obj.vendor_type_display_safe }}
 
-Invoice Name:
-{% if invoice_name %}{{ invoice_name }}{% else %}Not Available{% endif %}
+Submitted By:
+{{ submitted_by|default:"-" }}
+
+Total Invoices:
+{{ invoice_count }}
+
+Grand Total:
+INR {{ grand_total|floatformat:2 }}
+
+Invoice Summary
+
+{% for invoice in invoices %}
+Invoice {{ forloop.counter }}
 
 Invoice Number:
-{{ obj.invoice_number }}
-
-GST Type:
-{{ bill_type }}
+{{ invoice.invoice_number }}
 
 Invoice Date:
-{{ obj.invoice_date|date:"d-m-Y" }}
+{% if invoice.invoice_date %}{{ invoice.invoice_date|date:"d-m-Y" }}{% else %}-{% endif %}
+
+Bill Type:
+{{ invoice.bill_type }}
 
 Base Amount:
-INR {{ obj.base_amount }}
+INR {{ invoice.base_amount|floatformat:2 }}
 
 GST Amount:
-INR {{ obj.gst_amount }}
+INR {{ invoice.gst_amount|floatformat:2 }}
 
 Total Amount:
-INR {{ obj.total_amount }}
-
-Submitted By:
-{{ submitted_by }}
+INR {{ invoice.total_amount|floatformat:2 }}
 
 Description:
-{{ obj.description }}
-
-Attachments
+{% if invoice.description %}{{ invoice.description }}{% else %}-{% endif %}
 
 Invoice Attachment:
-{% if invoice_available %}Available{% if invoice_name %} - {{ invoice_name }}{% endif %}{% else %}Not Available{% endif %}
+{% if invoice.invoice_url %}
+Available{% if invoice.invoice_name %} - {{ invoice.invoice_name }}{% endif %}
+{{ invoice.invoice_url }}
+{% else %}
+Not Available
+{% endif %}
+
+{% empty %}
+No invoice rows found.
+{% endfor %}
+
+Bank Details
 
 Bank Details Attachment:
-{% if bank_attachment_available %}Available{% if bank_attachment_name %} - {{ bank_attachment_name }}{% endif %}{% else %}Not Available{% endif %}
-
-Actions
-
-Review Request:
-{{ review_url }}
-
-{% if invoice_url %}
-Open Invoice:
-{{ invoice_url }}
+{% if bank_attachment_available %}
+Available{% if bank_attachment_name %} - {{ bank_attachment_name }}{% endif %}
+{% else %}
+Not Available
 {% endif %}
 
 {% if bank_attachment_url %}
 Open Bank Details:
 {{ bank_attachment_url }}
 {% endif %}
+
+Bank Details Text:
+{% if obj.bank_details_text %}
+{{ obj.bank_details_text }}
+{% else %}
+-
+{% endif %}
+
+Actions
+
+Review Request:
+{{ review_url }}
 
 This is a system-generated email from BOS Lakshya ERP.

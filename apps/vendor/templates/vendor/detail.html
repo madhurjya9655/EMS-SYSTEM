@@ -11,10 +11,17 @@
     <i class="fa-solid fa-arrow-left"></i>
     Back
   </a>
+
+  {% if can_edit %}
+    <a href="{% url 'vendor:edit_request' obj.pk %}" class="btn btn-primary btn-sm">
+      <i class="fa-solid fa-pen-to-square"></i>
+      Edit
+    </a>
+  {% endif %}
 {% endblock %}
 
 {% block content %}
-<div class="card" style="max-width:1000px">
+<div class="card" style="max-width:1100px">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span>
       <i class="fa-solid fa-file-invoice-dollar me-2 text-primary"></i>
@@ -59,66 +66,123 @@
       </div>
 
       <div class="col-md-4">
-        <div class="text-muted small">Bill Type</div>
-        <strong>{{ obj.get_bill_type_display }}</strong>
-      </div>
-
-      <div class="col-md-4">
-        <div class="text-muted small">Invoice Date</div>
-        <strong>{{ obj.invoice_date|date:"d M Y" }}</strong>
-      </div>
-
-      <div class="col-md-4">
-        <div class="text-muted small">Invoice Number</div>
-        <strong>{{ obj.invoice_number }}</strong>
-      </div>
-
-      <div class="col-md-4">
         <div class="text-muted small">Submitted Date</div>
         <strong>{{ obj.created_at|date:"d M Y, h:i A" }}</strong>
       </div>
-    </div>
 
-    <hr>
-
-    <div class="row g-3 mb-4">
       <div class="col-md-4">
-        <div class="text-muted small">Base Amount</div>
-        <strong>₹{{ obj.base_amount|floatformat:2 }}</strong>
+        <div class="text-muted small">Invoice Count</div>
+        <strong>{{ obj.invoice_count }}</strong>
       </div>
 
       <div class="col-md-4">
-        <div class="text-muted small">GST Amount</div>
-        <strong>₹{{ obj.gst_amount|floatformat:2 }}</strong>
+        <div class="text-muted small">Grand Total</div>
+        <strong>₹{{ obj.payment_total|floatformat:2 }}</strong>
       </div>
 
       <div class="col-md-4">
-        <div class="text-muted small">Total Amount</div>
-        <strong>₹{{ obj.total_amount|floatformat:2 }}</strong>
+        <div class="text-muted small">Last Updated</div>
+        <strong>{{ obj.updated_at|date:"d M Y, h:i A" }}</strong>
       </div>
     </div>
 
     <hr>
 
     <div class="mb-4">
-      <div class="text-muted small">Description</div>
-      <div style="white-space:pre-wrap">{{ obj.description }}</div>
+      <h5 class="mb-3">
+        <i class="fa-solid fa-receipt me-2 text-primary"></i>
+        Invoice Details
+      </h5>
+
+      <div class="table-responsive">
+        <table class="table table-bordered align-middle">
+          <thead>
+            <tr>
+              <th>Invoice Date</th>
+              <th>Invoice No</th>
+              <th>Bill Type</th>
+              <th class="text-end">Base Amount</th>
+              <th class="text-end">GST Amount</th>
+              <th class="text-end">Total Amount</th>
+              <th>Description</th>
+              <th>Attachment</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {% for invoice in obj.invoices.all %}
+              <tr>
+                <td>{{ invoice.invoice_date|date:"d M Y" }}</td>
+                <td>
+                  <strong>{{ invoice.invoice_number }}</strong>
+                </td>
+                <td>{{ invoice.get_bill_type_display }}</td>
+                <td class="text-end">₹{{ invoice.base_amount|floatformat:2 }}</td>
+                <td class="text-end">₹{{ invoice.gst_amount|floatformat:2 }}</td>
+                <td class="text-end">
+                  <strong>₹{{ invoice.total_amount|floatformat:2 }}</strong>
+                </td>
+                <td style="white-space:pre-wrap">{{ invoice.description|default:"—" }}</td>
+                <td>
+                  {% if invoice.invoice_attachment %}
+                    <a href="{{ invoice.invoice_attachment.url }}" target="_blank" class="btn btn-sm btn-light">
+                      <i class="fa-solid fa-paperclip"></i>
+                      View
+                    </a>
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+              </tr>
+            {% empty %}
+              {% if obj.invoice_number %}
+                <tr>
+                  <td>{{ obj.invoice_date|date:"d M Y" }}</td>
+                  <td>
+                    <strong>{{ obj.invoice_number }}</strong>
+                  </td>
+                  <td>{{ obj.get_bill_type_display }}</td>
+                  <td class="text-end">₹{{ obj.base_amount|floatformat:2 }}</td>
+                  <td class="text-end">₹{{ obj.gst_amount|floatformat:2 }}</td>
+                  <td class="text-end">
+                    <strong>₹{{ obj.total_amount|floatformat:2 }}</strong>
+                  </td>
+                  <td style="white-space:pre-wrap">{{ obj.description|default:"—" }}</td>
+                  <td>
+                    {% if obj.attachment %}
+                      <a href="{{ obj.attachment.url }}" target="_blank" class="btn btn-sm btn-light">
+                        <i class="fa-solid fa-paperclip"></i>
+                        View
+                      </a>
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                </tr>
+              {% else %}
+                <tr>
+                  <td colspan="8" class="text-center text-muted">
+                    No invoice rows found.
+                  </td>
+                </tr>
+              {% endif %}
+            {% endfor %}
+          </tbody>
+
+          <tfoot>
+            <tr>
+              <th colspan="5" class="text-end">Grand Total</th>
+              <th class="text-end">₹{{ obj.payment_total|floatformat:2 }}</th>
+              <th colspan="2"></th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
     </div>
 
+    <hr>
+
     <div class="row g-3 mb-4">
-      <div class="col-md-6">
-        <div class="text-muted small">Invoice Attachment</div>
-
-        {% if obj.attachment %}
-          <a href="{{ obj.attachment.url }}" target="_blank" class="btn btn-sm btn-light mt-1">
-            <i class="fa-solid fa-paperclip"></i>
-            View Invoice Attachment
-          </a>
-        {% else %}
-          <div>—</div>
-        {% endif %}
-      </div>
-
       <div class="col-md-6">
         <div class="text-muted small">Copy of Cancelled Cheque / Bank Attachment</div>
 
@@ -131,16 +195,16 @@
           <div>—</div>
         {% endif %}
       </div>
-    </div>
 
-    <div class="mb-4">
-      <div class="text-muted small">Bank Details Text</div>
+      <div class="col-md-6">
+        <div class="text-muted small">Bank Details Text</div>
 
-      {% if obj.bank_details_text %}
-        <pre style="white-space:pre-wrap;margin:0;background:var(--surface-alt,#f8f9fa);border:1px solid var(--border,#ddd);border-radius:8px;padding:12px">{{ obj.bank_details_text }}</pre>
-      {% else %}
-        <div>—</div>
-      {% endif %}
+        {% if obj.bank_details_text %}
+          <pre style="white-space:pre-wrap;margin:0;background:var(--surface-alt,#f8f9fa);border:1px solid var(--border,#ddd);border-radius:8px;padding:12px">{{ obj.bank_details_text }}</pre>
+        {% else %}
+          <div>—</div>
+        {% endif %}
+      </div>
     </div>
 
     <hr>
@@ -171,8 +235,15 @@
       </div>
 
       <div class="col-md-4">
-        <div class="text-muted small">Last Updated</div>
-        <strong>{{ obj.updated_at|date:"d M Y, h:i A" }}</strong>
+        <div class="text-muted small">Paid By</div>
+
+        {% if obj.paid_by %}
+          <strong>
+            {{ obj.paid_by.get_full_name|default:obj.paid_by.username }}
+          </strong>
+        {% else %}
+          —
+        {% endif %}
       </div>
     </div>
 
@@ -289,7 +360,7 @@
 
           <div class="card-body">
             <div class="alert alert-warning">
-              This action will mark this vendor payment as <strong>Paid</strong> and update the same row in the Google Sheet.
+              This action will mark this vendor payment as <strong>Paid</strong> and update all invoice rows in the Google Sheet.
             </div>
 
             <div class="mb-3">

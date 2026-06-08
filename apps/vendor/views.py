@@ -13,7 +13,11 @@ from django.conf import settings
 from django.http import JsonResponse
 
 from .models import Vendor, VendorPaymentRequest, VendorApprovalConfig
-from .forms import VendorPaymentRequestForm, VendorApprovalConfigForm
+from .forms import (
+    VendorPaymentRequestForm,
+    VendorPaymentInvoiceFormSet,
+    VendorApprovalConfigForm,
+)
 from .services import send_vendor_payment_submission_email
 from apps.users.permissions import _user_permission_codes
 
@@ -31,6 +35,10 @@ def _sync_vendor_payment_sheet(obj: VendorPaymentRequest) -> None:
     - Sync service runs after DB commit.
     - Google errors must not break ERP workflow.
     - If integration file/env is missing, workflow still continues.
+
+    Multi-invoice behavior:
+    - sync_request(obj) must write one Google Sheet row per invoice.
+    - Parent request_id remains same for all invoice rows.
     """
     try:
         from apps.vendor.integrations.sheets import sync_request
@@ -225,15 +233,55 @@ def _send_submission_email(request, obj):
     """
     Backward-compatible wrapper.
 
-    Keep this function name because new_request() and resubmit()
-    already call _send_submission_email().
+    Keep this function name because new_request(), edit_request(), and resubmit()
+    call _send_submission_email().
 
     Actual production email logic is inside apps/vendor/services.py.
     """
     send_vendor_payment_submission_email(request, obj)
 
 
+def _invoice_summary_lines(obj) -> list[str]:
+    """
+    Build plain-text invoice summary lines.
+
+    Multi-invoice:
+    - Uses child invoice rows.
+
+    Legacy fallback:
+    - Uses old parent invoice fields when child rows do not exist.
+    """
+    lines = []
+
+    try:
+        invoices = list(obj.invoices.all())
+    except Exception:
+        invoices = []
+
+    if invoices:
+        for invoice in invoices:
+            lines.append(
+                f"{invoice.invoice_number} | INR {invoice.total_amount}"
+            )
+        return lines
+
+    if getattr(obj, "invoice_number", ""):
+        lines.append(
+            f"{obj.invoice_number} | INR {obj.total_amount}"
+        )
+
+    return lines
+
+
 def _send_finance_approved_email(request, obj):
+    """
+    Notify senior authority after finance approval.
+
+    Multi-invoice behavior:
+    - One email only.
+    - Shows request-level grand total.
+    - Shows invoice summary.
+    """
     config = VendorApprovalConfig.get_config()
 
     if not config.senior_authority or not config.senior_authority.email:
@@ -241,15 +289,25 @@ def _send_finance_approved_email(request, obj):
 
     subject = f"Vendor Payment Ready for Final Approval — {obj.request_id}"
 
+    approved_by = ""
+    if obj.finance_approved_by_id:
+        approved_by = (
+            obj.finance_approved_by.get_full_name()
+            or obj.finance_approved_by.username
+        )
+
+    invoice_lines = _invoice_summary_lines(obj)
+
     body = (
-        "A vendor payment has cleared finance review and awaits your final approval.\n\n"
+        "A vendor payment request has cleared finance review and awaits final approval.\n\n"
         f"Request ID       : {obj.request_id}\n"
         f"Vendor           : {obj.vendor_display_name}\n"
         f"Vendor Type      : {obj.vendor_type_display_safe}\n"
-        f"Invoice No       : {obj.invoice_number}\n"
-        f"GST Type         : {obj.get_bill_type_display()}\n"
-        f"Total Amount     : INR {obj.total_amount}\n"
-        f"Finance Approved : {obj.finance_approved_by.get_full_name() or obj.finance_approved_by.username}\n\n"
+        f"Total Invoices   : {obj.invoice_count}\n"
+        f"Grand Total      : INR {obj.payment_total}\n"
+        f"Finance Approved : {approved_by}\n\n"
+        "Invoice Summary:\n"
+        f"{chr(10).join(invoice_lines) if invoice_lines else '—'}\n\n"
         f"Please log in to give final approval.\n{request.build_absolute_uri('/')}"
     )
 
@@ -268,6 +326,11 @@ def _send_finance_approved_email(request, obj):
 
 
 def _send_final_approval_email(request, obj):
+    """
+    Notify Mumbai/accounts team after senior final approval.
+
+    Template should be updated later to show invoice count and grand total.
+    """
     config = VendorApprovalConfig.get_config()
     to_list = config.get_mumbai_email_list()
     cc_list = config.get_cc_email_list()
@@ -281,6 +344,7 @@ def _send_final_approval_email(request, obj):
         "vendor/email/final_approval.txt",
         {
             "obj": obj,
+            "invoice_lines": _invoice_summary_lines(obj),
             "site_url": request.build_absolute_uri("/"),
         },
     )
@@ -301,20 +365,30 @@ def _send_final_approval_email(request, obj):
 
 
 def _send_rejection_email(request, obj):
+    """
+    Notify request creator after rejection.
+
+    Multi-invoice behavior:
+    - Shows invoice count.
+    - Shows grand total.
+    """
     if not obj.created_by.email:
         return
 
     subject = f"Vendor Payment Request Rejected — {obj.request_id}"
 
+    invoice_lines = _invoice_summary_lines(obj)
+
     body = (
         "Your vendor payment request has been rejected.\n\n"
-        f"Request ID : {obj.request_id}\n"
-        f"Vendor     : {obj.vendor_display_name}\n"
-        f"Vendor Type: {obj.vendor_type_display_safe}\n"
-        f"Invoice No : {obj.invoice_number}\n"
-        f"GST Type   : {obj.get_bill_type_display()}\n"
-        f"Amount     : INR {obj.total_amount}\n"
-        f"Remarks    : {obj.remarks or '—'}\n\n"
+        f"Request ID     : {obj.request_id}\n"
+        f"Vendor         : {obj.vendor_display_name}\n"
+        f"Vendor Type    : {obj.vendor_type_display_safe}\n"
+        f"Total Invoices : {obj.invoice_count}\n"
+        f"Grand Total    : INR {obj.payment_total}\n"
+        f"Remarks        : {obj.remarks or '—'}\n\n"
+        "Invoice Summary:\n"
+        f"{chr(10).join(invoice_lines) if invoice_lines else '—'}\n\n"
         f"Please contact your approver for details.\n{request.build_absolute_uri('/')}"
     )
 
@@ -415,6 +489,16 @@ def dashboard(request):
 
 @login_required
 def new_request(request):
+    """
+    Create one Vendor Payment Request with many invoice rows.
+
+    Correct business workflow:
+    - User selects vendor once.
+    - User adds one or more invoice rows.
+    - System calculates grand_total from child invoices.
+    - One approval email is sent for the parent request.
+    - Google Sheet sync writes one row per invoice.
+    """
     if not _can_create(request.user):
         messages.error(
             request,
@@ -424,8 +508,13 @@ def new_request(request):
 
     if request.method == "POST":
         form = VendorPaymentRequestForm(request.POST, request.FILES)
+        formset = VendorPaymentInvoiceFormSet(
+            request.POST,
+            request.FILES,
+            prefix="invoices",
+        )
 
-        if form.is_valid():
+        if form.is_valid() and formset.is_valid():
             obj = form.save(commit=False)
             obj.created_by = request.user
 
@@ -441,16 +530,31 @@ def new_request(request):
 
             obj.save()
 
+            # Save child invoice rows.
+            formset.instance = obj
+            invoices = formset.save(commit=False)
+
+            for deleted_invoice in formset.deleted_objects:
+                deleted_invoice.delete()
+
+            for invoice in invoices:
+                invoice.payment_request = obj
+                invoice.save()
+
+            # Calculate request grand total after invoice rows are saved.
+            obj.recalculate_grand_total(save=True)
+            obj.refresh_from_db()
+
             # Google Sheet sync:
-            # Create row for draft/submitted request.
-            # Same row will be updated later using request_id.
+            # Multi-invoice sync should create one row per invoice.
             _sync_vendor_payment_sheet(obj)
 
             if obj.status == "submitted":
                 _send_submission_email(request, obj)
                 messages.success(
                     request,
-                    f"Request {obj.request_id} submitted. Finance team notified.",
+                    f"Request {obj.request_id} submitted with "
+                    f"{obj.invoice_count} invoice(s). Finance team notified.",
                 )
             else:
                 messages.success(
@@ -459,14 +563,112 @@ def new_request(request):
                 )
 
             return redirect("vendor:my_requests")
+
+        messages.error(request, "Please fix the errors below.")
     else:
         form = VendorPaymentRequestForm()
+        formset = VendorPaymentInvoiceFormSet(prefix="invoices")
 
     return render(
         request,
         "vendor/new_request.html",
         {
             "form": form,
+            "formset": formset,
+            "is_edit": False,
+        },
+    )
+
+
+@login_required
+def edit_request(request, pk):
+    """
+    Edit a draft/rejected Vendor Payment Request.
+
+    Allows before approval:
+    - Add invoice
+    - Remove invoice
+    - Update invoice
+    - Update bank details
+
+    Locked after submission/approval/payment.
+    """
+    obj = get_object_or_404(
+        VendorPaymentRequest.objects.prefetch_related("invoices"),
+        pk=pk,
+        created_by=request.user,
+    )
+
+    if obj.invoices_locked:
+        messages.error(
+            request,
+            "Invoices cannot be edited after the request has been submitted or approved.",
+        )
+        return redirect("vendor:detail", pk=obj.pk)
+
+    if request.method == "POST":
+        form = VendorPaymentRequestForm(
+            request.POST,
+            request.FILES,
+            instance=obj,
+        )
+        formset = VendorPaymentInvoiceFormSet(
+            request.POST,
+            request.FILES,
+            instance=obj,
+            prefix="invoices",
+        )
+
+        if form.is_valid() and formset.is_valid():
+            obj = form.save(commit=False)
+
+            action = request.POST.get("action")
+            obj.status = "submitted" if action == "submit" else "draft"
+
+            if obj.vendor_id:
+                obj.vendor_type = obj.vendor.type
+                obj.vendor_name_manual = ""
+
+            obj.save()
+
+            formset.save()
+
+            obj.recalculate_grand_total(save=True)
+            obj.refresh_from_db()
+
+            _sync_vendor_payment_sheet(obj)
+
+            if obj.status == "submitted":
+                _send_submission_email(request, obj)
+                messages.success(
+                    request,
+                    f"{obj.request_id} submitted with "
+                    f"{obj.invoice_count} invoice(s). Finance team notified.",
+                )
+            else:
+                messages.success(
+                    request,
+                    f"{obj.request_id} updated successfully.",
+                )
+
+            return redirect("vendor:detail", pk=obj.pk)
+
+        messages.error(request, "Please fix the errors below.")
+    else:
+        form = VendorPaymentRequestForm(instance=obj)
+        formset = VendorPaymentInvoiceFormSet(
+            instance=obj,
+            prefix="invoices",
+        )
+
+    return render(
+        request,
+        "vendor/new_request.html",
+        {
+            "form": form,
+            "formset": formset,
+            "obj": obj,
+            "is_edit": True,
         },
     )
 
@@ -486,7 +688,7 @@ def my_requests(request):
             "finance_approved_by",
             "final_approved_by",
             "paid_by",
-        )
+        ).prefetch_related("invoices")
     else:
         if not _can_view_own(request.user):
             messages.error(
@@ -497,7 +699,10 @@ def my_requests(request):
 
         qs = VendorPaymentRequest.objects.filter(
             created_by=request.user
-        ).select_related("vendor", "paid_by")
+        ).select_related(
+            "vendor",
+            "paid_by",
+        ).prefetch_related("invoices")
 
     status_filter = request.GET.get("status", "")
 
@@ -534,7 +739,7 @@ def approval_queue(request):
         "finance_approved_by",
         "final_approved_by",
         "paid_by",
-    )
+    ).prefetch_related("invoices")
 
     status_filter = request.GET.get("status", "")
 
@@ -576,7 +781,7 @@ def detail(request, pk):
             "finance_approved_by",
             "final_approved_by",
             "paid_by",
-        ),
+        ).prefetch_related("invoices"),
         pk=pk,
     )
 
@@ -595,6 +800,11 @@ def detail(request, pk):
         messages.error(request, "Access denied.")
         return redirect("vendor:dashboard")
 
+    can_edit = (
+        obj.created_by == request.user
+        and not obj.invoices_locked
+    )
+
     return render(
         request,
         "vendor/detail.html",
@@ -604,6 +814,7 @@ def detail(request, pk):
             "can_senior_action": is_sen and obj.status == "finance_approved",
             "can_mark_paid": is_fin and obj.status == "final_approved",
             "can_resubmit": obj.created_by == request.user and obj.status == "draft",
+            "can_edit": can_edit,
             "is_admin": is_admin,
         },
     )
@@ -611,12 +822,24 @@ def detail(request, pk):
 
 @login_required
 def resubmit(request, pk):
+    """
+    Submit a draft request.
+
+    Draft must have at least one invoice row.
+    """
     obj = get_object_or_404(
-        VendorPaymentRequest,
+        VendorPaymentRequest.objects.prefetch_related("invoices"),
         pk=pk,
         created_by=request.user,
         status="draft",
     )
+
+    has_child_invoices = obj.invoices.exists()
+    has_legacy_invoice = bool(obj.invoice_number)
+
+    if not has_child_invoices and not has_legacy_invoice:
+        messages.error(request, "Please add at least one invoice before submitting.")
+        return redirect("vendor:edit_request", pk=obj.pk)
 
     obj.status = "submitted"
 
@@ -624,12 +847,10 @@ def resubmit(request, pk):
         obj.vendor_type = obj.vendor.type
         obj.vendor_name_manual = ""
 
+    obj.recalculate_grand_total(save=False)
     obj.save()
 
-    # Google Sheet sync:
-    # Update existing draft row to Submitted.
     _sync_vendor_payment_sheet(obj)
-
     _send_submission_email(request, obj)
 
     messages.success(
@@ -645,7 +866,10 @@ def finance_action(request, pk):
     if request.method != "POST":
         return redirect("vendor:approval_queue")
 
-    obj = get_object_or_404(VendorPaymentRequest, pk=pk)
+    obj = get_object_or_404(
+        VendorPaymentRequest.objects.prefetch_related("invoices"),
+        pk=pk,
+    )
 
     if not _is_finance(request.user) or obj.status != "submitted":
         messages.error(request, "Not authorized or invalid status.")
@@ -658,10 +882,11 @@ def finance_action(request, pk):
         obj.status = "finance_approved"
         obj.finance_approved_by = request.user
         obj.remarks = remarks
+        obj.recalculate_grand_total(save=False)
         obj.save()
 
         # Google Sheet sync:
-        # Update same row to Finance Approved.
+        # Update all invoice rows for this parent request.
         _sync_vendor_payment_sheet(obj)
 
         _send_finance_approved_email(request, obj)
@@ -674,10 +899,11 @@ def finance_action(request, pk):
     elif action == "reject":
         obj.status = "rejected"
         obj.remarks = remarks
+        obj.recalculate_grand_total(save=False)
         obj.save()
 
         # Google Sheet sync:
-        # Update same row to Rejected.
+        # Update all invoice rows for this parent request.
         _sync_vendor_payment_sheet(obj)
 
         _send_rejection_email(request, obj)
@@ -695,7 +921,10 @@ def senior_action(request, pk):
     if request.method != "POST":
         return redirect("vendor:approval_queue")
 
-    obj = get_object_or_404(VendorPaymentRequest, pk=pk)
+    obj = get_object_or_404(
+        VendorPaymentRequest.objects.prefetch_related("invoices"),
+        pk=pk,
+    )
 
     if not _is_senior(request.user) or obj.status != "finance_approved":
         messages.error(request, "Not authorized or invalid status.")
@@ -708,10 +937,11 @@ def senior_action(request, pk):
         obj.status = "final_approved"
         obj.final_approved_by = request.user
         obj.remarks = remarks
+        obj.recalculate_grand_total(save=False)
         obj.save()
 
         # Google Sheet sync:
-        # Update same row to Final Approved.
+        # Update all invoice rows for this parent request.
         _sync_vendor_payment_sheet(obj)
 
         _send_final_approval_email(request, obj)
@@ -724,10 +954,11 @@ def senior_action(request, pk):
     elif action == "reject":
         obj.status = "rejected"
         obj.remarks = remarks
+        obj.recalculate_grand_total(save=False)
         obj.save()
 
         # Google Sheet sync:
-        # Update same row to Rejected.
+        # Update all invoice rows for this parent request.
         _sync_vendor_payment_sheet(obj)
 
         _send_rejection_email(request, obj)
@@ -750,7 +981,7 @@ def mark_paid(request, pk):
     - senior_action: finance_approved -> final_approved
     - mark_paid: final_approved -> paid
 
-    After payment, Google Sheet updates the same row using request_id.
+    After payment, Google Sheet updates all invoice rows using request_id.
     """
     if request.method != "POST":
         return redirect("vendor:detail", pk=pk)
@@ -762,7 +993,7 @@ def mark_paid(request, pk):
             "finance_approved_by",
             "final_approved_by",
             "paid_by",
-        ),
+        ).prefetch_related("invoices"),
         pk=pk,
     )
 
@@ -818,7 +1049,7 @@ def mark_paid(request, pk):
         return redirect("vendor:detail", pk=pk)
 
     # Google Sheet sync:
-    # Update same row to Paid.
+    # Update all invoice rows to Paid.
     _sync_vendor_payment_sheet(obj)
 
     messages.success(

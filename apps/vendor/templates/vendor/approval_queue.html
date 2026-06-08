@@ -1,41 +1,54 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Approval Queue{% endblock %}
+{% block title %}Vendor Approval Queue{% endblock %}
 {% block navbar_title %}Vendor Approval Queue{% endblock %}
 {% block breadcrumb %}Vendor Payments / Approval Queue{% endblock %}
-{% block page_title %}Approval Queue{% endblock %}
+{% block page_title %}
+  {% if is_admin %}
+    Vendor Admin Review
+  {% else %}
+    Approval Queue
+  {% endif %}
+{% endblock %}
+
+{% block page_actions %}
+  <a href="{% url 'vendor:dashboard' %}" class="btn btn-light btn-sm">
+    <i class="fa-solid fa-arrow-left"></i>
+    Dashboard
+  </a>
+{% endblock %}
 
 {% block content %}
+
+{% if is_admin %}
+  <div class="alert alert-info mb-3">
+    Admin review: showing vendor payment requests for tracking and audit.
+  </div>
+{% elif is_finance and is_senior %}
+  <div class="alert alert-info mb-3">
+    You are configured for both finance approval and final approval.
+  </div>
+{% elif is_finance %}
+  <div class="alert alert-info mb-3">
+    Finance queue: review submitted requests and mark final-approved requests as paid.
+  </div>
+{% elif is_senior %}
+  <div class="alert alert-info mb-3">
+    Senior authority queue: review finance-approved requests for final approval.
+  </div>
+{% endif %}
+
 <div class="dt-card">
   <div class="dt-toolbar">
     <div class="dt-toolbar-l">
-      <span class="dt-title">
-        {% if is_admin %}
-          All Vendor Payment Requests
-        {% else %}
-          Pending Approvals
-        {% endif %}
-      </span>
-
+      <span class="dt-title">Vendor Payment Requests</span>
       <span class="dt-count">{{ requests.count }}</span>
     </div>
 
-    <div class="dt-toolbar-r">
-      {% if is_admin %}
-        <span class="badge bg-dark">Admin Full Access</span>
-      {% endif %}
-
-      {% if is_finance %}
-        <span class="badge bg-primary">Finance Approver</span>
-      {% endif %}
-
-      {% if is_senior %}
-        <span class="badge bg-success">Senior Approver</span>
-      {% endif %}
-
-      {% if is_admin %}
-        <form method="get" class="d-inline-flex gap-2 ms-2">
+    {% if is_admin %}
+      <div class="dt-toolbar-r">
+        <form method="get" class="d-flex gap-2">
           <select
             name="status"
             class="form-select form-select-sm"
@@ -50,8 +63,8 @@
             {% endfor %}
           </select>
         </form>
-      {% endif %}
-    </div>
+      </div>
+    {% endif %}
   </div>
 
   <div class="data-table-wrap">
@@ -61,12 +74,10 @@
           <th>Request ID</th>
           <th>Vendor</th>
           <th>Vendor Type</th>
-          <th>Invoice No</th>
-          <th>Total</th>
           <th>Submitted By</th>
+          <th>Invoice Count</th>
+          <th>Grand Total</th>
           <th>Status</th>
-          <th>Invoice</th>
-          <th>Bank</th>
           <th>Date</th>
           <th></th>
         </tr>
@@ -83,12 +94,22 @@
 
             <td>{{ r.vendor_type_display_safe }}</td>
 
-            <td>{{ r.invoice_number }}</td>
-
-            <td>₹{{ r.total_amount|floatformat:2 }}</td>
+            <td>
+              {% if r.created_by %}
+                {{ r.created_by.get_full_name|default:r.created_by.username }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
 
             <td>
-              {{ r.created_by.get_full_name|default:r.created_by.username }}
+              <span class="badge bg-light text-dark">
+                {{ r.invoice_count }}
+              </span>
+            </td>
+
+            <td>
+              <strong>₹{{ r.payment_total|floatformat:2 }}</strong>
             </td>
 
             <td>
@@ -97,45 +118,17 @@
               </span>
             </td>
 
-            <td>
-              {% if r.attachment %}
-                <a
-                  href="{{ r.attachment.url }}"
-                  target="_blank"
-                  class="btn btn-sm btn-light"
-                >
-                  View
-                </a>
-              {% else %}
-                —
-              {% endif %}
-            </td>
-
-            <td>
-              {% if r.bank_attachment %}
-                <a
-                  href="{{ r.bank_attachment.url }}"
-                  target="_blank"
-                  class="btn btn-sm btn-light"
-                >
-                  View
-                </a>
-              {% else %}
-                —
-              {% endif %}
-            </td>
-
             <td>{{ r.created_at|date:"d M Y" }}</td>
 
             <td class="action-cell">
-              <a href="{% url 'vendor:detail' r.pk %}" class="btn btn-sm btn-primary">
+              <a href="{% url 'vendor:detail' r.pk %}" class="btn btn-sm btn-light">
                 Review
               </a>
             </td>
           </tr>
         {% empty %}
           <tr>
-            <td colspan="11" class="empty-state">
+            <td colspan="9" class="empty-state">
               No requests found.
             </td>
           </tr>

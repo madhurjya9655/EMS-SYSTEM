@@ -4,16 +4,18 @@
     <meta charset="UTF-8">
     <title>Vendor Payment Approval Required</title>
 </head>
+
 <body style="margin:0; padding:0; background-color:#f4f6f8; font-family:Arial, Helvetica, sans-serif; color:#222222;">
     <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f6f8; padding:24px 0;">
         <tr>
             <td align="center">
-                <table width="640" cellpadding="0" cellspacing="0" style="background-color:#ffffff; border:1px solid #dddddd; border-radius:6px;">
+                <table width="760" cellpadding="0" cellspacing="0" style="background-color:#ffffff; border:1px solid #dddddd; border-radius:8px;">
                     <tr>
                         <td style="padding:24px 28px 12px 28px;">
                             <h2 style="margin:0; font-size:20px; font-weight:600; color:#111111;">
                                 Vendor Payment Approval Required
                             </h2>
+
                             <p style="margin:12px 0 0 0; font-size:14px; line-height:1.6; color:#444444;">
                                 A new vendor payment request has been submitted and requires review.
                             </p>
@@ -29,68 +31,44 @@
                             <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; font-size:14px;">
                                 <tr>
                                     <td style="padding:8px 0; width:190px; color:#666666;">Request ID:</td>
-                                    <td style="padding:8px 0; font-weight:600; color:#222222;">{{ obj.request_id }}</td>
-                                </tr>
-
-                                <tr>
-                                    <td style="padding:8px 0; color:#666666;">Vendor:</td>
-                                    <td style="padding:8px 0; color:#222222;">{{ obj.vendor_display_name }}</td>
-                                </tr>
-
-                                <tr>
-                                    <td style="padding:8px 0; color:#666666;">Vendor Type:</td>
-                                    <td style="padding:8px 0; color:#222222;">{{ obj.vendor_type_display_safe }}</td>
-                                </tr>
-
-                                <tr>
-                                    <td style="padding:8px 0; color:#666666;">Invoice Name:</td>
-                                    <td style="padding:8px 0; color:#222222;">
-                                        {% if invoice_name %}
-                                            {{ invoice_name }}
-                                        {% else %}
-                                            Not Available
-                                        {% endif %}
+                                    <td style="padding:8px 0; font-weight:600; color:#222222;">
+                                        {{ obj.request_id }}
                                     </td>
                                 </tr>
 
                                 <tr>
-                                    <td style="padding:8px 0; color:#666666;">Invoice Number:</td>
-                                    <td style="padding:8px 0; color:#222222;">{{ obj.invoice_number }}</td>
+                                    <td style="padding:8px 0; color:#666666;">Vendor:</td>
+                                    <td style="padding:8px 0; color:#222222;">
+                                        {{ obj.vendor_display_name }}
+                                    </td>
                                 </tr>
 
                                 <tr>
-                                    <td style="padding:8px 0; color:#666666;">GST Type:</td>
-                                    <td style="padding:8px 0; color:#222222;">{{ bill_type }}</td>
-                                </tr>
-
-                                <tr>
-                                    <td style="padding:8px 0; color:#666666;">Invoice Date:</td>
-                                    <td style="padding:8px 0; color:#222222;">{{ obj.invoice_date|date:"d-m-Y" }}</td>
-                                </tr>
-
-                                <tr>
-                                    <td style="padding:8px 0; color:#666666;">Base Amount:</td>
-                                    <td style="padding:8px 0; color:#222222;">₹{{ obj.base_amount }}</td>
-                                </tr>
-
-                                <tr>
-                                    <td style="padding:8px 0; color:#666666;">GST Amount:</td>
-                                    <td style="padding:8px 0; color:#222222;">₹{{ obj.gst_amount }}</td>
-                                </tr>
-
-                                <tr>
-                                    <td style="padding:8px 0; color:#666666;">Total Amount:</td>
-                                    <td style="padding:8px 0; font-weight:600; color:#222222;">₹{{ obj.total_amount }}</td>
+                                    <td style="padding:8px 0; color:#666666;">Vendor Type:</td>
+                                    <td style="padding:8px 0; color:#222222;">
+                                        {{ obj.vendor_type_display_safe }}
+                                    </td>
                                 </tr>
 
                                 <tr>
                                     <td style="padding:8px 0; color:#666666;">Submitted By:</td>
-                                    <td style="padding:8px 0; color:#222222;">{{ submitted_by }}</td>
+                                    <td style="padding:8px 0; color:#222222;">
+                                        {{ submitted_by|default:"-" }}
+                                    </td>
                                 </tr>
 
                                 <tr>
-                                    <td style="padding:8px 0; color:#666666; vertical-align:top;">Description:</td>
-                                    <td style="padding:8px 0; color:#222222; line-height:1.5;">{{ obj.description|linebreaksbr }}</td>
+                                    <td style="padding:8px 0; color:#666666;">Total Invoices:</td>
+                                    <td style="padding:8px 0; font-weight:600; color:#222222;">
+                                        {{ invoice_count }}
+                                    </td>
+                                </tr>
+
+                                <tr>
+                                    <td style="padding:8px 0; color:#666666;">Grand Total:</td>
+                                    <td style="padding:8px 0; font-size:18px; font-weight:700; color:#111111;">
+                                        ₹{{ grand_total|floatformat:2 }}
+                                    </td>
                                 </tr>
                             </table>
                         </td>
@@ -101,26 +79,109 @@
                             <hr style="border:none; border-top:1px solid #e5e5e5; margin:0 0 16px 0;">
 
                             <h3 style="margin:0 0 12px 0; font-size:16px; font-weight:600; color:#111111;">
-                                Attachments
+                                Invoice Summary
+                            </h3>
+
+                            <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; font-size:13px;">
+                                <thead>
+                                    <tr style="background-color:#eef2ff;">
+                                        <th align="left" style="border:1px solid #d1d5db; padding:8px;">Invoice No</th>
+                                        <th align="left" style="border:1px solid #d1d5db; padding:8px;">Invoice Date</th>
+                                        <th align="left" style="border:1px solid #d1d5db; padding:8px;">Bill Type</th>
+                                        <th align="right" style="border:1px solid #d1d5db; padding:8px;">Base</th>
+                                        <th align="right" style="border:1px solid #d1d5db; padding:8px;">GST</th>
+                                        <th align="right" style="border:1px solid #d1d5db; padding:8px;">Total</th>
+                                        <th align="left" style="border:1px solid #d1d5db; padding:8px;">Attachment</th>
+                                    </tr>
+                                </thead>
+
+                                <tbody>
+                                    {% for invoice in invoices %}
+                                        <tr>
+                                            <td style="border:1px solid #e5e7eb; padding:8px; font-weight:600;">
+                                                {{ invoice.invoice_number }}
+                                            </td>
+
+                                            <td style="border:1px solid #e5e7eb; padding:8px;">
+                                                {% if invoice.invoice_date %}
+                                                    {{ invoice.invoice_date|date:"d-m-Y" }}
+                                                {% else %}
+                                                    -
+                                                {% endif %}
+                                            </td>
+
+                                            <td style="border:1px solid #e5e7eb; padding:8px;">
+                                                {{ invoice.bill_type }}
+                                            </td>
+
+                                            <td align="right" style="border:1px solid #e5e7eb; padding:8px;">
+                                                ₹{{ invoice.base_amount|floatformat:2 }}
+                                            </td>
+
+                                            <td align="right" style="border:1px solid #e5e7eb; padding:8px;">
+                                                ₹{{ invoice.gst_amount|floatformat:2 }}
+                                            </td>
+
+                                            <td align="right" style="border:1px solid #e5e7eb; padding:8px; font-weight:600;">
+                                                ₹{{ invoice.total_amount|floatformat:2 }}
+                                            </td>
+
+                                            <td style="border:1px solid #e5e7eb; padding:8px;">
+                                                {% if invoice.invoice_url %}
+                                                    <a href="{{ invoice.invoice_url }}" style="color:#1f4e79; text-decoration:none;">
+                                                        View Invoice
+                                                    </a>
+                                                {% else %}
+                                                    -
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+
+                                        {% if invoice.description %}
+                                            <tr>
+                                                <td colspan="7" style="border:1px solid #e5e7eb; padding:8px; color:#444444;">
+                                                    <strong>Description:</strong>
+                                                    {{ invoice.description|linebreaksbr }}
+                                                </td>
+                                            </tr>
+                                        {% endif %}
+                                    {% empty %}
+                                        <tr>
+                                            <td colspan="7" style="border:1px solid #e5e7eb; padding:12px; text-align:center; color:#777777;">
+                                                No invoice rows found.
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+
+                                <tfoot>
+                                    <tr>
+                                        <td colspan="5" align="right" style="border:1px solid #d1d5db; padding:8px; font-weight:700;">
+                                            Grand Total
+                                        </td>
+
+                                        <td align="right" style="border:1px solid #d1d5db; padding:8px; font-weight:700;">
+                                            ₹{{ grand_total|floatformat:2 }}
+                                        </td>
+
+                                        <td style="border:1px solid #d1d5db; padding:8px;"></td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td style="padding:12px 28px;">
+                            <hr style="border:none; border-top:1px solid #e5e5e5; margin:0 0 16px 0;">
+
+                            <h3 style="margin:0 0 12px 0; font-size:16px; font-weight:600; color:#111111;">
+                                Bank Details
                             </h3>
 
                             <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; font-size:14px;">
                                 <tr>
-                                    <td style="padding:8px 0; width:190px; color:#666666;">Invoice Attachment:</td>
-                                    <td style="padding:8px 0; color:#222222;">
-                                        {% if invoice_available %}
-                                            Available
-                                            {% if invoice_name %}
-                                                - {{ invoice_name }}
-                                            {% endif %}
-                                        {% else %}
-                                            Not Available
-                                        {% endif %}
-                                    </td>
-                                </tr>
-
-                                <tr>
-                                    <td style="padding:8px 0; color:#666666;">Bank Details Attachment:</td>
+                                    <td style="padding:8px 0; width:190px; color:#666666;">Bank Details Attachment:</td>
                                     <td style="padding:8px 0; color:#222222;">
                                         {% if bank_attachment_available %}
                                             Available
@@ -132,6 +193,15 @@
                                         {% endif %}
                                     </td>
                                 </tr>
+
+                                {% if obj.bank_details_text %}
+                                    <tr>
+                                        <td style="padding:8px 0; color:#666666; vertical-align:top;">Bank Details Text:</td>
+                                        <td style="padding:8px 0; color:#222222; line-height:1.5;">
+                                            {{ obj.bank_details_text|linebreaksbr }}
+                                        </td>
+                                    </tr>
+                                {% endif %}
                             </table>
                         </td>
                     </tr>
@@ -147,22 +217,13 @@
                                         </a>
                                     </td>
 
-                                    {% if invoice_url %}
-                                    <td style="padding-right:10px; padding-bottom:10px;">
-                                        <a href="{{ invoice_url }}"
-                                           style="display:inline-block; padding:11px 18px; background-color:#444444; color:#ffffff; text-decoration:none; border-radius:4px; font-size:14px; font-weight:600;">
-                                            Open Invoice
-                                        </a>
-                                    </td>
-                                    {% endif %}
-
                                     {% if bank_attachment_url %}
-                                    <td style="padding-bottom:10px;">
-                                        <a href="{{ bank_attachment_url }}"
-                                           style="display:inline-block; padding:11px 18px; background-color:#444444; color:#ffffff; text-decoration:none; border-radius:4px; font-size:14px; font-weight:600;">
-                                            Open Bank Details
-                                        </a>
-                                    </td>
+                                        <td style="padding-bottom:10px;">
+                                            <a href="{{ bank_attachment_url }}"
+                                               style="display:inline-block; padding:11px 18px; background-color:#444444; color:#ffffff; text-decoration:none; border-radius:4px; font-size:14px; font-weight:600;">
+                                                Open Bank Details
+                                            </a>
+                                        </td>
                                     {% endif %}
                                 </tr>
                             </table>

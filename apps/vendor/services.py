@@ -112,17 +112,131 @@ def _attach_file_if_possible(email, file_field, label: str) -> None:
         )
 
 
+def _get_invoice_queryset(obj):
+    """
+    Safely return child invoice rows for a VendorPaymentRequest.
+
+    The try/except keeps old deployments safe during staged migration,
+    where the relation may not exist yet.
+    """
+    try:
+        return list(obj.invoices.all())
+    except Exception:
+        return []
+
+
+def _build_invoice_context(request, obj) -> list[dict]:
+    """
+    Build invoice context for email templates.
+
+    New multi-invoice path:
+    - Uses obj.invoices.all()
+
+    Legacy fallback:
+    - If no child invoice rows exist, but old parent invoice fields exist,
+      build one invoice-like dictionary from parent fields.
+    """
+    invoice_rows = _get_invoice_queryset(obj)
+
+    if invoice_rows:
+        invoices = []
+
+        for invoice in invoice_rows:
+            attachment = getattr(invoice, "invoice_attachment", None)
+
+            invoices.append(
+                {
+                    "obj": invoice,
+                    "invoice_number": getattr(invoice, "invoice_number", "") or "",
+                    "invoice_date": getattr(invoice, "invoice_date", None),
+                    "bill_type": (
+                        invoice.get_bill_type_display()
+                        if hasattr(invoice, "get_bill_type_display")
+                        else str(getattr(invoice, "bill_type", "") or "")
+                    ),
+                    "base_amount": getattr(invoice, "base_amount", 0),
+                    "gst_amount": getattr(invoice, "gst_amount", 0),
+                    "total_amount": getattr(invoice, "total_amount", 0),
+                    "description": getattr(invoice, "description", "") or "",
+                    "invoice_attachment": attachment,
+                    "invoice_url": _absolute_file_url(request, attachment),
+                    "invoice_name": _file_display_name(attachment),
+                }
+            )
+
+        return invoices
+
+    # Legacy fallback for old one-invoice records.
+    if getattr(obj, "invoice_number", ""):
+        attachment = getattr(obj, "attachment", None)
+
+        return [
+            {
+                "obj": obj,
+                "invoice_number": getattr(obj, "invoice_number", "") or "",
+                "invoice_date": getattr(obj, "invoice_date", None),
+                "bill_type": (
+                    obj.get_bill_type_display()
+                    if hasattr(obj, "get_bill_type_display")
+                    else str(getattr(obj, "bill_type", "") or "")
+                ),
+                "base_amount": getattr(obj, "base_amount", 0),
+                "gst_amount": getattr(obj, "gst_amount", 0),
+                "total_amount": getattr(obj, "total_amount", 0),
+                "description": getattr(obj, "description", "") or "",
+                "invoice_attachment": attachment,
+                "invoice_url": _absolute_file_url(request, attachment),
+                "invoice_name": _file_display_name(attachment),
+            }
+        ]
+
+    return []
+
+
+def _payment_total(obj):
+    """
+    Return request total safely.
+
+    New requests:
+    - obj.payment_total / obj.grand_total
+
+    Old requests:
+    - obj.total_amount
+    """
+    try:
+        return obj.payment_total
+    except Exception:
+        pass
+
+    return getattr(obj, "grand_total", None) or getattr(obj, "total_amount", 0)
+
+
+def _invoice_count(obj, invoices: list[dict]) -> int:
+    """
+    Return invoice count safely.
+    """
+    try:
+        return obj.invoice_count
+    except Exception:
+        return len(invoices)
+
+
 def send_vendor_payment_submission_email(request, obj) -> None:
     """
     Send professional HTML vendor payment approval email to finance approvers.
 
-    Includes:
-    - HTML email
-    - Plain text fallback
-    - Review Request button
-    - Invoice attachment button
-    - Bank details attachment button
-    - Physical file attachments where local path is available
+    Multi-invoice behavior:
+    - Sends ONE email for ONE payment request.
+    - Shows vendor once.
+    - Shows total invoice count.
+    - Shows grand total.
+    - Shows invoice summary table in HTML template.
+    - Shows invoice summary list in TXT template.
+    - Attaches all invoice files where local path is available.
+    - Keeps bank attachment at parent request level.
+
+    Backward compatibility:
+    - If child invoices do not exist yet, old parent invoice fields are used.
     """
     config = VendorApprovalConfig.get_config()
     to_list = config.get_finance_email_list()
@@ -134,33 +248,38 @@ def send_vendor_payment_submission_email(request, obj) -> None:
         )
         return
 
-    subject = f"Vendor Payment Approval Required – {obj.request_id}"
+    subject = f"Vendor Payment Approval Required - {obj.request_id}"
 
     review_url = request.build_absolute_uri(
         reverse("vendor:detail", kwargs={"pk": obj.pk})
     )
 
-    invoice_url = _absolute_file_url(request, obj.attachment)
-    bank_attachment_url = _absolute_file_url(request, obj.bank_attachment)
+    invoices = _build_invoice_context(request, obj)
 
-    invoice_name = _file_display_name(obj.attachment)
-    bank_attachment_name = _file_display_name(obj.bank_attachment)
+    bank_attachment = getattr(obj, "bank_attachment", None)
+    bank_attachment_url = _absolute_file_url(request, bank_attachment)
+    bank_attachment_name = _file_display_name(bank_attachment)
 
     submitted_by = ""
     if getattr(obj, "created_by_id", None):
-        submitted_by = obj.created_by.get_full_name() or obj.created_by.username
+        try:
+            submitted_by = obj.created_by.get_full_name() or obj.created_by.username
+        except Exception:
+            submitted_by = ""
+
+    grand_total = _payment_total(obj)
+    invoice_count = _invoice_count(obj, invoices)
 
     context = {
         "obj": obj,
         "review_url": review_url,
-        "invoice_url": invoice_url,
-        "bank_attachment_url": bank_attachment_url,
         "submitted_by": submitted_by,
-        "invoice_available": bool(obj.attachment),
-        "bank_attachment_available": bool(obj.bank_attachment),
-        "invoice_name": invoice_name,
+        "invoices": invoices,
+        "invoice_count": invoice_count,
+        "grand_total": grand_total,
+        "bank_attachment_url": bank_attachment_url,
+        "bank_attachment_available": bool(bank_attachment),
         "bank_attachment_name": bank_attachment_name,
-        "bill_type": obj.get_bill_type_display(),
     }
 
     text_body = render_to_string(
@@ -183,25 +302,29 @@ def send_vendor_payment_submission_email(request, obj) -> None:
 
         email.attach_alternative(html_body, "text/html")
 
-        # Attach actual files to email when local file path is available.
-        _attach_file_if_possible(
-            email=email,
-            file_field=obj.attachment,
-            label="invoice attachment",
-        )
+        # Attach all invoice files physically where possible.
+        for invoice in invoices:
+            _attach_file_if_possible(
+                email=email,
+                file_field=invoice.get("invoice_attachment"),
+                label=f"invoice attachment {invoice.get('invoice_number') or ''}".strip(),
+            )
 
+        # Attach bank proof/cancelled cheque physically where possible.
         _attach_file_if_possible(
             email=email,
-            file_field=obj.bank_attachment,
+            file_field=bank_attachment,
             label="bank details attachment",
         )
 
         email.send(fail_silently=False)
 
         logger.info(
-            "Vendor payment submission email sent successfully for request pk=%s request_id=%s",
+            "Vendor payment submission email sent successfully for request pk=%s request_id=%s invoice_count=%s grand_total=%s",
             getattr(obj, "pk", None),
             getattr(obj, "request_id", ""),
+            invoice_count,
+            grand_total,
         )
 
     except Exception:

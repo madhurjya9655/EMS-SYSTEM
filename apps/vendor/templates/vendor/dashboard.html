@@ -26,7 +26,7 @@
 
       <div class="dc-body">
         <div class="dc-title">New Request</div>
-        <div class="dc-desc">Submit a new vendor payment request</div>
+        <div class="dc-desc">Submit one vendor payment request with multiple invoices</div>
       </div>
 
       <div class="dc-footer">
@@ -49,9 +49,9 @@
       <div class="dc-title">My Requests</div>
       <div class="dc-desc">
         {% if user.is_superuser %}
-          Track all submitted payment requests
+          Track all vendor payment requests and invoice groups
         {% else %}
-          Track your submitted payment requests
+          Track your submitted payment requests and invoice groups
         {% endif %}
       </div>
     </div>
@@ -83,9 +83,9 @@
 
         <div class="dc-desc">
           {% if is_vendor_admin %}
-            Review and track all requests
+            Review and track all vendor payment requests
           {% else %}
-            Review and approve pending requests
+            Review one request containing multiple invoice rows
           {% endif %}
         </div>
       </div>

@@ -50,7 +50,8 @@ TAB_MAIN = (
 TAB_CHANGELOG = "ChangeLog"
 TAB_SCHEMA = "Schema"
 
-SYNC_VERSION = 1
+# Version bumped because we added hidden Internal Row Key column.
+SYNC_VERSION = 2
 
 STRUCTURE_TTL_SECONDS = int(
     getattr(settings, "VENDOR_PAYMENT_SHEETS_STRUCTURE_TTL_SECONDS", 600)
@@ -68,33 +69,24 @@ WRITES_PER_MINUTE_BUDGET = int(
 # ---------------------------------------------------------------------------
 # Vendor Payment Sheet columns
 #
-# Requirement sheet:
-# A -> Unique Number or ID
-# B -> Vendor Name
-# C -> Type of Vendor
-# D -> Invoice Date
-# E -> Invoice Number
-# F -> Type of Bill
-# G -> Base Amount
-# H -> GST Amount
-# I -> Total Amount
-# J -> Description of Payment
-# K -> Attachment of Invoice
-# L -> Copy of Cancelled Cheque
-# M -> Bank Details
+# Requirement:
+# One VendorPaymentRequest can contain multiple invoice rows.
 #
-# Production recommendation:
-# N -> Status
-# O -> Updated At
+# Sheet behavior:
+# - One row per invoice.
+# - Visible Column A remains same parent Request ID.
+# - Hidden Column P stores unique internal row key so Google sync does not
+#   overwrite invoice rows sharing same Request ID.
 #
-# IMPORTANT:
-# Unlike reimbursement, this sheet uses visible Column A as the unique key.
-# VendorPaymentRequest is one row per request, so request_id is safe for display.
-# Internal fallback RowKey is VP-<pk>, but visible ID remains request_id.
+# Example:
+# A Unique Number or ID | B Vendor | E Invoice Number | I Total | P Internal Row Key
+# Vendor-001            | ABC      | INV001           | 10000   | Vendor-001::INVPK::10
+# Vendor-001            | ABC      | INV002           | 20000   | Vendor-001::INVPK::11
+# Vendor-001            | ABC      | INV003           | 30000   | Vendor-001::INVPK::12
 # ---------------------------------------------------------------------------
 
 HEADER = [
-    "Unique Number or ID",       # A
+    "Unique Number or ID",       # A visible parent request id
     "Vendor Name",               # B
     "Type of Vendor",            # C
     "Invoice Date",              # D
@@ -107,8 +99,9 @@ HEADER = [
     "Attachment of Invoice",     # K
     "Copy of Cancelled Cheque",  # L
     "Bank Details",              # M
-    "Status",                    # N - recommended for approval/payment sync
-    "Updated At",                # O - recommended for audit
+    "Status",                    # N
+    "Updated At",                # O
+    "Internal Row Key",          # P hidden technical key
 ]
 
 CHANGELOG_HEADER = [
@@ -238,6 +231,10 @@ def _header_end_col() -> str:
     return _excel_col(len(HEADER))
 
 
+def _internal_key_col() -> str:
+    return _excel_col(len(HEADER))
+
+
 def _iso(value) -> str:
     if not value:
         return ""
@@ -357,10 +354,10 @@ def _vendor_name(obj) -> str:
 
 def _row_key(obj) -> str:
     """
-    Visible unique ID for the sheet.
+    Visible request ID for the sheet.
 
-    request_id is already unique in VendorPaymentRequest.
-    Fallback to VP-<pk> only if request_id is still missing.
+    This is shown in Column A and remains the same for every invoice row
+    belonging to the same parent request.
     """
     req_id = (getattr(obj, "request_id", "") or "").strip()
     if req_id:
@@ -368,6 +365,36 @@ def _row_key(obj) -> str:
 
     pk = getattr(obj, "pk", None) or getattr(obj, "id", None)
     return f"VP-{pk}" if pk else ""
+
+
+def _invoice_row_key(obj, invoice=None) -> str:
+    """
+    Hidden unique key for Google Sheet row upsert.
+
+    Visible Column A can repeat for multiple invoices.
+    Hidden Column P must be unique per row.
+
+    New multi-invoice:
+    Vendor-001::INVPK::10
+
+    Legacy fallback:
+    Vendor-001::LEGACY
+    """
+    request_id = _row_key(obj)
+
+    if invoice is not None:
+        invoice_pk = getattr(invoice, "pk", None)
+        invoice_number = str(getattr(invoice, "invoice_number", "") or "").strip()
+
+        if invoice_pk:
+            return f"{request_id}::INVPK::{invoice_pk}"
+
+        if invoice_number:
+            return f"{request_id}::INV::{invoice_number}"
+
+        return f"{request_id}::INV::UNKNOWN"
+
+    return f"{request_id}::LEGACY"
 
 
 # ---------------------------------------------------------------------------
@@ -614,21 +641,22 @@ def _friendly_format_main(sheet_id: int) -> None:
     ]
 
     widths = {
-        1: 150,   # Unique Number or ID
-        2: 220,   # Vendor Name
-        3: 160,   # Vendor Type
-        4: 140,   # Invoice Date
-        5: 160,   # Invoice Number
-        6: 120,   # Type of Bill
-        7: 130,   # Base Amount
-        8: 130,   # GST Amount
-        9: 130,   # Total Amount
-        10: 300,  # Description
-        11: 160,  # Invoice Attachment
-        12: 180,  # Cancelled Cheque
-        13: 300,  # Bank Details
-        14: 150,  # Status
-        15: 180,  # Updated At
+        1: 150,
+        2: 220,
+        3: 160,
+        4: 140,
+        5: 160,
+        6: 120,
+        7: 130,
+        8: 130,
+        9: 130,
+        10: 300,
+        11: 160,
+        12: 180,
+        13: 300,
+        14: 150,
+        15: 180,
+        16: 180,
     }
 
     for col_index, px in widths.items():
@@ -717,6 +745,25 @@ def _friendly_format_main(sheet_id: int) -> None:
                 }
             }
         )
+
+    # Hide Internal Row Key column P.
+    internal_key_index = len(HEADER) - 1
+    requests.append(
+        {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "COLUMNS",
+                    "startIndex": internal_key_index,
+                    "endIndex": internal_key_index + 1,
+                },
+                "properties": {
+                    "hiddenByUser": True,
+                },
+                "fields": "hiddenByUser",
+            }
+        }
+    )
 
     try:
         _batch_update(requests)
@@ -848,36 +895,60 @@ def ensure_spreadsheet_structure() -> None:
 # Row building
 # ---------------------------------------------------------------------------
 
-def build_row(obj) -> List[Any]:
+def build_row(obj, invoice=None) -> List[Any]:
     """
-    Build one VendorPaymentRequest row.
+    Build one sheet row.
 
-    Always return exactly len(HEADER) columns.
+    Multi-invoice:
+    - One row per VendorPaymentInvoice child row.
+    - Visible request ID remains same.
+    - Hidden internal row key is unique per invoice.
+
+    Legacy:
+    - If invoice is None, uses old parent invoice fields.
     """
-    row_key = _row_key(obj)
+    visible_request_id = _row_key(obj)
+
+    if invoice is not None:
+        invoice_date = getattr(invoice, "invoice_date", None)
+        invoice_number = getattr(invoice, "invoice_number", "") or ""
+        bill_type_label = (
+            invoice.get_bill_type_display()
+            if hasattr(invoice, "get_bill_type_display")
+            else str(getattr(invoice, "bill_type", "") or "")
+        )
+        base_amount = _money(getattr(invoice, "base_amount", 0))
+        gst_amount = _money(getattr(invoice, "gst_amount", 0))
+        total_amount = _money(getattr(invoice, "total_amount", 0))
+        description = getattr(invoice, "description", "") or ""
+        attachment = getattr(invoice, "invoice_attachment", None)
+    else:
+        invoice_date = getattr(obj, "invoice_date", None)
+        invoice_number = getattr(obj, "invoice_number", "") or ""
+        bill_type_label = _bill_type_label(obj)
+        base_amount = _money(getattr(obj, "base_amount", 0))
+        gst_amount = _money(getattr(obj, "gst_amount", 0))
+        total_amount = _money(getattr(obj, "total_amount", 0))
+        description = getattr(obj, "description", "") or ""
+        attachment = getattr(obj, "attachment", None)
 
     row = [
-        row_key,                                  # A Unique Number or ID
-        _vendor_name(obj),                       # B Vendor Name
-        _vendor_type_label(obj),                 # C Type of Vendor
-        _iso(getattr(obj, "invoice_date", None)),# D Invoice Date
-        getattr(obj, "invoice_number", "") or "",# E Invoice Number
-        _bill_type_label(obj),                   # F Type of Bill
-        _money(getattr(obj, "base_amount", 0)),  # G Base Amount
-        _money(getattr(obj, "gst_amount", 0)),   # H GST Amount
-        _money(getattr(obj, "total_amount", 0)), # I Total Amount
-        getattr(obj, "description", "") or "",   # J Description of Payment
-        _file_hyperlink(
-            getattr(obj, "attachment", None),
-            "Invoice",
-        ),                                      # K Attachment of Invoice
-        _file_hyperlink(
-            getattr(obj, "bank_attachment", None),
-            "Cheque",
-        ),                                      # L Copy of Cancelled Cheque
-        getattr(obj, "bank_details_text", "") or "", # M Bank Details
-        _status_label(obj),                      # N Status
-        _iso(getattr(obj, "updated_at", None)),  # O Updated At
+        visible_request_id,
+        _vendor_name(obj),
+        _vendor_type_label(obj),
+        _iso(invoice_date),
+        invoice_number,
+        bill_type_label,
+        base_amount,
+        gst_amount,
+        total_amount,
+        description,
+        _file_hyperlink(attachment, "Invoice"),
+        _file_hyperlink(getattr(obj, "bank_attachment", None), "Cheque"),
+        getattr(obj, "bank_details_text", "") or "",
+        _status_label(obj),
+        _iso(getattr(obj, "updated_at", None)),
+        _invoice_row_key(obj, invoice=invoice),
     ]
 
     if len(row) != len(HEADER):
@@ -890,18 +961,89 @@ def build_row(obj) -> List[Any]:
 
 
 # ---------------------------------------------------------------------------
-# Upsert helpers
+# Row cleanup / append helpers
 # ---------------------------------------------------------------------------
 
-def _index_by_request_id() -> Dict[str, int]:
+def _delete_rows_for_request_id(request_id: str) -> None:
     """
-    Map Column A Unique Number or ID -> Google Sheet row number.
+    Delete existing sheet rows where visible Column A equals request_id.
 
-    This prevents duplicate rows.
-    If Vendor-001 exists, update same row.
-    If Vendor-001 does not exist, append new row.
+    This is intentionally used for multi-invoice requests before rewriting
+    all current invoice rows.
+
+    Why:
+    If user removes an invoice before approval, that old invoice row must
+    disappear from Google Sheet too.
     """
+    if not request_id:
+        return
+
+    meta = _spreadsheets_get()
+    sheet_map = _get_sheet_map_from_meta(meta)
+    sheet_id = sheet_map.get(TAB_MAIN)
+
+    if sheet_id is None:
+        return
+
     values = _values_get(f"{TAB_MAIN}!A2:A")
+
+    rows_to_delete = []
+
+    for row_number, row in enumerate(values, start=2):
+        if row and str(row[0]).strip() == request_id:
+            rows_to_delete.append(row_number)
+
+    if not rows_to_delete:
+        return
+
+    requests = []
+
+    for row_number in sorted(rows_to_delete, reverse=True):
+        requests.append(
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": row_number - 1,
+                        "endIndex": row_number,
+                    }
+                }
+            }
+        )
+
+    _batch_update(requests)
+
+
+def _append_rows(rows: List[List[Any]]) -> int:
+    if not rows:
+        return 0
+
+    end_col = _header_end_col()
+
+    resp = _values_append(
+        f"{TAB_MAIN}!A:{end_col}",
+        rows,
+        user_entered=True,
+    )
+
+    try:
+        updated_range = resp.get("updates", {}).get("updatedRange", "")
+        first_cell = updated_range.split("!")[1].split(":")[0]
+        return int(first_cell[1:])
+    except Exception:
+        return 0
+
+
+def _index_by_internal_row_key() -> Dict[str, int]:
+    """
+    Map hidden Internal Row Key column -> Google Sheet row number.
+
+    Kept for legacy single-row upsert fallback.
+    Multi-invoice sync uses delete-and-reappend for request correctness.
+    """
+    internal_col = _internal_key_col()
+    values = _values_get(f"{TAB_MAIN}!{internal_col}2:{internal_col}")
 
     index: Dict[str, int] = {}
 
@@ -918,17 +1060,22 @@ def _index_by_request_id() -> Dict[str, int]:
 
 
 def _upsert_row(row: List[Any]) -> int:
+    """
+    Upsert one row using hidden Internal Row Key.
+
+    Used mostly for legacy single-invoice fallback.
+    """
     if not row:
         return 0
 
     end_col = _header_end_col()
-    row_key = str(row[0]).strip()
+    internal_key = str(row[-1]).strip()
 
-    if not row_key:
-        raise ValueError("Vendor Payment row key is empty.")
+    if not internal_key:
+        raise ValueError("Vendor Payment internal row key is empty.")
 
-    index = _index_by_request_id()
-    existing_row_number = index.get(row_key)
+    index = _index_by_internal_row_key()
+    existing_row_number = index.get(internal_key)
 
     if existing_row_number:
         _values_batch_update(
@@ -942,18 +1089,7 @@ def _upsert_row(row: List[Any]) -> int:
         )
         return existing_row_number
 
-    resp = _values_append(
-        f"{TAB_MAIN}!A:{end_col}",
-        [row],
-        user_entered=True,
-    )
-
-    try:
-        updated_range = resp.get("updates", {}).get("updatedRange", "")
-        first_cell = updated_range.split("!")[1].split(":")[0]
-        return int(first_cell[1:])
-    except Exception:
-        return 0
+    return _append_rows([row])
 
 
 def append_changelog(
@@ -1003,26 +1139,42 @@ def _validate_for_sheet(obj) -> List[str]:
     if not getattr(obj, "vendor_id", None):
         errors.append("Vendor is missing.")
 
-    if not getattr(obj, "invoice_date", None):
-        errors.append("Invoice date is missing.")
+    return errors
 
-    if not (getattr(obj, "invoice_number", "") or "").strip():
+
+def _validate_invoice_for_sheet(invoice) -> List[str]:
+    errors: List[str] = []
+
+    if not getattr(invoice, "pk", None):
+        errors.append("Invoice has no primary key.")
+
+    if not getattr(invoice, "invoice_date", None):
+        errors.append(
+            f"Invoice {getattr(invoice, 'invoice_number', '')} is missing date."
+        )
+
+    if not (getattr(invoice, "invoice_number", "") or "").strip():
         errors.append("Invoice number is missing.")
 
-    if getattr(obj, "base_amount", None) is None:
-        errors.append("Base amount is missing.")
+    if getattr(invoice, "base_amount", None) is None:
+        errors.append(
+            f"Invoice {getattr(invoice, 'invoice_number', '')} is missing base amount."
+        )
 
-    if _money(getattr(obj, "base_amount", 0)) < 0:
-        errors.append("Base amount cannot be negative.")
+    if _money(getattr(invoice, "base_amount", 0)) < 0:
+        errors.append(
+            f"Invoice {getattr(invoice, 'invoice_number', '')} base amount cannot be negative."
+        )
 
-    if _money(getattr(obj, "gst_amount", 0)) < 0:
-        errors.append("GST amount cannot be negative.")
+    if _money(getattr(invoice, "gst_amount", 0)) < 0:
+        errors.append(
+            f"Invoice {getattr(invoice, 'invoice_number', '')} GST amount cannot be negative."
+        )
 
-    if _money(getattr(obj, "total_amount", 0)) < 0:
-        errors.append("Total amount cannot be negative.")
-
-    if not (getattr(obj, "description", "") or "").strip():
-        errors.append("Description is missing.")
+    if _money(getattr(invoice, "total_amount", 0)) < 0:
+        errors.append(
+            f"Invoice {getattr(invoice, 'invoice_number', '')} total amount cannot be negative."
+        )
 
     return errors
 
@@ -1032,6 +1184,17 @@ def _validate_for_sheet(obj) -> List[str]:
 # ---------------------------------------------------------------------------
 
 def _sync_request_impl(obj_id: int) -> None:
+    """
+    Sync one VendorPaymentRequest to Google Sheets.
+
+    Multi-invoice path:
+    - Delete all existing sheet rows for request_id.
+    - Append one fresh row per current child invoice.
+    - This prevents stale rows when an invoice is removed before approval.
+
+    Legacy single-invoice path:
+    - Upsert one row using hidden Internal Row Key.
+    """
     if not _google_available():
         return
 
@@ -1046,6 +1209,7 @@ def _sync_request_impl(obj_id: int) -> None:
                 "finance_approved_by",
                 "final_approved_by",
             )
+            .prefetch_related("invoices")
             .get(pk=obj_id)
         )
     except VendorPaymentRequest.DoesNotExist:
@@ -1068,30 +1232,83 @@ def _sync_request_impl(obj_id: int) -> None:
 
     ensure_spreadsheet_structure()
 
-    old_status = ""
     new_status = getattr(obj, "status", "") or ""
     request_id = _row_key(obj)
 
+    invoices = []
+
     try:
-        row = build_row(obj)
-        rownum = _upsert_row(row)
+        invoices = list(obj.invoices.all())
+    except Exception:
+        invoices = []
 
-        append_changelog(
-            event="upsert",
-            request_id=request_id,
-            old=old_status,
-            new=new_status,
-            rownum=rownum,
-            actor="system",
-            result="ok",
-        )
+    try:
+        if invoices:
+            rows = []
 
-        logger.info(
-            "Vendor Payment sheet sync completed: pk=%s request_id=%s row=%s",
-            obj.pk,
-            request_id,
-            rownum,
-        )
+            for invoice in invoices:
+                inv_errors = _validate_invoice_for_sheet(invoice)
+
+                if inv_errors:
+                    logger.warning(
+                        "Skipping invoice pk=%s for request pk=%s: %s",
+                        getattr(invoice, "pk", None),
+                        obj.pk,
+                        "; ".join(inv_errors),
+                    )
+                    continue
+
+                rows.append(build_row(obj, invoice=invoice))
+
+            if not rows:
+                logger.warning(
+                    "Vendor Payment sheet sync skipped for request pk=%s request_id=%s because no valid invoice rows were available.",
+                    obj.pk,
+                    request_id,
+                )
+                return
+
+            _delete_rows_for_request_id(request_id)
+            first_rownum = _append_rows(rows)
+
+            append_changelog(
+                event="rewrite",
+                request_id=request_id,
+                old="",
+                new=new_status,
+                rownum=first_rownum,
+                actor="system",
+                result=f"ok: {len(rows)} invoice row(s)",
+            )
+
+            logger.info(
+                "Vendor Payment sheet sync completed multi-invoice rewrite: pk=%s request_id=%s invoices=%s first_row=%s",
+                obj.pk,
+                request_id,
+                len(rows),
+                first_rownum,
+            )
+
+        else:
+            row = build_row(obj, invoice=None)
+            rownum = _upsert_row(row)
+
+            append_changelog(
+                event="upsert_legacy",
+                request_id=request_id,
+                old="",
+                new=new_status,
+                rownum=rownum,
+                actor="system",
+                result="ok",
+            )
+
+            logger.info(
+                "Vendor Payment sheet sync completed legacy: pk=%s request_id=%s row=%s",
+                obj.pk,
+                request_id,
+                rownum,
+            )
 
     except Exception as exc:
         logger.exception(
@@ -1102,9 +1319,9 @@ def _sync_request_impl(obj_id: int) -> None:
 
         try:
             append_changelog(
-                event="upsert",
+                event="sync",
                 request_id=request_id,
-                old=old_status,
+                old="",
                 new=new_status,
                 rownum=0,
                 actor="system",
@@ -1119,11 +1336,11 @@ def sync_request(obj_or_id) -> None:
     """
     Safe public sync function.
 
-    Same production principle as reimbursement:
-    - never blocks user request for Google API
-    - runs after DB commit
-    - uses short cache lock to avoid duplicate sync storms
-    - logs errors instead of breaking ERP workflow
+    Production principle:
+    - Never blocks user request for Google API.
+    - Runs after DB commit.
+    - Uses short cache lock to avoid duplicate sync storms.
+    - Logs errors instead of breaking ERP workflow.
     """
     try:
         obj_id = int(getattr(obj_or_id, "pk", obj_or_id))
@@ -1182,6 +1399,7 @@ def bulk_resync_all_requests(limit: Optional[int] = None) -> int:
             "finance_approved_by",
             "final_approved_by",
         )
+        .prefetch_related("invoices")
         .order_by("pk")
     )
 
