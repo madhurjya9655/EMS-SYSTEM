@@ -1796,6 +1796,12 @@ def edit_checklist(request, pk):
 
     old_assignee = obj.assign_to
 
+    # Capture the ORIGINAL recurring-series identity BEFORE form save.
+    # This is critical because task_name / assign_to / mode / frequency / group_name
+    # are mutable but are currently used as the recurring-series key.
+    old_is_recurring = _is_recurring_checklist_obj(obj)
+    old_series_filter = _checklist_series_filter_kwargs(obj) if old_is_recurring else None
+
     if request.method == "POST":
         form = ChecklistForm(request.POST, request.FILES, instance=obj)
 
@@ -1819,10 +1825,59 @@ def edit_checklist(request, pk):
                 messages.error(request, _leave_block_message())
                 return render(request, "tasks/add_checklist.html", {"form": form})
 
-            obj2 = form.save(commit=False)
-            obj2.planned_date = planned_date
-            obj2.save()
-            form.save_m2m()
+            with transaction.atomic():
+                obj2 = form.save(commit=False)
+                obj2.planned_date = planned_date
+                obj2.save()
+                form.save_m2m()
+
+                # Recurring checklist fix:
+                #
+                # Current master-list grouping treats one recurring series as:
+                # assign_to + task_name + mode + frequency + group_name
+                #
+                # If only the selected/latest row is edited, changing task_name
+                # splits one recurring series into two visible rows:
+                #
+                # Old rows: Handle BG
+                # Edited row: Handle BG Customer
+                #
+                # So for recurring tasks, update all rows from the ORIGINAL
+                # series identity with the new master/config values.
+                #
+                # IMPORTANT:
+                # Do NOT update planned_date for sibling rows here.
+                # Each recurring occurrence has its own planned_date.
+                if old_is_recurring and old_series_filter:
+                    sibling_qs = Checklist.objects.filter(**old_series_filter).exclude(pk=obj2.pk)
+
+                    if checklist_has_field("is_deleted"):
+                        sibling_qs = sibling_qs.filter(is_deleted=False)
+
+                    update_data = {
+                        "task_name": obj2.task_name,
+                        "message": obj2.message,
+                        "assign_to": obj2.assign_to,
+                        "priority": obj2.priority,
+                        "attachment_mandatory": obj2.attachment_mandatory,
+                        "mode": obj2.mode,
+                        "frequency": obj2.frequency,
+                        "recurrence_end_date": obj2.recurrence_end_date,
+                        "time_per_task_minutes": obj2.time_per_task_minutes,
+                        "remind_before_days": obj2.remind_before_days,
+                        "assign_pc": obj2.assign_pc,
+                        "group_name": obj2.group_name,
+                        "notify_to": obj2.notify_to,
+                        "auditor": obj2.auditor,
+                        "set_reminder": obj2.set_reminder,
+                        "reminder_mode": obj2.reminder_mode,
+                        "reminder_frequency": obj2.reminder_frequency,
+                        "reminder_starting_time": obj2.reminder_starting_time,
+                        "checklist_auto_close": obj2.checklist_auto_close,
+                        "checklist_auto_close_days": obj2.checklist_auto_close_days,
+                    }
+
+                    sibling_qs.update(**update_data)
 
             try:
                 if old_assignee and obj2.assign_to_id != old_assignee.id:
@@ -1850,7 +1905,6 @@ def edit_checklist(request, pk):
         form = ChecklistForm(instance=obj)
 
     return render(request, "tasks/add_checklist.html", {"form": form})
-
 
 @has_permission("list_checklist")
 def delete_checklist(request, pk):
