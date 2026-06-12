@@ -9,15 +9,15 @@ import os
 import random
 import threading
 import time
-from datetime import datetime, date, timezone
-from typing import Dict, List, Optional, Callable, Any, Tuple
+from datetime import date, datetime, timezone
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from django.conf import settings
 from django.core.cache import cache
+from django.db import transaction
 from django.urls import NoReverseMatch, reverse
-from django.db import transaction  # on_commit after DB save
 
-from apps.reimbursement.models import ReimbursementLine  # for INCLUDED-only filter
+from apps.reimbursement.models import ReimbursementLine
 
 logger = logging.getLogger(__name__)
 
@@ -28,72 +28,72 @@ __all__ = [
     "TAB_SCHEMA",
     "ensure_spreadsheet_structure",
     "sync_request",
-    "build_row",   # back-compat alias
+    "build_row",
     "build_rows",
-    "reset_main_data",  # utility to clear existing rows below the header
-    "bulk_resync_all_requests",  # quota-safe full export
+    "reset_main_data",
+    "bulk_resync_all_requests",
+    "rebuild_main_data_from_db",
+    "repair_main_sheet_from_db",
 ]
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Prefer env override first (Render), then settings, then safe dummy
 SPREADSHEET_ID = (
     os.environ.get("REIMBURSEMENT_SHEET_ID")
     or getattr(settings, "REIMBURSEMENT_SHEET_ID", None)
-    or getattr(settings, "REIMBURSEMENT_SHEET_ID".lower(), None)  # legacy
+    or getattr(settings, "reimbursement_sheet_id", None)
     or "1LOVDkTVMGdEPOP9CQx-WVDv7ZY1TpqiQD82FFCc3t4A"
 )
 
-TAB_MAIN      = "Reimbursements"
+TAB_MAIN = "Reimbursements"
 TAB_CHANGELOG = "ChangeLog"
-TAB_SCHEMA    = "Schema"
-TAB_META      = "_Meta"
+TAB_SCHEMA = "Schema"
 
-# Schema version:
-# v9 = legacy RowKey self-heal:
-#      - current correct rows have RowKey in hidden column A
-#      - old broken rows may have RowKey in visible column B
-#      - index now reads A:B and updates same row A:Q
-SYNC_VERSION = 9
+# v10 = duplicate/stale RowKey cleanup + strict A:Q bill-wise export
+SYNC_VERSION = 10
 
-# Structure checks throttle
 STRUCTURE_TTL_SECONDS = int(
     getattr(settings, "REIMBURSEMENT_SHEETS_STRUCTURE_TTL_SECONDS", 600)
 )
 
-# Quota budgets (per process), defaults keep headroom under Google's 60 writes/min/user limit
-READS_PER_MINUTE_BUDGET  = int(getattr(settings, "REIMBURSEMENT_SHEETS_READS_PER_MINUTE", 48))
-WRITES_PER_MINUTE_BUDGET = int(getattr(settings, "REIMBURSEMENT_SHEETS_WRITES_PER_MINUTE", 30))
+READS_PER_MINUTE_BUDGET = int(
+    getattr(settings, "REIMBURSEMENT_SHEETS_READS_PER_MINUTE", 48)
+)
+WRITES_PER_MINUTE_BUDGET = int(
+    getattr(settings, "REIMBURSEMENT_SHEETS_WRITES_PER_MINUTE", 30)
+)
 
 # ---------------------------------------------------------------------------
-# ONE ROW PER BILL — business-visible columns.
+# Canonical raw sheet schema
 #
 # IMPORTANT:
-# - Column A is RowKey and must remain hidden.
-# - Visible business columns start from B.
-# - This file must always write A:Q, never B:Q, otherwise values shift.
+# A = hidden RowKey
+# B:Q = visible business fields
+#
+# This module must always write A:Q.
+# Never write B:Q, otherwise every visible column shifts.
 # ---------------------------------------------------------------------------
 
 HEADER = [
-    "RowKey",                   # A hidden internal upsert key
-    "Req ID",                   # B visible
-    "Employee Name",            # C visible
-    "date of Bill",             # D visible
-    "Category",                 # E visible
-    "Description of Bill",      # F visible
-    "Amount",                   # G visible
-    "Receipt",                  # H visible
-    "Gst Type",                 # I visible
-    "Bill Status",              # J visible
-    "Finance Verifier",         # K visible
-    "Manager Verifier",         # L visible
-    "Bill Submission Time",     # M visible
-    "Finance Verified Time",    # N visible
-    "Manager Approved Time",    # O visible
-    "Bill Paid At (time)",      # P visible
-    "Payment reff",             # Q visible
+    "RowKey",                 # A hidden internal upsert key
+    "Req ID",                 # B
+    "Employee Name",          # C
+    "date of Bill",           # D
+    "Category",               # E
+    "Description of Bill",    # F
+    "Amount",                 # G
+    "Receipt",                # H
+    "Gst Type",               # I
+    "Bill Status",            # J
+    "Finance Verifier",       # K
+    "Manager Verifier",       # L
+    "Bill Submission Time",   # M
+    "Finance Verified Time",  # N
+    "Manager Approved Time",  # O
+    "Bill Paid At (time)",    # P
+    "Payment reff",           # Q
 ]
 
 CHANGELOG_HEADER = [
@@ -115,12 +115,12 @@ SCHEMA_HEADER = [
     "Note",
 ]
 
-# ---------------------------------------------------------------------------
-# Google client helpers
-# ---------------------------------------------------------------------------
-
 _WARNED_MISSING_GOOGLE = False
-_WARNED_MISSING_CREDS  = False
+_WARNED_MISSING_CREDS = False
+
+# ---------------------------------------------------------------------------
+# Basic helpers
+# ---------------------------------------------------------------------------
 
 
 def _excel_col(n: int) -> str:
@@ -135,14 +135,13 @@ def _header_end_col() -> str:
     return _excel_col(len(HEADER))
 
 
-def _iso(dt):
+def _iso(dt) -> str:
     """
-    Return UTC ISO8601 with seconds for either a datetime or a date.
-    - If date, coerce to midnight UTC.
-    - If naive datetime, assume UTC.
+    Return UTC ISO8601 with seconds for datetime/date.
     """
     if not dt:
         return ""
+
     try:
         if isinstance(dt, datetime):
             d = dt
@@ -162,12 +161,6 @@ def _iso(dt):
 
 
 def _site_url() -> str:
-    """
-    Public base URL for receipt links.
-
-    Render should ideally define SITE_URL or PUBLIC_BASE_URL.
-    Fallback keeps local/dev safe but production should not rely on 127.0.0.1.
-    """
     return (
         os.environ.get("PUBLIC_BASE_URL")
         or os.environ.get("SITE_URL")
@@ -179,24 +172,23 @@ def _site_url() -> str:
 
 
 def _absolute_url(url: str) -> str:
-    """
-    Ensure Sheet hyperlinks are absolute.
-
-    Some storage backends return relative /media/... URLs.
-    Google Sheets should receive full URLs where possible.
-    """
     if not url:
         return ""
+
     url = str(url).strip()
+
     if url.startswith("http://") or url.startswith("https://"):
         return url
+
     if url.startswith("/"):
         return f"{_site_url()}{url}"
+
     return f"{_site_url()}/{url}"
 
 
 def _detail_url(req_id: int) -> str:
     base = _site_url()
+
     try:
         return f"{base}{reverse('admin:reimbursement_reimbursementrequest_change', args=[req_id])}"
     except NoReverseMatch:
@@ -206,6 +198,7 @@ def _detail_url(req_id: int) -> str:
         getattr(settings, "REIMBURSEMENT_DETAIL_URL_TEMPLATE", None)
         or os.environ.get("REIMBURSEMENT_DETAIL_URL_TEMPLATE")
     )
+
     if tmpl:
         path = tmpl.format(id=req_id, pk=req_id)
         if not path.startswith("/"):
@@ -213,6 +206,44 @@ def _detail_url(req_id: int) -> str:
         return f"{base}{path}"
 
     return base + "/"
+
+
+def _looks_like_rowkey(value: Any) -> bool:
+    """
+    RowKey format: request_id-line_id
+    Example: 97-380
+    """
+    text = str(value or "").strip()
+
+    if "-" not in text:
+        return False
+
+    parts = text.split("-")
+
+    if len(parts) != 2:
+        return False
+
+    return parts[0].isdigit() and parts[1].isdigit()
+
+
+def _row_key(req_id: int, line_id: int) -> str:
+    return f"{req_id}-{line_id}"
+
+
+def _employee_name(user) -> str:
+    try:
+        if not user:
+            return ""
+
+        full = f"{(user.first_name or '').strip()} {(user.last_name or '').strip()}".strip()
+        return full or (user.username or f"User #{getattr(user, 'id', '')}")
+    except Exception:
+        return f"User #{getattr(user, 'id', '')}"
+
+
+# ---------------------------------------------------------------------------
+# Google client helpers
+# ---------------------------------------------------------------------------
 
 
 def _google_available() -> bool:
@@ -267,6 +298,7 @@ def _credentials():
         os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE")
         or getattr(settings, "GOOGLE_SERVICE_ACCOUNT_FILE", None)
     )
+
     if file_path:
         return service_account.Credentials.from_service_account_file(
             file_path,
@@ -289,26 +321,22 @@ def _svc_drive():
 
 
 # ---------------------------------------------------------------------------
-# Backoff + per-process token buckets for reads & writes
+# Backoff + quota helpers
 # ---------------------------------------------------------------------------
 
 _rw_lock = threading.Lock()
-_read_next_refill  = time.monotonic()
+_read_next_refill = time.monotonic()
 _write_next_refill = time.monotonic()
-_read_tokens  = READS_PER_MINUTE_BUDGET
+_read_tokens = READS_PER_MINUTE_BUDGET
 _write_tokens = WRITES_PER_MINUTE_BUDGET
 
 
-def _consume_tokens(kind: str, n: int = 1):
-    """
-    kind: 'read' or 'write'
-    """
+def _consume_tokens(kind: str, n: int = 1) -> None:
     global _read_tokens, _write_tokens, _read_next_refill, _write_next_refill
 
     with _rw_lock:
         now = time.monotonic()
 
-        # refill buckets per minute
         if now >= _read_next_refill:
             _read_tokens = READS_PER_MINUTE_BUDGET
             _read_next_refill = now + 60.0
@@ -318,50 +346,33 @@ def _consume_tokens(kind: str, n: int = 1):
             _write_next_refill = now + 60.0
 
         if kind == "read":
-            bucket, next_refill = _read_tokens, _read_next_refill
-        else:
-            bucket, next_refill = _write_tokens, _write_next_refill
-
-        if bucket < n:
-            sleep_for = max(0.05, next_refill - now + 0.01)
-            time.sleep(sleep_for)
-
-            now2 = time.monotonic()
-
-            if kind == "read":
-                if now2 >= _read_next_refill:
-                    _read_tokens = READS_PER_MINUTE_BUDGET
-                    _read_next_refill = now2 + 60.0
-                _read_tokens = max(0, _read_tokens - n)
-            else:
-                if now2 >= _write_next_refill:
-                    _write_tokens = WRITES_PER_MINUTE_BUDGET
-                    _write_next_refill = now2 + 60.0
-                _write_tokens = max(0, _write_tokens - n)
-
+            if _read_tokens < n:
+                time.sleep(max(0.05, _read_next_refill - now + 0.01))
+                _read_tokens = READS_PER_MINUTE_BUDGET
+                _read_next_refill = time.monotonic() + 60.0
+            _read_tokens = max(0, _read_tokens - n)
             return
 
-        if kind == "read":
-            _read_tokens = max(0, _read_tokens - n)
-        else:
-            _write_tokens = max(0, _write_tokens - n)
+        if _write_tokens < n:
+            time.sleep(max(0.05, _write_next_refill - now + 0.01))
+            _write_tokens = WRITES_PER_MINUTE_BUDGET
+            _write_next_refill = time.monotonic() + 60.0
+
+        _write_tokens = max(0, _write_tokens - n)
 
 
 def _with_backoff(label: str, kind: str, fn: Callable[[], Any]) -> Any:
-    """
-    kind: 'read' or 'write'
-    """
     _consume_tokens(kind)
 
     delays = [0.2, 0.5, 1.0, 2.0, 4.0]
     last_exc = None
 
-    for i, d in enumerate(delays, start=1):
+    for i, delay in enumerate(delays, start=1):
         try:
             return fn()
-        except Exception as e:
-            last_exc = e
-            code = getattr(getattr(e, "resp", None), "status", None)
+        except Exception as exc:
+            last_exc = exc
+            code = getattr(getattr(exc, "resp", None), "status", None)
 
             if code not in (429, 500, 502, 503, 504):
                 raise
@@ -369,11 +380,11 @@ def _with_backoff(label: str, kind: str, fn: Callable[[], Any]) -> Any:
             if i == len(delays):
                 break
 
-            sleep_for = d + random.uniform(0.0, 0.2)
+            sleep_for = delay + random.uniform(0.0, 0.2)
             logger.info(
-                "Retrying %s after %s (attempt %s/%s)",
+                "Retrying %s after %s, attempt %s/%s",
                 label,
-                e,
+                exc,
                 i,
                 len(delays),
             )
@@ -383,7 +394,7 @@ def _with_backoff(label: str, kind: str, fn: Callable[[], Any]) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Spreadsheet structure + formatting
+# Google Sheets low-level wrappers
 # ---------------------------------------------------------------------------
 
 _meta_lock = threading.Lock()
@@ -399,9 +410,9 @@ def _spreadsheets_get() -> dict:
     cache_key = f"sheets.meta.{SPREADSHEET_ID}"
 
     with _meta_lock:
-        meta = _meta_cache.get(cache_key)
-        if meta:
-            return meta
+        cached = _meta_cache.get(cache_key)
+        if cached:
+            return cached
 
         meta = _with_backoff("spreadsheets.get", "read", _call)
         _meta_cache[cache_key] = meta
@@ -410,9 +421,15 @@ def _spreadsheets_get() -> dict:
 
 def _get_sheet_map_from_meta(meta: dict) -> Dict[str, int]:
     out: Dict[str, int] = {}
+
     for s in meta.get("sheets", []):
         props = s.get("properties", {})
-        out[props.get("title")] = props.get("sheetId")
+        title = props.get("title")
+        sheet_id = props.get("sheetId")
+
+        if title is not None and sheet_id is not None:
+            out[title] = sheet_id
+
     return out
 
 
@@ -438,6 +455,17 @@ def _values_batch_get(ranges: List[str]) -> List[List[List[str]]]:
 
     resp = _with_backoff("values.batchGet", "read", _call)
     return [x.get("values", [[]]) for x in resp.get("valueRanges", [])]
+
+
+def _values_get(range_: str) -> List[List[Any]]:
+    def _call():
+        return _svc_sheets().spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=range_,
+        ).execute()
+
+    resp = _with_backoff(f"values.get {range_}", "read", _call)
+    return resp.get("values", [])
 
 
 def _values_update(range_: str, values: List[List[Any]]) -> None:
@@ -479,163 +507,173 @@ def _values_batch_update(
     def _call():
         return _svc_sheets().spreadsheets().values().batchUpdate(
             spreadsheetId=SPREADSHEET_ID,
-            body={"valueInputOption": input_option, "data": data_blocks},
+            body={
+                "valueInputOption": input_option,
+                "data": data_blocks,
+            },
         ).execute()
 
     _with_backoff("values.batchUpdate", "write", _call)
 
 
+# ---------------------------------------------------------------------------
+# Spreadsheet structure
+# ---------------------------------------------------------------------------
+
+_structure_lock = threading.Lock()
+_last_ensured_ts: Optional[float] = None
+
+
+def _structure_cache_key() -> str:
+    return f"reimb.sheets.structure.{SPREADSHEET_ID}.v{SYNC_VERSION}"
+
+
 def _friendly_format_main(sheet_id: int) -> None:
     end_col = len(HEADER)
-    requests = []
 
-    # Freeze header
-    requests.append({
-        "updateSheetProperties": {
-            "properties": {
-                "sheetId": sheet_id,
-                "gridProperties": {"frozenRowCount": 1},
-            },
-            "fields": "gridProperties.frozenRowCount",
-        }
-    })
-
-    # Hide column A — RowKey
-    requests.append({
-        "updateDimensionProperties": {
-            "range": {
-                "sheetId": sheet_id,
-                "dimension": "COLUMNS",
-                "startIndex": 0,
-                "endIndex": 1,
-            },
-            "properties": {"hiddenByUser": True},
-            "fields": "hiddenByUser",
-        }
-    })
-
-    # Basic filter on all columns A:Q
-    requests.append({
-        "setBasicFilter": {
-            "filter": {
-                "range": {
+    requests = [
+        {
+            "updateSheetProperties": {
+                "properties": {
                     "sheetId": sheet_id,
-                    "startRowIndex": 0,
-                    "endRowIndex": 1_000_000,
-                    "startColumnIndex": 0,
-                    "endColumnIndex": end_col,
-                }
+                    "gridProperties": {"frozenRowCount": 1},
+                },
+                "fields": "gridProperties.frozenRowCount",
             }
-        }
-    })
-
-    # Column widths
-    widths = {
-        2: 90,    # Req ID
-        3: 200,   # Employee Name
-        4: 150,   # date of Bill
-        5: 140,   # Category
-        6: 280,   # Description
-        7: 110,   # Amount
-        8: 120,   # Receipt
-        9: 120,   # GST
-        10: 150,  # Bill Status
-        11: 170,  # Finance Verifier
-        12: 170,  # Manager Verifier
-        13: 180,  # Submission
-        14: 180,  # Finance Verified
-        15: 180,  # Manager Approved
-        16: 180,  # Paid At
-        17: 170,  # Payment ref
-    }
-
-    for idx, px in widths.items():
-        requests.append({
+        },
+        {
             "updateDimensionProperties": {
                 "range": {
                     "sheetId": sheet_id,
                     "dimension": "COLUMNS",
-                    "startIndex": idx - 1,
-                    "endIndex": idx,
+                    "startIndex": 0,
+                    "endIndex": 1,
                 },
-                "properties": {"pixelSize": px},
-                "fields": "pixelSize",
+                "properties": {"hiddenByUser": True},
+                "fields": "hiddenByUser",
             }
-        })
-
-    # Wrap description
-    requests.append({
-        "repeatCell": {
-            "range": {
-                "sheetId": sheet_id,
-                "startRowIndex": 1,
-                "startColumnIndex": 6 - 1,
-                "endColumnIndex": 6,
-            },
-            "cell": {
-                "userEnteredFormat": {
-                    "wrapStrategy": "WRAP",
-                }
-            },
-            "fields": "userEnteredFormat.wrapStrategy",
-        }
-    })
-
-    # Amount as number
-    requests.append({
-        "repeatCell": {
-            "range": {
-                "sheetId": sheet_id,
-                "startRowIndex": 1,
-                "startColumnIndex": 7 - 1,
-                "endColumnIndex": 7,
-            },
-            "cell": {
-                "userEnteredFormat": {
-                    "numberFormat": {
-                        "type": "NUMBER",
-                        "pattern": "#,##0.00",
+        },
+        {
+            "setBasicFilter": {
+                "filter": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": 0,
+                        "endRowIndex": 1000000,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": end_col,
                     }
                 }
-            },
-            "fields": "userEnteredFormat.numberFormat",
-        }
-    })
+            }
+        },
+    ]
 
-    # Date/time formatting for date/time columns
-    for col in [4, 13, 14, 15, 16]:
-        requests.append({
+    widths = {
+        2: 90,
+        3: 200,
+        4: 150,
+        5: 140,
+        6: 280,
+        7: 110,
+        8: 120,
+        9: 120,
+        10: 150,
+        11: 170,
+        12: 170,
+        13: 180,
+        14: 180,
+        15: 180,
+        16: 180,
+        17: 170,
+    }
+
+    for idx, px in widths.items():
+        requests.append(
+            {
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "COLUMNS",
+                        "startIndex": idx - 1,
+                        "endIndex": idx,
+                    },
+                    "properties": {"pixelSize": px},
+                    "fields": "pixelSize",
+                }
+            }
+        )
+
+    # Wrap description F
+    requests.append(
+        {
             "repeatCell": {
                 "range": {
                     "sheetId": sheet_id,
                     "startRowIndex": 1,
-                    "startColumnIndex": col - 1,
-                    "endColumnIndex": col,
+                    "startColumnIndex": 5,
+                    "endColumnIndex": 6,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "wrapStrategy": "WRAP",
+                    }
+                },
+                "fields": "userEnteredFormat.wrapStrategy",
+            }
+        }
+    )
+
+    # Amount G
+    requests.append(
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 1,
+                    "startColumnIndex": 6,
+                    "endColumnIndex": 7,
                 },
                 "cell": {
                     "userEnteredFormat": {
                         "numberFormat": {
-                            "type": "DATE_TIME",
-                            "pattern": "yyyy-mm-dd hh:mm:ss",
+                            "type": "NUMBER",
+                            "pattern": "#,##0.00",
                         }
                     }
                 },
                 "fields": "userEnteredFormat.numberFormat",
             }
-        })
+        }
+    )
+
+    # Date/time columns D, M, N, O, P
+    for col in [4, 13, 14, 15, 16]:
+        requests.append(
+            {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": 1,
+                        "startColumnIndex": col - 1,
+                        "endColumnIndex": col,
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "numberFormat": {
+                                "type": "DATE_TIME",
+                                "pattern": "yyyy-mm-dd hh:mm:ss",
+                            }
+                        }
+                    },
+                    "fields": "userEnteredFormat.numberFormat",
+                }
+            }
+        )
 
     try:
         _batch_update(requests)
-    except Exception as e:
-        logger.info("Non-fatal formatting skip: %s", e)
-
-
-_structure_lock = threading.Lock()
-_last_ensured_ts: float | None = None
-
-
-def _structure_cache_key() -> str:
-    return f"reimb.sheets.structure.{SPREADSHEET_ID}.v{SYNC_VERSION}"
+    except Exception as exc:
+        logger.info("Non-fatal main sheet formatting skipped: %s", exc)
 
 
 def ensure_spreadsheet_structure() -> None:
@@ -643,35 +681,38 @@ def ensure_spreadsheet_structure() -> None:
         return
 
     global _last_ensured_ts
-    now = time.monotonic()
 
-    ck = _structure_cache_key()
-    cached = cache.get(ck)
-    if cached:
+    now = time.monotonic()
+    cache_key = _structure_cache_key()
+
+    if cache.get(cache_key):
         return
 
     with _structure_lock:
         if _last_ensured_ts and (now - _last_ensured_ts) < STRUCTURE_TTL_SECONDS:
-            cache.set(ck, True, timeout=STRUCTURE_TTL_SECONDS)
+            cache.set(cache_key, True, timeout=STRUCTURE_TTL_SECONDS)
             return
 
         meta = _spreadsheets_get()
         existing = _get_sheet_map_from_meta(meta)
 
         requests = []
+
         for title in [TAB_MAIN, TAB_CHANGELOG, TAB_SCHEMA]:
             if title not in existing:
-                requests.append({
-                    "addSheet": {
-                        "properties": {
-                            "title": title,
-                            "gridProperties": {
-                                "rowCount": 2000,
-                                "columnCount": 50,
-                            },
+                requests.append(
+                    {
+                        "addSheet": {
+                            "properties": {
+                                "title": title,
+                                "gridProperties": {
+                                    "rowCount": 2000,
+                                    "columnCount": 50,
+                                },
+                            }
                         }
                     }
-                })
+                )
 
         if requests:
             _batch_update(requests)
@@ -679,33 +720,36 @@ def ensure_spreadsheet_structure() -> None:
             meta = _spreadsheets_get()
             existing = _get_sheet_map_from_meta(meta)
 
-        # Hide non-main tabs
-        requests = []
-        for title in [TAB_CHANGELOG, TAB_SCHEMA]:
-            sid = existing.get(title)
-            if sid is not None:
-                requests.append({
-                    "updateSheetProperties": {
-                        "properties": {
-                            "sheetId": sid,
-                            "hidden": True,
-                        },
-                        "fields": "hidden",
-                    }
-                })
+        hide_requests = []
 
-        _batch_update(requests)
+        for title in [TAB_CHANGELOG, TAB_SCHEMA]:
+            sheet_id = existing.get(title)
+            if sheet_id is not None:
+                hide_requests.append(
+                    {
+                        "updateSheetProperties": {
+                            "properties": {
+                                "sheetId": sheet_id,
+                                "hidden": True,
+                            },
+                            "fields": "hidden",
+                        }
+                    }
+                )
+
+        _batch_update(hide_requests)
 
         main_id = existing.get(TAB_MAIN)
         if main_id is not None:
             _friendly_format_main(main_id)
 
-        ranges = [
-            f"{TAB_MAIN}!1:1",
-            f"{TAB_CHANGELOG}!1:1",
-            f"{TAB_SCHEMA}!1:1",
-        ]
-        values_list = _values_batch_get(ranges)
+        values_list = _values_batch_get(
+            [
+                f"{TAB_MAIN}!1:1",
+                f"{TAB_CHANGELOG}!1:1",
+                f"{TAB_SCHEMA}!1:1",
+            ]
+        )
 
         main_header = values_list[0][0] if values_list and values_list[0] else []
         changelog_header = values_list[1][0] if len(values_list) > 1 and values_list[1] else []
@@ -720,26 +764,31 @@ def ensure_spreadsheet_structure() -> None:
         if schema_header != SCHEMA_HEADER:
             _values_update(f"{TAB_SCHEMA}!1:1", [SCHEMA_HEADER])
 
-        hb = [
-            SYNC_VERSION,
-            json.dumps(HEADER, ensure_ascii=False),
-            True,
-            _iso(datetime.now(timezone.utc)),
-            "bootstrap/update",
-        ]
-
         try:
-            _values_append(f"{TAB_SCHEMA}!A:E", [hb], user_entered=False)
+            _values_append(
+                f"{TAB_SCHEMA}!A:E",
+                [
+                    [
+                        SYNC_VERSION,
+                        json.dumps(HEADER, ensure_ascii=False),
+                        True,
+                        _iso(datetime.now(timezone.utc)),
+                        "bootstrap/update",
+                    ]
+                ],
+                user_entered=False,
+            )
         except Exception:
             pass
 
         _last_ensured_ts = time.monotonic()
-        cache.set(ck, True, timeout=STRUCTURE_TTL_SECONDS)
+        cache.set(cache_key, True, timeout=STRUCTURE_TTL_SECONDS)
 
 
 # ---------------------------------------------------------------------------
-# Drive helpers — upload receipts, return shareable link
+# Drive receipt helpers
 # ---------------------------------------------------------------------------
+
 
 def _drive_folder_id() -> Optional[str]:
     return (
@@ -784,8 +833,7 @@ def _drive_find_file_by_name(name: str, parent: str) -> Optional[str]:
 
 def _drive_ensure_permission(file_id: str) -> None:
     def _call(body: dict):
-        svc = _svc_drive()
-        return svc.permissions().create(
+        return _svc_drive().permissions().create(
             fileId=file_id,
             body=body,
             fields="id",
@@ -796,19 +844,19 @@ def _drive_ensure_permission(file_id: str) -> None:
             body = {"type": "anyone", "role": "reader"}
         else:
             domain = _drive_domain()
-            if not domain:
-                body = {"type": "anyone", "role": "reader"}
-            else:
+            if domain:
                 body = {
                     "type": "domain",
                     "role": "reader",
                     "domain": domain,
                     "allowFileDiscovery": False,
                 }
+            else:
+                body = {"type": "anyone", "role": "reader"}
 
         _with_backoff("drive.permissions.create", "write", lambda: _call(body))
-    except Exception as e:
-        logger.info("Drive permission set failed for %s: %s", file_id, e)
+    except Exception as exc:
+        logger.info("Drive permission set failed for %s: %s", file_id, exc)
 
 
 def _drive_upload_bytes(
@@ -820,27 +868,28 @@ def _drive_upload_bytes(
     from googleapiclient.http import MediaIoBaseUpload
 
     def _call():
-        svc = _svc_drive()
         media = MediaIoBaseUpload(
             io.BytesIO(data),
             mime or mimetypes.guess_type(name)[0] or "application/octet-stream",
             resumable=False,
         )
         body = {"name": name, "parents": [parent]}
-        return svc.files().create(
+        return _svc_drive().files().create(
             body=body,
             media_body=media,
             fields="id",
         ).execute()
 
     try:
-        file = _with_backoff("drive.files.create", "write", _call)
-        fid = file.get("id")
-        if fid:
-            _drive_ensure_permission(fid)
-        return fid
-    except Exception as e:
-        logger.info("Drive upload failed for %s: %s", name, e)
+        file_obj = _with_backoff("drive.files.create", "write", _call)
+        file_id = file_obj.get("id")
+
+        if file_id:
+            _drive_ensure_permission(file_id)
+
+        return file_id
+    except Exception as exc:
+        logger.info("Drive upload failed for %s: %s", name, exc)
         return None
 
 
@@ -853,20 +902,15 @@ def _drive_link(file_id: str) -> str:
     return f"https://drive.google.com/file/d/{file_id}/view?usp=drivesdk"
 
 
-# ---------------------------------------------------------------------------
-# Helpers for building rows — bill-wise
-# ---------------------------------------------------------------------------
-
 def _collect_receipt_link_for_line(req, line) -> str:
     """
-    Return receipt link for the bill line.
+    Return receipt link for bill line.
 
     Priority:
-    1. Google Drive shared link, if Drive folder is configured.
+    1. Google Drive shared file link if drive folder configured.
     2. Storage file URL.
-    3. EMS secured receipt route.
+    3. EMS secured route.
     """
-    # Try Google Drive
     try:
         if _google_available() and _drive_folder_id():
             f = (
@@ -888,31 +932,31 @@ def _collect_receipt_link_for_line(req, line) -> str:
                     filename,
                     _drive_folder_id(),
                 )
+
                 if existing_id:
                     return _drive_link(existing_id)
 
                 with f.open("rb") as fh:
                     data = fh.read()
 
-                fid = _drive_upload_bytes(
+                file_id = _drive_upload_bytes(
                     filename,
                     data,
                     _drive_folder_id(),
                     mimetypes.guess_type(getattr(f, "name", ""))[0],
                 )
 
-                if fid:
-                    return _drive_link(fid)
+                if file_id:
+                    return _drive_link(file_id)
 
-    except Exception as e:
+    except Exception as exc:
         logger.info(
             "Drive link for req=%s line=%s skipped: %s",
             getattr(req, "id", None),
             getattr(line, "id", None),
-            e,
+            exc,
         )
 
-    # Storage URL
     f = (
         getattr(line, "receipt_file", None)
         or (
@@ -927,35 +971,20 @@ def _collect_receipt_link_for_line(req, line) -> str:
         except Exception:
             pass
 
-    # EMS secured route
     try:
         return _site_url() + reverse("reimbursement:receipt_line", args=[line.id])
     except Exception:
         return ""
 
 
-def _employee_name(user) -> str:
-    try:
-        if not user:
-            return ""
-
-        full = f"{(user.first_name or '').strip()} {(user.last_name or '').strip()}".strip()
-        return full or (user.username or f"User #{getattr(user, 'id', '')}")
-    except Exception:
-        return f"User #{getattr(user, 'id', '')}"
-
-
-def _row_key(req_id: int, line_id: int) -> str:
-    return f"{req_id}-{line_id}"
-
-
 # ---------------------------------------------------------------------------
-# Row building — BILL-WISE exact column order A:Q
+# Row building
 # ---------------------------------------------------------------------------
+
 
 def build_rows(req) -> List[List[Any]]:
     """
-    Build one row per INCLUDED bill.
+    Build one row per INCLUDED reimbursement bill.
 
     Physical columns:
     A = RowKey hidden
@@ -975,15 +1004,14 @@ def build_rows(req) -> List[List[Any]]:
     O = Manager Approved Time
     P = Bill Paid At (time)
     Q = Payment reff
-
-    This function must always return exactly len(HEADER) columns.
     """
     rows: List[List[Any]] = []
     employee = getattr(req, "created_by", None)
 
-    # INCLUDED lines only
-    lines_qs = req.lines.select_related("expense_item").filter(
-        status=ReimbursementLine.Status.INCLUDED
+    lines_qs = (
+        req.lines.select_related("expense_item")
+        .filter(status=ReimbursementLine.Status.INCLUDED)
+        .order_by("id")
     )
 
     for line in lines_qs:
@@ -995,23 +1023,19 @@ def build_rows(req) -> List[List[Any]]:
             or 0
         )
 
-        # Category label
         try:
             category = item.get_category_display() if item else ""
         except Exception:
             category = getattr(item, "category", "") or ""
 
-        # GST label
         try:
             gst = item.get_gst_type_display() if item else ""
         except Exception:
             gst = getattr(item, "gst_type", "") or ""
 
-        # Receipt hyperlink
         link = _collect_receipt_link_for_line(req, line)
-        receipt_cell = f'=HYPERLINK("{link}","View")' if link else ""
+        receipt_cell = f'=HYPERLINK("{str(link).replace(chr(34), chr(34) + chr(34))}","View")' if link else ""
 
-        # Bill status label
         bill_status = getattr(line, "bill_status", "") or ""
         try:
             bill_status = line.get_bill_status_display()
@@ -1030,7 +1054,6 @@ def build_rows(req) -> List[List[Any]]:
             else ""
         )
 
-        # Timestamps
         date_of_bill = getattr(item, "date", None)
         submitted_at = getattr(req, "submitted_at", None)
         verified_at = getattr(req, "verified_at", None)
@@ -1053,27 +1076,24 @@ def build_rows(req) -> List[List[Any]]:
             or (getattr(item, "description", "") or "").strip()
         )
 
-        # RowKey keeps upsert idempotent
-        rowkey = _row_key(req.id, line.id)
-
         row = [
-            rowkey,                    # A RowKey hidden
-            req.id,                    # B Req ID
-            _employee_name(employee),  # C Employee Name
-            _iso(date_of_bill),        # D date of Bill
-            category,                  # E Category
-            description,               # F Description of Bill
-            amount,                    # G Amount
-            receipt_cell,              # H Receipt
-            gst,                       # I Gst Type
-            bill_status,               # J Bill Status
-            finance_verifier,          # K Finance Verifier
-            manager_verifier,          # L Manager Verifier
-            _iso(submitted_at),        # M Bill Submission Time
-            _iso(verified_at),         # N Finance Verified Time
-            _iso(manager_approved_at), # O Manager Approved Time
-            _iso(paid_at),             # P Bill Paid At (time)
-            payment_ref,               # Q Payment reff
+            _row_key(req.id, line.id),      # A
+            req.id,                        # B
+            _employee_name(employee),      # C
+            _iso(date_of_bill),            # D
+            category,                      # E
+            description,                   # F
+            amount,                        # G
+            receipt_cell,                  # H
+            gst,                           # I
+            bill_status,                   # J
+            finance_verifier,              # K
+            manager_verifier,              # L
+            _iso(submitted_at),            # M
+            _iso(verified_at),             # N
+            _iso(manager_approved_at),     # O
+            _iso(paid_at),                 # P
+            payment_ref,                   # Q
         ]
 
         if len(row) != len(HEADER):
@@ -1087,140 +1107,221 @@ def build_rows(req) -> List[List[Any]]:
     return rows
 
 
-# Backward-compatible alias
-def build_row(req) -> List[List[Any]]:
-    return build_rows(req)
+def build_row(req) -> List[Any]:
+    """
+    Backward-compatible alias.
+
+    Old code expected one row per request. Current workflow is bill-wise, so this
+    returns the first bill row if present.
+    """
+    rows = build_rows(req)
+    return rows[0] if rows else []
 
 
 # ---------------------------------------------------------------------------
-# Upsert helpers — bill-wise; key = RowKey
+# RowKey index + repair helpers
 # ---------------------------------------------------------------------------
 
-def _looks_like_rowkey(value: Any) -> bool:
+
+def _scan_rowkeys() -> Dict[str, List[int]]:
     """
-    RowKey format is '<request_id>-<line_id>', for example '97-380'.
+    Return RowKey -> [sheet row numbers].
 
-    This is used to detect:
-    - correct current RowKey in hidden column A
-    - old broken RowKey accidentally written in visible column B
-
-    Plain request IDs like '97' must not match.
+    Handles:
+    - current layout: RowKey in A
+    - legacy shifted layout: RowKey in B
     """
-    if value is None:
-        return False
+    values = _values_get(f"{TAB_MAIN}!A2:B")
+    out: Dict[str, List[int]] = {}
 
-    text = str(value).strip()
-    if not text or "-" not in text:
-        return False
+    for row_number, row in enumerate(values, start=2):
+        col_a = str(row[0]).strip() if len(row) >= 1 and row[0] is not None else ""
+        col_b = str(row[1]).strip() if len(row) >= 2 and row[1] is not None else ""
 
-    left, right = text.split("-", 1)
-    return left.isdigit() and right.isdigit()
+        rowkey = ""
+
+        if _looks_like_rowkey(col_a):
+            rowkey = col_a
+        elif _looks_like_rowkey(col_b):
+            rowkey = col_b
+
+        if rowkey:
+            out.setdefault(rowkey, []).append(row_number)
+
+    return out
 
 
 def _index_by_rowkey() -> Dict[str, int]:
     """
-    Map RowKey -> row number.
+    Map RowKey -> first row number.
 
-    Production-safe behavior:
-    - Correct/current layout: RowKey is in hidden column A.
-    - Legacy broken layout: RowKey is in visible column B.
-    - We read A2:B once and index both positions.
-    - If a legacy row is found in B, the next update writes full A:Q on the
-      same row, self-healing the shifted alignment without manual Sheet edits.
-
-    Important:
-    - This function does not delete rows.
-    - This function does not clear data.
-    - It only helps upsert find the correct existing row.
+    Duplicate cleanup is handled separately.
     """
-    def _call():
-        return _svc_sheets().spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"{TAB_MAIN}!A2:B",
-        ).execute()
+    scanned = _scan_rowkeys()
 
-    resp = _with_backoff("values.get A2:B", "read", _call)
+    return {
+        rowkey: row_numbers[0]
+        for rowkey, row_numbers in scanned.items()
+        if row_numbers
+    }
 
-    idx: Dict[str, int] = {}
 
-    for row_number, values in enumerate(resp.get("values", []), start=2):
-        col_a = (
-            str(values[0]).strip()
-            if len(values) >= 1 and values[0] is not None
-            else ""
+def _delete_sheet_rows(row_numbers: List[int]) -> None:
+    """
+    Delete entire sheet rows by 1-based sheet row number.
+    Delete descending so row shifts do not corrupt targets.
+    """
+    rows = sorted({rn for rn in row_numbers if rn > 1}, reverse=True)
+
+    if not rows:
+        return
+
+    meta = _spreadsheets_get()
+    sheet_map = _get_sheet_map_from_meta(meta)
+    sheet_id = sheet_map.get(TAB_MAIN)
+
+    if sheet_id is None:
+        return
+
+    requests = []
+
+    for rn in rows:
+        requests.append(
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": rn - 1,
+                        "endIndex": rn,
+                    }
+                }
+            }
         )
-        col_b = (
-            str(values[1]).strip()
-            if len(values) >= 2 and values[1] is not None
-            else ""
-        )
 
-        # Correct current layout
-        if _looks_like_rowkey(col_a):
-            idx[col_a] = row_number
+    _batch_update(requests)
+    _meta_cache.clear()
+
+
+def _delete_stale_or_duplicate_rows_for_request(
+    req_id: int,
+    keep_rowkeys: set[str],
+) -> None:
+    """
+    Delete rows belonging to one request that should not exist anymore.
+
+    Deletes:
+    - RowKeys starting with '<req_id>-' but not in keep_rowkeys.
+    - Duplicate rows for the same RowKey, keeping the first.
+    """
+    prefix = f"{req_id}-"
+    scanned = _scan_rowkeys()
+    rows_to_delete: List[int] = []
+
+    for rowkey, row_numbers in scanned.items():
+        if not rowkey.startswith(prefix):
             continue
 
-        # Legacy shifted layout
-        if _looks_like_rowkey(col_b):
-            idx[col_b] = row_number
+        if rowkey not in keep_rowkeys:
+            rows_to_delete.extend(row_numbers)
+            continue
 
-    return idx
+        if len(row_numbers) > 1:
+            rows_to_delete.extend(row_numbers[1:])
+
+    _delete_sheet_rows(rows_to_delete)
+
+
+def _delete_rows_not_in_db(valid_rowkeys: set[str]) -> None:
+    """
+    Global repair:
+    Delete all RowKey-backed rows that do not exist in DB and duplicate RowKeys.
+    """
+    scanned = _scan_rowkeys()
+    rows_to_delete: List[int] = []
+
+    for rowkey, row_numbers in scanned.items():
+        if rowkey not in valid_rowkeys:
+            rows_to_delete.extend(row_numbers)
+            continue
+
+        if len(row_numbers) > 1:
+            rows_to_delete.extend(row_numbers[1:])
+
+    _delete_sheet_rows(rows_to_delete)
+
+
+# ---------------------------------------------------------------------------
+# Upsert
+# ---------------------------------------------------------------------------
+
+
+def _parse_updated_range_start_row(resp: dict) -> int:
+    try:
+        updated_range = resp.get("updates", {}).get("updatedRange", "")
+        if "!" not in updated_range:
+            return 0
+
+        a1 = updated_range.split("!", 1)[1]
+        start = a1.split(":", 1)[0]
+
+        digits = "".join(ch for ch in start if ch.isdigit())
+        return int(digits) if digits else 0
+    except Exception:
+        return 0
 
 
 def _upsert_rows_batch(rows: List[List[Any]]) -> Dict[str, int]:
     """
-    Performance path per request:
-    - Read RowKey index once.
-    - Batch update existing rows.
-    - Append new rows in one append call.
+    Upsert rows into A:Q using RowKey.
 
-    Because _index_by_rowkey() reads A:B, old shifted rows are now repaired
-    in-place instead of duplicated.
+    Existing row: update A:Q.
+    Missing row: append to A:Q.
     """
-    if not rows:
-        return {}
-
-    end_col = _header_end_col()
-    idx = _index_by_rowkey()
-
-    updates: List[Dict[str, Any]] = []
-    to_append: List[List[Any]] = []
     written_map: Dict[str, int] = {}
 
+    if not rows:
+        return written_map
+
+    idx = _index_by_rowkey()
+    end_col = _header_end_col()
+
+    update_blocks: List[Dict[str, Any]] = []
+    append_rows: List[List[Any]] = []
+
     for row in rows:
-        rowkey = str(row[0])
-        rn = idx.get(rowkey)
+        if len(row) != len(HEADER):
+            raise ValueError(f"Invalid row length: {len(row)} != {len(HEADER)}")
 
-        if rn:
-            updates.append({
-                "range": f"{TAB_MAIN}!A{rn}:{end_col}{rn}",
-                "values": [row],
-            })
-            written_map[rowkey] = rn
+        rowkey = str(row[0]).strip()
+        row_number = idx.get(rowkey)
+
+        if row_number:
+            update_blocks.append(
+                {
+                    "range": f"{TAB_MAIN}!A{row_number}:{end_col}{row_number}",
+                    "values": [row],
+                }
+            )
+            written_map[rowkey] = row_number
         else:
-            to_append.append(row)
+            append_rows.append(row)
 
-    # Batch update existing rows
-    if updates:
-        _values_batch_update(updates, input_option="USER_ENTERED")
+    if update_blocks:
+        _values_batch_update(update_blocks, input_option="USER_ENTERED")
 
-    # Append new rows in one shot
-    if to_append:
+    if append_rows:
         resp = _values_append(
             f"{TAB_MAIN}!A:{end_col}",
-            to_append,
+            append_rows,
             user_entered=True,
         )
 
-        try:
-            rng = resp.get("updates", {}).get("updatedRange", "")
-            first_rn = int(rng.split("!")[1].split(":")[0][1:])
-        except Exception:
-            first_rn = 0
+        first_row = _parse_updated_range_start_row(resp)
 
-        if first_rn:
-            for i, row in enumerate(to_append):
-                written_map[str(row[0])] = first_rn + i
+        if first_row:
+            for i, row in enumerate(append_rows):
+                written_map[str(row[0])] = first_row + i
 
     return written_map
 
@@ -1238,31 +1339,36 @@ def append_changelog(
     try:
         _values_append(
             f"{TAB_CHANGELOG}!A:H",
-            [[
-                _iso(datetime.now(timezone.utc)),
-                event,
-                rowkey,
-                old or "",
-                new or "",
-                rownum,
-                actor or "",
-                f"{result}: {err}" if err else result,
-            ]],
+            [
+                [
+                    _iso(datetime.now(timezone.utc)),
+                    event,
+                    rowkey,
+                    old or "",
+                    new or "",
+                    rownum,
+                    actor or "",
+                    f"{result}: {err}" if err else result,
+                ]
+            ],
             user_entered=False,
         )
-    except Exception as e:
-        logger.info("Changelog append skipped: %s", e)
+    except Exception as exc:
+        logger.info("Changelog append skipped: %s", exc)
 
 
 # ---------------------------------------------------------------------------
-# Public entry — sync a single request
+# Public sync
 # ---------------------------------------------------------------------------
+
 
 def _sync_request_impl(req_id: int) -> None:
     if not _google_available():
         return
 
-    from apps.reimbursement.models import ReimbursementRequest  # lazy import
+    from apps.reimbursement.models import ReimbursementRequest
+
+    ensure_spreadsheet_structure()
 
     try:
         req = (
@@ -1276,35 +1382,65 @@ def _sync_request_impl(req_id: int) -> None:
             .prefetch_related("lines__expense_item")
             .get(pk=req_id)
         )
-    except Exception:
+    except ReimbursementRequest.DoesNotExist:
+        try:
+            _delete_stale_or_duplicate_rows_for_request(
+                req_id=req_id,
+                keep_rowkeys=set(),
+            )
+        except Exception as exc:
+            logger.exception(
+                "Google Sheets stale cleanup failed for deleted req=%s: %s",
+                req_id,
+                exc,
+            )
+        return
+    except Exception as exc:
+        logger.exception(
+            "Failed to load reimbursement request %s for sheet sync: %s",
+            req_id,
+            exc,
+        )
         return
 
-    ensure_spreadsheet_structure()
-
     rows = build_rows(req)
+    keep_rowkeys = {str(row[0]) for row in rows}
+
+    try:
+        _delete_stale_or_duplicate_rows_for_request(
+            req_id=req_id,
+            keep_rowkeys=keep_rowkeys,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Google Sheets stale/duplicate cleanup failed for req=%s: %s",
+            req_id,
+            exc,
+        )
 
     try:
         written = _upsert_rows_batch(rows)
-    except Exception as e:
+    except Exception as exc:
         logger.exception(
-            "Google Sheets batch upsert failed for req=%s: %s",
+            "Google Sheets upsert failed for req=%s: %s",
             req_id,
-            e,
+            exc,
         )
         written = {}
 
     prev_status = getattr(req, "status", "") or ""
 
     for row in rows:
-        rk = str(row[0])
-        rn = int(written.get(rk, 0))
+        rowkey = str(row[0])
+        rownum = int(written.get(rowkey, 0))
+
         try:
             append_changelog(
                 "upsert",
-                rk,
+                rowkey,
                 prev_status,
                 req.status,
-                rn,
+                rownum,
                 "",
                 "ok",
             )
@@ -1314,12 +1450,12 @@ def _sync_request_impl(req_id: int) -> None:
 
 def sync_request(req) -> None:
     """
-    Export-only. No status mutations or audit writes.
+    Export one request to Google Sheets.
 
-    Non-blocking for the web request:
-    - Debounced per request via cache.
-    - Enqueued after DB commit using transaction.on_commit.
-    - Runs in a daemon thread.
+    Non-blocking:
+    - debounce by request ID
+    - run after DB commit
+    - execute in daemon thread
     """
     if req is None:
         return
@@ -1336,17 +1472,18 @@ def sync_request(req) -> None:
         return
 
     lock_key = f"reimb.sheets.sync.lock.{req_id}"
+
     if not cache.add(lock_key, True, timeout=30):
         return
 
     def _kick():
         try:
-            t = threading.Thread(
+            thread = threading.Thread(
                 target=_sync_request_impl,
                 args=(req_id,),
                 daemon=True,
             )
-            t.start()
+            thread.start()
         except Exception:
             cache.delete(lock_key)
 
@@ -1357,19 +1494,19 @@ def sync_request(req) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Maintenance helper — clear all data rows under header
+# Maintenance / repair
 # ---------------------------------------------------------------------------
+
 
 def reset_main_data() -> None:
     """
-    Clears all rows below header in TAB_MAIN.
-
-    Use only for controlled full rebuilds.
-    This keeps header intact.
+    Clear all data rows under header in Reimbursements.
+    Keeps row 1 header.
     """
     if not _google_available():
         return
 
+    ensure_spreadsheet_structure()
     end_col = _header_end_col()
 
     def _call():
@@ -1380,23 +1517,12 @@ def reset_main_data() -> None:
 
     try:
         _with_backoff("values.clear", "write", _call)
-        logger.info("Cleared main sheet data under header.")
-    except Exception as e:
-        logger.exception("Failed to clear main sheet: %s", e)
+        logger.info("Cleared Reimbursements data rows under header.")
+    except Exception as exc:
+        logger.exception("Failed to clear Reimbursements sheet: %s", exc)
 
-
-# ---------------------------------------------------------------------------
-# Bulk re-sync — quota-safe
-# ---------------------------------------------------------------------------
 
 def _collect_all_rows() -> Tuple[List[List[Any]], Dict[str, List[Any]]]:
-    """
-    Build rows for all reimbursement requests.
-
-    Returns:
-    - all_rows: list of rows
-    - rows_by_rowkey: dict RowKey -> row
-    """
     from apps.reimbursement.models import ReimbursementRequest
 
     all_rows: List[List[Any]] = []
@@ -1418,8 +1544,8 @@ def _collect_all_rows() -> Tuple[List[List[Any]], Dict[str, List[Any]]]:
         rows = build_rows(req)
         all_rows.extend(rows)
 
-        for r in rows:
-            rows_by_rowkey[str(r[0])] = r
+        for row in rows:
+            rows_by_rowkey[str(row[0])] = row
 
     return all_rows, rows_by_rowkey
 
@@ -1435,16 +1561,10 @@ def bulk_resync_all_requests(
     disable_changelog: bool = True,
 ) -> None:
     """
-    Quota-safe full export.
+    Export all reimbursement requests bill-wise.
 
-    Steps:
-    1. Ensure structure.
-    2. Read main sheet RowKey index once.
-       This now reads A:B, so old shifted rows can self-heal.
-    3. Compute updates vs appends for all rows.
-    4. Batch update existing rows.
-    5. Append only truly missing rows.
-    6. Optionally skip ChangeLog writes during bulk to preserve quota.
+    This updates existing RowKeys and appends missing RowKeys.
+    For corrupted sheets, call rebuild_main_data_from_db() instead.
     """
     if not _google_available():
         return
@@ -1460,35 +1580,35 @@ def bulk_resync_all_requests(
     idx = _index_by_rowkey()
     end_col = _header_end_col()
 
-    updates_blocks: List[Dict[str, Any]] = []
-    appends_rows: List[List[Any]] = []
+    update_blocks: List[Dict[str, Any]] = []
+    append_rows: List[List[Any]] = []
 
     for rowkey, row in rows_by_rowkey.items():
-        rn = idx.get(rowkey)
+        row_number = idx.get(rowkey)
 
-        if rn:
-            updates_blocks.append({
-                "range": f"{TAB_MAIN}!A{rn}:{end_col}{rn}",
-                "values": [row],
-            })
+        if row_number:
+            update_blocks.append(
+                {
+                    "range": f"{TAB_MAIN}!A{row_number}:{end_col}{row_number}",
+                    "values": [row],
+                }
+            )
         else:
-            appends_rows.append(row)
+            append_rows.append(row)
 
-    # Updates in chunks
-    if updates_blocks:
-        for chunk in _chunked(updates_blocks, update_chunk_size):
+    if update_blocks:
+        for chunk in _chunked(update_blocks, update_chunk_size):
             _values_batch_update(chunk, input_option="USER_ENTERED")
 
         logger.info(
             "bulk_resync_all_requests: updated %s existing rows.",
-            len(updates_blocks),
+            len(update_blocks),
         )
 
-    # Appends in chunks
-    if appends_rows:
+    if append_rows:
         first_chunk = True
 
-        for chunk in _chunked(appends_rows, append_chunk_size):
+        for chunk in _chunked(append_rows, append_chunk_size):
             if not first_chunk:
                 time.sleep(max(1, sleep_between_append_chunks_sec))
 
@@ -1500,20 +1620,59 @@ def bulk_resync_all_requests(
             first_chunk = False
 
         logger.info(
-            "bulk_resync_all_requests: appended %s new rows.",
-            len(appends_rows),
+            "bulk_resync_all_requests: appended %s rows.",
+            len(append_rows),
         )
 
-    # Optional changelog
     if not disable_changelog:
-        now = _iso(datetime.now(timezone.utc))
-        rows = [[now, "bulk_resync", "", "", "", 0, "", "ok"]]
-
         try:
             _values_append(
                 f"{TAB_CHANGELOG}!A:H",
-                rows,
+                [[_iso(datetime.now(timezone.utc)), "bulk_resync", "", "", "", 0, "", "ok"]],
                 user_entered=False,
             )
-        except Exception as e:
-            logger.info("bulk_resync changelog skipped: %s", e)
+        except Exception as exc:
+            logger.info("bulk_resync changelog skipped: %s", exc)
+
+
+def rebuild_main_data_from_db() -> None:
+    """
+    Production repair path.
+
+    1. Keep header.
+    2. Clear Reimbursements A2:Q.
+    3. Export one row per INCLUDED ReimbursementLine from DB.
+
+    Run once after deploying this fix.
+    """
+    reset_main_data()
+    bulk_resync_all_requests(
+        update_chunk_size=500,
+        append_chunk_size=500,
+        sleep_between_append_chunks_sec=65,
+        disable_changelog=True,
+    )
+
+
+def repair_main_sheet_from_db() -> None:
+    """
+    Incremental repair.
+
+    Deletes duplicate/stale RowKey rows, then upserts current DB rows.
+    For heavily corrupted old no-RowKey rows, use rebuild_main_data_from_db().
+    """
+    if not _google_available():
+        return
+
+    ensure_spreadsheet_structure()
+
+    all_rows, rows_by_rowkey = _collect_all_rows()
+    valid_rowkeys = set(rows_by_rowkey.keys())
+
+    try:
+        _delete_rows_not_in_db(valid_rowkeys)
+    except Exception as exc:
+        logger.exception("Failed to delete stale/duplicate rows: %s", exc)
+
+    if all_rows:
+        _upsert_rows_batch(all_rows)
