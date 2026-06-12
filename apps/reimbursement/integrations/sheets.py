@@ -1,4 +1,4 @@
-# apps/reimbursement/integrations/sheets.py
+#apps/reimbursement/integrations/sheets.py
 from __future__ import annotations
 
 import io
@@ -34,11 +34,8 @@ __all__ = [
     "bulk_resync_all_requests",
     "rebuild_main_data_from_db",
     "repair_main_sheet_from_db",
+    "force_rewrite_main_data_from_db",
 ]
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 
 SPREADSHEET_ID = (
     os.environ.get("REIMBURSEMENT_SHEET_ID")
@@ -51,8 +48,7 @@ TAB_MAIN = "Reimbursements"
 TAB_CHANGELOG = "ChangeLog"
 TAB_SCHEMA = "Schema"
 
-# v10 = duplicate/stale RowKey cleanup + strict A:Q bill-wise export
-SYNC_VERSION = 10
+SYNC_VERSION = 11
 
 STRUCTURE_TTL_SECONDS = int(
     getattr(settings, "REIMBURSEMENT_SHEETS_STRUCTURE_TTL_SECONDS", 600)
@@ -61,39 +57,29 @@ STRUCTURE_TTL_SECONDS = int(
 READS_PER_MINUTE_BUDGET = int(
     getattr(settings, "REIMBURSEMENT_SHEETS_READS_PER_MINUTE", 48)
 )
+
 WRITES_PER_MINUTE_BUDGET = int(
     getattr(settings, "REIMBURSEMENT_SHEETS_WRITES_PER_MINUTE", 30)
 )
 
-# ---------------------------------------------------------------------------
-# Canonical raw sheet schema
-#
-# IMPORTANT:
-# A = hidden RowKey
-# B:Q = visible business fields
-#
-# This module must always write A:Q.
-# Never write B:Q, otherwise every visible column shifts.
-# ---------------------------------------------------------------------------
-
 HEADER = [
-    "RowKey",                 # A hidden internal upsert key
-    "Req ID",                 # B
-    "Employee Name",          # C
-    "date of Bill",           # D
-    "Category",               # E
-    "Description of Bill",    # F
-    "Amount",                 # G
-    "Receipt",                # H
-    "Gst Type",               # I
-    "Bill Status",            # J
-    "Finance Verifier",       # K
-    "Manager Verifier",       # L
-    "Bill Submission Time",   # M
-    "Finance Verified Time",  # N
-    "Manager Approved Time",  # O
-    "Bill Paid At (time)",    # P
-    "Payment reff",           # Q
+    "RowKey",
+    "Req ID",
+    "Employee Name",
+    "date of Bill",
+    "Category",
+    "Description of Bill",
+    "Amount",
+    "Receipt",
+    "Gst Type",
+    "Bill Status",
+    "Finance Verifier",
+    "Manager Verifier",
+    "Bill Submission Time",
+    "Finance Verified Time",
+    "Manager Approved Time",
+    "Bill Paid At (time)",
+    "Payment reff",
 ]
 
 CHANGELOG_HEADER = [
@@ -118,9 +104,17 @@ SCHEMA_HEADER = [
 _WARNED_MISSING_GOOGLE = False
 _WARNED_MISSING_CREDS = False
 
-# ---------------------------------------------------------------------------
-# Basic helpers
-# ---------------------------------------------------------------------------
+_rw_lock = threading.Lock()
+_read_next_refill = time.monotonic()
+_write_next_refill = time.monotonic()
+_read_tokens = READS_PER_MINUTE_BUDGET
+_write_tokens = WRITES_PER_MINUTE_BUDGET
+
+_meta_lock = threading.Lock()
+_meta_cache: Dict[str, Any] = {}
+
+_structure_lock = threading.Lock()
+_last_ensured_ts: Optional[float] = None
 
 
 def _excel_col(n: int) -> str:
@@ -135,20 +129,17 @@ def _header_end_col() -> str:
     return _excel_col(len(HEADER))
 
 
-def _iso(dt) -> str:
-    """
-    Return UTC ISO8601 with seconds for datetime/date.
-    """
-    if not dt:
+def _iso(value) -> str:
+    if not value:
         return ""
 
     try:
-        if isinstance(dt, datetime):
-            d = dt
-        elif isinstance(dt, date):
-            d = datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
+        if isinstance(value, datetime):
+            d = value
+        elif isinstance(value, date):
+            d = datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
         else:
-            return str(dt)
+            return str(value)
 
         if d.tzinfo is None:
             d = d.replace(tzinfo=timezone.utc)
@@ -156,6 +147,65 @@ def _iso(dt) -> str:
             d = d.astimezone(timezone.utc)
 
         return d.isoformat(timespec="seconds")
+    except Exception:
+        return ""
+
+
+def _sheet_date(value) -> str:
+    if not value:
+        return ""
+
+    try:
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+
+        if isinstance(value, date):
+            return value.isoformat()
+
+        text = str(value).strip()
+
+        if not text:
+            return ""
+
+        if "T" in text:
+            return text.split("T", 1)[0]
+
+        if " " in text and len(text) >= 10:
+            return text[:10]
+
+        return text
+    except Exception:
+        return ""
+
+
+def _sheet_datetime(value) -> str:
+    if not value:
+        return ""
+
+    try:
+        if isinstance(value, datetime):
+            d = value
+            if d.tzinfo is not None:
+                d = d.astimezone(timezone.utc)
+            return d.strftime("%Y-%m-%d %H:%M:%S")
+
+        if isinstance(value, date):
+            return value.isoformat()
+
+        text = str(value).strip()
+
+        if not text:
+            return ""
+
+        text = text.replace("T", " ")
+
+        if "+" in text:
+            text = text.split("+", 1)[0]
+
+        if "." in text:
+            text = text.split(".", 1)[0]
+
+        return text[:19]
     except Exception:
         return ""
 
@@ -209,10 +259,6 @@ def _detail_url(req_id: int) -> str:
 
 
 def _looks_like_rowkey(value: Any) -> bool:
-    """
-    RowKey format: request_id-line_id
-    Example: 97-380
-    """
     text = str(value or "").strip()
 
     if "-" not in text:
@@ -241,9 +287,8 @@ def _employee_name(user) -> str:
         return f"User #{getattr(user, 'id', '')}"
 
 
-# ---------------------------------------------------------------------------
-# Google client helpers
-# ---------------------------------------------------------------------------
+def _escape_sheet_formula_string(value: str) -> str:
+    return str(value or "").replace('"', '""')
 
 
 def _google_available() -> bool:
@@ -288,6 +333,7 @@ def _credentials():
     ]
 
     raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+
     if raw:
         return service_account.Credentials.from_service_account_info(
             json.loads(raw),
@@ -318,17 +364,6 @@ def _svc_drive():
     from googleapiclient.discovery import build
 
     return build("drive", "v3", credentials=_credentials(), cache_discovery=False)
-
-
-# ---------------------------------------------------------------------------
-# Backoff + quota helpers
-# ---------------------------------------------------------------------------
-
-_rw_lock = threading.Lock()
-_read_next_refill = time.monotonic()
-_write_next_refill = time.monotonic()
-_read_tokens = READS_PER_MINUTE_BUDGET
-_write_tokens = WRITES_PER_MINUTE_BUDGET
 
 
 def _consume_tokens(kind: str, n: int = 1) -> None:
@@ -393,14 +428,6 @@ def _with_backoff(label: str, kind: str, fn: Callable[[], Any]) -> Any:
     raise last_exc
 
 
-# ---------------------------------------------------------------------------
-# Google Sheets low-level wrappers
-# ---------------------------------------------------------------------------
-
-_meta_lock = threading.Lock()
-_meta_cache: Dict[str, Any] = {}
-
-
 def _spreadsheets_get() -> dict:
     def _call():
         return _svc_sheets().spreadsheets().get(
@@ -411,6 +438,7 @@ def _spreadsheets_get() -> dict:
 
     with _meta_lock:
         cached = _meta_cache.get(cache_key)
+
         if cached:
             return cached
 
@@ -468,12 +496,16 @@ def _values_get(range_: str) -> List[List[Any]]:
     return resp.get("values", [])
 
 
-def _values_update(range_: str, values: List[List[Any]]) -> None:
+def _values_update(
+    range_: str,
+    values: List[List[Any]],
+    input_option: str = "USER_ENTERED",
+) -> None:
     def _call():
         return _svc_sheets().spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
             range=range_,
-            valueInputOption="RAW",
+            valueInputOption=input_option,
             body={"values": values},
         ).execute()
 
@@ -514,14 +546,6 @@ def _values_batch_update(
         ).execute()
 
     _with_backoff("values.batchUpdate", "write", _call)
-
-
-# ---------------------------------------------------------------------------
-# Spreadsheet structure
-# ---------------------------------------------------------------------------
-
-_structure_lock = threading.Lock()
-_last_ensured_ts: Optional[float] = None
 
 
 def _structure_cache_key() -> str:
@@ -571,19 +595,19 @@ def _friendly_format_main(sheet_id: int) -> None:
     widths = {
         2: 90,
         3: 200,
-        4: 150,
-        5: 140,
-        6: 280,
-        7: 110,
+        4: 130,
+        5: 150,
+        6: 320,
+        7: 120,
         8: 120,
-        9: 120,
+        9: 130,
         10: 150,
-        11: 170,
-        12: 170,
-        13: 180,
-        14: 180,
-        15: 180,
-        16: 180,
+        11: 180,
+        12: 180,
+        13: 190,
+        14: 190,
+        15: 190,
+        16: 190,
         17: 170,
     }
 
@@ -603,7 +627,6 @@ def _friendly_format_main(sheet_id: int) -> None:
             }
         )
 
-    # Wrap description F
     requests.append(
         {
             "repeatCell": {
@@ -613,17 +636,12 @@ def _friendly_format_main(sheet_id: int) -> None:
                     "startColumnIndex": 5,
                     "endColumnIndex": 6,
                 },
-                "cell": {
-                    "userEnteredFormat": {
-                        "wrapStrategy": "WRAP",
-                    }
-                },
+                "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
                 "fields": "userEnteredFormat.wrapStrategy",
             }
         }
     )
 
-    # Amount G
     requests.append(
         {
             "repeatCell": {
@@ -646,8 +664,29 @@ def _friendly_format_main(sheet_id: int) -> None:
         }
     )
 
-    # Date/time columns D, M, N, O, P
-    for col in [4, 13, 14, 15, 16]:
+    requests.append(
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 1,
+                    "startColumnIndex": 3,
+                    "endColumnIndex": 4,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "numberFormat": {
+                            "type": "DATE",
+                            "pattern": "yyyy-mm-dd",
+                        }
+                    }
+                },
+                "fields": "userEnteredFormat.numberFormat",
+            }
+        }
+    )
+
+    for col in [13, 14, 15, 16]:
         requests.append(
             {
                 "repeatCell": {
@@ -706,7 +745,7 @@ def ensure_spreadsheet_structure() -> None:
                             "properties": {
                                 "title": title,
                                 "gridProperties": {
-                                    "rowCount": 2000,
+                                    "rowCount": 3000,
                                     "columnCount": 50,
                                 },
                             }
@@ -740,6 +779,7 @@ def ensure_spreadsheet_structure() -> None:
         _batch_update(hide_requests)
 
         main_id = existing.get(TAB_MAIN)
+
         if main_id is not None:
             _friendly_format_main(main_id)
 
@@ -756,13 +796,13 @@ def ensure_spreadsheet_structure() -> None:
         schema_header = values_list[2][0] if len(values_list) > 2 and values_list[2] else []
 
         if main_header != HEADER:
-            _values_update(f"{TAB_MAIN}!1:1", [HEADER])
+            _values_update(f"{TAB_MAIN}!1:1", [HEADER], input_option="RAW")
 
         if changelog_header != CHANGELOG_HEADER:
-            _values_update(f"{TAB_CHANGELOG}!1:1", [CHANGELOG_HEADER])
+            _values_update(f"{TAB_CHANGELOG}!1:1", [CHANGELOG_HEADER], input_option="RAW")
 
         if schema_header != SCHEMA_HEADER:
-            _values_update(f"{TAB_SCHEMA}!1:1", [SCHEMA_HEADER])
+            _values_update(f"{TAB_SCHEMA}!1:1", [SCHEMA_HEADER], input_option="RAW")
 
         try:
             _values_append(
@@ -783,11 +823,6 @@ def ensure_spreadsheet_structure() -> None:
 
         _last_ensured_ts = time.monotonic()
         cache.set(cache_key, True, timeout=STRUCTURE_TTL_SECONDS)
-
-
-# ---------------------------------------------------------------------------
-# Drive receipt helpers
-# ---------------------------------------------------------------------------
 
 
 def _drive_folder_id() -> Optional[str]:
@@ -813,10 +848,9 @@ def _drive_domain() -> Optional[str]:
 
 def _drive_find_file_by_name(name: str, parent: str) -> Optional[str]:
     def _call():
-        svc = _svc_drive()
         safe_name = name.replace("'", "\\'")
         q = f"name = '{safe_name}' and '{parent}' in parents and trashed = false"
-        return svc.files().list(
+        return _svc_drive().files().list(
             q=q,
             spaces="drive",
             fields="files(id,name)",
@@ -873,9 +907,8 @@ def _drive_upload_bytes(
             mime or mimetypes.guess_type(name)[0] or "application/octet-stream",
             resumable=False,
         )
-        body = {"name": name, "parents": [parent]}
         return _svc_drive().files().create(
-            body=body,
+            body={"name": name, "parents": [parent]},
             media_body=media,
             fields="id",
         ).execute()
@@ -902,109 +935,87 @@ def _drive_link(file_id: str) -> str:
     return f"https://drive.google.com/file/d/{file_id}/view?usp=drivesdk"
 
 
-def _collect_receipt_link_for_line(req, line) -> str:
-    """
-    Return receipt link for bill line.
+def _receipt_file_for_line(line):
+    f = getattr(line, "receipt_file", None)
 
-    Priority:
-    1. Google Drive shared file link if drive folder configured.
-    2. Storage file URL.
-    3. EMS secured route.
-    """
+    if f and getattr(f, "name", None):
+        return f
+
+    item = getattr(line, "expense_item", None)
+
+    if item:
+        f = getattr(item, "receipt_file", None)
+        if f and getattr(f, "name", None):
+            return f
+
+    return None
+
+
+def _collect_receipt_link_for_line(req, line) -> str:
+    f = _receipt_file_for_line(line)
+
+    if not f:
+        return ""
+
     try:
         if _google_available() and _drive_folder_id():
-            f = (
-                getattr(line, "receipt_file", None)
-                or (
-                    getattr(line, "expense_item", None)
-                    and getattr(line.expense_item, "receipt_file", None)
-                )
+            filename = _receipt_drive_filename(
+                req.id,
+                line.id,
+                getattr(f, "name", "receipt"),
             )
 
-            if f:
-                filename = _receipt_drive_filename(
-                    req.id,
-                    line.id,
-                    getattr(f, "name", "receipt"),
-                )
+            existing_id = _drive_find_file_by_name(
+                filename,
+                _drive_folder_id(),
+            )
 
-                existing_id = _drive_find_file_by_name(
-                    filename,
-                    _drive_folder_id(),
-                )
+            if existing_id:
+                return _drive_link(existing_id)
 
-                if existing_id:
-                    return _drive_link(existing_id)
+            with f.open("rb") as fh:
+                data = fh.read()
 
-                with f.open("rb") as fh:
-                    data = fh.read()
+            file_id = _drive_upload_bytes(
+                filename,
+                data,
+                _drive_folder_id(),
+                mimetypes.guess_type(getattr(f, "name", ""))[0],
+            )
 
-                file_id = _drive_upload_bytes(
-                    filename,
-                    data,
-                    _drive_folder_id(),
-                    mimetypes.guess_type(getattr(f, "name", ""))[0],
-                )
-
-                if file_id:
-                    return _drive_link(file_id)
-
+            if file_id:
+                return _drive_link(file_id)
     except Exception as exc:
         logger.info(
-            "Drive link for req=%s line=%s skipped: %s",
+            "Drive receipt link skipped for req=%s line=%s: %s",
             getattr(req, "id", None),
             getattr(line, "id", None),
             exc,
         )
 
-    f = (
-        getattr(line, "receipt_file", None)
-        or (
-            getattr(line, "expense_item", None)
-            and getattr(line.expense_item, "receipt_file", None)
-        )
-    )
-
-    if f and getattr(f, "url", None):
-        try:
-            return _absolute_url(f.url)
-        except Exception:
-            pass
-
     try:
-        return _site_url() + reverse("reimbursement:receipt_line", args=[line.id])
-    except Exception:
+        if getattr(f, "url", None):
+            return _absolute_url(f.url)
+    except Exception as exc:
+        logger.warning(
+            "Receipt storage URL unavailable for req=%s line=%s file=%s: %s",
+            getattr(req, "id", None),
+            getattr(line, "id", None),
+            getattr(f, "name", ""),
+            exc,
+        )
+
+    return ""
+
+
+def _receipt_cell(link: str) -> str:
+    if not link:
         return ""
 
-
-# ---------------------------------------------------------------------------
-# Row building
-# ---------------------------------------------------------------------------
+    return f'=HYPERLINK("{_escape_sheet_formula_string(link)}","View")'
 
 
 def build_rows(req) -> List[List[Any]]:
-    """
-    Build one row per INCLUDED reimbursement bill.
-
-    Physical columns:
-    A = RowKey hidden
-    B = Req ID
-    C = Employee Name
-    D = date of Bill
-    E = Category
-    F = Description of Bill
-    G = Amount
-    H = Receipt
-    I = Gst Type
-    J = Bill Status
-    K = Finance Verifier
-    L = Manager Verifier
-    M = Bill Submission Time
-    N = Finance Verified Time
-    O = Manager Approved Time
-    P = Bill Paid At (time)
-    Q = Payment reff
-    """
     rows: List[List[Any]] = []
     employee = getattr(req, "created_by", None)
 
@@ -1034,9 +1045,10 @@ def build_rows(req) -> List[List[Any]]:
             gst = getattr(item, "gst_type", "") or ""
 
         link = _collect_receipt_link_for_line(req, line)
-        receipt_cell = f'=HYPERLINK("{str(link).replace(chr(34), chr(34) + chr(34))}","View")' if link else ""
+        receipt_cell = _receipt_cell(link)
 
         bill_status = getattr(line, "bill_status", "") or ""
+
         try:
             bill_status = line.get_bill_status_display()
         except Exception:
@@ -1077,23 +1089,23 @@ def build_rows(req) -> List[List[Any]]:
         )
 
         row = [
-            _row_key(req.id, line.id),      # A
-            req.id,                        # B
-            _employee_name(employee),      # C
-            _iso(date_of_bill),            # D
-            category,                      # E
-            description,                   # F
-            amount,                        # G
-            receipt_cell,                  # H
-            gst,                           # I
-            bill_status,                   # J
-            finance_verifier,              # K
-            manager_verifier,              # L
-            _iso(submitted_at),            # M
-            _iso(verified_at),             # N
-            _iso(manager_approved_at),     # O
-            _iso(paid_at),                 # P
-            payment_ref,                   # Q
+            _row_key(req.id, line.id),
+            req.id,
+            _employee_name(employee),
+            _sheet_date(date_of_bill),
+            category,
+            description,
+            amount,
+            receipt_cell,
+            gst,
+            bill_status,
+            finance_verifier,
+            manager_verifier,
+            _sheet_datetime(submitted_at),
+            _sheet_datetime(verified_at),
+            _sheet_datetime(manager_approved_at),
+            _sheet_datetime(paid_at),
+            payment_ref,
         ]
 
         if len(row) != len(HEADER):
@@ -1108,29 +1120,11 @@ def build_rows(req) -> List[List[Any]]:
 
 
 def build_row(req) -> List[Any]:
-    """
-    Backward-compatible alias.
-
-    Old code expected one row per request. Current workflow is bill-wise, so this
-    returns the first bill row if present.
-    """
     rows = build_rows(req)
     return rows[0] if rows else []
 
 
-# ---------------------------------------------------------------------------
-# RowKey index + repair helpers
-# ---------------------------------------------------------------------------
-
-
 def _scan_rowkeys() -> Dict[str, List[int]]:
-    """
-    Return RowKey -> [sheet row numbers].
-
-    Handles:
-    - current layout: RowKey in A
-    - legacy shifted layout: RowKey in B
-    """
     values = _values_get(f"{TAB_MAIN}!A2:B")
     out: Dict[str, List[int]] = {}
 
@@ -1152,11 +1146,6 @@ def _scan_rowkeys() -> Dict[str, List[int]]:
 
 
 def _index_by_rowkey() -> Dict[str, int]:
-    """
-    Map RowKey -> first row number.
-
-    Duplicate cleanup is handled separately.
-    """
     scanned = _scan_rowkeys()
 
     return {
@@ -1167,10 +1156,6 @@ def _index_by_rowkey() -> Dict[str, int]:
 
 
 def _delete_sheet_rows(row_numbers: List[int]) -> None:
-    """
-    Delete entire sheet rows by 1-based sheet row number.
-    Delete descending so row shifts do not corrupt targets.
-    """
     rows = sorted({rn for rn in row_numbers if rn > 1}, reverse=True)
 
     if not rows:
@@ -1207,13 +1192,6 @@ def _delete_stale_or_duplicate_rows_for_request(
     req_id: int,
     keep_rowkeys: set[str],
 ) -> None:
-    """
-    Delete rows belonging to one request that should not exist anymore.
-
-    Deletes:
-    - RowKeys starting with '<req_id>-' but not in keep_rowkeys.
-    - Duplicate rows for the same RowKey, keeping the first.
-    """
     prefix = f"{req_id}-"
     scanned = _scan_rowkeys()
     rows_to_delete: List[int] = []
@@ -1233,10 +1211,6 @@ def _delete_stale_or_duplicate_rows_for_request(
 
 
 def _delete_rows_not_in_db(valid_rowkeys: set[str]) -> None:
-    """
-    Global repair:
-    Delete all RowKey-backed rows that do not exist in DB and duplicate RowKeys.
-    """
     scanned = _scan_rowkeys()
     rows_to_delete: List[int] = []
 
@@ -1251,33 +1225,23 @@ def _delete_rows_not_in_db(valid_rowkeys: set[str]) -> None:
     _delete_sheet_rows(rows_to_delete)
 
 
-# ---------------------------------------------------------------------------
-# Upsert
-# ---------------------------------------------------------------------------
-
-
 def _parse_updated_range_start_row(resp: dict) -> int:
     try:
         updated_range = resp.get("updates", {}).get("updatedRange", "")
+
         if "!" not in updated_range:
             return 0
 
         a1 = updated_range.split("!", 1)[1]
         start = a1.split(":", 1)[0]
-
         digits = "".join(ch for ch in start if ch.isdigit())
+
         return int(digits) if digits else 0
     except Exception:
         return 0
 
 
 def _upsert_rows_batch(rows: List[List[Any]]) -> Dict[str, int]:
-    """
-    Upsert rows into A:Q using RowKey.
-
-    Existing row: update A:Q.
-    Missing row: append to A:Q.
-    """
     written_map: Dict[str, int] = {}
 
     if not rows:
@@ -1355,11 +1319,6 @@ def append_changelog(
         )
     except Exception as exc:
         logger.info("Changelog append skipped: %s", exc)
-
-
-# ---------------------------------------------------------------------------
-# Public sync
-# ---------------------------------------------------------------------------
 
 
 def _sync_request_impl(req_id: int) -> None:
@@ -1449,14 +1408,6 @@ def _sync_request_impl(req_id: int) -> None:
 
 
 def sync_request(req) -> None:
-    """
-    Export one request to Google Sheets.
-
-    Non-blocking:
-    - debounce by request ID
-    - run after DB commit
-    - execute in daemon thread
-    """
     if req is None:
         return
 
@@ -1493,16 +1444,7 @@ def sync_request(req) -> None:
         _kick()
 
 
-# ---------------------------------------------------------------------------
-# Maintenance / repair
-# ---------------------------------------------------------------------------
-
-
 def reset_main_data() -> None:
-    """
-    Clear all data rows under header in Reimbursements.
-    Keeps row 1 header.
-    """
     if not _google_available():
         return
 
@@ -1554,18 +1496,34 @@ def _chunked(seq: List[Any], size: int) -> List[List[Any]]:
     return [seq[i:i + size] for i in range(0, len(seq), size)]
 
 
+def _write_rows_fixed_position(rows: List[List[Any]], chunk_size: int = 500) -> None:
+    if not rows:
+        return
+
+    end_col = _header_end_col()
+    blocks = []
+
+    for start in range(0, len(rows), chunk_size):
+        chunk = rows[start:start + chunk_size]
+        sheet_start_row = 2 + start
+        sheet_end_row = sheet_start_row + len(chunk) - 1
+
+        blocks.append(
+            {
+                "range": f"{TAB_MAIN}!A{sheet_start_row}:{end_col}{sheet_end_row}",
+                "values": chunk,
+            }
+        )
+
+    _values_batch_update(blocks, input_option="USER_ENTERED")
+
+
 def bulk_resync_all_requests(
     update_chunk_size: int = 500,
     append_chunk_size: int = 500,
     sleep_between_append_chunks_sec: int = 65,
     disable_changelog: bool = True,
 ) -> None:
-    """
-    Export all reimbursement requests bill-wise.
-
-    This updates existing RowKeys and appends missing RowKeys.
-    For corrupted sheets, call rebuild_main_data_from_db() instead.
-    """
     if not _google_available():
         return
 
@@ -1606,18 +1564,14 @@ def bulk_resync_all_requests(
         )
 
     if append_rows:
-        first_chunk = True
-
         for chunk in _chunked(append_rows, append_chunk_size):
-            if not first_chunk:
-                time.sleep(max(1, sleep_between_append_chunks_sec))
-
             _values_append(
                 f"{TAB_MAIN}!A:{end_col}",
                 chunk,
                 user_entered=True,
             )
-            first_chunk = False
+            if sleep_between_append_chunks_sec and len(append_rows) > append_chunk_size:
+                time.sleep(max(1, sleep_between_append_chunks_sec))
 
         logger.info(
             "bulk_resync_all_requests: appended %s rows.",
@@ -1635,32 +1589,28 @@ def bulk_resync_all_requests(
             logger.info("bulk_resync changelog skipped: %s", exc)
 
 
-def rebuild_main_data_from_db() -> None:
-    """
-    Production repair path.
+def force_rewrite_main_data_from_db() -> None:
+    if not _google_available():
+        return
 
-    1. Keep header.
-    2. Clear Reimbursements A2:Q.
-    3. Export one row per INCLUDED ReimbursementLine from DB.
-
-    Run once after deploying this fix.
-    """
+    ensure_spreadsheet_structure()
     reset_main_data()
-    bulk_resync_all_requests(
-        update_chunk_size=500,
-        append_chunk_size=500,
-        sleep_between_append_chunks_sec=65,
-        disable_changelog=True,
-    )
+
+    rows, _ = _collect_all_rows()
+
+    logger.info("force_rewrite_main_data_from_db: prepared %s rows.", len(rows))
+
+    if rows:
+        _write_rows_fixed_position(rows, chunk_size=500)
+
+    logger.info("force_rewrite_main_data_from_db: wrote %s rows.", len(rows))
+
+
+def rebuild_main_data_from_db() -> None:
+    force_rewrite_main_data_from_db()
 
 
 def repair_main_sheet_from_db() -> None:
-    """
-    Incremental repair.
-
-    Deletes duplicate/stale RowKey rows, then upserts current DB rows.
-    For heavily corrupted old no-RowKey rows, use rebuild_main_data_from_db().
-    """
     if not _google_available():
         return
 
