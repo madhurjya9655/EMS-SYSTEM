@@ -1307,24 +1307,41 @@ class TokenDecisionView(View):
 
     def _decode(self, raw_token: str):
         try:
-            payload = signing.loads(raw_token, salt=TOKEN_SALT, max_age=TOKEN_MAX_AGE_SECONDS)
+            payload = signing.loads(
+                raw_token,
+                salt=TOKEN_SALT,
+                max_age=TOKEN_MAX_AGE_SECONDS,
+            )
             return payload
         except signing.BadSignature:
             raise ValueError("Invalid or expired token.")
 
     def _load(self, token: str):
         payload = self._decode(token)
+
         leave_id = int(payload.get("leave_id") or 0)
+
         actor_email = (
             payload.get("rp_email")
             or payload.get("actor_email")
             or payload.get("manager_email")
+            or payload.get("approver_email")
             or ""
         ).strip().lower()
+
         leave = get_object_or_404(
-            LeaveRequest.objects.select_related("employee", "reporting_person", "leave_type"),
+            LeaveRequest.objects.select_related(
+                "employee",
+                "reporting_person",
+                "approver",
+                "cc_person",
+                "leave_type",
+            ).prefetch_related(
+                "cc_users",
+            ),
             pk=leave_id,
         )
+
         return payload, actor_email, leave
 
     def _token_hash(self, token: str) -> str:
@@ -1335,53 +1352,229 @@ class TokenDecisionView(View):
     def _token_already_used(self, leave: LeaveRequest, token_hash: str) -> bool:
         if not LeaveDecisionAudit:
             return False
-        return LeaveDecisionAudit.objects.filter(leave=leave, token_hash=token_hash, token_used=True).exists()
+
+        return LeaveDecisionAudit.objects.filter(
+            leave=leave,
+            token_hash=token_hash,
+            token_used=True,
+        ).exists()
+
+    def _norm_email(self, value) -> str:
+        return (value or "").strip().lower()
+
+    def _token_actor_user_id(self, payload):
+        raw_user_id = (
+            payload.get("rp_user_id")
+            or payload.get("actor_user_id")
+            or payload.get("manager_user_id")
+            or payload.get("approver_user_id")
+            or payload.get("user_id")
+        )
+
+        if not raw_user_id:
+            return None
+
+        try:
+            return int(raw_user_id)
+        except (TypeError, ValueError):
+            return None
+
+    def _user_matches_token_actor(self, user, payload, actor_email: str) -> bool:
+        if not user:
+            return False
+
+        user_email = self._norm_email(getattr(user, "email", ""))
+
+        if actor_email and user_email and user_email == actor_email:
+            return True
+
+        actor_user_id = self._token_actor_user_id(payload)
+
+        if actor_user_id and int(getattr(user, "id", 0) or 0) == actor_user_id:
+            return True
+
+        return False
+
+    def _get_authorized_decider_user(self, request: HttpRequest, leave: LeaveRequest, payload, actor_email: str):
+        """
+        Public email approval authorization.
+
+        Valid approvers:
+        1. Logged-in superuser
+        2. Logged-in reporting person
+        3. Token actor email/user id matches leave.reporting_person
+        4. Token actor email/user id matches leave.approver, if already assigned
+        5. Token actor email/user id matches current ApproverMapping.reporting_person
+        6. Backward compatibility: old _role_for_email() says manager
+
+        IMPORTANT:
+        This intentionally does NOT depend only on _role_for_email(),
+        because _role_for_email() uses routing lookup and can return None even when
+        leave.reporting_person is correctly stored in DB.
+        """
+
+        if request.user.is_authenticated:
+            if getattr(request.user, "is_superuser", False):
+                return request.user
+
+            if leave.reporting_person_id == getattr(request.user, "id", None):
+                return request.user
+
+        if self._user_matches_token_actor(getattr(leave, "reporting_person", None), payload, actor_email):
+            return leave.reporting_person
+
+        if self._user_matches_token_actor(getattr(leave, "approver", None), payload, actor_email):
+            return leave.approver
+
+        try:
+            mapping = (
+                ApproverMapping.objects
+                .select_related("reporting_person", "cc_person")
+                .prefetch_related("default_cc_users")
+                .filter(employee=leave.employee)
+                .first()
+            )
+
+            if mapping:
+                if self._user_matches_token_actor(getattr(mapping, "reporting_person", None), payload, actor_email):
+                    return mapping.reporting_person
+
+                # Keep this only for projects where cc_person is treated as approval authority.
+                if self._user_matches_token_actor(getattr(mapping, "cc_person", None), payload, actor_email):
+                    return mapping.cc_person
+
+                try:
+                    default_cc_user = mapping.default_cc_users.filter(
+                        email__iexact=actor_email,
+                        is_active=True,
+                    ).first()
+
+                    if default_cc_user:
+                        return default_cc_user
+
+                except Exception:
+                    logger.exception(
+                        "Failed checking default_cc_users for leave %s.",
+                        getattr(leave, "pk", None),
+                    )
+
+        except Exception:
+            logger.exception(
+                "Failed checking ApproverMapping for leave %s.",
+                getattr(leave, "pk", None),
+            )
+
+        if _role_for_email(leave, actor_email) == "manager":
+            try:
+                User = get_user_model()
+                actor_user = User.objects.filter(
+                    email__iexact=actor_email,
+                    is_active=True,
+                ).first()
+
+                if actor_user:
+                    return actor_user
+
+            except Exception:
+                logger.exception(
+                    "Failed loading fallback token actor user for leave %s.",
+                    getattr(leave, "pk", None),
+                )
+
+            return leave.reporting_person
+
+        return None
+
+    def _is_allowed(self, request: HttpRequest, leave: LeaveRequest, payload, actor_email: str) -> bool:
+        return self._get_authorized_decider_user(
+            request=request,
+            leave=leave,
+            payload=payload,
+            actor_email=actor_email,
+        ) is not None
 
     def get(self, request: HttpRequest, token: str) -> HttpResponse:
         try:
-            _payload, actor_email, leave = self._load(token)
+            payload, actor_email, leave = self._load(token)
         except ValueError as e:
-            return render(request, self.template_error, {"message": str(e)}, status=400)
+            return render(
+                request,
+                self.template_error,
+                {"message": str(e)},
+                status=400,
+            )
 
         token_hash = self._token_hash(token)
-        if self._token_already_used(leave, token_hash) or leave.is_decided:
-            return render(request, self.template_used, {"leave": leave})
 
-        allowed = False
-        role = _role_for_email(leave, actor_email)
-        if role == "manager":
-            allowed = True
-        if request.user.is_authenticated and getattr(request.user, "is_superuser", False):
-            allowed = True
-        if request.user.is_authenticated and leave.reporting_person_id == getattr(request.user, "id", None):
-            allowed = True
+        if self._token_already_used(leave, token_hash) or leave.is_decided:
+            return render(
+                request,
+                self.template_used,
+                {"leave": leave},
+            )
+
+        allowed = self._is_allowed(
+            request=request,
+            leave=leave,
+            payload=payload,
+            actor_email=actor_email,
+        )
 
         try:
             if LeaveDecisionAudit:
                 LeaveDecisionAudit.objects.create(
                     leave=leave,
-                    action=(getattr(DecisionAction, "TOKEN_OPENED", "TOKEN_OPENED") if DecisionAction else "TOKEN_OPENED"),
+                    action=(
+                        getattr(DecisionAction, "TOKEN_OPENED", "TOKEN_OPENED")
+                        if DecisionAction
+                        else "TOKEN_OPENED"
+                    ),
                     decided_by=request.user if request.user.is_authenticated else None,
                     token_hash=token_hash,
                     token_manager_email=actor_email,
                     token_used=False,
                     ip_address=_client_ip(request),
                     user_agent=(request.META.get("HTTP_USER_AGENT") or ""),
-                    extra={"hint_action": (request.GET.get("a") or "").upper()},
+                    extra={
+                        "hint_action": (request.GET.get("a") or "").upper(),
+                        "allowed": allowed,
+                        "actor_email": actor_email,
+                        "leave_reporting_person_id": leave.reporting_person_id,
+                        "leave_reporting_person_email": (
+                            leave.reporting_person.email
+                            if leave.reporting_person
+                            else ""
+                        ),
+                    },
                 )
         except Exception:
-            logger.exception("Failed to audit TOKEN_OPENED for leave %s", leave.pk)
+            logger.exception(
+                "Failed to audit TOKEN_OPENED for leave %s",
+                leave.pk,
+            )
 
         hint_action = (request.GET.get("a") or "").upper()
+
         if hint_action not in ("APPROVED", "REJECTED"):
             hint_action = ""
 
-        ctx = {"leave": leave, "token": token, "allowed": allowed, "hint_action": hint_action}
-        return render(request, self.template_confirm, ctx)
+        ctx = {
+            "leave": leave,
+            "token": token,
+            "allowed": allowed,
+            "hint_action": hint_action,
+        }
+
+        return render(
+            request,
+            self.template_confirm,
+            ctx,
+        )
 
     @transaction.atomic
     def post(self, request: HttpRequest, token: str) -> HttpResponse:
         raw_action = (request.POST.get("action") or "").strip().lower()
+
         if raw_action in ("approve", "approved"):
             new_status = LeaveStatus.APPROVED
         elif raw_action in ("reject", "rejected"):
@@ -1390,35 +1583,40 @@ class TokenDecisionView(View):
             return HttpResponseBadRequest("Invalid action.")
 
         try:
-            _payload, actor_email, leave = self._load(token)
+            payload, actor_email, leave = self._load(token)
         except ValueError as e:
-            return render(request, self.template_error, {"message": str(e)}, status=400)
+            return render(
+                request,
+                self.template_error,
+                {"message": str(e)},
+                status=400,
+            )
 
         if leave.is_decided:
-            return render(request, self.template_used, {"leave": leave})
+            return render(
+                request,
+                self.template_used,
+                {"leave": leave},
+            )
 
         token_hash = self._token_hash(token)
+
         if self._token_already_used(leave, token_hash):
-            return render(request, self.template_used, {"leave": leave})
-
-        if not (
-            (
-                request.user.is_authenticated
-                and (request.user.is_superuser or leave.reporting_person_id == getattr(request.user, "id", None))
+            return render(
+                request,
+                self.template_used,
+                {"leave": leave},
             )
-            or (_role_for_email(leave, actor_email) == "manager")
-        ):
-            raise PermissionDenied("Only the assigned Reporting Person can decide this leave.")
 
-        decider_user = request.user if request.user.is_authenticated else None
+        decider_user = self._get_authorized_decider_user(
+            request=request,
+            leave=leave,
+            payload=payload,
+            actor_email=actor_email,
+        )
+
         if decider_user is None:
-            try:
-                User = get_user_model()
-                decider_user = User.objects.filter(email__iexact=actor_email).first()
-            except Exception:
-                decider_user = None
-        if decider_user is None:
-            decider_user = leave.reporting_person
+            raise PermissionDenied("You are not authorized to decide this leave via link.")
 
         try:
             employee = leave.employee
@@ -1426,12 +1624,12 @@ class TokenDecisionView(View):
             if new_status == LeaveStatus.APPROVED:
                 leave.approve(
                     by_user=decider_user,
-                    comment="Email decision: APPROVED by Reporting Person.",
+                    comment="Email decision: APPROVED by approval authority.",
                 )
             else:
                 leave.reject(
                     by_user=decider_user,
-                    comment="Email decision: REJECTED by Reporting Person.",
+                    comment="Email decision: REJECTED by approval authority.",
                 )
 
             def _after_token_decision_commit():
@@ -1440,13 +1638,16 @@ class TokenDecisionView(View):
                         employee,
                         exclude_handover=True,
                     )
+
                     logger.info(
-                        "Email decision completed for leave %s new_status=%s. Task skip state re-synced for employee %s result=%s.",
+                        "Email decision completed for leave %s new_status=%s. "
+                        "Task skip state re-synced for employee %s result=%s.",
                         leave.id,
                         new_status,
                         getattr(employee, "id", None),
                         resync_counts,
                     )
+
                 except Exception:
                     logger.exception(
                         "Post-email-decision task skip re-sync failed for leave %s.",
@@ -1456,17 +1657,31 @@ class TokenDecisionView(View):
             transaction.on_commit(_after_token_decision_commit)
 
         except ValidationError as e:
-            msg = next(iter(e.messages), "Action blocked.") if getattr(e, "messages", None) else "Action blocked."
-            return render(request, self.template_error, {"message": msg}, status=400)
+            msg = (
+                next(iter(e.messages), "Action blocked.")
+                if getattr(e, "messages", None)
+                else "Action blocked."
+            )
+
+            return render(
+                request,
+                self.template_error,
+                {"message": msg},
+                status=400,
+            )
+
         except Exception:
-            logger.exception("Token decision failed for leave %s", leave.pk)
-            return render(request, self.template_error, {"message": "Could not complete the action."}, status=400)
-        except ValidationError as e:
-            msg = next(iter(e.messages), "Action blocked.") if getattr(e, "messages", None) else "Action blocked."
-            return render(request, self.template_error, {"message": msg}, status=400)
-        except Exception:
-            logger.exception("Token decision failed for leave %s", leave.pk)
-            return render(request, self.template_error, {"message": "Could not complete the action."}, status=400)
+            logger.exception(
+                "Token decision failed for leave %s",
+                leave.pk,
+            )
+
+            return render(
+                request,
+                self.template_error,
+                {"message": "Could not complete the action."},
+                status=400,
+            )
 
         try:
             if LeaveDecisionAudit:
@@ -1477,11 +1692,15 @@ class TokenDecisionView(View):
                         if new_status == LeaveStatus.APPROVED
                         else getattr(DecisionAction, "REJECTED", "REJECTED")
                     ),
-                    decided_by=leave.approver,
+                    decided_by=decider_user,
                     ip_address=_client_ip(request),
                     user_agent=(request.META.get("HTTP_USER_AGENT") or ""),
-                    extra={},
+                    extra={
+                        "source": "email_token",
+                        "actor_email": actor_email,
+                    },
                 )
+
                 LeaveDecisionAudit.objects.create(
                     leave=leave,
                     action=(
@@ -1489,22 +1708,35 @@ class TokenDecisionView(View):
                         if new_status == LeaveStatus.APPROVED
                         else getattr(DecisionAction, "TOKEN_REJECT", "TOKEN_REJECT")
                     ),
-                    decided_by=leave.approver,
+                    decided_by=decider_user,
                     token_hash=token_hash,
                     token_manager_email=actor_email,
                     token_used=True,
                     ip_address=_client_ip(request),
                     user_agent=(request.META.get("HTTP_USER_AGENT") or ""),
-                    extra={},
+                    extra={
+                        "source": "email_token",
+                        "actor_email": actor_email,
+                    },
                 )
+
         except Exception:
-            logger.exception("Failed to write decision audits for leave %s", leave.pk)
+            logger.exception(
+                "Failed to write decision audits for leave %s",
+                leave.pk,
+            )
 
         messages.success(
             request,
-            f"Leave for {leave.employee.get_full_name() or leave.employee.username} has been {leave.get_status_display()}.",
+            f"Leave for {leave.employee.get_full_name() or leave.employee.username} "
+            f"has been {leave.get_status_display()}.",
         )
-        return render(request, self.template_done, {"leave": leave})
+
+        return render(
+            request,
+            self.template_done,
+            {"leave": leave},
+        )
 
 
 @has_permission("leave_list")
