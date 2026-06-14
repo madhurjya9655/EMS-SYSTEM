@@ -1,12 +1,12 @@
 # FILE: apps/reimbursement/urls.py
-# UPDATED: 2026-02-24
+# UPDATED: Bank details attachment routes added
 from __future__ import annotations
 
 from django.urls import path
 
 from . import views
 from . import views_analytics
-from . import views_attach  # NEW
+from . import views_attach
 
 app_name = "reimbursement"
 
@@ -38,22 +38,20 @@ urlpatterns = [
     path("request/<int:pk>/delete/", views.ReimbursementRequestDeleteView.as_view(), name="request_delete"),
     path("request/<int:pk>/resubmit/", views.ReimbursementResubmitView.as_view(), name="request_resubmit"),
 
-    # Canonical request detail (ONE canonical route)
+    # Canonical request detail
     path("request/<int:pk>/", views.ReimbursementDetailView.as_view(), name="request_detail"),
 
-    # ✅ FIXED: per-line delete MUST be under request/<pk>/..., because the view expects request pk
+    # Per-line delete under request/<pk>/...
     path("request/<int:pk>/line/delete/", views.RequestLineDeleteView.as_view(), name="request_line_delete"),
 
-    # ✅ Bulk delete remains
+    # Bulk delete
     path("request/<int:pk>/lines/delete/", views.RequestLinesBulkDeleteView.as_view(), name="request_lines_bulk_delete"),
 
-    # ✅ BACKWARD COMPATIBILITY (ADMIN / OLD TEMPLATES)
-    # Do NOT duplicate the same URL pattern; Django will only match the first one.
-    # Provide an alias route instead.
+    # Backward compatibility alias
     path("request/<int:pk>/detail/", views.ReimbursementDetailView.as_view(), name="reimbursement_detail"),
 
     # ------------------------------
-    # Manager / Management (REQUEST-LEVEL ONLY)
+    # Manager / Management
     # ------------------------------
     path("manager/", views.ManagerQueueView.as_view(), name="manager_pending"),
     path("manager/<int:pk>/review/", views.ManagerReviewView.as_view(), name="manager_review"),
@@ -67,15 +65,23 @@ urlpatterns = [
     path("finance/<int:pk>/verify/", views.FinanceVerifyView.as_view(), name="finance_verify"),
     path("finance/<int:pk>/review/", views.FinanceReviewView.as_view(), name="finance_review"),
 
-    # ✅ Finance settlement queue
+    # Finance settlement queue
     path("finance/settlement/", views.FinanceSettlementQueueView.as_view(), name="finance_settlement"),
     path("finance/<int:pk>/delete/", views.FinanceDeleteRequestView.as_view(), name="finance_delete"),
 
-    # ✅ attach missing receipt to a bill line
-    path("finance/line/<int:pk>/attach/", views_attach.FinanceAttachReceiptView.as_view(), name="finance_attach_receipt"),
+    # Attach missing receipt to a bill line
+    path(
+        "finance/line/<int:pk>/attach/",
+        views_attach.FinanceAttachReceiptView.as_view(),
+        name="finance_attach_receipt",
+    ),
 
-    # ✅ Rejected Bills Queue (resubmitted bills only)
-    path("finance/rejected-bills/", views.FinanceRejectedBillsQueueView.as_view(), name="finance_rejected_bills_queue"),
+    # Rejected Bills Queue
+    path(
+        "finance/rejected-bills/",
+        views.FinanceRejectedBillsQueueView.as_view(),
+        name="finance_rejected_bills_queue",
+    ),
 
     # ------------------------------
     # Admin dashboards / export
@@ -86,12 +92,12 @@ urlpatterns = [
     path("admin/status-summary/", views.AdminStatusSummaryView.as_view(), name="admin_status_summary"),
     path("admin/approver-mapping/", approver_mapping_admin_view, name="approver_mapping_admin"),
 
-    # ✅ Export (ONE canonical route) + optional alias
+    # Export
     path("admin/export.csv", views.ReimbursementExportCSVView.as_view(), name="admin_export_csv"),
-    path("admin/export/", views.ReimbursementExportCSVView.as_view(), name="admin_export"),  # optional alias
+    path("admin/export/", views.ReimbursementExportCSVView.as_view(), name="admin_export"),
 
     # ------------------------------
-    # Analytics (Dashboard + APIs)
+    # Analytics
     # ------------------------------
     path("analytics/", views_analytics.AnalyticsDashboardView.as_view(), name="analytics_dashboard"),
     path("analytics/api/summary/", views_analytics.AnalyticsSummaryAPI.as_view(), name="analytics_api_summary"),
@@ -103,10 +109,22 @@ urlpatterns = [
     path("analytics/api/realtime/", views_analytics.AnalyticsRealtimeNumbersAPI.as_view(), name="analytics_api_realtime"),
 
     # ------------------------------
-    # Secure receipt download
+    # Secure document downloads
     # ------------------------------
     path("receipt/line/<int:line_id>/", views.download_receipt, name="receipt_line"),
     path("receipt/expense/<int:expense_id>/", views.download_receipt, name="receipt_expense"),
+
+    # Bank details attachment download
+    path(
+        "bank-document/line/<int:line_id>/",
+        views.download_bank_document,
+        name="bank_document_line",
+    ),
+    path(
+        "bank-document/expense/<int:expense_id>/",
+        views.download_bank_document,
+        name="bank_document_expense",
+    ),
 
     # ------------------------------
     # Magic-link email actions
@@ -114,7 +132,7 @@ urlpatterns = [
     path("email-action/", views.reimbursement_email_action, name="email_action"),
 
     # ------------------------------
-    # Legacy routes (intentionally kept)
+    # Legacy routes
     # ------------------------------
     path("legacy/apply/", views.LegacyReimbursementCreateView.as_view(), name="legacy_apply"),
     path("legacy/my/", views.LegacyMyReimbursementsView.as_view(), name="legacy_my_reimbursements"),

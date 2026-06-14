@@ -1,5 +1,6 @@
 # FILE: apps/reimbursement/forms.py
 # UPDATED: ApproverMappingForm, ApproverMappingBulkForm updated for M2M managers/finance_users
+# UPDATED: Bank Details + Bank Details Attachment added to ExpenseItemForm
 from __future__ import annotations
 
 import os
@@ -9,6 +10,7 @@ from django import forms
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.db import transaction
 
 from .models import (
     ExpenseItem,
@@ -19,6 +21,7 @@ from .models import (
     ReimbursementSettings,
     GST_TYPE_CHOICES,
     REIMBURSEMENT_CATEGORY_CHOICES,
+    validate_bank_attachment_file,
 )
 
 User = get_user_model()
@@ -41,9 +44,34 @@ def _allowed_exts() -> List[str]:
     return [s.strip().lower() for s in str(exts).split(",") if s.strip()]
 
 
+def _allowed_bank_attachment_exts() -> List[str]:
+    exts = getattr(settings, "REIMBURSEMENT_BANK_ATTACHMENT_ALLOWED_EXTENSIONS", None)
+    if not exts:
+        exts = [".jpg", ".jpeg", ".png", ".pdf"]
+    if isinstance(exts, (list, tuple)):
+        return [str(e).lower().strip() for e in exts if str(e).strip()]
+    return [s.strip().lower() for s in str(exts).split(",") if s.strip()]
+
+
 def _accept_attr() -> str:
     cleaned = []
     for e in _allowed_exts():
+        e = e.strip().lower()
+        if not e:
+            continue
+        cleaned.append(e if e.startswith(".") else f".{e}")
+    seen = set()
+    out = []
+    for e in cleaned:
+        if e not in seen:
+            seen.add(e)
+            out.append(e)
+    return ",".join(out)
+
+
+def _bank_accept_attr() -> str:
+    cleaned = []
+    for e in _allowed_bank_attachment_exts():
         e = e.strip().lower()
         if not e:
             continue
@@ -96,6 +124,8 @@ class ExpenseItemForm(forms.ModelForm):
             "description",
             "gst_type",
             "receipt_file",
+            "bank_details",
+            "bank_attachment",
         ]
         widgets = {
             "date": DateInput(attrs={"class": "form-control"}),
@@ -125,6 +155,35 @@ class ExpenseItemForm(forms.ModelForm):
             "receipt_file": forms.FileInput(
                 attrs={"class": "form-control"}
             ),
+            "bank_details": forms.Textarea(
+                attrs={
+                    "class": "form-control",
+                    "rows": 3,
+                    "placeholder": (
+                        "Account Holder Name, Bank Name, Account Number, "
+                        "IFSC Code, UPI ID, etc."
+                    ),
+                }
+            ),
+            "bank_attachment": forms.FileInput(
+                attrs={
+                    "class": "form-control",
+                    "accept": ".pdf,.jpg,.jpeg,.png",
+                }
+            ),
+        }
+        labels = {
+            "category": "Type of Expense",
+            "gst_type": "Bill Type",
+            "description": "Description (required)",
+            "bank_details": "Bank Details",
+            "bank_attachment": "Bank Details Attachment",
+        }
+        help_texts = {
+            "bank_details": (
+                "Optional. Enter bank account / UPI details for reimbursement payment."
+            ),
+            "bank_attachment": "Optional. Allowed: PDF / JPG / JPEG / PNG.",
         }
 
     def __init__(self, *args, **kwargs):
@@ -136,18 +195,33 @@ class ExpenseItemForm(forms.ModelForm):
         self.fields["gst_type"].initial = "non_gst"
         self.fields["description"].required = True
         self.fields["description"].label = "Description (required)"
+        self.fields["bank_details"].required = False
+        self.fields["bank_attachment"].required = False
+
         try:
             self.fields["description"].widget.attrs["placeholder"] = "Describe the bill (required)"
         except Exception:
             pass
+
         try:
             self.fields["receipt_file"].widget.attrs["accept"] = _accept_attr()
+        except Exception:
+            pass
+
+        try:
+            self.fields["bank_attachment"].widget.attrs["accept"] = _bank_accept_attr()
         except Exception:
             pass
 
     def clean_receipt_file(self):
         f = self.files.get("receipt_file") or self.cleaned_data.get("receipt_file")
         _validate_uploaded_file(f, field_label="receipt")
+        return f
+
+    def clean_bank_attachment(self):
+        f = self.files.get("bank_attachment") or self.cleaned_data.get("bank_attachment")
+        if f:
+            validate_bank_attachment_file(f)
         return f
 
 
@@ -418,23 +492,82 @@ class FinanceLineDecisionForm(forms.Form):
 class EmployeeRejectedBillEditForm(forms.ModelForm):
     class Meta:
         model = ReimbursementLine
-        fields = ["amount", "description", "receipt_file"]
+        fields = [
+            "amount",
+            "description",
+            "receipt_file",
+            "bank_details",
+            "bank_attachment",
+        ]
         widgets = {
-            "amount": forms.NumberInput(attrs={"class": "form-control", "min": "0.01", "step": "0.01"}),
-            "description": forms.Textarea(attrs={"class": "form-control", "rows": 3, "placeholder": "Optional"}),
-            "receipt_file": forms.FileInput(attrs={"class": "form-control"}),
+            "amount": forms.NumberInput(
+                attrs={
+                    "class": "form-control",
+                    "min": "0.01",
+                    "step": "0.01",
+                }
+            ),
+            "description": forms.Textarea(
+                attrs={
+                    "class": "form-control",
+                    "rows": 3,
+                    "placeholder": "Optional",
+                }
+            ),
+            "receipt_file": forms.FileInput(
+                attrs={"class": "form-control"}
+            ),
+            "bank_details": forms.Textarea(
+                attrs={
+                    "class": "form-control",
+                    "rows": 3,
+                    "placeholder": (
+                        "Account Holder Name, Bank Name, Account Number, "
+                        "IFSC Code, UPI ID, etc."
+                    ),
+                }
+            ),
+            "bank_attachment": forms.FileInput(
+                attrs={
+                    "class": "form-control",
+                    "accept": ".pdf,.jpg,.jpeg,.png",
+                }
+            ),
+        }
+        labels = {
+            "bank_details": "Bank Details",
+            "bank_attachment": "Bank Details Attachment",
+        }
+        help_texts = {
+            "bank_details": "Optional. Update bank details for this corrected bill.",
+            "bank_attachment": "Optional. Allowed: PDF / JPG / JPEG / PNG.",
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        self.fields["bank_details"].required = False
+        self.fields["bank_attachment"].required = False
+
         try:
             self.fields["receipt_file"].widget.attrs["accept"] = _accept_attr()
+        except Exception:
+            pass
+
+        try:
+            self.fields["bank_attachment"].widget.attrs["accept"] = _bank_accept_attr()
         except Exception:
             pass
 
     def clean_receipt_file(self):
         f = self.files.get("receipt_file") or self.cleaned_data.get("receipt_file")
         _validate_uploaded_file(f, field_label="receipt")
+        return f
+
+    def clean_bank_attachment(self):
+        f = self.files.get("bank_attachment") or self.cleaned_data.get("bank_attachment")
+        if f:
+            validate_bank_attachment_file(f)
         return f
 
 
@@ -461,16 +594,25 @@ class ReimbursementSettingsForm(forms.ModelForm):
         ]
         widgets = {
             "admin_emails": forms.Textarea(
-                attrs={"class": "form-control", "rows": 2,
-                       "placeholder": "admin1@example.com, admin2@example.com"}
+                attrs={
+                    "class": "form-control",
+                    "rows": 2,
+                    "placeholder": "admin1@example.com, admin2@example.com",
+                }
             ),
             "finance_emails": forms.Textarea(
-                attrs={"class": "form-control", "rows": 2,
-                       "placeholder": "finance1@example.com, finance2@example.com"}
+                attrs={
+                    "class": "form-control",
+                    "rows": 2,
+                    "placeholder": "finance1@example.com, finance2@example.com",
+                }
             ),
             "management_emails": forms.Textarea(
-                attrs={"class": "form-control", "rows": 2,
-                       "placeholder": "mgmt1@example.com, mgmt2@example.com"}
+                attrs={
+                    "class": "form-control",
+                    "rows": 2,
+                    "placeholder": "mgmt1@example.com, mgmt2@example.com",
+                }
             ),
             "require_management_approval": forms.CheckboxInput(
                 attrs={"class": "form-check-input"}
@@ -482,28 +624,44 @@ class ReimbursementSettingsForm(forms.ModelForm):
                 attrs={"class": "form-control", "min": 0, "max": 23}
             ),
             "approver_level1_email": forms.EmailInput(
-                attrs={"class": "form-control",
-                       "placeholder": "Primary approver e.g. vilas@blueoceansteels.com"}
+                attrs={
+                    "class": "form-control",
+                    "placeholder": "Primary approver e.g. vilas@blueoceansteels.com",
+                }
             ),
             "approver_level2_email": forms.EmailInput(
-                attrs={"class": "form-control",
-                       "placeholder": "Next approver e.g. akshay@blueoceansteels.com"}
+                attrs={
+                    "class": "form-control",
+                    "placeholder": "Next approver e.g. akshay@blueoceansteels.com",
+                }
             ),
             "approver_cc_emails": forms.Textarea(
-                attrs={"class": "form-control", "rows": 2,
-                       "placeholder": "Comma-separated CC emails e.g. amreen@blueoceansteels.com"}
+                attrs={
+                    "class": "form-control",
+                    "rows": 2,
+                    "placeholder": "Comma-separated CC emails e.g. amreen@blueoceansteels.com",
+                }
             ),
             "approver_bcc_emails": forms.Textarea(
-                attrs={"class": "form-control", "rows": 2,
-                       "placeholder": "Comma-separated BCC emails"}
+                attrs={
+                    "class": "form-control",
+                    "rows": 2,
+                    "placeholder": "Comma-separated BCC emails",
+                }
             ),
             "submitted_notify_to_emails": forms.Textarea(
-                attrs={"class": "form-control", "rows": 2,
-                       "placeholder": "TO: e.g. vilas@blueoceansteels.com"}
+                attrs={
+                    "class": "form-control",
+                    "rows": 2,
+                    "placeholder": "TO: e.g. vilas@blueoceansteels.com",
+                }
             ),
             "submitted_notify_cc_emails": forms.Textarea(
-                attrs={"class": "form-control", "rows": 2,
-                       "placeholder": "CC: e.g. amreen@blueoceansteels.com, akshay@blueoceansteels.com"}
+                attrs={
+                    "class": "form-control",
+                    "rows": 2,
+                    "placeholder": "CC: e.g. amreen@blueoceansteels.com, akshay@blueoceansteels.com",
+                }
             ),
         }
         labels = {
@@ -545,7 +703,6 @@ class ApproverMappingForm(forms.ModelForm):
         fields = ["employee", "managers", "finance_users"]
         widgets = {
             "employee": forms.Select(attrs={"class": "form-select"}),
-            # UPDATED: SelectMultiple for M2M
             "managers": forms.SelectMultiple(
                 attrs={
                     "class": "form-select",
@@ -573,7 +730,9 @@ class ApproverMappingForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         active_qs = User.objects.filter(is_active=True).order_by(
-            "first_name", "last_name", "username"
+            "first_name",
+            "last_name",
+            "username",
         )
         self.fields["managers"].queryset = active_qs
         self.fields["finance_users"].queryset = active_qs
@@ -715,6 +874,7 @@ class ApproverMappingBulkForm(forms.Form):
 
         return processed
 
+
 class ApproverDefaultsForm(forms.Form):
     """
     Small helper form at the top of the mapping page.
@@ -722,7 +882,9 @@ class ApproverDefaultsForm(forms.Form):
     """
     default_managers = forms.ModelMultipleChoiceField(
         queryset=User.objects.filter(is_active=True).order_by(
-            "first_name", "last_name", "username"
+            "first_name",
+            "last_name",
+            "username",
         ),
         required=False,
         widget=forms.SelectMultiple(
@@ -736,7 +898,9 @@ class ApproverDefaultsForm(forms.Form):
     )
     default_finance_users = forms.ModelMultipleChoiceField(
         queryset=User.objects.filter(is_active=True).order_by(
-            "first_name", "last_name", "username"
+            "first_name",
+            "last_name",
+            "username",
         ),
         required=False,
         widget=forms.SelectMultiple(

@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 from typing import List, Optional, Iterable, Dict
 from decimal import Decimal
-from datetime import datetime
 
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
+from django.db.models import Sum
 from django.template.loader import render_to_string
 from django.template.exceptions import TemplateDoesNotExist
 from django.urls import reverse, NoReverseMatch
@@ -43,16 +43,12 @@ def _site_base() -> str:
     Returns the absolute base URL for the deployment.
 
     Priority order:
-      1. REIMBURSEMENT_SITE_BASE  (most specific — use this in settings.py)
+      1. REIMBURSEMENT_SITE_BASE
       2. SITE_URL
       3. APP_BASE_URL
 
     If none is set, logs a prominent ERROR so the misconfiguration surfaces
-    immediately in Render logs.  Email links will be broken until this is
-    configured.
-
-    Example settings.py:
-        REIMBURSEMENT_SITE_BASE = "https://your-app.onrender.com"
+    immediately in Render logs.
     """
     base = (
         getattr(settings, "REIMBURSEMENT_SITE_BASE", None)
@@ -62,12 +58,9 @@ def _site_base() -> str:
     if base:
         return base.rstrip("/")
 
-    # No base URL configured — log a prominent error.
     logger.error(
         "REIMBURSEMENT EMAIL LINKS BROKEN: None of REIMBURSEMENT_SITE_BASE / "
-        "SITE_URL / APP_BASE_URL is set in settings.py.  "
-        "All email approval/action links will be relative paths and will 404 "
-        "when clicked from an email client.  "
+        "SITE_URL / APP_BASE_URL is set in settings.py. "
         "Fix: add REIMBURSEMENT_SITE_BASE = 'https://your-app.onrender.com' "
         "to your settings / Render environment variables."
     )
@@ -76,11 +69,8 @@ def _site_base() -> str:
 
 def _abs_url(path: str) -> str:
     """
-    Convert a Django path (e.g. /reimbursement/manager/1/review/) to an
-    absolute URL using the configured site base.
-
-    If the path is already absolute (starts with http/https), it is returned
-    unchanged.
+    Convert a Django path to an absolute URL using the configured site base.
+    If the path is already absolute, return it unchanged.
     """
     if path.startswith("http://") or path.startswith("https://"):
         return path
@@ -90,8 +80,6 @@ def _abs_url(path: str) -> str:
         path = "/" + path
 
     if not base:
-        # No base configured — return path as-is (will be broken in emails,
-        # but at least we don't crash; the ERROR log above will flag it).
         return path
 
     return f"{base}{path}"
@@ -105,7 +93,12 @@ def _safe_reverse(viewname: str, *args, **kwargs) -> str:
     try:
         return reverse(viewname, *args, **kwargs)
     except NoReverseMatch:
-        logger.warning("_safe_reverse: could not reverse '%s' args=%s kwargs=%s", viewname, args, kwargs)
+        logger.warning(
+            "_safe_reverse: could not reverse '%s' args=%s kwargs=%s",
+            viewname,
+            args,
+            kwargs,
+        )
         return ""
 
 
@@ -121,7 +114,7 @@ def _fmt_amount(value) -> str:
 
 
 def _fmt_dt(dt) -> str:
-    """Format to: 17 Jan 2026, 14:50 IST (local tz name appended)."""
+    """Format to: 17 Jan 2026, 14:50 IST."""
     try:
         if not dt:
             return ""
@@ -152,14 +145,15 @@ def _dedup(seq: Optional[Iterable[str]]) -> Optional[List[str]]:
 def _render(template_base: str, context: dict) -> tuple[str, str]:
     """
     Returns (html, text) for an email given a template base name.
+
     Template files expected at:
       - templates/email/{template_base}.html
       - templates/email/{template_base}.txt
 
-    Hardened: if one or both templates are missing, render a safe fallback body
-    (no exception bubbles up, so emails never block workflows).
+    If templates are missing, render a safe fallback body.
     """
     html = txt = None
+
     try:
         html = render_to_string(f"email/{template_base}.html", context)
     except TemplateDoesNotExist:
@@ -176,13 +170,13 @@ def _render(template_base: str, context: dict) -> tuple[str, str]:
         logger.exception("TXT template render failed for %s", template_base)
         txt = None
 
-    # Final safety net: generate synthetic bodies if still missing
     if html is None or txt is None:
         req_id = context.get("request_id", "")
         employee = context.get("employee_name", "")
         total = context.get("total_amount", "")
         detail_url = context.get("detail_url") or context.get("queue_url") or "-"
         title = template_base.replace("_", " ").title()
+
         html_f = f"""<!doctype html>
 <html><body style="font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif">
   <h2 style="margin:0 0 8px 0;">{title}</h2>
@@ -193,13 +187,15 @@ def _render(template_base: str, context: dict) -> tuple[str, str]:
   </table>
   <p style="margin-top:12px;">Details: <a href="{detail_url}">{detail_url}</a></p>
 </body></html>"""
+
         txt_f = (
             f"{title}\n\n"
             f"Request ID : #{req_id}\n"
             f"Employee   : {employee}\n"
-            f"Total Amt  : \u20b9{total}\n"
+            f"Total Amt  : ₹{total}\n"
             f"Details    : {detail_url}\n"
         )
+
         html = html or html_f
         txt = txt or txt_f
 
@@ -217,27 +213,26 @@ def _send(
 ) -> None:
     """
     Fail-silent sender with recipient guard.
-    Logs a WARNING (not silent) when recipient list is empty so delivery
-    failures surface in Render logs.
+    Logs a warning when recipient list is empty.
     """
     to_list = _dedup(to_list) or []
     if not to_list:
         logger.warning(
-            "Email '%s' not sent: recipient list is empty. "
-            "Check that the target user has an email address configured.",
+            "Email '%s' not sent: recipient list is empty.",
             template_base,
         )
         return
+
     cc = _dedup(cc)
     bcc = _dedup(bcc)
 
-    # Recipient guard (e.g., exclusions/suppression by environment)
     filt_to, filt_cc, filt_bcc = filter_recipients_for_category(
         category="reimbursement",
         to=to_list,
         cc=cc or [],
         bcc=bcc or [],
     )
+
     if not (filt_to or filt_cc or filt_bcc):
         logger.warning(
             "Email '%s' suppressed by filter_recipients_for_category. "
@@ -247,6 +242,7 @@ def _send(
         return
 
     html, txt = _render(template_base, context)
+
     try:
         msg = EmailMultiAlternatives(
             subject=subject,
@@ -255,12 +251,15 @@ def _send(
             cc=filt_cc or None,
             bcc=filt_bcc or None,
             from_email=getattr(settings, "REIMBURSEMENT_EMAIL_FROM", None)
-                       or getattr(settings, "DEFAULT_FROM_EMAIL", None),
+            or getattr(settings, "DEFAULT_FROM_EMAIL", None),
         )
         msg.attach_alternative(html, "text/html")
         msg.send(fail_silently=True)
         logger.info(
-            "Email '%s' sent to %s (cc=%s)", template_base, filt_to, filt_cc
+            "Email '%s' sent to %s (cc=%s)",
+            template_base,
+            filt_to,
+            filt_cc,
         )
     except Exception:  # pragma: no cover
         logger.exception("Email send failed: %s", template_base)
@@ -300,38 +299,21 @@ def _display_name(user) -> str:
 # ---------------------------------------------------------------------------
 
 def _manager_queue_url() -> str:
-    """
-    Primary CTA for manager emails: the manager QUEUE page.
-    This URL IS in PERMISSION_URLS (reimbursement_manager_pending →
-    reimbursement:manager_pending), so PermissionEnforcementMiddleware
-    will NOT block it after login redirect.
-    """
     return _abs_url(_safe_reverse("reimbursement:manager_pending"))
 
 
 def _manager_review_url(req: ReimbursementRequest) -> str:
-    """
-    Direct link to the manager review page for a specific request.
-    Used as a secondary / convenience link in emails.
-
-    After login, LoginRequiredMixin redirects to this URL via ?next=.
-    PermissionEnforcementMiddleware now has this URL covered via the
-    reimbursement_manager_review mapping (see permission_urls.py fix).
-    """
     path = _safe_reverse("reimbursement:manager_review", args=[req.id])
     if not path:
-        # Fallback to queue if URL can't be reversed
         return _manager_queue_url()
     return _abs_url(path)
 
 
 def _finance_queue_url() -> str:
-    """Primary CTA for finance emails: the finance queue page."""
     return _abs_url(_safe_reverse("reimbursement:finance_pending"))
 
 
 def _finance_verify_url(req: ReimbursementRequest) -> str:
-    """Direct link to the finance verify page for a specific request."""
     path = _safe_reverse("reimbursement:finance_verify", args=[req.id])
     if not path:
         return _finance_queue_url()
@@ -339,23 +321,22 @@ def _finance_verify_url(req: ReimbursementRequest) -> str:
 
 
 def _request_detail_url(req: ReimbursementRequest) -> str:
-    """Absolute URL to the employee-facing request detail page."""
     path = _safe_reverse("reimbursement:request_detail", args=[req.id])
     if not path:
         return _abs_url("/reimbursement/my/")
     return _abs_url(path)
 
 
-# ---------- Helpers for final notification ----------
+# ---------------------------------------------------------------------------
+# Final notification recipient helpers
+# ---------------------------------------------------------------------------
 
 def _final_to_list() -> List[str]:
-    """TO recipients for final notification (configurable via settings)."""
     default_to = ["jyothi@gasteels.com", "chetan.shah@gasteels.com"]
     return list(getattr(settings, "REIMBURSEMENT_FINAL_TO", default_to))
 
 
 def _final_cc_list() -> List[str]:
-    """CC recipients for final notification (configurable via settings)."""
     default_cc = [
         "amreen@blueoceansteels.com",
         "vilas@blueoceansteels.com",
@@ -373,38 +354,74 @@ def _line_bill_url(line: ReimbursementLine) -> str:
         return ""
 
 
-def _lines_context(req: ReimbursementRequest) -> List[Dict[str, str]]:
+def _eligible_final_lines_qs(req: ReimbursementRequest):
+    """
+    Bills eligible to move beyond Finance.
+
+    Finance-rejected bills are dead for approval/final flow.
+    Only Finance-approved included bills should be shown to approvers/final recipients.
+    """
+    L = ReimbursementLine
+    return (
+        req.lines.select_related("expense_item")
+        .filter(
+            status=L.Status.INCLUDED,
+            bill_status=L.BillStatus.FINANCE_APPROVED,
+        )
+        .order_by("id")
+    )
+
+
+def _eligible_final_amount(req: ReimbursementRequest) -> Decimal:
+    total = _eligible_final_lines_qs(req).aggregate(total=Sum("amount")).get("total")
+    return total or Decimal("0.00")
+
+
+def _lines_context(
+    req: ReimbursementRequest,
+    *,
+    finance_approved_only: bool = False,
+) -> List[Dict[str, str]]:
     """
     Build the lines dataset for email templates:
-    category, date, description, amount (no currency symbol), bill_url.
-    Only includes request lines that are part of the reimbursement.
+    category, date, description, amount, bill_url.
+
+    Default behaviour keeps legacy full-included-line context.
+    finance_approved_only=True is mandatory for approver/final emails.
     """
     out: List[Dict[str, str]] = []
     try:
-        qs = (
-            req.lines.select_related("expense_item")
-            .filter(status=ReimbursementLine.Status.INCLUDED)
-            .order_by("id")
-        )
+        if finance_approved_only:
+            qs = _eligible_final_lines_qs(req)
+        else:
+            qs = (
+                req.lines.select_related("expense_item")
+                .filter(status=ReimbursementLine.Status.INCLUDED)
+                .order_by("id")
+            )
+
         for line in qs:
             item = line.expense_item
-            # Category
+
             try:
                 category = item.get_category_display()
             except Exception:
                 category = getattr(item, "category", "") or ""
-            # Date
+
             try:
                 date_str = item.date.strftime("%d %b %Y")
             except Exception:
                 date_str = str(getattr(item, "date", "") or "")
-            # Description
-            description = (line.description or getattr(item, "description", "") or "").strip() or "-"
-            # Amount (no currency symbol; template adds "₹")
+
+            description = (
+                line.description or getattr(item, "description", "") or ""
+            ).strip() or "-"
+
             amt = line.amount if line.amount is not None else getattr(item, "amount", None)
             amount_str = _fmt_amount(amt)
-            # Bill URL — absolute so it works from email clients
+
             bill_url = _line_bill_url(line)
+
             out.append(
                 {
                     "category": category,
@@ -415,15 +432,21 @@ def _lines_context(req: ReimbursementRequest) -> List[Dict[str, str]]:
                 }
             )
     except Exception:
-        logger.exception("Failed building lines for request #%s", getattr(req, "id", "?"))
+        logger.exception(
+            "Failed building lines for request #%s",
+            getattr(req, "id", "?"),
+        )
     return out
 
 
 # ---------------------------------------------------------------------------
-# Bill-specific notifications (used by bill-level workflow)
+# Bill-specific notifications
 # ---------------------------------------------------------------------------
 
-def send_bill_rejected_by_finance(req: ReimbursementRequest, line: ReimbursementLine) -> None:
+def send_bill_rejected_by_finance(
+    req: ReimbursementRequest,
+    line: ReimbursementLine,
+) -> None:
     subject = f"Reimbursement #{req.id}: One bill was rejected by Finance"
     ctx = {
         "employee_name": _display_name(req.created_by),
@@ -435,49 +458,39 @@ def send_bill_rejected_by_finance(req: ReimbursementRequest, line: Reimbursement
         "detail_url": _request_detail_url(req),
         "status_label": dict(ReimbursementRequest.Status.choices).get(req.status, req.status),
     }
-    _send(_employee_email(req), subject, "reimbursement_bill_rejected_by_finance", ctx)
+
+    _send(
+        _employee_email(req),
+        subject,
+        "reimbursement_bill_rejected_by_finance",
+        ctx,
+    )
+
     ReimbursementLog.log(
         req,
         ReimbursementLog.Action.EMAIL_SENT,
         actor=None,
         message=f"Email: bill #{line.id} rejected by finance sent to employee.",
-        extra={"line_id": line.id, "template": "reimbursement_bill_rejected_by_finance"},
+        extra={
+            "line_id": line.id,
+            "template": "reimbursement_bill_rejected_by_finance",
+        },
     )
 
 
-def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *, actor) -> None:
-    subject = f"Reimbursement #{req.id}: Employee resubmitted a corrected bill"
-    ctx = {
-        "employee_name": _display_name(req.created_by),
-        "employee_email": getattr(req.created_by, "email", "") or "-",
-        "request_id": req.id,
-        "bill_id": line.id,
-        "bill_amount": f"{line.amount:.2f}",
-        "bill_description": line.description or "-",
-        "resubmitted_by": _display_name(actor),
-        "detail_url": _finance_queue_url(),
-        "queue_url": _finance_queue_url(),
-        "status_label": dict(ReimbursementRequest.Status.choices).get(req.status, req.status),
-    }
-    _send(_finance_emails(), subject, "reimbursement_bill_resubmitted", ctx)
-    ReimbursementLog.log(
-        req,
-        ReimbursementLog.Action.EMAIL_SENT,
-        actor=actor,
-        message=f"Email: bill #{line.id} resubmitted sent to finance.",
-        extra={"line_id": line.id, "template": "reimbursement_bill_resubmitted"},
-    )
-
-
-def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *, actor) -> None:
+def send_bill_resubmitted(
+    req: ReimbursementRequest,
+    line: ReimbursementLine,
+    *,
+    actor,
+) -> None:
     """
-    FIX: Corrected-bill resubmission email.
-    TO  = Finance emails
-    CC  = Manager email + ReimbursementSettings.approver_cc_list()
+    Corrected-bill resubmission email.
+
+    TO = Finance emails
+    CC = Manager email + ReimbursementSettings.approver_cc_list()
     """
     settings_obj = ReimbursementSettings.get_solo()
-
-    # Build CC: manager + configured approver CC list, deduplicated
     cc_raw = _manager_emails(req) + settings_obj.approver_cc_list()
 
     subject = f"Reimbursement #{req.id}: Employee resubmitted a corrected bill"
@@ -497,7 +510,13 @@ def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *,
     to = _finance_emails()
     cc = _dedup(cc_raw) or []
 
-    _send(to, subject, "reimbursement_bill_resubmitted", ctx, cc=cc)
+    _send(
+        to,
+        subject,
+        "reimbursement_bill_resubmitted",
+        ctx,
+        cc=cc,
+    )
 
     ReimbursementLog.log(
         req,
@@ -513,7 +532,12 @@ def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *,
     )
 
 
-def send_bill_rejected_by_manager(req: ReimbursementRequest, line: ReimbursementLine, *, reason: str = "") -> None:
+def send_bill_rejected_by_manager(
+    req: ReimbursementRequest,
+    line: ReimbursementLine,
+    *,
+    reason: str = "",
+) -> None:
     subject = f"Reimbursement #{req.id}: One bill was rejected by Manager"
     ctx = {
         "employee_name": _display_name(req.created_by),
@@ -522,16 +546,26 @@ def send_bill_rejected_by_manager(req: ReimbursementRequest, line: Reimbursement
         "bill_amount": f"{line.amount:.2f}",
         "bill_description": line.description or "-",
         "manager_name": _display_name(req.manager),
-        "rejection_reason": (reason or "-"),
+        "rejection_reason": reason or "-",
         "detail_url": _request_detail_url(req),
     }
-    _send(_employee_email(req), subject, "reimbursement_bill_rejected_by_manager", ctx)
+
+    _send(
+        _employee_email(req),
+        subject,
+        "reimbursement_bill_rejected_by_manager",
+        ctx,
+    )
+
     ReimbursementLog.log(
         req,
         ReimbursementLog.Action.EMAIL_SENT,
         actor=None,
         message=f"Email: bill #{line.id} rejected by manager sent to employee.",
-        extra={"line_id": line.id, "template": "reimbursement_bill_rejected_by_manager"},
+        extra={
+            "line_id": line.id,
+            "template": "reimbursement_bill_rejected_by_manager",
+        },
     )
 
 
@@ -547,13 +581,23 @@ def send_bill_paid(req: ReimbursementRequest, line: ReimbursementLine) -> None:
         "paid_at": line.paid_at,
         "detail_url": _request_detail_url(req),
     }
-    _send(_employee_email(req), subject, "reimbursement_bill_paid", ctx)
+
+    _send(
+        _employee_email(req),
+        subject,
+        "reimbursement_bill_paid",
+        ctx,
+    )
+
     ReimbursementLog.log(
         req,
         ReimbursementLog.Action.EMAIL_SENT,
         actor=None,
         message=f"Email: bill #{line.id} paid sent to employee.",
-        extra={"line_id": line.id, "template": "reimbursement_bill_paid"},
+        extra={
+            "line_id": line.id,
+            "template": "reimbursement_bill_paid",
+        },
     )
 
 
@@ -561,15 +605,16 @@ def send_bill_paid(req: ReimbursementRequest, line: ReimbursementLine) -> None:
 # Request-level notifications
 # ---------------------------------------------------------------------------
 
-def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_note: str = "") -> None:
+def send_reimbursement_finance_verify(
+    req: ReimbursementRequest,
+    *,
+    employee_note: str = "",
+) -> None:
     """
     Sent when an employee submits or resubmits a reimbursement.
 
-    TWO emails are sent:
-    1. Finance queue notification (existing behaviour, using reimbursement_finance_verify template)
-    2. Submission notification to admin/manager list (using reimbursement_submitted template)
-       TO  = ReimbursementSettings.submitted_notify_to_list()
-       CC  = ReimbursementSettings.submitted_notify_cc_list()
+    Finance verification email intentionally uses request total / all submitted bills,
+    because Finance needs to review all included bills.
     """
     settings_obj = ReimbursementSettings.get_solo()
     verify_url = _finance_verify_url(req)
@@ -577,7 +622,6 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
     detail_url = _request_detail_url(req)
     status_label = dict(ReimbursementRequest.Status.choices).get(req.status, req.status)
 
-    # ── Email 1: Finance verification queue ──────────────────────────────────
     finance_ctx = {
         "employee_name": _display_name(req.created_by),
         "employee_email": getattr(req.created_by, "email", "") or "-",
@@ -590,12 +634,14 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
         "reject_url": verify_url,
         "submitted_at": req.submitted_at,
     }
+
     _send(
         _finance_emails(),
         f"Reimbursement #{req.id}: Submitted for Finance Verification",
         "reimbursement_finance_verify",
         finance_ctx,
     )
+
     ReimbursementLog.log(
         req,
         ReimbursementLog.Action.EMAIL_SENT,
@@ -604,7 +650,6 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
         extra={"template": "reimbursement_finance_verify"},
     )
 
-    # ── Email 2: Submission notification (manager/admin list) ─────────────────
     notify_to = settings_obj.submitted_notify_to_list()
     notify_cc = settings_obj.submitted_notify_cc_list()
 
@@ -622,6 +667,7 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
             "manager_to": ", ".join(notify_to),
             "admin_cc": notify_cc,
         }
+
         _send(
             notify_to,
             f"New Reimbursement Submitted — #{req.id} by {_display_name(req.created_by)}",
@@ -629,6 +675,7 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
             submitted_ctx,
             cc=notify_cc or None,
         )
+
         ReimbursementLog.log(
             req,
             ReimbursementLog.Action.EMAIL_SENT,
@@ -641,37 +688,60 @@ def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_not
             },
         )
 
+
 def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
     """
-    FIX: Finance-verified email to manager.
-    TO  = Manager email (fallback: Finance)
-    CC  = ReimbursementSettings.approver_cc_list()
+    Finance-verified email to manager.
 
-    Previous version sent with no CC — approver_cc_list() was never included.
+    IMPORTANT:
+    Finance-rejected bills are dead for approval flow.
+    This fallback email must use only Finance-approved bills and eligible amount.
     """
+    eligible_lines = _eligible_final_lines_qs(req)
+    eligible_count = eligible_lines.count()
+
+    if eligible_count <= 0:
+        logger.info(
+            "Legacy finance-verified email suppressed: no Finance-approved bills for req #%s.",
+            req.id,
+        )
+        return
+
     settings_obj = ReimbursementSettings.get_solo()
     cc = _dedup(settings_obj.approver_cc_list()) or []
+
+    eligible_amount = _eligible_final_amount(req)
 
     subject = f"Reimbursement #{req.id}: Ready for your approval"
     queue_url = _manager_queue_url()
     review_url = _manager_review_url(req)
+
     ctx = {
         "manager_name": _display_name(req.manager),
         "employee_name": _display_name(req.created_by),
         "request_id": req.id,
-        "total_amount": _fmt_amount(req.total_amount),
+        "total_amount": _fmt_amount(eligible_amount),
+        "eligible_total_amount": _fmt_amount(eligible_amount),
+        "eligible_bill_count": eligible_count,
         "queue_url": queue_url,
         "detail_url": _request_detail_url(req),
         "review_url": review_url,
         "approve_url": review_url,
         "reject_url": review_url,
+        "lines": _lines_context(req, finance_approved_only=True),
     }
 
     to = _manager_emails(req)
     if not to:
-        to = _finance_emails()  # fallback if manager has no email
+        to = _finance_emails()
 
-    _send(to, subject, "reimbursement_finance_verified", ctx, cc=cc)
+    _send(
+        to,
+        subject,
+        "reimbursement_finance_verified",
+        ctx,
+        cc=cc,
+    )
 
     ReimbursementLog.log(
         req,
@@ -682,11 +752,17 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
             "template": "reimbursement_finance_verified",
             "to": to,
             "cc": cc,
+            "eligible_bill_count": eligible_count,
+            "eligible_total_amount": str(eligible_amount),
         },
     )
 
 
-def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: str) -> None:
+def send_reimbursement_manager_action(
+    req: ReimbursementRequest,
+    *,
+    decision: str,
+) -> None:
     subject = f"Reimbursement #{req.id}: Manager decision — {decision.capitalize()}"
     ctx = {
         "employee_name": _display_name(req.created_by),
@@ -697,7 +773,14 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
         "status_label": dict(ReimbursementRequest.Status.choices).get(req.status, req.status),
         "detail_url": _request_detail_url(req),
     }
-    _send(_employee_email(req), subject, "reimbursement_manager_action", ctx)
+
+    _send(
+        _employee_email(req),
+        subject,
+        "reimbursement_manager_action",
+        ctx,
+    )
+
     ReimbursementLog.log(
         req,
         ReimbursementLog.Action.EMAIL_SENT,
@@ -705,11 +788,13 @@ def send_reimbursement_manager_action(req: ReimbursementRequest, *, decision: st
         message=f"Email: manager decision ({decision}) sent to employee.",
         extra={"template": "reimbursement_manager_action"},
     )
-    # NOTE: we do NOT auto-send final notification here to avoid duplicate emails.
-    # Call send_reimbursement_final_notification(req) from your approval handler.
 
 
-def send_reimbursement_management_action(req: ReimbursementRequest, *, decision: str) -> None:
+def send_reimbursement_management_action(
+    req: ReimbursementRequest,
+    *,
+    decision: str,
+) -> None:
     subject = f"Reimbursement #{req.id}: Management decision — {decision.capitalize()}"
     ctx = {
         "employee_name": _display_name(req.created_by),
@@ -720,7 +805,14 @@ def send_reimbursement_management_action(req: ReimbursementRequest, *, decision:
         "status_label": dict(ReimbursementRequest.Status.choices).get(req.status, req.status),
         "detail_url": _request_detail_url(req),
     }
-    _send(_employee_email(req), subject, "reimbursement_management_action", ctx)
+
+    _send(
+        _employee_email(req),
+        subject,
+        "reimbursement_management_action",
+        ctx,
+    )
+
     ReimbursementLog.log(
         req,
         ReimbursementLog.Action.EMAIL_SENT,
@@ -736,11 +828,18 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
         "employee_name": _display_name(req.created_by),
         "request_id": req.id,
         "total_amount": _fmt_amount(req.total_amount),
-        "payment_reference": (req.finance_payment_reference or "-"),
+        "payment_reference": req.finance_payment_reference or "-",
         "paid_at": req.paid_at,
         "detail_url": _request_detail_url(req),
     }
-    _send(_employee_email(req), subject, "reimbursement_request_paid", ctx)
+
+    _send(
+        _employee_email(req),
+        subject,
+        "reimbursement_request_paid",
+        ctx,
+    )
+
     ReimbursementLog.log(
         req,
         ReimbursementLog.Action.EMAIL_SENT,
@@ -757,13 +856,27 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
 def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
     """
     Final email after approval.
-    TO:  settings.REIMBURSEMENT_FINAL_TO (or defaults)
-    CC:  settings.REIMBURSEMENT_FINAL_CC (or defaults)
 
-    Body matches the approved example with full expense table.
-    All URLs are guaranteed absolute via _abs_url().
+    TO: settings.REIMBURSEMENT_FINAL_TO
+    CC: settings.REIMBURSEMENT_FINAL_CC
+
+    IMPORTANT:
+    Finance-rejected bills are dead for final approval flow.
+    This fallback email must include only Finance-approved bills and eligible total.
     """
     try:
+        eligible_lines = _eligible_final_lines_qs(req)
+        eligible_count = eligible_lines.count()
+
+        if eligible_count <= 0:
+            logger.info(
+                "Legacy final notification suppressed: no Finance-approved bills for req #%s.",
+                req.id,
+            )
+            return
+
+        eligible_amount = _eligible_final_amount(req)
+
         employee_name = _display_name(req.created_by)
         verified_by = _display_name(getattr(req, "verified_by", None)) or "Finance"
         approved_by = _display_name(getattr(req, "manager", None)) or "Approver"
@@ -772,26 +885,43 @@ def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
         ctx = {
             "employee_name": employee_name,
             "request_id": req.id,
-            "total_amount": _fmt_amount(req.total_amount),
+            "total_amount": _fmt_amount(eligible_amount),
+            "eligible_total_amount": _fmt_amount(eligible_amount),
+            "eligible_bill_count": eligible_count,
             "verified_by": verified_by,
             "approved_by": approved_by,
             "approved_at": _fmt_dt(approved_at),
             "detail_url": _request_detail_url(req),
-            "lines": _lines_context(req),
+            "lines": _lines_context(req, finance_approved_only=True),
         }
 
-        subject = f"Approved Reimbursement — {employee_name} — \u20b9{ctx['total_amount']}"
+        subject = f"Approved Reimbursement — {employee_name} — ₹{ctx['total_amount']}"
         to_list = _final_to_list()
         cc_list = _final_cc_list()
 
-        _send(to_list, subject, "reimbursement_final_notification", ctx, cc=cc_list)
+        _send(
+            to_list,
+            subject,
+            "reimbursement_final_notification",
+            ctx,
+            cc=cc_list,
+        )
 
         ReimbursementLog.log(
             req,
             ReimbursementLog.Action.EMAIL_SENT,
             actor=None,
             message="Email: final notification after approval.",
-            extra={"template": "reimbursement_final_notification", "to": to_list, "cc": cc_list},
+            extra={
+                "template": "reimbursement_final_notification",
+                "to": to_list,
+                "cc": cc_list,
+                "eligible_bill_count": eligible_count,
+                "eligible_total_amount": str(eligible_amount),
+            },
         )
     except Exception:
-        logger.exception("Failed to send final notification for request #%s", getattr(req, "id", "?"))
+        logger.exception(
+            "Failed to send final notification for request #%s",
+            getattr(req, "id", "?"),
+        )

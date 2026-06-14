@@ -29,6 +29,7 @@
       <div class="card-body">
         <form method="post" enctype="multipart/form-data" novalidate>
           {% csrf_token %}
+
           {% for field in form %}
             {% if field.name in "bill_type gst_type gst_bill" %}
               <div class="mb-3">
@@ -43,25 +44,48 @@
                     </div>
                   {% endfor %}
                 </div>
-                {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
-                {% if field.errors %}<div class="text-danger small">{{ field.errors }}</div>{% endif %}
+                {% if field.help_text %}
+                  <div class="form-text">{{ field.help_text }}</div>
+                {% endif %}
+                {% if field.errors %}
+                  <div class="text-danger small">{{ field.errors }}</div>
+                {% endif %}
               </div>
             {% else %}
               <div class="mb-3">
                 {{ field.label_tag }}
+
                 {% if field.name == "receipt_file" %}
                   {{ field|attr:"accept:.pdf,.jpg,.jpeg,.png,.xls,.xlsx"|add_class:"form-control" }}
                   <div class="form-text">Allowed: PDF / JPG / JPEG / PNG / XLS / XLSX</div>
+
+                {% elif field.name == "bank_attachment" %}
+                  {{ field|attr:"accept:.pdf,.jpg,.jpeg,.png"|add_class:"form-control" }}
+                  <div class="form-text">Allowed: PDF / JPG / JPEG / PNG</div>
+
+                {% elif field.name == "bank_details" %}
+                  {{ field|add_class:"form-control" }}
+                  <div class="form-text">
+                    Enter Account Holder Name, Bank Name, Account Number, IFSC Code, UPI ID, or other bank details.
+                  </div>
+
                 {% elif field.field.widget.input_type == "select" %}
                   {{ field|add_class:"form-select" }}
+
                 {% else %}
                   {{ field|add_class:"form-control" }}
                 {% endif %}
-                {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
-                {% if field.errors %}<div class="text-danger small">{{ field.errors }}</div>{% endif %}
+
+                {% if field.help_text %}
+                  <div class="form-text">{{ field.help_text }}</div>
+                {% endif %}
+                {% if field.errors %}
+                  <div class="text-danger small">{{ field.errors }}</div>
+                {% endif %}
               </div>
             {% endif %}
           {% endfor %}
+
           <button type="submit" class="btn btn-primary w-100">Save Expense</button>
         </form>
       </div>
@@ -74,6 +98,7 @@
         <span>Your Expenses</span>
         <small class="text-muted">Draft + submitted expenses</small>
       </div>
+
       <div class="card-body">
         <div class="table-responsive">
           <table class="table table-sm table-hover align-middle">
@@ -86,41 +111,89 @@
                 <th class="text-end">Amount</th>
                 <th>Status</th>
                 <th>Bill</th>
+                <th>Bank Details</th>
+                <th>Bank Document</th>
                 <th style="width:220px;">Actions</th>
               </tr>
             </thead>
+
             <tbody>
               {% for item in items %}
               <tr>
                 <td>{{ item.date|date:"Y-m-d" }}</td>
+
                 <td>{{ item.get_category_display }}</td>
+
                 <td>
-                  {% if item.gst_type %}{{ item.get_gst_type_display }}{% else %}<span class="text-muted">-</span>{% endif %}
+                  {% if item.gst_type %}
+                    {{ item.get_gst_type_display }}
+                  {% else %}
+                    <span class="text-muted">-</span>
+                  {% endif %}
                 </td>
+
                 <td>{{ item.vendor|default:"-" }}</td>
+
                 <td class="text-end">₹{{ item.amount|floatformat:2 }}</td>
+
                 <td>
                   <span class="badge bg-light text-dark">{{ item.get_status_display }}</span>
                 </td>
+
                 <td>
                   {% if item.receipt_file %}
-                    <a href="{% url 'reimbursement:receipt_expense' item.id %}" target="_blank" class="btn btn-sm btn-outline-secondary">View</a>
+                    <a href="{% url 'reimbursement:receipt_expense' item.id %}"
+                       target="_blank"
+                       class="btn btn-sm btn-outline-secondary">
+                      View
+                    </a>
                   {% else %}
                     <span class="text-muted small">No file</span>
                   {% endif %}
                 </td>
+
+                <td class="small">
+                  {% if item.bank_details %}
+                    <div style="white-space:pre-line;">{{ item.bank_details|truncatechars:80 }}</div>
+                  {% else %}
+                    <span class="text-muted">-</span>
+                  {% endif %}
+                </td>
+
+                <td>
+                  {% if item.bank_attachment %}
+                    <a href="{% url 'reimbursement:bank_document_expense' item.id %}"
+                       target="_blank"
+                       class="btn btn-sm btn-outline-secondary">
+                      View
+                    </a>
+                  {% else %}
+                    <span class="text-muted small">No file</span>
+                  {% endif %}
+                </td>
+
                 <td>
                   {% if item.can_employee_edit %}
                     <div class="btn-group">
-                      <a href="{% url 'reimbursement:expense_edit' item.id %}" class="btn btn-sm btn-outline-primary">Edit</a>
+                      <a href="{% url 'reimbursement:expense_edit' item.id %}"
+                         class="btn btn-sm btn-outline-primary">
+                        Edit
+                      </a>
+
                       {% if item.can_employee_delete %}
-                        <a href="{% url 'reimbursement:expense_delete' item.id %}" class="btn btn-sm btn-outline-danger">Delete</a>
+                        <a href="{% url 'reimbursement:expense_delete' item.id %}"
+                           class="btn btn-sm btn-outline-danger">
+                          Delete
+                        </a>
                       {% endif %}
                     </div>
 
                     {% if item.has_finance_rejected_lines %}
                       <div class="mt-1">
-                        <small class="text-muted">Finance returned this bill. Edit it, save it, then click <em>Proceed to Finance</em> on the Edit page.</small>
+                        <small class="text-muted">
+                          Finance returned this bill. Edit it, save it, then click
+                          <em>Proceed to Finance</em> on the Edit page.
+                        </small>
                       </div>
                     {% endif %}
                   {% else %}
@@ -130,7 +203,7 @@
               </tr>
               {% empty %}
               <tr>
-                <td colspan="8" class="text-center text-muted py-3">
+                <td colspan="10" class="text-center text-muted py-3">
                   No expenses yet. Use the form on the left to add your first expense.
                 </td>
               </tr>
@@ -138,6 +211,7 @@
             </tbody>
           </table>
         </div>
+
         <div class="mt-2">
           <a href="{% url 'reimbursement:create_request' %}" class="btn btn-outline-primary btn-sm">
             Create Reimbursement Request from Selected Expenses

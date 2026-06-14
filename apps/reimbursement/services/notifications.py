@@ -1,4 +1,4 @@
-#E:\CLIENT PROJECT\employee management system bos\employee_management_system\apps\reimbursement\services\notifications.py
+# FILE: apps/reimbursement/services/notifications.py
 from __future__ import annotations
 
 import logging
@@ -11,6 +11,7 @@ from urllib.parse import urlencode, urljoin
 from django.conf import settings
 from django.core import signing
 from django.core.mail import EmailMultiAlternatives, get_connection
+from django.db.models import Sum
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import escape
@@ -49,6 +50,7 @@ def _as_cfg_list(value) -> List[str]:
     if isinstance(value, (list, tuple)):
         return [str(x).strip() for x in value if str(x).strip()]
     return [part.strip() for part in str(value).split(",") if part.strip()]
+
 
 # Finance verification stage — ONLY these (settings first; fallback to spec)
 _FINANCE_TEAM = _as_cfg_list(getattr(settings, "REIMBURSEMENT_FINANCE_TEAM", None)) or [
@@ -164,10 +166,32 @@ def _format_dt(dt) -> str:
         return str(dt)
 
 
-def _collect_receipt_files(req: ReimbursementRequest) -> List:
+def _eligible_final_lines_qs(req: ReimbursementRequest):
+    """
+    Bills eligible to move beyond Finance.
+
+    Business rule:
+    - Finance-rejected bills are dead for approval flow.
+    - Only Finance-approved included bills can be shown to approver/final recipient.
+    """
+    return req.lines.select_related("expense_item").filter(
+        status=ReimbursementLine.Status.INCLUDED,
+        bill_status=ReimbursementLine.BillStatus.FINANCE_APPROVED,
+    )
+
+
+def _collect_receipt_files(
+    req: ReimbursementRequest,
+    *,
+    finance_approved_only: bool = False,
+) -> List:
     files = []
     try:
-        lines = req.lines.select_related("expense_item")
+        if finance_approved_only:
+            lines = _eligible_final_lines_qs(req)
+        else:
+            lines = req.lines.select_related("expense_item")
+
         seen_paths = set()
         for line in lines:
             f = line.receipt_file or getattr(line.expense_item, "receipt_file", None)
@@ -183,10 +207,14 @@ def _collect_receipt_files(req: ReimbursementRequest) -> List:
     return files
 
 
-def _collect_receipt_files_limited(req: ReimbursementRequest) -> List:
+def _collect_receipt_files_limited(
+    req: ReimbursementRequest,
+    *,
+    finance_approved_only: bool = False,
+) -> List:
     selected = []
     total = 0
-    for f in _collect_receipt_files(req):
+    for f in _collect_receipt_files(req, finance_approved_only=finance_approved_only):
         try:
             size = getattr(f, "size", None)
             if size is None and hasattr(f, "path"):
@@ -216,7 +244,7 @@ def _amreen_from_email() -> str:
 def _amreen_reply_to() -> List[str]:
     from_value = _amreen_from_email()
     if "<" in from_value and ">" in from_value:
-        email = from_value[from_value.find("<")+1 : from_value.find(">")].strip()
+        email = from_value[from_value.find("<") + 1 : from_value.find(">")].strip()
     else:
         email = from_value.strip()
     return [email] if email else []
@@ -393,6 +421,7 @@ def _already_sent_recent(
     except Exception:
         return False
 
+
 # ---------------------------------------------------------------------------
 # Recipient resolution
 # ---------------------------------------------------------------------------
@@ -497,18 +526,27 @@ def _employee_email(req: ReimbursementRequest) -> Optional[str]:
     except Exception:
         return None
 
+
 # ---------------------------------------------------------------------------
 # Expense line details for emails
 # ---------------------------------------------------------------------------
 
-def _lines_for_email(req: ReimbursementRequest) -> List[Dict[str, str]]:
+def _lines_for_email(
+    req: ReimbursementRequest,
+    *,
+    finance_approved_only: bool = False,
+) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
     try:
-        lines = (
-            req.lines.select_related("expense_item")
-            .filter(status=ReimbursementLine.Status.INCLUDED)
-            .order_by("id")
-        )
+        if finance_approved_only:
+            lines = _eligible_final_lines_qs(req).order_by("id")
+        else:
+            lines = (
+                req.lines.select_related("expense_item")
+                .filter(status=ReimbursementLine.Status.INCLUDED)
+                .order_by("id")
+            )
+
         for line in lines:
             item = line.expense_item
             try:
@@ -539,12 +577,16 @@ def _lines_for_email(req: ReimbursementRequest) -> List[Dict[str, str]]:
     return rows
 
 
-def _build_lines_table_html(req: ReimbursementRequest) -> str:
-    rows = _lines_for_email(req)
+def _build_lines_table_html(
+    req: ReimbursementRequest,
+    *,
+    finance_approved_only: bool = False,
+) -> str:
+    rows = _lines_for_email(req, finance_approved_only=finance_approved_only)
     if not rows:
         return """
 <p style="font-size:13px;color:#6b7280;margin:8px 0;">
-  No expense lines attached to this reimbursement.
+  No eligible expense lines attached to this reimbursement.
 </p>
         """.strip()
 
@@ -593,10 +635,14 @@ def _build_lines_table_html(req: ReimbursementRequest) -> str:
     return "\n".join(parts)
 
 
-def _build_lines_table_text(req: ReimbursementRequest) -> str:
-    rows = _lines_for_email(req)
+def _build_lines_table_text(
+    req: ReimbursementRequest,
+    *,
+    finance_approved_only: bool = False,
+) -> str:
+    rows = _lines_for_email(req, finance_approved_only=finance_approved_only)
     if not rows:
-        return "No expense lines attached."
+        return "No eligible expense lines attached."
 
     header = "Type of Expenses | Date of Expenses | Description | Amount | Bill Attachment"
     sep = "-" * len(header)
@@ -606,11 +652,13 @@ def _build_lines_table_text(req: ReimbursementRequest) -> str:
         lines.append(f"{r['category']} | {r['date']} | {r['description']} | {r['amount']} | {bill}")
     return "\n".join(lines)
 
+
 # ---------------------------------------------------------------------------
 # Email-action links (Approve / Reject from email)
 # ---------------------------------------------------------------------------
 
 _ACTION_SALT = "reimbursement-email-action"  # must match views.EMAIL_ACTION_SALT
+
 
 def _build_action_token(req: ReimbursementRequest, role: str, decision: str) -> str:
     payload: Dict[str, object] = {
@@ -673,6 +721,7 @@ def _management_action_buttons(req: ReimbursementRequest) -> str:
       </div>
     """.strip()
 
+
 # ---------------------------------------------------------------------------
 # Public API – finance-first flow (NEW)
 # ---------------------------------------------------------------------------
@@ -680,6 +729,9 @@ def _management_action_buttons(req: ReimbursementRequest) -> str:
 def send_reimbursement_finance_verify(req: ReimbursementRequest, *, employee_note: str = "") -> None:
     """
     STEP 1 — Send ONLY to Finance team (Akshay & Sharyu). No CC.
+
+    Finance verification email intentionally shows all included bills, because
+    Finance must decide which bills are approved/rejected.
     """
     if not _email_enabled():
         logger.info("Emails disabled; skipping finance-verify email for #%s.", req.id)
@@ -784,10 +836,22 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
     """
     STEP 2 — Finance verified → email Approver(s).
     CC MUST include ONLY the verifier (Akshay or Sharyu), not both.
-    Include verification timestamp, verified-by, and approver names.
+
+    Reimbursement approval flow rule:
+    - Finance-rejected bills are dead for downstream approval.
+    - Approver email must include ONLY Finance-approved bills.
     """
     if not _email_enabled():
         logger.info("Emails disabled; skipping finance-verified email for #%s.", req.id)
+        return
+
+    eligible_lines = _eligible_final_lines_qs(req)
+    eligible_count = eligible_lines.count()
+    if eligible_count <= 0:
+        logger.info(
+            "Finance verified email suppressed: no Finance-approved bills for req #%s.",
+            req.id,
+        )
         return
 
     kind = "finance_verified"
@@ -800,8 +864,10 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
         logger.warning("Finance verified email suppressed: no manager/L1 email for req #%s.", req.id)
         return
 
+    eligible_amount = eligible_lines.aggregate(total=Sum("amount")).get("total") or Decimal("0.00")
+
     emp_name = escape(_employee_display_name(req.created_by))
-    amt_str = _format_amount(req.total_amount)
+    amt_str = _format_amount(eligible_amount)
     subject = f"Reimbursement #{req.id} Verified – Pending Manager Approval"
 
     detail_url = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
@@ -810,12 +876,14 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
     verifier_name = _employee_display_name(req.verified_by) if req.verified_by else "Finance"
     approver_list_str = ", ".join(mgr_rec.to)
 
-    lines_html = _build_lines_table_html(req)
-    lines_txt = _build_lines_table_text(req)
+    lines_html = _build_lines_table_html(req, finance_approved_only=True)
+    lines_txt = _build_lines_table_text(req, finance_approved_only=True)
     buttons_html = _manager_action_buttons(req)
 
-    verifier_email = ((req.verified_by.email or "").strip()
-                      if (req.verified_by and getattr(req.verified_by, "email", None)) else "")
+    verifier_email = (
+        (req.verified_by.email or "").strip()
+        if (req.verified_by and getattr(req.verified_by, "email", None)) else ""
+    )
     cc_list = _dedupe_preserve([verifier_email] if verifier_email else [])
 
     html = f"""
@@ -827,7 +895,9 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
         Reimbursement Request For – {emp_name} – ₹{amt_str}
       </h2>
 
-      <p style="margin:0 0 8px 0;">Finance has verified this request and forwarded it for approval.</p>
+      <p style="margin:0 0 8px 0;">
+        Finance has verified the eligible bills and forwarded them for approval.
+      </p>
 
       <table style="font-size:14px;margin:8px 0 16px 0;">
         <tr><td style="padding-right:8px;"><strong>Request ID -</strong></td><td>#{req.id}</td></tr>
@@ -836,9 +906,11 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
         <tr><td style="padding-right:8px;"><strong>Verified By -</strong></td><td>{escape(verifier_name)}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Verification Timestamp -</strong></td><td>{_format_dt(verified_at)}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Approver(s) -</strong></td><td>{escape(approver_list_str)}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Eligible Bill Count -</strong></td><td>{eligible_count}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Eligible Amount -</strong></td><td>₹{amt_str}</td></tr>
       </table>
 
-      <h3 style="font-size:15px;margin:16px 0 6px 0;">Expense Details</h3>
+      <h3 style="font-size:15px;margin:16px 0 6px 0;">Finance-Approved Expense Details</h3>
       {lines_html}
 
       <p style="font-size:14px;margin:16px 0 6px 0;">
@@ -866,7 +938,7 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
         [
             f"Reimbursement Request For – {_employee_display_name(req.created_by)} – ₹{amt_str}",
             "",
-            "Finance has verified this request and forwarded it for approval.",
+            "Finance has verified the eligible bills and forwarded them for approval.",
             "",
             f"Request ID - #{req.id}",
             f"Employee Name - {_employee_display_name(req.created_by)}",
@@ -874,8 +946,10 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
             f"Verified By - {verifier_name}",
             f"Verification Timestamp - {verified_at}",
             f"Approver(s) - {approver_list_str}",
+            f"Eligible Bill Count - {eligible_count}",
+            f"Eligible Amount - ₹{amt_str}",
             "",
-            "Expense Details:",
+            "Finance-Approved Expense Details:",
             lines_txt,
             "",
             "View in BOS Lakshya:",
@@ -887,9 +961,12 @@ def send_reimbursement_finance_verified(req: ReimbursementRequest) -> None:
         ]
     )
 
-    # *** PERMANENT FIX ***
     # Manager-facing email: do NOT attach receipts unless explicitly enabled via settings.
-    attachments = _collect_receipt_files_limited(req) if _ATTACH_TO_MANAGER else []
+    # When enabled, attach only Finance-approved bill receipts.
+    attachments = (
+        _collect_receipt_files_limited(req, finance_approved_only=True)
+        if _ATTACH_TO_MANAGER else []
+    )
 
     _send_and_log(
         req,
@@ -912,7 +989,7 @@ def send_reimbursement_finance_rejected(req: ReimbursementRequest) -> None:
 
     kind = "finance_rejected"
     if _already_sent_recent(req, kind):
-        logger.info("Suppressing duplicate '%s' email for req #%s.", req.id)
+        logger.info("Suppressing duplicate '%s' email for req #%s.", kind, req.id)
         return
 
     emp_email = _employee_email(req)
@@ -981,6 +1058,7 @@ def send_reimbursement_finance_rejected(req: ReimbursementRequest) -> None:
         txt=txt,
         extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "finance_rejected"},
     )
+
 
 # ---------------------------------------------------------------------------
 # Public API – legacy/compat (manager-first submit email kept)
@@ -1112,6 +1190,7 @@ def send_reimbursement_submitted(req: ReimbursementRequest, *, employee_note: st
         extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "submitted"},
     )
 
+
 # ---------------------------------------------------------------------------
 # Manager / management / finance follow-ups
 # ---------------------------------------------------------------------------
@@ -1208,10 +1287,22 @@ def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
     STEP 3 — Final email after approval.
     TO:  Jyothi & Chetan
     CC:  Amreen, Vilas, Akshay, Sharyu
-    Body includes: Bill Amount, Employee Name, Verified By, Approved By, Approval Timestamp.
+
+    Reimbursement approval flow rule:
+    - Finance-rejected bills are dead for downstream approval.
+    - Final notification must include ONLY Finance-approved bills.
     """
     if not _email_enabled():
         logger.info("Emails disabled; skipping final-notification email for #%s.", req.id)
+        return
+
+    eligible_lines = _eligible_final_lines_qs(req)
+    eligible_count = eligible_lines.count()
+    if eligible_count <= 0:
+        logger.info(
+            "Final notification suppressed: no Finance-approved bills for req #%s.",
+            req.id,
+        )
         return
 
     kind = "final_notification"
@@ -1225,8 +1316,10 @@ def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
         return
     cc_list = _ensure_cc_amreen(_FINAL_CC)
 
+    eligible_amount = eligible_lines.aggregate(total=Sum("amount")).get("total") or Decimal("0.00")
+
     emp_name = escape(_employee_display_name(req.created_by))
-    amt_str = _format_amount(req.total_amount)
+    amt_str = _format_amount(eligible_amount)
     approved_by = _employee_display_name(req.manager) if req.manager else "Approver"
     approved_at = req.manager_decided_at or timezone.now()
     verified_by = _employee_display_name(req.verified_by) if req.verified_by else "Finance"
@@ -1234,8 +1327,8 @@ def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
     subject = f"Approved Reimbursement — {emp_name} — ₹{amt_str}"
 
     detail_url = _abs_url(reverse("reimbursement:request_detail", args=[req.id]))
-    lines_html = _build_lines_table_html(req)
-    lines_txt = _build_lines_table_text(req)
+    lines_html = _build_lines_table_html(req, finance_approved_only=True)
+    lines_txt = _build_lines_table_text(req, finance_approved_only=True)
 
     html = f"""
 <html>
@@ -1252,9 +1345,11 @@ def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
         <tr><td style="padding-right:8px;"><strong>Verified By -</strong></td><td>{escape(verified_by)}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Approved By -</strong></td><td>{escape(approved_by)}</td></tr>
         <tr><td style="padding-right:8px;"><strong>Approval Timestamp -</strong></td><td>{_format_dt(approved_at)}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Eligible Bill Count -</strong></td><td>{eligible_count}</td></tr>
+        <tr><td style="padding-right:8px;"><strong>Eligible Amount -</strong></td><td>₹{amt_str}</td></tr>
       </table>
 
-      <h3 style="font-size:15px;margin:16px 0 6px 0;">Expense Details</h3>
+      <h3 style="font-size:15px;margin:16px 0 6px 0;">Finance-Approved Expense Details</h3>
       {lines_html}
 
       <p style="font-size:14px;margin:16px 0 6px 0;">
@@ -1274,13 +1369,15 @@ def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
         [
             f"Approved Reimbursement — {_employee_display_name(req.created_by)} — ₹{amt_str}",
             "",
-            f"Request ID        : #{req.id}",
-            f"Employee Name     : {_employee_display_name(req.created_by)}",
-            f"Verified By       : {verified_by}",
-            f"Approved By       : {approved_by}",
-            f"Approval Timestamp: {approved_at}",
+            f"Request ID         : #{req.id}",
+            f"Employee Name      : {_employee_display_name(req.created_by)}",
+            f"Verified By        : {verified_by}",
+            f"Approved By        : {approved_by}",
+            f"Approval Timestamp : {approved_at}",
+            f"Eligible Bill Count: {eligible_count}",
+            f"Eligible Amount    : ₹{amt_str}",
             "",
-            "Expense Details:",
+            "Finance-Approved Expense Details:",
             lines_txt,
             "",
             "View details:",
@@ -1288,7 +1385,7 @@ def send_reimbursement_final_notification(req: ReimbursementRequest) -> None:
         ]
     )
 
-    attachments = _collect_receipt_files_limited(req)
+    attachments = _collect_receipt_files_limited(req, finance_approved_only=True)
 
     _send_and_log(
         req,
@@ -1581,6 +1678,7 @@ def send_reimbursement_paid(req: ReimbursementRequest) -> None:
         extra_headers={"X-BOS-Flow": "reimbursement", "X-BOS-Stage": "paid"},
     )
 
+
 # ---------------------------------------------------------------------------
 # NEW: Bill-level notifications wired for finance-first flow
 # ---------------------------------------------------------------------------
@@ -1638,7 +1736,7 @@ def send_bill_rejected_by_finance(req: ReimbursementRequest, line: Reimbursement
       </p>
 
       <p style="font-size:14px;margin:12px 0;">
-        {('Bill file: <a href="'+bill_url+'" style="color:#2563eb;text-decoration:none;">View</a><br>' if bill_url else '')}
+        {('Bill file: <a href="' + bill_url + '" style="color:#2563eb;text-decoration:none;">View</a><br>' if bill_url else '')}
         Full request: <a href="{req_url}" style="color:#2563eb;text-decoration:none;">{req_url}</a>
       </p>
 
@@ -1721,7 +1819,7 @@ def send_bill_resubmitted(req: ReimbursementRequest, line: ReimbursementLine, *,
       </table>
 
       <p style="font-size:14px;margin:12px 0;">
-        {('Bill file: <a href="'+bill_url+'" style="color:#2563eb;text-decoration:none;">View</a><br>' if bill_url else '')}
+        {('Bill file: <a href="' + bill_url + '" style="color:#2563eb;text-decoration:none;">View</a><br>' if bill_url else '')}
         Full request: <a href="{req_url}" style="color:#2563eb;text-decoration:none;">{req_url}</a>
       </p>
 

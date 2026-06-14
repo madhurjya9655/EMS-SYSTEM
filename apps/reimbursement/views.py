@@ -1223,10 +1223,22 @@ class ManagementReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         req: ReimbursementRequest = self.object
+
         approved = _eligible_manager_lines_qs(req)
+
         ctx["approved_lines"] = approved
         ctx["eligible_lines"] = approved
-        ctx["all_lines"] = req.lines.select_related("expense_item").order_by("id")
+
+        # Finance-rejected bills are dead for approval flow.
+        # Do not expose all request lines to the management approval template.
+        # Templates may render "all_lines", so keep it aligned with eligible lines.
+        ctx["all_lines"] = approved
+
+        ctx["eligible_total_amount"] = (
+            approved.aggregate(total=Sum("amount")).get("total") or 0
+        )
+        ctx["eligible_bill_count"] = approved.count()
+
         ctx["back_url"] = _safe_back_url(self.request.GET.get("return"))
         return ctx
 
@@ -1272,7 +1284,6 @@ class ManagementReviewView(LoginRequiredMixin, PermissionRequiredMixin, UpdateVi
             self.request.GET.get("return") or self.request.POST.get("return")
         )
         return back or reverse("reimbursement:management_pending")
-
 
 # ---------------------------------------------------------------------------
 # Finance queues
@@ -2294,7 +2305,7 @@ class ReimbursementExportCSVView(
 
 
 # ---------------------------------------------------------------------------
-# Secure receipt download (iframe-friendly)
+# Secure receipt / bank document download (iframe-friendly)
 # ---------------------------------------------------------------------------
 
 
@@ -2305,60 +2316,52 @@ def download_receipt(
     expense_id: Optional[int] = None,
 ):
     """
-    FIX (Issue #4 — Receipt links from email return 404):
+    Securely serves receipt / bill attachment files.
 
-    ROOT CAUSE:
-    The previous guard was:
-        if not user.is_authenticated:
-            raise Http404
-    When a manager or finance user clicked a receipt link from email they were
-    not yet logged in, so the view immediately raised Http404. Django had no
-    ?next= redirect information, so after login the user landed on the dashboard
-    instead of the receipt — and the email link appeared broken.
-
-    FIX:
-    Replace the Http404 with redirect_to_login(request.get_full_path()), which
-    is exactly what LoginRequiredMixin does. Django's login view stores the
-    full receipt URL in ?next= and redirects back to it after a successful login.
-
-    ACCESS CONTROL (unchanged — already correct):
-    - Owner (employee who submitted the expense) → allowed
-    - Admin (_user_is_admin) → allowed
-    - Finance (_user_is_finance) → allowed
-    - Manager (_user_is_manager) → allowed
-    - Anyone else → 403 Forbidden
+    Access allowed:
+    - Employee who owns the expense/request
+    - Reimbursement Admin
+    - Finance user
+    - Manager / Management approver
     """
     user = request.user
 
-    # FIX: redirect to login with ?next= instead of raising Http404.
-    # After login, Django redirects back to this URL automatically.
     if not user.is_authenticated:
         return redirect_to_login(request.get_full_path())
 
     file_field = None
+    owner = None
+
     if line_id is not None:
         line = get_object_or_404(
             ReimbursementLine.objects.select_related(
-                "expense_item", "request", "request__created_by"
+                "expense_item",
+                "request",
+                "request__created_by",
             ),
             pk=line_id,
         )
+
         file_field = line.receipt_file or line.expense_item.receipt_file
         owner = line.request.created_by
+
     elif expense_id is not None:
         expense = get_object_or_404(
-            ExpenseItem.objects.select_related("created_by"), pk=expense_id
+            ExpenseItem.objects.select_related("created_by"),
+            pk=expense_id,
         )
+
         file_field = expense.receipt_file
         owner = expense.created_by
+
     else:
         raise Http404
 
     if not file_field:
         raise Http404("No receipt file attached.")
 
-    # Role-based access control — unchanged from original.
     allowed = False
+
     if user == owner:
         allowed = True
     elif _user_is_admin(user) or _user_is_finance(user) or _user_is_manager(user):
@@ -2369,11 +2372,103 @@ def download_receipt(
 
     storage = file_field.storage
     name = file_field.name
+
     if not name or not storage.exists(name):
         raise Http404("Receipt file not found.")
 
     filename = os.path.basename(name)
-    return FileResponse(storage.open(name, "rb"), as_attachment=False, filename=filename)
+
+    return FileResponse(
+        storage.open(name, "rb"),
+        as_attachment=False,
+        filename=filename,
+    )
+
+
+@xframe_options_sameorigin
+def download_bank_document(
+    request,
+    line_id: Optional[int] = None,
+    expense_id: Optional[int] = None,
+):
+    """
+    Securely serves Bank Details Attachment files.
+
+    Access allowed:
+    - Employee who owns the expense/request
+    - Reimbursement Admin
+    - Finance user
+    - Manager / Management approver
+
+    URL names used by templates:
+    - reimbursement:bank_document_line
+    - reimbursement:bank_document_expense
+    """
+    user = request.user
+
+    if not user.is_authenticated:
+        return redirect_to_login(request.get_full_path())
+
+    file_field = None
+    owner = None
+
+    if line_id is not None:
+        line = get_object_or_404(
+            ReimbursementLine.objects.select_related(
+                "expense_item",
+                "request",
+                "request__created_by",
+            ),
+            pk=line_id,
+        )
+
+        if getattr(line, "bank_attachment", None):
+            file_field = line.bank_attachment
+        elif line.expense_item and getattr(line.expense_item, "bank_attachment", None):
+            file_field = line.expense_item.bank_attachment
+
+        owner = line.request.created_by
+
+    elif expense_id is not None:
+        expense = get_object_or_404(
+            ExpenseItem.objects.select_related("created_by"),
+            pk=expense_id,
+        )
+
+        if getattr(expense, "bank_attachment", None):
+            file_field = expense.bank_attachment
+
+        owner = expense.created_by
+
+    else:
+        raise Http404
+
+    if not file_field:
+        raise Http404("No bank document attached.")
+
+    allowed = False
+
+    if user == owner:
+        allowed = True
+    elif _user_is_admin(user) or _user_is_finance(user) or _user_is_manager(user):
+        allowed = True
+
+    if not allowed:
+        return HttpResponseForbidden("You are not allowed to view this bank document.")
+
+    storage = file_field.storage
+    name = file_field.name
+
+    if not name or not storage.exists(name):
+        raise Http404("Bank document file not found.")
+
+    filename = os.path.basename(name)
+
+    return FileResponse(
+        storage.open(name, "rb"),
+        as_attachment=False,
+        filename=filename,
+    )
 
 
 # ---------------------------------------------------------------------------

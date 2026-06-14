@@ -1,25 +1,64 @@
 {% extends "base.html" %}
+{% load widget_tweaks %}
+
 {% block title %}Apply (Legacy){% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h2>Legacy — Apply</h2>
-  <a href="{% url 'reimbursement:legacy_my_reimbursements' %}" class="btn btn-outline-secondary btn-sm">My Legacy Requests</a>
+  <a href="{% url 'reimbursement:legacy_my_reimbursements' %}" class="btn btn-outline-secondary btn-sm">
+    My Legacy Requests
+  </a>
 </div>
 
 <div class="card">
   <div class="card-body">
-    <form method="post" enctype="multipart/form-data">
+    <form method="post" enctype="multipart/form-data" novalidate>
       {% csrf_token %}
+
       {% for field in form %}
         <div class="mb-3">
           {{ field.label_tag }}
-          {{ field }}
-          {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
-          {% if field.errors %}<div class="text-danger small">{{ field.errors }}</div>{% endif %}
+
+          {% if field.name == "bill" %}
+            {{ field|attr:"accept:.pdf,.jpg,.jpeg,.png,.xls,.xlsx"|add_class:"form-control" }}
+            <div class="form-text">Allowed: PDF / JPG / JPEG / PNG / XLS / XLSX</div>
+
+          {% elif field.name == "bank_attachment" %}
+            {{ field|attr:"accept:.pdf,.jpg,.jpeg,.png"|add_class:"form-control" }}
+            <div class="form-text">Allowed: PDF / JPG / JPEG / PNG</div>
+
+          {% elif field.name == "bank_details" %}
+            {{ field|add_class:"form-control" }}
+            <div class="form-text">
+              Enter Account Holder Name, Bank Name, Account Number, IFSC Code, UPI ID, or other bank details.
+            </div>
+
+          {% elif field.field.widget.input_type == "select" %}
+            {{ field|add_class:"form-select" }}
+
+          {% elif field.field.widget.input_type == "checkbox" %}
+            <div class="form-check">
+              {{ field|add_class:"form-check-input" }}
+            </div>
+
+          {% else %}
+            {{ field|add_class:"form-control" }}
+          {% endif %}
+
+          {% if field.help_text %}
+            <div class="form-text">{{ field.help_text }}</div>
+          {% endif %}
+
+          {% if field.errors %}
+            <div class="text-danger small">{{ field.errors }}</div>
+          {% endif %}
         </div>
       {% endfor %}
-      <button class="btn btn-primary">Submit</button>
+
+      <button type="submit" class="btn btn-primary">
+        Submit
+      </button>
     </form>
   </div>
 </div>

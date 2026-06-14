@@ -1,6 +1,7 @@
 # FILE: apps/reimbursement/models.py
 # FIXED: 2026-03-21
 # UPDATED: ReimbursementApproverMapping now uses M2M for managers + finance_users
+# UPDATED: Bank Details + Bank Details Attachment added to ExpenseItem and ReimbursementLine
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -49,6 +50,11 @@ def receipt_upload_path(instance: models.Model, filename: str) -> str:
     return f"reimbursement/receipts/{today:%Y/%m/%d}/{filename}"
 
 
+def bank_attachment_upload_path(instance: models.Model, filename: str) -> str:
+    today = timezone.now()
+    return f"reimbursement/bank_documents/{today:%Y/%m/%d}/{filename}"
+
+
 def _parse_email_list(raw: str) -> list[str]:
     if not raw:
         return []
@@ -89,6 +95,33 @@ def validate_receipt_file(value) -> None:
     if size > max_mb * 1024 * 1024:
         raise DjangoCoreValidationError(
             _("File is too large (max %(max_mb)s MB)."),
+            params={"max_mb": max_mb},
+        )
+
+
+def validate_bank_attachment_file(value) -> None:
+    max_mb = getattr(settings, "REIMBURSEMENT_MAX_BANK_ATTACHMENT_MB", 8)
+    default_exts = [".jpg", ".jpeg", ".png", ".pdf"]
+    allowed_exts = getattr(
+        settings,
+        "REIMBURSEMENT_BANK_ATTACHMENT_ALLOWED_EXTENSIONS",
+        default_exts,
+    )
+    allowed_exts = [str(e).lower() for e in (allowed_exts or default_exts)]
+
+    name = getattr(value, "name", "") or ""
+    size = getattr(value, "size", 0) or 0
+
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in allowed_exts:
+        raise DjangoCoreValidationError(
+            _("Unsupported bank document type '%(ext)s'. Allowed types: %(types)s"),
+            params={"ext": ext, "types": ", ".join(allowed_exts)},
+        )
+
+    if size > max_mb * 1024 * 1024:
+        raise DjangoCoreValidationError(
+            _("Bank document is too large (max %(max_mb)s MB)."),
             params={"max_mb": max_mb},
         )
 
@@ -158,7 +191,10 @@ class ReimbursementSettings(models.Model):
                 dj_validate_email(val)
                 return val
         except Exception:
-            logger.warning("Invalid approver_level1_email configured: %r", self.approver_level1_email)
+            logger.warning(
+                "Invalid approver_level1_email configured: %r",
+                self.approver_level1_email,
+            )
         return None
 
     def approver_level2(self) -> Optional[str]:
@@ -168,7 +204,10 @@ class ReimbursementSettings(models.Model):
                 dj_validate_email(val)
                 return val
         except Exception:
-            logger.warning("Invalid approver_level2_email configured: %r", self.approver_level2_email)
+            logger.warning(
+                "Invalid approver_level2_email configured: %r",
+                self.approver_level2_email,
+            )
         return None
 
     def approver_cc_list(self) -> list[str]:
@@ -194,15 +233,8 @@ class ReimbursementApproverMapping(models.Model):
     Maps each employee to one or more managers and one or more finance users.
 
     UPDATED: both manager and finance are now ManyToManyField so Admin can
-    assign multiple approvers per employee.  The first entry in each M2M set
-    is treated as the "primary" for workflow purposes (request assignment,
-    email TO).  Additional entries receive CC notifications.
-
-    Helper methods:
-      primary_manager()   → first manager User, or None
-      primary_finance()   → first finance User, or None
-      all_manager_emails()  → list of email strings for all managers
-      all_finance_emails()  → list of email strings for all finance users
+    assign multiple approvers per employee. The first entry in each M2M set
+    is treated as the "primary" for workflow purposes.
     """
 
     employee = models.OneToOneField(
@@ -232,50 +264,39 @@ class ReimbursementApproverMapping(models.Model):
     def __str__(self) -> str:
         return f"Reimbursement mapping for {self.employee}"
 
-    # ── Primary helpers (used by workflow to assign req.manager) ──────────
-
     def primary_manager(self):
-        """Returns the first mapped manager User, or None."""
         return self.managers.first()
 
     def primary_finance(self):
-        """Returns the first mapped finance User, or None."""
         return self.finance_users.first()
 
-    # ── Email helpers ─────────────────────────────────────────────────────
-
     def all_manager_emails(self) -> list[str]:
-        """Returns email list for all mapped managers (non-empty only)."""
         return [
-            e for e in (
+            e
+            for e in (
                 (getattr(u, "email", "") or "").strip()
                 for u in self.managers.all()
-            ) if e
+            )
+            if e
         ]
 
     def all_finance_emails(self) -> list[str]:
-        """Returns email list for all mapped finance users (non-empty only)."""
         return [
-            e for e in (
+            e
+            for e in (
                 (getattr(u, "email", "") or "").strip()
                 for u in self.finance_users.all()
-            ) if e
+            )
+            if e
         ]
-
-    # ── Backward-compat property aliases ─────────────────────────────────
-    # These let any code that still reads `.manager` or `.finance` keep working.
 
     @property
     def manager(self):
-        """Backward-compat: returns first manager (like the old FK)."""
         return self.primary_manager()
 
     @property
     def finance(self):
-        """Backward-compat: returns first finance user (like the old FK)."""
         return self.primary_finance()
-
-    # ── Class-level lookup ────────────────────────────────────────────────
 
     @classmethod
     def for_employee(cls, user) -> "ReimbursementApproverMapping | None":
@@ -301,15 +322,45 @@ class ExpenseItem(models.Model):
         SUBMITTED = "submitted", _("Submitted")
         VOID = "void", _("Voided")
 
-    created_by = models.ForeignKey(UserModel, on_delete=models.CASCADE, related_name="expense_items")
+    created_by = models.ForeignKey(
+        UserModel,
+        on_delete=models.CASCADE,
+        related_name="expense_items",
+    )
     date = models.DateField()
     category = models.CharField(max_length=32, choices=REIMBURSEMENT_CATEGORY_CHOICES)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     vendor = models.CharField(max_length=255, blank=True, default="")
     description = models.TextField(blank=True, default="")
-    gst_type = models.CharField(max_length=10, choices=GST_TYPE_CHOICES, default="non_gst")
-    receipt_file = models.FileField(upload_to=receipt_upload_path, validators=[validate_receipt_file])
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.SAVED, db_index=True)
+    gst_type = models.CharField(
+        max_length=10,
+        choices=GST_TYPE_CHOICES,
+        default="non_gst",
+    )
+    receipt_file = models.FileField(
+        upload_to=receipt_upload_path,
+        validators=[validate_receipt_file],
+    )
+
+    bank_details = models.TextField(
+        blank=True,
+        default="",
+        help_text="Bank details entered by employee for reimbursement payment.",
+    )
+    bank_attachment = models.FileField(
+        upload_to=bank_attachment_upload_path,
+        validators=[validate_bank_attachment_file],
+        blank=True,
+        null=True,
+        help_text="Optional bank details attachment uploaded by employee.",
+    )
+
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.SAVED,
+        db_index=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -326,7 +377,9 @@ class ExpenseItem(models.Model):
     def clean(self) -> None:
         super().clean()
         if self.amount is None or self.amount <= Decimal("0"):
-            raise DjangoCoreValidationError({"amount": _("Amount must be greater than 0.")})
+            raise DjangoCoreValidationError(
+                {"amount": _("Amount must be greater than 0.")}
+            )
 
     @property
     def is_locked(self) -> bool:
@@ -334,6 +387,7 @@ class ExpenseItem(models.Model):
 
     def rejected_lines_qs(self):
         from .models import ReimbursementLine
+
         return self.request_lines.filter(
             bill_status__in=[
                 ReimbursementLine.BillStatus.FINANCE_REJECTED,
@@ -347,6 +401,7 @@ class ExpenseItem(models.Model):
 
     def resubmit_rejected_lines(self, *, actor: Optional[models.Model]) -> int:
         from .models import ReimbursementLine, ReimbursementRequest
+
         count = 0
         touched_requests: set[int] = set()
 
@@ -363,7 +418,8 @@ class ExpenseItem(models.Model):
                 try:
                     req = ReimbursementRequest.objects.get(pk=req_id)
                     req.apply_derived_status_from_bills(
-                        actor=actor, reason="Employee resubmitted corrected bill(s)."
+                        actor=actor,
+                        reason="Employee resubmitted corrected bill(s).",
                     )
                 except ReimbursementRequest.DoesNotExist:
                     continue
@@ -375,13 +431,25 @@ class ExpenseItem(models.Model):
         old_amount = None
         old_description = None
         old_receipt_name = None
+        old_bank_details = None
+        old_bank_attachment_name = None
 
         if not creating:
             try:
-                prev = type(self).objects.only("amount", "description", "receipt_file").get(pk=self.pk)
+                prev = type(self).objects.only(
+                    "amount",
+                    "description",
+                    "receipt_file",
+                    "bank_details",
+                    "bank_attachment",
+                ).get(pk=self.pk)
+
                 old_amount = prev.amount
                 old_description = prev.description
                 old_receipt_name = getattr(prev.receipt_file, "name", None)
+                old_bank_details = prev.bank_details
+                old_bank_attachment_name = getattr(prev.bank_attachment, "name", None)
+
             except type(self).DoesNotExist:
                 creating = True
 
@@ -391,11 +459,16 @@ class ExpenseItem(models.Model):
             return
 
         new_receipt_name = getattr(self.receipt_file, "name", None)
+        new_bank_attachment_name = getattr(self.bank_attachment, "name", None)
+
         changed = (
             (old_amount is not None and self.amount != old_amount)
             or ((old_description or "") != (self.description or ""))
             or ((old_receipt_name or "") != (new_receipt_name or ""))
+            or ((old_bank_details or "") != (self.bank_details or ""))
+            or ((old_bank_attachment_name or "") != (new_bank_attachment_name or ""))
         )
+
         if not changed:
             return
 
@@ -418,8 +491,11 @@ class ExpenseItem(models.Model):
                 amount=self.amount,
                 description=self.description,
                 receipt_file=self.receipt_file,
+                bank_details=self.bank_details,
+                bank_attachment=self.bank_attachment,
                 updated_at=timezone.now(),
             )
+
         except Exception:
             logger.exception(
                 "Failed to propagate edited ExpenseItem #%s into ReimbursementLine rows.",
@@ -452,7 +528,9 @@ class ReimbursementRequest(models.Model):
     }
 
     created_by = models.ForeignKey(
-        UserModel, on_delete=models.CASCADE, related_name="reimbursement_requests"
+        UserModel,
+        on_delete=models.CASCADE,
+        related_name="reimbursement_requests",
     )
     submitted_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(
@@ -461,17 +539,24 @@ class ReimbursementRequest(models.Model):
         default=Status.PENDING_FINANCE_VERIFY,
         db_index=True,
     )
-    total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    total_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
+    )
 
-    # req.manager is still a single FK — it's the assigned approver for this request.
-    # Multiple managers in the mapping means multiple people CAN approve, but the
-    # request is assigned to the primary manager at submission time.
     manager = models.ForeignKey(
-        UserModel, null=True, blank=True, on_delete=models.SET_NULL,
+        UserModel,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         related_name="reimbursements_as_manager",
     )
     management = models.ForeignKey(
-        UserModel, null=True, blank=True, on_delete=models.SET_NULL,
+        UserModel,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         related_name="reimbursements_as_management",
     )
 
@@ -484,7 +569,10 @@ class ReimbursementRequest(models.Model):
     management_decided_at = models.DateTimeField(null=True, blank=True)
 
     verified_by = models.ForeignKey(
-        UserModel, on_delete=models.SET_NULL, null=True, blank=True,
+        UserModel,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="reimbursements_verified",
     )
     verified_at = models.DateTimeField(null=True, blank=True)
@@ -604,7 +692,10 @@ class ReimbursementRequest(models.Model):
         return self._STATUS_ORDER.get(status, 0)
 
     def apply_derived_status_from_bills(
-        self, *, actor: Optional[models.Model] = None, reason: str = ""
+        self,
+        *,
+        actor: Optional[models.Model] = None,
+        reason: str = "",
     ) -> None:
         if self.is_final:
             return
@@ -647,7 +738,10 @@ class ReimbursementRequest(models.Model):
         return {
             "total": inc.count(),
             "pending": inc.filter(
-                bill_status__in=[L.BillStatus.SUBMITTED, L.BillStatus.EMPLOYEE_RESUBMITTED]
+                bill_status__in=[
+                    L.BillStatus.SUBMITTED,
+                    L.BillStatus.EMPLOYEE_RESUBMITTED,
+                ]
             ).count(),
             "approved": inc.filter(bill_status=L.BillStatus.FINANCE_APPROVED).count(),
             "rejected": inc.filter(bill_status=L.BillStatus.FINANCE_REJECTED).count(),
@@ -764,7 +858,10 @@ class ReimbursementRequest(models.Model):
         super().save(*args, **kwargs)
 
     def mark_verified(
-        self, *, actor: Optional[models.Model] = None, note: str = ""
+        self,
+        *,
+        actor: Optional[models.Model] = None,
+        note: str = "",
     ) -> None:
         if self.is_final:
             raise DjangoCoreValidationError(_("Cannot verify a finalized reimbursement."))
@@ -778,7 +875,11 @@ class ReimbursementRequest(models.Model):
             )
         self.save(
             update_fields=[
-                "status", "verified_by", "verified_at", "finance_note", "updated_at"
+                "status",
+                "verified_by",
+                "verified_at",
+                "finance_note",
+                "updated_at",
             ]
         )
         ReimbursementLog.log(
@@ -842,7 +943,10 @@ class ReimbursementRequest(models.Model):
         )
 
     def employee_resubmit(
-        self, *, actor: Optional[models.Model], note: str = ""
+        self,
+        *,
+        actor: Optional[models.Model],
+        note: str = "",
     ) -> None:
         if self.status == self.Status.PAID:
             raise DjangoCoreValidationError(
@@ -889,10 +993,18 @@ class ReimbursementRequest(models.Model):
 
             self.save(
                 update_fields=[
-                    "status", "submitted_at", "verified_by", "verified_at",
-                    "manager_decision", "manager_comment", "manager_decided_at",
-                    "management_decision", "management_comment", "management_decided_at",
-                    "finance_note", "updated_at",
+                    "status",
+                    "submitted_at",
+                    "verified_by",
+                    "verified_at",
+                    "manager_decision",
+                    "manager_comment",
+                    "manager_decided_at",
+                    "management_decision",
+                    "management_comment",
+                    "management_decided_at",
+                    "finance_note",
+                    "updated_at",
                 ]
             )
 
@@ -909,7 +1021,10 @@ class ReimbursementRequest(models.Model):
             )
 
     def reverse_to_finance_verification(
-        self, *, actor: Optional[models.Model], reason: str
+        self,
+        *,
+        actor: Optional[models.Model],
+        reason: str,
     ) -> None:
         if self.status == self.Status.PAID:
             raise DjangoCoreValidationError(_("Paid reimbursements cannot be reversed."))
@@ -958,10 +1073,17 @@ class ReimbursementRequest(models.Model):
 
             self.save(
                 update_fields=[
-                    "status", "verified_by", "verified_at",
-                    "manager_decision", "manager_comment", "manager_decided_at",
-                    "management_decision", "management_comment", "management_decided_at",
-                    "finance_note", "updated_at",
+                    "status",
+                    "verified_by",
+                    "verified_at",
+                    "manager_decision",
+                    "manager_comment",
+                    "manager_decided_at",
+                    "management_decision",
+                    "management_comment",
+                    "management_decided_at",
+                    "finance_note",
+                    "updated_at",
                 ]
             )
 
@@ -975,7 +1097,12 @@ class ReimbursementRequest(models.Model):
                 extra={"type": "reverse_to_finance_verification"},
             )
 
-    def resend_to_finance(self, *, actor: Optional[models.Model], reason: str = "") -> None:
+    def resend_to_finance(
+        self,
+        *,
+        actor: Optional[models.Model],
+        reason: str = "",
+    ) -> None:
         if self.status == self.Status.PAID:
             raise DjangoCoreValidationError(
                 _("Paid reimbursements cannot be resent to Finance.")
@@ -986,7 +1113,8 @@ class ReimbursementRequest(models.Model):
                 self,
                 ReimbursementLog.Action.STATUS_CHANGED,
                 actor=actor,
-                message="Admin re-sent to Finance Verification (already there). " + (reason or ""),
+                message="Admin re-sent to Finance Verification (already there). "
+                + (reason or ""),
                 from_status=from_status,
                 to_status=self.status,
                 extra={"type": "resend_to_finance"},
@@ -997,7 +1125,12 @@ class ReimbursementRequest(models.Model):
             reason=reason or "Admin resend to Finance Verification",
         )
 
-    def resend_to_manager(self, *, actor: Optional[models.Model], reason: str = "") -> None:
+    def resend_to_manager(
+        self,
+        *,
+        actor: Optional[models.Model],
+        reason: str = "",
+    ) -> None:
         if self.status == self.Status.PAID:
             raise DjangoCoreValidationError(
                 _("Paid reimbursements cannot be resent to Manager.")
@@ -1007,8 +1140,8 @@ class ReimbursementRequest(models.Model):
                 _("Cannot resend to Manager before Finance verifies.")
             )
         from_status = self.status
-        self.status = self.Status.PENDING_MANAGER
         note = f"Admin re-sent to Manager. {('Reason: ' + reason) if reason else ''}".strip()
+        self.status = self.Status.PENDING_MANAGER
         self.save(update_fields=["status", "updated_at"])
         ReimbursementLog.log(
             self,
@@ -1021,10 +1154,16 @@ class ReimbursementRequest(models.Model):
         )
 
     def admin_force_move(
-        self, target_status: str, *, actor: Optional[models.Model], reason: str = ""
+        self,
+        target_status: str,
+        *,
+        actor: Optional[models.Model],
+        reason: str = "",
     ) -> None:
         if self.status == self.Status.PAID:
-            raise DjangoCoreValidationError(_("Paid reimbursements cannot be force-moved."))
+            raise DjangoCoreValidationError(
+                _("Paid reimbursements cannot be force-moved.")
+            )
         valid = {c[0] for c in self.Status.choices}
         if target_status not in valid:
             raise DjangoCoreValidationError(_("Invalid target status."))
@@ -1077,10 +1216,14 @@ class ReimbursementLine(models.Model):
         PAID = "paid", _("Paid")
 
     request = models.ForeignKey(
-        ReimbursementRequest, on_delete=models.CASCADE, related_name="lines"
+        ReimbursementRequest,
+        on_delete=models.CASCADE,
+        related_name="lines",
     )
     expense_item = models.ForeignKey(
-        ExpenseItem, on_delete=models.PROTECT, related_name="request_lines"
+        ExpenseItem,
+        on_delete=models.PROTECT,
+        related_name="request_lines",
     )
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     description = models.TextField(blank=True, default="")
@@ -1090,8 +1233,25 @@ class ReimbursementLine(models.Model):
         blank=True,
         null=True,
     )
+
+    bank_details = models.TextField(
+        blank=True,
+        default="",
+        help_text="Bank details copied from the uploaded expense.",
+    )
+    bank_attachment = models.FileField(
+        upload_to=bank_attachment_upload_path,
+        validators=[validate_bank_attachment_file],
+        blank=True,
+        null=True,
+        help_text="Bank details attachment copied from the uploaded expense.",
+    )
+
     status = models.CharField(
-        max_length=16, choices=Status.choices, default=Status.INCLUDED, db_index=True
+        max_length=16,
+        choices=Status.choices,
+        default=Status.INCLUDED,
+        db_index=True,
     )
     bill_status = models.CharField(
         max_length=32,
@@ -1101,12 +1261,18 @@ class ReimbursementLine(models.Model):
     )
     finance_rejection_reason = models.TextField(blank=True, default="")
     rejected_by = models.ForeignKey(
-        UserModel, on_delete=models.SET_NULL, null=True, blank=True,
+        UserModel,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="finance_rejected_bills",
     )
     rejected_at = models.DateTimeField(null=True, blank=True)
     last_modified_by = models.ForeignKey(
-        UserModel, on_delete=models.SET_NULL, null=True, blank=True,
+        UserModel,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="modified_reimbursement_lines",
     )
     payment_reference = models.CharField(max_length=255, blank=True, default="")
@@ -1159,7 +1325,9 @@ class ReimbursementLine(models.Model):
         if self.status == self.Status.INCLUDED:
             desc = (self.description or "").strip()
             exp_desc = (
-                (self.expense_item.description or "").strip() if self.expense_item_id else ""
+                (self.expense_item.description or "").strip()
+                if self.expense_item_id
+                else ""
             )
             if not (desc or exp_desc):
                 raise DjangoCoreValidationError(
@@ -1168,7 +1336,9 @@ class ReimbursementLine(models.Model):
 
     def save(self, *args, **kwargs):
         updating_specific_fields = kwargs.get("update_fields") is not None
-        update_fields_set = set(kwargs["update_fields"]) if updating_specific_fields else None
+        update_fields_set = (
+            set(kwargs["update_fields"]) if updating_specific_fields else None
+        )
         creating = self.pk is None
 
         if self.expense_item_id and not updating_specific_fields:
@@ -1178,6 +1348,14 @@ class ReimbursementLine(models.Model):
                 self.description = self.expense_item.description
             if not self.receipt_file:
                 self.receipt_file = self.expense_item.receipt_file
+            if not (self.bank_details or "").strip():
+                self.bank_details = getattr(self.expense_item, "bank_details", "") or ""
+            if not self.bank_attachment and getattr(
+                self.expense_item,
+                "bank_attachment",
+                None,
+            ):
+                self.bank_attachment = self.expense_item.bank_attachment
 
         if not updating_specific_fields:
             self.full_clean()
@@ -1191,7 +1369,9 @@ class ReimbursementLine(models.Model):
             if not creating:
                 try:
                     prev = (
-                        type(self).objects.only("bill_status", "status").get(pk=self.pk)
+                        type(self)
+                        .objects.only("bill_status", "status")
+                        .get(pk=self.pk)
                     )
                     old_bill_status = prev.bill_status
                     old_line_status = prev.status
@@ -1217,7 +1397,8 @@ class ReimbursementLine(models.Model):
             logger.exception(
                 "Failed to auto-derive parent status on line save "
                 "(line_id=%s, request_id=%s).",
-                self.pk, self.request_id,
+                self.pk,
+                self.request_id,
             )
 
     def approve_by_finance(self, *, actor: Optional[models.Model]) -> None:
@@ -1231,14 +1412,21 @@ class ReimbursementLine(models.Model):
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
         self.save(
             update_fields=[
-                "bill_status", "finance_rejection_reason", "rejected_by",
-                "rejected_at", "last_modified_by", "updated_at",
+                "bill_status",
+                "finance_rejection_reason",
+                "rejected_by",
+                "rejected_at",
+                "last_modified_by",
+                "updated_at",
             ]
         )
         ReimbursementLog.log(
-            self.request, ReimbursementLog.Action.STATUS_CHANGED, actor=actor,
+            self.request,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
             message=f"Finance approved bill line #{self.pk}.",
-            from_status=prev, to_status=self.bill_status,
+            from_status=prev,
+            to_status=self.bill_status,
             extra={"line_id": self.pk, "type": "bill_finance_approved"},
         )
 
@@ -1253,8 +1441,12 @@ class ReimbursementLine(models.Model):
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
         self.save(
             update_fields=[
-                "bill_status", "finance_rejection_reason", "rejected_by",
-                "rejected_at", "last_modified_by", "updated_at",
+                "bill_status",
+                "finance_rejection_reason",
+                "rejected_by",
+                "rejected_at",
+                "last_modified_by",
+                "updated_at",
             ]
         )
 
@@ -1265,24 +1457,34 @@ class ReimbursementLine(models.Model):
         try:
             try:
                 from .services import notifications as _notif
+
                 if hasattr(_notif, "send_bill_rejected_by_finance"):
                     _notif.send_bill_rejected_by_finance(self.request, self)
                 else:
                     raise ImportError
             except Exception:
                 from .emails import send_bill_rejected_by_finance as _legacy
+
                 _legacy(self.request, self)
         except Exception:
             logger.exception(
                 "Failed to send bill-rejected email for req=%s line=%s",
-                self.request_id, self.pk,
+                self.request_id,
+                self.pk,
             )
 
         ReimbursementLog.log(
-            self.request, ReimbursementLog.Action.STATUS_CHANGED, actor=actor,
+            self.request,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
             message=f"Finance rejected bill line #{self.pk}.",
-            from_status=prev, to_status=self.bill_status,
-            extra={"line_id": self.pk, "reason": self.finance_rejection_reason, "type": "bill_finance_rejected"},
+            from_status=prev,
+            to_status=self.bill_status,
+            extra={
+                "line_id": self.pk,
+                "reason": self.finance_rejection_reason,
+                "type": "bill_finance_rejected",
+            },
         )
 
     def employee_resubmit_bill(self, *, actor: Optional[models.Model]) -> None:
@@ -1299,15 +1501,31 @@ class ReimbursementLine(models.Model):
         if exp:
             self.amount = exp.amount
             self.description = exp.description
+            self.bank_details = getattr(exp, "bank_details", "") or ""
+
             if getattr(exp, "receipt_file", None):
                 self.receipt_file = exp.receipt_file
+
+            if getattr(exp, "bank_attachment", None):
+                self.bank_attachment = exp.bank_attachment
 
         self.bill_status = self.BillStatus.EMPLOYEE_RESUBMITTED
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
 
-        update_fields = ["bill_status", "last_modified_by", "updated_at", "amount", "description"]
+        update_fields = [
+            "bill_status",
+            "last_modified_by",
+            "updated_at",
+            "amount",
+            "description",
+            "bank_details",
+        ]
+
         if exp and getattr(exp, "receipt_file", None):
             update_fields.append("receipt_file")
+
+        if exp and getattr(exp, "bank_attachment", None):
+            update_fields.append("bank_attachment")
 
         self.save(update_fields=update_fields)
 
@@ -1321,23 +1539,29 @@ class ReimbursementLine(models.Model):
         try:
             try:
                 from .services import notifications as _notif
+
                 if hasattr(_notif, "send_bill_resubmitted"):
                     _notif.send_bill_resubmitted(self.request, self, actor=actor)
                 else:
                     raise ImportError
             except Exception:
                 from .emails import send_bill_resubmitted as _legacy
+
                 _legacy(self.request, self, actor=actor)
         except Exception:
             logger.exception(
                 "Failed to send bill-resubmitted email for req=%s line=%s",
-                self.request_id, self.pk,
+                self.request_id,
+                self.pk,
             )
 
         ReimbursementLog.log(
-            self.request, ReimbursementLog.Action.STATUS_CHANGED, actor=actor,
+            self.request,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
             message=f"Employee resubmitted bill line #{self.pk} after correction.",
-            from_status=prev, to_status=self.bill_status,
+            from_status=prev,
+            to_status=self.bill_status,
             extra={"line_id": self.pk, "type": "bill_employee_resubmitted"},
         )
 
@@ -1351,13 +1575,21 @@ class ReimbursementLine(models.Model):
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
         self.save(update_fields=["bill_status", "last_modified_by", "updated_at"])
         ReimbursementLog.log(
-            self.request, ReimbursementLog.Action.MANAGER_APPROVED, actor=actor,
+            self.request,
+            ReimbursementLog.Action.MANAGER_APPROVED,
+            actor=actor,
             message=f"Manager approved bill line #{self.pk}.",
-            from_status=prev, to_status=self.bill_status,
+            from_status=prev,
+            to_status=self.bill_status,
             extra={"line_id": self.pk, "type": "bill_manager_approved"},
         )
 
-    def manager_reject(self, *, actor: Optional[models.Model], reason: str = "") -> None:
+    def manager_reject(
+        self,
+        *,
+        actor: Optional[models.Model],
+        reason: str = "",
+    ) -> None:
         if self.bill_status != self.BillStatus.MANAGER_PENDING:
             raise DjangoCoreValidationError(
                 _("Only Manager-Pending bills can be rejected by Manager.")
@@ -1376,31 +1608,45 @@ class ReimbursementLine(models.Model):
 
         try:
             from .emails import send_bill_rejected_by_manager
+
             send_bill_rejected_by_manager(self.request, self, reason=reason)
         except Exception:
             logger.exception(
                 "Failed to send bill-rejected-by-manager email: req=%s line=%s",
-                self.request_id, self.pk,
+                self.request_id,
+                self.pk,
             )
 
         ReimbursementLog.log(
-            self.request, ReimbursementLog.Action.STATUS_CHANGED, actor=actor,
+            self.request,
+            ReimbursementLog.Action.STATUS_CHANGED,
+            actor=actor,
             message=(
                 f"Manager rejected bill line #{self.pk}. "
                 + (f"Reason: {reason}" if reason else "")
             ).strip(),
-            from_status=prev, to_status=self.bill_status,
+            from_status=prev,
+            to_status=self.bill_status,
             extra={"line_id": self.pk, "type": "bill_manager_rejected"},
         )
 
-    def mark_paid(self, reference: str, *, actor: Optional[models.Model] = None) -> None:
+    def mark_paid(
+        self,
+        reference: str,
+        *,
+        actor: Optional[models.Model] = None,
+    ) -> None:
         if self.bill_status not in (
             self.BillStatus.FINANCE_APPROVED,
             self.BillStatus.MANAGER_APPROVED,
         ):
-            raise DjangoCoreValidationError(_("Only Finance-Approved bills can be marked Paid."))
+            raise DjangoCoreValidationError(
+                _("Only Finance-Approved bills can be marked Paid.")
+            )
         if not (reference or "").strip():
-            raise DjangoCoreValidationError(_("Payment reference is required to mark Paid."))
+            raise DjangoCoreValidationError(
+                _("Payment reference is required to mark Paid.")
+            )
 
         prev = self.bill_status
         self.bill_status = self.BillStatus.PAID
@@ -1408,22 +1654,33 @@ class ReimbursementLine(models.Model):
         self.paid_at = timezone.now()
         self.last_modified_by = actor if isinstance(actor, models.Model) else None
         self.save(
-            update_fields=["bill_status", "payment_reference", "paid_at", "last_modified_by", "updated_at"]
+            update_fields=[
+                "bill_status",
+                "payment_reference",
+                "paid_at",
+                "last_modified_by",
+                "updated_at",
+            ]
         )
 
         try:
             from .emails import send_bill_paid
+
             send_bill_paid(self.request, self)
         except Exception:
             logger.exception(
                 "Failed to send bill-paid email: req=%s line=%s",
-                self.request_id, self.pk,
+                self.request_id,
+                self.pk,
             )
 
         ReimbursementLog.log(
-            self.request, ReimbursementLog.Action.PAID, actor=actor,
+            self.request,
+            ReimbursementLog.Action.PAID,
+            actor=actor,
             message=f"Bill line #{self.pk} marked Paid with reference {self.payment_reference!r}",
-            from_status=prev, to_status=self.bill_status,
+            from_status=prev,
+            to_status=self.bill_status,
             extra={"line_id": self.pk, "type": "bill_paid"},
         )
 
@@ -1447,10 +1704,15 @@ class ReimbursementLog(models.Model):
         REVERSED = "reversed", _("Reversed to Finance Verification")
 
     request = models.ForeignKey(
-        ReimbursementRequest, on_delete=models.CASCADE, related_name="logs"
+        ReimbursementRequest,
+        on_delete=models.CASCADE,
+        related_name="logs",
     )
     actor = models.ForeignKey(
-        UserModel, on_delete=models.SET_NULL, null=True, blank=True,
+        UserModel,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="reimbursement_logs",
     )
     action = models.CharField(max_length=32, choices=Action.choices, db_index=True)
@@ -1481,13 +1743,20 @@ class ReimbursementLog(models.Model):
     ) -> "ReimbursementLog":
         extra_data = extra or {}
         obj = cls.objects.create(
-            request=request, actor=actor, action=action,
-            from_status=from_status or "", to_status=to_status or "",
-            message=message or "", extra=extra_data,
+            request=request,
+            actor=actor,
+            action=action,
+            from_status=from_status or "",
+            to_status=to_status or "",
+            message=message or "",
+            extra=extra_data,
         )
         logger.info(
             "ReimbursementLog: req=%s action=%s from=%s to=%s actor=%s",
-            getattr(request, "id", None), action, from_status, to_status,
+            getattr(request, "id", None),
+            action,
+            from_status,
+            to_status,
             getattr(actor, "id", None) if actor else None,
         )
         return obj

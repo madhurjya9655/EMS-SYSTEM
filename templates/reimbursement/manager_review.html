@@ -1,6 +1,6 @@
 {# FILE: templates/reimbursement/manager_review.html #}
 {# PURPOSE: Manager should review ONLY Finance-Approved bills; rejected/pending never shown #}
-{# UPDATED: 2026-02-24 #}
+{# UPDATED: Bank details support added for reimbursement upload flow #}
 {% extends "base.html" %}
 {% load i18n %}
 
@@ -23,7 +23,6 @@
 <div class="row">
   <div class="col-md-8">
 
-    <!-- Compact request summary -->
     <div class="card mb-3">
       <div class="card-body">
         <div class="row">
@@ -40,12 +39,12 @@
         <div class="alert alert-info mt-3 mb-0">
           <strong>Note:</strong>
           Manager approves only <strong>Finance-Approved</strong> bills.
-          Any Finance-Rejected bills are handled by the employee separately (edit + resubmit) and are not shown here.
+          Any Finance-Rejected bills are handled by the employee separately
+          (edit + resubmit) and are not shown here.
         </div>
       </div>
     </div>
 
-    <!-- Bills visible to manager: Finance-Approved only -->
     <div class="card">
       <div class="card-header">Bills for Your Approval (Finance-Approved Only)</div>
       <div class="card-body p-0">
@@ -57,21 +56,58 @@
                 <th style="width:140px;">Category</th>
                 <th style="width:120px;">Date</th>
                 <th>Description</th>
+                <th style="width:220px;">Bank Details</th>
+                <th style="width:140px;">Bank Document</th>
                 <th class="text-end" style="width:140px;">Amount</th>
                 <th style="width:80px;">Bill</th>
               </tr>
             </thead>
+
             <tbody>
               {% for line in approved_lines %}
               <tr>
                 <td>{{ forloop.counter }}</td>
+
                 <td>{{ line.expense_item.get_category_display|default:line.expense_item.category }}</td>
+
                 <td>{{ line.expense_item.date|date:"d M Y" }}</td>
-                <td style="white-space:pre-line;">{{ line.description|default:line.expense_item.description|default:"-" }}</td>
+
+                <td style="white-space:pre-line;">
+                  {{ line.description|default:line.expense_item.description|default:"-" }}
+                </td>
+
+                <td class="small">
+                  {% if line.bank_details %}
+                    <div style="white-space:pre-line;">{{ line.bank_details }}</div>
+                  {% elif line.expense_item.bank_details %}
+                    <div style="white-space:pre-line;">{{ line.expense_item.bank_details }}</div>
+                  {% else %}
+                    <span class="text-muted">-</span>
+                  {% endif %}
+                </td>
+
+                <td>
+                  {% if line.bank_attachment or line.expense_item.bank_attachment %}
+                    <a href="{% url 'reimbursement:bank_document_line' line.id %}"
+                       target="_blank"
+                       rel="noopener"
+                       class="btn btn-sm btn-outline-secondary">
+                      View Bank Document
+                    </a>
+                  {% else %}
+                    <span class="text-muted small">No file</span>
+                  {% endif %}
+                </td>
+
                 <td class="text-end">₹{{ line.amount|floatformat:2 }}</td>
+
                 <td>
                   {% if line.receipt_file or line.expense_item.receipt_file %}
-                    <a href="{% url 'reimbursement:receipt_line' line.id %}" target="_blank" rel="noopener">View</a>
+                    <a href="{% url 'reimbursement:receipt_line' line.id %}"
+                       target="_blank"
+                       rel="noopener">
+                      View
+                    </a>
                   {% else %}
                     <span class="text-muted">No file</span>
                   {% endif %}
@@ -79,7 +115,7 @@
               </tr>
               {% empty %}
               <tr>
-                <td colspan="6" class="text-center text-muted py-3">
+                <td colspan="8" class="text-center text-muted py-3">
                   No Finance-Approved bills are available for Manager approval yet.
                   <div class="small mt-1">
                     Finance must approve bills first. Rejected bills go back to employee for correction + resubmission.
@@ -95,14 +131,15 @@
     </div>
   </div>
 
-  <!-- Decision -->
   <div class="col-md-4">
     <div class="card mb-3">
       <div class="card-header">Manager Decision</div>
       <div class="card-body">
         <form method="post" novalidate>
           {% csrf_token %}
-          {% if request.GET.return %}<input type="hidden" name="return" value="{{ request.GET.return }}">{% endif %}
+          {% if request.GET.return %}
+            <input type="hidden" name="return" value="{{ request.GET.return }}">
+          {% endif %}
 
           {{ form.non_field_errors }}
 
@@ -128,7 +165,8 @@
         </form>
 
         <div class="small text-muted mt-3">
-          If you approve, the request moves forward as per settings (Management step optional).<br>
+          If you approve, the request moves forward as per settings
+          (Management step optional).<br>
           If you reject, the request is rejected at request level.
         </div>
       </div>

@@ -29,25 +29,33 @@
           <div class="mb-3">
             <label class="form-label">Date</label>
             {{ form.date|add_class:"form-control" }}
-            {% if form.date.errors %}<div class="text-danger small">{{ form.date.errors }}</div>{% endif %}
+            {% if form.date.errors %}
+              <div class="text-danger small">{{ form.date.errors }}</div>
+            {% endif %}
           </div>
 
           <div class="mb-3">
             <label class="form-label">Type of Expense</label>
             {{ form.category|add_class:"form-select" }}
-            {% if form.category.errors %}<div class="text-danger small">{{ form.category.errors }}</div>{% endif %}
+            {% if form.category.errors %}
+              <div class="text-danger small">{{ form.category.errors }}</div>
+            {% endif %}
           </div>
 
           <div class="mb-3">
             <label class="form-label">Amount</label>
             {{ form.amount|add_class:"form-control" }}
-            {% if form.amount.errors %}<div class="text-danger small">{{ form.amount.errors }}</div>{% endif %}
+            {% if form.amount.errors %}
+              <div class="text-danger small">{{ form.amount.errors }}</div>
+            {% endif %}
           </div>
 
           <div class="mb-3">
             <label class="form-label">Description</label>
             {{ form.description|add_class:"form-control" }}
-            {% if form.description.errors %}<div class="text-danger small">{{ form.description.errors }}</div>{% endif %}
+            {% if form.description.errors %}
+              <div class="text-danger small">{{ form.description.errors }}</div>
+            {% endif %}
           </div>
 
           <div class="mb-3">
@@ -56,23 +64,62 @@
               {% for subwidget in form.gst_type %}
                 <div class="form-check">
                   {{ subwidget.tag }}
-                  <label class="form-check-label" for="{{ subwidget.id_for_label }}">{{ subwidget.choice_label }}</label>
+                  <label class="form-check-label" for="{{ subwidget.id_for_label }}">
+                    {{ subwidget.choice_label }}
+                  </label>
                 </div>
               {% endfor %}
             </div>
-            {% if form.gst_type.errors %}<div class="text-danger small">{{ form.gst_type.errors }}</div>{% endif %}
+            {% if form.gst_type.errors %}
+              <div class="text-danger small">{{ form.gst_type.errors }}</div>
+            {% endif %}
           </div>
 
           <div class="mb-3">
             <label class="form-label">Receipt file</label>
             {{ form.receipt_file|attr:"accept:.pdf,.jpg,.jpeg,.png,.xls,.xlsx"|add_class:"form-control" }}
             <div class="form-text">Allowed: PDF / JPG / JPEG / PNG / XLS / XLSX</div>
-            {% if form.receipt_file.errors %}<div class="text-danger small">{{ form.receipt_file.errors }}</div>{% endif %}
+            {% if form.receipt_file.errors %}
+              <div class="text-danger small">{{ form.receipt_file.errors }}</div>
+            {% endif %}
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Bank Details</label>
+            {{ form.bank_details|add_class:"form-control" }}
+            <div class="form-text">
+              Enter Account Holder Name, Bank Name, Account Number, IFSC Code, UPI ID, or other bank details.
+            </div>
+            {% if form.bank_details.errors %}
+              <div class="text-danger small">{{ form.bank_details.errors }}</div>
+            {% endif %}
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Bank Details Attachment</label>
+            {{ form.bank_attachment|attr:"accept:.pdf,.jpg,.jpeg,.png"|add_class:"form-control" }}
+            <div class="form-text">Allowed: PDF / JPG / JPEG / PNG</div>
+
+            {% if object.bank_attachment %}
+              <div class="mt-2">
+                <a href="{% url 'reimbursement:bank_document_expense' object.id %}"
+                   target="_blank"
+                   rel="noopener"
+                   class="btn btn-sm btn-outline-secondary">
+                  View Current Bank Document
+                </a>
+              </div>
+            {% endif %}
+
+            {% if form.bank_attachment.errors %}
+              <div class="text-danger small">{{ form.bank_attachment.errors }}</div>
+            {% endif %}
           </div>
 
           <div class="d-flex justify-content-between align-items-center gap-2">
             <div class="d-flex gap-2">
               <button type="submit" class="btn btn-primary">Save</button>
+
               {% if back_url %}
                 <a href="{{ back_url }}" class="btn btn-outline-secondary">Cancel</a>
               {% else %}
