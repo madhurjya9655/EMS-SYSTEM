@@ -1,8 +1,9 @@
 {# FILE: templates/kam/visit_actual.html #}
 {# PURPOSE: Fix Visits & Calls — correct plan_id link format (query param not path), #}
 {#          show CallLog + VisitPlan, retain filter values, role-aware UI #}
-{# UPDATED: 2026-03-03 #}
-{# FIX ISSUE 2: All "Open" links use ?plan_id=N&from_date=...&to_date=... (GET params). #}
+{#          + KAM-wise filter dropdown (manager/admin only) #}
+{# UPDATED: 2026-06-19 #}
+{# FIX ISSUE 2: All "Open" links use ?plan_id=N&from_date=...&to_date=...&kam=... (GET params). #}
 {#              There is NO path-based /kam/visits/<int:pk>/ URL — using path params #}
 {#              caused 404. Query params are the only correct form. #}
 {% extends "base.html" %}
@@ -51,6 +52,10 @@
     margin-bottom: .5rem;
     opacity: .35;
   }
+
+  .kam-filter-bar select#kamFilterSelect {
+    min-width: 180px;
+  }
 </style>
 
 {# ── Page header ──────────────────────────────────────────────────────── #}
@@ -76,17 +81,18 @@
 {# ── Filter bar ─────────────────────────────────────────────────────────── #}
 {# FIX ISSUE 2: method=GET, param names from_date / to_date match view exactly #}
 {# FIX ISSUE 3: filter_from / filter_to from context retain selected dates     #}
+{# NEW: KAM filter dropdown — manager/admin only, value retained via selected_kam_id #}
 <form method="get" class="d-flex align-items-end gap-2 flex-wrap mb-4 kam-filter-bar">
 
   <div>
     <label class="form-label mb-1 small fw-semibold">Quick range</label>
-    <select class="form-select form-select-sm"
+    <select class="form-select form-select-sm" id="quickRangeSelect"
             onchange="if(this.value){ window.location=this.value; }">
       <option value="">— Select —</option>
-      <option value="{% url 'kam:visits' %}?days=7"  {% if filter_days == '7'  %}selected{% endif %}>Last 7 days</option>
-      <option value="{% url 'kam:visits' %}?days=14" {% if filter_days == '14' %}selected{% endif %}>Last 14 days</option>
-      <option value="{% url 'kam:visits' %}?days=30" {% if filter_days == '30' %}selected{% endif %}>Last 30 days</option>
-      <option value="{% url 'kam:visits' %}?days=60" {% if filter_days == '60' %}selected{% endif %}>Last 60 days</option>
+      <option value="{% url 'kam:visits' %}?days=7{% if selected_kam_raw %}&kam={{ selected_kam_raw }}{% endif %}"  {% if filter_days == '7'  %}selected{% endif %}>Last 7 days</option>
+      <option value="{% url 'kam:visits' %}?days=14{% if selected_kam_raw %}&kam={{ selected_kam_raw }}{% endif %}" {% if filter_days == '14' %}selected{% endif %}>Last 14 days</option>
+      <option value="{% url 'kam:visits' %}?days=30{% if selected_kam_raw %}&kam={{ selected_kam_raw }}{% endif %}" {% if filter_days == '30' %}selected{% endif %}>Last 30 days</option>
+      <option value="{% url 'kam:visits' %}?days=60{% if selected_kam_raw %}&kam={{ selected_kam_raw }}{% endif %}" {% if filter_days == '60' %}selected{% endif %}>Last 60 days</option>
     </select>
   </div>
 
@@ -107,6 +113,20 @@
            name="to_date"
            value="{{ filter_to }}">
   </div>
+
+  {% if can_choose_kam %}
+    <div>
+      <label class="form-label mb-1 small fw-semibold">KAM</label>
+      <select class="form-select form-select-sm" id="kamFilterSelect" name="kam">
+        <option value="" {% if not selected_kam_id %}selected{% endif %}>All KAMs</option>
+        {% for k in kam_dropdown_options %}
+          <option value="{{ k.id }}" {% if selected_kam_id == k.id %}selected{% endif %}>
+            {{ k.get_full_name|default:k.username }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+  {% endif %}
 
   <div class="d-flex align-items-center gap-2 pt-1">
     <button class="btn btn-sm btn-primary" type="submit">Apply</button>
@@ -131,6 +151,9 @@
               {% else %}{{ selected_plan.counterparty_name|default:"—" }}{% endif %}
             </div>
             <div><strong>Category:</strong> {{ selected_plan.get_visit_category_display }}</div>
+            {% if is_manager %}
+              <div><strong>KAM:</strong> {{ selected_plan.kam.get_full_name|default:selected_plan.kam.username }}</div>
+            {% endif %}
             <div class="small text-muted mt-1">Status: {{ selected_plan.approval_status }}</div>
           </div>
 
@@ -138,6 +161,8 @@
             {% csrf_token %}
             {# FIX ISSUE 2: plan_id sent as hidden field in POST body, not in URL path #}
             <input type="hidden" name="plan_id" value="{{ selected_plan.id }}">
+            {# NEW: preserve KAM filter across save-redirect #}
+            {% if selected_kam_raw %}<input type="hidden" name="kam" value="{{ selected_kam_raw }}">{% endif %}
 
             <div class="row g-2 mb-3">
               <div class="col-6">
@@ -164,7 +189,7 @@
               <button class="btn btn-sm btn-primary" type="submit">Save</button>
               {# FIX ISSUE 2: Clear link uses query params, not path params #}
               <a class="btn btn-sm btn-outline-secondary"
-                 href="{% url 'kam:visits' %}?from_date={{ filter_from }}&to_date={{ filter_to }}">Clear</a>
+                 href="{% url 'kam:visits' %}?from_date={{ filter_from }}&to_date={{ filter_to }}{% if selected_kam_raw %}&kam={{ selected_kam_raw }}{% endif %}">Clear</a>
             </div>
             <div class="small text-muted mt-2">
               Confirmed location and remarks are required. If not successful, provide a reason.
@@ -188,7 +213,12 @@
     <div class="kam-card mb-3">
       <div class="card-body">
         <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
-          <div class="kam-section-title mb-0">Recent Plans</div>
+          <div class="kam-section-title mb-0">
+            Recent Plans
+            {% if selected_kam_user %}
+              <span class="badge bg-light text-dark border ms-2">{{ selected_kam_user.get_full_name|default:selected_kam_user.username }}</span>
+            {% endif %}
+          </div>
           <div class="kam-soft-note">{{ filter_from }} → {{ filter_to }}</div>
         </div>
 
@@ -227,7 +257,7 @@
                     {# NEVER use path param /kam/visits/<pk>/ — that URL does NOT exist #}
                     <a class="btn btn-xs btn-outline-primary"
                        style="font-size:.75rem;padding:.15rem .45rem;"
-                       href="{% url 'kam:visits' %}?plan_id={{ p.id }}&from_date={{ filter_from }}&to_date={{ filter_to }}">
+                       href="{% url 'kam:visits' %}?plan_id={{ p.id }}&from_date={{ filter_from }}&to_date={{ filter_to }}{% if selected_kam_raw %}&kam={{ selected_kam_raw }}{% endif %}">
                       Open
                     </a>
                   </td>
@@ -239,8 +269,8 @@
         {% else %}
           <div class="kam-empty-state py-3">
             <div class="kam-empty-icon">🗓️</div>
-            <div>No visit plans found for <strong>{{ filter_from }}</strong> → <strong>{{ filter_to }}</strong>.</div>
-            <div class="small mt-1">Try adjusting the date range above and click <strong>Apply</strong>.</div>
+            <div>No visit plans found for <strong>{{ filter_from }}</strong> → <strong>{{ filter_to }}</strong>{% if selected_kam_user %} for <strong>{{ selected_kam_user.get_full_name|default:selected_kam_user.username }}</strong>{% endif %}.</div>
+            <div class="small mt-1">Try adjusting the date range or KAM filter above and click <strong>Apply</strong>.</div>
           </div>
         {% endif %}
       </div>
@@ -250,7 +280,12 @@
     <div class="kam-card">
       <div class="card-body">
         <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
-          <div class="kam-section-title mb-0">Recent Calls</div>
+          <div class="kam-section-title mb-0">
+            Recent Calls
+            {% if selected_kam_user %}
+              <span class="badge bg-light text-dark border ms-2">{{ selected_kam_user.get_full_name|default:selected_kam_user.username }}</span>
+            {% endif %}
+          </div>
           <div class="kam-soft-note">{{ filter_from }} → {{ filter_to }}</div>
         </div>
 
@@ -286,9 +321,9 @@
         {% else %}
           <div class="kam-empty-state py-3">
             <div class="kam-empty-icon">📞</div>
-            <div>No calls logged for <strong>{{ filter_from }}</strong> → <strong>{{ filter_to }}</strong>.</div>
+            <div>No calls logged for <strong>{{ filter_from }}</strong> → <strong>{{ filter_to }}</strong>{% if selected_kam_user %} for <strong>{{ selected_kam_user.get_full_name|default:selected_kam_user.username }}</strong>{% endif %}.</div>
             <div class="small mt-1">
-              <a href="{% url 'kam:call_new' %}">Log a call</a> or adjust the date range.
+              <a href="{% url 'kam:call_new' %}">Log a call</a> or adjust the date range / KAM filter.
             </div>
           </div>
         {% endif %}

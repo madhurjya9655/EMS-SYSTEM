@@ -1456,6 +1456,50 @@ def _kam_options_for_user(user: User) -> List[str]:
         User.objects.filter(is_active=True, id__in=allowed_ids).order_by("username").values_list("username", flat=True)
     )
 
+def _kam_dropdown_options_for_user(user: User) -> List[User]:
+    """
+    KAM objects for the Visits & Calls filter dropdown.
+    Admin -> all active users. Manager -> own team + self. KAM -> empty
+    (dropdown hidden in template; filter is forced to self).
+    """
+    if _is_admin(user):
+        return list(
+            User.objects.filter(is_active=True)
+            .order_by("first_name", "last_name", "username")
+        )
+    if _is_manager(user):
+        ids = set(_kams_managed_by_manager(user))
+        ids.add(user.id)
+        return list(
+            User.objects.filter(is_active=True, id__in=ids)
+            .order_by("first_name", "last_name", "username")
+        )
+    return []
+
+
+def _resolve_visits_kam_filter(request: HttpRequest, user: User) -> Tuple[Optional[int], Optional[User]]:
+    """
+    Resolves which kam_id Visits & Calls should be filtered by, respecting
+    permissions. Returns (kam_id_or_None, kam_user_or_None).
+    None kam_id means "no restriction" (only possible for admin/manager
+    when nothing / ALL is selected).
+    """
+    if not _is_manager(user):
+        return user.id, user
+
+    raw = (request.GET.get("kam") or "").strip()
+    if not raw or raw.upper() in {"ALL", "*"}:
+        return None, None
+    if not raw.isdigit():
+        return None, None
+
+    kam_id = int(raw)
+    allowed_ids = {u.id for u in _kam_dropdown_options_for_user(user)}
+    if kam_id not in allowed_ids:
+        return None, None
+
+    kam_user = User.objects.filter(id=kam_id, is_active=True).first()
+    return (kam_id, kam_user) if kam_user else (None, None)
 
 def _split_full_name(full_name: str) -> Tuple[str, str]:
     full_name = (full_name or "").strip()
@@ -4057,7 +4101,16 @@ def visits(request: HttpRequest) -> HttpResponse:
                     update_fields.append("expected_collection")
                 plan.save(update_fields=update_fields)
                 messages.success(request, "Visit actual saved.")
-                return redirect(f"{reverse('kam:visits')}?plan_id={plan.id}")
+                redirect_url = f"{reverse('kam:visits')}?plan_id={plan.id}"
+                kam_qs = (request.POST.get("kam") or request.GET.get("kam") or "").strip()
+                if kam_qs:
+                    redirect_url += f"&kam={kam_qs}"
+                return redirect(redirect_url)
+
+    # ── KAM filter (NEW) ────────────────────────────────────────────────
+    kam_filter_id, kam_filter_user = _resolve_visits_kam_filter(request, user)
+    kam_dropdown_options = _kam_dropdown_options_for_user(user)
+    selected_kam_raw = (request.GET.get("kam") or "").strip()
 
     selected_plan = None
     form = None
@@ -4099,17 +4152,30 @@ def visits(request: HttpRequest) -> HttpResponse:
         visit_qs = VisitPlan.objects.select_related("customer", "kam").filter(kam=user)
         call_qs = CallLog.objects.select_related("customer", "kam").filter(kam=user)
 
+    # ── Apply KAM filter (NEW) — applied before slicing so all counts respect it ──
+    if kam_filter_id is not None:
+        visit_qs = visit_qs.filter(kam_id=kam_filter_id)
+        call_qs = call_qs.filter(kam_id=kam_filter_id)
+
+    recent_plans_qs = visit_qs.filter(visit_date__gte=start, visit_date__lt=end).order_by("-visit_date")
+    recent_calls_qs = call_qs.filter(call_datetime__date__gte=start, call_datetime__date__lt=end).order_by("-call_datetime")
+
     ctx = {
         "page_title": "Visits & Calls",
         "form": form, "selected_plan": selected_plan,
-        "recent_plans": visit_qs.filter(visit_date__gte=start, visit_date__lt=end).order_by("-visit_date"),
-        "recent_calls": call_qs.filter(call_datetime__date__gte=start, call_datetime__date__lt=end).order_by("-call_datetime"),
+        "recent_plans": recent_plans_qs,
+        "recent_calls": recent_calls_qs,
         "filter_from": from_date.isoformat() if from_date else start.isoformat(),
         "filter_to": to_date.isoformat() if to_date else (end - timezone.timedelta(days=1)).isoformat(),
         "filter_days": days_raw, "is_manager": _is_manager(user),
+        # ── KAM filter context (NEW) ──
+        "can_choose_kam": _is_manager(user),
+        "kam_dropdown_options": kam_dropdown_options,
+        "selected_kam_id": kam_filter_id,
+        "selected_kam_raw": selected_kam_raw,
+        "selected_kam_user": kam_filter_user,
     }
     return render(request, "kam/visit_actual.html", ctx)
-
 
 # =====================================================================
 # MANAGER VIEW
