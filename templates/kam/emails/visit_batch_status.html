@@ -45,6 +45,7 @@
       <tr><th>Batch ID</th><td><strong>#{{ batch.id }}</strong></td></tr>
       <tr><th>Category</th><td>{{ visit_category_label|default:"—" }}</td></tr>
       <tr><th>Date Range</th><td>{{ batch.from_date }} → {{ batch.to_date }}</td></tr>
+      <tr><th>Purpose of Visit</th><td>{{ purpose_of_visit|default:batch.purpose|default:"—" }}</td></tr>
       <tr><th>Decided By</th><td>{{ actor.get_full_name|default:actor.username }}</td></tr>
       <tr><th>Decision</th><td><strong>{{ status }}</strong></td></tr>
     </table>

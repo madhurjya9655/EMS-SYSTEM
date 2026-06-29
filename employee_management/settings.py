@@ -54,28 +54,6 @@ ADMIN_URL = os.getenv("ADMIN_URL", "super-secret-admin/")
 # -----------------------------------------------------------------------------
 # HOST / ORIGIN SECURITY
 # -----------------------------------------------------------------------------
-# SECURITY RULE:
-# In production, ALLOWED_HOSTS must contain real production hostnames only.
-#
-# Render issue protection:
-# If Render environment accidentally contains:
-#   ALLOWED_HOSTS=localhost,127.0.0.1
-# this block filters those unsafe values and keeps safe production hosts.
-#
-# GOOD production examples:
-#   ALLOWED_HOSTS=ems-system-d26q.onrender.com
-#   ALLOWED_HOSTS=erp.blueoceansteels.com,ems-system-d26q.onrender.com
-#
-# BAD production examples:
-#   ALLOWED_HOSTS=*
-#   ALLOWED_HOSTS=.onrender.com
-#   ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,testserver
-#   ALLOWED_HOSTS=https://ems-system-d26q.onrender.com
-#
-# IMPORTANT:
-# ALLOWED_HOSTS must NOT include https:// or http://.
-# CSRF_TRUSTED_ORIGINS must include https://.
-
 DEFAULT_PRODUCTION_ALLOWED_HOSTS = [
     "ems-system-d26q.onrender.com",
     "erp.blueoceansteels.com",
@@ -99,13 +77,6 @@ FORBIDDEN_PRODUCTION_ALLOWED_HOSTS = {
 
 
 def _host_from_url(value: str) -> str:
-    """
-    Convert URL-like host values into plain hostnames.
-
-    Examples:
-      https://ems-system-d26q.onrender.com -> ems-system-d26q.onrender.com
-      ems-system-d26q.onrender.com         -> ems-system-d26q.onrender.com
-    """
     value = (value or "").strip()
 
     if not value:
@@ -119,18 +90,6 @@ def _host_from_url(value: str) -> str:
 
 
 def _clean_allowed_hosts(raw_hosts: list[str], allow_local: bool = False) -> list[str]:
-    """
-    Normalize and clean ALLOWED_HOSTS.
-
-    Production:
-      - removes localhost / 127.0.0.1 / 0.0.0.0 / testserver
-      - removes wildcard values
-      - removes URL schemes
-      - keeps exact hostnames only
-
-    Debug:
-      - local hosts are allowed
-    """
     cleaned: list[str] = []
 
     for raw in raw_hosts:
@@ -166,7 +125,6 @@ else:
         allow_local=False,
     )
 
-    # Always keep safe production defaults available.
     for production_host in DEFAULT_PRODUCTION_ALLOWED_HOSTS:
         if production_host not in ALLOWED_HOSTS:
             ALLOWED_HOSTS.append(production_host)
@@ -360,13 +318,6 @@ DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
 
 
 def _sqlite_database_config() -> dict:
-    """
-    Local/development fallback only.
-
-    IMPORTANT:
-    Do not silently use SQLite on Render production. BOS Lakshya ERP production
-    data must come from PostgreSQL through DATABASE_URL.
-    """
     sqlite_path = os.environ.get("SQLITE_PATH", "").strip()
 
     if not sqlite_path:
@@ -389,12 +340,6 @@ def _sqlite_database_config() -> dict:
 
 
 def _postgres_database_config(database_url: str) -> dict:
-    """
-    Production PostgreSQL config for Render.
-
-    DATABASE_URL is parsed with dj_database_url.parse(), then hardened with
-    timeout and application_name options for easier production debugging.
-    """
     config = dj_database_url.parse(
         database_url,
         conn_max_age=600,
@@ -866,8 +811,6 @@ MIS_REPORT_CC = env_list(
 
 MIS_REPORT_TIME_ZONE = os.getenv("MIS_REPORT_TIME_ZONE", "Asia/Kolkata")
 
-# variance = ((Actual - Planned) / Planned) * 100
-# completion_pct = (Actual / Planned) * 100
 MIS_SCORE_FORMULA = os.getenv("MIS_SCORE_FORMULA", "variance")
 
 MIS_TASK_MODEL_NAMES = env_list(
@@ -875,11 +818,8 @@ MIS_TASK_MODEL_NAMES = env_list(
     "Checklist,Delegation,HelpTicket",
 )
 
-# Monday 10:30 AM MIS should send previous Monday-Saturday data.
 MIS_REPORT_DEFAULT_WEEK = os.getenv("MIS_REPORT_DEFAULT_WEEK", "last")
 
-# Employee table exclusion rules.
-# Pankaj can receive the report email but should not appear inside the employee MIS table.
 MIS_EXCLUDE_USERNAMES = env_list(
     "MIS_EXCLUDE_USERNAMES",
     "admin,pankaj",
@@ -1219,10 +1159,22 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.kam.tasks.sync_google_sheet_to_db",
         "schedule": _KAM_SYNC_INTERVAL,
     },
+
+    # KAM weekly consolidated report:
+    # Every Monday at 10:00 AM IST.
+    # Includes all KAMs collected by apps.kam.tasks.send_weekly_kam_performance_report.
+    "weekly_kam_performance_report_monday_10am": {
+        "task": "apps.kam.tasks.send_weekly_kam_performance_report",
+        "schedule": crontab(hour=10, minute=0, day_of_week="1"),
+        "args": (),
+    },
 }
 
 if not env_bool("KAM_SYNC_ENABLED", True):
     CELERY_BEAT_SCHEDULE.pop("kam-sync-google-sheet-to-db", None)
+
+if not env_bool("KAM_WEEKLY_REPORT_ENABLED", True):
+    CELERY_BEAT_SCHEDULE.pop("weekly_kam_performance_report_monday_10am", None)
 
 # -----------------------------------------------------------------------------
 # REIMBURSEMENT CONTENT RULES

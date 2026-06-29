@@ -1,6 +1,8 @@
 # FILE: apps/kam/views.py
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import math
 from datetime import date
@@ -1110,7 +1112,614 @@ def _parse_decimal_or_none(s: str) -> Optional[Decimal]:
         return Decimal(s)
     except Exception:
         return None
+    
+def _require_purpose_of_visit(value: str, *, max_length: int = 2000) -> str:
+    """
+    Backend guard for Purpose of Visit.
 
+    Important:
+    - DB field remains `purpose`.
+    - UI/display label is `Purpose of Visit`.
+    - Used in views where raw POST data is handled directly.
+    """
+    value = (value or "").strip()
+
+    if not value:
+        raise ValueError("Purpose of Visit is required.")
+
+    if len(value) > max_length:
+        raise ValueError(f"Purpose of Visit is too long. Max {max_length} characters allowed.")
+
+    return value
+
+
+def _post_meeting_details_complete(actual: Optional["VisitActual"]) -> bool:
+    """
+    Post-meeting workflow completion check.
+
+    Outcome should be visible to manager only after:
+    - Post Meeting Date & Time exists
+    - Meeting Outcome exists
+    - Post Meeting Details / Discussion Summary exists
+    - Follow-up Notes exists
+    """
+    if not actual:
+        return False
+
+    if not getattr(actual, "actual_datetime", None):
+        return False
+
+    if getattr(actual, "successful", None) is None:
+        return False
+
+    if not (getattr(actual, "meeting_notes", "") or "").strip():
+        return False
+
+    if not (getattr(actual, "next_action", "") or "").strip():
+        return False
+
+    return True
+
+def _manager_visit_business_status(plan: "VisitPlan") -> str:
+    """
+    Manager View business status.
+
+    Required production lifecycle:
+    - DRAFT              -> Draft
+    - PENDING_APPROVAL   -> Pending
+    - APPROVED           -> Pending
+    - REJECTED           -> Rejected
+    - COMPLETED          -> Completed
+
+    Important:
+    Manager approval alone must NOT display Completed.
+    Completed is shown only after manager accepts post-visit review.
+    """
+    status = (getattr(plan, "approval_status", "") or "").strip().upper()
+
+    if status == STATUS_COMPLETED:
+        return "Completed"
+
+    if status == STATUS_REJECTED:
+        return "Rejected"
+
+    if status == STATUS_DRAFT:
+        return "Draft"
+
+    return "Pending"
+
+
+def _post_visit_submitted(plan: "VisitPlan") -> bool:
+    """
+    True only when KAM has submitted required post-visit details.
+    This does NOT mean workflow is completed.
+    """
+    actual = getattr(plan, "actual", None)
+    return bool(actual and _post_meeting_details_complete(actual))
+
+
+def _post_visit_can_be_manager_reviewed(plan: "VisitPlan") -> bool:
+    """
+    Manager can accept post visit only after:
+    - visit was manager-approved
+    - KAM submitted complete post-visit details
+    - workflow is not already completed
+    """
+    return (
+        (getattr(plan, "approval_status", "") or "").strip().upper() == STATUS_APPROVED
+        and _post_visit_submitted(plan)
+    )
+
+
+def _post_visit_completion_mail_already_sent(plan: "VisitPlan") -> bool:
+    """
+    Prevent duplicate post-visit completion review emails.
+    Uses existing VisitApprovalAudit table.
+    """
+    try:
+        return VisitApprovalAudit.objects.filter(
+            plan=plan,
+            note__icontains="[POST_VISIT_COMPLETION_MAIL_SENT]",
+        ).exists()
+    except Exception:
+        logger.exception(
+            "Failed checking post-visit mail audit. plan_id=%s",
+            getattr(plan, "id", None),
+        )
+        return False
+
+
+def _safe_actual_attachment_text(actual: Optional["VisitActual"]) -> str:
+    """
+    Schema-safe attachment display helper.
+
+    Reuses whatever attachment/file field exists in production.
+    If no attachment field exists, returns '-'.
+    """
+    if not actual:
+        return "-"
+
+    candidate_attrs = (
+        "attachment",
+        "attachments",
+        "file",
+        "files",
+        "document",
+        "documents",
+        "proof",
+        "proof_file",
+    )
+
+    for attr in candidate_attrs:
+        try:
+            value = getattr(actual, attr, None)
+        except Exception:
+            continue
+
+        if not value:
+            continue
+
+        try:
+            if hasattr(value, "all"):
+                names = []
+                for item in value.all():
+                    name = (
+                        getattr(item, "name", None)
+                        or getattr(item, "filename", None)
+                        or getattr(item, "file", None)
+                        or str(item)
+                    )
+                    if name:
+                        names.append(str(name))
+                return ", ".join(names) if names else "-"
+        except Exception:
+            logger.exception(
+                "Failed reading related attachments. actual_id=%s attr=%s",
+                getattr(actual, "id", None),
+                attr,
+            )
+
+        try:
+            return str(value)
+        except Exception:
+            return "-"
+
+    return "-"
+
+
+def _post_visit_meeting_outcome_text(actual: Optional["VisitActual"]) -> str:
+    if not actual:
+        return "-"
+
+    if getattr(actual, "successful", None) is True:
+        return "Successful"
+
+    if getattr(actual, "successful", None) is False:
+        reason = getattr(actual, "not_success_reason", None)
+        if reason:
+            try:
+                return f"Not Successful: {actual.get_not_success_reason_display()}"
+            except Exception:
+                return f"Not Successful: {reason}"
+        return "Not Successful"
+
+    return "-"
+
+
+def _build_post_visit_completion_email(
+    *,
+    request: HttpRequest,
+    plan: "VisitPlan",
+    manager_user: User,
+) -> str:
+    """
+    Post Visit Completion Mail.
+
+    Required fields:
+    - Customer
+    - Purpose of Visit
+    - Meeting Outcome
+    - Discussion
+    - Sales Opportunity
+    - Attachments
+    - Visit Date
+    - Manager Review Link
+    """
+    actual = getattr(plan, "actual", None)
+
+    if getattr(plan, "customer_id", None) and getattr(plan, "customer", None):
+        customer_name = _safe_email_value(plan.customer.name)
+    else:
+        customer_name = _safe_email_value(getattr(plan, "counterparty_name", None))
+
+    review_url = request.build_absolute_uri(
+        reverse("kam:manager_view") + f"?tab=visits&focus_visit={plan.id}"
+    )
+
+    context = {
+        "recipient_name": _email_display_name(manager_user),
+        "visit_id": plan.id,
+        "customer": customer_name,
+        "kam_name": _email_display_name(getattr(plan, "kam", None)),
+        "purpose": _safe_email_value(getattr(plan, "purpose", None)),
+        "meeting_outcome": _post_visit_meeting_outcome_text(actual),
+        "discussion": _safe_email_value(getattr(actual, "meeting_notes", None) if actual else None),
+        "sales_opportunity": _safe_email_value(getattr(actual, "actual_sales_mt", None) if actual else None),
+        "attachments": _safe_actual_attachment_text(actual),
+        "visit_date": _display_date_range(
+            getattr(plan, "visit_date", None),
+            getattr(plan, "visit_date_to", None),
+        ),
+        "review_url": review_url,
+        "remarks": _safe_email_value(getattr(actual, "next_action", None) if actual else None),
+    }
+
+    try:
+        return render_to_string("kam/emails/post_visit_completion.html", context)
+    except Exception:
+        logger.info(
+            "Optional template kam/emails/post_visit_completion.html not found or failed. "
+            "Using inline fallback. plan_id=%s",
+            getattr(plan, "id", None),
+        )
+
+    return f"""
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Post Visit Completion Review</title>
+</head>
+<body style="margin:0;padding:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;color:#111;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f7f9;padding:24px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:680px;background:#ffffff;border:1px solid #e6e8ec;">
+          <tr>
+            <td style="background:#0b1f3a;color:#ffffff;padding:18px 20px;font-size:18px;font-weight:bold;">
+              Post Visit Completion Review Required
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px;font-size:14px;line-height:1.6;">
+              <p>Hello {context["recipient_name"]},</p>
+              <p>The KAM has submitted post-visit details. Please review and accept to complete the workflow.</p>
+
+              <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e6e8ec;">
+                <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Visit ID</td><td style="padding:8px;border:1px solid #e6e8ec;">#{context["visit_id"]}</td></tr>
+                <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Customer</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["customer"]}</td></tr>
+                <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">KAM</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["kam_name"]}</td></tr>
+                <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Visit Date</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["visit_date"]}</td></tr>
+                <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Purpose of Visit</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["purpose"]}</td></tr>
+                <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Meeting Outcome</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["meeting_outcome"]}</td></tr>
+                <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Discussion</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["discussion"]}</td></tr>
+                <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Sales Opportunity</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["sales_opportunity"]}</td></tr>
+                <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Attachments</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["attachments"]}</td></tr>
+                <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Remarks / Next Action</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["remarks"]}</td></tr>
+              </table>
+
+              <p style="margin-top:18px;">
+                <a href="{context["review_url"]}" style="background:#0b5cab;color:#ffffff;text-decoration:none;padding:10px 16px;display:inline-block;border-radius:4px;">
+                  Review Post Visit
+                </a>
+              </p>
+
+              <p style="font-size:12px;color:#667085;">System generated message. Please do not reply.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+"""
+
+
+def _send_post_visit_completion_mail(
+    *,
+    request: HttpRequest,
+    plan: "VisitPlan",
+) -> bool:
+    """
+    Sends second email to manager after KAM submits post-visit details.
+    Does not complete the workflow.
+    """
+    manager_user = _active_manager_for_kam(plan.kam)
+
+    if not manager_user or not getattr(manager_user, "email", None):
+        logger.warning(
+            "Post visit completion mail skipped. No active manager email. plan_id=%s kam_id=%s",
+            getattr(plan, "id", None),
+            getattr(plan, "kam_id", None),
+        )
+        return False
+
+    if _post_visit_completion_mail_already_sent(plan):
+        logger.info(
+            "Post visit completion mail already sent. Skipping duplicate. plan_id=%s",
+            getattr(plan, "id", None),
+        )
+        return True
+
+    subject = (
+        f"[KAM] Post Visit Completion Review Required: Visit #{plan.id} "
+        f"({plan.visit_date}) - {plan.kam.get_full_name() or plan.kam.username}"
+    )
+
+    body = _build_post_visit_completion_email(
+        request=request,
+        plan=plan,
+        manager_user=manager_user,
+    )
+
+    cc_users = _active_cc_for_kam(plan.kam)
+
+    sent_ok = _send_safe_mail(
+        subject,
+        body,
+        [manager_user],
+        cc_users,
+    )
+
+    if sent_ok:
+        VisitApprovalAudit.objects.create(
+            plan=plan,
+            actor=plan.kam,
+            action=VisitApprovalAudit.ACTION_SUBMIT,
+            note="[POST_VISIT_COMPLETION_MAIL_SENT] Post visit submitted to manager for review",
+            actor_ip=_get_ip(request),
+        )
+
+    return sent_ok
+
+
+def _build_customer_history_payload(customer_ids: List[int], actor: User) -> Dict[int, dict]:
+    """
+    Builds customer visit history for Manager View eye-icon modal.
+
+    Reuses existing tables only:
+    - Customer
+    - VisitPlan
+    - VisitActual
+    - VisitApprovalAudit
+
+    No duplicate records.
+    No new workflow.
+    """
+    customer_ids = sorted({int(customer_id) for customer_id in (customer_ids or []) if customer_id})
+
+    if not customer_ids:
+        return {}
+
+    visits_qs = (
+        _visitplan_qs_for_user(actor)
+        .select_related("customer", "kam", "actual", "approved_by", "rejected_by")
+        .filter(customer_id__in=customer_ids)
+        .order_by("-visit_date", "-created_at", "-id")
+    )
+
+    visits_by_customer: Dict[int, List[VisitPlan]] = {}
+
+    for visit in visits_qs:
+        if not visit.customer_id:
+            continue
+        visits_by_customer.setdefault(visit.customer_id, []).append(visit)
+
+    payload: Dict[int, dict] = {}
+
+    for customer_id, visits in visits_by_customer.items():
+        if not visits:
+            continue
+
+        latest_visit = visits[0]
+        first_visit = visits[-1]
+        customer = latest_visit.customer
+
+        successful_count = 0
+        pending_count = 0
+        rejected_count = 0
+        followup_count = 0
+
+        timeline = []
+        next_meetings = []
+
+        for visit in visits:
+            actual = getattr(visit, "actual", None)
+            business_status = _manager_visit_business_status(visit)
+
+            if business_status == "Rejected":
+                rejected_count += 1
+            elif business_status == "Completed":
+                if actual and actual.successful is True:
+                    successful_count += 1
+            else:
+                pending_count += 1
+
+            if actual and (getattr(actual, "next_action", "") or "").strip():
+                followup_count += 1
+
+            manager_decision = "-"
+
+            if visit.approval_status == STATUS_REJECTED:
+                manager_decision = "Rejected"
+            elif visit.approval_status == STATUS_COMPLETED:
+                manager_decision = "Post Visit Accepted"
+            elif visit.approval_status == STATUS_APPROVED:
+                manager_decision = "Visit Approved"
+
+            meeting_outcome = _post_visit_meeting_outcome_text(actual)
+
+            timeline.append({
+                "visit": visit,
+                "actual": actual,
+                "visit_status": business_status,
+                "manager_decision": manager_decision,
+                "meeting_outcome": meeting_outcome,
+            })
+
+            if actual and getattr(actual, "next_action_date", None):
+                next_meetings.append({
+                    "meeting_date": actual.next_action_date,
+                    "meeting_purpose": actual.next_action or "-",
+                    "outcome": meeting_outcome,
+                })
+
+        payload[customer_id] = {
+            "customer": customer,
+            "kam_name": latest_visit.kam.get_full_name() or latest_visit.kam.username,
+            "total_visits": len(visits),
+            "first_visit": first_visit.visit_date if first_visit else None,
+            "latest_visit": latest_visit.visit_date if latest_visit else None,
+            "timeline": timeline,
+            "next_meetings": next_meetings,
+            "sales_summary": {
+                "total_visits": len(visits),
+                "successful_visits": successful_count,
+                "pending_visits": pending_count,
+                "rejected_visits": rejected_count,
+                "followup_count": followup_count,
+            },
+        }
+
+    return payload
+
+def _current_business_quarter_bounds(today_value=None) -> Tuple[date, date]:
+    """
+    Current financial/business quarter.
+
+    Business quarters:
+      Q1: Apr-Jun
+      Q2: Jul-Sep
+      Q3: Oct-Dec
+      Q4: Jan-Mar
+
+    Requirement:
+      Current quarter = quarter start date through today.
+    """
+    today_value = today_value or timezone.localdate()
+
+    if today_value.month in (4, 5, 6):
+        start = date(today_value.year, 4, 1)
+    elif today_value.month in (7, 8, 9):
+        start = date(today_value.year, 7, 1)
+    elif today_value.month in (10, 11, 12):
+        start = date(today_value.year, 10, 1)
+    else:
+        start = date(today_value.year, 1, 1)
+
+    return start, today_value
+
+
+def _visit_time_filter_bounds(time_filter: str) -> Tuple[Optional[date], Optional[date]]:
+    """
+    Visit History / Manager View date-range filter.
+
+    Production-safe behavior:
+      weekly     / current_week     -> Monday of current week through today
+      monthly    / current_month    -> first day of current month through today
+      quarterly  / current_quarter  -> current financial quarter through today
+      yearly     / current_year     -> current financial year through today
+
+    Financial year:
+      Apr 1 -> Mar 31
+      For current-filter use: Apr 1 of current FY through today.
+    """
+    today_value = timezone.localdate()
+    value = (time_filter or "").strip().lower()
+
+    if value in {"weekly", "current_week", "week"}:
+        start = today_value - timezone.timedelta(days=today_value.weekday())
+        return start, today_value
+
+    if value in {"monthly", "current_month", "month"}:
+        return date(today_value.year, today_value.month, 1), today_value
+
+    if value in {"quarterly", "current_quarter", "quarter"}:
+        return _current_business_quarter_bounds(today_value)
+
+    if value in {"yearly", "current_year", "year"}:
+        financial_year_start_year = today_value.year if today_value.month >= 4 else today_value.year - 1
+        return date(financial_year_start_year, 4, 1), today_value
+
+    return None, None
+
+def _apply_visit_history_filters(qs, request: HttpRequest, *, kam_field: str, date_field: str):
+    """
+    Combined server-side filter helper for Visit History / Single Visits / Manager View.
+
+    Supports:
+      - Status is handled outside this helper.
+      - KAM dropdown:
+          kam / user / kam_id
+      - Required Visit History date range dropdown:
+          date_range = weekly / monthly / quarterly / yearly
+      - Backward-compatible older params:
+          time_filter = current_month / current_quarter / current_year
+      - Optional legacy custom dates:
+          from_date / from
+          to_date / to
+
+    Production rule:
+      Filters combine together.
+    """
+    selected_kam = (
+        request.GET.get("kam")
+        or request.GET.get("user")
+        or request.GET.get("kam_id")
+        or ""
+    ).strip()
+
+    raw_from = (
+        request.GET.get("from_date")
+        or request.GET.get("from")
+        or ""
+    ).strip()
+
+    raw_to = (
+        request.GET.get("to_date")
+        or request.GET.get("to")
+        or ""
+    ).strip()
+
+    # New required Visit History dropdown name.
+    date_range = (request.GET.get("date_range") or "").strip().lower()
+
+    # Backward-compatible old name used by existing Manager View / Single Visit screens.
+    time_filter = (request.GET.get("time_filter") or "").strip().lower()
+
+    active_range = date_range or time_filter
+
+    range_start, range_end = _visit_time_filter_bounds(active_range)
+    explicit_from = _parse_iso_date(raw_from)
+    explicit_to = _parse_iso_date(raw_to)
+
+    start_date = range_start
+    end_date = range_end
+
+    if explicit_from:
+        start_date = max(start_date, explicit_from) if start_date else explicit_from
+
+    if explicit_to:
+        end_date = min(end_date, explicit_to) if end_date else explicit_to
+
+    if selected_kam and selected_kam.upper() not in {"ALL", "*"}:
+        if selected_kam.isdigit():
+            qs = qs.filter(**{kam_field: int(selected_kam)})
+        else:
+            relation = kam_field[:-3] if kam_field.endswith("_id") else kam_field
+            qs = qs.filter(
+                Q(**{f"{relation}__username__iexact": selected_kam})
+                | Q(**{f"{relation}__email__iexact": selected_kam})
+            )
+
+    if start_date:
+        qs = qs.filter(**{f"{date_field}__gte": start_date})
+
+    if end_date:
+        qs = qs.filter(**{f"{date_field}__lte": end_date})
+
+    return qs
 
 # FIX 2 — Timezone-aware datetime helpers
 # All datetime construction now uses timezone.make_aware() to prevent
@@ -1229,53 +1838,18 @@ def _get_period(request: HttpRequest) -> Tuple[str, timezone.datetime, timezone.
 
 
 def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timezone.datetime, str]:
-    now = timezone.now()
-    today_local = timezone.localtime(now).replace(hour=0, minute=0, second=0, microsecond=0)
+    """
+    Canonical dashboard/report date-range resolver.
+
+    Production behavior:
+    - Default dashboard/report period is Current Month.
+    - Existing custom from/to filters remain supported.
+    - Existing range shortcuts remain supported.
+    - Returned end_dt is exclusive.
+    """
+    now = timezone.localtime(timezone.now())
+    today_local = now.replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow = today_local + timezone.timedelta(days=1)
-
-    range_shortcut = (request.GET.get("range") or "").strip().lower()
-
-    if range_shortcut:
-        if range_shortcut in ("today", "day"):
-            return today_local, tomorrow, f"{today_local.date()} → {today_local.date()}"
-
-        if range_shortcut in ("this_week", "week"):
-            monday = today_local - timezone.timedelta(days=today_local.weekday())
-            saturday_exclusive = monday + timezone.timedelta(days=6)
-            return monday, saturday_exclusive, f"{monday.date()} → {(saturday_exclusive - timezone.timedelta(days=1)).date()}"
-
-        if range_shortcut in ("last7", "7d", "7days"):
-            start = today_local - timezone.timedelta(days=7)
-            return start, tomorrow, f"{start.date()} → {today_local.date()}"
-
-        if range_shortcut in ("last30", "30d", "30days"):
-            start = today_local - timezone.timedelta(days=30)
-            return start, tomorrow, f"{start.date()} → {today_local.date()}"
-
-        if range_shortcut in ("last60", "60d"):
-            start = today_local - timezone.timedelta(days=60)
-            return start, tomorrow, f"{start.date()} → {today_local.date()}"
-
-        if range_shortcut in ("last90", "90d", "90days", "3m"):
-            start = today_local - timezone.timedelta(days=90)
-            return start, tomorrow, f"{start.date()} → {today_local.date()}"
-
-        if range_shortcut in ("thismonth", "this_month", "month"):
-            ws, we, _ = _month_bounds(now)
-            return ws, we, f"{ws.date()} → {(we - timezone.timedelta(days=1)).date()}"
-
-        if range_shortcut in ("thisquarter", "this_quarter", "quarter"):
-            ws, we, _ = _quarter_bounds(now)
-            return ws, we, f"{ws.date()} → {(we - timezone.timedelta(days=1)).date()}"
-
-        if range_shortcut in ("thisyear", "this_year", "year"):
-            ws, we, _ = _year_bounds(now)
-            return ws, we, f"{ws.date()} → {(we - timezone.timedelta(days=1)).date()}"
-
-        if range_shortcut in ("all", "*"):
-            s = timezone.make_aware(timezone.datetime(2000, 1, 1, 0, 0, 0))
-            e = timezone.make_aware(timezone.datetime(2100, 1, 1, 0, 0, 0))
-            return s, e, "ALL"
 
     from_s = _first_query_value(
         request,
@@ -1308,6 +1882,7 @@ def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timez
         end = timezone.make_aware(
             timezone.datetime(to_d.year, to_d.month, to_d.day, 0, 0, 0)
         ) + timezone.timedelta(days=1)
+
         return start, end, f"{from_d} → {to_d}"
 
     if from_d and not to_d:
@@ -1316,16 +1891,52 @@ def _get_dashboard_range(request: HttpRequest) -> Tuple[timezone.datetime, timez
         )
         return start, start + timezone.timedelta(days=1), f"{from_d} → {from_d}"
 
-    m, y = today_local.month, today_local.year
-    fy_start_year = y if m >= 4 else y - 1
+    range_shortcut = (request.GET.get("range") or "").strip().lower()
 
-    fy_start = timezone.make_aware(
-        timezone.datetime(fy_start_year, 4, 1, 0, 0, 0)
-    )
-    fy_end = today_local + timezone.timedelta(days=1)
+    if range_shortcut:
+        if range_shortcut in {"today", "day"}:
+            return today_local, tomorrow, f"{today_local.date()} → {today_local.date()}"
 
-    return fy_start, fy_end, f"{fy_start.date()} → {today_local.date()} (Fiscal YTD)"
+        if range_shortcut in {"weekly", "week", "this_week", "current_week"}:
+            start = today_local - timezone.timedelta(days=today_local.weekday())
+            end = start + timezone.timedelta(days=7)
+            return start, end, f"{start.date()} → {(end - timezone.timedelta(days=1)).date()}"
 
+        if range_shortcut in {"monthly", "month", "this_month", "thismonth", "current_month"}:
+            start, end, _pid = _month_bounds(now)
+            return start, end, f"{start.date()} → {(end - timezone.timedelta(days=1)).date()}"
+
+        if range_shortcut in {"quarterly", "quarter", "this_quarter", "thisquarter", "current_quarter"}:
+            start, end, _pid = _quarter_bounds(now)
+            return start, end, f"{start.date()} → {(end - timezone.timedelta(days=1)).date()}"
+
+        if range_shortcut in {"yearly", "year", "this_year", "thisyear", "current_year"}:
+            start, end, _pid = _year_bounds(now)
+            return start, end, f"{start.date()} → {(end - timezone.timedelta(days=1)).date()}"
+
+        if range_shortcut in {"last7", "7d", "7days"}:
+            start = today_local - timezone.timedelta(days=6)
+            return start, tomorrow, f"{start.date()} → {today_local.date()}"
+
+        if range_shortcut in {"last30", "30d", "30days"}:
+            start = today_local - timezone.timedelta(days=29)
+            return start, tomorrow, f"{start.date()} → {today_local.date()}"
+
+        if range_shortcut in {"last60", "60d"}:
+            start = today_local - timezone.timedelta(days=59)
+            return start, tomorrow, f"{start.date()} → {today_local.date()}"
+
+        if range_shortcut in {"last90", "90d", "90days", "3m"}:
+            start = today_local - timezone.timedelta(days=89)
+            return start, tomorrow, f"{start.date()} → {today_local.date()}"
+
+        if range_shortcut in {"all", "*"}:
+            start = timezone.make_aware(timezone.datetime(2000, 1, 1, 0, 0, 0))
+            end = timezone.make_aware(timezone.datetime(2100, 1, 1, 0, 0, 0))
+            return start, end, "ALL"
+
+    start, end, _pid = _month_bounds(now)
+    return start, end, f"{start.date()} → {(end - timezone.timedelta(days=1)).date()}"
 
 def _resolve_scope(request: HttpRequest, actor: User) -> Tuple[Optional[int], str]:
     if not _is_manager(actor):
@@ -1444,6 +2055,214 @@ def _calc_visits_target(start_dt: timezone.datetime, end_dt: timezone.datetime) 
     if delta_days == 0:
         return 6
     return math.ceil(delta_days / 7) * 6
+
+def _report_value(report: Optional[dict], *path, default=0):
+    """
+    Safe nested value reader for build_kam_performance_report() payload.
+
+    Keeps dashboard/report merge resilient when service payload has missing keys.
+    """
+    current = report or {}
+
+    for key in path:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key)
+
+    return default if current is None else current
+
+
+def _build_dashboard_report_charts(
+    *,
+    report: Optional[dict],
+    kpi: dict,
+    trend_rows: List[Dict],
+) -> dict:
+    """
+    Build dashboard chart payload from:
+    - existing build_kam_performance_report() output
+    - existing dashboard KPI calculations
+
+    Important:
+    - No duplicate KPI service.
+    - No duplicate aggregation service.
+    - No duplicate report calculation.
+    """
+    report = report or {}
+
+    monthly_trend = _report_value(report, "charts", "monthly_trend", default=[]) or []
+    weekly_trend = _report_value(report, "charts", "weekly_trend", default=[]) or []
+
+    if monthly_trend:
+        sales_trend_labels = [
+            row.get("label") or row.get("period") or row.get("month") or "-"
+            for row in monthly_trend
+        ]
+        sales_trend_values = [
+            float(row.get("sales_mt") or row.get("sales") or 0)
+            for row in monthly_trend
+        ]
+    else:
+        sales_trend_labels = [row.get("week") for row in trend_rows]
+        sales_trend_values = [float(row.get("sales_mt") or 0) for row in trend_rows]
+
+    leads_total = int(
+        _report_value(
+            report,
+            "leads",
+            "total_leads",
+            default=kpi.get("leads_total_count") or 0,
+        ) or 0
+    )
+    leads_won = int(
+        _report_value(
+            report,
+            "leads",
+            "converted_leads",
+            default=kpi.get("leads_converted_count") or 0,
+        ) or 0
+    )
+    leads_lost = int(
+        _report_value(
+            report,
+            "leads",
+            "lost_leads",
+            default=0,
+        ) or 0
+    )
+    leads_pending = max(leads_total - leads_won - leads_lost, 0)
+
+    total_overdue = float(
+        _report_value(
+            report,
+            "collections",
+            "total_overdue",
+            default=kpi.get("collection_planned") or 0,
+        ) or 0
+    )
+    total_collected = float(
+        _report_value(
+            report,
+            "collections",
+            "total_collected",
+            default=kpi.get("collection_actual") or 0,
+        ) or 0
+    )
+    pending_collection = float(
+        _report_value(
+            report,
+            "collections",
+            "pending_collection",
+            default=kpi.get("collection_pending") or 0,
+        ) or 0
+    )
+
+    overall_score = float(
+        _report_value(
+            report,
+            "score",
+            "overall_score",
+            default=0,
+        ) or 0
+    )
+
+    sales_achievement = float(kpi.get("sales_ach_pct") or 0)
+    achieved_sales = min(max(sales_achievement, 0), 100)
+    remaining_sales = max(100 - achieved_sales, 0)
+
+    return {
+        "monthly_sales_trend": {
+            "labels": sales_trend_labels,
+            "values": sales_trend_values,
+        },
+        "visits_completed": {
+            "labels": ["Completed", "Target"],
+            "values": [
+                int(kpi.get("visits_actual") or 0),
+                int(kpi.get("visits_target") or 0),
+            ],
+        },
+        "calls_completed": {
+            "labels": ["Completed", "Target"],
+            "values": [
+                int(kpi.get("calls") or 0),
+                int(kpi.get("calls_target") or 0),
+            ],
+        },
+        "lead_conversion": {
+            "labels": ["Won", "Lost", "Pending"],
+            "values": [leads_won, leads_lost, leads_pending],
+        },
+        "collections": {
+            "labels": ["Collected", "Pending", "Overdue"],
+            "values": [total_collected, pending_collection, total_overdue],
+        },
+        "customer_visit_distribution": {
+            "labels": ["Customer Visit", "Vendor Visit", "Plant Visit", "Other"],
+            "values": [
+                int(_report_value(report, "visits", "customer_visits", default=0) or 0),
+                int(_report_value(report, "visits", "vendor_visits", default=0) or 0),
+                int(_report_value(report, "visits", "plant_visits", default=0) or 0),
+                int(_report_value(report, "visits", "other_visits", default=0) or 0),
+            ],
+        },
+        "visit_approval_status": {
+            "labels": ["Approved", "Pending", "Rejected", "Completed"],
+            "values": [
+                int(_report_value(report, "visits", "approved_visits", default=0) or 0),
+                int(_report_value(report, "visits", "pending_visits", default=0) or 0),
+                int(_report_value(report, "visits", "rejected_visits", default=0) or 0),
+                int(kpi.get("visits_actual") or 0),
+            ],
+        },
+        "performance_score": {
+            "labels": ["Overall KPI %", "Remaining"],
+            "values": [
+                min(max(overall_score, 0), 100),
+                max(100 - overall_score, 0),
+            ],
+        },
+        "target_achievement": {
+            "labels": ["Achieved", "Remaining"],
+            "values": [achieved_sales, remaining_sales],
+        },
+        "monthly_comparison": {
+            "labels": ["Sales", "Visits", "Collections", "Calls"],
+            "values": [
+                float(kpi.get("sales_mt") or 0),
+                int(kpi.get("visits_actual") or 0),
+                total_collected,
+                int(kpi.get("calls") or 0),
+            ],
+        },
+        "weekly_trend": weekly_trend,
+        "monthly_trend": monthly_trend,
+    }
+
+
+def _dashboard_selected_report_kam(
+    *,
+    request: HttpRequest,
+    scope_kam_id: Optional[int],
+) -> Optional[User]:
+    """
+    Resolve the KAM used by the embedded dashboard report section.
+
+    Rules:
+    - If dashboard is scoped to one KAM, use that KAM.
+    - If dashboard is ALL, reuse existing report resolver.
+    """
+    if scope_kam_id:
+        return (
+            User.objects
+            .filter(id=scope_kam_id, is_active=True)
+            .exclude(is_superuser=True)
+            .exclude(username__iexact="admin")
+            .exclude(email__icontains="admin")
+            .first()
+        )
+
+    return _resolve_selected_kam_for_performance_report(request)
 
 
 def _kam_options_for_user(user: User) -> List[str]:
@@ -1635,6 +2454,7 @@ def _build_batch_approval_email(
         "visit_category_label": _safe_email_value(visit_category_label),
         "date_range": _display_date_range(getattr(batch, "from_date", None), getattr(batch, "to_date", None)),
         "remarks": _safe_email_value(remarks),
+        "purpose_of_visit": _safe_email_value(remarks),
 
         "customer_summary": customer_summary,
         "location_summary": location_summary,
@@ -1686,6 +2506,8 @@ def _build_batch_approval_email(
                 <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Employee Email</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["employee_email"]}</td></tr>
                 <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Date</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["date_range"]}</td></tr>
                 <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Category</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["visit_category_label"]}</td></tr>
+                <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Purpose of Visit</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["purpose"]}</td></tr>
+                <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Purpose of Visit</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["purpose_of_visit"]}</td></tr>
               </table>
               <p style="margin-top:18px;">
                 <a href="{direct_approve_url}" style="background:#0b5cab;color:#ffffff;text-decoration:none;padding:10px 16px;display:inline-block;border-radius:4px;margin-right:8px;">Approve</a>
@@ -1808,6 +2630,7 @@ def _build_single_visit_approval_email(
                 <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Customer</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["counterparty"]}</td></tr>
                 <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Location</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["location"]}</td></tr>
                 <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Category</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["visit_category_label"]}</td></tr>
+                <tr><td style="padding:8px;border:1px solid #e6e8ec;background:#f8fafc;font-weight:bold;">Purpose of Visit</td><td style="padding:8px;border:1px solid #e6e8ec;">{context["purpose"]}</td></tr>
               </table>
               <p style="margin-top:18px;">
                 <a href="{direct_approve_url}" style="background:#0b5cab;color:#ffffff;text-decoration:none;padding:10px 16px;display:inline-block;border-radius:4px;margin-right:8px;">Approve</a>
@@ -1826,62 +2649,155 @@ def _build_single_visit_approval_email(
 
 
 def _notify_kam_single_visit_decision(*, request, plan, actor, status, rejection_reason="") -> None:
+    """
+    Notify KAM when single visit is approved/rejected.
+
+    Fixed:
+    - Purpose of Visit included in email template context.
+    - Purpose of Visit included in plain-text fallback.
+    """
     try:
         kam_user = plan.kam
+
         if not kam_user or not getattr(kam_user, "email", None):
             return
-        visit_category_label = _VISIT_CATEGORY_LABELS.get(plan.visit_category, plan.visit_category)
-        counterparty = plan.customer.name if plan.customer_id else (plan.counterparty_name or "—")
-        plan_url = request.build_absolute_uri(reverse("kam:single_visit_detail", args=[plan.id]))
-        subject = f"[KAM] Single Visit #{plan.id} {status}: {plan.visit_date} — {visit_category_label}"
+
+        visit_category_label = _VISIT_CATEGORY_LABELS.get(
+            plan.visit_category,
+            plan.visit_category,
+        )
+
+        counterparty = (
+            plan.customer.name
+            if plan.customer_id and plan.customer
+            else (plan.counterparty_name or "—")
+        )
+
+        purpose_of_visit = (plan.purpose or "").strip() or "—"
+
+        plan_url = request.build_absolute_uri(
+            reverse("kam:single_visit_detail", args=[plan.id])
+        )
+
+        subject = (
+            f"[KAM] Single Visit #{plan.id} {status}: "
+            f"{plan.visit_date} — {visit_category_label}"
+        )
+
         try:
-            body = render_to_string("kam/emails/single_visit_status.html", {
-                "plan": plan, "kam_user": kam_user, "actor": actor, "status": status,
-                "visit_category_label": visit_category_label, "counterparty": counterparty,
-                "rejection_reason": rejection_reason, "plan_url": plan_url,
-            })
+            body = render_to_string(
+                "kam/emails/single_visit_status.html",
+                {
+                    "plan": plan,
+                    "kam_user": kam_user,
+                    "actor": actor,
+                    "status": status,
+                    "visit_category_label": visit_category_label,
+                    "counterparty": counterparty,
+                    "purpose_of_visit": purpose_of_visit,
+                    "rejection_reason": rejection_reason,
+                    "plan_url": plan_url,
+                },
+            )
         except Exception:
+            logger.exception(
+                "Failed rendering single visit status email. plan_id=%s",
+                getattr(plan, "id", None),
+            )
+
             body = (
                 f"Single Visit #{plan.id} has been {status}.\n"
-                f"Category: {visit_category_label}\nEntity: {counterparty}\n"
-                f"Date: {plan.visit_date}\nDecided by: {actor.get_full_name() or actor.username}\n"
+                f"Category: {visit_category_label}\n"
+                f"Entity: {counterparty}\n"
+                f"Date: {plan.visit_date}\n"
+                f"Purpose of Visit: {purpose_of_visit}\n"
+                f"Decided by: {actor.get_full_name() or actor.username}\n"
             )
+
             if rejection_reason:
                 body += f"\nRejection Reason:\n{rejection_reason}\n"
+
             body += f"\nView visit: {plan_url}\n"
+
         _send_safe_mail(subject, body, [kam_user])
+
     except Exception:
-        pass
+        logger.exception(
+            "Failed to notify KAM single visit decision. plan_id=%s",
+            getattr(plan, "id", None),
+        )
 
 
 def _notify_kam_batch_decision(*, request, batch, actor, status, rejection_reason="") -> None:
+    """
+    Notify KAM when batch is approved/rejected.
+
+    Fixed:
+    - Purpose of Visit included in email template context.
+    - Purpose of Visit included in plain-text fallback.
+    """
     try:
         kam_user = batch.kam
+
         if not kam_user or not getattr(kam_user, "email", None):
             return
-        visit_category_label = _VISIT_CATEGORY_LABELS.get(batch.visit_category, batch.visit_category)
-        batch_url = request.build_absolute_uri(reverse("kam:visit_batch_detail", args=[batch.id]))
-        subject = f"[KAM] Batch #{batch.id} {status}: {batch.from_date}..{batch.to_date} — {visit_category_label}"
+
+        visit_category_label = _VISIT_CATEGORY_LABELS.get(
+            batch.visit_category,
+            batch.visit_category,
+        )
+
+        purpose_of_visit = (batch.purpose or "").strip() or "—"
+
+        batch_url = request.build_absolute_uri(
+            reverse("kam:visit_batch_detail", args=[batch.id])
+        )
+
+        subject = (
+            f"[KAM] Batch #{batch.id} {status}: "
+            f"{batch.from_date}..{batch.to_date} — {visit_category_label}"
+        )
+
         try:
-            body = render_to_string("kam/emails/visit_batch_status.html", {
-                "batch": batch, "kam_user": kam_user, "actor": actor, "status": status,
-                "visit_category_label": visit_category_label,
-                "rejection_reason": rejection_reason, "batch_url": batch_url,
-            })
+            body = render_to_string(
+                "kam/emails/visit_batch_status.html",
+                {
+                    "batch": batch,
+                    "kam_user": kam_user,
+                    "actor": actor,
+                    "status": status,
+                    "visit_category_label": visit_category_label,
+                    "purpose_of_visit": purpose_of_visit,
+                    "rejection_reason": rejection_reason,
+                    "batch_url": batch_url,
+                },
+            )
         except Exception:
+            logger.exception(
+                "Failed rendering batch status email. batch_id=%s",
+                getattr(batch, "id", None),
+            )
+
             body = (
                 f"Batch #{batch.id} has been {status}.\n"
                 f"Category: {visit_category_label}\n"
                 f"Date Range: {batch.from_date} to {batch.to_date}\n"
+                f"Purpose of Visit: {purpose_of_visit}\n"
                 f"Decided by: {actor.get_full_name() or actor.username}\n"
             )
+
             if rejection_reason:
                 body += f"\nRejection Reason:\n{rejection_reason}\n"
-            body += f"\nView batch: {batch_url}\n"
-        _send_safe_mail(subject, body, [kam_user])
-    except Exception:
-        pass
 
+            body += f"\nView batch: {batch_url}\n"
+
+        _send_safe_mail(subject, body, [kam_user])
+
+    except Exception:
+        logger.exception(
+            "Failed to notify KAM batch decision. batch_id=%s",
+            getattr(batch, "id", None),
+        )
 
 # =====================================================================
 # ADMIN: KAM → Manager Mapping
@@ -2087,7 +3003,16 @@ def admin_kam_manager_mapping(request: HttpRequest) -> HttpResponse:
 def dashboard(request: HttpRequest) -> HttpResponse:
     start_dt, end_dt, range_label = _get_dashboard_range(request)
     scope_kam_id, scope_label = _resolve_scope(request, request.user)
-    selected_user = _first_query_value(request, "user", "kam", "KAM", "username", "user_name", "kam_username")
+
+    selected_user = _first_query_value(
+        request,
+        "user",
+        "kam",
+        "KAM",
+        "username",
+        "user_name",
+        "kam_username",
+    )
 
     sales_target_mt = Decimal(0)
     calls_target = 0
@@ -2097,7 +3022,12 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     if scope_kam_id:
         start_date_ts = start_dt.date()
         end_date_ts_inc = (end_dt - timezone.timedelta(days=1)).date()
-        ts = _target_setting_for_kam_window(scope_kam_id, start_date_ts, end_date_ts_inc)
+        ts = _target_setting_for_kam_window(
+            scope_kam_id,
+            start_date_ts,
+            end_date_ts_inc,
+        )
+
         if ts:
             sales_target_mt = _safe_decimal(ts.sales_target_mt)
             calls_target = int(ts.calls_target or 0)
@@ -2109,112 +3039,249 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     end_date = end_dt.date()
 
     inv_qs = InvoiceFact.objects.filter(
-    invoice_date__gte=start_date,
-    invoice_date__lt=end_date,
+        invoice_date__gte=start_date,
+        invoice_date__lt=end_date,
     )
-    inv_qs = _filter_qs_by_kam_scope(inv_qs, request.user, scope_kam_id, "kam_id")
+    inv_qs = _filter_qs_by_kam_scope(
+        inv_qs,
+        request.user,
+        scope_kam_id,
+        "kam_id",
+    )
     inv_qs = _sales_converted_qs(inv_qs)
 
-    visit_plan_qs = VisitPlan.objects.filter(visit_date__gte=start_date, visit_date__lt=end_date)
-    visit_act_qs = VisitActual.objects.filter(plan__visit_date__gte=start_date, plan__visit_date__lt=end_date)
-    call_qs = CallLog.objects.filter(call_datetime__gte=start_dt, call_datetime__lt=end_dt)
-    lead_qs = LeadFact.objects.filter(doe__gte=start_date, doe__lt=end_date)
-    coll_qs = CollectionTxn.objects.filter(txn_datetime__gte=start_dt, txn_datetime__lt=end_dt)
+    visit_plan_qs = (
+        VisitPlan.objects
+        .select_related("kam", "customer", "batch")
+        .filter(
+            visit_date__gte=start_date,
+            visit_date__lt=end_date,
+        )
+    )
+    visit_act_qs = (
+        VisitActual.objects
+        .select_related("plan", "plan__kam", "plan__customer")
+        .filter(
+            plan__visit_date__gte=start_date,
+            plan__visit_date__lt=end_date,
+        )
+    )
+    call_qs = (
+        CallLog.objects
+        .select_related("kam", "customer")
+        .filter(
+            call_datetime__gte=start_dt,
+            call_datetime__lt=end_dt,
+        )
+    )
+    lead_qs = (
+        LeadFact.objects
+        .select_related("kam", "customer")
+        .filter(
+            doe__gte=start_date,
+            doe__lt=end_date,
+        )
+    )
+    coll_qs = (
+        CollectionTxn.objects
+        .select_related("kam", "customer")
+        .filter(
+            txn_datetime__gte=start_dt,
+            txn_datetime__lt=end_dt,
+        )
+    )
 
-    visit_plan_qs = _filter_qs_by_kam_scope(visit_plan_qs, request.user, scope_kam_id, "kam_id")
-    visit_act_qs = _filter_qs_by_kam_scope(visit_act_qs, request.user, scope_kam_id, "plan__kam_id")
-    call_qs = _filter_qs_by_kam_scope(call_qs, request.user, scope_kam_id, "kam_id")
-    lead_qs = _filter_qs_by_kam_scope(lead_qs, request.user, scope_kam_id, "kam_id")
-    coll_qs = _filter_qs_by_kam_scope(coll_qs, request.user, scope_kam_id, "kam_id")
+    visit_plan_qs = _filter_qs_by_kam_scope(
+        visit_plan_qs,
+        request.user,
+        scope_kam_id,
+        "kam_id",
+    )
+    visit_act_qs = _filter_qs_by_kam_scope(
+        visit_act_qs,
+        request.user,
+        scope_kam_id,
+        "plan__kam_id",
+    )
+    call_qs = _filter_qs_by_kam_scope(
+        call_qs,
+        request.user,
+        scope_kam_id,
+        "kam_id",
+    )
+    lead_qs = _filter_qs_by_kam_scope(
+        lead_qs,
+        request.user,
+        scope_kam_id,
+        "kam_id",
+    )
+    coll_qs = _filter_qs_by_kam_scope(
+        coll_qs,
+        request.user,
+        scope_kam_id,
+        "kam_id",
+    )
 
-    sales_mt = _safe_decimal(inv_qs.aggregate(mt=Sum("qty_mt")).get("mt"))
+    sales_mt = _safe_decimal(
+        inv_qs.aggregate(mt=Sum("qty_mt")).get("mt")
+    )
+
     visits_planned = visit_plan_qs.count()
     visits_actual = visit_act_qs.count()
     visits_successful = visit_act_qs.filter(successful=True).count()
+
     calls_total = call_qs.count()
-    calls_successful = call_qs.filter(outcome__isnull=False).exclude(outcome="").count()
+    calls_successful = call_qs.filter(
+        outcome__isnull=False,
+    ).exclude(
+        outcome="",
+    ).count()
 
     won_status_q = _lead_won_q()
+
     leads_agg = lead_qs.aggregate(
         total_mt=Sum("qty_mt"),
-        won_mt=Sum("qty_mt", filter=Q(status="WON")),
+        won_mt=Sum("qty_mt", filter=won_status_q),
     )
     leads_total_mt = _safe_decimal(leads_agg.get("total_mt"))
     leads_won_mt = _safe_decimal(leads_agg.get("won_mt"))
+
     leads_total_count = lead_qs.count()
-    leads_converted_count = lead_qs.filter(status="WON").count()
+    leads_converted_count = lead_qs.filter(won_status_q).count()
     leads_converted_value = _safe_decimal(
-        lead_qs.filter(status="WON").aggregate(v=Sum("qty_mt")).get("v")
+        lead_qs
+        .filter(won_status_q)
+        .aggregate(v=Sum("qty_mt"))
+        .get("v")
     )
-    collections_actual = _safe_decimal(coll_qs.aggregate(total_amt=Sum("amount")).get("total_amt"))
+
+    collections_actual = _safe_decimal(
+        coll_qs.aggregate(total_amt=Sum("amount")).get("total_amt")
+    )
 
     if scope_kam_id is not None:
         customer_ids_for_scope = list(
-            Customer.objects.filter(Q(kam_id=scope_kam_id) | Q(primary_kam_id=scope_kam_id)).values_list("id", flat=True)
+            Customer.objects
+            .filter(
+                Q(kam_id=scope_kam_id)
+                | Q(primary_kam_id=scope_kam_id)
+            )
+            .values_list("id", flat=True)
         )
     else:
-        customer_ids_for_scope = list(_customer_qs_for_user(request.user).values_list("id", flat=True))
+        customer_ids_for_scope = list(
+            _customer_qs_for_user(request.user)
+            .values_list("id", flat=True)
+        )
 
-    # ── Collection Plan Aggregation (overdue-driven, sheet = source of truth) ──
-    cp_qs = CollectionPlan.objects.filter(overdue_amount__gt=0)
-    cp_qs = _filter_qs_by_kam_scope(cp_qs, request.user, scope_kam_id, "kam_id")
+    cp_qs = (
+        CollectionPlan.objects
+        .select_related("kam", "customer")
+        .filter(overdue_amount__gt=0)
+    )
+    cp_qs = _filter_qs_by_kam_scope(
+        cp_qs,
+        request.user,
+        scope_kam_id,
+        "kam_id",
+    )
+
     cp_agg = cp_qs.aggregate(
         total_overdue=Sum("overdue_amount"),
         total_actual=Sum("actual_amount"),
     )
+
     collection_total_customers = cp_qs.count()
-    collection_overdue         = _safe_decimal(cp_agg.get("total_overdue"))
-    collection_actual_plan     = _safe_decimal(cp_agg.get("total_actual"))
-    collection_pending         = max(collection_overdue - collection_actual_plan, Decimal("0"))
+    collection_overdue = _safe_decimal(cp_agg.get("total_overdue"))
+    collection_actual_plan = _safe_decimal(cp_agg.get("total_actual"))
+    collection_pending = max(
+        collection_overdue - collection_actual_plan,
+        Decimal("0"),
+    )
 
-    # Backward-compat aliases used in ctx and _pct() calls below
-    collection_planned  = collection_overdue
+    collection_planned = collection_overdue
     collections_planned = collection_overdue
-
-    overdue_sum = collection_overdue
 
     overdue_snapshot_date = None
     prev_overdue_snapshot_date = None
     credit_limit_sum = Decimal(0)
     exposure_sum = Decimal(0)
-    overdue_sum = Decimal(0)
+    overdue_sum = collection_overdue
     prev_overdue_sum = Decimal(0)
 
     if customer_ids_for_scope:
         credit_limit_sum = _safe_decimal(
-            Customer.objects.filter(id__in=customer_ids_for_scope).aggregate(total_cl=Sum("credit_limit")).get("total_cl")
+            Customer.objects
+            .filter(id__in=customer_ids_for_scope)
+            .aggregate(total_cl=Sum("credit_limit"))
+            .get("total_cl")
         )
+
         end_date_inclusive = (end_dt - timezone.timedelta(days=1)).date()
         start_date_inclusive = start_dt.date()
 
         overdue_snapshot_date = (
-            OverdueSnapshot.objects.filter(customer_id__in=customer_ids_for_scope, snapshot_date__lte=end_date_inclusive)
-            .order_by("-snapshot_date").values_list("snapshot_date", flat=True).first()
-        )
-        if overdue_snapshot_date:
-            agg = OverdueSnapshot.objects.filter(
-                customer_id__in=customer_ids_for_scope, snapshot_date=overdue_snapshot_date
-            ).aggregate(
-                total_exposure=Sum("exposure"), total_overdue=Sum("overdue"),
-                a0=Sum("ageing_0_30"), a1=Sum("ageing_31_60"), a2=Sum("ageing_61_90"), a3=Sum("ageing_90_plus"),
+            OverdueSnapshot.objects
+            .filter(
+                customer_id__in=customer_ids_for_scope,
+                snapshot_date__lte=end_date_inclusive,
             )
+            .order_by("-snapshot_date")
+            .values_list("snapshot_date", flat=True)
+            .first()
+        )
+
+        if overdue_snapshot_date:
+            agg = (
+                OverdueSnapshot.objects
+                .filter(
+                    customer_id__in=customer_ids_for_scope,
+                    snapshot_date=overdue_snapshot_date,
+                )
+                .aggregate(
+                    total_exposure=Sum("exposure"),
+                    total_overdue=Sum("overdue"),
+                    a0=Sum("ageing_0_30"),
+                    a1=Sum("ageing_31_60"),
+                    a2=Sum("ageing_61_90"),
+                    a3=Sum("ageing_90_plus"),
+                )
+            )
+
             exposure_sum = _safe_decimal(agg.get("total_exposure"))
             overdue_sum = _safe_decimal(agg.get("total_overdue"))
+
             if not exposure_sum:
-                ageing_sum = sum(_safe_decimal(agg.get(k)) for k in ("a0", "a1", "a2", "a3"))
+                ageing_sum = sum(
+                    _safe_decimal(agg.get(k))
+                    for k in ("a0", "a1", "a2", "a3")
+                )
                 if ageing_sum:
                     exposure_sum = ageing_sum
+
             if not exposure_sum and overdue_sum:
                 exposure_sum = overdue_sum
 
         prev_overdue_snapshot_date = (
-            OverdueSnapshot.objects.filter(customer_id__in=customer_ids_for_scope, snapshot_date__lt=start_date_inclusive)
-            .order_by("-snapshot_date").values_list("snapshot_date", flat=True).first()
+            OverdueSnapshot.objects
+            .filter(
+                customer_id__in=customer_ids_for_scope,
+                snapshot_date__lt=start_date_inclusive,
+            )
+            .order_by("-snapshot_date")
+            .values_list("snapshot_date", flat=True)
+            .first()
         )
+
         if prev_overdue_snapshot_date:
-            agg2 = OverdueSnapshot.objects.filter(
-                customer_id__in=customer_ids_for_scope, snapshot_date=prev_overdue_snapshot_date
-            ).aggregate(total_overdue=Sum("overdue"))
+            agg2 = (
+                OverdueSnapshot.objects
+                .filter(
+                    customer_id__in=customer_ids_for_scope,
+                    snapshot_date=prev_overdue_snapshot_date,
+                )
+                .aggregate(total_overdue=Sum("overdue"))
+            )
             prev_overdue_sum = _safe_decimal(agg2.get("total_overdue"))
 
     def _pct(n: Decimal, d: Decimal) -> Optional[Decimal]:
@@ -2234,30 +3301,165 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     overdue_risk_ratio = (exposure_sum / credit_limit_sum) if credit_limit_sum else None
     visit_success_pct = _pct(Decimal(visits_successful), Decimal(visits_actual)) if visits_actual else None
 
-    prod_by_grade = list(inv_qs.values("grade").annotate(mt=Sum("qty_mt")).order_by("-mt"))
-    prod_by_size = list(inv_qs.values("size").annotate(mt=Sum("qty_mt")).order_by("-mt"))
+    prod_by_grade = list(
+        inv_qs
+        .values("grade")
+        .annotate(mt=Sum("qty_mt"))
+        .order_by("-mt")
+    )
+    prod_by_size = list(
+        inv_qs
+        .values("size")
+        .annotate(mt=Sum("qty_mt"))
+        .order_by("-mt")
+    )
+
+    if sales_mt:
+        for row in prod_by_grade:
+            row["pct"] = round(
+                float(
+                    (_safe_decimal(row.get("mt")) / sales_mt)
+                    * Decimal("100")
+                ),
+                1,
+            )
+
+        for row in prod_by_size:
+            row["pct"] = round(
+                float(
+                    (_safe_decimal(row.get("mt")) / sales_mt)
+                    * Decimal("100")
+                ),
+                1,
+            )
 
     trend_rows: List[Dict] = []
     anchor_end = _last_completed_ms_week_end(timezone.now())
+
     for k in (3, 2, 1, 0):
         end_i = anchor_end - timezone.timedelta(days=7 * k)
         start_i = end_i - timezone.timedelta(days=7)
-        _, __, pid_i = _ms_week_bounds(start_i)
+        _a, _b, pid_i = _ms_week_bounds(start_i)
+
         inv_i = _filter_qs_by_kam_scope(
-            InvoiceFact.objects.filter(invoice_date__gte=start_i.date(), invoice_date__lt=end_i.date()),
-            request.user, scope_kam_id, "kam_id"
+            InvoiceFact.objects.filter(
+                invoice_date__gte=start_i.date(),
+                invoice_date__lt=end_i.date(),
+            ),
+            request.user,
+            scope_kam_id,
+            "kam_id",
         )
-        inv_i = _preferred_inv_qs(inv_i)
-        vis_i = _filter_qs_by_kam_scope(VisitPlan.objects.filter(visit_date__gte=start_i.date(), visit_date__lt=end_i.date()), request.user, scope_kam_id, "kam_id")
-        calls_i = _filter_qs_by_kam_scope(CallLog.objects.filter(call_datetime__gte=start_i, call_datetime__lt=end_i), request.user, scope_kam_id, "kam_id")
-        coll_i = _filter_qs_by_kam_scope(CollectionTxn.objects.filter(txn_datetime__gte=start_i, txn_datetime__lt=end_i), request.user, scope_kam_id, "kam_id")
+        inv_i = _sales_converted_qs(inv_i)
+
+        vis_i = _filter_qs_by_kam_scope(
+            VisitPlan.objects.filter(
+                visit_date__gte=start_i.date(),
+                visit_date__lt=end_i.date(),
+            ),
+            request.user,
+            scope_kam_id,
+            "kam_id",
+        )
+
+        calls_i = _filter_qs_by_kam_scope(
+            CallLog.objects.filter(
+                call_datetime__gte=start_i,
+                call_datetime__lt=end_i,
+            ),
+            request.user,
+            scope_kam_id,
+            "kam_id",
+        )
+
+        coll_i = _filter_qs_by_kam_scope(
+            CollectionTxn.objects.filter(
+                txn_datetime__gte=start_i,
+                txn_datetime__lt=end_i,
+            ),
+            request.user,
+            scope_kam_id,
+            "kam_id",
+        )
+
         trend_rows.append({
             "week": pid_i,
-            "sales_mt": _safe_decimal(inv_i.aggregate(mt=Sum("qty_mt")).get("mt")),
+            "sales_mt": _safe_decimal(
+                inv_i.aggregate(mt=Sum("qty_mt")).get("mt")
+            ),
             "visits": vis_i.count(),
             "calls": calls_i.count(),
-            "collections": _safe_decimal(coll_i.aggregate(a=Sum("amount")).get("a")),
+            "collections": _safe_decimal(
+                coll_i.aggregate(a=Sum("amount")).get("a")
+            ),
         })
+
+    kpi = {
+        "sales_mt": sales_mt,
+        "sales_target_mt": sales_target_mt,
+        "sales_ach_pct": sales_ach_pct,
+
+        "visits_target": visits_target,
+        "visits_planned": visits_planned,
+        "visits_actual": visits_actual,
+        "visit_ach_pct": visit_ach_pct,
+        "visit_success_pct": visit_success_pct,
+
+        "calls": calls_total,
+        "calls_successful": calls_successful,
+        "calls_target": calls_target,
+        "call_ach_pct": call_ach_pct,
+        "calls_conversion_pct": calls_conversion_pct,
+
+        "leads_total_mt": leads_total_mt,
+        "leads_won_mt": leads_won_mt,
+        "leads_target_mt": leads_target_mt,
+        "lead_conv_pct": lead_conv_pct,
+        "leads_total_count": leads_total_count,
+        "leads_converted_count": leads_converted_count,
+        "lead_count_conv_pct": lead_count_conv_pct,
+        "leads_converted_value": leads_converted_value,
+
+        "collections_actual": collections_actual,
+        "collections_planned": collections_planned,
+        "collections_eff_pct": coll_eff_pct,
+
+        "collection_planned": collection_planned,
+        "collection_actual": collection_actual_plan,
+        "collection_pending": collection_pending,
+        "collection_total_customers": collection_total_customers,
+        "collection_ach_pct": collection_ach_pct,
+        "collection_overdue_amt": overdue_sum,
+
+        "overdue_sum": overdue_sum,
+        "prev_overdue_sum": prev_overdue_sum,
+        "overdue_reduction_pct": overdue_reduction_pct,
+        "credit_limit_sum": credit_limit_sum,
+        "exposure_sum": exposure_sum,
+        "overdue_risk_ratio": overdue_risk_ratio,
+        "overdue_snapshot_date": overdue_snapshot_date,
+        "prev_overdue_snapshot_date": prev_overdue_snapshot_date,
+    }
+
+    selected_report_kam = _dashboard_selected_report_kam(
+        request=request,
+        scope_kam_id=scope_kam_id,
+    )
+
+    performance_report = None
+
+    if selected_report_kam:
+        performance_report = build_kam_performance_report(
+            kam_id=selected_report_kam.id,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+
+    dashboard_report_charts = _build_dashboard_report_charts(
+        report=performance_report,
+        kpi=kpi,
+        trend_rows=trend_rows,
+    )
 
     ctx = {
         "page_title": "KAM Dashboard",
@@ -2268,45 +3470,30 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         "filter_from": start_dt.date().isoformat(),
         "filter_to": (end_dt - timezone.timedelta(days=1)).date().isoformat(),
         "selected_user": selected_user,
-        "kpi": {
-            "sales_mt": sales_mt, "sales_target_mt": sales_target_mt, "sales_ach_pct": sales_ach_pct,
-            "visits_target": visits_target, "visits_planned": visits_planned, "visits_actual": visits_actual,
-            "visit_ach_pct": visit_ach_pct, "visit_success_pct": visit_success_pct,
-            "calls": calls_total, "calls_successful": calls_successful, "calls_target": calls_target,
-            "call_ach_pct": call_ach_pct, "calls_conversion_pct": calls_conversion_pct,
-            "leads_total_mt": leads_total_mt, "leads_won_mt": leads_won_mt,
-            "leads_target_mt": leads_target_mt, "lead_conv_pct": lead_conv_pct,
-            "leads_total_count": leads_total_count,
-            "leads_converted_count": leads_converted_count,
-            "lead_count_conv_pct": lead_count_conv_pct,
-            "leads_converted_value": leads_converted_value,
-            "collections_actual": collections_actual,
-            "collections_planned": collections_planned,
-            "collections_eff_pct": coll_eff_pct,
-            "collection_planned": collection_planned,
-            "collection_actual": collection_actual_plan,
-            "collection_pending": collection_pending,
-            "collection_total_customers": collection_total_customers,
-            "collection_ach_pct": collection_ach_pct,
-            "collection_overdue_amt": overdue_sum,
-            "overdue_sum": overdue_sum, "prev_overdue_sum": prev_overdue_sum,
-            "overdue_reduction_pct": overdue_reduction_pct, "credit_limit_sum": credit_limit_sum,
-            "exposure_sum": exposure_sum, "overdue_risk_ratio": overdue_risk_ratio,
-            "overdue_snapshot_date": overdue_snapshot_date,
-            "prev_overdue_snapshot_date": prev_overdue_snapshot_date,
-        },
+
+        "kpi": kpi,
         "prod_by_grade": prod_by_grade,
         "prod_by_size": prod_by_size,
         "trend_rows": trend_rows,
-        "lead_analysis_data": {"total": leads_total_count, "converted": leads_converted_count},
-        "collection_analysis_data": {
-        "planned": float(collection_planned),
-        "actual": float(collection_actual_plan),
-        "overdue": float(collection_overdue),
-        "pending": float(collection_pending),
-        "customers": collection_total_customers,
+
+        "lead_analysis_data": {
+            "total": leads_total_count,
+            "converted": leads_converted_count,
         },
+        "collection_analysis_data": {
+            "planned": float(collection_planned),
+            "actual": float(collection_actual_plan),
+            "overdue": float(collection_overdue),
+            "pending": float(collection_pending),
+            "customers": collection_total_customers,
+        },
+
+        "kam_report": performance_report,
+        "selected_report_kam": selected_report_kam,
+        "dashboard_report_charts": dashboard_report_charts,
+        "report_kam_options": _kam_options_for_performance_report(request.user),
     }
+
     return render(request, "kam/kam_dashboard.html", ctx)
 
 
@@ -2316,11 +3503,25 @@ def dashboard(request: HttpRequest) -> HttpResponse:
 @login_required(login_url="/accounts/login/")
 @require_kam_code("kam_manager")
 def manager_dashboard(request: HttpRequest) -> HttpResponse:
+    """
+    Today's Details.
+
+    Fixed:
+    - Purpose of Visit is available through plan.purpose.
+    - Outcome counts only post-meeting-complete visits.
+    - Manager dashboard does not treat incomplete actuals as completed outcome.
+    """
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
 
-    today_start = timezone.localtime(timezone.now()).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = timezone.localtime(timezone.now()).replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
     tomorrow = today_start + timezone.timedelta(days=1)
+
     kam_ids = _kams_managed_by_manager(request.user)
 
     def _scope(qs, field):
@@ -2328,39 +3529,129 @@ def manager_dashboard(request: HttpRequest) -> HttpResponse:
             return qs
         return qs.filter(**{f"{field}__in": kam_ids})
 
-    visits_today_qs = _scope(VisitActual.objects.select_related("plan__customer", "plan__kam").filter(plan__visit_date__gte=today_start.date(), plan__visit_date__lt=tomorrow.date()), "plan__kam_id")
-    calls_today_qs = _scope(CallLog.objects.select_related("customer", "kam").filter(call_datetime__gte=today_start, call_datetime__lt=tomorrow), "kam_id")
-    leads_today_qs = _scope(LeadFact.objects.filter(doe=today_start.date()), "kam_id")
-    collections_today_qs = _scope(CollectionTxn.objects.select_related("customer", "kam").filter(txn_datetime__gte=today_start, txn_datetime__lt=tomorrow), "kam_id")
-    collections_today_total = _safe_decimal(collections_today_qs.aggregate(a=Sum("amount"))["a"])
+    today_visit_plans_qs = _scope(
+        VisitPlan.objects
+        .select_related("customer", "kam", "actual")
+        .filter(
+            visit_date__gte=today_start.date(),
+            visit_date__lt=tomorrow.date(),
+        ),
+        "kam_id",
+    )
+
+    visits_actual_qs = _scope(
+        VisitActual.objects
+        .select_related("plan__customer", "plan__kam")
+        .filter(
+            plan__visit_date__gte=today_start.date(),
+            plan__visit_date__lt=tomorrow.date(),
+        ),
+        "plan__kam_id",
+    )
+
+    completed_actuals = [
+        actual
+        for actual in visits_actual_qs[:300]
+        if _post_meeting_details_complete(actual)
+    ]
+
+    calls_today_qs = _scope(
+        CallLog.objects
+        .select_related("customer", "kam")
+        .filter(call_datetime__gte=today_start, call_datetime__lt=tomorrow),
+        "kam_id",
+    )
+
+    leads_today_qs = _scope(
+        LeadFact.objects.filter(doe=today_start.date()),
+        "kam_id",
+    )
+
+    collections_today_qs = _scope(
+        CollectionTxn.objects
+        .select_related("customer", "kam")
+        .filter(txn_datetime__gte=today_start, txn_datetime__lt=tomorrow),
+        "kam_id",
+    )
+
+    collections_today_total = _safe_decimal(
+        collections_today_qs.aggregate(a=Sum("amount")).get("a")
+    )
 
     kam_rows = []
-    kams = (User.objects.filter(is_active=True, id__in=kam_ids).order_by("username") if kam_ids else User.objects.none())
+
     if _is_admin(request.user):
         kams = User.objects.filter(is_active=True).order_by("username")
+    else:
+        kams = User.objects.filter(is_active=True, id__in=kam_ids).order_by("username")
+
     for k in kams:
-        v_count = VisitActual.objects.filter(plan__kam=k, plan__visit_date__gte=today_start.date(), plan__visit_date__lt=tomorrow.date()).count()
-        c_count = CallLog.objects.filter(kam=k, call_datetime__gte=today_start, call_datetime__lt=tomorrow).count()
-        l_count = LeadFact.objects.filter(kam=k, doe=today_start.date()).count()
-        coll_amt = _safe_decimal(CollectionTxn.objects.filter(kam=k, txn_datetime__gte=today_start, txn_datetime__lt=tomorrow).aggregate(a=Sum("amount"))["a"])
-        if v_count or c_count or l_count or coll_amt:
-            kam_rows.append({"kam": k, "visits": v_count, "calls": c_count, "leads": l_count, "collections": coll_amt})
+        v_actual_qs = VisitActual.objects.select_related("plan").filter(
+            plan__kam=k,
+            plan__visit_date__gte=today_start.date(),
+            plan__visit_date__lt=tomorrow.date(),
+        )
+
+        complete_visit_count = sum(
+            1
+            for actual in v_actual_qs
+            if _post_meeting_details_complete(actual)
+        )
+
+        c_count = CallLog.objects.filter(
+            kam=k,
+            call_datetime__gte=today_start,
+            call_datetime__lt=tomorrow,
+        ).count()
+
+        l_count = LeadFact.objects.filter(
+            kam=k,
+            doe=today_start.date(),
+        ).count()
+
+        coll_amt = _safe_decimal(
+            CollectionTxn.objects.filter(
+                kam=k,
+                txn_datetime__gte=today_start,
+                txn_datetime__lt=tomorrow,
+            ).aggregate(a=Sum("amount")).get("a")
+        )
+
+        if complete_visit_count or c_count or l_count or coll_amt:
+            kam_rows.append(
+                {
+                    "kam": k,
+                    "visits": complete_visit_count,
+                    "calls": c_count,
+                    "leads": l_count,
+                    "collections": coll_amt,
+                }
+            )
 
     ctx = {
         "page_title": "Today's Details",
         "today": today_start.date(),
-        "today_visits_count": visits_today_qs.count(),
-        "today_visits_success": visits_today_qs.filter(successful=True).count(),
+
+        "today_visits_count": today_visit_plans_qs.count(),
+        "today_visits_success": sum(
+            1
+            for actual in completed_actuals
+            if actual.successful is True
+        ),
+
         "today_calls_count": calls_today_qs.count(),
         "today_leads_count": leads_today_qs.count(),
         "today_collections_amount": collections_today_total,
         "today_collections_count": collections_today_qs.count(),
-        "today_visits": list(visits_today_qs[:50]),
+
+        # Template expects actual rows with v.plan.
+        "today_visits": completed_actuals[:50],
         "today_calls": list(calls_today_qs[:50]),
         "today_leads": list(leads_today_qs[:50]),
         "today_collections": list(collections_today_qs[:50]),
         "kam_rows": kam_rows,
     }
+
     return render(request, "kam/manager_dashboard.html", ctx)
 
 
@@ -2431,7 +3722,25 @@ def manager_kpis(request: HttpRequest) -> HttpResponse:
 # =====================================================================
 # PLAN VISIT — Single + Batch
 # =====================================================================
+@login_required(login_url="/accounts/login/")
+@require_kam_code("kam_plan")
 def weekly_plan(request: HttpRequest) -> HttpResponse:
+    """
+    Plan Visit page.
+
+    Production-safe update:
+    - KAM sees only scoped/assigned customers through _customer_qs_for_user.
+    - Purpose of Visit mandatory for Single Visit Save Draft.
+    - Purpose of Visit mandatory for Single Visit Submit to Manager.
+    - New customer is auto-created only once.
+    - New customer is mapped to KAM through Customer.kam, Customer.primary_kam, and KAMAssignment.
+    - New customer becomes available in future existing customer dropdown.
+    - Batch manual customers also receive KAMAssignment.
+    - Existing approval email workflow is preserved.
+    - Existing batch workflow is preserved.
+    - No duplicate workflows.
+    - No unrelated modules touched.
+    """
     schema_ready = _visitplan_workflow_schema_ready()
     user = request.user
 
@@ -2454,16 +3763,16 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
         customer_queryset=customer_qs,
     )
 
-    batch_form = VisitBatchForm(prefix=BATCH_PREFIX)
+    batch_form = VisitBatchForm(
+        prefix=BATCH_PREFIX,
+        customer_queryset=customer_qs,
+    )
 
     if "customer" in single_form.fields:
         single_form.fields["customer"].queryset = customer_qs
 
     if "customers" in batch_form.fields:
         batch_form.fields["customers"].queryset = customer_qs
-
-    if "purpose" in batch_form.fields:
-        batch_form.fields["purpose"].required = False
 
     if request.method == "POST" and not schema_ready:
         messages.error(
@@ -2473,10 +3782,16 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
         )
         return redirect(reverse("kam:plan"))
 
+    post_mode = (
+        request.POST.get("mode")
+        or request.POST.get("form_kind")
+        or ""
+    ).strip().lower()
+
     # ---------------------------------------------------------------------
     # SINGLE VISIT SUBMIT
     # ---------------------------------------------------------------------
-    if request.method == "POST" and (request.POST.get("mode") or "").strip().lower() == "single":
+    if request.method == "POST" and post_mode == "single":
         single_form = SingleVisitForm(
             request.POST,
             prefix=SINGLE_PREFIX,
@@ -2500,12 +3815,26 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
         if single_form.is_valid():
             submit_action = (
-                request.POST.get("submit_action") or "save_draft"
+                request.POST.get("submit_action")
+                or request.POST.get("action")
+                or "save_draft"
             ).strip().lower()
+
+            if submit_action == "draft":
+                submit_action = "save_draft"
+
+            if submit_action == "submit":
+                submit_action = "submit_to_manager"
 
             plan: VisitPlan = single_form.save(commit=False)
             plan.kam = user
             plan.batch = None
+
+            try:
+                plan.purpose = _require_purpose_of_visit(plan.purpose)
+            except ValueError as exc:
+                messages.error(request, str(exc))
+                return redirect(reverse("kam:plan"))
 
             try:
                 profile = getattr(user, "profile", None)
@@ -2520,31 +3849,59 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             if plan.visit_category == VisitPlan.CAT_CUSTOMER:
                 if manual_customer_name:
                     try:
-                        customer_obj, created = Customer.objects.get_or_create(
-                            name__iexact=manual_customer_name,
-                            defaults={
-                                "name": manual_customer_name,
-                                "kam": user,
-                                "primary_kam": user,
-                                "source": Customer.SOURCE_MANUAL,
-                                "created_by": user,
-                            },
-                        )
+                        with transaction.atomic():
+                            customer_obj = (
+                                Customer.objects
+                                .select_for_update()
+                                .filter(name__iexact=manual_customer_name)
+                                .first()
+                            )
 
-                        changed = False
+                            created = False
 
-                        if not customer_obj.kam_id:
-                            customer_obj.kam = user
-                            changed = True
+                            if not customer_obj:
+                                customer_obj = Customer.objects.create(
+                                    name=manual_customer_name,
+                                    kam=user,
+                                    primary_kam=user,
+                                    source=Customer.SOURCE_MANUAL,
+                                    created_by=user,
+                                )
+                                created = True
 
-                        if not customer_obj.primary_kam_id:
-                            customer_obj.primary_kam = user
-                            changed = True
+                            changed_fields = []
 
-                        if changed:
-                            customer_obj.save(update_fields=["kam", "primary_kam", "updated_at"])
+                            if hasattr(customer_obj, "kam_id") and not customer_obj.kam_id:
+                                customer_obj.kam = user
+                                changed_fields.append("kam")
+
+                            if hasattr(customer_obj, "primary_kam_id") and not customer_obj.primary_kam_id:
+                                customer_obj.primary_kam = user
+                                changed_fields.append("primary_kam")
+
+                            if hasattr(customer_obj, "source") and not getattr(customer_obj, "source", None):
+                                customer_obj.source = Customer.SOURCE_MANUAL
+                                changed_fields.append("source")
+
+                            if hasattr(customer_obj, "created_by_id") and not getattr(customer_obj, "created_by_id", None):
+                                customer_obj.created_by = user
+                                changed_fields.append("created_by")
+
+                            if changed_fields:
+                                if hasattr(customer_obj, "updated_at"):
+                                    changed_fields.append("updated_at")
+                                customer_obj.save(update_fields=changed_fields)
+
+                            KAMAssignment.objects.get_or_create(
+                                customer=customer_obj,
+                                kam=user,
+                                defaults={
+                                    "active_from": timezone.localdate(),
+                                },
+                            )
 
                         plan.customer = customer_obj
+                        plan.counterparty_name = ""
 
                         if created:
                             messages.info(
@@ -2554,8 +3911,9 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
                     except Exception as exc:
                         logger.exception(
-                            "Failed to get_or_create manual customer: %s",
+                            "Failed to create/map manual customer. name=%s user_id=%s",
                             manual_customer_name,
+                            getattr(user, "id", None),
                         )
                         messages.error(
                             request,
@@ -2567,9 +3925,11 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     if not customer_qs.filter(id=plan.customer_id).exists():
                         messages.error(
                             request,
-                            "Invalid customer selection (out of your scope).",
+                            "Invalid customer selection. You can only select customers assigned to your KAM mapping.",
                         )
                         return redirect(reverse("kam:plan"))
+
+                    plan.counterparty_name = ""
 
                 else:
                     messages.error(
@@ -2683,14 +4043,15 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
     # ---------------------------------------------------------------------
     # BATCH VISIT SUBMIT
     # ---------------------------------------------------------------------
-    if request.method == "POST" and (request.POST.get("mode") or "").strip().lower() == "batch":
-        batch_form = VisitBatchForm(request.POST, prefix=BATCH_PREFIX)
+    if request.method == "POST" and post_mode == "batch":
+        batch_form = VisitBatchForm(
+            request.POST,
+            prefix=BATCH_PREFIX,
+            customer_queryset=customer_qs,
+        )
 
         if "customers" in batch_form.fields:
             batch_form.fields["customers"].queryset = customer_qs
-
-        if "purpose" in batch_form.fields:
-            batch_form.fields["purpose"].required = False
 
         action = (
             request.POST.get("action")
@@ -2699,6 +4060,8 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
         ).strip().lower()
 
         proceed_flag = action in {
+            "submit",
+            "submit_to_manager",
             "proceed",
             "proceed_to_manager",
             "proceed-manager",
@@ -2716,7 +4079,15 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             visit_category = batch_form.cleaned_data.get("visit_category")
             from_date = batch_form.cleaned_data.get("from_date")
             to_date = batch_form.cleaned_data.get("to_date")
-            remarks = (batch_form.cleaned_data.get("purpose") or "").strip()
+
+            try:
+                remarks = _require_purpose_of_visit(
+                    batch_form.cleaned_data.get("purpose"),
+                    max_length=1000,
+                )
+            except ValueError as exc:
+                messages.error(request, str(exc))
+                return redirect(reverse("kam:plan"))
 
             selected_ids: List[int] = []
 
@@ -2738,36 +4109,63 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
             for manual_name in manual_names:
                 try:
-                    manual_customer, created = Customer.objects.get_or_create(
-                        name__iexact=manual_name,
-                        defaults={
-                            "name": manual_name,
-                            "kam": user,
-                            "primary_kam": user,
-                            "source": Customer.SOURCE_MANUAL,
-                            "created_by": user,
-                        },
-                    )
+                    with transaction.atomic():
+                        manual_customer = (
+                            Customer.objects
+                            .select_for_update()
+                            .filter(name__iexact=manual_name)
+                            .first()
+                        )
 
-                    changed = False
+                        created = False
 
-                    if not manual_customer.kam_id:
-                        manual_customer.kam = user
-                        changed = True
+                        if not manual_customer:
+                            manual_customer = Customer.objects.create(
+                                name=manual_name,
+                                kam=user,
+                                primary_kam=user,
+                                source=Customer.SOURCE_MANUAL,
+                                created_by=user,
+                            )
+                            created = True
 
-                    if not manual_customer.primary_kam_id:
-                        manual_customer.primary_kam = user
-                        changed = True
+                        changed_fields = []
 
-                    if changed:
-                        manual_customer.save(update_fields=["kam", "primary_kam", "updated_at"])
+                        if hasattr(manual_customer, "kam_id") and not manual_customer.kam_id:
+                            manual_customer.kam = user
+                            changed_fields.append("kam")
+
+                        if hasattr(manual_customer, "primary_kam_id") and not manual_customer.primary_kam_id:
+                            manual_customer.primary_kam = user
+                            changed_fields.append("primary_kam")
+
+                        if hasattr(manual_customer, "source") and not getattr(manual_customer, "source", None):
+                            manual_customer.source = Customer.SOURCE_MANUAL
+                            changed_fields.append("source")
+
+                        if hasattr(manual_customer, "created_by_id") and not getattr(manual_customer, "created_by_id", None):
+                            manual_customer.created_by = user
+                            changed_fields.append("created_by")
+
+                        if changed_fields:
+                            if hasattr(manual_customer, "updated_at"):
+                                changed_fields.append("updated_at")
+                            manual_customer.save(update_fields=changed_fields)
+
+                        KAMAssignment.objects.get_or_create(
+                            customer=manual_customer,
+                            kam=user,
+                            defaults={
+                                "active_from": timezone.localdate(),
+                            },
+                        )
 
                     if manual_customer.id not in selected_ids:
                         selected_ids.append(manual_customer.id)
 
                     if created:
                         logger.info(
-                            "Batch manual customer created: id=%s name=%r by user=%s",
+                            "Batch manual customer created and mapped: id=%s name=%r by user=%s",
                             manual_customer.id,
                             manual_name,
                             user.username,
@@ -2775,7 +4173,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
                 except Exception as exc:
                     logger.exception(
-                        "Failed to get_or_create batch manual customer: %r",
+                        "Failed to create/map batch manual customer: %r",
                         manual_name,
                     )
                     messages.error(
@@ -2794,8 +4192,10 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     )
                     return redirect(reverse("kam:plan"))
 
+                refreshed_customer_qs = _customer_qs_for_user(user).order_by("name", "code")
+
                 valid_selected_customers = list(
-                    customer_qs
+                    refreshed_customer_qs
                     .filter(id__in=selected_ids)
                     .order_by("name", "code")
                 )
@@ -2809,6 +4209,19 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                         "One or more selected customers are outside your allowed scope.",
                     )
                     return redirect(reverse("kam:plan"))
+
+                for customer in valid_selected_customers:
+                    try:
+                        _require_purpose_of_visit(
+                            request.POST.get(f"purpose_{customer.id}"),
+                            max_length=500,
+                        )
+                    except ValueError:
+                        messages.error(
+                            request,
+                            f"Purpose of Visit is required for customer: {customer.name}",
+                        )
+                        return redirect(reverse("kam:plan"))
 
             non_customer_lines = []
 
@@ -2829,6 +4242,15 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     line_form = MultiVisitPlanLineForm(data)
 
                     if line_form.is_valid():
+                        try:
+                            _require_purpose_of_visit(
+                                line_form.cleaned_data.get("counterparty_purpose"),
+                                max_length=500,
+                            )
+                        except ValueError as exc:
+                            messages.error(request, str(exc))
+                            return redirect(reverse("kam:plan"))
+
                         non_customer_lines.append(line_form)
                     else:
                         messages.error(
@@ -2836,6 +4258,13 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                             "One or more non-customer batch lines are invalid.",
                         )
                         return redirect(reverse("kam:plan"))
+
+                if not non_customer_lines:
+                    messages.error(
+                        request,
+                        "Add at least one line to save a non-customer batch visit.",
+                    )
+                    return redirect(reverse("kam:plan"))
 
             approval_status = (
                 VisitBatch.PENDING_APPROVAL
@@ -2895,7 +4324,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     from_date=from_date,
                     to_date=to_date,
                     visit_category=visit_category,
-                    purpose=remarks or None,
+                    purpose=remarks,
                     approval_status=approval_status,
                     submitted_at=timezone.now() if proceed_flag else None,
                 )
@@ -2904,9 +4333,10 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
                 if visit_category == VisitBatch.CAT_CUSTOMER:
                     for customer in valid_selected_customers:
-                        purpose = (
-                            request.POST.get(f"purpose_{customer.id}") or ""
-                        ).strip()
+                        purpose = _require_purpose_of_visit(
+                            request.POST.get(f"purpose_{customer.id}"),
+                            max_length=500,
+                        )
 
                         expected_sales_mt_raw = (
                             request.POST.get(f"expected_sales_mt_{customer.id}") or ""
@@ -2945,7 +4375,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                             visit_date_to=to_date,
                             visit_type=VisitPlan.PLANNED,
                             visit_category=VisitPlan.CAT_CUSTOMER,
-                            purpose=purpose or (remarks or None),
+                            purpose=purpose,
                             expected_sales_mt=expected_sales,
                             expected_collection=expected_collection,
                             location=location,
@@ -2956,15 +4386,12 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                         created_lines += 1
 
                 else:
-                    if not non_customer_lines:
-                        messages.error(
-                            request,
-                            "Add at least one line to save a non-customer batch draft.",
-                        )
-                        transaction.set_rollback(True)
-                        return redirect(reverse("kam:plan"))
-
                     for line_form in non_customer_lines:
+                        line_purpose = _require_purpose_of_visit(
+                            line_form.cleaned_data.get("counterparty_purpose"),
+                            max_length=500,
+                        )
+
                         VisitPlan.objects.create(
                             batch=batch,
                             customer=None,
@@ -2974,11 +4401,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                             visit_date_to=to_date,
                             visit_type=VisitPlan.PLANNED,
                             visit_category=visit_category,
-                            purpose=(
-                                line_form.cleaned_data.get("counterparty_purpose")
-                                or remarks
-                                or None
-                            ),
+                            purpose=line_purpose,
                             location=(
                                 line_form.cleaned_data.get("counterparty_location")
                                 or ""
@@ -3126,6 +4549,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                 visit_date__gte=plan_window_start,
                 visit_date__lte=plan_window_end,
             )
+            .select_related("customer", "kam", "actual")
             .order_by("visit_date", "customer__name")
         )
     else:
@@ -3137,6 +4561,53 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
         "single_form": single_form,
         "batch_form": batch_form,
         "plans": my_plans,
+        "recent_plans": my_plans,
+        "recent_visits": my_plans,
+        "customers": list(customer_qs),
+        "SINGLE_PREFIX": SINGLE_PREFIX,
+        "BATCH_PREFIX": BATCH_PREFIX,
+        "visitplan_schema_ready": schema_ready,
+        "status_constants": {
+            "DRAFT": STATUS_DRAFT,
+            "PENDING_APPROVAL": STATUS_PENDING_APPROVAL,
+            "APPROVED": STATUS_APPROVED,
+            "REJECTED": STATUS_REJECTED,
+            "COMPLETED": STATUS_COMPLETED,
+        },
+    }
+
+    return render(request, "kam/plan_visit.html", ctx)
+
+    # ---------------------------------------------------------------------
+    # GET PAGE RENDER
+    # ---------------------------------------------------------------------
+    week_start, week_end, _ = _iso_week_bounds(timezone.now())
+
+    if schema_ready:
+        today_local = timezone.localtime(timezone.now()).date()
+        plan_window_start = today_local - timezone.timedelta(days=7)
+        plan_window_end = today_local + timezone.timedelta(days=7)
+
+        my_plans = (
+            _visitplan_qs_for_user(user)
+            .filter(
+                batch__isnull=True,
+                visit_date__gte=plan_window_start,
+                visit_date__lte=plan_window_end,
+            )
+            .select_related("customer", "kam", "actual")
+            .order_by("visit_date", "customer__name")
+        )
+    else:
+        my_plans = []
+
+    ctx = {
+        "page_title": "Plan Visit",
+        "form": single_form,
+        "single_form": single_form,
+        "batch_form": batch_form,
+        "plans": my_plans,
+        "recent_plans": my_plans,
         "customers": list(customer_qs),
         "SINGLE_PREFIX": SINGLE_PREFIX,
         "BATCH_PREFIX": BATCH_PREFIX,
@@ -3436,25 +4907,86 @@ def single_visit_reject_link(request: HttpRequest, token: str) -> HttpResponse:
 # =====================================================================
 @login_required(login_url="/accounts/login/")
 def single_visit_list(request: HttpRequest) -> HttpResponse:
-    if not _visitplan_workflow_schema_ready():
-        messages.error(request, "Single Visit workflow DB fields are not migrated yet. Run migrations before using this page.")
-        return render(request, "kam/single_visit_list.html", {
-            "page_title": "Single Visits", "rows": [], "status_filter": "",
-            "can_approve": _is_manager(request.user),
-            "status_choices": VisitPlan.APPROVAL_STATUS_CHOICES,
-        })
+    """
+    Single Visit list.
 
-    qs = _single_visit_qs_for_user(request.user).order_by("-created_at")
+    Fixed:
+    - Purpose of Visit visible in template context.
+    - KAM filter supported.
+    - Date range filter supported.
+    - Time filter supported.
+    - Filters combine together.
+    """
+    if not _visitplan_workflow_schema_ready():
+        messages.error(
+            request,
+            "Single Visit workflow DB fields are not migrated yet. Run migrations before using this page.",
+        )
+        return render(
+            request,
+            "kam/single_visit_list.html",
+            {
+                "page_title": "Single Visits",
+                "rows": [],
+                "status_filter": "",
+                "selected_kam": "",
+                "filter_from": "",
+                "filter_to": "",
+                "time_filter": "",
+                "can_approve": _is_manager(request.user),
+                "status_choices": VisitPlan.APPROVAL_STATUS_CHOICES,
+                "kam_dropdown_options": [],
+            },
+        )
+
+    qs = (
+        _single_visit_qs_for_user(request.user)
+        .select_related("customer", "kam", "actual")
+        .order_by("-created_at")
+    )
+
     status_filter = (request.GET.get("status") or "").strip().upper()
+
     if status_filter:
         qs = qs.filter(approval_status=status_filter)
 
+    qs = _apply_visit_history_filters(
+        qs,
+        request,
+        kam_field="kam_id",
+        date_field="visit_date",
+    )
+
+    kam_dropdown_options = []
+
+    if _is_manager(request.user):
+        try:
+            kam_ids = _kams_managed_by_manager(request.user)
+            if _is_admin(request.user):
+                kam_dropdown_options = list(
+                    User.objects.filter(is_active=True).order_by("first_name", "last_name", "username")
+                )
+            else:
+                kam_dropdown_options = list(
+                    User.objects.filter(is_active=True, id__in=kam_ids).order_by("first_name", "last_name", "username")
+                )
+        except Exception:
+            logger.exception("Failed to build single visit KAM dropdown.")
+            kam_dropdown_options = []
+
     ctx = {
-        "page_title": "Single Visits", "rows": list(qs[:300]),
+        "page_title": "Single Visits",
+        "rows": list(qs[:300]),
         "status_filter": status_filter,
+        "selected_kam": request.GET.get("kam", "") or request.GET.get("user", ""),
+        "filter_from": request.GET.get("from_date", "") or request.GET.get("from", ""),
+        "filter_to": request.GET.get("to_date", "") or request.GET.get("to", ""),
+        "time_filter": request.GET.get("time_filter", ""),
         "can_approve": _is_manager(request.user),
         "status_choices": VisitPlan.APPROVAL_STATUS_CHOICES,
+        "kam_dropdown_options": kam_dropdown_options,
     }
+
     return render(request, "kam/single_visit_list.html", ctx)
 
 
@@ -3807,67 +5339,355 @@ def visit_batches(request: HttpRequest) -> HttpResponse:
 
 
 @login_required(login_url="/accounts/login/")
-@require_any_kam_code("kam_plan", "kam_manager")
 def visit_batches_page(request: HttpRequest) -> HttpResponse:
-    user = request.user
-    qs = _visitbatch_qs_for_user(user).order_by("-created_at")
-    status = (request.GET.get("status") or "").strip().upper()
-    if status:
-        qs = qs.filter(approval_status=status)
-    return render(request, "kam/visit_batches.html", {"page_title": "Visit History", "rows": list(qs[:300]), "can_view_all": _is_manager(user)})
+    """
+    Visit History page.
 
+    Production-safe update:
+    - Keeps existing queryset/service flow.
+    - Adds server-side KAM filter.
+    - Adds server-side date_range dropdown filter:
+        weekly / monthly / quarterly / yearly
+    - Keeps old time_filter values backward-compatible.
+    - Uses select_related / prefetch_related to avoid N+1.
+    - Does not change approval workflow.
+    - Does not change reports/emails/APIs.
+    """
+    can_view_all = _is_manager(request.user)
+
+    if not _visitplan_workflow_schema_ready():
+        messages.error(
+            request,
+            "Visit workflow DB fields are not migrated yet. Run migrations before using this page.",
+        )
+        return render(
+            request,
+            "kam/visit_batches.html",
+            {
+                "rows": [],
+                "can_view_all": can_view_all,
+                "status_filter": "",
+                "selected_kam": "",
+                "date_range": "",
+                "time_filter": "",
+                "filter_from": "",
+                "filter_to": "",
+                "kam_dropdown_options": [],
+            },
+        )
+
+    qs = (
+        _visitbatch_qs_for_user(request.user)
+        .select_related("kam")
+        .prefetch_related("lines", "lines__customer", "lines__actual")
+        .order_by("-created_at")
+    )
+
+    status_filter = (request.GET.get("status") or "").strip().upper()
+
+    if status_filter:
+        qs = qs.filter(approval_status=status_filter)
+
+    qs = _apply_visit_history_filters(
+        qs,
+        request,
+        kam_field="kam_id",
+        date_field="from_date",
+    )
+
+    kam_dropdown_options = []
+
+    if can_view_all:
+        try:
+            if _is_admin(request.user):
+                kam_dropdown_options = list(
+                    User.objects
+                    .filter(is_active=True)
+                    .order_by("first_name", "last_name", "username")
+                )
+            else:
+                kam_ids = _kams_managed_by_manager(request.user)
+                kam_dropdown_options = list(
+                    User.objects
+                    .filter(is_active=True, id__in=kam_ids)
+                    .order_by("first_name", "last_name", "username")
+                )
+        except Exception:
+            logger.exception("Failed to build visit history KAM dropdown.")
+            kam_dropdown_options = []
+
+    selected_kam = (
+        request.GET.get("kam", "")
+        or request.GET.get("user", "")
+        or request.GET.get("kam_id", "")
+    )
+
+    date_range = (request.GET.get("date_range") or "").strip().lower()
+    time_filter = (request.GET.get("time_filter") or "").strip().lower()
+
+    ctx = {
+        "rows": list(qs[:300]),
+        "can_view_all": can_view_all,
+        "status_filter": status_filter,
+        "selected_kam": selected_kam,
+
+        # New Visit History dropdown state.
+        "date_range": date_range,
+
+        # Backward-compatible aliases for older templates/pages.
+        "time_filter": time_filter,
+        "filter_from": request.GET.get("from_date", "") or request.GET.get("from", ""),
+        "filter_to": request.GET.get("to_date", "") or request.GET.get("to", ""),
+
+        "kam_dropdown_options": kam_dropdown_options,
+    }
+
+    return render(request, "kam/visit_batches.html", ctx)
 
 @login_required(login_url="/accounts/login/")
-@require_any_kam_code("kam_plan", "kam_manager")
 def visit_batches_api(request: HttpRequest) -> JsonResponse:
-    user = request.user
-    qs = _visitbatch_qs_for_user(user).order_by("-created_at")
-    rows = [{"id": b.id, "kam": b.kam.username if b.kam_id else None, "from_date": str(b.from_date), "to_date": str(b.to_date), "visit_category": b.visit_category, "visit_category_label": b.get_visit_category_display(), "approval_status": b.approval_status, "remarks": b.purpose or "", "created_at": timezone.localtime(b.created_at).isoformat() if b.created_at else None} for b in qs[:300]]
-    return JsonResponse({"ok": True, "count": len(rows), "batches": rows})
+    """
+    Existing Visit History API.
 
+    Production-safe update:
+    - Keeps same endpoint.
+    - Keeps same response key: batches.
+    - Adds support for date_range:
+        weekly / monthly / quarterly / yearly
+    - Keeps old time_filter support.
+    - Keeps purpose_of_visit and remarks.
+    - Avoids N+1 for line count by using prefetched lines.
+    """
+    if not _visitplan_workflow_schema_ready():
+        return JsonResponse({"batches": []})
+
+    qs = (
+        _visitbatch_qs_for_user(request.user)
+        .select_related("kam")
+        .prefetch_related("lines", "lines__customer", "lines__actual")
+        .order_by("-created_at")
+    )
+
+    status_filter = (request.GET.get("status") or "").strip().upper()
+
+    if status_filter:
+        qs = qs.filter(approval_status=status_filter)
+
+    qs = _apply_visit_history_filters(
+        qs,
+        request,
+        kam_field="kam_id",
+        date_field="from_date",
+    )
+
+    batches = []
+
+    for batch in qs[:300]:
+        purpose = (batch.purpose or "").strip()
+
+        try:
+            line_count = len(list(batch.lines.all()))
+        except Exception:
+            line_count = batch.lines.count() if hasattr(batch, "lines") else 0
+
+        batches.append(
+            {
+                "id": batch.id,
+                "kam": batch.kam.get_full_name() or batch.kam.username,
+                "kam_username": batch.kam.username,
+                "visit_category": batch.visit_category,
+                "visit_category_label": batch.get_visit_category_display(),
+                "from_date": batch.from_date.isoformat() if batch.from_date else "",
+                "to_date": batch.to_date.isoformat() if batch.to_date else "",
+                "purpose_of_visit": purpose,
+                "remarks": purpose,
+                "approval_status": batch.approval_status,
+                "line_count": line_count,
+            }
+        )
+
+    return JsonResponse({"batches": batches})
 
 @login_required(login_url="/accounts/login/")
-@require_any_kam_code("kam_plan", "kam_manager")
+@require_any_kam_code("kam_manager", "kam_plan")
 def visit_history_edit(request: HttpRequest, plan_id: int) -> HttpResponse:
+    """
+    Edit Visit History item.
+
+    Production lifecycle:
+    - KAM submits post-visit details after approval.
+    - Post-visit submit sends second email to manager.
+    - Post-visit submit does NOT mark Completed.
+    - Manager review acceptance is the only Completed transition.
+    - Next Meeting Date is hidden until workflow is Completed.
+    """
     user = request.user
+
     if _is_admin(user):
-        plan = get_object_or_404(VisitPlan.objects.select_related("customer", "kam", "batch"), id=plan_id)
+        plan = get_object_or_404(
+            VisitPlan.objects.select_related("customer", "kam", "batch", "actual"),
+            id=plan_id,
+        )
     elif _is_manager(user):
-        plan = get_object_or_404(VisitPlan.objects.select_related("customer", "kam", "batch"), id=plan_id, kam_id__in=_kams_managed_by_manager(user))
+        plan = get_object_or_404(
+            VisitPlan.objects.select_related("customer", "kam", "batch", "actual"),
+            id=plan_id,
+            kam_id__in=_kams_managed_by_manager(user),
+        )
     else:
-        plan = get_object_or_404(VisitPlan.objects.select_related("customer", "kam", "batch"), id=plan_id, kam=user)
-    if not _is_manager(user) and plan.approval_status not in {STATUS_APPROVED, STATUS_DRAFT}:
-        messages.error(request, "Only approved or draft visits can be edited.")
+        plan = get_object_or_404(
+            VisitPlan.objects.select_related("customer", "kam", "batch", "actual"),
+            id=plan_id,
+            kam=user,
+        )
+
+    if not _is_manager(user) and plan.approval_status not in {
+        STATUS_APPROVED,
+        STATUS_COMPLETED,
+    }:
+        messages.error(
+            request,
+            "Only approved or completed visits can be edited for post-visit details.",
+        )
         return redirect(reverse("kam:visit_batches"))
 
     existing_actual = getattr(plan, "actual", None)
+    workflow_completed = plan.approval_status == STATUS_COMPLETED
+
     if request.method == "POST":
         new_visit_date = _parse_iso_date((request.POST.get("visit_date") or "").strip())
         new_visit_date_to = _parse_iso_date((request.POST.get("visit_date_to") or "").strip())
-        new_purpose = (request.POST.get("purpose") or "").strip() or None
         new_location = (request.POST.get("location") or "").strip() or None
-        if new_visit_date:
-            plan.visit_date = new_visit_date
-        if new_visit_date_to:
-            plan.visit_date_to = new_visit_date_to
-        if new_purpose is not None:
-            plan.purpose = new_purpose
-        if new_location is not None:
-            plan.location = new_location
-        plan.save(update_fields=["visit_date", "visit_date_to", "purpose", "location", "updated_at"])
-        actual_form = VisitActualForm(request.POST, instance=existing_actual)
+
+        try:
+            new_purpose = _require_purpose_of_visit(request.POST.get("purpose"))
+        except ValueError as exc:
+            messages.error(request, str(exc))
+
+            actual_form = VisitActualForm(
+                request.POST,
+                instance=existing_actual,
+                workflow_completed=workflow_completed,
+            )
+
+            return render(
+                request,
+                "kam/visit_history_edit.html",
+                {
+                    "page_title": "Edit Visit",
+                    "plan": plan,
+                    "actual_form": actual_form,
+                    "existing_actual": existing_actual,
+                    "can_edit_plan_fields": True,
+                    "workflow_completed": workflow_completed,
+                },
+            )
+
+        if not new_visit_date:
+            messages.error(request, "Visit Date is required.")
+
+            actual_form = VisitActualForm(
+                request.POST,
+                instance=existing_actual,
+                workflow_completed=workflow_completed,
+            )
+
+            return render(
+                request,
+                "kam/visit_history_edit.html",
+                {
+                    "page_title": "Edit Visit",
+                    "plan": plan,
+                    "actual_form": actual_form,
+                    "existing_actual": existing_actual,
+                    "can_edit_plan_fields": True,
+                    "workflow_completed": workflow_completed,
+                },
+            )
+
+        actual_form = VisitActualForm(
+            request.POST,
+            instance=existing_actual,
+            workflow_completed=workflow_completed,
+        )
+
         if actual_form.is_valid():
-            actual: VisitActual = actual_form.save(commit=False)
-            actual.plan = plan
-            actual.save()
-            messages.success(request, f"Visit #{plan.id} updated successfully.")
+            with transaction.atomic():
+                plan.visit_date = new_visit_date
+                plan.visit_date_to = new_visit_date_to
+                plan.purpose = new_purpose
+                plan.location = new_location
+
+                plan.save(
+                    update_fields=[
+                        "visit_date",
+                        "visit_date_to",
+                        "purpose",
+                        "location",
+                        "updated_at",
+                    ]
+                )
+
+                actual: VisitActual = actual_form.save(commit=False)
+                actual.plan = plan
+
+                if plan.approval_status != STATUS_COMPLETED:
+                    actual.next_action_date = None
+
+                actual.save()
+
+                VisitApprovalAudit.objects.create(
+                    plan=plan,
+                    actor=user,
+                    action=VisitApprovalAudit.ACTION_SUBMIT,
+                    note="[POST_VISIT_SUBMITTED] Post visit details submitted by KAM",
+                    actor_ip=_get_ip(request),
+                )
+
+            if plan.approval_status == STATUS_APPROVED and _post_meeting_details_complete(actual):
+                sent_ok = _send_post_visit_completion_mail(
+                    request=request,
+                    plan=plan,
+                )
+
+                if sent_ok:
+                    messages.success(
+                        request,
+                        f"Post visit details for Visit #{plan.id} submitted. Manager review mail sent.",
+                    )
+                else:
+                    messages.warning(
+                        request,
+                        f"Post visit details for Visit #{plan.id} submitted, but manager email could not be sent. Please check mail configuration.",
+                    )
+            else:
+                messages.success(
+                    request,
+                    f"Visit #{plan.id} updated successfully.",
+                )
+
             return redirect(reverse("kam:visit_batches"))
+
         messages.error(request, "Please correct the errors below.")
+
     else:
-        actual_form = VisitActualForm(instance=existing_actual)
+        actual_form = VisitActualForm(
+            instance=existing_actual,
+            workflow_completed=workflow_completed,
+        )
 
-    return render(request, "kam/visit_history_edit.html", {"page_title": "Edit Visit", "plan": plan, "actual_form": actual_form, "existing_actual": existing_actual, "can_edit_plan_fields": True})
-
+    return render(
+        request,
+        "kam/visit_history_edit.html",
+        {
+            "page_title": "Edit Visit",
+            "plan": plan,
+            "actual_form": actual_form,
+            "existing_actual": existing_actual,
+            "can_edit_plan_fields": True,
+            "workflow_completed": workflow_completed,
+        },
+    )
 
 @login_required(login_url="/accounts/login/")
 @require_any_kam_code("kam_manager", "kam_plan")
@@ -4056,305 +5876,521 @@ def visit_batch_reject_link(request: HttpRequest, token: str) -> HttpResponse:
 # VISITS & CALLS
 # =====================================================================
 @login_required(login_url="/accounts/login/")
-@require_kam_code("kam_visits")
+@require_any_kam_code("kam_manager", "kam_plan")
 def visits(request: HttpRequest) -> HttpResponse:
+    """
+    Visits & Calls page.
+
+    Production lifecycle:
+    - Only approved/completed visits are visible for post-visit update.
+    - KAM post-visit save does not complete workflow.
+    - Manager review acceptance completes workflow.
+    - Next Meeting Date is hidden unless workflow is completed.
+    """
     user = request.user
-    plan_id = request.GET.get("plan_id")
-    error_expected = False
+    can_choose_kam = _is_manager(user) or _is_admin(user)
 
-    if request.method == "POST":
-        plan_id_post = request.POST.get("plan_id") or plan_id
-        plan = get_object_or_404(VisitPlan, id=plan_id_post, kam=user)
-        instance = getattr(plan, "actual", None)
-        form = VisitActualForm(request.POST, instance=instance)
-        exp_sales_raw = (request.POST.get("expected_sales_mt") or "").strip()
-        exp_coll_raw = (request.POST.get("expected_collection") or "").strip()
-        if exp_sales_raw == "":
-            messages.error(request, "Expected Sales (MT) is required.")
-            error_expected = True
-        if exp_coll_raw == "":
-            messages.error(request, "Expected Collection (₹) is required.")
-            error_expected = True
-        try:
-            exp_sales = Decimal(exp_sales_raw) if exp_sales_raw != "" else None
-        except Exception:
-            messages.error(request, "Expected Sales (MT) must be a number.")
-            error_expected = True
-            exp_sales = None
-        try:
-            exp_coll = Decimal(exp_coll_raw) if exp_coll_raw != "" else None
-        except Exception:
-            messages.error(request, "Expected Collection (₹) must be a number.")
-            error_expected = True
-            exp_coll = None
-        if form.is_valid() and not error_expected:
-            with transaction.atomic():
-                actual: VisitActual = form.save(commit=False)
-                actual.plan = plan
-                actual.save()
-                update_fields = ["updated_at"]
-                if exp_sales is not None:
-                    plan.expected_sales_mt = exp_sales
-                    update_fields.append("expected_sales_mt")
-                if exp_coll is not None:
-                    plan.expected_collection = exp_coll
-                    update_fields.append("expected_collection")
-                plan.save(update_fields=update_fields)
-                messages.success(request, "Visit actual saved.")
-                redirect_url = f"{reverse('kam:visits')}?plan_id={plan.id}"
-                kam_qs = (request.POST.get("kam") or request.GET.get("kam") or "").strip()
-                if kam_qs:
-                    redirect_url += f"&kam={kam_qs}"
-                return redirect(redirect_url)
+    selected_kam_id = (request.GET.get("kam") or "").strip()
+    selected_plan_id = (
+        request.GET.get("plan")
+        or request.POST.get("plan_id")
+        or ""
+    ).strip()
 
-    # ── KAM filter (NEW) ────────────────────────────────────────────────
-    kam_filter_id, kam_filter_user = _resolve_visits_kam_filter(request, user)
-    kam_dropdown_options = _kam_dropdown_options_for_user(user)
-    selected_kam_raw = (request.GET.get("kam") or "").strip()
+    rows_qs = (
+        _visitplan_qs_for_user(user)
+        .select_related("customer", "kam", "actual")
+        .filter(approval_status__in=[STATUS_APPROVED, STATUS_COMPLETED])
+        .order_by("-visit_date", "-created_at", "-id")
+    )
+
+    rows_qs = _apply_visit_history_filters(
+        rows_qs,
+        request,
+        kam_field="kam_id",
+        date_field="visit_date",
+    )
+
+    rows = list(rows_qs[:300])
 
     selected_plan = None
-    form = None
-    if plan_id:
-        if _is_admin(user):
-            selected_plan = get_object_or_404(VisitPlan, id=plan_id)
-        elif _is_manager(user):
-            selected_plan = get_object_or_404(VisitPlan, id=plan_id, kam_id__in=_kams_managed_by_manager(user))
+
+    if selected_plan_id.isdigit():
+        selected_plan = (
+            rows_qs
+            .filter(id=int(selected_plan_id))
+            .select_related("customer", "kam", "actual")
+            .first()
+        )
+
+    if selected_plan is None and rows:
+        selected_plan = rows[0]
+
+    existing_actual = getattr(selected_plan, "actual", None) if selected_plan else None
+    workflow_completed = bool(
+        selected_plan and selected_plan.approval_status == STATUS_COMPLETED
+    )
+
+    if request.method == "POST":
+        if not selected_plan:
+            messages.error(request, "Please select a visit first.")
+            return redirect(reverse("kam:visits"))
+
+        try:
+            new_purpose = _require_purpose_of_visit(request.POST.get("purpose"))
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            actual_form = VisitActualForm(
+                request.POST,
+                instance=existing_actual,
+                workflow_completed=workflow_completed,
+            )
         else:
-            selected_plan = get_object_or_404(VisitPlan, id=plan_id, kam=user)
-        form = VisitActualForm(instance=getattr(selected_plan, "actual", None))
+            actual_form = VisitActualForm(
+                request.POST,
+                instance=existing_actual,
+                workflow_completed=workflow_completed,
+            )
 
-    days_raw = (request.GET.get("days") or "").strip()
-    from_date_raw = (request.GET.get("from_date") or "").strip()
-    to_date_raw = (request.GET.get("to_date") or "").strip()
-    from_date = _parse_iso_date(from_date_raw)
-    to_date = _parse_iso_date(to_date_raw)
-    today = timezone.localtime(timezone.now()).date()
-    start = today - timezone.timedelta(days=29)
-    end = today + timezone.timedelta(days=1)
-    if days_raw.isdigit():
-        start = today - timezone.timedelta(days=int(days_raw) - 1)
-        end = today + timezone.timedelta(days=1)
-    elif from_date and to_date and from_date <= to_date:
-        start = from_date
-        end = to_date + timezone.timedelta(days=1)
-    elif from_date:
-        start = from_date
-        end = from_date + timezone.timedelta(days=1)
+            if actual_form.is_valid():
+                with transaction.atomic():
+                    selected_plan.purpose = new_purpose
+                    selected_plan.save(update_fields=["purpose", "updated_at"])
 
-    if _is_admin(user):
-        visit_qs = VisitPlan.objects.select_related("customer", "kam")
-        call_qs = CallLog.objects.select_related("customer", "kam")
-    elif _is_manager(user):
-        kam_ids = _kams_managed_by_manager(user)
-        visit_qs = VisitPlan.objects.select_related("customer", "kam").filter(kam_id__in=kam_ids)
-        call_qs = CallLog.objects.select_related("customer", "kam").filter(kam_id__in=kam_ids)
+                    actual: VisitActual = actual_form.save(commit=False)
+                    actual.plan = selected_plan
+
+                    if selected_plan.approval_status != STATUS_COMPLETED:
+                        actual.next_action_date = None
+
+                    actual.save()
+
+                    VisitApprovalAudit.objects.create(
+                        plan=selected_plan,
+                        actor=user,
+                        action=VisitApprovalAudit.ACTION_SUBMIT,
+                        note="[POST_VISIT_SUBMITTED] Post visit details submitted by KAM",
+                        actor_ip=_get_ip(request),
+                    )
+
+                if (
+                    selected_plan.approval_status == STATUS_APPROVED
+                    and _post_meeting_details_complete(actual)
+                ):
+                    sent_ok = _send_post_visit_completion_mail(
+                        request=request,
+                        plan=selected_plan,
+                    )
+
+                    if sent_ok:
+                        messages.success(
+                            request,
+                            f"Post visit details for Visit #{selected_plan.id} submitted. Manager review mail sent.",
+                        )
+                    else:
+                        messages.warning(
+                            request,
+                            f"Post visit details for Visit #{selected_plan.id} submitted, but manager email could not be sent.",
+                        )
+                else:
+                    messages.success(
+                        request,
+                        f"Visit #{selected_plan.id} updated successfully.",
+                    )
+
+                return redirect(reverse("kam:visits") + f"?plan={selected_plan.id}")
+
+            messages.error(request, "Please correct the errors below.")
+
     else:
-        visit_qs = VisitPlan.objects.select_related("customer", "kam").filter(kam=user)
-        call_qs = CallLog.objects.select_related("customer", "kam").filter(kam=user)
+        actual_form = VisitActualForm(
+            instance=existing_actual,
+            workflow_completed=workflow_completed,
+        )
 
-    # ── Apply KAM filter (NEW) — applied before slicing so all counts respect it ──
-    if kam_filter_id is not None:
-        visit_qs = visit_qs.filter(kam_id=kam_filter_id)
-        call_qs = call_qs.filter(kam_id=kam_filter_id)
+    kam_dropdown_options = []
 
-    recent_plans_qs = visit_qs.filter(visit_date__gte=start, visit_date__lt=end).order_by("-visit_date")
-    recent_calls_qs = call_qs.filter(call_datetime__date__gte=start, call_datetime__date__lt=end).order_by("-call_datetime")
+    if can_choose_kam:
+        kam_ids = _kams_managed_by_manager(user)
+        if _is_admin(user):
+            kam_dropdown_options = list(
+                User.objects
+                .filter(is_active=True)
+                .order_by("first_name", "last_name", "username")
+            )
+        else:
+            kam_dropdown_options = list(
+                User.objects
+                .filter(id__in=kam_ids, is_active=True)
+                .order_by("first_name", "last_name", "username")
+            )
 
-    ctx = {
+    context = {
         "page_title": "Visits & Calls",
-        "form": form, "selected_plan": selected_plan,
-        "recent_plans": recent_plans_qs,
-        "recent_calls": recent_calls_qs,
-        "filter_from": from_date.isoformat() if from_date else start.isoformat(),
-        "filter_to": to_date.isoformat() if to_date else (end - timezone.timedelta(days=1)).isoformat(),
-        "filter_days": days_raw, "is_manager": _is_manager(user),
-        # ── KAM filter context (NEW) ──
-        "can_choose_kam": _is_manager(user),
+        "rows": rows,
+        "selected_plan": selected_plan,
+        "actual_form": actual_form,
+        "workflow_completed": workflow_completed,
+
+        "can_choose_kam": can_choose_kam,
         "kam_dropdown_options": kam_dropdown_options,
-        "selected_kam_id": kam_filter_id,
-        "selected_kam_raw": selected_kam_raw,
-        "selected_kam_user": kam_filter_user,
+        "selected_kam_id": selected_kam_id,
+
+        "filter_from": request.GET.get("from_date", ""),
+        "filter_to": request.GET.get("to_date", ""),
+        "time_filter": request.GET.get("time_filter", ""),
     }
-    return render(request, "kam/visit_actual.html", ctx)
+
+    return render(request, "kam/visit_actual.html", context)
 
 # =====================================================================
 # MANAGER VIEW
 # =====================================================================
 @login_required(login_url="/accounts/login/")
+@require_kam_code("kam_manager")
 def manager_view(request: HttpRequest) -> HttpResponse:
+    """
+    Manager View.
+
+    Production lifecycle rule:
+    - Visit created/submitted              -> Pending
+    - Manager approved                     -> Still Pending
+    - KAM submitted post visit             -> Still Pending
+    - Manager accepted post-visit review   -> Completed
+
+    Manager approval alone never marks the workflow completed.
+    """
     if not _is_manager(request.user):
         return HttpResponseForbidden("403 Forbidden: Manager access required.")
 
-    start_dt, end_dt, range_label = _get_dashboard_range(request)
-    scope_kam_id, scope_label = _resolve_scope(request, request.user)
-
     active_tab = (request.GET.get("tab") or "visits").strip().lower()
-    if active_tab not in {"visits", "calls", "sales", "leads", "collections"}:
+
+    tabs = [
+        ("visits", "Visits"),
+        ("calls", "Calls"),
+        ("collections", "Collections"),
+        ("leads", "Leads"),
+    ]
+
+    if active_tab not in {key for key, _label in tabs}:
         active_tab = "visits"
 
-    start_date = start_dt.date()
-    end_date = end_dt.date()
+    kam_options = _kam_options_for_user(request.user)
+    selected_user = request.GET.get("user", "") or request.GET.get("kam", "")
+    time_filter = request.GET.get("time_filter", "")
+    focus_visit = (request.GET.get("focus_visit") or "").strip()
 
-    def _pct(n: Decimal, d: Decimal) -> Optional[Decimal]:
-        if d and d != 0:
-            return (n / d) * Decimal("100")
-        return None
-
-    visits_data, visits_summary = [], {}
-    calls_data, calls_summary = [], {}
-    sales_data, sales_summary = [], {}
-    leads_data, leads_summary = [], {}
-    collections_data, collections_summary = [], {}
-
-    if active_tab == "visits":
-        qs = _filter_qs_by_kam_scope(
-            VisitPlan.objects.select_related("customer", "kam").filter(
-                visit_date__gte=start_date,
-                visit_date__lt=end_date,
-            ),
-            request.user,
-            scope_kam_id,
-            "kam_id",
-        )
-
-        visits_data = list(qs.order_by("-visit_date")[:500])
-        total_actuals = VisitActual.objects.filter(plan__in=qs).count()
-        successful = VisitActual.objects.filter(plan__in=qs, successful=True).count()
-
-        visits_summary = {
-            "total_planned": qs.count(),
-            "total_actual": total_actuals,
-            "successful": successful,
-            "success_pct": _pct(Decimal(successful), Decimal(total_actuals)) if total_actuals else None,
-        }
-
-    if active_tab == "calls":
-        qs = _filter_qs_by_kam_scope(
-            CallLog.objects.select_related("customer", "kam").filter(
-                call_datetime__gte=start_dt,
-                call_datetime__lt=end_dt,
-            ),
-            request.user,
-            scope_kam_id,
-            "kam_id",
-        )
-
-        calls_data = list(qs.order_by("-call_datetime")[:500])
-        total_calls = qs.count()
-        successful_calls = qs.exclude(outcome="").exclude(outcome__isnull=True).count()
-
-        calls_summary = {
-            "total": total_calls,
-            "successful": successful_calls,
-            "conversion_pct": _pct(Decimal(successful_calls), Decimal(total_calls)) if total_calls else None,
-        }
-
-    if active_tab == "sales":
-        qs = _filter_qs_by_kam_scope(
-            InvoiceFact.objects.filter(
-                invoice_date__gte=start_date,
-                invoice_date__lt=end_date,
-            ),
-            request.user,
-            scope_kam_id,
-            "kam_id",
-        )
-        qs = _sales_converted_qs(qs)
-
-        sales_data = list(
-            qs.values(
-                customer_name=F("customer__name"),
-                kam_username=F("kam__username"),
-            )
-            .annotate(mt=Sum("qty_mt"))
-            .order_by("-mt")[:300]
-        )
-
-        sales_summary = {
-            "total_mt": _safe_decimal(qs.aggregate(mt=Sum("qty_mt")).get("mt")),
-            "customer_count": len(sales_data),
-        }
-
-    if active_tab == "leads":
-        qs = _filter_qs_by_kam_scope(
-            LeadFact.objects.select_related("customer", "kam").filter(
-                doe__gte=start_date,
-                doe__lt=end_date,
-            ),
-            request.user,
-            scope_kam_id,
-            "kam_id",
-        )
-
-        leads_data = list(qs.order_by("-doe")[:500])
-
-        leads_summary = {
-            "total_count": qs.count(),
-            "won_count": qs.filter(status="WON").count(),
-            "total_mt": _safe_decimal(qs.aggregate(mt=Sum("qty_mt")).get("mt")),
-            "won_mt": _safe_decimal(qs.filter(status="WON").aggregate(mt=Sum("qty_mt")).get("mt")),
-        }
-
-    if active_tab == "collections":
-        qs = CollectionPlan.objects.select_related("customer", "kam").filter(
-            overdue_amount__gt=0,
-        )
-        qs = _filter_qs_by_kam_scope(qs, request.user, scope_kam_id, "kam_id")
-
-        collections_data = list(
-            qs.order_by("kam__username", "customer__name")[:500]
-        )
-
-        agg = qs.aggregate(
-            total_overdue=Sum("overdue_amount"),
-            total_collected=Sum("actual_amount"),
-        )
-
-        total_overdue = _safe_decimal(agg.get("total_overdue"))
-        total_collected = _safe_decimal(agg.get("total_collected"))
-        total_pending = max(total_overdue - total_collected, Decimal("0"))
-
-        collections_summary = {
-            "total_overdue": total_overdue,
-            "total_collected": total_collected,
-            "total_pending": total_pending,
-            "customer_count": qs.count(),
-
-            # Backward-compatible aliases for older template variables.
-            "total_amount": total_collected,
-            "transaction_count": qs.count(),
-        }
-
-    ctx = {
-        "page_title": "Manager View",
-        "range_label": range_label,
-        "scope_label": scope_label,
-        "active_tab": active_tab,
-        "tabs": [
-            ("visits", "Visits"),
-            ("calls", "Calls"),
-            ("sales", "Sales"),
-            ("leads", "Leads"),
-            ("collections", "Collections"),
-        ],
-        "kam_options": _kam_options_for_user(request.user),
-        "filter_from": start_dt.date().isoformat(),
-        "filter_to": (end_dt - timezone.timedelta(days=1)).date().isoformat(),
-        "selected_user": scope_label if scope_label != "ALL" else "",
-        "visits_data": visits_data,
-        "visits_summary": visits_summary,
-        "calls_data": calls_data,
-        "calls_summary": calls_summary,
-        "sales_data": sales_data,
-        "sales_summary": sales_summary,
-        "leads_data": leads_data,
-        "leads_summary": leads_summary,
-        "collections_data": collections_data,
-        "collections_summary": collections_summary,
+    visits_data = []
+    customer_history_map = {}
+    visits_summary = {
+        "total_planned": 0,
+        "total_actual": 0,
+        "successful": 0,
+        "success_pct": None,
     }
 
-    return render(request, "kam/manager_view.html", ctx)
+    calls_data = []
+    calls_summary = {
+        "total_calls": 0,
+        "connected": 0,
+        "followups": 0,
+        "conversion_pct": None,
+    }
 
+    collections_data = []
+    collections_summary = {
+        "target": Decimal(0),
+        "collected": Decimal(0),
+        "pending": Decimal(0),
+        "achievement_pct": None,
+    }
+
+    leads_data = []
+    leads_summary = {
+        "total": 0,
+        "won": 0,
+        "lost": 0,
+        "open": 0,
+    }
+
+    if active_tab == "visits":
+        visit_qs = (
+            _visitplan_qs_for_user(request.user)
+            .select_related("customer", "kam", "actual", "approved_by", "rejected_by")
+            .order_by("-visit_date", "-created_at", "-id")
+        )
+
+        visit_qs = _apply_visit_history_filters(
+            visit_qs,
+            request,
+            kam_field="kam_id",
+            date_field="visit_date",
+        )
+
+        visits_data = list(visit_qs[:300])
+
+        for visit in visits_data:
+            visit.business_status = _manager_visit_business_status(visit)
+            visit.post_visit_submitted = _post_visit_submitted(visit)
+            visit.can_manager_review_post_visit = _post_visit_can_be_manager_reviewed(visit)
+
+        completed_actuals = [
+            visit.actual
+            for visit in visits_data
+            if getattr(visit, "actual", None)
+            and visit.approval_status == STATUS_COMPLETED
+            and _post_meeting_details_complete(visit.actual)
+        ]
+
+        total_actual = len(completed_actuals)
+        successful = sum(1 for actual in completed_actuals if actual.successful is True)
+
+        visits_summary = {
+            "total_planned": len(visits_data),
+            "total_actual": total_actual,
+            "successful": successful,
+            "success_pct": (successful / total_actual * 100) if total_actual else None,
+        }
+
+        customer_ids = [
+            visit.customer_id
+            for visit in visits_data
+            if getattr(visit, "customer_id", None)
+        ]
+        customer_history_map = _build_customer_history_payload(customer_ids, request.user)
+
+    elif active_tab == "calls":
+        call_qs = CallLog.objects.select_related("customer", "kam").order_by("-call_datetime")
+        scope_kam_id, _scope_label = _resolve_scope(request, request.user)
+
+        call_qs = _filter_qs_by_kam_scope(
+            call_qs,
+            request.user,
+            scope_kam_id,
+            "kam_id",
+        )
+
+        from_d = _parse_iso_date(request.GET.get("from_date") or request.GET.get("from") or "")
+        to_d = _parse_iso_date(request.GET.get("to_date") or request.GET.get("to") or "")
+        time_start, time_end = _visit_time_filter_bounds(time_filter)
+
+        start_d = from_d or time_start
+        end_d = to_d or time_end
+
+        if start_d:
+            start_dt = timezone.make_aware(
+                timezone.datetime(start_d.year, start_d.month, start_d.day, 0, 0, 0)
+            )
+            call_qs = call_qs.filter(call_datetime__gte=start_dt)
+
+        if end_d:
+            end_dt = timezone.make_aware(
+                timezone.datetime(end_d.year, end_d.month, end_d.day, 0, 0, 0)
+            ) + timezone.timedelta(days=1)
+            call_qs = call_qs.filter(call_datetime__lt=end_dt)
+
+        calls_data = list(call_qs[:300])
+        connected = sum(1 for call in calls_data if (getattr(call, "outcome", "") or "").strip())
+
+        calls_summary = {
+            "total_calls": len(calls_data),
+            "connected": connected,
+            "followups": sum(
+                1
+                for call in calls_data
+                if (getattr(call, "next_action", "") or "").strip()
+            ),
+            "conversion_pct": (connected / len(calls_data) * 100) if calls_data else None,
+        }
+
+    elif active_tab == "collections":
+        collection_qs = CollectionTxn.objects.select_related("customer", "kam").order_by("-txn_datetime")
+        scope_kam_id, _scope_label = _resolve_scope(request, request.user)
+
+        collection_qs = _filter_qs_by_kam_scope(
+            collection_qs,
+            request.user,
+            scope_kam_id,
+            "kam_id",
+        )
+
+        from_d = _parse_iso_date(request.GET.get("from_date") or request.GET.get("from") or "")
+        to_d = _parse_iso_date(request.GET.get("to_date") or request.GET.get("to") or "")
+        time_start, time_end = _visit_time_filter_bounds(time_filter)
+
+        start_d = from_d or time_start
+        end_d = to_d or time_end
+
+        if start_d:
+            start_dt = timezone.make_aware(
+                timezone.datetime(start_d.year, start_d.month, start_d.day, 0, 0, 0)
+            )
+            collection_qs = collection_qs.filter(txn_datetime__gte=start_dt)
+
+        if end_d:
+            end_dt = timezone.make_aware(
+                timezone.datetime(end_d.year, end_d.month, end_d.day, 0, 0, 0)
+            ) + timezone.timedelta(days=1)
+            collection_qs = collection_qs.filter(txn_datetime__lt=end_dt)
+
+        collections_data = list(collection_qs[:300])
+        collected = _safe_decimal(collection_qs.aggregate(total=Sum("amount")).get("total"))
+
+        collections_summary = {
+            "target": Decimal(0),
+            "collected": collected,
+            "pending": Decimal(0),
+            "achievement_pct": None,
+        }
+
+    elif active_tab == "leads":
+        lead_qs = LeadFact.objects.select_related("customer", "kam").order_by("-doe")
+        scope_kam_id, _scope_label = _resolve_scope(request, request.user)
+
+        lead_qs = _filter_qs_by_kam_scope(
+            lead_qs,
+            request.user,
+            scope_kam_id,
+            "kam_id",
+        )
+
+        from_d = _parse_iso_date(request.GET.get("from_date") or request.GET.get("from") or "")
+        to_d = _parse_iso_date(request.GET.get("to_date") or request.GET.get("to") or "")
+        time_start, time_end = _visit_time_filter_bounds(time_filter)
+
+        start_d = from_d or time_start
+        end_d = to_d or time_end
+
+        if start_d:
+            lead_qs = lead_qs.filter(doe__gte=start_d)
+
+        if end_d:
+            lead_qs = lead_qs.filter(doe__lte=end_d)
+
+        leads_data = list(lead_qs[:300])
+
+        leads_summary = {
+            "total": len(leads_data),
+            "won": sum(1 for lead in leads_data if (lead.status or "").upper() == "WON"),
+            "lost": sum(1 for lead in leads_data if (lead.status or "").upper() == "LOST"),
+            "open": sum(
+                1
+                for lead in leads_data
+                if (lead.status or "").upper() not in {"WON", "LOST"}
+            ),
+        }
+
+    context = {
+        "page_title": "Manager View",
+        "active_tab": active_tab,
+        "tabs": tabs,
+
+        "range_label": "Filtered View",
+        "scope_label": selected_user or "ALL",
+
+        "filter_from": request.GET.get("from_date", "") or request.GET.get("from", ""),
+        "filter_to": request.GET.get("to_date", "") or request.GET.get("to", ""),
+        "time_filter": time_filter,
+        "focus_visit": focus_visit,
+
+        "selected_user": selected_user,
+        "kam_options": kam_options,
+
+        "visits_data": visits_data,
+        "customer_history_map": customer_history_map,
+        "visits_summary": visits_summary,
+
+        "calls_data": calls_data,
+        "calls_summary": calls_summary,
+
+        "collections_data": collections_data,
+        "collections_summary": collections_summary,
+
+        "leads_data": leads_data,
+        "leads_summary": leads_summary,
+    }
+
+    return render(request, "kam/manager_view.html", context)
+
+@login_required(login_url="/accounts/login/")
+@require_kam_code("kam_manager")
+def manager_accept_post_visit(request: HttpRequest, plan_id: int) -> HttpResponse:
+    """
+    Manager accepts KAM post-visit submission.
+
+    Production lifecycle:
+    Visit Plan
+      -> Manager Approval
+      -> Visit
+      -> Post Visit
+      -> Manager Review
+      -> Completion
+
+    This function is the ONLY transition to COMPLETED after post-visit review.
+    """
+    if request.method != "POST":
+        return HttpResponseForbidden("403 Forbidden: POST required.")
+
+    if not _is_manager(request.user):
+        return HttpResponseForbidden("403 Forbidden: Manager access required.")
+
+    with transaction.atomic():
+        plan = get_object_or_404(
+            VisitPlan.objects
+            .select_for_update()
+            .select_related("kam", "customer", "actual"),
+            id=plan_id,
+        )
+
+        if not _can_manager_approve_visit(request.user, plan):
+            return HttpResponseForbidden("403 Forbidden: This visit is not in your approval scope.")
+
+        if plan.approval_status == STATUS_REJECTED:
+            messages.error(
+                request,
+                f"Visit #{plan.id} is rejected and cannot be completed.",
+            )
+            return redirect(reverse("kam:manager_view") + "?tab=visits")
+
+        if plan.approval_status == STATUS_COMPLETED:
+            messages.info(
+                request,
+                f"Visit #{plan.id} is already completed.",
+            )
+            return redirect(reverse("kam:manager_view") + f"?tab=visits&focus_visit={plan.id}")
+
+        actual = getattr(plan, "actual", None)
+
+        if not _post_meeting_details_complete(actual):
+            messages.error(
+                request,
+                f"Visit #{plan.id} cannot be completed because post-visit details are incomplete.",
+            )
+            return redirect(reverse("kam:manager_view") + f"?tab=visits&focus_visit={plan.id}")
+
+        if plan.approval_status != STATUS_APPROVED:
+            messages.error(
+                request,
+                f"Visit #{plan.id} must be manager-approved before post-visit review can be accepted.",
+            )
+            return redirect(reverse("kam:manager_view") + f"?tab=visits&focus_visit={plan.id}")
+
+        plan.approval_status = STATUS_COMPLETED
+        plan.save(update_fields=["approval_status", "updated_at"])
+
+        VisitApprovalAudit.objects.create(
+            plan=plan,
+            actor=request.user,
+            action=VisitApprovalAudit.ACTION_APPROVE,
+            note="[POST_VISIT_REVIEW_ACCEPTED] Manager accepted post visit. Workflow completed.",
+            actor_ip=_get_ip(request),
+        )
+
+    messages.success(
+        request,
+        f"Visit #{plan.id} marked Completed after post-visit manager review.",
+    )
+    return redirect(reverse("kam:manager_view") + f"?tab=visits&focus_visit={plan.id}")
 # =====================================================================
 # Legacy approve/reject
 # =====================================================================
@@ -4893,36 +6929,29 @@ def _resolve_selected_kam_for_performance_report(request: HttpRequest) -> Option
 @login_required(login_url="/accounts/login/")
 @require_kam_code("kam_reports")
 def reports(request: HttpRequest) -> HttpResponse:
-    start_dt, end_dt, range_label = _get_dashboard_range(request)
+    """
+    Legacy KAM Reports route.
 
-    kam_options = _kam_options_for_performance_report(request.user)
-    selected_kam = _resolve_selected_kam_for_performance_report(request)
+    UI has been merged into KAM Dashboard.
+    Backend URL is preserved for backward compatibility.
+    """
+    query = request.GET.urlencode()
+    url = reverse("kam:dashboard")
 
-    report = None
+    if query:
+        url = f"{url}?{query}"
 
-    if selected_kam:
-        report = build_kam_performance_report(
-            kam_id=selected_kam.id,
-            start_dt=start_dt,
-            end_dt=end_dt,
-        )
-
-    ctx = {
-        "page_title": "KAM Performance Analytics",
-        "range_label": range_label,
-        "filter_from": start_dt.date().isoformat(),
-        "filter_to": (end_dt - timezone.timedelta(days=1)).date().isoformat(),
-        "kam_options": kam_options,
-        "selected_kam": selected_kam,
-        "report": report,
-        "can_choose_kam": _is_manager(request.user),
-    }
-
-    return render(request, "kam/reports.html", ctx)
+    return redirect(url)
 
 @login_required(login_url="/accounts/login/")
-@require_kam_code("kam_reports")
+@require_any_kam_code("kam_reports", "kam_dashboard")
 def kam_performance_report_api(request: HttpRequest) -> JsonResponse:
+    """
+    Existing report API preserved.
+
+    Dashboard can reuse this API.
+    No duplicate dashboard/report API is created.
+    """
     start_dt, end_dt, range_label = _get_dashboard_range(request)
     selected_kam = _resolve_selected_kam_for_performance_report(request)
 
@@ -4952,47 +6981,248 @@ def kam_performance_report_api(request: HttpRequest) -> JsonResponse:
 # CSV export
 # =====================================================================
 @login_required(login_url="/accounts/login/")
-@require_kam_code("kam_export_kpi_csv")
-def export_kpi_csv(request: HttpRequest) -> StreamingHttpResponse:
-    period_type, start_dt, end_dt, period_id = _get_period(request)
+@require_any_kam_code("kam_export_kpi_csv", "kam_dashboard", "kam_reports")
+def export_kpi_csv(request: HttpRequest) -> HttpResponse:
+    """
+    Backward-compatible export endpoint.
+
+    Existing URL/name preserved:
+      kam:export_kpi_csv
+
+    Supported formats:
+      ?format=csv
+      ?format=xlsx
+      ?format=excel
+      ?format=pdf
+
+    This avoids creating duplicate export APIs.
+    """
+    export_format = (request.GET.get("format") or "csv").strip().lower()
+
+    start_dt, end_dt, range_label = _get_dashboard_range(request)
+
     if _is_manager(request.user):
-        user_q = (request.GET.get("user") or "").strip()
-        if user_q:
-            u = User.objects.filter(username=user_q, is_active=True).first()
-            if not u or (not _is_admin(request.user) and u.id not in set(_kams_managed_by_manager(request.user))):
-                kam_user_ids = []
-            else:
-                kam_user_ids = [u.id]
+        raw_user = (request.GET.get("user") or "").strip()
+        raw_kam_id = (request.GET.get("kam_id") or "").strip()
+
+        if raw_kam_id.isdigit():
+            u = User.objects.filter(
+                id=int(raw_kam_id),
+                is_active=True,
+            ).first()
+        elif raw_user:
+            u = User.objects.filter(
+                username__iexact=raw_user,
+                is_active=True,
+            ).first()
         else:
-            kam_user_ids = list(InvoiceFact.objects.filter(invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date()).values_list("kam_id", flat=True).distinct()) if _is_admin(request.user) else _kams_managed_by_manager(request.user)
+            u = None
+
+        if u:
+            if _is_admin(request.user) or u.id in set(_kams_managed_by_manager(request.user)):
+                kam_user_ids = [u.id]
+            else:
+                kam_user_ids = []
+        else:
+            if _is_admin(request.user):
+                kam_user_ids = _kam_ids_with_real_kam_data()
+            else:
+                kam_user_ids = _kams_managed_by_manager(request.user)
     else:
         kam_user_ids = [request.user.id]
 
-    rows = [["period_type", "period_id", "kam_id", "sales_mt", "calls", "visits_actual", "collections_amount"]]
+    reports = []
+
     for kam_id in kam_user_ids:
-        inv_qs = InvoiceFact.objects.filter(kam_id=kam_id, invoice_date__gte=start_dt.date(), invoice_date__lt=end_dt.date())
-        inv_qs = _preferred_inv_qs(inv_qs)
-        rows.append([period_type, period_id, kam_id,
-            str(_safe_decimal(inv_qs.aggregate(mt=Sum("qty_mt"))["mt"])),
-            str(CallLog.objects.filter(kam_id=kam_id, call_datetime__gte=start_dt, call_datetime__lt=end_dt).count()),
-            str(VisitActual.objects.filter(plan__kam_id=kam_id, plan__visit_date__gte=start_dt.date(), plan__visit_date__lt=end_dt.date()).count()),
-            str(_safe_decimal(CollectionTxn.objects.filter(kam_id=kam_id, txn_datetime__gte=start_dt, txn_datetime__lt=end_dt).aggregate(a=Sum("amount"))["a"])),
+        kam = (
+            User.objects
+            .filter(id=kam_id, is_active=True)
+            .exclude(is_superuser=True)
+            .exclude(username__iexact="admin")
+            .exclude(email__icontains="admin")
+            .first()
+        )
+
+        if not kam:
+            continue
+
+        report = build_kam_performance_report(
+            kam_id=kam.id,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+
+        reports.append(report)
+
+    reports.sort(
+        key=lambda r: float(_report_value(r, "score", "overall_score", default=0) or 0),
+        reverse=True,
+    )
+
+    rows = [[
+        "Reporting Period",
+        "KAM",
+        "Designation",
+        "Manager",
+        "Sales MT",
+        "Visits",
+        "Calls",
+        "Collections",
+        "Leads",
+        "Conversion %",
+        "Target %",
+        "Performance %",
+        "Overdues",
+        "Risk",
+    ]]
+
+    for report in reports:
+        rows.append([
+            range_label,
+            _report_value(report, "basic", "name", default="-"),
+            _report_value(report, "basic", "designation", default="-"),
+            _report_value(report, "basic", "manager", default="-"),
+            _report_value(report, "sales", "total_sales_mt", default=0),
+            _report_value(report, "visits", "actual_visits", default=0),
+            _report_value(report, "calls", "total_calls", default=0),
+            _report_value(report, "collections", "total_collected", default=0),
+            _report_value(report, "leads", "total_leads", default=0),
+            _report_value(report, "leads", "conversion_ratio", default=0),
+            _report_value(report, "sales", "achievement_pct", default=0),
+            _report_value(report, "score", "overall_score", default=0),
+            _report_value(report, "collections", "total_overdue", default=0),
+            _report_value(report, "risk", "risk_customers", default=0),
         ])
 
-    def _iter_csv() -> Iterable[bytes]:
-        import io, csv
-        buf = io.StringIO()
-        writer = csv.writer(buf)
-        for r in rows:
-            buf.seek(0)
-            buf.truncate(0)
-            writer.writerow(r)
-            yield buf.getvalue().encode("utf-8")
+    filename_period = f"{start_dt.date()}_to_{(end_dt - timezone.timedelta(days=1)).date()}"
 
-    resp = StreamingHttpResponse(_iter_csv(), content_type="text/csv")
-    resp["Content-Disposition"] = f'attachment; filename="kam_kpis_{period_id}.csv"'
-    return resp
+    if export_format in {"xlsx", "excel"}:
+        try:
+            from openpyxl import Workbook
+        except Exception:
+            logger.exception("openpyxl is not installed. Excel export failed.")
+            return HttpResponse(
+                "Excel export requires openpyxl to be installed.",
+                status=500,
+                content_type="text/plain",
+            )
 
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "KAM Performance"
+
+        for row in rows:
+            ws.append(row)
+
+        for column_cells in ws.columns:
+            max_length = 0
+            col_letter = column_cells[0].column_letter
+
+            for cell in column_cells:
+                value = "" if cell.value is None else str(cell.value)
+                max_length = max(max_length, len(value))
+
+            ws.column_dimensions[col_letter].width = min(max_length + 2, 36)
+
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+
+        response = HttpResponse(
+            buffer.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response["Content-Disposition"] = (
+            f'attachment; filename="kam_performance_{filename_period}.xlsx"'
+        )
+        return response
+
+    if export_format == "pdf":
+        html = render_to_string(
+            "kam/emails/monthly_kam_performance_report.html",
+            {
+                "reporting_period": range_label,
+                "summary_table": [
+                    {
+                        "rank": idx,
+                        "kam": _report_value(report, "basic", "name", default="-"),
+                        "sales": _report_value(report, "sales", "total_sales_mt", default=0),
+                        "visits": _report_value(report, "visits", "actual_visits", default=0),
+                        "collections": _report_value(report, "collections", "total_collected", default=0),
+                        "target_pct": _report_value(report, "sales", "achievement_pct", default=0),
+                        "performance_pct": _report_value(report, "score", "overall_score", default=0),
+                    }
+                    for idx, report in enumerate(reports, start=1)
+                ],
+                "kam_sections": [
+                    {
+                        "name": _report_value(report, "basic", "name", default="-"),
+                        "designation": _report_value(report, "basic", "designation", default="-"),
+                        "manager": _report_value(report, "basic", "manager", default="-"),
+                        "sales": _report_value(report, "sales", "total_sales_mt", default=0),
+                        "visits": _report_value(report, "visits", "actual_visits", default=0),
+                        "calls": _report_value(report, "calls", "total_calls", default=0),
+                        "collections": _report_value(report, "collections", "total_collected", default=0),
+                        "leads": _report_value(report, "leads", "total_leads", default=0),
+                        "conversion": _report_value(report, "leads", "conversion_ratio", default=0),
+                        "targets": _report_value(report, "sales", "target_mt", default=0),
+                        "achievement_pct": _report_value(report, "sales", "achievement_pct", default=0),
+                        "overdues": _report_value(report, "collections", "total_overdue", default=0),
+                        "risk": _report_value(report, "risk", "risk_customers", default=0),
+                        "performance_pct": _report_value(report, "score", "overall_score", default=0),
+                        "chart_cids": [],
+                    }
+                    for report in reports
+                ],
+                "management_summary": {
+                    "top_performer": (
+                        _report_value(reports[0], "basic", "name", default="-")
+                        if reports
+                        else "-"
+                    ),
+                    "needs_improvement": (
+                        _report_value(reports[-1], "basic", "name", default="-")
+                        if reports
+                        else "-"
+                    ),
+                    "recommendations": (
+                        "Review sales target gaps, pending visits, overdue exposure, "
+                        "collection delays, and lead conversion follow-up."
+                    ),
+                },
+            },
+        )
+
+        try:
+            from weasyprint import HTML
+
+            pdf_bytes = HTML(string=html).write_pdf()
+            response = HttpResponse(pdf_bytes, content_type="application/pdf")
+            response["Content-Disposition"] = (
+                f'attachment; filename="kam_performance_{filename_period}.pdf"'
+            )
+            return response
+
+        except Exception:
+            logger.exception("PDF export failed. Returning HTML fallback.")
+
+            response = HttpResponse(html, content_type="text/html")
+            response["Content-Disposition"] = (
+                f'attachment; filename="kam_performance_{filename_period}.html"'
+            )
+            return response
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+
+    for row in rows:
+        writer.writerow(row)
+
+    response = HttpResponse(buffer.getvalue(), content_type="text/csv")
+    response["Content-Disposition"] = (
+        f'attachment; filename="kam_performance_{filename_period}.csv"'
+    )
+    return response
 
 # =====================================================================
 # Collections Plan

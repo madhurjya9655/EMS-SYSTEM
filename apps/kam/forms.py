@@ -51,6 +51,9 @@ def _clean_decimal_field(value, allow_blank: bool = True) -> Optional[Decimal]:
 class VisitPlanForm(forms.ModelForm):
     """
     Legacy single visit form.
+
+    Purpose of Visit is mandatory.
+    DB field remains VisitPlan.purpose.
     """
 
     class Meta:
@@ -73,16 +76,26 @@ class VisitPlanForm(forms.ModelForm):
             "purpose": forms.Textarea(
                 attrs={
                     "rows": 2,
-                    "placeholder": "Purpose / remarks (optional)",
+                    "placeholder": "Enter Purpose of Visit",
+                    "required": "required",
                 }
             ),
             "location": forms.Textarea(
                 attrs={
                     "rows": 2,
-                    "placeholder": "Location (optional)",
+                    "placeholder": "Location",
                 }
             ),
         }
+        labels = {
+            "purpose": "Purpose of Visit",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.fields["purpose"].required = True
+        self.fields["purpose"].label = "Purpose of Visit"
 
     def clean(self):
         data = super().clean()
@@ -92,6 +105,7 @@ class VisitPlanForm(forms.ModelForm):
         cpn = (data.get("counterparty_name") or "").strip()
         vd = data.get("visit_date")
         vdt = data.get("visit_date_to")
+        purpose = (data.get("purpose") or "").strip()
 
         if not vd:
             self.add_error("visit_date", "Visit Date is required.")
@@ -101,6 +115,13 @@ class VisitPlanForm(forms.ModelForm):
 
         if vd and vdt and vdt < vd:
             self.add_error("visit_date_to", "To Date cannot be earlier than Visit Date.")
+
+        if not purpose:
+            self.add_error("purpose", "Purpose of Visit is required.")
+        elif len(purpose) > 2000:
+            self.add_error("purpose", "Purpose of Visit is too long (max 2000 characters).")
+        else:
+            data["purpose"] = purpose
 
         if cat == VisitPlan.CAT_CUSTOMER:
             if not cust:
@@ -143,6 +164,15 @@ class VisitPlanForm(forms.ModelForm):
 
         return data
 
+    def save(self, commit=True):
+        inst: VisitPlan = super().save(commit=False)
+        inst.purpose = (inst.purpose or "").strip()
+
+        if commit:
+            inst.save()
+
+        return inst
+
 
 class SingleVisitForm(forms.ModelForm):
     """
@@ -152,6 +182,7 @@ class SingleVisitForm(forms.ModelForm):
       - customer_queryset is passed by views.py.
       - This prevents dropdown from using all customers or none incorrectly.
       - Manual customer mode remains supported.
+      - Purpose of Visit is mandatory for Save Draft and Submit to Manager.
     """
 
     class Meta:
@@ -181,7 +212,8 @@ class SingleVisitForm(forms.ModelForm):
                 attrs={
                     "class": "form-control",
                     "rows": 3,
-                    "placeholder": "Purpose / remarks",
+                    "placeholder": "Enter Purpose of Visit",
+                    "required": "required",
                 }
             ),
             "counterparty_name": forms.TextInput(
@@ -197,7 +229,7 @@ class SingleVisitForm(forms.ModelForm):
             "customer": "Customer Name",
             "counterparty_name": "Customer / Vendor / Supplier / Warehouse Name",
             "location": "Location",
-            "purpose": "Purpose / Remarks",
+            "purpose": "Purpose of Visit",
         }
 
     def __init__(self, *args, **kwargs):
@@ -214,6 +246,7 @@ class SingleVisitForm(forms.ModelForm):
         self.fields["counterparty_name"].required = False
         self.fields["location"].required = True
         self.fields["purpose"].required = True
+        self.fields["purpose"].label = "Purpose of Visit"
 
         self.fields["visit_category"].widget.attrs.update(
             {
@@ -225,6 +258,13 @@ class SingleVisitForm(forms.ModelForm):
             {
                 "class": "form-select",
                 "data-placeholder": "Select customer",
+            }
+        )
+
+        self.fields["purpose"].widget.attrs.update(
+            {
+                "required": "required",
+                "placeholder": "Enter Purpose of Visit",
             }
         )
 
@@ -280,11 +320,15 @@ class SingleVisitForm(forms.ModelForm):
             self.add_error("location", "Location is required.")
         elif len(location) > 1000:
             self.add_error("location", "Location is too long (max 1000 characters).")
+        else:
+            data["location"] = location
 
         if not purpose:
-            self.add_error("purpose", "Purpose / Remarks is required.")
+            self.add_error("purpose", "Purpose of Visit is required.")
         elif len(purpose) > 2000:
-            self.add_error("purpose", "Purpose / Remarks is too long (max 2000 characters).")
+            self.add_error("purpose", "Purpose of Visit is too long (max 2000 characters).")
+        else:
+            data["purpose"] = purpose
 
         if visit_category == VisitPlan.CAT_CUSTOMER:
             if not customer and not manual_customer:
@@ -316,6 +360,8 @@ class SingleVisitForm(forms.ModelForm):
                     "counterparty_name",
                     "Name is too long (max 255 characters).",
                 )
+            else:
+                data["counterparty_name"] = counterparty_name
 
         return data
 
@@ -334,7 +380,7 @@ class SingleVisitForm(forms.ModelForm):
             inst.counterparty_name = (inst.counterparty_name or "").strip() or None
 
         inst.location = (inst.location or "").strip() or None
-        inst.purpose = (inst.purpose or "").strip() or None
+        inst.purpose = (inst.purpose or "").strip()
 
         if commit:
             inst.save()
@@ -344,8 +390,18 @@ class SingleVisitForm(forms.ModelForm):
 
 class VisitActualForm(forms.ModelForm):
     """
-    Visit actual form.
-    meeting_notes is optional.
+    Visit actual / post-meeting form.
+
+    Mandatory post-meeting fields:
+      - actual_datetime
+      - successful / meeting outcome
+      - meeting_notes = Discussion Summary / Customer Feedback
+      - next_action = Required Follow-up / Next Action
+
+    Next Meeting Date rule:
+      - Hidden and cleared until manager accepts post-visit review.
+      - Visible only when workflow_completed=True.
+      - workflow_completed=True only when VisitPlan.approval_status == COMPLETED.
     """
 
     class Meta:
@@ -362,31 +418,150 @@ class VisitActualForm(forms.ModelForm):
             "reminder_cc_manager",
         ]
         widgets = {
-            "actual_datetime": forms.DateTimeInput(attrs={"type": "datetime-local"}),
+            "actual_datetime": forms.DateTimeInput(
+                attrs={
+                    "type": "datetime-local",
+                    "required": "required",
+                    "class": "form-control",
+                }
+            ),
+            "successful": forms.Select(
+                choices=(
+                    ("", "— Select outcome —"),
+                    ("true", "Successful"),
+                    ("false", "Not Successful"),
+                ),
+                attrs={
+                    "class": "form-select",
+                },
+            ),
+            "not_success_reason": forms.Select(
+                attrs={
+                    "class": "form-select",
+                }
+            ),
             "meeting_notes": forms.Textarea(
                 attrs={
                     "rows": 3,
-                    "placeholder": "Meeting notes / remarks (optional)",
+                    "placeholder": "Enter Discussion Summary / Customer Feedback / Remarks",
+                    "required": "required",
+                    "class": "form-control",
                 }
             ),
-            "next_action": forms.Textarea(attrs={"rows": 2}),
-            "next_action_date": forms.DateInput(attrs={"type": "date"}),
+            "actual_sales_mt": forms.NumberInput(
+                attrs={
+                    "step": "0.01",
+                    "class": "form-control",
+                    "placeholder": "Sales Opportunity",
+                }
+            ),
+            "actual_collection": forms.NumberInput(
+                attrs={
+                    "step": "0.01",
+                    "class": "form-control",
+                    "placeholder": "Expected / Actual Collection",
+                }
+            ),
+            "next_action": forms.Textarea(
+                attrs={
+                    "rows": 2,
+                    "placeholder": "Enter Required Follow-up / Next Action",
+                    "required": "required",
+                    "class": "form-control",
+                }
+            ),
+            "next_action_date": forms.DateInput(
+                attrs={
+                    "type": "date",
+                    "class": "form-control",
+                }
+            ),
+            "reminder_cc_manager": forms.CheckboxInput(
+                attrs={
+                    "class": "form-check-input",
+                }
+            ),
+        }
+        labels = {
+            "actual_datetime": "Post Meeting Date & Time",
+            "successful": "Meeting Outcome",
+            "not_success_reason": "Not Successful Reason",
+            "meeting_notes": "Discussion Summary / Customer Feedback",
+            "actual_sales_mt": "Sales Opportunity",
+            "actual_collection": "Expected / Actual Collection",
+            "next_action": "Required Follow-up / Next Action",
+            "next_action_date": "Next Meeting Date",
+            "reminder_cc_manager": "CC Manager on Reminder",
         }
 
     def __init__(self, *args, **kwargs):
+        self.workflow_completed = bool(kwargs.pop("workflow_completed", False))
+
         super().__init__(*args, **kwargs)
 
-        self.fields["meeting_notes"].required = False
+        self.fields["actual_datetime"].required = True
+        self.fields["meeting_notes"].required = True
+        self.fields["next_action"].required = True
+
+        # successful may be a BooleanField. Keep backend validation in clean()
+        # because unchecked/empty handling can vary by widget/model field.
+        self.fields["successful"].required = False
+
+        self.fields["meeting_notes"].label = "Discussion Summary / Customer Feedback"
+        self.fields["actual_sales_mt"].label = "Sales Opportunity"
+        self.fields["actual_collection"].label = "Expected / Actual Collection"
+        self.fields["next_action"].label = "Required Follow-up / Next Action"
+
+        if not self.workflow_completed:
+            self.fields["next_action_date"].required = False
+            self.fields["next_action_date"].widget = forms.HiddenInput()
+            self.fields["next_action_date"].help_text = (
+                "Next Meeting Date is available only after manager accepts post-visit review."
+            )
+        else:
+            self.fields["next_action_date"].required = False
+            self.fields["next_action_date"].widget.attrs.update(
+                {
+                    "type": "date",
+                    "class": "form-control",
+                }
+            )
 
         if self.instance and getattr(self.instance, "pk", None):
             if not (self.instance.meeting_notes or "").strip() and (self.instance.summary or "").strip():
                 self.fields["meeting_notes"].initial = self.instance.summary or ""
 
+    def clean_successful(self):
+        value = self.cleaned_data.get("successful")
+
+        if value in (True, False):
+            return value
+
+        raw_value = self.data.get(self.add_prefix("successful"))
+
+        if raw_value in ("true", "True", "1", "yes", "on"):
+            return True
+
+        if raw_value in ("false", "False", "0", "no", "off"):
+            return False
+
+        return value
+
     def clean(self):
         data = super().clean()
 
+        actual_datetime = data.get("actual_datetime")
         successful = data.get("successful")
         reason = data.get("not_success_reason")
+        meeting_notes = (data.get("meeting_notes") or "").strip()
+        next_action = (data.get("next_action") or "").strip()
+        next_action_date = data.get("next_action_date")
+
+        if not actual_datetime:
+            self.add_error("actual_datetime", "Post Meeting Date & Time is required.")
+
+        if successful is None:
+            self.add_error("successful", "Meeting Outcome is required.")
 
         if successful is False and not reason:
             self.add_error(
@@ -396,6 +571,41 @@ class VisitActualForm(forms.ModelForm):
 
         if successful is True:
             data["not_success_reason"] = None
+
+        if not meeting_notes:
+            self.add_error(
+                "meeting_notes",
+                "Discussion Summary / Customer Feedback is required.",
+            )
+        elif len(meeting_notes) > 5000:
+            self.add_error(
+                "meeting_notes",
+                "Discussion Summary / Customer Feedback is too long.",
+            )
+        else:
+            data["meeting_notes"] = meeting_notes
+
+        if not next_action:
+            self.add_error(
+                "next_action",
+                "Required Follow-up / Next Action is required.",
+            )
+        elif len(next_action) > 2000:
+            self.add_error(
+                "next_action",
+                "Required Follow-up / Next Action is too long.",
+            )
+        else:
+            data["next_action"] = next_action
+
+        if not self.workflow_completed:
+            data["next_action_date"] = None
+
+        elif next_action_date and (not meeting_notes or not next_action):
+            self.add_error(
+                "next_action_date",
+                "Next Meeting Date can be entered only after post-meeting details and follow-up are completed.",
+            )
 
         try:
             data["actual_sales_mt"] = _clean_decimal_field(
@@ -419,8 +629,17 @@ class VisitActualForm(forms.ModelForm):
         inst = super().save(commit=False)
 
         notes = (inst.meeting_notes or "").strip()
+        action = (inst.next_action or "").strip()
+
         inst.meeting_notes = notes or None
         inst.summary = inst.meeting_notes
+        inst.next_action = action or None
+
+        if not self.workflow_completed:
+            inst.next_action_date = None
+
+        if not inst.meeting_notes or not inst.next_action:
+            inst.next_action_date = None
 
         if commit:
             inst.save()
@@ -508,9 +727,13 @@ class VisitBatchForm(forms.ModelForm):
             "purpose": forms.Textarea(
                 attrs={
                     "rows": 2,
-                    "placeholder": "Remarks / purpose (optional)",
+                    "placeholder": "Enter Purpose of Visit",
+                    "required": "required",
                 }
             ),
+        }
+        labels = {
+            "purpose": "Purpose of Visit",
         }
 
     def __init__(self, *args, **kwargs):
@@ -518,7 +741,14 @@ class VisitBatchForm(forms.ModelForm):
 
         super().__init__(*args, **kwargs)
 
-        self.fields["purpose"].required = False
+        self.fields["purpose"].required = True
+        self.fields["purpose"].label = "Purpose of Visit"
+        self.fields["purpose"].widget.attrs.update(
+            {
+                "required": "required",
+                "placeholder": "Enter Purpose of Visit",
+            }
+        )
 
         if customer_queryset is not None:
             self.fields["customers"].queryset = customer_queryset.order_by("name", "code")
@@ -541,34 +771,51 @@ class VisitBatchForm(forms.ModelForm):
         if from_date and to_date and to_date < from_date:
             self.add_error("to_date", "To date cannot be earlier than From date.")
 
-        if len(purpose) > 1000:
-            self.add_error("purpose", "Remarks too long (max 1000 chars).")
+        if not purpose:
+            self.add_error("purpose", "Purpose of Visit is required.")
+        elif len(purpose) > 1000:
+            self.add_error("purpose", "Purpose of Visit is too long (max 1000 characters).")
+        else:
+            data["purpose"] = purpose
 
         return data
+
+    def save(self, commit=True):
+        inst: VisitBatch = super().save(commit=False)
+        inst.purpose = (inst.purpose or "").strip()
+
+        if commit:
+            inst.save()
+
+        return inst
 
 
 class MultiVisitPlanLineForm(forms.Form):
     counterparty_name = forms.CharField(
         required=True,
         max_length=255,
+        label="Name",
     )
 
     counterparty_location = forms.CharField(
         required=False,
         max_length=255,
+        label="Location",
         widget=forms.TextInput(
             attrs={
-                "placeholder": "Location (optional)",
+                "placeholder": "Location",
             }
         ),
     )
 
     counterparty_purpose = forms.CharField(
-        required=False,
+        required=True,
         max_length=500,
+        label="Purpose of Visit",
         widget=forms.TextInput(
             attrs={
-                "placeholder": "Purpose / remarks (optional)",
+                "placeholder": "Enter Purpose of Visit",
+                "required": "required",
             }
         ),
     )
@@ -578,6 +825,17 @@ class MultiVisitPlanLineForm(forms.Form):
 
         if not value:
             raise ValidationError("Name is required.")
+
+        return value
+
+    def clean_counterparty_purpose(self):
+        value = (self.cleaned_data.get("counterparty_purpose") or "").strip()
+
+        if not value:
+            raise ValidationError("Purpose of Visit is required.")
+
+        if len(value) > 500:
+            raise ValidationError("Purpose of Visit is too long (max 500 characters).")
 
         return value
 

@@ -114,6 +114,7 @@ def _display_user(user) -> str:
 def _display_email(user) -> str:
     if not user:
         return "-"
+
     email = (getattr(user, "email", "") or "").strip()
     return email or "-"
 
@@ -144,6 +145,7 @@ def _safe_email_list(users: Sequence[User] | Iterable[User]) -> list[str]:
 
     for user in users or []:
         email = (getattr(user, "email", "") or "").strip()
+
         if email:
             emails.append(email)
 
@@ -198,7 +200,7 @@ def _send_email_message(
 
     if not to_emails and not cc_emails:
         logger.warning(
-            "KAM batch approval email skipped because no recipients were found. subject=%r",
+            "KAM email skipped because no recipients were found. subject=%r",
             subject,
         )
         return False
@@ -229,7 +231,7 @@ def _send_email_message(
         sent_count = email.send(fail_silently=False)
 
         logger.info(
-            "KAM batch approval email sent. subject=%r to=%s cc=%s sent_count=%s",
+            "KAM email sent. subject=%r to=%s cc=%s sent_count=%s",
             subject,
             final_to,
             final_cc,
@@ -240,7 +242,7 @@ def _send_email_message(
 
     except Exception:
         logger.exception(
-            "KAM batch approval email failed. subject=%r to=%s cc=%s",
+            "KAM email failed. subject=%r to=%s cc=%s",
             subject,
             final_to,
             final_cc,
@@ -276,10 +278,12 @@ def build_batch_approval_urls(
         try:
             approve_path = reverse("kam:direct_batch_approve", args=[approve_token])
             reject_path = reverse("kam:direct_batch_reject", args=[reject_token])
+
             return (
                 request.build_absolute_uri(approve_path),
                 request.build_absolute_uri(reject_path),
             )
+
         except NoReverseMatch:
             logger.warning(
                 "Direct batch approval URLs not found. Falling back to login-required batch approval URLs."
@@ -447,7 +451,7 @@ def _build_safe_fallback_batch_html(
 
 
 # ---------------------------------------------------------------------------
-# Public send function
+# Public send function: visit batch approval
 # ---------------------------------------------------------------------------
 def send_visit_batch_approval_email(
     *,
@@ -544,12 +548,14 @@ def send_visit_batch_approval_email(
 
     try:
         html_body = render_to_string(template_name, context)
+
     except Exception:
         logger.exception(
             "Failed to render batch approval email template=%s batch_id=%s",
             template_name,
             getattr(batch, "id", None),
         )
+
         html_body = _build_safe_fallback_batch_html(
             batch=batch,
             kam_user=kam_user,
@@ -573,6 +579,304 @@ def send_visit_batch_approval_email(
 
 
 # ---------------------------------------------------------------------------
+# Public send function: monthly KAM performance report
+# ---------------------------------------------------------------------------
+def send_monthly_kam_performance_report_email(
+    *,
+    reporting_period: str,
+    kam_sections: list[dict],
+    summary_table: list[dict],
+    management_summary: dict,
+    chart_attachments: list[dict] | None = None,
+    template_name: str = "kam/emails/monthly_kam_performance_report.html",
+) -> bool:
+    """
+    Sends one consolidated monthly KAM Performance Report.
+
+    Production requirements:
+    - One email only.
+    - Every KAM included.
+    - TO: pankaj@blueoceansteels.com
+    - CC: amreen@blueoceansteels.com
+    - Professional HTML.
+    - Company branding.
+    - Embedded chart support via Content-ID.
+    - No duplicate calculation logic here.
+
+    chart_attachments expected format:
+    [
+        {
+            "cid": "chart_akshay_sales",
+            "filename": "chart_akshay_sales.png",
+            "content": b"...png bytes...",
+            "mimetype": "image/png",
+        }
+    ]
+    """
+    subject = f"BOS Lakshya Monthly KAM Performance Report - {reporting_period}"
+
+    to_emails = ["pankaj@blueoceansteels.com"]
+    cc_emails = ["amreen@blueoceansteels.com"]
+
+    context = {
+        "reporting_period": reporting_period,
+        "kam_sections": kam_sections or [],
+        "summary_table": summary_table or [],
+        "management_summary": management_summary or {},
+    }
+
+    try:
+        html_body = render_to_string(template_name, context)
+
+    except Exception:
+        logger.exception(
+            "Failed to render monthly KAM performance email template=%s period=%s",
+            template_name,
+            reporting_period,
+        )
+
+        html_body = _build_safe_fallback_monthly_kam_report_html(
+            reporting_period=reporting_period,
+            kam_sections=kam_sections or [],
+            summary_table=summary_table or [],
+            management_summary=management_summary or {},
+        )
+
+    plain_body = _html_to_plain_text(html_body)
+
+    from_email = (
+        getattr(settings, "DEFAULT_FROM_EMAIL", None)
+        or getattr(settings, "EMAIL_HOST_USER", None)
+    )
+
+    final_to = _dedupe_email_list(to_emails)
+    final_cc = _dedupe_email_list(cc_emails)
+
+    to_keys = {email.lower() for email in final_to}
+    final_cc = [
+        email
+        for email in final_cc
+        if email.lower() not in to_keys
+    ]
+
+    try:
+        email = EmailMultiAlternatives(
+            subject=subject,
+            body=plain_body,
+            from_email=from_email,
+            to=final_to,
+            cc=final_cc,
+        )
+
+        email.attach_alternative(html_body, "text/html")
+
+        for attachment in chart_attachments or []:
+            cid = (attachment.get("cid") or "").strip()
+            filename = (attachment.get("filename") or "").strip()
+            content = attachment.get("content")
+            mimetype = (attachment.get("mimetype") or "image/png").strip()
+
+            if not cid or not filename or not content:
+                continue
+
+            try:
+                part = email.attach(filename, content, mimetype)
+                part.add_header("Content-ID", f"<{cid}>")
+                part.add_header("Content-Disposition", "inline", filename=filename)
+
+            except Exception:
+                logger.exception(
+                    "Failed to attach inline monthly KAM chart image. cid=%s filename=%s",
+                    cid,
+                    filename,
+                )
+
+        sent_count = email.send(fail_silently=False)
+
+        logger.info(
+            "Monthly KAM performance report sent. period=%s to=%s cc=%s sent_count=%s kam_count=%s",
+            reporting_period,
+            final_to,
+            final_cc,
+            sent_count,
+            len(kam_sections or []),
+        )
+
+        return bool(sent_count)
+
+    except Exception:
+        logger.exception(
+            "Monthly KAM performance report email failed. period=%s to=%s cc=%s",
+            reporting_period,
+            final_to,
+            final_cc,
+        )
+        return False
+
+
+def _build_safe_fallback_monthly_kam_report_html(
+    *,
+    reporting_period: str,
+    kam_sections: list[dict],
+    summary_table: list[dict],
+    management_summary: dict,
+) -> str:
+    """
+    Minimal fallback HTML for the monthly KAM report.
+
+    Used only when the main template fails to render.
+    """
+    summary_rows = ""
+
+    for row in summary_table or []:
+        summary_rows += f"""
+        <tr>
+          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;">{_safe_str(row.get("rank"))}</td>
+          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;">{_safe_str(row.get("kam"))}</td>
+          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;text-align:right;">{_safe_str(row.get("sales"))}</td>
+          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;text-align:right;">{_safe_str(row.get("visits"))}</td>
+          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;text-align:right;">{_safe_str(row.get("collections"))}</td>
+          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;text-align:right;">{_safe_str(row.get("target_pct"))}</td>
+          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;text-align:right;">{_safe_str(row.get("performance_pct"))}</td>
+        </tr>
+        """
+
+    if not summary_rows:
+        summary_rows = """
+        <tr>
+          <td colspan="7" style="border:1px solid #e5e7eb;padding:12px;font-size:12px;text-align:center;color:#6b7280;">
+            No KAM performance records available.
+          </td>
+        </tr>
+        """
+
+    kam_blocks = ""
+
+    for item in kam_sections or []:
+        kam_blocks += f"""
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 18px 0;border:1px solid #d1d5db;">
+          <tr>
+            <td style="background:#f9fafb;padding:12px 14px;border-bottom:1px solid #d1d5db;">
+              <div style="font-size:15px;font-weight:700;color:#111827;">{_safe_str(item.get("name"))}</div>
+              <div style="font-size:12px;color:#4b5563;margin-top:3px;">
+                Designation: {_safe_str(item.get("designation"))} |
+                Manager: {_safe_str(item.get("manager"))} |
+                Reporting Period: {reporting_period}
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:14px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+                <tr>
+                  <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;"><strong>Sales</strong><br>{_safe_str(item.get("sales"))}</td>
+                  <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;"><strong>Visits</strong><br>{_safe_str(item.get("visits"))}</td>
+                  <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;"><strong>Calls</strong><br>{_safe_str(item.get("calls"))}</td>
+                  <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;"><strong>Collections</strong><br>{_safe_str(item.get("collections"))}</td>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;"><strong>Leads</strong><br>{_safe_str(item.get("leads"))}</td>
+                  <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;"><strong>Conversion</strong><br>{_safe_str(item.get("conversion"))}</td>
+                  <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;"><strong>Targets</strong><br>{_safe_str(item.get("targets"))}</td>
+                  <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;"><strong>Achievement</strong><br>{_safe_str(item.get("achievement_pct"))}</td>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;"><strong>Overdues</strong><br>{_safe_str(item.get("overdues"))}</td>
+                  <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;"><strong>Risk</strong><br>{_safe_str(item.get("risk"))}</td>
+                  <td colspan="2" style="border:1px solid #e5e7eb;padding:8px;font-size:12px;"><strong>Performance</strong><br>{_safe_str(item.get("performance_pct"))}</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+        """
+
+    if not kam_blocks:
+        kam_blocks = """
+        <p style="font-size:13px;color:#6b7280;margin:0 0 18px 0;">
+          No individual KAM sections were available for this reporting period.
+        </p>
+        """
+
+    return f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>BOS Lakshya Monthly KAM Performance Report</title>
+</head>
+<body style="margin:0;padding:0;background:#f5f6f8;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f5f6f8;padding:24px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:980px;background:#ffffff;border:1px solid #e5e7eb;border-collapse:collapse;">
+          <tr>
+            <td style="background:#0b1f3a;color:#ffffff;padding:20px 24px;">
+              <div style="font-size:20px;font-weight:700;">Blue Ocean Steels</div>
+              <div style="font-size:13px;margin-top:4px;">BOS Lakshya ERP System</div>
+              <div style="font-size:16px;font-weight:700;margin-top:14px;">Monthly KAM Performance Report</div>
+              <div style="font-size:13px;margin-top:4px;">Reporting Period: {reporting_period}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:22px 24px;">
+              <h2 style="font-size:16px;margin:0 0 10px 0;color:#111827;">Executive Summary</h2>
+              <p style="font-size:14px;line-height:1.6;margin:0 0 16px 0;color:#374151;">
+                This consolidated report presents monthly sales, visits, calls, collections,
+                leads, target achievement, overdue risk, and overall KAM performance.
+              </p>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:22px;">
+                <thead>
+                  <tr>
+                    <th align="left" style="border:1px solid #d1d5db;background:#f3f4f6;padding:8px;font-size:12px;">Rank</th>
+                    <th align="left" style="border:1px solid #d1d5db;background:#f3f4f6;padding:8px;font-size:12px;">KAM</th>
+                    <th align="right" style="border:1px solid #d1d5db;background:#f3f4f6;padding:8px;font-size:12px;">Sales</th>
+                    <th align="right" style="border:1px solid #d1d5db;background:#f3f4f6;padding:8px;font-size:12px;">Visits</th>
+                    <th align="right" style="border:1px solid #d1d5db;background:#f3f4f6;padding:8px;font-size:12px;">Collections</th>
+                    <th align="right" style="border:1px solid #d1d5db;background:#f3f4f6;padding:8px;font-size:12px;">Target %</th>
+                    <th align="right" style="border:1px solid #d1d5db;background:#f3f4f6;padding:8px;font-size:12px;">Performance %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary_rows}
+                </tbody>
+              </table>
+
+              {kam_blocks}
+
+              <h2 style="font-size:16px;margin:0 0 10px 0;color:#111827;">Overall Management Summary</h2>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:16px;">
+                <tr>
+                  <td style="border:1px solid #e5e7eb;padding:10px;font-size:13px;width:28%;background:#f9fafb;"><strong>Top Performer</strong></td>
+                  <td style="border:1px solid #e5e7eb;padding:10px;font-size:13px;">{_safe_str(management_summary.get("top_performer"))}</td>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #e5e7eb;padding:10px;font-size:13px;background:#f9fafb;"><strong>Needs Improvement</strong></td>
+                  <td style="border:1px solid #e5e7eb;padding:10px;font-size:13px;">{_safe_str(management_summary.get("needs_improvement"))}</td>
+                </tr>
+                <tr>
+                  <td style="border:1px solid #e5e7eb;padding:10px;font-size:13px;background:#f9fafb;"><strong>Recommendations</strong></td>
+                  <td style="border:1px solid #e5e7eb;padding:10px;font-size:13px;line-height:1.55;">{_safe_str(management_summary.get("recommendations"))}</td>
+                </tr>
+              </table>
+
+              <p style="font-size:11px;color:#6b7280;margin:18px 0 0 0;">
+                This is a system generated report from BOS Lakshya ERP. Please do not reply to this email.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+"""
+
+
+# ---------------------------------------------------------------------------
 # Token validation helper
 # ---------------------------------------------------------------------------
 def validate_and_parse_token(
@@ -592,10 +896,13 @@ def validate_and_parse_token(
     try:
         payload = signer.parse_token(token)
         return payload, None
+
     except SignatureExpired:
         return None, "Approval link expired."
+
     except BadSignature:
         return None, "Invalid approval link."
+
     except Exception:
         logger.exception("Unexpected error while validating batch approval token")
         return None, "Invalid approval link."

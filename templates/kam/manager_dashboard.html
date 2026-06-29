@@ -1,6 +1,5 @@
 {# FILE: templates/kam/manager_dashboard.html #}
-{# PURPOSE: Today's Details — renamed from Manager Console. Shows today's Visits, Calls, Leads, Collections. #}
-{# UPDATED: 2026-03-05 #}
+{# PURPOSE: Today's Details — shows today's Visits, Calls, Leads, Collections. #}
 {% extends "base.html" %}
 {% load humanize %}
 
@@ -19,31 +18,92 @@
     gap: 14px;
     box-shadow: var(--shadow-xs);
   }
-  .today-stat-icon {
-    width: 44px; height: 44px; border-radius: 12px;
-    display: grid; place-items: center;
-    font-size: 18px; flex-shrink: 0;
-  }
-  .today-stat-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--subtle); }
-  .today-stat-value { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; color: var(--text); line-height: 1.1; }
-  .today-stat-sub   { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
 
-  .section-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .today-stat-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+
+  .today-stat-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--subtle);
+  }
+
+  .today-stat-value {
+    font-family: var(--font-display);
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.1;
+  }
+
+  .today-stat-sub {
+    font-size: 11.5px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  .section-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
   .section-header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 16px; border-bottom: 1px solid var(--border-light);
-    font-size: 13px; font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-light);
+    font-size: 13px;
+    font-weight: 700;
   }
+
   .section-table th {
-    font-size: 11px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: .05em; color: var(--muted); white-space: nowrap;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--muted);
+    white-space: nowrap;
   }
-  .section-table td { font-size: 13px; vertical-align: middle; }
+
+  .section-table td {
+    font-size: 13px;
+    vertical-align: middle;
+  }
+
   .kam-chip {
-    display: inline-block; background: var(--primary-soft); color: var(--primary);
-    font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 4px;
+    display: inline-block;
+    background: var(--primary-soft);
+    color: var(--primary);
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
   }
-  .empty-state { padding: 30px 20px; text-align: center; color: var(--subtle); font-size: 13px; }
+
+  .empty-state {
+    padding: 30px 20px;
+    text-align: center;
+    color: var(--subtle);
+    font-size: 13px;
+  }
+
+  .purpose-text {
+    max-width: 220px;
+    color: var(--muted);
+    line-height: 1.35;
+  }
 </style>
 {% endblock %}
 
@@ -64,7 +124,6 @@
   </div>
 </div>
 
-{# ── Summary Stats ─────────────────────────────────────────────────── #}
 <div class="row g-3 mb-4">
   <div class="col-6 col-md-3">
     <div class="today-stat-card">
@@ -78,6 +137,7 @@
       </div>
     </div>
   </div>
+
   <div class="col-6 col-md-3">
     <div class="today-stat-card">
       <div class="today-stat-icon" style="background:#f5f3ff;">
@@ -90,6 +150,7 @@
       </div>
     </div>
   </div>
+
   <div class="col-6 col-md-3">
     <div class="today-stat-card">
       <div class="today-stat-icon" style="background:#fff7ed;">
@@ -102,6 +163,7 @@
       </div>
     </div>
   </div>
+
   <div class="col-6 col-md-3">
     <div class="today-stat-card">
       <div class="today-stat-icon" style="background:#ecfdf5;">
@@ -109,14 +171,15 @@
       </div>
       <div>
         <div class="today-stat-label">Collections Today</div>
-        <div class="today-stat-value" style="font-size:1.1rem;">₹ {{ today_collections_amount|floatformat:0|intcomma|default:"0" }}</div>
+        <div class="today-stat-value" style="font-size:1.1rem;">
+          ₹ {{ today_collections_amount|floatformat:0|intcomma|default:"0" }}
+        </div>
         <div class="today-stat-sub">{{ today_collections_count|default:"0" }} txns</div>
       </div>
     </div>
   </div>
 </div>
 
-{# ── KAM breakdown table ────────────────────────────────────────────── #}
 {% if kam_rows %}
 <div class="section-card mb-4">
   <div class="section-header">
@@ -157,13 +220,13 @@
 
 <div class="row g-3">
 
-  {# ── Today's Visits ────────────────────────────────────────────────── #}
   <div class="col-lg-6">
     <div class="section-card">
       <div class="section-header">
         <span><i class="fas fa-route me-2 text-muted"></i>Today's Visits</span>
         <span class="badge bg-primary" style="font-size:11px;">{{ today_visits|length }}</span>
       </div>
+
       {% if today_visits %}
       <div class="table-responsive">
         <table class="table table-sm section-table align-middle mb-0">
@@ -171,19 +234,51 @@
             <tr>
               <th>KAM</th>
               <th>Customer</th>
+              <th>Purpose of Visit</th>
               <th class="text-center">Outcome</th>
             </tr>
           </thead>
           <tbody>
             {% for v in today_visits %}
             <tr>
-              <td><span class="kam-chip">{{ v.plan.kam.username }}</span></td>
-              <td style="font-weight:600;font-size:12.5px;">{{ v.plan.customer.name|default:v.plan.counterparty_name|default:"—" }}</td>
-              <td class="text-center">
-                {% if v.successful %}
-                  <span style="background:#ecfdf5;color:#10b981;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;">✓ Success</span>
+              <td>
+                <span class="kam-chip">
+                  {% if v.plan %}
+                    {{ v.plan.kam.username }}
+                  {% elif v.kam %}
+                    {{ v.kam.username }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </span>
+              </td>
+              <td>
+                {% if v.plan and v.plan.customer %}
+                  {{ v.plan.customer.name }}
+                {% elif v.plan %}
+                  {{ v.plan.counterparty_name|default:"—" }}
+                {% elif v.customer %}
+                  {{ v.customer.name }}
                 {% else %}
-                  <span style="background:#fef2f2;color:#ef4444;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;">✕ Missed</span>
+                  —
+                {% endif %}
+              </td>
+              <td class="purpose-text">
+                {% if v.plan %}
+                  {{ v.plan.purpose|default:"—"|truncatechars:70 }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td class="text-center">
+                {% if v.plan and v.plan.approval_status == "COMPLETED" %}
+                  {% if v.successful %}
+                    <span class="badge bg-success">Successful</span>
+                  {% else %}
+                    <span class="badge bg-danger">Not Successful</span>
+                  {% endif %}
+                {% else %}
+                  <span class="text-muted">—</span>
                 {% endif %}
               </td>
             </tr>
@@ -192,18 +287,20 @@
         </table>
       </div>
       {% else %}
-      <div class="empty-state">No visits recorded today.</div>
+      <div class="empty-state">
+        No visits recorded today.
+      </div>
       {% endif %}
     </div>
   </div>
 
-  {# ── Today's Calls ─────────────────────────────────────────────────── #}
   <div class="col-lg-6">
     <div class="section-card">
       <div class="section-header">
-        <span><i class="fas fa-phone-volume me-2 text-muted"></i>Today's Calls</span>
+        <span><i class="fas fa-phone me-2 text-muted"></i>Today's Calls</span>
         <span class="badge bg-primary" style="font-size:11px;">{{ today_calls|length }}</span>
       </div>
+
       {% if today_calls %}
       <div class="table-responsive">
         <table class="table table-sm section-table align-middle mb-0">
@@ -211,33 +308,37 @@
             <tr>
               <th>KAM</th>
               <th>Customer</th>
-              <th>Time</th>
+              <th>Outcome</th>
             </tr>
           </thead>
           <tbody>
             {% for c in today_calls %}
             <tr>
-              <td><span class="kam-chip">{{ c.kam.username }}</span></td>
-              <td style="font-weight:600;font-size:12.5px;">{{ c.customer.name|default:"—" }}</td>
-              <td class="text-muted small">{{ c.call_datetime|time:"H:i" }}</td>
+              <td>
+                <span class="kam-chip">{{ c.kam.username }}</span>
+              </td>
+              <td>{{ c.customer.name|default:"—" }}</td>
+              <td>{{ c.outcome|default:"—" }}</td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
       {% else %}
-      <div class="empty-state">No calls logged today.</div>
+      <div class="empty-state">
+        No calls logged today.
+      </div>
       {% endif %}
     </div>
   </div>
 
-  {# ── Today's Leads ─────────────────────────────────────────────────── #}
   <div class="col-lg-6">
     <div class="section-card">
       <div class="section-header">
         <span><i class="fas fa-bullseye me-2 text-muted"></i>Today's Leads</span>
         <span class="badge bg-primary" style="font-size:11px;">{{ today_leads|length }}</span>
       </div>
+
       {% if today_leads %}
       <div class="table-responsive">
         <table class="table table-sm section-table align-middle mb-0">
@@ -245,43 +346,37 @@
             <tr>
               <th>KAM</th>
               <th>Customer</th>
-              <th class="text-end">MT</th>
               <th>Status</th>
+              <th class="text-end">Qty MT</th>
             </tr>
           </thead>
           <tbody>
-            {% for l in today_leads %}
+            {% for lead in today_leads %}
             <tr>
-              <td><span class="kam-chip">{{ l.kam.username }}</span></td>
-              <td style="font-weight:600;font-size:12.5px;">{{ l.customer.name|default:"—" }}</td>
-              <td class="text-end">{{ l.qty_mt|floatformat:2 }}</td>
-              <td>
-                {% if l.status == "WON" %}
-                  <span style="background:#ecfdf5;color:#10b981;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;">WON</span>
-                {% elif l.status == "LOST" %}
-                  <span style="background:#fef2f2;color:#ef4444;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;">LOST</span>
-                {% else %}
-                  <span style="background:#fffbeb;color:#f59e0b;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;">{{ l.status }}</span>
-                {% endif %}
-              </td>
+              <td><span class="kam-chip">{{ lead.kam.username }}</span></td>
+              <td>{{ lead.customer.name|default:"—" }}</td>
+              <td>{{ lead.status|default:"—" }}</td>
+              <td class="text-end">{{ lead.qty_mt|default:0|floatformat:3 }}</td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
       {% else %}
-      <div class="empty-state">No leads added today.</div>
+      <div class="empty-state">
+        No leads created today.
+      </div>
       {% endif %}
     </div>
   </div>
 
-  {# ── Today's Collections ───────────────────────────────────────────── #}
   <div class="col-lg-6">
     <div class="section-card">
       <div class="section-header">
         <span><i class="fas fa-money-bill-wave me-2 text-muted"></i>Today's Collections</span>
         <span class="badge bg-primary" style="font-size:11px;">{{ today_collections|length }}</span>
       </div>
+
       {% if today_collections %}
       <div class="table-responsive">
         <table class="table table-sm section-table align-middle mb-0">
@@ -289,25 +384,30 @@
             <tr>
               <th>KAM</th>
               <th>Customer</th>
-              <th class="text-end">Amount (₹)</th>
+              <th class="text-end">Amount</th>
+              <th>Reference</th>
             </tr>
           </thead>
           <tbody>
-            {% for t in today_collections %}
+            {% for txn in today_collections %}
             <tr>
-              <td><span class="kam-chip">{{ t.kam.username }}</span></td>
-              <td style="font-weight:600;font-size:12.5px;">{{ t.customer.name|default:"—" }}</td>
-              <td class="text-end fw-semibold text-success">₹ {{ t.amount|floatformat:0|intcomma }}</td>
+              <td><span class="kam-chip">{{ txn.kam.username }}</span></td>
+              <td>{{ txn.customer.name|default:"—" }}</td>
+              <td class="text-end fw-semibold">₹ {{ txn.amount|default:0|floatformat:0|intcomma }}</td>
+              <td>{{ txn.reference_no|default:"—" }}</td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
       {% else %}
-      <div class="empty-state">No collections recorded today.</div>
+      <div class="empty-state">
+        No collections recorded today.
+      </div>
       {% endif %}
     </div>
   </div>
 
 </div>
+
 {% endblock %}

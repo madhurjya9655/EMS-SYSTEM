@@ -182,7 +182,7 @@
     </div>
   </div>
 
-  <!-- SALES — ✅ Collection Report link added -->
+  <!-- SALES -->
   <div class="sub-panel-section" id="panel-sales">
     <div class="sub-panel-header">
       <div class="sub-panel-icon" style="background:#fff7ed;color:#ea580c"><i class="fa-solid fa-chart-line"></i></div>
@@ -192,11 +192,9 @@
     <div class="sub-panel-nav">
       {% if user|has_permission:"kam_dashboard" %}<a href="{% url 'kam:dashboard' %}" class="sub-link {% if request.resolver_match.app_name == 'kam' and request.resolver_match.url_name == 'dashboard' %}active{% endif %}"><i class="fa-solid fa-gauge-high"></i> KAM Dashboard</a>{% endif %}
       {% if user|has_permission:"kam_plan" %}<a href="{% url 'kam:plan' %}" class="sub-link {% if request.resolver_match.url_name == 'plan' %}active{% endif %}"><i class="fa-solid fa-calendar-plus"></i> Plan Visit</a>{% endif %}
-      {% if user|has_any_permission:"kam_plan,kam_manager" or user.is_superuser %}<a href="{% url 'kam:visit_batches' %}" class="sub-link {% if request.resolver_match.url_name == 'visit_batches' %}active{% endif %}"><i class="fa-solid fa-clock-rotate-left"></i> Visit History</a>{% endif %}
-      {% if user|has_any_permission:"kam_visits,kam_call_new,kam_collection_new" %}<a href="{% url 'kam:visits' %}" class="sub-link {% if request.resolver_match.url_name == 'visits' %}active{% endif %}"><i class="fa-solid fa-phone-volume"></i> Visits &amp; Calls</a>{% endif %}
+      {% if user|has_any_permission:"kam_plan,kam_manager,kam_visits,kam_call_new,kam_collection_new" or user.is_superuser %}<a href="{% url 'kam:visit_batches' %}" class="sub-link {% if request.resolver_match.url_name == 'visit_batches' or request.resolver_match.url_name == 'visits' %}active{% endif %}"><i class="fa-solid fa-clock-rotate-left"></i> Visit History</a>{% endif %}
       {% if user|has_permission:"kam_manager" or user.is_superuser %}
       <a href="{% url 'kam:manager_view' %}" class="sub-link {% if request.resolver_match.url_name == 'manager_view' %}active{% endif %}"><i class="fa-solid fa-chart-column"></i> Manager View</a>
-      <a href="{% url 'kam:manager_dashboard' %}" class="sub-link {% if request.resolver_match.url_name == 'manager_dashboard' %}active{% endif %}"><i class="fa-solid fa-calendar-day"></i> Today's Details</a>
       {% endif %}
       {% if user|has_permission:"kam_customers" %}<a href="{% url 'kam:customers' %}" class="sub-link {% if request.resolver_match.url_name == 'customers' %}active{% endif %}"><i class="fa-solid fa-address-book"></i> Customer 360</a>{% endif %}
       {% if user|has_any_permission:"kam_targets,kam_targets_lines" %}<a href="{% url 'kam:targets' %}" class="sub-link {% if request.resolver_match.url_name == 'targets' %}active{% endif %}"><i class="fa-solid fa-bullseye"></i> Targets</a>{% endif %}

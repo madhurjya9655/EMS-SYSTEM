@@ -1,223 +1,1015 @@
 {# FILE: templates/kam/visit_batches.html #}
-{# PURPOSE: Visit History — renamed from Visit Batches. Employees can edit post-visit details. #}
-{# UPDATED: 2026-03-05 #}
+{# PURPOSE: Visit History — unified KAM visit history, post-visit update, calls and collections shortcuts. #}
 {% extends "base.html" %}
-{% load humanize %}
+{% load humanize user_filters %}
 
 {% block title %}Visit History — BOS Lakshya{% endblock %}
 {% block breadcrumb %}Visit History{% endblock %}
 
 {% block head_extra %}
 <style>
-  .status-pill {
-    display: inline-flex; align-items: center; gap: 4px;
-    font-size: 11px; font-weight: 700;
-    padding: 2px 9px; border-radius: 999px;
-    text-transform: uppercase; letter-spacing: .04em;
+  .visit-history-page {
+    width: 100%;
   }
-  .status-pill.approved  { background: #ecfdf5; color: #10b981; }
-  .status-pill.pending   { background: #fffbeb; color: #f59e0b; }
-  .status-pill.draft     { background: #f3f4f6; color: #6b7280; }
-  .status-pill.rejected  { background: #fef2f2; color: #ef4444; }
 
-  .visit-table th {
-    font-size: 11px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: .05em; color: var(--muted);
-    white-space: nowrap;
+  .visit-history-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
   }
-  .visit-table td { font-size: 13px; vertical-align: middle; }
 
-  .btn-xs { font-size: .75rem; padding: .2rem .55rem; border-radius: 6px; font-weight: 600; }
+  .visit-history-title {
+    margin: 0;
+    font-size: 30px;
+    font-weight: 800;
+    color: var(--text);
+    letter-spacing: -0.03em;
+  }
+
+  .visit-history-subtitle {
+    margin-top: 6px;
+    font-size: 15px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .visit-history-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .visit-history-btn {
+    height: 40px;
+    border-radius: 10px;
+    padding: 0 15px;
+    font-size: 13px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    text-decoration: none;
+  }
+
+  .visit-history-btn-primary {
+    border: 1px solid var(--primary);
+    background: var(--primary);
+    color: #fff;
+    box-shadow: 0 10px 18px rgba(71, 124, 255, .22);
+  }
+
+  .visit-history-btn-primary:hover {
+    color: #fff;
+    background: var(--primary-dark, #3867e8);
+  }
+
+  .visit-history-btn-outline {
+    border: 1px solid var(--border-strong, #7b8794);
+    background: #fff;
+    color: var(--text-secondary);
+  }
+
+  .visit-history-btn-outline:hover {
+    color: var(--text);
+    background: #f8fafc;
+  }
+
+  .visit-filter-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    box-shadow: var(--shadow-xs);
+    padding: 18px 20px;
+    margin-bottom: 22px;
+  }
 
   .filter-bar {
-    display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 12px 16px; margin-bottom: 18px;
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
   }
-  .filter-bar .form-select, .filter-bar .form-control { font-size: 13px; height: 36px; min-width: 130px; }
 
-  .empty-state { padding: 50px 20px; text-align: center; color: var(--subtle); }
-  .empty-state i { font-size: 2rem; display: block; margin-bottom: 10px; }
+  .filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 190px;
+  }
+
+  .filter-label {
+    font-size: 10.5px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: #98a2b3;
+  }
+
+  .filter-bar .form-select,
+  .filter-bar .form-control {
+    min-height: 42px;
+    border-radius: 12px;
+    border: 1px solid #d7dde8;
+    font-size: 14px;
+    color: var(--text);
+    background-color: #fff;
+    box-shadow: none;
+  }
+
+  .filter-bar .form-select:focus,
+  .filter-bar .form-control:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 .16rem rgba(71, 124, 255, .14);
+  }
+
+  .filter-actions {
+    display: flex;
+    gap: 9px;
+    align-items: flex-end;
+  }
+
+  .visit-main-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(360px, .95fr);
+    gap: 20px;
+    align-items: start;
+  }
+
+  .visit-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    box-shadow: var(--shadow-xs);
+    overflow: hidden;
+  }
+
+  .visit-card-header {
+    min-height: 62px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-light);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  .visit-card-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 800;
+    color: var(--text);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .visit-card-title i {
+    color: var(--text-secondary);
+  }
+
+  .visit-card-meta {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-secondary);
+  }
+
+  .visit-count-badge {
+    min-width: 24px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: var(--primary);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .visit-table-wrap {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .visit-table {
+    width: 100%;
+    margin-bottom: 0;
+    table-layout: auto;
+  }
+
+  .visit-table th {
+    background: #f8fafc;
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #667085;
+    white-space: nowrap;
+    padding: 11px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .visit-table td {
+    font-size: 13px;
+    vertical-align: middle;
+    padding: 12px 10px;
+    border-bottom: 1px solid var(--border-light);
+  }
+
+  .visit-table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .visit-id-cell {
+    width: 42px;
+    color: var(--muted);
+    font-weight: 700;
+  }
+
+  .kam-cell {
+    min-width: 92px;
+    font-weight: 800;
+    color: var(--text);
+  }
+
+  .category-pill {
+    display: inline-flex;
+    align-items: center;
+    max-width: 110px;
+    line-height: 1.25;
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--primary);
+    background: var(--primary-soft, #eef4ff);
+    padding: 4px 9px;
+    border-radius: 8px;
+  }
+
+  .date-cell {
+    min-width: 72px;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    line-height: 1.35;
+  }
+
+  .purpose-cell {
+    min-width: 130px;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 800;
+    padding: 5px 10px;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    white-space: nowrap;
+  }
+
+  .status-pill.approved  { background: #ecfdf5; color: #059669; }
+  .status-pill.completed { background: #eff6ff; color: #2563eb; }
+  .status-pill.pending   { background: #fffbeb; color: #d97706; }
+  .status-pill.draft     { background: #f3f4f6; color: #6b7280; }
+  .status-pill.rejected  { background: #fef2f2; color: #dc2626; }
+
+  .line-count-pill {
+    min-width: 26px;
+    height: 24px;
+    border-radius: 999px;
+    background: #667085;
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .table-action-wrap {
+    display: flex;
+    gap: 6px;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    min-width: 116px;
+  }
+
+  .btn-xs {
+    min-height: 34px;
+    font-size: 12px;
+    padding: 6px 9px;
+    border-radius: 8px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .post-visit-card {
+    min-height: 282px;
+  }
+
+  .post-visit-card-body {
+    padding: 18px 20px;
+  }
+
+  .selected-plan-box {
+    background: #f8fafc;
+    border: 1px solid var(--border-light);
+    border-radius: 12px;
+    padding: 13px 14px;
+    margin-bottom: 14px;
+  }
+
+  .selected-plan-title {
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--text);
+    margin-bottom: 5px;
+    line-height: 1.4;
+  }
+
+  .selected-plan-meta {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .workflow-note {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    color: #1e40af;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    margin-bottom: 12px;
+  }
+
+  .next-date-locked {
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    color: #9a3412;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    margin-bottom: 12px;
+  }
+
+  .post-visit-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+  }
+
+  .post-visit-help {
+    font-size: 11.5px;
+    color: var(--muted);
+    margin-top: 4px;
+    line-height: 1.45;
+  }
+
+  .post-visit-card textarea,
+  .post-visit-card input,
+  .post-visit-card select {
+    border-radius: 10px;
+    border: 1px solid #d7dde8;
+    font-size: 13px;
+  }
+
+  .post-visit-card textarea:focus,
+  .post-visit-card input:focus,
+  .post-visit-card select:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 .16rem rgba(71, 124, 255, .14);
+  }
+
+  .post-visit-empty {
+    min-height: 184px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: #98a2b3;
+    padding: 28px 22px;
+    line-height: 1.55;
+    font-size: 15px;
+  }
+
+  .post-visit-empty i {
+    display: block;
+    font-size: 26px;
+    color: #b5bdca;
+    margin-bottom: 10px;
+  }
+
+  .calls-card {
+    margin-top: 20px;
+  }
+
+  .calls-card .visit-card-header {
+    min-height: 58px;
+  }
+
+  .calls-body {
+    padding: 18px 20px;
+  }
+
+  .calls-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .calls-actions .btn {
+    min-height: 38px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .calls-note {
+    margin-top: 12px;
+    color: var(--muted);
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+
+  .empty-state {
+    padding: 48px 20px;
+    text-align: center;
+    color: var(--subtle);
+  }
+
+  .empty-state i {
+    font-size: 30px;
+    display: block;
+    margin-bottom: 10px;
+    color: #b5bdca;
+  }
+
+  .individual-card {
+    margin-top: 20px;
+  }
+
+  @media (max-width: 1200px) {
+    .visit-main-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .post-visit-card {
+      min-height: auto;
+    }
+
+    .post-visit-empty {
+      min-height: 130px;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .visit-history-header {
+      align-items: stretch;
+    }
+
+    .visit-history-actions {
+      width: 100%;
+    }
+
+    .visit-history-btn {
+      flex: 1;
+    }
+
+    .visit-filter-card {
+      padding: 14px;
+      border-radius: 14px;
+    }
+
+    .filter-group,
+    .filter-bar .form-select,
+    .filter-bar .form-control {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .filter-actions {
+      width: 100%;
+    }
+
+    .filter-actions .btn {
+      flex: 1;
+    }
+
+    .visit-card-header {
+      padding: 14px 16px;
+    }
+
+    .post-visit-card-body,
+    .calls-body {
+      padding: 16px;
+    }
+
+    .visit-history-title {
+      font-size: 26px;
+    }
+  }
 </style>
 {% endblock %}
 
 {% block content %}
 
-<div class="page-header d-flex align-items-start justify-content-between flex-wrap gap-2">
-  <div>
-    <h1 class="page-title">Visit History</h1>
-    <p class="text-muted small mt-1">Your planned and completed visits. Edit post-visit details from here.</p>
-  </div>
-  <div class="d-flex gap-2">
-    <a href="{% url 'kam:plan' %}" class="btn btn-sm btn-primary">
-      <i class="fas fa-plus me-1"></i>Plan New Visit
-    </a>
-    <a href="{% url 'kam:dashboard' %}" class="btn btn-sm btn-outline-secondary">
-      <i class="fas fa-arrow-left me-1"></i>Dashboard
-    </a>
-  </div>
-</div>
+<div class="visit-history-page">
 
-{# ── Filter bar ──────────────────────────────────────────────────── #}
-<form method="get" class="filter-bar">
-  <div class="d-flex flex-column gap-1">
-    <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--subtle);">Status</span>
-    <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
-      <option value="" {% if not request.GET.status %}selected{% endif %}>All Statuses</option>
-      <option value="APPROVED"         {% if request.GET.status == "APPROVED" %}selected{% endif %}>Approved</option>
-      <option value="PENDING_APPROVAL" {% if request.GET.status == "PENDING_APPROVAL" %}selected{% endif %}>Pending Approval</option>
-      <option value="DRAFT"            {% if request.GET.status == "DRAFT" %}selected{% endif %}>Draft</option>
-      <option value="REJECTED"         {% if request.GET.status == "REJECTED" %}selected{% endif %}>Rejected</option>
-    </select>
-  </div>
-  <div class="d-flex gap-2 align-items-end">
-    <a href="{% url 'kam:visit_batches' %}" class="btn btn-sm btn-outline-secondary">
-      <i class="fas fa-rotate-left me-1"></i>Reset
-    </a>
-  </div>
-</form>
-
-{# ── Visit Batches Table ──────────────────────────────────────────── #}
-<div class="card">
-  <div class="card-header d-flex align-items-center justify-content-between">
-    <span class="fw-semibold">
-      <i class="fas fa-clock-rotate-left me-2 text-muted"></i>Visit Batches
-      <span class="badge bg-primary ms-2" style="font-size:11px;">{{ rows|length }}</span>
-    </span>
-    {% if can_view_all %}
-      <span class="text-muted small">Showing all managed KAMs</span>
-    {% endif %}
-  </div>
-  <div class="card-body p-0">
-    {% if rows %}
-    <div class="table-responsive">
-      <table class="table table-sm table-hover align-middle mb-0 visit-table">
-        <thead class="table-light">
-          <tr>
-            <th>#</th>
-            <th>KAM</th>
-            <th>Category</th>
-            <th>From</th>
-            <th>To</th>
-            <th>Purpose</th>
-            <th class="text-center">Status</th>
-            <th class="text-center">Visits</th>
-            <th class="text-center">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for b in rows %}
-          <tr>
-            <td class="text-muted small">{{ b.id }}</td>
-            <td class="fw-semibold">{{ b.kam.get_full_name|default:b.kam.username }}</td>
-            <td>
-              <span style="font-size:12px;background:var(--primary-soft);color:var(--primary);padding:2px 8px;border-radius:4px;font-weight:600;">
-                {{ b.get_visit_category_display }}
-              </span>
-            </td>
-            <td style="font-size:12.5px;color:var(--muted);">{{ b.from_date|date:"d M Y" }}</td>
-            <td style="font-size:12.5px;color:var(--muted);">{{ b.to_date|date:"d M Y" }}</td>
-            <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;">
-              {{ b.purpose|default:"—"|truncatechars:40 }}
-            </td>
-            <td class="text-center">
-              {% if b.approval_status == "APPROVED" %}
-                <span class="status-pill approved"><i class="fas fa-check"></i>Approved</span>
-              {% elif b.approval_status == "PENDING_APPROVAL" %}
-                <span class="status-pill pending"><i class="fas fa-clock"></i>Pending</span>
-              {% elif b.approval_status == "DRAFT" %}
-                <span class="status-pill draft"><i class="fas fa-pencil"></i>Draft</span>
-              {% elif b.approval_status == "REJECTED" %}
-                <span class="status-pill rejected"><i class="fas fa-xmark"></i>Rejected</span>
-              {% else %}
-                <span class="status-pill draft">{{ b.approval_status }}</span>
-              {% endif %}
-            </td>
-            <td class="text-center">
-              {# Count visit plans in this batch #}
-              <span class="badge bg-secondary">{{ b.lines.count }}</span>
-            </td>
-            <td class="text-center">
-              <div class="d-flex gap-1 justify-content-center flex-wrap">
-                <a href="{% url 'kam:visit_batch_detail' b.id %}"
-                   class="btn btn-xs btn-outline-secondary"
-                   title="View batch detail">
-                  <i class="fas fa-eye"></i>
-                </a>
-                {# Edit post-visit details — available for own visits #}
-                {% for plan in b.lines.all %}
-                  {% if forloop.first %}
-                    <a href="{% url 'kam:visit_history_edit' plan.id %}"
-                       class="btn btn-xs btn-outline-primary"
-                       title="Edit post-visit details">
-                      <i class="fas fa-pen-to-square me-1"></i>Edit
-                    </a>
-                  {% endif %}
-                {% empty %}
-                  <span class="text-muted small">No plans</span>
-                {% endfor %}
-                {% if b.approval_status == "DRAFT" %}
-                  <form method="post" action="{% url 'kam:visit_batch_delete' b.id %}"
-                        class="d-inline"
-                        onsubmit="return confirm('Delete batch #{{ b.id }}? This cannot be undone.');">
-                    {% csrf_token %}
-                    <button type="submit" class="btn btn-xs btn-outline-danger" title="Delete draft">
-                      <i class="fas fa-trash"></i>
-                    </button>
-                  </form>
-                {% endif %}
-              </div>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% else %}
-    <div class="empty-state">
-      <i class="fas fa-clock-rotate-left text-muted"></i>
-      <div class="fw-semibold">No visit history found.</div>
-      <div class="text-muted small mt-1">
-        {% if request.GET.status %}Try removing the status filter.{% else %}Start by <a href="{% url 'kam:plan' %}">planning a visit</a>.{% endif %}
+  <div class="visit-history-header">
+    <div>
+      <h1 class="visit-history-title">Visit History</h1>
+      <div class="visit-history-subtitle">
+        Single place for visit history, approved visit updates, outcomes, call activity, and post-visit workflow.
       </div>
     </div>
-    {% endif %}
-  </div>
-</div>
 
-{# ── Individual VisitPlan rows (for KAMs — direct edit access) ──── #}
-{% if not can_view_all %}
-<div class="card mt-3">
-  <div class="card-header fw-semibold">
-    <i class="fas fa-list-check me-2 text-muted"></i>My Individual Visits
-    <span class="text-muted small ms-2">(Click Edit to update post-visit outcome)</span>
-  </div>
-  <div class="card-body p-0">
-    <div class="table-responsive">
-      <table class="table table-sm table-hover align-middle mb-0 visit-table" id="planTable">
-        <thead class="table-light">
-          <tr>
-            <th>#</th>
-            <th>Customer</th>
-            <th>Visit Date</th>
-            <th>Purpose</th>
-            <th class="text-center">Status</th>
-            <th class="text-center">Outcome</th>
-            <th class="text-center">Action</th>
-          </tr>
-        </thead>
-        <tbody id="planTableBody">
-          <tr>
-            <td colspan="7" class="text-center text-muted py-3" id="planLoadingRow">
-              <div class="spinner-border spinner-border-sm me-2" role="status"></div>Loading visits…
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <div class="visit-history-actions">
+      <a href="{% url 'kam:plan' %}" class="visit-history-btn visit-history-btn-primary">
+        <i class="fas fa-plus"></i>
+        Plan New Visit
+      </a>
+
+      <a href="{% url 'kam:dashboard' %}" class="visit-history-btn visit-history-btn-outline">
+        <i class="fas fa-arrow-left"></i>
+        Dashboard
+      </a>
     </div>
   </div>
+
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show mb-3" role="alert">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      </div>
+    {% endfor %}
+  {% endif %}
+
+  <div class="visit-filter-card">
+    <form method="get" class="filter-bar">
+      <div class="filter-group">
+        <span class="filter-label">Status</span>
+        <select name="status" class="form-select form-select-sm">
+          <option value="" {% if not status_filter %}selected{% endif %}>All Statuses</option>
+          <option value="APPROVED" {% if status_filter == "APPROVED" %}selected{% endif %}>Approved</option>
+          <option value="COMPLETED" {% if status_filter == "COMPLETED" %}selected{% endif %}>Completed</option>
+          <option value="PENDING_APPROVAL" {% if status_filter == "PENDING_APPROVAL" %}selected{% endif %}>Pending Approval</option>
+          <option value="DRAFT" {% if status_filter == "DRAFT" %}selected{% endif %}>Draft</option>
+          <option value="REJECTED" {% if status_filter == "REJECTED" %}selected{% endif %}>Rejected</option>
+        </select>
+      </div>
+
+      {% if can_view_all %}
+        <div class="filter-group">
+          <span class="filter-label">KAM</span>
+          <select name="kam" class="form-select form-select-sm">
+            <option value="" {% if not selected_kam %}selected{% endif %}>All KAMs</option>
+            {% for kam in kam_dropdown_options %}
+              <option value="{{ kam.id }}" {% if selected_kam|stringformat:"s" == kam.id|stringformat:"s" %}selected{% endif %}>
+                {{ kam.get_full_name|default:kam.username }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+      {% endif %}
+
+      <div class="filter-group">
+        <span class="filter-label">Date Range</span>
+        <select name="date_range" class="form-select form-select-sm">
+          <option value="" {% if not date_range %}selected{% endif %}>All Dates</option>
+          <option value="weekly" {% if date_range == "weekly" %}selected{% endif %}>Weekly</option>
+          <option value="monthly" {% if date_range == "monthly" %}selected{% endif %}>Monthly</option>
+          <option value="quarterly" {% if date_range == "quarterly" %}selected{% endif %}>Quarterly</option>
+          <option value="yearly" {% if date_range == "yearly" %}selected{% endif %}>Yearly</option>
+        </select>
+      </div>
+
+      <div class="filter-actions">
+        <button type="submit" class="btn btn-sm btn-primary">
+          <i class="fas fa-filter me-1"></i>
+          Apply
+        </button>
+
+        <a href="{% url 'kam:visit_batches' %}" class="btn btn-sm btn-outline-secondary">
+          <i class="fas fa-rotate-left me-1"></i>
+          Reset
+        </a>
+      </div>
+    </form>
+  </div>
+
+  <div class="visit-main-grid">
+
+    <div>
+      <div class="visit-card">
+        <div class="visit-card-header">
+          <div class="visit-card-title">
+            <i class="fas fa-clock-rotate-left"></i>
+            Visit Batches
+            <span class="visit-count-badge">{{ rows|length }}</span>
+          </div>
+
+          {% if can_view_all %}
+            <div class="visit-card-meta">Showing managed KAMs</div>
+          {% endif %}
+        </div>
+
+        <div class="visit-table-wrap">
+          {% if rows %}
+            <table class="table table-sm table-hover align-middle visit-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>KAM</th>
+                  <th>Category</th>
+                  <th>From</th>
+                  <th>To</th>
+                  <th>Purpose</th>
+                  <th class="text-center">Status</th>
+                  <th class="text-center">Visits</th>
+                  <th class="text-center">Actions</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {% for b in rows %}
+                  <tr>
+                    <td class="visit-id-cell">{{ b.id }}</td>
+
+                    <td class="kam-cell">
+                      {{ b.kam.get_full_name|default:b.kam.username }}
+                    </td>
+
+                    <td>
+                      <span class="category-pill">
+                        {{ b.get_visit_category_display }}
+                      </span>
+                    </td>
+
+                    <td class="date-cell">
+                      {{ b.from_date|date:"d M Y" }}
+                    </td>
+
+                    <td class="date-cell">
+                      {{ b.to_date|date:"d M Y" }}
+                    </td>
+
+                    <td class="purpose-cell" title="{{ b.purpose|default:'' }}">
+                      {{ b.purpose|default:"—"|truncatechars:52 }}
+                    </td>
+
+                    <td class="text-center">
+                      {% if b.approval_status == "APPROVED" %}
+                        <span class="status-pill approved">
+                          <i class="fas fa-check"></i>
+                          Approved
+                        </span>
+                      {% elif b.approval_status == "COMPLETED" %}
+                        <span class="status-pill completed">
+                          <i class="fas fa-flag-checkered"></i>
+                          Completed
+                        </span>
+                      {% elif b.approval_status == "PENDING_APPROVAL" %}
+                        <span class="status-pill pending">
+                          <i class="fas fa-clock"></i>
+                          Pending
+                        </span>
+                      {% elif b.approval_status == "DRAFT" %}
+                        <span class="status-pill draft">
+                          <i class="fas fa-pencil"></i>
+                          Draft
+                        </span>
+                      {% elif b.approval_status == "REJECTED" %}
+                        <span class="status-pill rejected">
+                          <i class="fas fa-xmark"></i>
+                          Rejected
+                        </span>
+                      {% else %}
+                        <span class="status-pill draft">{{ b.approval_status }}</span>
+                      {% endif %}
+                    </td>
+
+                    <td class="text-center">
+                      <span class="line-count-pill">{{ b.lines.count }}</span>
+                    </td>
+
+                    <td class="text-center">
+                      <div class="table-action-wrap">
+                        <a href="{% url 'kam:visit_batch_detail' b.id %}"
+                           class="btn btn-xs btn-outline-secondary"
+                           title="View batch detail">
+                          <i class="fas fa-eye"></i>
+                        </a>
+
+                        {% for plan in b.lines.all %}
+                          {% if forloop.first %}
+                            <a href="{% url 'kam:visit_history_edit' plan.id %}"
+                               class="btn btn-xs btn-outline-primary"
+                               title="Edit post-visit details">
+                              <i class="fas fa-pen-to-square"></i>
+                              Edit
+                            </a>
+
+                            {% if plan.approval_status == "APPROVED" or plan.approval_status == "COMPLETED" %}
+                              <a href="{% url 'kam:visit_batches' %}?plan={{ plan.id }}{% if status_filter %}&status={{ status_filter }}{% endif %}{% if selected_kam %}&kam={{ selected_kam }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}"
+                                 class="btn btn-xs btn-outline-success"
+                                 title="Open post-visit form">
+                                <i class="fas fa-clipboard-check"></i>
+                                Post Visit
+                              </a>
+                            {% endif %}
+                          {% endif %}
+                        {% empty %}
+                          <span class="text-muted small">No plans</span>
+                        {% endfor %}
+
+                        {% if b.approval_status == "DRAFT" %}
+                          <form method="post"
+                                action="{% url 'kam:visit_batch_delete' b.id %}"
+                                class="d-inline"
+                                onsubmit="return confirm('Delete batch #{{ b.id }}? This cannot be undone.');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-xs btn-outline-danger" title="Delete draft">
+                              <i class="fas fa-trash"></i>
+                            </button>
+                          </form>
+                        {% endif %}
+                      </div>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <div class="empty-state">
+              <i class="fas fa-clock-rotate-left"></i>
+              <div class="fw-semibold">No visit history found.</div>
+              <div class="text-muted small mt-1">
+                {% if status_filter or selected_kam or date_range %}
+                  Try removing filters.
+                {% else %}
+                  Start by <a href="{% url 'kam:plan' %}">planning a visit</a>.
+                {% endif %}
+              </div>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if not can_view_all %}
+        <div class="visit-card individual-card">
+          <div class="visit-card-header">
+            <div class="visit-card-title">
+              <i class="fas fa-list-check"></i>
+              My Individual Visits
+            </div>
+            <div class="visit-card-meta">Click Open/Post Visit to update outcome</div>
+          </div>
+
+          <div class="visit-table-wrap">
+            <table class="table table-sm table-hover align-middle visit-table" id="planTable">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Customer / Entity</th>
+                  <th>Visit Date</th>
+                  <th>Purpose</th>
+                  <th class="text-center">Status</th>
+                  <th class="text-center">Outcome</th>
+                  <th class="text-center">Action</th>
+                </tr>
+              </thead>
+
+              <tbody id="planTableBody">
+                <tr>
+                  <td colspan="7" class="text-center text-muted py-3" id="planLoadingRow">
+                    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                    Loading visits…
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      {% endif %}
+    </div>
+
+    <div>
+      <div class="visit-card post-visit-card">
+        <div class="visit-card-header">
+          <div class="visit-card-title">
+            <i class="fas fa-clipboard-check"></i>
+            Post Visit Update
+          </div>
+        </div>
+
+        <div class="post-visit-card-body">
+          {% if selected_plan %}
+            <div class="selected-plan-box">
+              <div class="selected-plan-title">
+                Visit #{{ selected_plan.id }}
+                —
+                {% if selected_plan.customer %}
+                  {{ selected_plan.customer.name }}
+                {% else %}
+                  {{ selected_plan.counterparty_name|default:"—" }}
+                {% endif %}
+              </div>
+
+              <div class="selected-plan-meta">
+                {{ selected_plan.visit_date|date:"d M Y" }}
+                ·
+                {{ selected_plan.kam.get_full_name|default:selected_plan.kam.username }}
+                ·
+                {{ selected_plan.get_visit_category_display }}
+              </div>
+            </div>
+
+            <div class="workflow-note">
+              <strong>Lifecycle Rule:</strong>
+              Submitting post-visit details sends manager review mail.
+              The visit remains pending until the manager accepts the post-visit review.
+            </div>
+
+            {% if not workflow_completed %}
+              <div class="next-date-locked">
+                <strong>Next Meeting Date is hidden.</strong>
+                It appears only after manager post-visit review completes the workflow.
+              </div>
+            {% endif %}
+
+            {% if actual_form.non_field_errors %}
+              <div class="alert alert-danger">
+                {% for err in actual_form.non_field_errors %}
+                  <div>{{ err }}</div>
+                {% endfor %}
+              </div>
+            {% endif %}
+
+            <form method="post" novalidate>
+              {% csrf_token %}
+              <input type="hidden" name="plan_id" value="{{ selected_plan.id }}">
+
+              <div class="mb-3">
+                <label class="post-visit-label">
+                  Purpose of Visit <span class="text-danger">*</span>
+                </label>
+                <textarea name="purpose"
+                          class="form-control form-control-sm"
+                          rows="2"
+                          required
+                          placeholder="Enter Purpose of Visit">{{ selected_plan.purpose|default_if_none:'' }}</textarea>
+                <div class="post-visit-help">Purpose of Visit is mandatory.</div>
+              </div>
+
+              {% for field in actual_form %}
+                {% if field.name == "next_action_date" %}
+                  {% if workflow_completed %}
+                    <div class="mb-3" id="nextMeetingDateWrap">
+                      <label class="post-visit-label" for="{{ field.id_for_label }}">
+                        Next Meeting Date
+                      </label>
+                      {{ field }}
+                      {% if field.errors %}
+                        <div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>
+                      {% endif %}
+                      <div class="post-visit-help">
+                        Available because manager has reviewed the post visit and completed the workflow.
+                      </div>
+                    </div>
+                  {% else %}
+                    {{ field }}
+                  {% endif %}
+                {% elif field.name == "reminder_cc_manager" %}
+                  <div class="form-check mb-3">
+                    {{ field }}
+                    <label class="form-check-label" for="{{ field.id_for_label }}">
+                      {{ field.label }}
+                    </label>
+                    {% if field.errors %}
+                      <div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>
+                    {% endif %}
+                  </div>
+                {% else %}
+                  <div class="mb-3">
+                    <label class="post-visit-label" for="{{ field.id_for_label }}">
+                      {{ field.label }}
+                      {% if field.field.required %}<span class="text-danger">*</span>{% endif %}
+                    </label>
+                    {{ field }}
+                    {% if field.errors %}
+                      <div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>
+                    {% endif %}
+
+                    {% if field.name == "meeting_notes" %}
+                      <div class="post-visit-help">
+                        Enter Discussion Summary, Customer Feedback, and Remarks.
+                      </div>
+                    {% elif field.name == "actual_sales_mt" %}
+                      <div class="post-visit-help">
+                        Enter Sales Opportunity if available.
+                      </div>
+                    {% elif field.name == "next_action" %}
+                      <div class="post-visit-help">
+                        Enter Required Follow-up and Next Action.
+                      </div>
+                    {% endif %}
+                  </div>
+                {% endif %}
+              {% endfor %}
+
+              <button type="submit" class="btn btn-primary w-100">
+                <i class="fas fa-save me-1"></i>
+                Save Post Visit
+              </button>
+            </form>
+          {% else %}
+            <div class="post-visit-empty">
+              <div>
+                <i class="fas fa-clipboard-list"></i>
+                Select an approved visit using <strong>Post Visit</strong> to enter visit outcome and post-visit details.
+              </div>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="visit-card calls-card">
+        <div class="visit-card-header">
+          <div class="visit-card-title">
+            <i class="fas fa-phone-volume"></i>
+            Calls / Collections
+          </div>
+        </div>
+
+        <div class="calls-body">
+          <div class="calls-actions">
+            {% if selected_plan %}
+              <a href="{% url 'kam:visits' %}?plan={{ selected_plan.id }}"
+                 class="btn btn-sm btn-outline-primary">
+                <i class="fas fa-folder-open"></i>
+                Open Existing Flow
+              </a>
+            {% else %}
+              <a href="{% url 'kam:visits' %}"
+                 class="btn btn-sm btn-outline-primary">
+                <i class="fas fa-folder-open"></i>
+                Open Existing Flow
+              </a>
+            {% endif %}
+
+            {% if user|has_permission:"kam_call_new" or user.is_superuser %}
+              <a href="{% url 'kam:visits' %}" class="btn btn-sm btn-outline-secondary">
+                <i class="fas fa-phone"></i>
+                Log Call
+              </a>
+            {% endif %}
+
+            {% if user|has_permission:"kam_collection_new" or user.is_superuser %}
+              <a href="{% url 'kam:visits' %}" class="btn btn-sm btn-outline-secondary">
+                <i class="fas fa-indian-rupee-sign"></i>
+                Add Collection
+              </a>
+            {% endif %}
+          </div>
+
+          <div class="calls-note">
+            Existing Visits & Calls backend, APIs, and URLs are preserved.
+            These shortcuts keep the old flow accessible while Visit History remains the single navigation page.
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
 </div>
-{% endif %}
 
 {% endblock %}
 
@@ -225,41 +1017,71 @@
 {% if not can_view_all %}
 <script>
 (function() {
-  fetch("{% url 'kam:visit_batches_api' %}")
+  const params = new URLSearchParams(window.location.search);
+  const apiUrl = "{% url 'kam:visit_batches_api' %}" + (params.toString() ? "?" + params.toString() : "");
+
+  function escapeHtml(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  fetch(apiUrl)
     .then(r => r.json())
     .then(data => {
-      const tbody = document.getElementById('planTableBody');
+      const tbody = document.getElementById("planTableBody");
       if (!tbody) return;
+
       if (!data.batches || !data.batches.length) {
         tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-3">No visits found.</td></tr>';
         return;
       }
-      // For individual visits we'll show via the API data
-      tbody.innerHTML = data.batches.map((b, i) => {
+
+      tbody.innerHTML = data.batches.map((b) => {
         const statusMap = {
-          'APPROVED': '<span style="background:#ecfdf5;color:#10b981;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;">Approved</span>',
-          'PENDING_APPROVAL': '<span style="background:#fffbeb;color:#f59e0b;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;">Pending</span>',
-          'DRAFT': '<span style="background:#f3f4f6;color:#6b7280;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;">Draft</span>',
-          'REJECTED': '<span style="background:#fef2f2;color:#ef4444;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;">Rejected</span>',
+          "APPROVED": '<span class="status-pill approved">Approved</span>',
+          "COMPLETED": '<span class="status-pill completed">Completed</span>',
+          "PENDING_APPROVAL": '<span class="status-pill pending">Pending</span>',
+          "DRAFT": '<span class="status-pill draft">Draft</span>',
+          "REJECTED": '<span class="status-pill rejected">Rejected</span>',
         };
+
+        const purpose = b.purpose_of_visit || b.remarks || "—";
+        const entity = b.customer_name || b.entity || b.counterparty || b.kam || "—";
+        const dateText = b.visit_date || ((b.from_date || "—") + " → " + (b.to_date || "—"));
+        const detailUrl = b.detail_url || ("/kam/visit-history/" + b.id + "/");
+        const postVisitUrl = "{% url 'kam:visit_batches' %}?plan=" + encodeURIComponent(b.id);
+
         return `<tr>
-          <td class="text-muted small">${b.id}</td>
-          <td>—</td>
-          <td class="text-muted small">${b.from_date} → ${b.to_date}</td>
-          <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;">${b.remarks || '—'}</td>
-          <td class="text-center">${statusMap[b.approval_status] || b.approval_status}</td>
-          <td class="text-center">—</td>
+          <td class="visit-id-cell">${escapeHtml(b.id)}</td>
+          <td>${escapeHtml(entity)}</td>
+          <td class="date-cell">${escapeHtml(dateText)}</td>
+          <td class="purpose-cell" title="${escapeHtml(purpose)}">
+            ${escapeHtml(purpose)}
+          </td>
+          <td class="text-center">${statusMap[b.approval_status] || escapeHtml(b.approval_status || "—")}</td>
+          <td class="text-center">${escapeHtml(b.outcome || "—")}</td>
           <td class="text-center">
-            <a href="/kam/visit-history/${b.id}/" class="btn btn-outline-secondary" style="font-size:.75rem;padding:.2rem .55rem;">
-              <i class="fas fa-eye"></i>
-            </a>
+            <div class="table-action-wrap">
+              <a href="${escapeHtml(detailUrl)}" class="btn btn-xs btn-outline-secondary">
+                <i class="fas fa-eye"></i>
+              </a>
+              <a href="${escapeHtml(postVisitUrl)}" class="btn btn-xs btn-outline-primary">
+                Open
+              </a>
+            </div>
           </td>
         </tr>`;
-      }).join('');
+      }).join("");
     })
     .catch(() => {
-      const tbody = document.getElementById('planTableBody');
-      if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-3">Could not load data.</td></tr>';
+      const tbody = document.getElementById("planTableBody");
+      if (tbody) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-3">Could not load data.</td></tr>';
+      }
     });
 })();
 </script>

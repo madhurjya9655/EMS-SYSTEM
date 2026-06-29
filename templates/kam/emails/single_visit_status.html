@@ -149,6 +149,10 @@
           <td>{{ plan.location|default:"&mdash;" }}</td>
         </tr>
         <tr>
+          <th>Purpose of Visit</th>
+          <td>{{ purpose_of_visit|default:plan.purpose|default:"&mdash;" }}</td>
+        </tr>
+        <tr>
           <th>Decided By</th>
           <td>{{ actor.get_full_name|default:actor.username }}</td>
         </tr>
@@ -174,7 +178,7 @@
 
       {% if status == "APPROVED" %}
         <div class="action-note">
-          <strong>Next Step:</strong> Your visit is approved. You can now proceed with the visit and update the actual details (meeting notes, outcome) after completion.
+          <strong>Next Step:</strong> Your visit is approved. You can now proceed with the visit and update the actual details after completion.
         </div>
       {% endif %}
 

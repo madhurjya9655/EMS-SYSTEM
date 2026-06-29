@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>BOS Lakshya Monthly KAM Performance Report</title>
+</head>
+
+<body style="margin:0;padding:0;background:#f5f6f8;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f5f6f8;padding:24px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:980px;background:#ffffff;border:1px solid #e5e7eb;border-collapse:collapse;">
+          <tr>
+            <td style="background:#0b1f3a;color:#ffffff;padding:20px 24px;">
+              <div style="font-size:20px;font-weight:700;line-height:1.25;">
+                Blue Ocean Steels
+              </div>
+
+              <div style="font-size:13px;margin-top:4px;line-height:1.35;">
+                BOS Lakshya ERP System
+              </div>
+
+              <div style="font-size:16px;font-weight:700;margin-top:14px;line-height:1.35;">
+                Monthly KAM Performance Report
+              </div>
+
+              <div style="font-size:13px;margin-top:4px;line-height:1.35;">
+                Reporting Period: {{ reporting_period }}
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:22px 24px;">
+              <h2 style="font-size:16px;margin:0 0 10px 0;color:#111827;">
+                Executive Summary
+              </h2>
+
+              <p style="font-size:14px;line-height:1.6;margin:0 0 16px 0;color:#374151;">
+                This consolidated report presents monthly sales, visits, calls, collections,
+                leads, target achievement, overdue risk, and overall KAM performance for the
+                reporting period.
+              </p>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:22px;">
+                <thead>
+                  <tr>
+                    <th align="left" style="border:1px solid #d1d5db;background:#f3f4f6;padding:8px;font-size:12px;color:#111827;">Rank</th>
+                    <th align="left" style="border:1px solid #d1d5db;background:#f3f4f6;padding:8px;font-size:12px;color:#111827;">KAM</th>
+                    <th align="right" style="border:1px solid #d1d5db;background:#f3f4f6;padding:8px;font-size:12px;color:#111827;">Sales</th>
+                    <th align="right" style="border:1px solid #d1d5db;background:#f3f4f6;padding:8px;font-size:12px;color:#111827;">Visits</th>
+                    <th align="right" style="border:1px solid #d1d5db;background:#f3f4f6;padding:8px;font-size:12px;color:#111827;">Collections</th>
+                    <th align="right" style="border:1px solid #d1d5db;background:#f3f4f6;padding:8px;font-size:12px;color:#111827;">Target %</th>
+                    <th align="right" style="border:1px solid #d1d5db;background:#f3f4f6;padding:8px;font-size:12px;color:#111827;">Performance %</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {% for row in summary_table %}
+                    <tr>
+                      <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;">
+                        {{ row.rank }}
+                      </td>
+
+                      <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;">
+                        {{ row.kam }}
+                      </td>
+
+                      <td align="right" style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;">
+                        {{ row.sales }}
+                      </td>
+
+                      <td align="right" style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;">
+                        {{ row.visits }}
+                      </td>
+
+                      <td align="right" style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;">
+                        {{ row.collections }}
+                      </td>
+
+                      <td align="right" style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;">
+                        {{ row.target_pct }}
+                      </td>
+
+                      <td align="right" style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;">
+                        {{ row.performance_pct }}
+                      </td>
+                    </tr>
+                  {% empty %}
+                    <tr>
+                      <td colspan="7" align="center" style="border:1px solid #e5e7eb;padding:14px;font-size:12px;color:#6b7280;">
+                        No KAM performance records were available for this reporting period.
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+
+              {% for item in kam_sections %}
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:24px;border:1px solid #d1d5db;">
+                  <tr>
+                    <td style="background:#f9fafb;padding:12px 14px;border-bottom:1px solid #d1d5db;">
+                      <div style="font-size:15px;font-weight:700;color:#111827;line-height:1.35;">
+                        {{ item.name }}
+                      </div>
+
+                      <div style="font-size:12px;color:#4b5563;margin-top:3px;line-height:1.45;">
+                        Designation: {{ item.designation }} |
+                        Manager: {{ item.manager }} |
+                        Reporting Period: {{ reporting_period }}
+                      </div>
+                    </td>
+                  </tr>
+
+                  <tr>
+                    <td style="padding:14px;">
+                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+                        <tr>
+                          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;width:25%;vertical-align:top;">
+                            <strong>Sales</strong><br>
+                            {{ item.sales }}
+                          </td>
+
+                          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;width:25%;vertical-align:top;">
+                            <strong>Visits</strong><br>
+                            {{ item.visits }}
+                          </td>
+
+                          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;width:25%;vertical-align:top;">
+                            <strong>Calls</strong><br>
+                            {{ item.calls }}
+                          </td>
+
+                          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;width:25%;vertical-align:top;">
+                            <strong>Collections</strong><br>
+                            {{ item.collections }}
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;vertical-align:top;">
+                            <strong>Leads</strong><br>
+                            {{ item.leads }}
+                          </td>
+
+                          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;vertical-align:top;">
+                            <strong>Conversion</strong><br>
+                            {{ item.conversion }}
+                          </td>
+
+                          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;vertical-align:top;">
+                            <strong>Targets</strong><br>
+                            {{ item.targets }}
+                          </td>
+
+                          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;vertical-align:top;">
+                            <strong>Achievement %</strong><br>
+                            {{ item.achievement_pct }}
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;vertical-align:top;">
+                            <strong>Overdues</strong><br>
+                            {{ item.overdues }}
+                          </td>
+
+                          <td style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;vertical-align:top;">
+                            <strong>Risk</strong><br>
+                            {{ item.risk }}
+                          </td>
+
+                          <td colspan="2" style="border:1px solid #e5e7eb;padding:8px;font-size:12px;color:#111827;vertical-align:top;">
+                            <strong>Performance %</strong><br>
+                            {{ item.performance_pct }}
+                          </td>
+                        </tr>
+                      </table>
+
+                      {% if item.chart_cids %}
+                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;border-collapse:collapse;">
+                          {% for chart in item.chart_cids %}
+                            <tr>
+                              <td style="padding:8px 0;">
+                                <div style="font-size:12px;font-weight:700;margin-bottom:6px;color:#111827;">
+                                  {{ chart.title }}
+                                </div>
+
+                                <img
+                                  src="cid:{{ chart.cid }}"
+                                  alt="{{ chart.title }}"
+                                  style="max-width:100%;border:1px solid #e5e7eb;display:block;"
+                                >
+                              </td>
+                            </tr>
+                          {% endfor %}
+                        </table>
+                      {% endif %}
+                    </td>
+                  </tr>
+                </table>
+              {% empty %}
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:24px;border:1px solid #d1d5db;">
+                  <tr>
+                    <td align="center" style="padding:18px;font-size:13px;color:#6b7280;">
+                      No individual KAM sections were available for this reporting period.
+                    </td>
+                  </tr>
+                </table>
+              {% endfor %}
+
+              <h2 style="font-size:16px;margin:0 0 10px 0;color:#111827;">
+                Overall Management Summary
+              </h2>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-bottom:16px;">
+                <tr>
+                  <td style="border:1px solid #e5e7eb;padding:10px;font-size:13px;color:#111827;width:28%;vertical-align:top;background:#f9fafb;">
+                    <strong>Top Performer</strong>
+                  </td>
+
+                  <td style="border:1px solid #e5e7eb;padding:10px;font-size:13px;color:#111827;vertical-align:top;">
+                    {{ management_summary.top_performer }}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="border:1px solid #e5e7eb;padding:10px;font-size:13px;color:#111827;vertical-align:top;background:#f9fafb;">
+                    <strong>Needs Improvement</strong>
+                  </td>
+
+                  <td style="border:1px solid #e5e7eb;padding:10px;font-size:13px;color:#111827;vertical-align:top;">
+                    {{ management_summary.needs_improvement }}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="border:1px solid #e5e7eb;padding:10px;font-size:13px;color:#111827;vertical-align:top;background:#f9fafb;">
+                    <strong>Recommendations</strong>
+                  </td>
+
+                  <td style="border:1px solid #e5e7eb;padding:10px;font-size:13px;color:#111827;vertical-align:top;line-height:1.55;">
+                    {{ management_summary.recommendations }}
+                  </td>
+                </tr>
+              </table>
+
+              <p style="font-size:11px;color:#6b7280;margin:18px 0 0 0;line-height:1.5;">
+                This is a system generated report from BOS Lakshya ERP. Please do not reply to this email.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

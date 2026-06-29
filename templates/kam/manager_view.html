@@ -91,9 +91,13 @@
 
   .summary-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 14px;
     margin-bottom: 16px;
+  }
+
+  .summary-grid.summary-grid-four {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .summary-card {
@@ -179,14 +183,22 @@
     font-size: 13px;
   }
 
+  .purpose-cell {
+    max-width: 260px;
+    color: var(--muted);
+    line-height: 1.35;
+  }
+
   @media (max-width: 1100px) {
-    .summary-grid {
+    .summary-grid,
+    .summary-grid.summary-grid-four {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 
   @media (max-width: 768px) {
-    .summary-grid {
+    .summary-grid,
+    .summary-grid.summary-grid-four {
       grid-template-columns: 1fr;
     }
 
@@ -240,6 +252,16 @@
         </select>
       </div>
 
+      <div class="manager-filter-field">
+        <label class="manager-filter-label">Time Filter</label>
+        <select name="time_filter" class="form-select form-select-sm">
+          <option value="" {% if not time_filter %}selected{% endif %}>Custom / All</option>
+          <option value="current_month" {% if time_filter == "current_month" %}selected{% endif %}>Current Month</option>
+          <option value="current_quarter" {% if time_filter == "current_quarter" %}selected{% endif %}>Current Quarter</option>
+          <option value="current_year" {% if time_filter == "current_year" %}selected{% endif %}>Current Year</option>
+        </select>
+      </div>
+
       <div class="d-flex gap-2 align-items-end">
         <button type="submit" class="btn btn-primary btn-sm">
           <i class="fas fa-filter me-1"></i>Apply
@@ -252,86 +274,136 @@
   </form>
 
   <ul class="nav manager-tabs">
-    {% for tab_id, tab_label in tabs %}
+    {% for key, label in tabs %}
       <li class="nav-item">
-        <a class="nav-link {% if active_tab == tab_id %}active{% endif %}"
-           href="?tab={{ tab_id }}&from={{ filter_from }}&to={{ filter_to }}&user={{ selected_user }}">
-          {{ tab_label }}
+        <a class="nav-link {% if active_tab == key %}active{% endif %}"
+           href="{% url 'kam:manager_view' %}?tab={{ key }}">
+          {{ label }}
         </a>
       </li>
     {% endfor %}
   </ul>
 
-  {% if active_tab == 'visits' %}
+  {% if active_tab == "visits" %}
     <div class="summary-grid">
       <div class="summary-card">
-        <div class="summary-label">Planned</div>
+        <div class="summary-label">Planned Visits</div>
         <div class="summary-value">{{ visits_summary.total_planned|default:0 }}</div>
       </div>
+
       <div class="summary-card">
-        <div class="summary-label">Actual</div>
-        <div class="summary-value">{{ visits_summary.total_actual|default:0 }}</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-label">Successful</div>
-        <div class="summary-value success">{{ visits_summary.successful|default:0 }}</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-label">Success Rate</div>
-        <div class="summary-value">
-          {% if visits_summary.success_pct %}{{ visits_summary.success_pct|floatformat:1 }}%{% else %}—{% endif %}
-        </div>
+        <div class="summary-label">Completed Visits</div>
+        <div class="summary-value success">{{ visits_summary.total_actual|default:0 }}</div>
       </div>
     </div>
 
     <div class="data-card">
       <div class="data-card-header">
         <div class="data-card-title">
-          <i class="fas fa-route"></i>Visit Plans
+          <i class="fas fa-route"></i>
+          Visit Lifecycle
         </div>
+        <span class="text-muted small">{{ visits_data|length }} records</span>
       </div>
 
       {% if visits_data %}
         <div class="table-responsive">
-          <table class="table table-sm table-hover mb-0 align-middle">
+          <table class="table table-sm table-hover align-middle mb-0">
             <thead>
               <tr>
                 <th>Date</th>
                 <th>Customer / Entity</th>
+                <th>Purpose of Visit</th>
                 <th>KAM</th>
                 <th>Category</th>
                 <th>Status</th>
                 <th>Outcome</th>
+                <th class="text-end">Actions</th>
               </tr>
             </thead>
             <tbody>
               {% for v in visits_data %}
-                <tr>
-                  <td class="text-nowrap">{{ v.visit_date }}</td>
-                  <td>{% if v.customer %}{{ v.customer.name }}{% else %}{{ v.counterparty_name|default:"—" }}{% endif %}</td>
-                  <td>{{ v.kam.username }}</td>
-                  <td>{{ v.get_visit_category_display }}</td>
-                  <td>
-                    {% if v.approval_status == 'APPROVED' %}
-                      <span class="badge bg-success">Approved</span>
-                    {% elif v.approval_status == 'PENDING_APPROVAL' %}
-                      <span class="badge bg-warning text-dark">Pending</span>
-                    {% elif v.approval_status == 'REJECTED' %}
-                      <span class="badge bg-danger">Rejected</span>
-                    {% else %}
-                      <span class="badge bg-secondary">{{ v.approval_status }}</span>
+                <tr id="visit-row-{{ v.id }}">
+                  <td class="text-nowrap">
+                    {{ v.visit_date|date:"d M Y" }}
+                    {% if focus_visit|stringformat:"s" == v.id|stringformat:"s" %}
+                      <span class="badge bg-info ms-1">Review</span>
                     {% endif %}
                   </td>
+
                   <td>
-                    {% if v.actual_id %}
+                    {% if v.customer %}
+                      <div class="fw-semibold">{{ v.customer.name }}</div>
+                      {% if v.customer.code %}
+                        <div class="text-muted small">{{ v.customer.code }}</div>
+                      {% endif %}
+                    {% else %}
+                      <div class="fw-semibold">{{ v.counterparty_name|default:"—" }}</div>
+                    {% endif %}
+                  </td>
+
+                  <td class="purpose-cell">
+                    {{ v.purpose|default:"—"|truncatechars:90 }}
+                  </td>
+
+                  <td>{{ v.kam.get_full_name|default:v.kam.username }}</td>
+                  <td>{{ v.get_visit_category_display }}</td>
+
+                  <td>
+                    {% if v.business_status == "Completed" %}
+                      <span class="badge bg-primary">Completed</span>
+                    {% elif v.business_status == "Rejected" %}
+                      <span class="badge bg-danger">Rejected</span>
+                    {% elif v.business_status == "Draft" %}
+                      <span class="badge bg-secondary">Draft</span>
+                    {% else %}
+                      <span class="badge bg-warning text-dark">Pending</span>
+                    {% endif %}
+                  </td>
+
+                  <td>
+                    {% if v.actual and v.post_visit_submitted %}
                       {% if v.actual.successful %}
                         <span class="badge bg-success">Successful</span>
                       {% else %}
-                        <span class="badge bg-danger">Not Successful</span>
+                        <span class="badge bg-danger">
+                          Not Successful{% if v.actual.not_success_reason %}: {{ v.actual.get_not_success_reason_display }}{% endif %}
+                        </span>
                       {% endif %}
                     {% else %}
-                      <span class="text-muted">Pending</span>
+                      <span class="text-muted">—</span>
                     {% endif %}
+                  </td>
+
+                  <td class="text-end">
+                    <div class="d-flex gap-1 justify-content-end flex-wrap">
+
+                      {% if v.customer_id %}
+                        <button type="button"
+                                class="btn btn-sm btn-outline-secondary"
+                                data-bs-toggle="modal"
+                                data-bs-target="#customerHistoryModal{{ v.customer_id }}"
+                                title="View Complete Visit History">
+                          <i class="fas fa-eye"></i>
+                        </button>
+                      {% endif %}
+
+                      <a href="{% url 'kam:visit_history_edit' v.id %}" class="btn btn-sm btn-outline-primary">
+                        Edit
+                      </a>
+
+                      {% if v.can_manager_review_post_visit %}
+                        <form method="post" action="{% url 'kam:manager_accept_post_visit' v.id %}" class="d-inline">
+                          {% csrf_token %}
+                          <button type="submit"
+                                  class="btn btn-sm btn-success"
+                                  onclick="return confirm('Accept post visit review and mark this workflow Completed?');">
+                            Accept Post Visit
+                          </button>
+                        </form>
+                      {% endif %}
+
+                    </div>
                   </td>
                 </tr>
               {% endfor %}
@@ -339,25 +411,200 @@
           </table>
         </div>
       {% else %}
-        <div class="empty-state">No visit plans found for the selected filters.</div>
+        <div class="empty-state">
+          No visits found for selected filters.
+        </div>
       {% endif %}
     </div>
-  {% endif %}
 
-  {% if active_tab == 'calls' %}
-    <div class="summary-grid">
+    {% for customer_id, history in customer_history_map.items %}
+      <div class="modal fade" id="customerHistoryModal{{ customer_id }}" tabindex="-1" aria-labelledby="customerHistoryModalLabel{{ customer_id }}" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+          <div class="modal-content">
+
+            <div class="modal-header">
+              <div>
+                <h5 class="modal-title" id="customerHistoryModalLabel{{ customer_id }}">
+                  Customer Visit History
+                </h5>
+                <div class="text-muted small">
+                  {{ history.customer.name|default:"—" }}
+                </div>
+              </div>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+
+            <div class="modal-body">
+
+              <div class="row g-3 mb-3">
+                <div class="col-md-4">
+                  <div class="border rounded p-3 h-100">
+                    <div class="text-muted small">Customer Name</div>
+                    <div class="fw-semibold">{{ history.customer.name|default:"—" }}</div>
+                  </div>
+                </div>
+
+                <div class="col-md-4">
+                  <div class="border rounded p-3 h-100">
+                    <div class="text-muted small">KAM Name</div>
+                    <div class="fw-semibold">{{ history.kam_name|default:"—" }}</div>
+                  </div>
+                </div>
+
+                <div class="col-md-4">
+                  <div class="border rounded p-3 h-100">
+                    <div class="text-muted small">Total Visits</div>
+                    <div class="fw-semibold">{{ history.total_visits|default:0 }}</div>
+                  </div>
+                </div>
+
+                <div class="col-md-6">
+                  <div class="border rounded p-3 h-100">
+                    <div class="text-muted small">First Visit</div>
+                    <div class="fw-semibold">{{ history.first_visit|default:"—" }}</div>
+                  </div>
+                </div>
+
+                <div class="col-md-6">
+                  <div class="border rounded p-3 h-100">
+                    <div class="text-muted small">Latest Visit</div>
+                    <div class="fw-semibold">{{ history.latest_visit|default:"—" }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <h6 class="fw-bold mt-3">Visit Timeline</h6>
+              <div class="table-responsive mb-4">
+                <table class="table table-sm table-bordered align-middle">
+                  <thead class="table-light">
+                    <tr>
+                      <th>Visit Date</th>
+                      <th>Purpose of Visit</th>
+                      <th>Meeting Outcome</th>
+                      <th>Discussion</th>
+                      <th>Sales Opportunity</th>
+                      <th>Visit Status</th>
+                      <th>Manager Decision</th>
+                      <th>Created By</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for row in history.timeline %}
+                      <tr>
+                        <td>{{ row.visit.visit_date|date:"d M Y"|default:"—" }}</td>
+                        <td>{{ row.visit.purpose|default:"—" }}</td>
+                        <td>{{ row.meeting_outcome|default:"—" }}</td>
+                        <td>{{ row.actual.meeting_notes|default:"—" }}</td>
+                        <td>{{ row.actual.actual_sales_mt|default:"—" }}</td>
+                        <td>{{ row.visit_status|default:"—" }}</td>
+                        <td>{{ row.manager_decision|default:"—" }}</td>
+                        <td>{{ row.visit.kam.get_full_name|default:row.visit.kam.username }}</td>
+                      </tr>
+                    {% empty %}
+                      <tr>
+                        <td colspan="8" class="text-muted text-center">No visit timeline found.</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+
+              <h6 class="fw-bold mt-3">Next Meeting History</h6>
+              <div class="table-responsive mb-4">
+                <table class="table table-sm table-bordered align-middle">
+                  <thead class="table-light">
+                    <tr>
+                      <th>Meeting Date</th>
+                      <th>Meeting Purpose</th>
+                      <th>Outcome</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for meeting in history.next_meetings %}
+                      <tr>
+                        <td>{{ meeting.meeting_date|date:"d M Y"|default:"—" }}</td>
+                        <td>{{ meeting.meeting_purpose|default:"—" }}</td>
+                        <td>{{ meeting.outcome|default:"—" }}</td>
+                      </tr>
+                    {% empty %}
+                      <tr>
+                        <td colspan="3" class="text-muted text-center">No next meeting history found.</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+
+              <h6 class="fw-bold mt-3">Sales Summary</h6>
+              <div class="row g-3">
+                <div class="col-md-2">
+                  <div class="border rounded p-3 text-center">
+                    <div class="text-muted small">Total Visits</div>
+                    <div class="fw-bold">{{ history.sales_summary.total_visits }}</div>
+                  </div>
+                </div>
+
+                <div class="col-md-2">
+                  <div class="border rounded p-3 text-center">
+                    <div class="text-muted small">Successful</div>
+                    <div class="fw-bold">{{ history.sales_summary.successful_visits }}</div>
+                  </div>
+                </div>
+
+                <div class="col-md-2">
+                  <div class="border rounded p-3 text-center">
+                    <div class="text-muted small">Pending</div>
+                    <div class="fw-bold">{{ history.sales_summary.pending_visits }}</div>
+                  </div>
+                </div>
+
+                <div class="col-md-2">
+                  <div class="border rounded p-3 text-center">
+                    <div class="text-muted small">Rejected</div>
+                    <div class="fw-bold">{{ history.sales_summary.rejected_visits }}</div>
+                  </div>
+                </div>
+
+                <div class="col-md-2">
+                  <div class="border rounded p-3 text-center">
+                    <div class="text-muted small">Follow-up</div>
+                    <div class="fw-bold">{{ history.sales_summary.followup_count }}</div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+
+  {% elif active_tab == "calls" %}
+    <div class="summary-grid summary-grid-four">
       <div class="summary-card">
         <div class="summary-label">Total Calls</div>
-        <div class="summary-value">{{ calls_summary.total|default:0 }}</div>
+        <div class="summary-value">{{ calls_summary.total_calls|default:0 }}</div>
       </div>
+
       <div class="summary-card">
-        <div class="summary-label">Successful</div>
-        <div class="summary-value success">{{ calls_summary.successful|default:0 }}</div>
+        <div class="summary-label">Connected / Outcome Logged</div>
+        <div class="summary-value success">{{ calls_summary.connected|default:0 }}</div>
       </div>
+
       <div class="summary-card">
-        <div class="summary-label">Conversion</div>
+        <div class="summary-label">Follow-ups</div>
+        <div class="summary-value warning">{{ calls_summary.followups|default:0 }}</div>
+      </div>
+
+      <div class="summary-card">
+        <div class="summary-label">Conversion %</div>
         <div class="summary-value">
-          {% if calls_summary.conversion_pct %}{{ calls_summary.conversion_pct|floatformat:1 }}%{% else %}—{% endif %}
+          {% if calls_summary.conversion_pct is not None %}
+            {{ calls_summary.conversion_pct|floatformat:1 }}%
+          {% else %}
+            —
+          {% endif %}
         </div>
       </div>
     </div>
@@ -365,231 +612,181 @@
     <div class="data-card">
       <div class="data-card-header">
         <div class="data-card-title">
-          <i class="fas fa-phone-volume"></i>Call Logs
+          <i class="fas fa-phone"></i>
+          Calls
         </div>
+        <span class="text-muted small">{{ calls_data|length }} records</span>
       </div>
 
       {% if calls_data %}
         <div class="table-responsive">
-          <table class="table table-sm table-hover mb-0">
+          <table class="table table-sm table-hover align-middle mb-0">
             <thead>
               <tr>
-                <th>Date &amp; Time</th>
-                <th>KAM</th>
+                <th>Date / Time</th>
                 <th>Customer</th>
-                <th>Duration</th>
+                <th>KAM</th>
+                <th>Purpose</th>
                 <th>Outcome</th>
-                <th>Summary</th>
+                <th>Next Action</th>
               </tr>
             </thead>
             <tbody>
               {% for c in calls_data %}
                 <tr>
-                  <td class="text-nowrap">{{ c.call_datetime|date:"d M Y H:i" }}</td>
-                  <td>{{ c.kam.username }}</td>
+                  <td>{{ c.call_datetime|date:"d M Y H:i" }}</td>
                   <td>{{ c.customer.name|default:"—" }}</td>
-                  <td>{% if c.duration_minutes %}{{ c.duration_minutes }} min{% else %}—{% endif %}</td>
+                  <td>{{ c.kam.get_full_name|default:c.kam.username }}</td>
+                  <td>{{ c.purpose|default:"—" }}</td>
                   <td>{{ c.outcome|default:"—" }}</td>
-                  <td class="text-muted">{{ c.summary|default:"—"|truncatechars:70 }}</td>
+                  <td>{{ c.next_action|default:"—" }}</td>
                 </tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
       {% else %}
-        <div class="empty-state">No calls found for the selected filters.</div>
+        <div class="empty-state">
+          No calls found for selected filters.
+        </div>
       {% endif %}
     </div>
-  {% endif %}
 
-  {% if active_tab == 'sales' %}
-    <div class="summary-grid">
+  {% elif active_tab == "collections" %}
+    <div class="summary-grid summary-grid-four">
       <div class="summary-card">
-        <div class="summary-label">Total Sales</div>
-        <div class="summary-value">{{ sales_summary.total_mt|default:0|floatformat:2 }} MT</div>
+        <div class="summary-label">Target</div>
+        <div class="summary-value">₹ {{ collections_summary.target|floatformat:0|intcomma }}</div>
       </div>
+
       <div class="summary-card">
-        <div class="summary-label">Customers</div>
-        <div class="summary-value">{{ sales_summary.customer_count|default:0 }}</div>
+        <div class="summary-label">Collected</div>
+        <div class="summary-value success">₹ {{ collections_summary.collected|floatformat:0|intcomma }}</div>
+      </div>
+
+      <div class="summary-card">
+        <div class="summary-label">Pending</div>
+        <div class="summary-value warning">₹ {{ collections_summary.pending|floatformat:0|intcomma }}</div>
+      </div>
+
+      <div class="summary-card">
+        <div class="summary-label">Achievement %</div>
+        <div class="summary-value">
+          {% if collections_summary.achievement_pct is not None %}
+            {{ collections_summary.achievement_pct|floatformat:1 }}%
+          {% else %}
+            —
+          {% endif %}
+        </div>
       </div>
     </div>
 
     <div class="data-card">
       <div class="data-card-header">
         <div class="data-card-title">
-          <i class="fas fa-boxes-stacked"></i>Sales by Customer
+          <i class="fas fa-money-bill-wave"></i>
+          Collections
         </div>
-        <div class="text-muted small">Order Converted only</div>
+        <span class="text-muted small">{{ collections_data|length }} records</span>
       </div>
 
-      {% if sales_data %}
+      {% if collections_data %}
         <div class="table-responsive">
-          <table class="table table-sm table-hover mb-0">
+          <table class="table table-sm table-hover align-middle mb-0">
             <thead>
               <tr>
+                <th>Date / Time</th>
                 <th>Customer</th>
                 <th>KAM</th>
-                <th class="text-end">Sales (MT)</th>
+                <th class="text-end">Amount</th>
+                <th>Mode</th>
+                <th>Reference</th>
               </tr>
             </thead>
             <tbody>
-              {% for r in sales_data %}
+              {% for txn in collections_data %}
                 <tr>
-                  <td>{{ r.customer_name|default:"—" }}</td>
-                  <td>{{ r.kam_username|default:"—" }}</td>
-                  <td class="text-end fw-bold">{{ r.mt|default:0|floatformat:3 }}</td>
+                  <td>{{ txn.txn_datetime|date:"d M Y H:i" }}</td>
+                  <td>{{ txn.customer.name|default:"—" }}</td>
+                  <td>{{ txn.kam.get_full_name|default:txn.kam.username }}</td>
+                  <td class="text-end">₹ {{ txn.amount|floatformat:0|intcomma }}</td>
+                  <td>{{ txn.mode|default:"—" }}</td>
+                  <td>{{ txn.reference|default:"—" }}</td>
                 </tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
       {% else %}
-        <div class="empty-state">No converted sales found for the selected filters.</div>
+        <div class="empty-state">
+          No collections found for selected filters.
+        </div>
       {% endif %}
     </div>
-  {% endif %}
 
-  {% if active_tab == 'leads' %}
-    <div class="summary-grid">
+  {% elif active_tab == "leads" %}
+    <div class="summary-grid summary-grid-four">
       <div class="summary-card">
         <div class="summary-label">Total Leads</div>
-        <div class="summary-value">{{ leads_summary.total_count|default:0 }}</div>
+        <div class="summary-value">{{ leads_summary.total|default:0 }}</div>
       </div>
+
       <div class="summary-card">
-        <div class="summary-label">Won Leads</div>
-        <div class="summary-value success">{{ leads_summary.won_count|default:0 }}</div>
+        <div class="summary-label">Won</div>
+        <div class="summary-value success">{{ leads_summary.won|default:0 }}</div>
       </div>
+
       <div class="summary-card">
-        <div class="summary-label">Total Volume</div>
-        <div class="summary-value">{{ leads_summary.total_mt|default:0|floatformat:2 }} MT</div>
+        <div class="summary-label">Lost</div>
+        <div class="summary-value danger">{{ leads_summary.lost|default:0 }}</div>
       </div>
+
       <div class="summary-card">
-        <div class="summary-label">Conversion</div>
-        <div class="summary-value">
-          {% if leads_summary.conversion_pct %}{{ leads_summary.conversion_pct|floatformat:1 }}%{% else %}—{% endif %}
-        </div>
+        <div class="summary-label">Open</div>
+        <div class="summary-value warning">{{ leads_summary.open|default:0 }}</div>
       </div>
     </div>
 
     <div class="data-card">
       <div class="data-card-header">
         <div class="data-card-title">
-          <i class="fas fa-filter-circle-dollar"></i>Leads / Enquiries
+          <i class="fas fa-bullseye"></i>
+          Leads
         </div>
+        <span class="text-muted small">{{ leads_data|length }} records</span>
       </div>
 
       {% if leads_data %}
         <div class="table-responsive">
-          <table class="table table-sm table-hover mb-0">
+          <table class="table table-sm table-hover align-middle mb-0">
             <thead>
               <tr>
                 <th>Date</th>
                 <th>Customer</th>
                 <th>KAM</th>
-                <th>Grade</th>
-                <th class="text-end">Qty (MT)</th>
                 <th>Status</th>
+                <th>Product</th>
+                <th class="text-end">Qty MT</th>
               </tr>
             </thead>
             <tbody>
-              {% for l in leads_data %}
+              {% for lead in leads_data %}
                 <tr>
-                  <td>{{ l.doe|default:"—" }}</td>
-                  <td>{{ l.customer.name|default:"—" }}</td>
-                  <td>{{ l.kam.username|default:"—" }}</td>
-                  <td>{{ l.grade|default:"—" }}</td>
-                  <td class="text-end">{{ l.qty_mt|default:0|floatformat:3 }}</td>
-                  <td>
-                    {% if l.status == 'WON' %}
-                      <span class="badge bg-success">Won</span>
-                    {% elif l.status == 'LOST' %}
-                      <span class="badge bg-danger">Lost</span>
-                    {% elif l.status == 'NEGOTIATION' %}
-                      <span class="badge bg-warning text-dark">Negotiation</span>
-                    {% else %}
-                      <span class="badge bg-info text-dark">Open</span>
-                    {% endif %}
-                  </td>
+                  <td>{{ lead.doe|date:"d M Y"|default:"—" }}</td>
+                  <td>{{ lead.customer.name|default:"—" }}</td>
+                  <td>{{ lead.kam.get_full_name|default:lead.kam.username }}</td>
+                  <td>{{ lead.status|default:"—" }}</td>
+                  <td>{{ lead.product|default:"—" }}</td>
+                  <td class="text-end">{{ lead.qty_mt|default:"—" }}</td>
                 </tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
       {% else %}
-        <div class="empty-state">No leads found for the selected filters.</div>
-      {% endif %}
-    </div>
-  {% endif %}
-
-  {% if active_tab == 'collections' %}
-    <div class="summary-grid">
-      <div class="summary-card">
-        <div class="summary-label">Customers</div>
-        <div class="summary-value">{{ collections_summary.customer_count|default:0 }}</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-label">Total Overdue</div>
-        <div class="summary-value danger">₹ {{ collections_summary.total_overdue|default:0|floatformat:0|intcomma }}</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-label">Collected</div>
-        <div class="summary-value success">₹ {{ collections_summary.total_collected|default:0|floatformat:0|intcomma }}</div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-label">Pending</div>
-        <div class="summary-value warning">₹ {{ collections_summary.total_pending|default:0|floatformat:0|intcomma }}</div>
-      </div>
-    </div>
-
-    <div class="data-card">
-      <div class="data-card-header">
-        <div class="data-card-title">
-          <i class="fas fa-indian-rupee-sign"></i>Overdue-Driven Collection Plans
+        <div class="empty-state">
+          No leads found for selected filters.
         </div>
-        <div class="text-muted small">Current overdue snapshot from PostgreSQL</div>
-      </div>
-
-      {% if collections_data %}
-        <div class="table-responsive">
-          <table class="table table-sm table-hover mb-0">
-            <thead>
-              <tr>
-                <th>KAM</th>
-                <th>Customer</th>
-                <th class="text-end">Overdue (₹)</th>
-                <th class="text-end">Collected (₹)</th>
-                <th class="text-end">Pending (₹)</th>
-                <th>Status</th>
-                <th>Last Synced</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for c in collections_data %}
-                <tr>
-                  <td>{{ c.kam.username }}</td>
-                  <td>{{ c.customer.name|default:"—" }}</td>
-                  <td class="text-end fw-bold text-danger">{{ c.overdue_amount|default:0|floatformat:0|intcomma }}</td>
-                  <td class="text-end fw-bold text-success">{{ c.actual_amount|default:0|floatformat:0|intcomma }}</td>
-                  <td class="text-end fw-bold text-warning">{{ c.pending_amount|default:0|floatformat:0|intcomma }}</td>
-                  <td>
-                    {% if c.collection_status == 'COLLECTED' %}
-                      <span class="badge bg-success">Collected</span>
-                    {% elif c.collection_status == 'PARTIAL' %}
-                      <span class="badge bg-warning text-dark">Partial</span>
-                    {% else %}
-                      <span class="badge bg-secondary">Open</span>
-                    {% endif %}
-                  </td>
-                  <td class="text-muted">
-                    {% if c.last_synced_at %}{{ c.last_synced_at|date:"d M Y H:i" }}{% else %}—{% endif %}
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="empty-state">No overdue collection plans found for the selected filters.</div>
       {% endif %}
     </div>
   {% endif %}

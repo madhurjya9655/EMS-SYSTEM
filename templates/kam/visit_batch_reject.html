@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Reject Batch #{{ batch.id }}{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width:560px;margin-top:40px;">
+  <div class="card">
+    <div class="card-header" style="background:#fef2f2;border-bottom:1px solid #fecaca;">
+      <h5 class="mb-0" style="color:#b91c1c;">
+        &#10007; Reject Visit Batch #{{ batch.id }}
+      </h5>
+    </div>
+
+    <div class="card-body">
+
+      <div class="mb-3 p-3 rounded" style="background:#f8f9fa;font-size:13px;">
+        <div><strong>KAM:</strong> {{ batch.kam.get_full_name|default:batch.kam.username }}</div>
+        <div><strong>Category:</strong> {{ batch.get_visit_category_display }}</div>
+        <div><strong>Date Range:</strong> {{ batch.from_date }} → {{ batch.to_date }}</div>
+        <div><strong>Purpose of Visit:</strong> {{ batch.purpose|default:"—" }}</div>
+      </div>
+
+      <form method="post">
+        {% csrf_token %}
+
+        <div class="mb-3">
+          <label class="form-label fw-semibold">
+            Rejection Reason <span class="text-danger">*</span>
+          </label>
+          <textarea name="reason"
+                    class="form-control"
+                    rows="4"
+                    placeholder="Please provide a reason for rejection (required)…"
+                    required></textarea>
+          <div class="form-text">
+            This reason will be sent to the KAM so they can resubmit.
+          </div>
+        </div>
+
+        <div class="d-flex gap-2">
+          <button type="submit" class="btn btn-danger fw-semibold">
+            &#10007; Confirm Rejection
+          </button>
+          <a href="{% url 'kam:visit_batches' %}" class="btn btn-outline-secondary">Cancel</a>
+        </div>
+      </form>
+
+    </div>
+  </div>
+</div>
+{% endblock %}

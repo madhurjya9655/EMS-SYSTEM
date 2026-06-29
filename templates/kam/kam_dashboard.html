@@ -5,7 +5,7 @@
 {% block breadcrumb %}KAM Dashboard{% endblock %}
 
 {% block head_extra %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
 <style>
   :root {
@@ -14,6 +14,7 @@
 
   .kam-page {
     font-family: var(--kam-font);
+    padding-bottom: 24px;
   }
 
   .kam-header {
@@ -28,29 +29,54 @@
   .kam-title {
     font-size: 1.55rem;
     font-weight: 750;
-    color: var(--text);
+    color: var(--text, #0f172a);
     margin: 0;
     letter-spacing: -0.02em;
   }
 
   .kam-subtitle {
-    color: var(--muted);
+    color: var(--muted, #64748b);
     font-size: 13px;
     margin-top: 4px;
   }
 
-  .range-pill {
+  .range-pill,
+  .ach-pill {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    background: var(--primary-soft);
-    border: 1px solid var(--primary-border);
-    color: var(--primary);
-    font-size: 12px;
-    font-weight: 650;
-    padding: 5px 11px;
+    gap: 6px;
+    font-size: 11.5px;
+    font-weight: 750;
+    padding: 5px 10px;
     border-radius: 999px;
+  }
+
+  .range-pill {
+    background: var(--primary-soft, #eff6ff);
+    border: 1px solid var(--primary-border, #bfdbfe);
+    color: var(--primary, #2563eb);
     margin-top: 8px;
+  }
+
+  .ach-pill.good {
+    background: #ecfdf5;
+    color: #16a34a;
+  }
+
+  .ach-pill.ok {
+    background: #fffbeb;
+    color: #d97706;
+  }
+
+  .ach-pill.low {
+    background: #fef2f2;
+    color: #dc2626;
+  }
+
+  .ach-pill.neutral {
+    background: var(--surface-alt, #f8fafc);
+    color: var(--muted, #64748b);
+    border: 1px solid var(--border-light, #eef2f7);
   }
 
   .kam-filter-bar {
@@ -58,11 +84,12 @@
     align-items: flex-end;
     gap: 12px;
     flex-wrap: wrap;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    background: var(--surface, #ffffff);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: var(--radius, 14px);
     padding: 14px 16px;
     margin-bottom: 20px;
+    box-shadow: var(--shadow-xs, 0 1px 2px rgba(15, 23, 42, .04));
   }
 
   .kam-filter-group {
@@ -76,7 +103,7 @@
     font-weight: 750;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--subtle);
+    color: var(--subtle, #64748b);
   }
 
   .kam-filter-bar .form-control,
@@ -95,14 +122,14 @@
 
   .kam-filter-divider {
     width: 1px;
-    background: var(--border);
+    background: var(--border, #e5e7eb);
     align-self: stretch;
     margin: 0 2px;
   }
 
   .kam-readonly-input {
-    background: var(--surface-alt);
-    color: var(--text-secondary);
+    background: var(--surface-alt, #f8fafc);
+    color: var(--text-secondary, #475569);
   }
 
   .kpi-grid,
@@ -114,18 +141,18 @@
   }
 
   .kpi-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    background: var(--surface, #ffffff);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: var(--radius, 14px);
     padding: 16px 18px;
     position: relative;
     overflow: hidden;
-    box-shadow: var(--shadow-xs);
+    box-shadow: var(--shadow-xs, 0 1px 2px rgba(15, 23, 42, .04));
     transition: box-shadow 0.16s ease, transform 0.16s ease;
   }
 
   .kpi-card:hover {
-    box-shadow: var(--shadow-md);
+    box-shadow: var(--shadow-md, 0 10px 20px rgba(15, 23, 42, .08));
     transform: translateY(-1px);
   }
 
@@ -138,12 +165,29 @@
     width: 4px;
   }
 
-  .kpi-card.kpi-sales::before { background: var(--primary); }
-  .kpi-card.kpi-visits::before { background: var(--success); }
-  .kpi-card.kpi-calls::before { background: var(--accent); }
-  .kpi-card.kpi-leads::before { background: #7c3aed; }
-  .kpi-card.kpi-collections::before { background: var(--warning); }
-  .kpi-card.kpi-overdue::before { background: var(--danger); }
+  .kpi-card.kpi-sales::before {
+    background: var(--primary, #2563eb);
+  }
+
+  .kpi-card.kpi-visits::before {
+    background: #16a34a;
+  }
+
+  .kpi-card.kpi-calls::before {
+    background: #0ea5e9;
+  }
+
+  .kpi-card.kpi-leads::before {
+    background: #7c3aed;
+  }
+
+  .kpi-card.kpi-collections::before {
+    background: #d97706;
+  }
+
+  .kpi-card.kpi-overdue::before {
+    background: #dc2626;
+  }
 
   .kpi-card-header {
     display: flex;
@@ -158,7 +202,7 @@
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.07em;
-    color: var(--muted);
+    color: var(--muted, #64748b);
     display: flex;
     align-items: center;
     gap: 7px;
@@ -177,7 +221,7 @@
     font-family: var(--kam-font);
     font-size: 2rem;
     font-weight: 800;
-    color: var(--text);
+    color: var(--text, #0f172a);
     line-height: 1;
     letter-spacing: -0.03em;
     margin-bottom: 7px;
@@ -186,7 +230,7 @@
   .kam-sales-unit {
     font-size: 0.55em;
     font-weight: 650;
-    color: var(--muted);
+    color: var(--muted, #64748b);
   }
 
   .kpi-sub-row {
@@ -199,28 +243,13 @@
 
   .kpi-meta {
     font-size: 12px;
-    color: var(--muted);
+    color: var(--muted, #64748b);
   }
 
   .kpi-meta strong {
-    color: var(--text-secondary);
+    color: var(--text-secondary, #334155);
     font-weight: 700;
   }
-
-  .ach-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 11.5px;
-    font-weight: 750;
-    padding: 4px 9px;
-    border-radius: 999px;
-  }
-
-  .ach-pill.good { background: #ecfdf5; color: var(--success); }
-  .ach-pill.ok { background: #fffbeb; color: var(--warning); }
-  .ach-pill.low { background: #fef2f2; color: var(--danger); }
-  .ach-pill.neutral { background: var(--surface-alt); color: var(--muted); }
 
   .kpi-two-col {
     display: flex;
@@ -236,7 +265,7 @@
 
   .kpi-two-col-label {
     font-size: 10.5px;
-    color: var(--subtle);
+    color: var(--subtle, #64748b);
     font-weight: 750;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -246,7 +275,7 @@
     font-size: 1.08rem;
     font-weight: 800;
     font-family: var(--kam-font);
-    color: var(--text);
+    color: var(--text, #0f172a);
   }
 
   .coll-kpi-mini {
@@ -257,8 +286,8 @@
   }
 
   .coll-kpi-mini-item {
-    background: var(--surface-alt);
-    border: 1px solid var(--border-light);
+    background: var(--surface-alt, #f8fafc);
+    border: 1px solid var(--border-light, #eef2f7);
     border-radius: 8px;
     padding: 9px 10px;
   }
@@ -268,7 +297,7 @@
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--subtle);
+    color: var(--subtle, #64748b);
     margin-bottom: 4px;
     display: flex;
     align-items: center;
@@ -279,13 +308,21 @@
     font-size: 0.96rem;
     font-weight: 800;
     font-family: var(--kam-font);
-    color: var(--text);
+    color: var(--text, #0f172a);
     line-height: 1.1;
   }
 
-  .coll-kpi-mini-val.v-overdue { color: #dc2626; }
-  .coll-kpi-mini-val.v-collected { color: #16a34a; }
-  .coll-kpi-mini-val.v-pending { color: #d97706; }
+  .coll-kpi-mini-val.v-overdue {
+    color: #dc2626;
+  }
+
+  .coll-kpi-mini-val.v-collected {
+    color: #16a34a;
+  }
+
+  .coll-kpi-mini-val.v-pending {
+    color: #d97706;
+  }
 
   .overdue-row {
     display: flex;
@@ -296,25 +333,20 @@
 
   .overdue-label {
     font-size: 11px;
-    color: var(--muted);
+    color: var(--muted, #64748b);
     min-width: 96px;
   }
 
   .overdue-val {
     font-size: 13.5px;
     font-weight: 800;
-    color: var(--text);
-  }
-
-  .overdue-snapshot {
-    font-size: 11px;
-    color: var(--subtle);
+    color: var(--text, #0f172a);
   }
 
   .kam-overdue-footer {
     margin-top: 11px;
     padding-top: 11px;
-    border-top: 1px solid var(--border-light);
+    border-top: 1px solid var(--border-light, #eef2f7);
     display: flex;
     gap: 12px;
     flex-wrap: wrap;
@@ -329,30 +361,30 @@
   }
 
   .analysis-card,
-  .dash-card,
-  .trend-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+  .dash-card {
+    background: var(--surface, #ffffff);
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: var(--radius, 14px);
     overflow: hidden;
-    box-shadow: var(--shadow-xs);
+    box-shadow: var(--shadow-xs, 0 1px 2px rgba(15, 23, 42, .04));
   }
 
   .analysis-card-header,
   .dash-card-header {
     padding: 13px 16px;
-    border-bottom: 1px solid var(--border-light);
+    border-bottom: 1px solid var(--border-light, #eef2f7);
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+    flex-wrap: wrap;
   }
 
   .analysis-card-title,
   .dash-card-title {
     font-size: 13px;
     font-weight: 800;
-    color: var(--text);
+    color: var(--text, #0f172a);
     display: flex;
     align-items: center;
     gap: 8px;
@@ -360,7 +392,7 @@
 
   .analysis-card-title i,
   .dash-card-title i {
-    color: var(--muted);
+    color: var(--muted, #64748b);
     font-size: 12px;
   }
 
@@ -377,8 +409,8 @@
   }
 
   .analysis-kpi-item {
-    background: var(--surface-alt);
-    border: 1px solid var(--border-light);
+    background: var(--surface-alt, #f8fafc);
+    border: 1px solid var(--border-light, #eef2f7);
     border-radius: 8px;
     padding: 10px 12px;
   }
@@ -388,7 +420,7 @@
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.07em;
-    color: var(--subtle);
+    color: var(--subtle, #64748b);
     margin-bottom: 5px;
   }
 
@@ -396,18 +428,25 @@
     font-size: 1.08rem;
     font-weight: 800;
     font-family: var(--kam-font);
-    color: var(--text);
+    color: var(--text, #0f172a);
     line-height: 1.1;
   }
 
-  .analysis-kpi-value.color-success { color: #16a34a; }
-  .analysis-kpi-value.color-danger { color: #dc2626; }
-  .analysis-kpi-value.color-warning { color: #d97706; }
-  .analysis-kpi-value.font-sm { font-size: 0.95rem; }
+  .analysis-kpi-value.color-success {
+    color: #16a34a;
+  }
+
+  .analysis-kpi-value.color-danger {
+    color: #dc2626;
+  }
+
+  .analysis-kpi-value.color-warning {
+    color: #d97706;
+  }
 
   .analysis-kpi-sub {
     font-size: 10.5px;
-    color: var(--subtle);
+    color: var(--subtle, #64748b);
     margin-top: 3px;
   }
 
@@ -419,7 +458,7 @@
   .dash-empty {
     padding: 30px 16px;
     text-align: center;
-    color: var(--subtle);
+    color: var(--subtle, #64748b);
     font-size: 13px;
   }
 
@@ -441,7 +480,7 @@
   .mix-bar {
     width: 52px;
     height: 5px;
-    background: var(--border-light);
+    background: var(--border-light, #eef2f7);
     border-radius: 999px;
     overflow: hidden;
   }
@@ -452,19 +491,24 @@
     width: 0;
   }
 
-  .mix-bar-fill.mix-grade { background: var(--primary); }
-  .mix-bar-fill.mix-size { background: var(--accent); }
+  .mix-bar-fill.mix-grade {
+    background: var(--primary, #2563eb);
+  }
+
+  .mix-bar-fill.mix-size {
+    background: #0ea5e9;
+  }
 
   .mix-pct {
     font-size: 11.5px;
-    color: var(--muted);
+    color: var(--muted, #64748b);
     min-width: 34px;
     text-align: right;
   }
 
   .trend-note {
     font-size: 11.5px;
-    color: var(--subtle);
+    color: var(--subtle, #64748b);
     margin-top: 3px;
   }
 
@@ -478,21 +522,80 @@
     font-size: 12.5px;
   }
 
+  .kam-report-chart-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .report-chart-card {
+    border: 1px solid var(--border-light, #eef2f7);
+    border-radius: 10px;
+    padding: 14px;
+    background: var(--surface-alt, #f8fafc);
+  }
+
+  .report-chart-title {
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--text, #0f172a);
+    margin-bottom: 10px;
+  }
+
+  .report-chart-wrap {
+    height: 260px;
+    position: relative;
+  }
+
+  .report-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .report-summary-item {
+    background: #ffffff;
+    border: 1px solid var(--border-light, #eef2f7);
+    border-radius: 10px;
+    padding: 12px;
+  }
+
+  .report-summary-label {
+    font-size: 10px;
+    font-weight: 800;
+    color: var(--subtle, #64748b);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-bottom: 5px;
+  }
+
+  .report-summary-value {
+    font-size: 1.08rem;
+    font-weight: 850;
+    color: var(--text, #0f172a);
+  }
+
   @media (max-width: 1100px) {
     .kpi-grid,
-    .kpi-grid-bottom {
+    .kpi-grid-bottom,
+    .report-summary-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .analysis-grid,
-    .section-grid {
+    .section-grid,
+    .kam-report-chart-grid {
       grid-template-columns: 1fr;
     }
   }
 
   @media (max-width: 768px) {
     .kpi-grid,
-    .kpi-grid-bottom {
+    .kpi-grid-bottom,
+    .report-summary-grid {
       grid-template-columns: 1fr;
     }
 
@@ -520,7 +623,9 @@
   <div class="kam-header">
     <div>
       <h1 class="kam-title">KAM Dashboard</h1>
-      <div class="kam-subtitle">Sales, leads, overdues, collections, visits and calls from PostgreSQL synced data.</div>
+      <div class="kam-subtitle">
+        Sales, visits, calls, leads, collections, overdues, targets and KAM performance analytics.
+      </div>
 
       {% if range_label %}
         <span class="range-pill">
@@ -530,38 +635,64 @@
       {% endif %}
     </div>
 
-    {% if can_choose_kam %}
-      <div class="d-flex gap-2 align-items-center">
+    <div class="quick-actions">
+      {% if can_choose_kam %}
         <a href="{% url 'kam:manager_kpis' %}" class="btn btn-sm btn-primary">
           <i class="fas fa-chart-bar me-1"></i>Manager KPIs
         </a>
-      </div>
-    {% endif %}
+      {% endif %}
+
+      <a
+        class="btn btn-sm btn-outline-secondary"
+        href="{% url 'kam:export_kpi_csv' %}?format=pdf{% if filter_from %}&from={{ filter_from }}{% endif %}{% if filter_to %}&to={{ filter_to }}{% endif %}{% if selected_user %}&user={{ selected_user }}{% endif %}"
+      >
+        <i class="fas fa-file-pdf me-1"></i>Export PDF
+      </a>
+
+      <a
+        class="btn btn-sm btn-outline-secondary"
+        href="{% url 'kam:export_kpi_csv' %}?format=xlsx{% if filter_from %}&from={{ filter_from }}{% endif %}{% if filter_to %}&to={{ filter_to }}{% endif %}{% if selected_user %}&user={{ selected_user }}{% endif %}"
+      >
+        <i class="fas fa-file-excel me-1"></i>Export Excel
+      </a>
+    </div>
   </div>
 
   <form class="kam-filter-bar" method="get" id="kamFilterForm">
     <div class="kam-filter-group">
       <span class="kam-filter-label">From</span>
-      <input type="date" name="from" value="{% firstof request.GET.from filter_from %}" class="form-control" id="filterFrom">
+      <input
+        type="date"
+        name="from"
+        value="{% firstof request.GET.from filter_from %}"
+        class="form-control"
+        id="filterFrom"
+      >
     </div>
 
     <div class="kam-filter-group">
       <span class="kam-filter-label">To</span>
-      <input type="date" name="to" value="{% firstof request.GET.to filter_to %}" class="form-control" id="filterTo">
+      <input
+        type="date"
+        name="to"
+        value="{% firstof request.GET.to filter_to %}"
+        class="form-control"
+        id="filterTo"
+      >
     </div>
 
     <div class="kam-filter-group">
       <span class="kam-filter-label">Quick Range</span>
-      <select class="form-select" id="quickRange" onchange="applyQuickRange(this.value)">
-        <option value="">Custom</option>
-        <option value="this_month">This Month</option>
-        <option value="last_month">Last Month</option>
-        <option value="this_fy">This FY</option>
-        <option value="last_fy">Last FY</option>
-        <option value="this_week">This Week</option>
-        <option value="last_7">Last 7 Days</option>
-        <option value="last_30">Last 30 Days</option>
-        <option value="last_90">Last 90 Days</option>
+      <select name="range" class="form-select" id="quickRange">
+        <option value="" {% if not request.GET.range %}selected{% endif %}>Current Month</option>
+        <option value="weekly" {% if request.GET.range == "weekly" or request.GET.range == "week" or request.GET.range == "this_week" %}selected{% endif %}>Weekly</option>
+        <option value="monthly" {% if request.GET.range == "monthly" or request.GET.range == "month" or request.GET.range == "this_month" %}selected{% endif %}>Monthly</option>
+        <option value="quarterly" {% if request.GET.range == "quarterly" or request.GET.range == "quarter" or request.GET.range == "this_quarter" %}selected{% endif %}>Quarterly</option>
+        <option value="yearly" {% if request.GET.range == "yearly" or request.GET.range == "year" or request.GET.range == "this_year" %}selected{% endif %}>Yearly</option>
+        <option value="last7" {% if request.GET.range == "last7" %}selected{% endif %}>Last 7 Days</option>
+        <option value="last30" {% if request.GET.range == "last30" %}selected{% endif %}>Last 30 Days</option>
+        <option value="last90" {% if request.GET.range == "last90" %}selected{% endif %}>Last 90 Days</option>
+        <option value="all" {% if request.GET.range == "all" %}selected{% endif %}>All</option>
       </select>
     </div>
 
@@ -573,7 +704,9 @@
         <select name="user" class="form-select">
           <option value="" {% if not request.GET.user and not selected_user %}selected{% endif %}>All KAMs</option>
           {% for uname in kam_options %}
-            <option value="{{ uname }}" {% if request.GET.user == uname or selected_user == uname %}selected{% endif %}>{{ uname }}</option>
+            <option value="{{ uname }}" {% if request.GET.user == uname or selected_user == uname %}selected{% endif %}>
+              {{ uname }}
+            </option>
           {% endfor %}
         </select>
       </div>
@@ -602,7 +735,7 @@
           <i class="fas fa-boxes-stacked"></i>Sales
         </div>
         <div class="kpi-card-action">
-          <a class="btn btn-sm btn-outline-primary" href="{% url 'kam:reports' %}?metric=sales{% if request.GET.from or filter_from %}&from={% firstof request.GET.from filter_from %}{% endif %}{% if request.GET.to or filter_to %}&to={% firstof request.GET.to filter_to %}{% endif %}{% if request.GET.user or selected_user %}&user={% firstof request.GET.user selected_user %}{% endif %}">
+          <a class="btn btn-sm btn-outline-primary" href="#kamPerformanceReports">
             Analysis
           </a>
         </div>
@@ -614,7 +747,11 @@
       </div>
 
       <div class="kpi-sub-row">
-        <span class="kpi-meta">Target: <strong>{{ kpi.sales_target_mt|default:0|floatformat:2 }} MT</strong></span>
+        <span class="kpi-meta">
+          Target:
+          <strong>{{ kpi.sales_target_mt|default:0|floatformat:2 }} MT</strong>
+        </span>
+
         {% if kpi.sales_ach_pct is not None %}
           <span class="ach-pill {% if kpi.sales_ach_pct >= 100 %}good{% elif kpi.sales_ach_pct >= 70 %}ok{% else %}low{% endif %}">
             <i class="fas fa-bullseye"></i>{{ kpi.sales_ach_pct|floatformat:1 }}%
@@ -631,7 +768,7 @@
           <i class="fas fa-route"></i>Visits
         </div>
         <div class="kpi-card-action">
-          <a class="btn btn-sm btn-outline-primary" href="{% url 'kam:reports' %}?metric=visits{% if request.GET.from or filter_from %}&from={% firstof request.GET.from filter_from %}{% endif %}{% if request.GET.to or filter_to %}&to={% firstof request.GET.to filter_to %}{% endif %}{% if request.GET.user or selected_user %}&user={% firstof request.GET.user selected_user %}{% endif %}">
+          <a class="btn btn-sm btn-outline-primary" href="#kamPerformanceReports">
             Analysis
           </a>
         </div>
@@ -662,7 +799,10 @@
         {% endif %}
 
         {% if kpi.visit_success_pct is not None %}
-          <span class="kpi-meta">Success: <strong>{{ kpi.visit_success_pct|floatformat:1 }}%</strong></span>
+          <span class="kpi-meta">
+            Success:
+            <strong>{{ kpi.visit_success_pct|floatformat:1 }}%</strong>
+          </span>
         {% endif %}
       </div>
     </div>
@@ -673,7 +813,7 @@
           <i class="fas fa-phone-volume"></i>Calls
         </div>
         <div class="kpi-card-action">
-          <a class="btn btn-sm btn-outline-primary" href="{% url 'kam:reports' %}?metric=calls{% if request.GET.from or filter_from %}&from={% firstof request.GET.from filter_from %}{% endif %}{% if request.GET.to or filter_to %}&to={% firstof request.GET.to filter_to %}{% endif %}{% if request.GET.user or selected_user %}&user={% firstof request.GET.user selected_user %}{% endif %}">
+          <a class="btn btn-sm btn-outline-primary" href="#kamPerformanceReports">
             Analysis
           </a>
         </div>
@@ -682,7 +822,11 @@
       <div class="kpi-main-value">{{ kpi.calls|default:0 }}</div>
 
       <div class="kpi-sub-row">
-        <span class="kpi-meta">Target: <strong>{{ kpi.calls_target|default:0 }}</strong></span>
+        <span class="kpi-meta">
+          Target:
+          <strong>{{ kpi.calls_target|default:0 }}</strong>
+        </span>
+
         {% if kpi.call_ach_pct is not None %}
           <span class="ach-pill {% if kpi.call_ach_pct >= 100 %}good{% elif kpi.call_ach_pct >= 70 %}ok{% else %}low{% endif %}">
             <i class="fas fa-bullseye"></i>{{ kpi.call_ach_pct|floatformat:1 }}%
@@ -700,6 +844,11 @@
         <div class="kpi-card-title">
           <i class="fas fa-filter-circle-dollar"></i>Leads
         </div>
+        <div class="kpi-card-action">
+          <a class="btn btn-sm btn-outline-primary" href="#kamPerformanceReports">
+            Analysis
+          </a>
+        </div>
       </div>
 
       <div class="kpi-two-col mb-3">
@@ -710,6 +859,10 @@
         <div class="kpi-two-col-item">
           <span class="kpi-two-col-label">Won Leads</span>
           <span class="kpi-two-col-val">{{ kpi.leads_converted_count|default:0 }}</span>
+        </div>
+        <div class="kpi-two-col-item">
+          <span class="kpi-two-col-label">Won Volume</span>
+          <span class="kpi-two-col-val">{{ kpi.leads_converted_value|default:0|floatformat:2 }} MT</span>
         </div>
       </div>
 
@@ -817,11 +970,262 @@
         {% endif %}
 
         {% if kpi.overdue_risk_ratio %}
-          <span class="kpi-meta">Risk: <strong>{{ kpi.overdue_risk_ratio|floatformat:2 }}</strong></span>
+          <span class="kpi-meta">
+            Risk:
+            <strong>{{ kpi.overdue_risk_ratio|floatformat:2 }}</strong>
+          </span>
         {% endif %}
       </div>
     </div>
   </div>
+
+  <section id="kamPerformanceReports" class="dash-card mb-4">
+    <div class="dash-card-header">
+      <div>
+        <div class="dash-card-title">
+          <i class="fas fa-chart-pie"></i>KAM Performance Reports
+        </div>
+        <div class="trend-note">
+          Monthly performance dashboard for the selected period.
+        </div>
+      </div>
+
+      <div class="d-flex gap-2 flex-wrap">
+        <a
+          class="btn btn-sm btn-outline-secondary"
+          href="{% url 'kam:export_kpi_csv' %}?format=pdf{% if filter_from %}&from={{ filter_from }}{% endif %}{% if filter_to %}&to={{ filter_to }}{% endif %}{% if selected_user %}&user={{ selected_user }}{% endif %}"
+        >
+          <i class="fas fa-file-pdf me-1"></i>Export PDF
+        </a>
+
+        <a
+          class="btn btn-sm btn-outline-secondary"
+          href="{% url 'kam:export_kpi_csv' %}?format=xlsx{% if filter_from %}&from={{ filter_from }}{% endif %}{% if filter_to %}&to={{ filter_to }}{% endif %}{% if selected_user %}&user={{ selected_user }}{% endif %}"
+        >
+          <i class="fas fa-file-excel me-1"></i>Export Excel
+        </a>
+      </div>
+    </div>
+
+    <div class="dash-card-body">
+      {% if selected_report_kam %}
+        <div class="mb-3">
+          <span class="ach-pill neutral">
+            Report KAM:
+            {% if selected_report_kam.get_full_name %}
+              {{ selected_report_kam.get_full_name }}
+            {% else %}
+              {{ selected_report_kam.username }}
+            {% endif %}
+          </span>
+        </div>
+      {% endif %}
+
+      {% if kam_report %}
+        {{ dashboard_report_charts|json_script:"dashboardReportCharts" }}
+        {{ kam_report|json_script:"kamPerformanceReportJson" }}
+
+        <div class="report-summary-grid">
+          <div class="report-summary-item">
+            <div class="report-summary-label">Overall KPI %</div>
+            <div class="report-summary-value">
+              {{ kam_report.score.overall_score|default:0|floatformat:1 }}%
+            </div>
+          </div>
+
+          <div class="report-summary-item">
+            <div class="report-summary-label">Performance Status</div>
+            <div class="report-summary-value">
+              {{ kam_report.score.status|default:"-" }}
+            </div>
+          </div>
+
+          <div class="report-summary-item">
+            <div class="report-summary-label">Target Achievement</div>
+            <div class="report-summary-value">
+              {{ kam_report.sales.achievement_pct|default:0|floatformat:1 }}%
+            </div>
+          </div>
+
+          <div class="report-summary-item">
+            <div class="report-summary-label">Collection Efficiency</div>
+            <div class="report-summary-value">
+              {{ kam_report.collections.collection_efficiency_pct|default:0|floatformat:1 }}%
+            </div>
+          </div>
+        </div>
+
+        <div class="kam-report-chart-grid">
+          <div class="report-chart-card">
+            <div class="report-chart-title">Monthly Sales Trend</div>
+            <div class="report-chart-wrap">
+              <canvas id="chartMonthlySalesTrend"></canvas>
+            </div>
+          </div>
+
+          <div class="report-chart-card">
+            <div class="report-chart-title">Visits Completed</div>
+            <div class="report-chart-wrap">
+              <canvas id="chartVisitsCompleted"></canvas>
+            </div>
+          </div>
+
+          <div class="report-chart-card">
+            <div class="report-chart-title">Calls Completed</div>
+            <div class="report-chart-wrap">
+              <canvas id="chartCallsCompleted"></canvas>
+            </div>
+          </div>
+
+          <div class="report-chart-card">
+            <div class="report-chart-title">Lead Conversion</div>
+            <div class="report-chart-wrap">
+              <canvas id="chartLeadConversion"></canvas>
+            </div>
+          </div>
+
+          <div class="report-chart-card">
+            <div class="report-chart-title">Collections</div>
+            <div class="report-chart-wrap">
+              <canvas id="chartCollectionsReport"></canvas>
+            </div>
+          </div>
+
+          <div class="report-chart-card">
+            <div class="report-chart-title">Customer Visit Distribution</div>
+            <div class="report-chart-wrap">
+              <canvas id="chartVisitDistribution"></canvas>
+            </div>
+          </div>
+
+          <div class="report-chart-card">
+            <div class="report-chart-title">Visit Approval Status</div>
+            <div class="report-chart-wrap">
+              <canvas id="chartVisitApprovalStatus"></canvas>
+            </div>
+          </div>
+
+          <div class="report-chart-card">
+            <div class="report-chart-title">Performance Score Distribution</div>
+            <div class="report-chart-wrap">
+              <canvas id="chartPerformanceScore"></canvas>
+            </div>
+          </div>
+
+          <div class="report-chart-card">
+            <div class="report-chart-title">Target Achievement</div>
+            <div class="report-chart-wrap">
+              <canvas id="chartTargetAchievement"></canvas>
+            </div>
+          </div>
+
+          <div class="report-chart-card">
+            <div class="report-chart-title">Monthly Comparison</div>
+            <div class="report-chart-wrap">
+              <canvas id="chartMonthlyComparison"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-responsive mt-4">
+          <table class="table table-sm align-middle mb-0">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th class="text-end">Value</th>
+                <th class="text-end">Target / Benchmark</th>
+                <th class="text-end">Achievement</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              <tr>
+                <td class="kam-table-strong">Sales</td>
+                <td class="text-end">{{ kpi.sales_mt|default:0|floatformat:2 }} MT</td>
+                <td class="text-end">{{ kpi.sales_target_mt|default:0|floatformat:2 }} MT</td>
+                <td class="text-end">
+                  {% if kpi.sales_ach_pct is not None %}
+                    {{ kpi.sales_ach_pct|floatformat:1 }}%
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+              </tr>
+
+              <tr>
+                <td class="kam-table-strong">Visits</td>
+                <td class="text-end">{{ kpi.visits_actual|default:0 }}</td>
+                <td class="text-end">{{ kpi.visits_target|default:0 }}</td>
+                <td class="text-end">
+                  {% if kpi.visit_ach_pct is not None %}
+                    {{ kpi.visit_ach_pct|floatformat:1 }}%
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+              </tr>
+
+              <tr>
+                <td class="kam-table-strong">Calls</td>
+                <td class="text-end">{{ kpi.calls|default:0 }}</td>
+                <td class="text-end">{{ kpi.calls_target|default:0 }}</td>
+                <td class="text-end">
+                  {% if kpi.call_ach_pct is not None %}
+                    {{ kpi.call_ach_pct|floatformat:1 }}%
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+              </tr>
+
+              <tr>
+                <td class="kam-table-strong">Collections</td>
+                <td class="text-end">₹ {{ kpi.collection_actual|default:0|floatformat:0|intcomma }}</td>
+                <td class="text-end">₹ {{ kpi.collection_planned|default:0|floatformat:0|intcomma }}</td>
+                <td class="text-end">
+                  {% if kpi.collection_ach_pct is not None %}
+                    {{ kpi.collection_ach_pct|floatformat:1 }}%
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+              </tr>
+
+              <tr>
+                <td class="kam-table-strong">Leads</td>
+                <td class="text-end">{{ kpi.leads_total_count|default:0 }}</td>
+                <td class="text-end">{{ kpi.leads_converted_count|default:0 }} won</td>
+                <td class="text-end">
+                  {% if kpi.lead_count_conv_pct is not None %}
+                    {{ kpi.lead_count_conv_pct|floatformat:1 }}%
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+              </tr>
+
+              <tr>
+                <td class="kam-table-strong">Overdues</td>
+                <td class="text-end">₹ {{ kpi.overdue_sum|default:0|floatformat:0|intcomma }}</td>
+                <td class="text-end">Credit: ₹ {{ kpi.credit_limit_sum|default:0|floatformat:0|intcomma }}</td>
+                <td class="text-end">
+                  {% if kpi.overdue_reduction_pct is not None %}
+                    {{ kpi.overdue_reduction_pct|floatformat:1 }}%
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="dash-empty">
+          No KAM performance report is available for the selected period.
+        </div>
+      {% endif %}
+    </div>
+  </section>
 
   <div class="analysis-grid">
     <div class="analysis-card">
@@ -829,7 +1233,7 @@
         <div class="analysis-card-title">
           <i class="fas fa-filter-circle-dollar"></i>Lead Analysis
         </div>
-        <a href="{% url 'kam:reports' %}?metric=leads" class="btn btn-sm btn-outline-secondary">
+        <a href="#kamPerformanceReports" class="btn btn-sm btn-outline-secondary">
           Full Report
         </a>
       </div>
@@ -845,13 +1249,17 @@
           <div class="analysis-kpi-item">
             <div class="analysis-kpi-label">Won Leads</div>
             <div class="analysis-kpi-value color-success">{{ kpi.leads_converted_count|default:0 }}</div>
-            <div class="analysis-kpi-sub">Normalized status = WON</div>
+            <div class="analysis-kpi-sub">Converted leads</div>
           </div>
 
           <div class="analysis-kpi-item">
             <div class="analysis-kpi-label">Conversion Rate</div>
             <div class="analysis-kpi-value">
-              {% if kpi.lead_count_conv_pct is not None %}{{ kpi.lead_count_conv_pct|floatformat:1 }}%{% else %}—{% endif %}
+              {% if kpi.lead_count_conv_pct is not None %}
+                {{ kpi.lead_count_conv_pct|floatformat:1 }}%
+              {% else %}
+                —
+              {% endif %}
             </div>
             <div class="analysis-kpi-sub">Won / Total</div>
           </div>
@@ -874,35 +1282,43 @@
         <div class="analysis-card-title">
           <i class="fas fa-indian-rupee-sign"></i>Collection Analysis
         </div>
-        <a href="{% url 'kam:collections_plan' %}" class="btn btn-sm btn-outline-primary">
-          Track Collections
+        <a href="#kamPerformanceReports" class="btn btn-sm btn-outline-secondary">
+          Full Report
         </a>
       </div>
 
       <div class="analysis-card-body">
         <div class="analysis-kpi-row">
           <div class="analysis-kpi-item">
-            <div class="analysis-kpi-label">Customers</div>
-            <div class="analysis-kpi-value">{{ kpi.collection_total_customers|default:0 }}</div>
-            <div class="analysis-kpi-sub">With overdue</div>
+            <div class="analysis-kpi-label">Overdue</div>
+            <div class="analysis-kpi-value color-danger">
+              ₹ {{ kpi.collection_planned|default:0|floatformat:0|intcomma }}
+            </div>
+            <div class="analysis-kpi-sub">Plan overdue</div>
           </div>
 
           <div class="analysis-kpi-item">
-            <div class="analysis-kpi-label">Total Overdue</div>
-            <div class="analysis-kpi-value color-danger font-sm">₹ {{ kpi.collection_planned|default:0|floatformat:0|intcomma }}</div>
-            <div class="analysis-kpi-sub">From synced sheet data</div>
-          </div>
-
-          <div class="analysis-kpi-item">
-            <div class="analysis-kpi-label">Total Collected</div>
-            <div class="analysis-kpi-value color-success font-sm">₹ {{ kpi.collection_actual|default:0|floatformat:0|intcomma }}</div>
-            <div class="analysis-kpi-sub">Actual received</div>
+            <div class="analysis-kpi-label">Collected</div>
+            <div class="analysis-kpi-value color-success">
+              ₹ {{ kpi.collection_actual|default:0|floatformat:0|intcomma }}
+            </div>
+            <div class="analysis-kpi-sub">Actual collection</div>
           </div>
 
           <div class="analysis-kpi-item">
             <div class="analysis-kpi-label">Pending</div>
-            <div class="analysis-kpi-value color-warning font-sm">₹ {{ kpi.collection_pending|default:0|floatformat:0|intcomma }}</div>
-            <div class="analysis-kpi-sub">Overdue - Collected</div>
+            <div class="analysis-kpi-value color-warning">
+              ₹ {{ kpi.collection_pending|default:0|floatformat:0|intcomma }}
+            </div>
+            <div class="analysis-kpi-sub">Balance pending</div>
+          </div>
+
+          <div class="analysis-kpi-item">
+            <div class="analysis-kpi-label">Customers</div>
+            <div class="analysis-kpi-value">
+              {{ kpi.collection_total_customers|default:0 }}
+            </div>
+            <div class="analysis-kpi-sub">Collection accounts</div>
           </div>
         </div>
 
@@ -916,143 +1332,92 @@
   <div class="section-grid">
     <div class="dash-card">
       <div class="dash-card-header">
-        <div class="dash-card-title">
-          <i class="fas fa-layer-group"></i>Product Mix — Grade
+        <div>
+          <div class="dash-card-title">
+            <i class="fas fa-layer-group"></i>Product Mix by Grade
+          </div>
+          <div class="trend-note">Sales contribution by grade for selected period.</div>
         </div>
       </div>
 
-      {% if prod_by_grade %}
-        <div class="dash-card-body kam-section-no-padding">
-          <table class="table table-sm mb-0">
-            <thead>
-              <tr>
-                <th>Grade</th>
-                <th class="text-end">MT</th>
-                <th class="text-end">Share</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for r in prod_by_grade %}
+      <div class="dash-card-body kam-section-no-padding">
+        {% if prod_by_grade %}
+          <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+              <thead>
                 <tr>
-                  <td>{{ r.grade|default:"—" }}</td>
-                  <td class="text-end kam-table-strong">{{ r.mt|default:0|floatformat:2 }}</td>
-                  <td class="text-end">
-                    <div class="mix-share-wrap">
-                      <div class="mix-bar">
-                        <div class="mix-bar-fill mix-grade js-mix-bar" data-pct="{{ r.pct|default_if_none:0 }}"></div>
-                      </div>
-                      <span class="mix-pct">{{ r.pct|default:"—" }}%</span>
-                    </div>
-                  </td>
+                  <th>Grade</th>
+                  <th class="text-end">Sales MT</th>
+                  <th class="text-end">Share</th>
                 </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="dash-empty">No grade data for this period.</div>
-      {% endif %}
+              </thead>
+
+              <tbody>
+                {% for row in prod_by_grade %}
+                  <tr>
+                    <td class="kam-table-strong">{{ row.grade|default:"-" }}</td>
+                    <td class="text-end">{{ row.mt|default:0|floatformat:2 }}</td>
+                    <td class="text-end">
+                      <div class="mix-share-wrap">
+                        <div class="mix-bar">
+                          <div class="mix-bar-fill mix-grade" data-pct="{{ row.pct|default:0 }}"></div>
+                        </div>
+                        <span class="mix-pct">{{ row.pct|default:0|floatformat:1 }}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="dash-empty">No grade-wise sales found.</div>
+        {% endif %}
+      </div>
     </div>
 
     <div class="dash-card">
       <div class="dash-card-header">
-        <div class="dash-card-title">
-          <i class="fas fa-ruler-combined"></i>Product Mix — Size
+        <div>
+          <div class="dash-card-title">
+            <i class="fas fa-ruler-combined"></i>Product Mix by Size
+          </div>
+          <div class="trend-note">Sales contribution by size for selected period.</div>
         </div>
       </div>
 
-      {% if prod_by_size %}
-        <div class="dash-card-body kam-section-no-padding">
-          <table class="table table-sm mb-0">
-            <thead>
-              <tr>
-                <th>Size</th>
-                <th class="text-end">MT</th>
-                <th class="text-end">Share</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for r in prod_by_size %}
+      <div class="dash-card-body kam-section-no-padding">
+        {% if prod_by_size %}
+          <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+              <thead>
                 <tr>
-                  <td>{{ r.size|default:"—" }}</td>
-                  <td class="text-end kam-table-strong">{{ r.mt|default:0|floatformat:2 }}</td>
-                  <td class="text-end">
-                    <div class="mix-share-wrap">
-                      <div class="mix-bar">
-                        <div class="mix-bar-fill mix-size js-mix-bar" data-pct="{{ r.pct|default_if_none:0 }}"></div>
-                      </div>
-                      <span class="mix-pct">{{ r.pct|default:"—" }}%</span>
-                    </div>
-                  </td>
+                  <th>Size</th>
+                  <th class="text-end">Sales MT</th>
+                  <th class="text-end">Share</th>
                 </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="dash-empty">No size data for this period.</div>
-      {% endif %}
-    </div>
-  </div>
+              </thead>
 
-  <div class="trend-card mb-4">
-    <div class="dash-card-header">
-      <div>
-        <div class="dash-card-title">
-          <i class="fas fa-chart-line"></i>4-Week Trend
-        </div>
-        <div class="trend-note">Last 4 completed weeks.</div>
-      </div>
-    </div>
-
-    {% if trend_rows %}
-      <div class="table-responsive">
-        <table class="table table-sm align-middle mb-0">
-          <thead>
-            <tr>
-              <th>Week</th>
-              <th class="text-end">Sales (MT)</th>
-              <th class="text-end">Visits</th>
-              <th class="text-end">Calls</th>
-              <th class="text-end">Collections (₹)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in trend_rows %}
-              <tr>
-                <td><span class="kam-table-strong">{{ row.week }}</span></td>
-                <td class="text-end">{{ row.sales_mt|default:0|floatformat:2 }}</td>
-                <td class="text-end">{{ row.visits|default:0 }}</td>
-                <td class="text-end">{{ row.calls|default:0 }}</td>
-                <td class="text-end">₹ {{ row.collections|default:0|floatformat:0|intcomma }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <div class="dash-empty">No trend data available.</div>
-    {% endif %}
-  </div>
-
-  <div class="dash-card">
-    <div class="dash-card-header">
-      <div class="dash-card-title">
-        <i class="fas fa-bolt"></i>Quick Actions
-      </div>
-    </div>
-
-    <div class="dash-card-body">
-      <div class="quick-actions">
-        <a href="{% url 'kam:plan' %}" class="btn btn-outline-secondary btn-sm">Plan Visit</a>
-        <a href="{% url 'kam:visits' %}" class="btn btn-outline-secondary btn-sm">Post Visit</a>
-        <a href="{% url 'kam:call_new' %}" class="btn btn-outline-secondary btn-sm">Log Call</a>
-        <a href="{% url 'kam:collection_new' %}" class="btn btn-outline-secondary btn-sm">Add Collection</a>
-        <a href="{% url 'kam:customers' %}" class="btn btn-outline-secondary btn-sm">Customer 360</a>
-        <a href="{% url 'kam:collections_plan' %}" class="btn btn-outline-success btn-sm">Collection Tracking</a>
-
-        {% if can_choose_kam %}
-          <a href="{% url 'kam:manager_kpis' %}" class="btn btn-primary btn-sm">Manager KPIs</a>
+              <tbody>
+                {% for row in prod_by_size %}
+                  <tr>
+                    <td class="kam-table-strong">{{ row.size|default:"-" }}</td>
+                    <td class="text-end">{{ row.mt|default:0|floatformat:2 }}</td>
+                    <td class="text-end">
+                      <div class="mix-share-wrap">
+                        <div class="mix-bar">
+                          <div class="mix-bar-fill mix-size" data-pct="{{ row.pct|default:0 }}"></div>
+                        </div>
+                        <span class="mix-pct">{{ row.pct|default:0|floatformat:1 }}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="dash-empty">No size-wise sales found.</div>
         {% endif %}
       </div>
     </div>
@@ -1063,205 +1428,203 @@
 
 {% block extra_js %}
 <script>
-(function () {
-  function pad(n) {
-    return String(n).padStart(2, "0");
-  }
+  function readJsonScript(id) {
+    const el = document.getElementById(id);
 
-  function fmt(d) {
-    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
-  }
-
-  function clampPct(v) {
-    var n = parseFloat(v);
-    return Number.isNaN(n) ? 0 : Math.max(0, Math.min(100, n));
-  }
-
-  window.applyQuickRange = function(val) {
-    if (!val) return;
-
-    var today = new Date();
-    var y = today.getFullYear();
-    var m = today.getMonth();
-    var d = today.getDate();
-    var from;
-    var to;
-
-    if (val === "this_month") {
-      from = new Date(y, m, 1);
-      to = new Date(y, m + 1, 0);
-    } else if (val === "last_month") {
-      from = new Date(y, m - 1, 1);
-      to = new Date(y, m, 0);
-    } else if (val === "this_week") {
-      var dow = (today.getDay() + 6) % 7;
-      from = new Date(y, m, d - dow);
-      to = new Date(y, m, d - dow + 6);
-    } else if (val === "last_7") {
-      from = new Date(y, m, d - 6);
-      to = today;
-    } else if (val === "last_30") {
-      from = new Date(y, m, d - 29);
-      to = today;
-    } else if (val === "last_90") {
-      from = new Date(y, m, d - 89);
-      to = today;
-    } else if (val === "this_fy") {
-      var fs = m >= 3 ? y : y - 1;
-      from = new Date(fs, 3, 1);
-      to = new Date(fs + 1, 2, 31);
-    } else if (val === "last_fy") {
-      var lfs = (m >= 3 ? y : y - 1) - 1;
-      from = new Date(lfs, 3, 1);
-      to = new Date(lfs + 1, 2, 31);
+    if (!el) {
+      return null;
     }
-
-    if (from && to) {
-      document.getElementById("filterFrom").value = fmt(from);
-      document.getElementById("filterTo").value = fmt(to);
-      document.getElementById("kamFilterForm").submit();
-    }
-  };
-
-  document.querySelectorAll(".js-mix-bar").forEach(function(el) {
-    el.style.width = clampPct(el.dataset.pct) + "%";
-  });
-
-  function safeJsonScript(id) {
-    var el = document.getElementById(id);
-    if (!el) return null;
 
     try {
       return JSON.parse(el.textContent);
-    } catch (_) {
+    } catch (err) {
       return null;
     }
   }
 
-  var leadData = safeJsonScript("leadAnalysisData");
-  var leadCanvas = document.getElementById("chartLeadAnalysis");
+  function chartCanvas(id) {
+    return document.getElementById(id);
+  }
 
-  if (leadData && leadCanvas) {
-    var total = Number(leadData.total || 0);
-    var converted = Number(leadData.converted || 0);
+  function makeChart(id, type, labels, values, label) {
+    const canvas = chartCanvas(id);
 
-    new Chart(leadCanvas, {
-      type: "doughnut",
+    if (!canvas) {
+      return null;
+    }
+
+    return new Chart(canvas, {
+      type: type,
       data: {
-        labels: ["Won", "Open / Other"],
+        labels: labels || [],
         datasets: [{
-          data: [converted, Math.max(total - converted, 0)],
-          backgroundColor: ["rgba(34,197,94,.82)", "rgba(148,163,184,.45)"],
-          borderColor: ["rgb(34,197,94)", "rgb(148,163,184)"],
-          borderWidth: 2,
-          hoverOffset: 4
+          label: label || "",
+          data: values || [],
+          tension: 0.35,
+          borderWidth: 2
         }]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        cutout: "66%",
+        cutout: type === "doughnut" ? "68%" : undefined,
         plugins: {
           legend: {
-            position: "right",
-            labels: {
-              font: { size: 11 },
-              boxWidth: 12
-            }
-          },
-          tooltip: {
-            callbacks: {
-              label: function(ctx) {
-                var pct = total > 0 ? ((ctx.raw / total) * 100).toFixed(1) : "0.0";
-                return " " + ctx.label + ": " + ctx.raw + " (" + pct + "%)";
-              }
-            }
-          }
-        }
-      }
-    });
-  }
-
-  var collData = safeJsonScript("collectionAnalysisData");
-  var collCanvas = document.getElementById("chartCollectionAnalysis");
-
-  if (collData && collCanvas) {
-    var overdue = Number(collData.overdue || 0);
-    var collected = Number(collData.actual || 0);
-    var pending = Number(collData.pending || Math.max(overdue - collected, 0));
-
-    new Chart(collCanvas, {
-      type: "bar",
-      data: {
-        labels: ["Collection Overview"],
-        datasets: [
-          {
-            label: "Overdue",
-            data: [overdue],
-            backgroundColor: "rgba(220,38,38,.72)",
-            borderColor: "rgb(220,38,38)",
-            borderWidth: 1,
-            borderRadius: 5
-          },
-          {
-            label: "Collected",
-            data: [collected],
-            backgroundColor: "rgba(22,163,74,.75)",
-            borderColor: "rgb(22,163,74)",
-            borderWidth: 1,
-            borderRadius: 5
-          },
-          {
-            label: "Pending",
-            data: [pending],
-            backgroundColor: "rgba(217,119,6,.72)",
-            borderColor: "rgb(217,119,6)",
-            borderWidth: 1,
-            borderRadius: 5
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            position: "top",
-            labels: {
-              font: { size: 11 },
-              boxWidth: 12
-            }
-          },
-          tooltip: {
-            callbacks: {
-              label: function(ctx) {
-                return " " + ctx.dataset.label + ": ₹" + Number(ctx.raw).toLocaleString("en-IN");
-              }
-            }
+            display: type === "pie" || type === "doughnut",
+            position: "bottom"
           }
         },
-        scales: {
-          x: { grid: { display: false } },
+        scales: type === "pie" || type === "doughnut" ? {} : {
           y: {
-            beginAtZero: true,
-            grid: { color: "rgba(0,0,0,.04)" },
-            ticks: {
-              font: { size: 10 },
-              callback: function(v) {
-                if (v >= 10000000) return "₹" + (v / 10000000).toFixed(1) + "Cr";
-                if (v >= 100000) return "₹" + (v / 100000).toFixed(1) + "L";
-                if (v >= 1000) return "₹" + (v / 1000).toFixed(0) + "k";
-                return "₹" + v;
-              }
-            }
+            beginAtZero: true
           }
         }
       }
     });
   }
-}());
-</script>
 
-{{ lead_analysis_data|default:"null"|json_script:"leadAnalysisData" }}
-{{ collection_analysis_data|default:"null"|json_script:"collectionAnalysisData" }}
+  function numberValue(value) {
+    const parsed = Number(value || 0);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  document.querySelectorAll(".mix-bar-fill[data-pct]").forEach(function (el) {
+    const pct = Math.max(0, Math.min(100, numberValue(el.dataset.pct)));
+    el.style.width = pct + "%";
+  });
+
+  const leadAnalysisData = {
+    total: numberValue("{{ lead_analysis_data.total|default:0 }}"),
+    converted: numberValue("{{ lead_analysis_data.converted|default:0 }}")
+  };
+
+  const collectionAnalysisData = {
+    planned: numberValue("{{ collection_analysis_data.planned|default:0 }}"),
+    actual: numberValue("{{ collection_analysis_data.actual|default:0 }}"),
+    overdue: numberValue("{{ collection_analysis_data.overdue|default:0 }}"),
+    pending: numberValue("{{ collection_analysis_data.pending|default:0 }}")
+  };
+
+  makeChart(
+    "chartLeadAnalysis",
+    "doughnut",
+    ["Won", "Pending / Lost"],
+    [
+      leadAnalysisData.converted,
+      Math.max(leadAnalysisData.total - leadAnalysisData.converted, 0)
+    ],
+    "Leads"
+  );
+
+  makeChart(
+    "chartCollectionAnalysis",
+    "doughnut",
+    ["Collected", "Pending", "Overdue"],
+    [
+      collectionAnalysisData.actual,
+      collectionAnalysisData.pending,
+      collectionAnalysisData.overdue
+    ],
+    "Collections"
+  );
+
+  const dashboardReportCharts = readJsonScript("dashboardReportCharts");
+
+  if (dashboardReportCharts) {
+    makeChart(
+      "chartMonthlySalesTrend",
+      "line",
+      dashboardReportCharts.monthly_sales_trend.labels,
+      dashboardReportCharts.monthly_sales_trend.values,
+      "Sales MT"
+    );
+
+    makeChart(
+      "chartVisitsCompleted",
+      "bar",
+      dashboardReportCharts.visits_completed.labels,
+      dashboardReportCharts.visits_completed.values,
+      "Visits"
+    );
+
+    makeChart(
+      "chartCallsCompleted",
+      "bar",
+      dashboardReportCharts.calls_completed.labels,
+      dashboardReportCharts.calls_completed.values,
+      "Calls"
+    );
+
+    makeChart(
+      "chartLeadConversion",
+      "pie",
+      dashboardReportCharts.lead_conversion.labels,
+      dashboardReportCharts.lead_conversion.values,
+      "Leads"
+    );
+
+    makeChart(
+      "chartCollectionsReport",
+      "pie",
+      dashboardReportCharts.collections.labels,
+      dashboardReportCharts.collections.values,
+      "Collections"
+    );
+
+    makeChart(
+      "chartVisitDistribution",
+      "pie",
+      dashboardReportCharts.customer_visit_distribution.labels,
+      dashboardReportCharts.customer_visit_distribution.values,
+      "Visit Distribution"
+    );
+
+    makeChart(
+      "chartVisitApprovalStatus",
+      "pie",
+      dashboardReportCharts.visit_approval_status.labels,
+      dashboardReportCharts.visit_approval_status.values,
+      "Visit Status"
+    );
+
+    makeChart(
+      "chartPerformanceScore",
+      "doughnut",
+      dashboardReportCharts.performance_score.labels,
+      dashboardReportCharts.performance_score.values,
+      "Performance"
+    );
+
+    makeChart(
+      "chartTargetAchievement",
+      "pie",
+      dashboardReportCharts.target_achievement.labels,
+      dashboardReportCharts.target_achievement.values,
+      "Target Achievement"
+    );
+
+    makeChart(
+      "chartMonthlyComparison",
+      "bar",
+      dashboardReportCharts.monthly_comparison.labels,
+      dashboardReportCharts.monthly_comparison.values,
+      "Monthly Comparison"
+    );
+  }
+
+  document.getElementById("quickRange")?.addEventListener("change", function () {
+    const fromInput = document.getElementById("filterFrom");
+    const toInput = document.getElementById("filterTo");
+
+    if (this.value) {
+      if (fromInput) {
+        fromInput.value = "";
+      }
+
+      if (toInput) {
+        toInput.value = "";
+      }
+    }
+  });
+</script>
 {% endblock %}

@@ -2,154 +2,341 @@
 {% load static %}
 
 {% block title %}Plan Visit{% endblock %}
+{% block breadcrumb %}KAM / Plan Visit{% endblock %}
 
-{% block content %}
+{% block head_extra %}
 <style>
-  /* ─── General ─────────────────────────────────────────────────────── */
-  .kam-form .form-label {
+  .kam-plan-page {
+    max-width: 100%;
+  }
+
+  .kam-plan-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 22px;
+  }
+
+  .kam-plan-title {
+    margin: 0;
+    font-size: 34px;
+    font-weight: 500;
+    color: #07172f;
+  }
+
+  .kam-plan-subtitle {
+    margin-top: 6px;
+    font-size: 17px;
+    color: #607086;
+  }
+
+  .kam-header-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .kam-btn-soft {
+    border: 1px solid #bcd2ff;
+    color: #477cff;
+    background: #f7faff;
+    border-radius: 9px;
+    padding: 10px 16px;
     font-weight: 600;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
   }
 
-  .kam-remarks-compact {
-    resize: vertical;
-    min-height: 38px;
-    height: 38px;
-    padding-top: 6px;
-    padding-bottom: 6px;
-  }
-
-  /* ─── Scroll-locked customer table ────────────────────────────────── */
-  .kam-scroll-table {
-    max-height: 520px;
-    overflow: auto;
-    border: 1px solid rgba(0, 0, 0, .08);
-    border-radius: 8px;
+  .kam-btn-outline {
+    border: 1px solid #718096;
+    color: #4a5568;
     background: #fff;
+    border-radius: 9px;
+    padding: 10px 16px;
+    font-weight: 600;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
   }
 
-  .kam-scroll-table table {
+  .kam-tabs {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid #d9dee8;
     margin-bottom: 0;
   }
 
-  .kam-scroll-table thead th {
-    position: sticky;
-    top: 0;
-    z-index: 5;
-    background: #f8f9fa;
-    vertical-align: middle;
-    white-space: nowrap;
+  .kam-tabs .nav-link {
+    border: 0;
+    border-radius: 0;
+    padding: 14px 20px;
+    font-weight: 700;
+    color: #5f6f83;
+    background: transparent;
   }
 
-  .table-sm > :not(caption) > * > * {
-    padding: .45rem .55rem;
+  .kam-tabs .nav-link.active {
+    color: #477cff;
+    background: #fff;
+    border: 1px solid #d9dee8;
+    border-bottom-color: #fff;
+    margin-bottom: -1px;
   }
 
-  /* ─── Hint / section cards ────────────────────────────────────────── */
-  .kam-hint {
-    background: #f8f9fa;
-    border: 1px dashed rgba(0, 0, 0, .2);
+  .kam-tab-panel {
+    background: #fff;
+    border: 1px solid #d9dee8;
+    border-top: 0;
+    padding: 28px 20px 20px;
+  }
+
+  .kam-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1.5fr;
+    gap: 22px;
+    align-items: end;
+    margin-bottom: 28px;
+  }
+
+  .kam-field {
+    width: 100%;
+  }
+
+  .kam-label {
+    display: block;
+    margin-bottom: 8px;
+    color: #162033;
+    font-size: 15px;
+    font-weight: 700;
+  }
+
+  .kam-label .required {
+    color: #ef4444;
+  }
+
+  .kam-field input,
+  .kam-field select,
+  .kam-field textarea {
+    width: 100%;
+    min-height: 42px;
+    border: 1px solid #a8b0bd;
+    border-radius: 0;
+    background: #fff;
+    color: #1f2937;
+    font-size: 16px;
+    padding: 8px 10px;
+    box-sizing: border-box;
+  }
+
+  .kam-field textarea {
+    min-height: 64px;
+    resize: vertical;
+  }
+
+  .kam-help {
+    font-size: 12px;
+    color: #718096;
+    margin-top: 5px;
+  }
+
+  .kam-error {
+    color: #dc2626;
+    font-size: 12px;
+    margin-top: 5px;
+  }
+
+  .kam-info-alert {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    color: #1e40af;
     border-radius: 8px;
-    padding: 16px;
-    color: rgba(0, 0, 0, .65);
+    padding: 11px 13px;
+    font-size: 13px;
+    margin-bottom: 18px;
+  }
+
+  .kam-warning-alert {
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    color: #9a3412;
+    border-radius: 8px;
+    padding: 11px 13px;
+    font-size: 13px;
+    margin-bottom: 18px;
   }
 
   .kam-section-card {
-    border: 1px solid rgba(0, 0, 0, .08);
-    border-radius: 10px;
+    border: 1px solid #e7eaf0;
+    border-radius: 12px;
     background: #fff;
+    box-shadow: 0 8px 18px rgba(15, 23, 42, .06);
+    overflow: hidden;
+    margin-bottom: 28px;
   }
 
-  .kam-section-card .card-body {
-    padding: 1rem;
+  .kam-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 20px 24px;
+    border-bottom: 1px solid #edf0f4;
+    flex-wrap: wrap;
   }
 
-  /* ─── Global date window banner ─────────────────────────────────── */
-  .kam-global-window {
-    border: 1px solid rgba(13, 110, 253, .18);
-    background: rgba(13, 110, 253, .04);
-    border-radius: 8px;
-    padding: .75rem .9rem;
+  .kam-section-title {
+    font-size: 18px;
+    font-weight: 800;
+    color: #020617;
+    margin: 0;
   }
 
-  .kam-global-window .kam-window-label {
-    font-size: .875rem;
-    color: #495057;
-  }
-
-  .kam-global-window .kam-window-value {
+  .kam-section-subtitle {
+    color: #64748b;
+    font-size: 16px;
     font-weight: 600;
-    color: #212529;
+    margin-top: 4px;
   }
 
-  /* ─── Table input widths ─────────────────────────────────────────── */
-  .kam-table-input {
-    min-width: 140px;
-  }
-
-  .kam-table-input-wide {
-    min-width: 220px;
-  }
-
-  .kam-table-input-num {
-    min-width: 160px;
-    text-align: right;
-  }
-
-  .kam-muted-note {
-    font-size: .875rem;
-    color: #6c757d;
-  }
-
-  /* ─── Status badges ──────────────────────────────────────────────── */
-  .status-badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 999px;
-    font-size: 11px;
+  .kam-add-line-btn {
+    border: 1px solid #bcd2ff;
+    background: #fff;
+    color: #477cff;
+    border-radius: 9px;
+    padding: 10px 16px;
     font-weight: 700;
-    text-transform: uppercase;
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
   }
 
-  .status-badge-draft {
-    background: #f3f4f6;
-    color: #6b7280;
+  .kam-table-wrap {
+    width: 100%;
+    overflow-x: auto;
   }
 
-  .status-badge-pending {
-    background: #fef3c7;
-    color: #d97706;
+  .kam-lines-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
   }
 
-  .status-badge-approved {
-    background: #dcfce7;
-    color: #16a34a;
+  .kam-lines-table th {
+    background: #f8fafc;
+    padding: 12px 12px;
+    border-bottom: 1px solid #e7eaf0;
+    color: #020617;
+    font-size: 16px;
+    font-weight: 800;
+    white-space: nowrap;
+    vertical-align: middle;
   }
 
-  .status-badge-rejected {
-    background: #fee2e2;
-    color: #dc2626;
+  .kam-lines-table td {
+    padding: 10px 12px;
+    vertical-align: middle;
   }
 
-  /* ─── Manual-customer toggle UI ─────────────────────────────────── */
-  .cust-mode-toggle .btn-check:checked + .btn-outline-primary {
-    background: #0d6efd;
+  .kam-line-input {
+    width: 100%;
+    height: 48px;
+    border: 1px solid #d9dee8;
+    border-radius: 14px;
+    padding: 10px 16px;
+    font-size: 16px;
+    color: #1f2937;
+    box-sizing: border-box;
+  }
+
+  .kam-line-input::placeholder {
+    color: #97a1b3;
+  }
+
+  .kam-remove-line {
+    width: 44px;
+    height: 44px;
+    border: 1px solid #fb7185;
+    color: #e11d48;
+    background: #fff;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .kam-action-row {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-top: 20px;
+  }
+
+  .kam-save-btn {
+    min-width: 160px;
+    height: 48px;
+    border: 1px solid #718096;
+    color: #5f6f83;
+    background: #fff;
+    border-radius: 14px;
+    font-size: 16px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+  }
+
+  .kam-submit-btn {
+    min-width: 215px;
+    height: 48px;
+    border: 0;
     color: #fff;
+    background: linear-gradient(135deg, #477cff, #4f83ff);
+    border-radius: 14px;
+    font-size: 16px;
+    font-weight: 800;
+    box-shadow: 0 8px 18px rgba(71, 124, 255, .28);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
   }
 
-  .cust-mode-toggle .btn-check:checked + .btn-outline-success {
-    background: #198754;
-    color: #fff;
+  .kam-manager-note {
+    color: #607086;
+    font-size: 17px;
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+  }
+
+  .kam-customer-mode {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+
+  .kam-customer-mode .btn {
+    border-radius: 8px;
+    font-weight: 700;
   }
 
   .manual-preview-box {
     display: none;
     background: #ecfdf5;
     border: 1px solid #6ee7b7;
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 12px;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 13px;
     color: #065f46;
-    margin-top: 6px;
+    margin-top: 8px;
   }
 
   .manual-preview-box.visible {
@@ -162,1435 +349,721 @@
     border: 1px dashed #ffc107;
     background: #fff8e1;
     color: #7a5b00;
-    border-radius: 6px;
+    border-radius: 8px;
     padding: 8px 10px;
+    font-size: 13px;
+    margin-top: 8px;
+  }
+
+  .kam-history-card {
+    margin-top: 28px;
+    border: 1px solid #d9dee8;
+    border-radius: 12px;
+    background: #fff;
+    overflow: hidden;
+  }
+
+  .kam-history-head {
+    padding: 16px 20px;
+    border-bottom: 1px solid #edf0f4;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .kam-history-title {
+    font-weight: 800;
+    color: #020617;
+    margin: 0;
+  }
+
+  .kam-history-table th {
     font-size: 12px;
-    margin-top: 6px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: #64748b;
+    background: #f8fafc;
+    white-space: nowrap;
+  }
+
+  .kam-history-table td {
+    font-size: 13px;
+    vertical-align: middle;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+
+  .status-pill.pending {
+    background: #fffbeb;
+    color: #d97706;
+  }
+
+  .status-pill.approved {
+    background: #ecfdf5;
+    color: #059669;
+  }
+
+  .status-pill.completed {
+    background: #eff6ff;
+    color: #2563eb;
+  }
+
+  .status-pill.rejected {
+    background: #fef2f2;
+    color: #dc2626;
+  }
+
+  .status-pill.draft {
+    background: #f3f4f6;
+    color: #6b7280;
+  }
+
+  @media (max-width: 1100px) {
+    .kam-form-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .kam-form-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .kam-plan-title {
+      font-size: 28px;
+    }
+
+    .kam-action-row {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .kam-save-btn,
+    .kam-submit-btn {
+      width: 100%;
+    }
   }
 </style>
 
-<div class="container-fluid kam-form">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+{% endblock %}
 
-  <!-- ── Page header ──────────────────────────────────────────────── -->
-  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+{% block content %}
+<div class="kam-plan-page">
+
+  <div class="kam-plan-header">
     <div>
-      <h3 class="mb-0">{{ page_title|default:"Plan Visit" }}</h3>
-      <div class="kam-muted-note mt-1">
-        Submit visit plans for manager approval. Any active employee can apply.
+      <h1 class="kam-plan-title">Plan Visit</h1>
+      <div class="kam-plan-subtitle">
+        Create a visit plan for your assigned customers or add a new customer safely.
       </div>
     </div>
 
-    <div class="d-flex align-items-center gap-2 flex-wrap">
-      <a class="btn btn-sm btn-outline-primary" href="{% url 'kam:single_visit_list' %}">
-        My Visits
+    <div class="kam-header-actions">
+      <a href="{% url 'kam:visit_batches' %}" class="kam-btn-outline">
+        <i class="fas fa-clock-rotate-left"></i>
+        Visit History
       </a>
-      <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:visit_batches' %}">
-        View Batches
+
+      <a href="{% url 'kam:dashboard' %}" class="kam-btn-soft">
+        <i class="fas fa-arrow-left"></i>
+        Dashboard
       </a>
     </div>
   </div>
 
-  <!-- Flash messages are rendered by base.html (.page-messages). No duplicate block here. -->
-
-  <!-- ── Migration warning ────────────────────────────────────────── -->
-  {% if not visitplan_schema_ready %}
-    <div class="alert alert-warning">
-      <strong>Database migration required.</strong>
-      Run: <code>python manage.py makemigrations &amp;&amp; python manage.py migrate</code>
+  {% if messages %}
+    <div class="mb-3">
+      {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show mb-2" role="alert">
+          {{ message }}
+          <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+      {% endfor %}
     </div>
   {% endif %}
 
-  <!-- ── Tabs ─────────────────────────────────────────────────────── -->
-  <ul class="nav nav-tabs" id="planTabs" role="tablist">
+  <ul class="nav kam-tabs" role="tablist">
     <li class="nav-item" role="presentation">
-      <a class="nav-link active"
-         id="single-tab"
-         data-toggle="tab"
-         data-bs-toggle="tab"
-         href="#single"
-         role="tab"
-         aria-controls="single"
-         aria-selected="true">
+      <button class="nav-link active"
+              id="singleVisitTab"
+              data-bs-toggle="tab"
+              data-bs-target="#singleVisitPanel"
+              type="button"
+              role="tab"
+              aria-controls="singleVisitPanel"
+              aria-selected="true">
         Single Visit
-      </a>
+      </button>
     </li>
 
-    <li class="nav-item" role="presentation">
-      <a class="nav-link"
-         id="batch-tab"
-         data-toggle="tab"
-         data-bs-toggle="tab"
-         href="#batch"
-         role="tab"
-         aria-controls="batch"
-         aria-selected="false">
-        Batch Visit
-      </a>
-    </li>
+    {% if batch_form %}
+      <li class="nav-item" role="presentation">
+        <button class="nav-link"
+                id="multiVisitTab"
+                data-bs-toggle="tab"
+                data-bs-target="#multiVisitPanel"
+                type="button"
+                role="tab"
+                aria-controls="multiVisitPanel"
+                aria-selected="false">
+          Multi Visit
+        </button>
+      </li>
+    {% endif %}
   </ul>
 
-  <div class="tab-content border border-top-0 p-3 bg-white" id="planTabsContent">
+  <div class="tab-content">
 
-    <!-- ═══════════════════════════════════════════════════════════════
-         TAB 1 — SINGLE VISIT
-    ════════════════════════════════════════════════════════════════ -->
-    <div class="tab-pane fade show active" id="single" role="tabpanel" aria-labelledby="single-tab">
+    <div class="tab-pane fade show active kam-tab-panel"
+         id="singleVisitPanel"
+         role="tabpanel"
+         aria-labelledby="singleVisitTab">
 
-      <!-- Reporting officer notice -->
-      <div class="row mb-3 mt-1">
-        <div class="col-12">
-          <div class="alert alert-info d-flex align-items-center gap-2 py-2 mb-0" role="alert">
-            <i class="fas fa-info-circle"></i>
-            <div class="small">
-              Your <strong>Reporting Manager</strong> is assigned automatically from your employee profile.
-              No manual manager selection required.
-            </div>
-          </div>
-        </div>
+      <div class="kam-info-alert">
+        <i class="fas fa-circle-info me-1"></i>
+        Customer dropdown shows only customers assigned to the logged-in KAM.
+        For a new customer, choose <strong>New Customer</strong>. On successful save, the customer is created and becomes available in future existing-customer dropdowns.
       </div>
 
-      <form method="post" id="singleForm" novalidate>
+      <form method="post" novalidate id="singleVisitForm">
         {% csrf_token %}
-        <input type="hidden" name="mode" value="single" />
+        <input type="hidden" name="mode" value="single">
+        <input type="hidden" name="form_kind" value="single">
 
         {% if single_form.non_field_errors %}
           <div class="alert alert-danger">
-            {% for err in single_form.non_field_errors %}
-              <div>{{ err }}</div>
+            {% for error in single_form.non_field_errors %}
+              <div>{{ error }}</div>
             {% endfor %}
           </div>
         {% endif %}
 
-        <div class="row g-3 align-items-start">
+        <div class="kam-form-grid">
 
-          <!-- Visit Category -->
-          <div class="col-12 col-md-4">
-            <label class="form-label mb-1" for="{{ single_form.visit_category.id_for_label }}">
-              Visit Category <span class="text-danger">*</span>
+          <div class="kam-field">
+            <label class="kam-label" for="{{ single_form.visit_category.id_for_label }}">
+              Visit Category <span class="required">*</span>
             </label>
             {{ single_form.visit_category }}
             {% if single_form.visit_category.errors %}
-              <div class="text-danger small mt-1">{{ single_form.visit_category.errors }}</div>
+              <div class="kam-error">{{ single_form.visit_category.errors|join:", " }}</div>
             {% endif %}
           </div>
 
-          <!-- Visit Date -->
-          <div class="col-12 col-md-4">
-            <label class="form-label mb-1" for="{{ single_form.visit_date.id_for_label }}">
-              Visit Date <span class="text-danger">*</span>
+          <div class="kam-field">
+            <label class="kam-label" for="{{ single_form.visit_date.id_for_label }}">
+              Visit Date <span class="required">*</span>
             </label>
             {{ single_form.visit_date }}
             {% if single_form.visit_date.errors %}
-              <div class="text-danger small mt-1">{{ single_form.visit_date.errors }}</div>
+              <div class="kam-error">{{ single_form.visit_date.errors|join:", " }}</div>
             {% endif %}
           </div>
 
-          <!-- Customer Block -->
-          <div class="col-12 col-md-6" id="singleCustomerWrap">
-            <label class="form-label mb-1">
-              Customer <span class="text-danger">*</span>
+          <div class="kam-field">
+            <label class="kam-label" for="{{ single_form.location.id_for_label }}">
+              Location <span class="required">*</span>
+            </label>
+            {{ single_form.location }}
+            {% if single_form.location.errors %}
+              <div class="kam-error">{{ single_form.location.errors|join:", " }}</div>
+            {% endif %}
+          </div>
+
+          <div class="kam-field" id="customerModeWrap">
+            <label class="kam-label">
+              Customer <span class="required">*</span>
             </label>
 
-            <!-- Toggle: Select existing vs Enter new -->
-            <div class="btn-group btn-group-sm mb-2 cust-mode-toggle" role="group" id="singleCustToggleGroup">
-              <input type="radio"
-                     class="btn-check"
-                     name="single_cust_input_mode"
-                     id="singleCustModeSelect"
-                     value="select"
-                     checked>
-              <label class="btn btn-outline-primary" for="singleCustModeSelect">
-                <i class="fas fa-list me-1"></i>Select Existing Customer
-              </label>
-
-              <input type="radio"
-                     class="btn-check"
-                     name="single_cust_input_mode"
-                     id="singleCustModeManual"
-                     value="manual">
-              <label class="btn btn-outline-success" for="singleCustModeManual">
-                <i class="fas fa-pen me-1"></i>Enter New Customer
-              </label>
+            <div class="kam-customer-mode">
+              <button type="button" class="btn btn-sm btn-primary" id="existingCustomerBtn">
+                Existing Customer
+              </button>
+              <button type="button" class="btn btn-sm btn-outline-primary" id="newCustomerBtn">
+                New Customer
+              </button>
             </div>
 
-            <!-- Existing dropdown -->
-            <div id="singleCustDropdownWrap">
+            <div id="existingCustomerWrap">
               {{ single_form.customer }}
-
               {% if single_form.customer.errors %}
-                <div class="text-danger small mt-1">{{ single_form.customer.errors }}</div>
+                <div class="kam-error">{{ single_form.customer.errors|join:", " }}</div>
               {% endif %}
 
               {% if single_form.fields.customer.queryset.count == 0 %}
                 <div class="customer-empty-warning">
-                  No customers are available for your role. Please check customer sync and KAM mapping.
+                  No assigned customers found. Use New Customer or check KAM assignment sync.
                 </div>
               {% endif %}
-
-              <div class="form-text text-muted">
-                Can't find your customer?
-                <a href="#" id="singleSwitchToManual">Enter manually &rarr;</a>
-              </div>
             </div>
 
-            <!-- Manual entry -->
-            <div id="singleCustManualWrap" style="display:none;">
+            <div id="manualCustomerWrap" style="display:none;">
               <input type="text"
-                     id="singleManualCustomerInput"
                      name="manual_customer"
-                     class="form-control form-control-sm"
-                     placeholder="Type new customer name…"
-                     autocomplete="off" />
-
-              <div class="form-text text-muted">
-                A new customer record will be created automatically if this name does not already exist.
-                <a href="#" id="singleSwitchToDropdown">Select from list instead &rarr;</a>
+                     id="manualCustomerInput"
+                     class="form-control"
+                     maxlength="255"
+                     autocomplete="off"
+                     placeholder="Enter new customer name">
+              <div class="kam-help">
+                This customer will be created automatically after successful save and assigned to your KAM mapping.
               </div>
-
-              <div class="manual-preview-box" id="singleManualPreview">
+              <div class="manual-preview-box" id="manualCustomerPreview">
                 <i class="fas fa-check-circle"></i>
-                Customer "<strong id="singleManualCustName"></strong>" will be created on save.
+                <span id="manualCustomerPreviewText"></span>
               </div>
             </div>
           </div>
-          <!-- End Customer Block -->
 
-          <!-- Counterparty for non-customer categories -->
-          <div class="col-12 col-md-6" id="singleCounterpartyWrap" style="display:none;">
-            <label class="form-label mb-1" for="{{ single_form.counterparty_name.id_for_label }}">
-              Vendor / Supplier / Warehouse Name <span class="text-danger">*</span>
+          <div class="kam-field" id="counterpartyWrap" style="display:none;">
+            <label class="kam-label" for="{{ single_form.counterparty_name.id_for_label }}">
+              Vendor / Supplier / Warehouse Name <span class="required">*</span>
             </label>
             {{ single_form.counterparty_name }}
             {% if single_form.counterparty_name.errors %}
-              <div class="text-danger small mt-1">{{ single_form.counterparty_name.errors }}</div>
-            {% endif %}
-          </div>
-
-          <!-- Location -->
-          <div class="col-12 col-md-6">
-            <label class="form-label mb-1" for="{{ single_form.location.id_for_label }}">
-              Location <span class="text-danger">*</span>
-            </label>
-            {{ single_form.location }}
-            {% if single_form.location.errors %}
-              <div class="text-danger small mt-1">{{ single_form.location.errors }}</div>
-            {% endif %}
-          </div>
-
-          <!-- Purpose -->
-          <div class="col-12 col-md-6">
-            <label class="form-label mb-1" for="{{ single_form.purpose.id_for_label }}">
-              Purpose / Remarks <span class="text-danger">*</span>
-            </label>
-            {{ single_form.purpose }}
-            {% if single_form.purpose.errors %}
-              <div class="text-danger small mt-1">{{ single_form.purpose.errors }}</div>
+              <div class="kam-error">{{ single_form.counterparty_name.errors|join:", " }}</div>
             {% endif %}
           </div>
 
         </div>
 
-        <div class="d-flex gap-2 mt-4 flex-wrap align-items-center">
-          <button type="submit"
-                  class="btn btn-outline-secondary"
-                  name="submit_action"
-                  value="save_draft">
-            <i class="fas fa-save me-1"></i> Save Draft
+        <div class="kam-field">
+          <label class="kam-label" for="{{ single_form.purpose.id_for_label }}">
+            Purpose of Visit <span class="required">*</span>
+          </label>
+          {{ single_form.purpose }}
+          {% if single_form.purpose.errors %}
+            <div class="kam-error">{{ single_form.purpose.errors|join:", " }}</div>
+          {% endif %}
+          <div class="kam-help">
+            Purpose of Visit is mandatory before saving or submitting to manager.
+          </div>
+        </div>
+
+        <div class="kam-action-row">
+          <button type="submit" name="action" value="draft" class="kam-save-btn">
+            <i class="fas fa-save"></i>
+            Save Draft
           </button>
 
-          <button type="submit"
-                  class="btn btn-primary"
-                  name="submit_action"
-                  value="submit_to_manager">
-            <i class="fas fa-paper-plane me-1"></i> Submit to Manager
+          <button type="submit" name="action" value="submit" class="kam-submit-btn">
+            <i class="fas fa-paper-plane"></i>
+            Submit to Manager
           </button>
 
-          <span class="kam-muted-note ms-2">
-            <i class="fas fa-lock me-1"></i> Manager is auto-assigned from your reporting officer
-          </span>
+          <div class="kam-manager-note">
+            <i class="fas fa-envelope"></i>
+            Manager approval mail is sent immediately on submit.
+          </div>
         </div>
       </form>
     </div>
-    <!-- /single tab pane -->
 
+    {% if batch_form %}
+      <div class="tab-pane fade kam-tab-panel"
+           id="multiVisitPanel"
+           role="tabpanel"
+           aria-labelledby="multiVisitTab">
 
-    <!-- ═══════════════════════════════════════════════════════════════
-         TAB 2 — BATCH VISIT
-    ════════════════════════════════════════════════════════════════ -->
-    <div class="tab-pane fade" id="batch" role="tabpanel" aria-labelledby="batch-tab">
-
-      <form method="post" id="batchForm" novalidate>
-        {% csrf_token %}
-        <input type="hidden" name="mode" value="batch" />
-
-        <!-- Top row: Category / From / To / Remarks -->
-        <div class="row g-3 align-items-end mt-1">
-          <div class="col-12 col-lg-3">
-            <label class="form-label mb-1">Visit Category</label>
-            {{ batch_form.visit_category }}
-            {% if batch_form.visit_category.errors %}
-              <div class="text-danger small mt-1">{{ batch_form.visit_category.errors }}</div>
-            {% endif %}
-          </div>
-
-          <div class="col-12 col-md-6 col-lg-3">
-            <label class="form-label mb-1">From Date</label>
-            {{ batch_form.from_date }}
-            {% if batch_form.from_date.errors %}
-              <div class="text-danger small mt-1">{{ batch_form.from_date.errors }}</div>
-            {% endif %}
-          </div>
-
-          <div class="col-12 col-md-6 col-lg-3">
-            <label class="form-label mb-1">To Date</label>
-            {{ batch_form.to_date }}
-            {% if batch_form.to_date.errors %}
-              <div class="text-danger small mt-1">{{ batch_form.to_date.errors }}</div>
-            {% endif %}
-          </div>
-
-          <div class="col-12 col-lg-3">
-            <label class="form-label mb-1">Remarks</label>
-            {{ batch_form.purpose }}
-            {% if batch_form.purpose.errors %}
-              <div class="text-danger small mt-1">{{ batch_form.purpose.errors }}</div>
-            {% endif %}
-          </div>
+        <div class="kam-warning-alert">
+          <i class="fas fa-triangle-exclamation me-1"></i>
+          Existing batch visit workflow is preserved for historical production data.
         </div>
 
-        <!-- Global date window info bar -->
-        <div class="kam-global-window mt-3" id="globalDateInfo">
-          <div class="d-flex flex-wrap align-items-center gap-2">
-            <span class="kam-window-label">Batch date window:</span>
-            <span class="kam-window-value" id="globalDateInfoText">
-              Select From Date and To Date above.
-            </span>
+        <form method="post" novalidate id="batchVisitForm">
+          {% csrf_token %}
+          <input type="hidden" name="mode" value="batch">
+          <input type="hidden" name="form_kind" value="batch">
+
+          {% if batch_form.non_field_errors %}
+            <div class="alert alert-danger">
+              {% for error in batch_form.non_field_errors %}
+                <div>{{ error }}</div>
+              {% endfor %}
+            </div>
+          {% endif %}
+
+          <div class="kam-form-grid">
+
+            <div class="kam-field">
+              <label class="kam-label" for="{{ batch_form.visit_category.id_for_label }}">
+                Visit Category <span class="required">*</span>
+              </label>
+              {{ batch_form.visit_category }}
+              {% if batch_form.visit_category.errors %}
+                <div class="kam-error">{{ batch_form.visit_category.errors|join:", " }}</div>
+              {% endif %}
+            </div>
+
+            <div class="kam-field">
+              <label class="kam-label" for="{{ batch_form.from_date.id_for_label }}">
+                From Date <span class="required">*</span>
+              </label>
+              {{ batch_form.from_date }}
+              {% if batch_form.from_date.errors %}
+                <div class="kam-error">{{ batch_form.from_date.errors|join:", " }}</div>
+              {% endif %}
+            </div>
+
+            <div class="kam-field">
+              <label class="kam-label" for="{{ batch_form.to_date.id_for_label }}">
+                To Date <span class="required">*</span>
+              </label>
+              {{ batch_form.to_date }}
+              {% if batch_form.to_date.errors %}
+                <div class="kam-error">{{ batch_form.to_date.errors|join:", " }}</div>
+              {% endif %}
+            </div>
+
+            <div class="kam-field">
+              <label class="kam-label" for="{{ batch_form.purpose.id_for_label }}">
+                Purpose of Visit <span class="required">*</span>
+              </label>
+              {{ batch_form.purpose }}
+              {% if batch_form.purpose.errors %}
+                <div class="kam-error">{{ batch_form.purpose.errors|join:", " }}</div>
+              {% endif %}
+            </div>
+
           </div>
-        </div>
 
-        <hr class="my-3" />
-
-        <!-- Category hint -->
-        <div id="categoryHint" class="kam-hint">
-          Select a <b>Visit Category</b> above to continue.
-        </div>
-
-        <!-- Customer batch section -->
-        <div id="customerBatchSection" style="display:none;">
-          <div class="kam-section-card">
-            <div class="card-body">
-
-              <!-- Search / filter bar -->
-              <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
-                <div class="d-flex gap-2 flex-wrap">
-                  <input class="form-control form-control-sm"
-                         style="width:260px"
-                         id="custSearch"
-                         placeholder="Search customers (name/code/mobile)" />
-
-                  <select class="form-select form-select-sm" style="width:180px" id="custSource">
-                    <option value="">All Sources</option>
-                    <option value="SHEET">SHEET</option>
-                    <option value="MANUAL">MANUAL</option>
-                  </select>
-
-                  <button type="button" class="btn btn-sm btn-outline-primary" id="btnRefreshCustomers">
-                    <i class="fas fa-sync-alt me-1"></i>Refresh
-                  </button>
+          {% if line_forms %}
+            <div class="kam-section-card">
+              <div class="kam-section-head">
+                <div>
+                  <h2 class="kam-section-title">Visit Lines</h2>
+                  <div class="kam-section-subtitle">Add customer/vendor visit lines for this batch.</div>
                 </div>
 
-                <div class="d-flex gap-2 align-items-center flex-wrap">
-                  <button type="button"
-                          class="btn btn-sm btn-outline-success"
-                          data-toggle="modal"
-                          data-bs-toggle="modal"
-                          data-target="#manualCustomerModal"
-                          data-bs-target="#manualCustomerModal">
-                    + Manual Customer
-                  </button>
-
-                  <span class="badge bg-secondary" id="selCount">0 selected</span>
-                </div>
+                <button type="button" class="kam-add-line-btn" id="addBatchLineBtn">
+                  <i class="fas fa-plus"></i>
+                  Add Line
+                </button>
               </div>
 
-              <div class="small text-muted mb-2">
-                All selected customers will use the global <strong>From Date</strong> and
-                <strong>To Date</strong> shown above.
-              </div>
-
-              <!-- Batch Manual Customer Entry -->
-              <div class="card mb-3 border-success-subtle">
-                <div class="card-header bg-success-subtle d-flex align-items-center justify-content-between py-2">
-                  <span class="fw-semibold text-success-emphasis small">
-                    <i class="fas fa-pen me-1"></i>Add New Customer to Batch (Manual Entry)
-                  </span>
-
-                  <button type="button" class="btn btn-sm btn-outline-success" id="batchAddManualBtn">
-                    <i class="fas fa-plus me-1"></i>Add
-                  </button>
-                </div>
-
-                <div class="card-body py-2">
-                  <div class="row g-2 align-items-end">
-                    <div class="col-12 col-md-5">
-                      <label class="form-label mb-1 small fw-semibold">
-                        Customer Name <span class="text-danger">*</span>
-                      </label>
-                      <input type="text"
-                             id="batchManualCustName"
-                             class="form-control form-control-sm"
-                             placeholder="e.g. ABC New Traders"
-                             autocomplete="off" />
-                    </div>
-
-                    <div class="col-12 col-md-4">
-                      <label class="form-label mb-1 small fw-semibold">Purpose (optional)</label>
-                      <input type="text"
-                             id="batchManualCustPurpose"
-                             class="form-control form-control-sm"
-                             placeholder="Purpose / notes" />
-                    </div>
-
-                    <div class="col-12 col-md-3">
-                      <div class="form-text text-muted mb-0">
-                        Customer is created automatically if the name doesn't exist yet.
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="manual-preview-box mt-2" id="batchManualPreview">
-                    <i class="fas fa-check-circle"></i>
-                    Customer "<strong id="batchManualCustNamePreview"></strong>" will be added to batch.
-                  </div>
-                </div>
-              </div>
-
-              <!-- Customer table -->
-              <div class="kam-scroll-table">
-                <table class="table table-sm table-hover align-middle">
+              <div class="kam-table-wrap">
+                <table class="kam-lines-table">
                   <thead>
                     <tr>
-                      <th style="width:44px;">
-                        <input type="checkbox" id="selectAllCust" />
-                      </th>
-                      <th>Customer</th>
-                      <th style="width:260px;">Purpose (optional)</th>
-                      <th style="width:170px;">Expected Sales (MT)</th>
-                      <th style="width:190px;">Expected Collection (₹)</th>
-                      <th style="width:90px;">Source</th>
+                      <th>#</th>
+                      <th>Customer / Entity</th>
+                      <th>Visit Date</th>
+                      <th>Purpose</th>
+                      <th>Remove</th>
                     </tr>
                   </thead>
+                  <tbody id="batchLinesBody">
+                    {% for line_form in line_forms %}
+                      <tr class="batch-line-row">
+                        <td>{{ forloop.counter }}</td>
 
-                  <tbody id="custTbody">
-                    <tr>
-                      <td colspan="6" class="text-muted">
-                        Select category to load customers…
-                      </td>
-                    </tr>
+                        <td>
+                          {{ line_form.customer }}
+                          {{ line_form.counterparty_name }}
+
+                          {% if line_form.customer.errors %}
+                            <div class="kam-error">{{ line_form.customer.errors|join:", " }}</div>
+                          {% endif %}
+
+                          {% if line_form.counterparty_name.errors %}
+                            <div class="kam-error">{{ line_form.counterparty_name.errors|join:", " }}</div>
+                          {% endif %}
+                        </td>
+
+                        <td>
+                          {{ line_form.visit_date }}
+                          {% if line_form.visit_date.errors %}
+                            <div class="kam-error">{{ line_form.visit_date.errors|join:", " }}</div>
+                          {% endif %}
+                        </td>
+
+                        <td>
+                          {{ line_form.purpose }}
+                          {% if line_form.purpose.errors %}
+                            <div class="kam-error">{{ line_form.purpose.errors|join:", " }}</div>
+                          {% endif %}
+                        </td>
+
+                        <td class="text-center">
+                          <button type="button" class="kam-remove-line">
+                            <i class="fas fa-trash"></i>
+                          </button>
+                        </td>
+                      </tr>
+                    {% endfor %}
                   </tbody>
                 </table>
               </div>
-
-              <!-- Hidden inputs injected at submit time -->
-              <div id="selectedHiddenInputs"></div>
-              <div id="batchManualCustomerInputs"></div>
-
-              <div class="d-flex gap-2 mt-3 flex-wrap">
-                <button type="submit" name="action" value="save_draft" class="btn btn-outline-secondary">
-                  <i class="fas fa-save me-1"></i> Save Draft Batch
-                </button>
-
-                <button type="submit" name="action" value="proceed" class="btn btn-primary">
-                  <i class="fas fa-paper-plane me-1"></i> Proceed to Manager
-                </button>
-              </div>
-
             </div>
+          {% endif %}
+
+          <div class="kam-action-row">
+            <button type="submit" name="action" value="draft" class="kam-save-btn">
+              <i class="fas fa-save"></i>
+              Save Draft
+            </button>
+
+            <button type="submit" name="action" value="submit" class="kam-submit-btn">
+              <i class="fas fa-paper-plane"></i>
+              Submit Batch to Manager
+            </button>
           </div>
-        </div>
-        <!-- /customerBatchSection -->
+        </form>
 
-        <!-- Non-customer batch section -->
-        <div id="nonCustomerSection" style="display:none;">
-          <div class="kam-section-card">
-            <div class="card-body">
-              <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
-                <div class="text-muted small">
-                  Add one or more lines for supplier / warehouse / vendor batch planning.
-                </div>
+      </div>
+    {% endif %}
 
-                <button type="button" class="btn btn-sm btn-outline-primary" id="addNonCustomerLine">
-                  + Add line
-                </button>
-              </div>
+  </div>
 
-              <div class="table-responsive">
-                <table class="table table-sm align-middle">
-                  <thead class="table-light">
-                    <tr>
-                      <th style="width:260px;">Name</th>
-                      <th style="width:260px;">Location</th>
-                      <th>Purpose</th>
-                      <th style="width:110px;"></th>
-                    </tr>
-                  </thead>
-                  <tbody id="nonCustomerTbody"></tbody>
-                </table>
-              </div>
+  {% if recent_visits %}
+    <div class="kam-history-card">
+      <div class="kam-history-head">
+        <h2 class="kam-history-title">Recent Visit Plans</h2>
+        <a href="{% url 'kam:visit_batches' %}" class="btn btn-sm btn-outline-secondary">
+          View All
+        </a>
+      </div>
 
-              <div class="d-flex gap-2 mt-3 flex-wrap">
-                <button type="submit" name="action" value="save_draft" class="btn btn-outline-secondary">
-                  <i class="fas fa-save me-1"></i> Save Draft Batch
-                </button>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0 kam-history-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Customer / Entity</th>
+              <th>Purpose of Visit</th>
+              <th>Status</th>
+              <th>KAM</th>
+            </tr>
+          </thead>
 
-                <button type="submit" name="action" value="proceed" class="btn btn-primary">
-                  <i class="fas fa-paper-plane me-1"></i> Proceed to Manager
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-        <!-- /nonCustomerSection -->
+          <tbody>
+            {% for visit in recent_visits %}
+              <tr>
+                <td>{{ visit.visit_date|date:"d M Y" }}</td>
 
-      </form>
+                <td>
+                  {% if visit.customer %}
+                    {{ visit.customer.name }}
+                  {% else %}
+                    {{ visit.counterparty_name|default:"—" }}
+                  {% endif %}
+                </td>
+
+                <td>{{ visit.purpose|default:"—"|truncatechars:80 }}</td>
+
+                <td>
+                  {% if visit.approval_status == "COMPLETED" %}
+                    <span class="status-pill completed">Completed</span>
+                  {% elif visit.approval_status == "APPROVED" %}
+                    <span class="status-pill pending">Pending</span>
+                  {% elif visit.approval_status == "PENDING_APPROVAL" %}
+                    <span class="status-pill pending">Pending</span>
+                  {% elif visit.approval_status == "REJECTED" %}
+                    <span class="status-pill rejected">Rejected</span>
+                  {% elif visit.approval_status == "DRAFT" %}
+                    <span class="status-pill draft">Draft</span>
+                  {% else %}
+                    <span class="status-pill draft">{{ visit.approval_status }}</span>
+                  {% endif %}
+                </td>
+
+                <td>{{ visit.kam.get_full_name|default:visit.kam.username }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
-    <!-- /batch tab pane -->
-
-  </div>
-  <!-- /tab-content -->
-
-
-  <!-- This Week's Plans Table -->
-  <hr class="my-4" />
-
-  <div class="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
-    <h5 class="mb-0">This Week's Visit Plans</h5>
-    <a href="{% url 'kam:single_visit_list' %}" class="btn btn-sm btn-outline-primary">
-      View All
-    </a>
-  </div>
-
-  <div class="table-responsive">
-    <table class="table table-sm table-striped align-middle">
-      <thead class="table-light">
-        <tr>
-          <th>#</th>
-          <th>Date</th>
-          <th>Customer / Counterparty</th>
-          <th>Category</th>
-          <th>Location</th>
-          <th>Status</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-
-      <tbody>
-        {% for p in plans %}
-          <tr>
-            <td class="text-muted small">{{ p.id }}</td>
-
-            <td>
-              {{ p.visit_date }}
-              {% if p.visit_date_to %}
-                &rarr; {{ p.visit_date_to }}
-              {% endif %}
-            </td>
-
-            <td>
-              {% if p.customer %}
-                {{ p.customer.name }}
-              {% else %}
-                {{ p.counterparty_name|default:"&mdash;" }}
-              {% endif %}
-            </td>
-
-            <td>{{ p.get_visit_category_display }}</td>
-
-            <td class="text-muted small">
-              {{ p.location|default:"&mdash;" }}
-            </td>
-
-            <td>
-              {% if p.approval_status == "DRAFT" %}
-                <span class="status-badge status-badge-draft">Draft</span>
-              {% elif p.approval_status == "PENDING_APPROVAL" %}
-                <span class="status-badge status-badge-pending">Pending</span>
-              {% elif p.approval_status == "APPROVED" %}
-                <span class="status-badge status-badge-approved">Approved</span>
-              {% elif p.approval_status == "REJECTED" %}
-                <span class="status-badge status-badge-rejected">Rejected</span>
-              {% else %}
-                <span class="status-badge status-badge-draft">{{ p.approval_status }}</span>
-              {% endif %}
-            </td>
-
-            <td>
-              <a href="{% url 'kam:single_visit_detail' p.id %}"
-                 class="btn btn-xs btn-outline-secondary"
-                 style="font-size:12px;padding:2px 8px;">
-                View
-              </a>
-
-              {% if p.approval_status == "DRAFT" or p.approval_status == "REJECTED" %}
-                <a href="{% url 'kam:single_visit_edit' p.id %}"
-                   class="btn btn-xs btn-outline-primary ms-1"
-                   style="font-size:12px;padding:2px 8px;">
-                  Edit
-                </a>
-              {% endif %}
-            </td>
-          </tr>
-        {% empty %}
-          <tr>
-            <td colspan="7" class="text-muted text-center py-3">
-              No visit plans this week. Use the form above to create one.
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+  {% endif %}
 
 </div>
-<!-- /container-fluid -->
-
-
-<!-- Manual Customer Modal -->
-<div class="modal fade" id="manualCustomerModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-lg modal-dialog-scrollable">
-    <div class="modal-content">
-
-      <div class="modal-header">
-        <h5 class="modal-title">Add Manual Customer</h5>
-        <button type="button"
-                class="btn-close"
-                data-dismiss="modal"
-                data-bs-dismiss="modal"
-                aria-label="Close"></button>
-      </div>
-
-      <div class="modal-body">
-        <div class="row g-3">
-          <div class="col-12 col-md-6">
-            <label class="form-label mb-1">Name <span class="text-danger">*</span></label>
-            <input class="form-control form-control-sm" id="mc_name" placeholder="Customer name" />
-          </div>
-
-          <div class="col-12 col-md-6">
-            <label class="form-label mb-1">Mobile</label>
-            <input class="form-control form-control-sm" id="mc_mobile" placeholder="Mobile number" />
-          </div>
-
-          <div class="col-12">
-            <label class="form-label mb-1">Address</label>
-            <input class="form-control form-control-sm" id="mc_address" placeholder="Full address" />
-          </div>
-
-          <div class="col-12 col-md-6">
-            <label class="form-label mb-1">Email</label>
-            <input class="form-control form-control-sm" id="mc_email" placeholder="email@example.com" />
-          </div>
-
-          <div class="col-12 col-md-6">
-            <label class="form-label mb-1">GST Number</label>
-            <input class="form-control form-control-sm" id="mc_gst" placeholder="GST number" />
-          </div>
-
-          <div class="col-12 col-md-4">
-            <label class="form-label mb-1">Pincode</label>
-            <input class="form-control form-control-sm" id="mc_pincode" placeholder="Pincode" />
-          </div>
-        </div>
-
-        <div class="small text-muted mt-2">
-          Manual customers are editable/deletable; sheet customers are read-only.
-        </div>
-
-        <div class="text-danger small mt-2" id="mc_err" style="display:none;"></div>
-        <div class="text-success small mt-2" id="mc_ok" style="display:none;"></div>
-      </div>
-
-      <div class="modal-footer">
-        <button class="btn btn-outline-secondary"
-                type="button"
-                data-dismiss="modal"
-                data-bs-dismiss="modal">
-          Close
-        </button>
-
-        <button class="btn btn-success" type="button" id="mc_save">
-          Save Customer
-        </button>
-      </div>
-
-    </div>
-  </div>
-</div>
-
 
 <script>
 (function () {
-  "use strict";
+  const categoryField =
+    document.getElementById("id_single-visit_category") ||
+    document.getElementById("id_single_visit_category") ||
+    document.getElementById("id_visit_category");
 
-  /* ─── Utilities ─────────────────────────────────────────────────── */
-  function qs(sel, ctx) {
-    return (ctx || document).querySelector(sel);
-  }
+  const existingCustomerBtn = document.getElementById("existingCustomerBtn");
+  const newCustomerBtn = document.getElementById("newCustomerBtn");
+  const existingCustomerWrap = document.getElementById("existingCustomerWrap");
+  const manualCustomerWrap = document.getElementById("manualCustomerWrap");
+  const manualCustomerInput = document.getElementById("manualCustomerInput");
+  const manualCustomerPreview = document.getElementById("manualCustomerPreview");
+  const manualCustomerPreviewText = document.getElementById("manualCustomerPreviewText");
 
-  function qsa(sel, ctx) {
-    return Array.prototype.slice.call((ctx || document).querySelectorAll(sel));
-  }
+  const customerSelect =
+    document.getElementById("id_single-customer") ||
+    document.getElementById("id_single_customer") ||
+    document.getElementById("id_customer");
 
-  function getCookie(name) {
-    var v = null;
+  const counterpartyWrap = document.getElementById("counterpartyWrap");
 
-    if (document.cookie) {
-      document.cookie.split(";").forEach(function (c) {
-        c = c.trim();
-        if (c.startsWith(name + "=")) {
-          v = decodeURIComponent(c.slice(name.length + 1));
-        }
-      });
+  const counterpartyInput =
+    document.getElementById("id_single-counterparty_name") ||
+    document.getElementById("id_single_counterparty_name") ||
+    document.getElementById("id_counterparty_name");
+
+  const customerModeWrap = document.getElementById("customerModeWrap");
+
+  let customerMode = "existing";
+
+  function setCustomerMode(mode) {
+    customerMode = mode;
+
+    if (!existingCustomerBtn || !newCustomerBtn || !existingCustomerWrap || !manualCustomerWrap) {
+      return;
     }
 
-    return v;
-  }
+    if (mode === "manual") {
+      existingCustomerBtn.classList.remove("btn-primary");
+      existingCustomerBtn.classList.add("btn-outline-primary");
 
-  function esc(s) {
-    return String(s || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
-  }
+      newCustomerBtn.classList.remove("btn-outline-primary");
+      newCustomerBtn.classList.add("btn-primary");
 
-  function isCustomerCat(v) {
-    return String(v || "").toUpperCase() === "CUSTOMER";
-  }
+      existingCustomerWrap.style.display = "none";
+      manualCustomerWrap.style.display = "";
 
-  function hasCat(v) {
-    return String(v || "").trim() !== "";
-  }
-
-  var csrftoken = getCookie("csrftoken");
-  var apiUrl = "{% url 'kam:customers_api' %}";
-
-  /* ─── Apply Bootstrap classes to Django-rendered form widgets ───── */
-  function applyBootstrap() {
-    ["#batchForm", "#singleForm"].forEach(function (formSel) {
-      var form = qs(formSel);
-      if (!form) return;
-
-      qsa("select", form).forEach(function (el) {
-        if (!el.classList.contains("form-select")) {
-          el.classList.add("form-select", "form-select-sm");
-        }
-      });
-
-      qsa('input[type="date"]', form).forEach(function (el) {
-        if (!el.classList.contains("form-control")) {
-          el.classList.add("form-control", "form-control-sm");
-        }
-      });
-
-      qsa("input:not([type='hidden']):not([type='checkbox']):not([type='radio'])", form).forEach(function (el) {
-        if (!el.classList.contains("form-control")) {
-          el.classList.add("form-control", "form-control-sm");
-        }
-      });
-
-      qsa("textarea", form).forEach(function (el) {
-        if (!el.classList.contains("form-control")) {
-          el.classList.add("form-control", "form-control-sm");
-        }
-      });
-    });
-
-    var purpose = qs('#batchForm textarea[name$="purpose"]');
-    if (purpose) {
-      purpose.classList.add("kam-remarks-compact");
-    }
-  }
-
-
-  /* ════════════════════════════════════════════════════════════════
-     SECTION A — SINGLE VISIT
-  ════════════════════════════════════════════════════════════════ */
-
-  var singleCategoryEl = qs('#singleForm select[name$="visit_category"]');
-  var singleCustomerWrap = qs("#singleCustomerWrap");
-  var singleCpWrap = qs("#singleCounterpartyWrap");
-
-  var singleCustModeSelect = qs("#singleCustModeSelect");
-  var singleCustModeManual = qs("#singleCustModeManual");
-  var singleCustDropWrap = qs("#singleCustDropdownWrap");
-  var singleCustManualWrap = qs("#singleCustManualWrap");
-  var singleManualInput = qs("#singleManualCustomerInput");
-  var singleManualPreview = qs("#singleManualPreview");
-  var singleManualCustName = qs("#singleManualCustName");
-  var singleSwitchToManual = qs("#singleSwitchToManual");
-  var singleSwitchToDrop = qs("#singleSwitchToDropdown");
-  var singleDropSelect = singleCustDropWrap && singleCustDropWrap.querySelector("select");
-
-  function singleActivateManual() {
-    if (singleCustDropWrap) {
-      singleCustDropWrap.style.display = "none";
-    }
-
-    if (singleCustManualWrap) {
-      singleCustManualWrap.style.display = "";
-    }
-
-    if (singleCustModeManual) {
-      singleCustModeManual.checked = true;
-    }
-
-    if (singleDropSelect) {
-      singleDropSelect.disabled = true;
-      singleDropSelect.value = "";
-    }
-
-    if (singleManualInput) {
-      singleManualInput.focus();
-    }
-  }
-
-  function singleActivateDropdown() {
-    if (singleCustDropWrap) {
-      singleCustDropWrap.style.display = "";
-    }
-
-    if (singleCustManualWrap) {
-      singleCustManualWrap.style.display = "none";
-    }
-
-    if (singleCustModeSelect) {
-      singleCustModeSelect.checked = true;
-    }
-
-    if (singleDropSelect) {
-      singleDropSelect.disabled = false;
-    }
-
-    if (singleManualInput) {
-      singleManualInput.value = "";
-    }
-
-    if (singleManualPreview) {
-      singleManualPreview.classList.remove("visible");
-    }
-  }
-
-  if (singleCustModeSelect) {
-    singleCustModeSelect.addEventListener("change", singleActivateDropdown);
-  }
-
-  if (singleCustModeManual) {
-    singleCustModeManual.addEventListener("change", singleActivateManual);
-  }
-
-  if (singleSwitchToManual) {
-    singleSwitchToManual.addEventListener("click", function (e) {
-      e.preventDefault();
-      singleActivateManual();
-    });
-  }
-
-  if (singleSwitchToDrop) {
-    singleSwitchToDrop.addEventListener("click", function (e) {
-      e.preventDefault();
-      singleActivateDropdown();
-    });
-  }
-
-  if (singleManualInput) {
-    singleManualInput.addEventListener("input", function () {
-      var val = (singleManualInput.value || "").trim();
-
-      if (val.length > 1) {
-        if (singleManualCustName) {
-          singleManualCustName.textContent = val;
-        }
-
-        if (singleManualPreview) {
-          singleManualPreview.classList.add("visible");
-        }
-      } else {
-        if (singleManualPreview) {
-          singleManualPreview.classList.remove("visible");
-        }
+      if (customerSelect) {
+        customerSelect.value = "";
+        customerSelect.removeAttribute("required");
       }
-    });
-  }
 
-  function toggleSingleFields() {
-    var v = singleCategoryEl ? singleCategoryEl.value : "";
-    var isCust = isCustomerCat(v);
-
-    if (singleCustomerWrap) {
-      singleCustomerWrap.style.display = isCust ? "" : "none";
-    }
-
-    if (singleCpWrap) {
-      singleCpWrap.style.display = isCust ? "none" : "";
-    }
-
-    if (!isCust) {
-      singleActivateDropdown();
-    }
-  }
-
-  if (singleCategoryEl) {
-    singleCategoryEl.addEventListener("change", toggleSingleFields);
-  }
-
-  var singleFormEl = qs("#singleForm");
-  if (singleFormEl) {
-    singleFormEl.addEventListener("submit", function () {
-      var isManual = singleCustModeManual && singleCustModeManual.checked;
-
-      if (isManual) {
-        if (singleDropSelect) {
-          singleDropSelect.disabled = true;
-          singleDropSelect.value = "";
-        }
-      } else {
-        if (singleDropSelect) {
-          singleDropSelect.disabled = false;
-        }
-
-        if (singleManualInput) {
-          singleManualInput.value = "";
-        }
+      if (manualCustomerInput) {
+        manualCustomerInput.setAttribute("required", "required");
+        manualCustomerInput.focus();
       }
-    });
-  }
 
-
-  /* ════════════════════════════════════════════════════════════════
-     SECTION B — BATCH VISIT
-  ════════════════════════════════════════════════════════════════ */
-
-  var batchCategoryEl = qs('#batchForm select[name$="visit_category"]');
-  var batchFromEl = qs('#batchForm input[type="date"][name$="from_date"]');
-  var batchToEl = qs('#batchForm input[type="date"][name$="to_date"]');
-
-  var categoryHint = qs("#categoryHint");
-  var customerBatchSection = qs("#customerBatchSection");
-  var nonCustomerSection = qs("#nonCustomerSection");
-  var globalDateInfoText = qs("#globalDateInfoText");
-
-  var custTbody = qs("#custTbody");
-  var custSearch = qs("#custSearch");
-  var custSourceEl = qs("#custSource");
-  var btnRefresh = qs("#btnRefreshCustomers");
-  var selectAllCust = qs("#selectAllCust");
-  var selCountBadge = qs("#selCount");
-  var selectedHidden = qs("#selectedHiddenInputs");
-  var nonCustomerTbody = qs("#nonCustomerTbody");
-  var addLineBtn = qs("#addNonCustomerLine");
-
-  var batchManualCustNameInput = qs("#batchManualCustName");
-  var batchManualCustPurpose = qs("#batchManualCustPurpose");
-  var batchAddManualBtn = qs("#batchAddManualBtn");
-  var batchManualPreview = qs("#batchManualPreview");
-  var batchManualCustNamePrev = qs("#batchManualCustNamePreview");
-  var batchManualInputsDiv = qs("#batchManualCustomerInputs");
-
-  var batchManualCustomers = [];
-  var selectedSet = new Set();
-  var customerCache = [];
-
-  function updateGlobalDateInfo() {
-    if (!globalDateInfoText) return;
-
-    var f = (batchFromEl && batchFromEl.value) || "";
-    var t = (batchToEl && batchToEl.value) || "";
-
-    if (f && t) {
-      globalDateInfoText.textContent = f + " → " + t;
-    } else if (f) {
-      globalDateInfoText.textContent = f + " → (select To Date)";
-    } else if (t) {
-      globalDateInfoText.textContent = "(select From Date) → " + t;
     } else {
-      globalDateInfoText.textContent = "Select From Date and To Date above.";
+      existingCustomerBtn.classList.remove("btn-outline-primary");
+      existingCustomerBtn.classList.add("btn-primary");
+
+      newCustomerBtn.classList.remove("btn-primary");
+      newCustomerBtn.classList.add("btn-outline-primary");
+
+      existingCustomerWrap.style.display = "";
+      manualCustomerWrap.style.display = "none";
+
+      if (manualCustomerInput) {
+        manualCustomerInput.value = "";
+        manualCustomerInput.removeAttribute("required");
+      }
+
+      if (manualCustomerPreview) {
+        manualCustomerPreview.classList.remove("visible");
+      }
+
+      if (customerSelect) {
+        customerSelect.setAttribute("required", "required");
+      }
     }
   }
 
-  function updateSelectedCount() {
-    var checks = qsa(".cust-check");
-    var cnt = 0;
-
-    checks.forEach(function (ch) {
-      if (ch.checked) {
-        cnt++;
-      }
-    });
-
-    if (selCountBadge) {
-      selCountBadge.textContent = cnt + " selected";
-    }
-
-    if (selectAllCust) {
-      selectAllCust.checked = checks.length > 0 && cnt === checks.length;
-      selectAllCust.indeterminate = cnt > 0 && cnt < checks.length;
-    }
+  function isCustomerCategory(value) {
+    const normalized = String(value || "").toUpperCase();
+    return normalized === "CUSTOMER" || normalized === "CUSTOMER_VISIT";
   }
 
-  function renderCustomers() {
-    if (!custTbody) return;
+  function syncCategoryUI() {
+    const isCustomer = isCustomerCategory(categoryField ? categoryField.value : "");
 
-    if (!customerCache.length) {
-      custTbody.innerHTML =
-        '<tr><td colspan="6" class="text-muted text-center py-3">No customers found.</td></tr>';
-      updateSelectedCount();
-      return;
-    }
-
-    var rows = customerCache.map(function (c) {
-      var cid = String(c.id || "");
-      var checked = selectedSet.has(cid) ? "checked" : "";
-      var displayName = c.text || c.name || "";
-
-      return '' +
-        '<tr>' +
-          '<td>' +
-            '<input class="form-check-input cust-check" type="checkbox" data-cid="' + esc(cid) + '" ' + checked + '>' +
-          '</td>' +
-          '<td>' +
-            '<div class="fw-semibold">' + esc(displayName) + '</div>' +
-            '<div class="small text-muted">' +
-              esc(c.code || "") +
-              (c.mobile ? " &bull; " + esc(c.mobile) : "") +
-            '</div>' +
-          '</td>' +
-          '<td>' +
-            '<input class="form-control form-control-sm kam-table-input-wide" type="text" name="purpose_' + esc(cid) + '" placeholder="Optional">' +
-          '</td>' +
-          '<td>' +
-            '<input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_sales_mt_' + esc(cid) + '" placeholder="e.g. 12.5">' +
-          '</td>' +
-          '<td>' +
-            '<input class="form-control form-control-sm kam-table-input-num" type="text" name="expected_collection_' + esc(cid) + '" placeholder="e.g. 250000">' +
-          '</td>' +
-          '<td>' +
-            '<span class="badge bg-light text-dark border">' + esc((c.source || "").toUpperCase()) + '</span>' +
-          '</td>' +
-        '</tr>';
-    }).join("");
-
-    custTbody.innerHTML = rows;
-
-    qsa(".cust-check").forEach(function (ch) {
-      ch.addEventListener("change", function () {
-        var cid = String(ch.getAttribute("data-cid") || "");
-
-        if (cid) {
-          if (ch.checked) {
-            selectedSet.add(cid);
-          } else {
-            selectedSet.delete(cid);
-          }
-        }
-
-        updateSelectedCount();
-      });
-    });
-
-    updateSelectedCount();
-  }
-
-  function loadCustomers() {
-    if (!custTbody) return;
-
-    var manualRows = Array.from(custTbody.querySelectorAll("tr[data-manual-idx]"));
-
-    qsa(".cust-check[data-cid]").forEach(function (ch) {
-      var cid = String(ch.getAttribute("data-cid") || "");
-
-      if (cid && ch.checked) {
-        selectedSet.add(cid);
-      } else if (cid) {
-        selectedSet.delete(cid);
+    if (isCustomer) {
+      if (customerModeWrap) {
+        customerModeWrap.style.display = "";
       }
-    });
 
-    custTbody.innerHTML =
-      '<tr><td colspan="6" class="text-muted text-center py-3">' +
-      '<span class="spinner-border spinner-border-sm me-2"></span>Loading…</td></tr>';
-
-    var q = encodeURIComponent((custSearch && custSearch.value) || "");
-    var src = encodeURIComponent((custSourceEl && custSourceEl.value) || "");
-
-    fetch(apiUrl + "?q=" + q + "&source=" + src, {
-      headers: {
-        Accept: "application/json"
+      if (counterpartyWrap) {
+        counterpartyWrap.style.display = "none";
       }
-    })
-      .then(function (r) {
-        return r.json();
-      })
-      .then(function (data) {
-        if (!data.ok) {
-          throw new Error(data.error || "Failed to load customers");
-        }
 
-        customerCache = data.customers || [];
-        renderCustomers();
-
-        manualRows.forEach(function (r) {
-          custTbody.appendChild(r);
-        });
-
-        updateSelectedCount();
-      })
-      .catch(function (err) {
-        custTbody.innerHTML =
-          '<tr><td colspan="6" class="text-danger text-center py-3">Error: ' + esc(err.message) + '</td></tr>';
-
-        manualRows.forEach(function (r) {
-          custTbody.appendChild(r);
-        });
-      });
-  }
-
-  function addBatchManualCustomer() {
-    var name = (batchManualCustNameInput && batchManualCustNameInput.value || "").trim();
-    var purpose = (batchManualCustPurpose && batchManualCustPurpose.value || "").trim();
-
-    if (!name) {
-      if (batchManualCustNameInput) {
-        batchManualCustNameInput.classList.add("is-invalid");
-        batchManualCustNameInput.focus();
+      if (counterpartyInput) {
+        counterpartyInput.value = "";
+        counterpartyInput.removeAttribute("required");
       }
-      return;
-    }
 
-    if (batchManualCustNameInput) {
-      batchManualCustNameInput.classList.remove("is-invalid");
-    }
-
-    if (batchManualCustomers.some(function (c) {
-      return c.name.toLowerCase() === name.toLowerCase();
-    })) {
-      alert('"' + name + '" is already in the list.');
-      return;
-    }
-
-    batchManualCustomers.push({
-      name: name,
-      purpose: purpose
-    });
-
-    if (custTbody) {
-      var idx = batchManualCustomers.length - 1;
-      var tr = document.createElement("tr");
-
-      tr.setAttribute("data-manual-idx", idx);
-
-      tr.innerHTML =
-        '<td><input class="form-check-input cust-check" type="checkbox" data-cid="" data-manual-idx="' + idx + '" checked></td>' +
-        '<td>' +
-          '<div class="fw-semibold">' + esc(name) + '</div>' +
-          '<div class="small text-success"><i class="fas fa-pen me-1"></i>New manual entry</div>' +
-        '</td>' +
-        '<td><input class="form-control form-control-sm kam-table-input-wide" type="text" name="manual_purpose_' + idx + '" value="' + esc(purpose) + '" placeholder="Optional" /></td>' +
-        '<td><input class="form-control form-control-sm kam-table-input-num" type="text" name="manual_expected_sales_mt_' + idx + '" placeholder="e.g. 12.5" /></td>' +
-        '<td><input class="form-control form-control-sm kam-table-input-num" type="text" name="manual_expected_collection_' + idx + '" placeholder="e.g. 250000" /></td>' +
-        '<td><span class="badge bg-success border">MANUAL</span></td>';
-
-      custTbody.appendChild(tr);
-
-      var check = tr.querySelector(".cust-check");
-      if (check) {
-        check.addEventListener("change", updateSelectedCount);
-      }
-    }
-
-    if (batchManualCustNameInput) {
-      batchManualCustNameInput.value = "";
-    }
-
-    if (batchManualCustPurpose) {
-      batchManualCustPurpose.value = "";
-    }
-
-    if (batchManualPreview) {
-      batchManualPreview.classList.remove("visible");
-    }
-
-    updateSelectedCount();
-  }
-
-  if (batchManualCustNameInput) {
-    batchManualCustNameInput.addEventListener("input", function () {
-      var val = (batchManualCustNameInput.value || "").trim();
-
-      if (val.length > 1) {
-        if (batchManualCustNamePrev) {
-          batchManualCustNamePrev.textContent = val;
-        }
-
-        if (batchManualPreview) {
-          batchManualPreview.classList.add("visible");
-        }
+      if (customerMode === "manual") {
+        setCustomerMode("manual");
       } else {
-        if (batchManualPreview) {
-          batchManualPreview.classList.remove("visible");
-        }
+        setCustomerMode("existing");
       }
-    });
 
-    batchManualCustNameInput.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        addBatchManualCustomer();
+    } else {
+      if (customerModeWrap) {
+        customerModeWrap.style.display = "none";
       }
-    });
+
+      if (counterpartyWrap) {
+        counterpartyWrap.style.display = "";
+      }
+
+      if (counterpartyInput) {
+        counterpartyInput.setAttribute("required", "required");
+      }
+
+      if (customerSelect) {
+        customerSelect.value = "";
+        customerSelect.removeAttribute("required");
+      }
+
+      if (manualCustomerInput) {
+        manualCustomerInput.value = "";
+        manualCustomerInput.removeAttribute("required");
+      }
+    }
   }
 
-  if (batchAddManualBtn) {
-    batchAddManualBtn.addEventListener("click", addBatchManualCustomer);
-  }
-
-  if (selectAllCust) {
-    selectAllCust.addEventListener("change", function () {
-      qsa(".cust-check").forEach(function (ch) {
-        ch.checked = selectAllCust.checked;
-
-        var cid = String(ch.getAttribute("data-cid") || "");
-
-        if (cid) {
-          if (ch.checked) {
-            selectedSet.add(cid);
-          } else {
-            selectedSet.delete(cid);
-          }
-        }
-      });
-
-      updateSelectedCount();
-    });
-  }
-
-  var batchFormEl = qs("#batchForm");
-  if (batchFormEl) {
-    batchFormEl.addEventListener("submit", function () {
-      if (selectedHidden) {
-        selectedHidden.innerHTML = "";
-
-        qsa(".cust-check[data-cid]").forEach(function (ch) {
-          var cid = (ch.getAttribute("data-cid") || "").trim();
-
-          if (!ch.checked || !cid) return;
-
-          var inp = document.createElement("input");
-          inp.type = "hidden";
-          inp.name = "customers_selected[]";
-          inp.value = cid;
-
-          selectedHidden.appendChild(inp);
-        });
-      }
-
-      if (batchManualInputsDiv) {
-        batchManualInputsDiv.innerHTML = "";
-
-        qsa(".cust-check[data-manual-idx]").forEach(function (ch) {
-          if (!ch.checked) return;
-
-          var idx = ch.getAttribute("data-manual-idx");
-          var mc = batchManualCustomers[idx];
-
-          if (!mc) return;
-
-          var inp = document.createElement("input");
-          inp.type = "hidden";
-          inp.name = "batch_manual_customer[]";
-          inp.value = mc.name;
-
-          batchManualInputsDiv.appendChild(inp);
-        });
-      }
-    });
-  }
-
-  function toggleBatchSections() {
-    var v = batchCategoryEl ? batchCategoryEl.value : "";
-
-    if (!hasCat(v)) {
-      if (categoryHint) {
-        categoryHint.style.display = "";
-      }
-
-      if (customerBatchSection) {
-        customerBatchSection.style.display = "none";
-      }
-
-      if (nonCustomerSection) {
-        nonCustomerSection.style.display = "none";
-      }
-
+  function syncManualPreview() {
+    if (!manualCustomerInput || !manualCustomerPreview || !manualCustomerPreviewText) {
       return;
     }
 
-    if (categoryHint) {
-      categoryHint.style.display = "none";
-    }
+    const value = manualCustomerInput.value.trim();
 
-    if (isCustomerCat(v)) {
-      if (customerBatchSection) {
-        customerBatchSection.style.display = "";
-      }
-
-      if (nonCustomerSection) {
-        nonCustomerSection.style.display = "none";
-      }
-
-      loadCustomers();
+    if (value.length > 0) {
+      manualCustomerPreviewText.textContent = "New customer will be created: " + value;
+      manualCustomerPreview.classList.add("visible");
     } else {
-      if (customerBatchSection) {
-        customerBatchSection.style.display = "none";
-      }
-
-      if (nonCustomerSection) {
-        nonCustomerSection.style.display = "";
-      }
-
-      if (nonCustomerTbody && !nonCustomerTbody.children.length) {
-        addNonCustomerLine();
-      }
+      manualCustomerPreview.classList.remove("visible");
     }
   }
 
-  function addNonCustomerLine() {
-    if (!nonCustomerTbody) return;
-
-    var tr = document.createElement("tr");
-
-    tr.innerHTML =
-      '<td><input class="form-control form-control-sm" name="counterparty_name[]" placeholder="Name *"></td>' +
-      '<td><input class="form-control form-control-sm" name="counterparty_location[]" placeholder="Location"></td>' +
-      '<td><input class="form-control form-control-sm" name="counterparty_purpose[]" placeholder="Purpose"></td>' +
-      '<td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger">Remove</button></td>';
-
-    var btn = tr.querySelector("button");
-    if (btn) {
-      btn.addEventListener("click", function () {
-        tr.remove();
-      });
-    }
-
-    nonCustomerTbody.appendChild(tr);
-  }
-
-  var mcSave = qs("#mc_save");
-  var mcErr = qs("#mc_err");
-  var mcOk = qs("#mc_ok");
-
-  if (mcSave) {
-    mcSave.addEventListener("click", function () {
-      var payload = new URLSearchParams();
-
-      [
-        ["name", "mc_name"],
-        ["mobile", "mc_mobile"],
-        ["address", "mc_address"],
-        ["email", "mc_email"],
-        ["gst_number", "mc_gst"],
-        ["pincode", "mc_pincode"]
-      ].forEach(function (pair) {
-        var el = qs("#" + pair[1]);
-        payload.append(pair[0], (el && el.value) || "");
-      });
-
-      fetch("{% url 'kam:customer_create_manual' %}", {
-        method: "POST",
-        headers: {
-          "X-CSRFToken": csrftoken,
-          Accept: "application/json"
-        },
-        body: payload
-      })
-        .then(function (r) {
-          return r.json().then(function (j) {
-            return {
-              ok: r.ok,
-              json: j
-            };
-          });
-        })
-        .then(function (res) {
-          if (!res.ok || !res.json.ok) {
-            throw new Error(res.json.error || "Failed");
-          }
-
-          if (mcErr) {
-            mcErr.style.display = "none";
-          }
-
-          if (mcOk) {
-            mcOk.style.display = "";
-            mcOk.textContent = "Saved. Refreshing customer list…";
-          }
-
-          loadCustomers();
-        })
-        .catch(function (err) {
-          if (mcOk) {
-            mcOk.style.display = "none";
-          }
-
-          if (mcErr) {
-            mcErr.style.display = "";
-            mcErr.textContent = err.message;
-          }
-        });
+  if (existingCustomerBtn) {
+    existingCustomerBtn.addEventListener("click", function () {
+      setCustomerMode("existing");
     });
   }
 
-  /* ── Wire events ─────────────────────────────────────────────── */
-  if (btnRefresh) {
-    btnRefresh.addEventListener("click", loadCustomers);
-  }
-
-  if (custSourceEl) {
-    custSourceEl.addEventListener("change", loadCustomers);
-  }
-
-  if (custSearch) {
-    custSearch.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        loadCustomers();
-      }
+  if (newCustomerBtn) {
+    newCustomerBtn.addEventListener("click", function () {
+      setCustomerMode("manual");
     });
   }
 
-  if (addLineBtn) {
-    addLineBtn.addEventListener("click", addNonCustomerLine);
+  if (manualCustomerInput) {
+    manualCustomerInput.addEventListener("input", syncManualPreview);
   }
 
-  if (batchCategoryEl) {
-    batchCategoryEl.addEventListener("change", toggleBatchSections);
+  if (categoryField) {
+    categoryField.addEventListener("change", syncCategoryUI);
   }
 
-  if (batchFromEl) {
-    batchFromEl.addEventListener("change", updateGlobalDateInfo);
-  }
-
-  if (batchToEl) {
-    batchToEl.addEventListener("change", updateGlobalDateInfo);
-  }
-
-  /* ─── Init ───────────────────────────────────────────────────── */
-  applyBootstrap();
-  updateGlobalDateInfo();
-  toggleBatchSections();
-  toggleSingleFields();
-
+  syncCategoryUI();
+  syncManualPreview();
 })();
 </script>
 {% endblock %}

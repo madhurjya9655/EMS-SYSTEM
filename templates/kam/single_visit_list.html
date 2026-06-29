@@ -85,6 +85,47 @@
         {% endfor %}
       </select>
     </div>
+
+    {% if can_approve %}
+      <div class="col-md-4 col-lg-3">
+        <label class="form-label small fw-semibold">KAM</label>
+        <select name="kam" class="form-select form-select-sm">
+          <option value="">All KAMs</option>
+          {% for kam in kam_dropdown_options %}
+            <option value="{{ kam.id }}" {% if selected_kam|stringformat:"s" == kam.id|stringformat:"s" %}selected{% endif %}>
+              {{ kam.get_full_name|default:kam.username }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+    {% endif %}
+
+    <div class="col-md-4 col-lg-3">
+      <label class="form-label small fw-semibold">From Date</label>
+      <input type="date"
+             name="from_date"
+             class="form-control form-control-sm"
+             value="{{ filter_from }}">
+    </div>
+
+    <div class="col-md-4 col-lg-3">
+      <label class="form-label small fw-semibold">To Date</label>
+      <input type="date"
+             name="to_date"
+             class="form-control form-control-sm"
+             value="{{ filter_to }}">
+    </div>
+
+    <div class="col-md-4 col-lg-3">
+      <label class="form-label small fw-semibold">Time Filter</label>
+      <select name="time_filter" class="form-select form-select-sm">
+        <option value="" {% if not time_filter %}selected{% endif %}>Custom / All</option>
+        <option value="current_month" {% if time_filter == "current_month" %}selected{% endif %}>Current Month</option>
+        <option value="current_quarter" {% if time_filter == "current_quarter" %}selected{% endif %}>Current Quarter</option>
+        <option value="current_year" {% if time_filter == "current_year" %}selected{% endif %}>Current Year</option>
+      </select>
+    </div>
+
     <div class="col-md-auto">
       <button type="submit" class="btn btn-sm btn-primary">Apply</button>
       <a href="{% url 'kam:single_visit_list' %}" class="btn btn-sm btn-outline-secondary">Reset</a>
@@ -106,6 +147,7 @@
               <th>ID</th>
               <th>Date</th>
               <th>Entity</th>
+              <th>Purpose of Visit</th>
               <th>Category</th>
               <th>Location</th>
               <th>Status</th>
@@ -126,9 +168,9 @@
                       {{ plan.counterparty_name|default:"—" }}
                     {% endif %}
                   </div>
-                  {% if plan.purpose %}
-                    <div class="text-muted small">{{ plan.purpose|truncatechars:60 }}</div>
-                  {% endif %}
+                </td>
+                <td class="text-muted small">
+                  {{ plan.purpose|default:"—"|truncatechars:80 }}
                 </td>
                 <td>{{ plan.get_visit_category_display }}</td>
                 <td>{{ plan.location|default:"—"|truncatechars:40 }}</td>

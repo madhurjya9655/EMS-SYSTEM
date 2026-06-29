@@ -261,9 +261,9 @@
                 </tr>
 
                 <tr>
-                  <td class="details-label">Remarks</td>
+                  <td class="details-label">Purpose of Visit</td>
                   <td class="details-value">
-                    {{ remarks|default:"-" }}
+                    {{ purpose_of_visit|default:remarks|default:batch.purpose|default:"-" }}
                   </td>
                 </tr>
 
@@ -289,6 +289,7 @@
                     <th>Date</th>
                     <th>Location</th>
                     <th>Category</th>
+                    <th>Purpose of Visit</th>
                   </tr>
                 </thead>
 
@@ -301,6 +302,7 @@
                       <td>{{ row.date|default:"-" }}</td>
                       <td>{{ row.location|default:"-" }}</td>
                       <td>{{ row.category|default:"-" }}</td>
+                      <td>{{ row.purpose|default:row.purpose_of_visit|default:"-" }}</td>
                     </tr>
                     {% endfor %}
 
@@ -312,6 +314,7 @@
                       <td>{{ date_range|default:"-" }}</td>
                       <td>{{ customer.address|default:"-" }}</td>
                       <td>{{ visit_category_label|default:"-" }}</td>
+                      <td>{{ purpose_of_visit|default:remarks|default:batch.purpose|default:"-" }}</td>
                     </tr>
                     {% endfor %}
 
@@ -323,12 +326,13 @@
                       <td>{{ date_range|default:"-" }}</td>
                       <td>-</td>
                       <td>{{ visit_category_label|default:"-" }}</td>
+                      <td>{{ purpose_of_visit|default:remarks|default:batch.purpose|default:"-" }}</td>
                     </tr>
                     {% endfor %}
 
                   {% else %}
                     <tr>
-                      <td colspan="5">No visit lines available.</td>
+                      <td colspan="6">No visit lines available.</td>
                     </tr>
                   {% endif %}
                 </tbody>

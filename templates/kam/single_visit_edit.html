@@ -43,7 +43,14 @@
     font-size: 13px;
     color: #1e40af;
   }
-  .manager-info-box .label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #3b82f6; margin-bottom: 4px; }
+  .manager-info-box .label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: #3b82f6;
+    margin-bottom: 4px;
+  }
 </style>
 {% endblock %}
 
@@ -161,7 +168,7 @@
 
             <div class="col-12">
               <label class="field-label" for="{{ form.purpose.id_for_label }}">
-                Purpose / Remarks <span class="text-danger">*</span>
+                Purpose of Visit <span class="text-danger">*</span>
               </label>
               {{ form.purpose }}
               {% if form.purpose.errors %}
@@ -238,30 +245,39 @@
 
 <script>
 (function () {
-  // Auto-apply Bootstrap classes to form fields rendered by Django forms
   document.querySelectorAll("#singleVisitEditForm select").forEach(el => {
     if (!el.classList.contains("form-select")) el.classList.add("form-select", "form-select-sm");
   });
+
   document.querySelectorAll("#singleVisitEditForm input[type='date']").forEach(el => {
     if (!el.classList.contains("form-control")) el.classList.add("form-control", "form-control-sm");
   });
+
   document.querySelectorAll("#singleVisitEditForm input:not([type='hidden'])").forEach(el => {
     if (!el.classList.contains("form-control")) el.classList.add("form-control", "form-control-sm");
   });
+
   document.querySelectorAll("#singleVisitEditForm textarea").forEach(el => {
     if (!el.classList.contains("form-control")) el.classList.add("form-control", "form-control-sm");
+    el.setAttribute("required", "required");
   });
 
-  // Toggle customer vs counterparty field based on visit category
-  const categoryField     = document.getElementById("{{ form.visit_category.id_for_label }}");
-  const customerWrap      = document.getElementById("customerFieldWrap");
-  const counterpartyWrap  = document.getElementById("counterpartyFieldWrap");
+  const categoryField = document.getElementById("{{ form.visit_category.id_for_label }}");
+  const customerWrap = document.getElementById("customerFieldWrap");
+  const counterpartyWrap = document.getElementById("counterpartyFieldWrap");
 
   function syncFields() {
     if (!categoryField) return;
+
     const isCustomer = (categoryField.value || "") === "CUSTOMER";
-    if (customerWrap)     customerWrap.style.display     = isCustomer ? "" : "none";
-    if (counterpartyWrap) counterpartyWrap.style.display = isCustomer ? "none" : "";
+
+    if (customerWrap) {
+      customerWrap.style.display = isCustomer ? "" : "none";
+    }
+
+    if (counterpartyWrap) {
+      counterpartyWrap.style.display = isCustomer ? "none" : "";
+    }
   }
 
   if (categoryField) {
