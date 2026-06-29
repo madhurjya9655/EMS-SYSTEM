@@ -526,6 +526,104 @@ def _normalize_customer_name(name: str) -> str:
     return " ".join(str(name or "").strip().split()).strip()
 
 
+def _customer_identity_key(name: str) -> str:
+    """
+    Canonical customer key used during Google Sheet sync.
+
+    Purpose:
+    - Prevent duplicate customers caused by legal-name variations.
+    - AAM Forge Pvt. Ltd. == AAM FORGE PRIVATE LIMITED
+    - AKAR AUTO INDUSTRIES LIMITED == AKAR AUTO INDUSTRIES PVT LTD
+
+    This does not modify display names.
+    This does not delete duplicates.
+    """
+    text = unicodedata.normalize("NFKD", str(name or ""))
+    text = text.encode("ascii", "ignore").decode()
+    text = text.upper()
+
+    replacements = {
+        "&": " AND ",
+        ".": " ",
+        ",": " ",
+        "-": " ",
+        "_": " ",
+        "/": " ",
+        "\\": " ",
+        "(": " ",
+        ")": " ",
+        "PRIVATE": "PVT",
+        "LIMITED": "LTD",
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    tokens = [token.strip() for token in text.split() if token.strip()]
+
+    removable_suffixes = {
+        "PVT",
+        "LTD",
+        "PRIVATE",
+        "LIMITED",
+        "LLP",
+        "LLC",
+        "INC",
+        "CO",
+        "COMPANY",
+        "CORP",
+        "CORPORATION",
+    }
+
+    tokens = [token for token in tokens if token not in removable_suffixes]
+
+    return re.sub(r"[^A-Z0-9]", "", "".join(tokens))
+
+
+def _customer_candidate_queryset(clean_name: str):
+    """
+    Narrow DB scan for customer alias matching.
+
+    First tries exact match.
+    If exact match does not exist, searches by first meaningful token.
+    Final decision is made by _customer_identity_key().
+    """
+    exact_qs = Customer.objects.filter(name__iexact=clean_name).order_by("pk")
+
+    if exact_qs.exists():
+        return exact_qs
+
+    text = unicodedata.normalize("NFKD", str(clean_name or ""))
+    text = text.encode("ascii", "ignore").decode()
+    text = text.upper()
+
+    for ch in ". ,-/\\()_&":
+        text = text.replace(ch, " ")
+
+    skip = {
+        "PVT",
+        "PRIVATE",
+        "LTD",
+        "LIMITED",
+        "LLP",
+        "LLC",
+        "INC",
+        "CO",
+        "COMPANY",
+        "CORP",
+        "CORPORATION",
+        "AND",
+    }
+
+    tokens = [token for token in text.split() if token and token not in skip]
+    first_token = tokens[0] if tokens else ""
+
+    if not first_token:
+        return Customer.objects.none()
+
+    return Customer.objects.filter(name__icontains=first_token).order_by("pk")
+
+
 def _safe_get_or_create_customer(
     name: str,
     kam_user=None,
@@ -536,9 +634,10 @@ def _safe_get_or_create_customer(
 
     Rules:
       - Never hard-delete duplicate customers.
-      - Reuse the oldest matching customer by case-insensitive name.
+      - Reuse the oldest matching customer by exact name or normalized legal name.
       - Repair kam / primary_kam when KAM is known.
       - Fill missing optional fields only.
+      - Preserve display name.
     """
     clean_name = _normalize_customer_name(name)
 
@@ -555,11 +654,17 @@ def _safe_get_or_create_customer(
     if extra_defaults:
         defaults.update(extra_defaults)
 
-    matches = list(
-        Customer.objects
-        .filter(name__iexact=clean_name)
-        .order_by("pk")
-    )
+    incoming_key = _customer_identity_key(clean_name)
+
+    matches = []
+
+    for candidate in _customer_candidate_queryset(clean_name):
+        candidate_key = _customer_identity_key(candidate.name)
+
+        if candidate.name.strip().lower() == clean_name.lower() or (
+            incoming_key and candidate_key and incoming_key == candidate_key
+        ):
+            matches.append(candidate)
 
     if not matches:
         with transaction.atomic():
@@ -569,14 +674,14 @@ def _safe_get_or_create_customer(
             )
             return customer
 
-    customer = matches[0]
+    customer = sorted(matches, key=lambda item: item.pk)[0]
 
     if len(matches) > 1:
         logger.warning(
-            "Duplicate customer names found for %r. Using pk=%s. Duplicate pks=%s. No rows deleted.",
+            "Duplicate customer aliases found for %r. Using pk=%s. Matched pks=%s. No rows deleted.",
             clean_name,
             customer.pk,
-            [item.pk for item in matches[1:]],
+            [item.pk for item in matches],
         )
 
     changed = False

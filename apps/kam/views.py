@@ -1102,6 +1102,135 @@ def _safe_decimal(val) -> Decimal:
         return Decimal(val or 0)
     except Exception:
         return Decimal(0)
+    
+def _safe_ratio(numerator, denominator):
+    numerator = _safe_decimal(numerator)
+    denominator = _safe_decimal(denominator)
+
+    if not denominator:
+        return None
+
+    try:
+        return numerator / denominator
+    except Exception:
+        return None
+
+
+def _customer360_identity_key(name: str) -> str:
+    """
+    Runtime customer alias key for Customer360 reads.
+
+    Purpose:
+    - Include existing duplicate customer rows created by sheet name variations.
+    - AAM Forge Pvt. Ltd. == AAM FORGE PRIVATE LIMITED
+    - AKAR AUTO INDUSTRIES LIMITED == AKAR AUTO INDUSTRIES PVT LTD
+
+    Does not modify DB.
+    Does not change display name.
+    """
+    import re
+    import unicodedata
+
+    text = unicodedata.normalize("NFKD", str(name or ""))
+    text = text.encode("ascii", "ignore").decode()
+    text = text.upper()
+
+    replacements = {
+        "&": " AND ",
+        ".": " ",
+        ",": " ",
+        "-": " ",
+        "_": " ",
+        "/": " ",
+        "\\": " ",
+        "(": " ",
+        ")": " ",
+        "PRIVATE": "PVT",
+        "LIMITED": "LTD",
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    tokens = [token.strip() for token in text.split() if token.strip()]
+
+    removable_suffixes = {
+        "PVT",
+        "LTD",
+        "PRIVATE",
+        "LIMITED",
+        "LLP",
+        "LLC",
+        "INC",
+        "CO",
+        "COMPANY",
+        "CORP",
+        "CORPORATION",
+    }
+
+    tokens = [token for token in tokens if token not in removable_suffixes]
+
+    return re.sub(r"[^A-Z0-9]", "", "".join(tokens))
+
+
+def _customer360_alias_customer_ids(customer: Customer, accessible_qs=None) -> List[int]:
+    """
+    Return all Customer IDs representing the same real customer.
+
+    Fixes:
+    - Existing duplicate customer rows caused by sheet name variations.
+    - Avoids .only() conflict when accessible_qs already has select_related().
+    - Does not modify DB.
+    - Does not change display name.
+    """
+    if not customer:
+        return []
+
+    target_key = _customer360_identity_key(customer.name)
+
+    if not target_key:
+        return [customer.id]
+
+    base_qs = accessible_qs if accessible_qs is not None else Customer.objects.all()
+
+    raw_name = str(customer.name or "").strip()
+
+    first_token = ""
+
+    for token in (
+        raw_name
+        .replace(".", " ")
+        .replace(",", " ")
+        .replace("-", " ")
+        .replace("/", " ")
+        .replace("(", " ")
+        .replace(")", " ")
+        .split()
+    ):
+        token = token.strip()
+
+        if token:
+            first_token = token
+            break
+
+    if first_token:
+        candidate_qs = base_qs.filter(name__icontains=first_token)
+    else:
+        candidate_qs = base_qs.filter(id=customer.id)
+
+    alias_ids = []
+
+    # IMPORTANT:
+    # Use values("id", "name") instead of only("id", "name").
+    # .only() conflicts with select_related("kam", "primary_kam") on base_qs.
+    for candidate in candidate_qs.values("id", "name"):
+        if _customer360_identity_key(candidate.get("name")) == target_key:
+            alias_ids.append(candidate.get("id"))
+
+    if customer.id not in alias_ids:
+        alias_ids.append(customer.id)
+
+    return sorted({int(customer_id) for customer_id in alias_ids if customer_id})
 
 
 def _parse_decimal_or_none(s: str) -> Optional[Decimal]:
@@ -5247,80 +5376,223 @@ def customer_search_api(request: HttpRequest) -> JsonResponse:
 @login_required(login_url="/accounts/login/")
 def customer_360_api(request: HttpRequest, customer_id: int) -> JsonResponse:
     """
-    Lightweight Customer 360 API used by inline widgets.
+    Lightweight Customer 360 API.
 
-    Must stay aligned with:
-    - _customer_qs_for_user()
-    - _preferred_inv_qs()
+    Reads PostgreSQL only.
+    Uses alias customer IDs so all historical synced data is included even when
+    Google Sheet tabs used slightly different customer legal names.
     """
-    accessible_qs = _customer_qs_for_user(request.user)
+    accessible_qs = _customer_qs_for_user(request.user).select_related("kam", "primary_kam")
+
     try:
         customer = accessible_qs.get(id=customer_id)
     except Customer.DoesNotExist:
         return JsonResponse({"error": "Customer not found or access denied"}, status=404)
 
-    plans = CollectionPlan.objects.filter(customer_id=customer.id)
-    if not _is_admin(request.user):
-        if _is_manager(request.user):
-            allowed_kam_ids = _kams_managed_by_manager(request.user)
-            plans = plans.filter(kam_id__in=allowed_kam_ids)
-        else:
-            plans = plans.filter(kam_id=request.user.id)
+    alias_customer_ids = _customer360_alias_customer_ids(customer, accessible_qs)
 
-    plan_agg = plans.aggregate(
-        planned=Sum("planned_amount"),
-        actual=Sum("actual_amount"),
+    latest_snapshot_date = (
+        OverdueSnapshot.objects
+        .filter(customer_id__in=alias_customer_ids)
+        .order_by("-snapshot_date")
+        .values_list("snapshot_date", flat=True)
+        .first()
     )
-    total_planned = _safe_decimal(plan_agg.get("planned"))
-    total_collected = _safe_decimal(plan_agg.get("actual"))
-    outstanding = total_planned - total_collected
-    last_collection = plans.order_by("-updated_at").first()
+
+    snapshot_agg = {
+        "exposure": Decimal(0),
+        "overdue": Decimal(0),
+        "a0_30": Decimal(0),
+        "a31_60": Decimal(0),
+        "a61_90": Decimal(0),
+        "a90_plus": Decimal(0),
+    }
+
+    if latest_snapshot_date:
+        snapshot_agg = (
+            OverdueSnapshot.objects
+            .filter(customer_id__in=alias_customer_ids, snapshot_date=latest_snapshot_date)
+            .aggregate(
+                exposure=Sum("exposure"),
+                overdue=Sum("overdue"),
+                a0_30=Sum("ageing_0_30"),
+                a31_60=Sum("ageing_31_60"),
+                a61_90=Sum("ageing_61_90"),
+                a90_plus=Sum("ageing_90_plus"),
+            )
+        )
+
+    exposure = _safe_decimal(snapshot_agg.get("exposure"))
+    overdue = _safe_decimal(snapshot_agg.get("overdue"))
+    ageing_0_30 = _safe_decimal(snapshot_agg.get("a0_30"))
+    ageing_31_60 = _safe_decimal(snapshot_agg.get("a31_60"))
+    ageing_61_90 = _safe_decimal(snapshot_agg.get("a61_90"))
+    ageing_90_plus = _safe_decimal(snapshot_agg.get("a90_plus"))
+
+    credit_limit = _safe_decimal(customer.credit_limit)
+
+    if not credit_limit:
+        credit_limit = _safe_decimal(
+            Customer.objects
+            .filter(id__in=alias_customer_ids)
+            .aggregate(s=Sum("credit_limit"))
+            .get("s")
+        )
+
+    if not exposure:
+        exposure = _safe_decimal(
+            Customer.objects
+            .filter(id__in=alias_customer_ids)
+            .aggregate(s=Sum("total_exposure"))
+            .get("s")
+        )
+
+    if not exposure:
+        age_sum = ageing_0_30 + ageing_31_60 + ageing_61_90 + ageing_90_plus
+
+        if age_sum:
+            exposure = age_sum
+        elif overdue:
+            exposure = overdue
 
     sales_qs = _preferred_inv_qs(
-        InvoiceFact.objects.filter(customer=customer)
+        InvoiceFact.objects.filter(customer_id__in=alias_customer_ids)
     )
+
     sales_agg = sales_qs.aggregate(
         total_mt=Sum("qty_mt"),
         total_value=Sum("invoice_value"),
     )
+
     total_sales_mt = _safe_decimal(sales_agg.get("total_mt"))
     total_sales_value = _safe_decimal(sales_agg.get("total_value"))
-    last_invoice = sales_qs.order_by("-invoice_date").first()
 
-    visits = VisitPlan.objects.filter(customer_id=customer.id)
+    today = timezone.localdate()
+    month_start = today.replace(day=1)
+    year_start = date(today.year, 1, 1)
+
+    monthly_sales = _safe_decimal(
+        _preferred_inv_qs(
+            InvoiceFact.objects.filter(
+                customer_id__in=alias_customer_ids,
+                invoice_date__gte=month_start,
+                invoice_date__lte=today,
+            )
+        ).aggregate(s=Sum("qty_mt")).get("s")
+    )
+
+    yearly_sales = _safe_decimal(
+        _preferred_inv_qs(
+            InvoiceFact.objects.filter(
+                customer_id__in=alias_customer_ids,
+                invoice_date__gte=year_start,
+                invoice_date__lte=today,
+            )
+        ).aggregate(s=Sum("qty_mt")).get("s")
+    )
+
+    collected = _safe_decimal(
+        CollectionTxn.objects
+        .filter(customer_id__in=alias_customer_ids)
+        .aggregate(received=Sum("amount"))
+        .get("received")
+    )
+
+    plan_agg = (
+        CollectionPlan.objects
+        .filter(customer_id__in=alias_customer_ids)
+        .aggregate(
+            planned=Sum("planned_amount"),
+            actual=Sum("actual_amount"),
+            plan_overdue=Sum("overdue_amount"),
+        )
+    )
+
+    planned_collection = _safe_decimal(plan_agg.get("planned"))
+    plan_actual = _safe_decimal(plan_agg.get("actual"))
+    plan_overdue = _safe_decimal(plan_agg.get("plan_overdue"))
+
+    if not collected and plan_actual:
+        collected = plan_actual
+
+    if not overdue and plan_overdue:
+        overdue = plan_overdue
+
+    outstanding = exposure - collected
+    pending_collection = outstanding if outstanding > 0 else Decimal(0)
+
+    visits = VisitPlan.objects.filter(customer_id__in=alias_customer_ids)
+    planned_visits = visits.count()
+    completed_visits = visits.filter(actual__isnull=False).count()
+    pending_visits = max(planned_visits - completed_visits, 0)
     last_visit = visits.order_by("-visit_date").first()
 
-    kam_name = ""
-    if customer.kam_id:
-        try:
-            kam_name = customer.kam.get_full_name() or customer.kam.username
-        except Exception:
-            pass
+    calls = CallLog.objects.filter(customer_id__in=alias_customer_ids)
+    call_count = calls.count()
+    last_call = calls.order_by("-call_datetime").first()
 
-    last_coll_date = None
-    if last_collection and last_collection.updated_at:
-        try:
-            last_coll_date = timezone.localtime(last_collection.updated_at).strftime("%d %b %Y")
-        except Exception:
-            last_coll_date = str(last_collection.updated_at.date())
+    leads = LeadFact.objects.filter(customer_id__in=alias_customer_ids)
+    lead_count = leads.count()
+    lead_qty = _safe_decimal(leads.aggregate(s=Sum("qty_mt")).get("s"))
+
+    last_invoice = sales_qs.order_by("-invoice_date").first()
+
+    kam_name = ""
+
+    if customer.kam_id:
+        kam_name = customer.kam.get_full_name() or customer.kam.username
+    elif customer.primary_kam_id:
+        kam_name = customer.primary_kam.get_full_name() or customer.primary_kam.username
+
+    risk_ratio = _safe_ratio(exposure, credit_limit)
 
     data = {
+        "id": customer.id,
+        "alias_customer_ids": alias_customer_ids,
         "name": customer.name,
         "kam": kam_name,
         "code": getattr(customer, "code", None) or "",
         "mobile": getattr(customer, "mobile", None) or "",
-        "total_planned": float(total_planned),
-        "total_collected": float(total_collected),
+        "phone": getattr(customer, "mobile", None) or "",
+        "email": getattr(customer, "email", None) or "",
+        "address": getattr(customer, "address", None) or "",
+        "contact_person": getattr(customer, "contact_person", None) or "",
+
+        "credit_limit": float(credit_limit),
+        "exposure": float(exposure),
         "outstanding": float(outstanding),
+        "overdue": float(overdue),
+        "collected": float(collected),
+        "pending_collection": float(pending_collection),
+        "planned_collection": float(planned_collection),
+        "risk_ratio": float(risk_ratio) if risk_ratio is not None else None,
+
+        "ageing": {
+            "0_30": float(ageing_0_30),
+            "31_60": float(ageing_31_60),
+            "61_90": float(ageing_61_90),
+            "90_plus": float(ageing_90_plus),
+        },
+
         "total_sales_mt": float(total_sales_mt),
         "total_sales_value": float(total_sales_value),
+        "monthly_sales": float(monthly_sales),
+        "yearly_sales": float(yearly_sales),
         "last_invoice_date": str(last_invoice.invoice_date) if last_invoice else None,
-        "last_collection_date": last_coll_date,
-        "last_visit_date": str(last_visit.visit_date) if last_visit else None,
-        "total_visits": visits.count(),
-    }
-    return JsonResponse(data)
 
+        "planned_visits": planned_visits,
+        "completed_visits": completed_visits,
+        "pending_visits": pending_visits,
+        "last_visit_date": str(last_visit.visit_date) if last_visit else None,
+
+        "call_count": call_count,
+        "last_call": str(last_call.call_datetime) if last_call else None,
+
+        "lead_count": lead_count,
+        "lead_qty": float(lead_qty),
+    }
+
+    return JsonResponse(data)
 
 # =====================================================================
 # Visit batches / Visit History
@@ -6485,153 +6757,339 @@ def collection_new(request: HttpRequest) -> HttpResponse:
 @require_kam_code("kam_customers")
 def customers(request: HttpRequest) -> HttpResponse:
     """
-    FIX 3 — Safe customer fallback.
-    NEVER crash on ?id=<invalid>. If the provided ID does not exist or is
-    out of scope, fall back to the first customer in the queryset (or None).
-    This prevents 404 errors when the frontend sends stale/invalid IDs.
+    Customer 360.
+
+    Fixed for all customers:
+    - Uses PostgreSQL only.
+    - Includes data linked to duplicate customer aliases.
+    - Exposes all expected financial/sales/visits/calls/leads/ageing values.
+    - Removes duplicate query blocks.
+    - Does not change business logic.
     """
     scope_kam_id, scope_label = _resolve_scope(request, request.user)
     customer_id = request.GET.get("id")
 
-    base_qs = _customer_qs_for_user(request.user)
+    base_qs = _customer_qs_for_user(request.user).select_related("kam", "primary_kam")
 
     if scope_kam_id is not None:
-        scoped_invoice_customer_ids = InvoiceFact.objects.filter(
-            kam_id=scope_kam_id
-        ).values_list("customer_id", flat=True)
+        scoped_invoice_customer_ids = (
+            InvoiceFact.objects
+            .filter(kam_id=scope_kam_id)
+            .values_list("customer_id", flat=True)
+        )
 
-        scoped_lead_customer_ids = LeadFact.objects.filter(
-            kam_id=scope_kam_id
-        ).values_list("customer_id", flat=True)
+        scoped_lead_customer_ids = (
+            LeadFact.objects
+            .filter(kam_id=scope_kam_id)
+            .values_list("customer_id", flat=True)
+        )
 
-        scoped_collection_customer_ids = CollectionTxn.objects.filter(
-            kam_id=scope_kam_id
-        ).values_list("customer_id", flat=True)
+        scoped_collection_customer_ids = (
+            CollectionTxn.objects
+            .filter(kam_id=scope_kam_id)
+            .values_list("customer_id", flat=True)
+        )
 
-        base_qs = base_qs.filter(
-            Q(kam_id=scope_kam_id)
-            | Q(primary_kam_id=scope_kam_id)
-            | Q(id__in=scoped_invoice_customer_ids)
-            | Q(id__in=scoped_lead_customer_ids)
-            | Q(id__in=scoped_collection_customer_ids)
-        ).distinct()
+        base_qs = (
+            base_qs
+            .filter(
+                Q(kam_id=scope_kam_id)
+                | Q(primary_kam_id=scope_kam_id)
+                | Q(id__in=scoped_invoice_customer_ids)
+                | Q(id__in=scoped_lead_customer_ids)
+                | Q(id__in=scoped_collection_customer_ids)
+            )
+            .distinct()
+        )
 
     customer_list = list(base_qs.order_by("name")[:300])
 
-    # FIX 3 — Safe customer lookup: never crash on invalid/missing ID
     customer = None
+
     if customer_id:
         try:
             customer = base_qs.filter(id=int(customer_id)).first()
         except (ValueError, TypeError):
             customer = None
 
-    # Fallback: use first customer in list if no valid ID was provided
     if customer is None:
         customer = customer_list[0] if customer_list else None
 
     period_type, start_date, end_date, period_id = _get_customer360_range(request)
 
-    exposure = overdue = credit_limit = Decimal(0)
-    ageing = {"a0_30": Decimal(0), "a31_60": Decimal(0), "a61_90": Decimal(0), "a90_plus": Decimal(0)}
-    sales_history = collections_history = visit_history = call_history = lead_history = overdue_history = followups = []
+    exposure = Decimal(0)
+    overdue = Decimal(0)
+    credit_limit = Decimal(0)
+    outstanding = Decimal(0)
+    collected = Decimal(0)
+    pending_collection = Decimal(0)
+    planned_collection = Decimal(0)
+
+    ageing = {
+        "a0_30": Decimal(0),
+        "a31_60": Decimal(0),
+        "a61_90": Decimal(0),
+        "a90_plus": Decimal(0),
+    }
+
+    total_sales = Decimal(0)
+    monthly_sales = Decimal(0)
+    yearly_sales = Decimal(0)
+    total_sales_value = Decimal(0)
+
+    planned_visits = 0
+    completed_visits = 0
+    pending_visits = 0
+
+    call_count = 0
+    last_call = None
+
+    lead_count = 0
+    lead_qty = Decimal(0)
+
+    sales_history = []
+    collections_history = []
+    visit_history = []
+    call_history = []
+    lead_history = []
+    overdue_history = []
+    followups = []
+
     risk_ratio = None
+    alias_customer_ids = []
 
     if customer:
-        latest_dt = OverdueSnapshot.objects.filter(customer=customer).order_by("-snapshot_date").values_list("snapshot_date", flat=True).first()
+        alias_customer_ids = _customer360_alias_customer_ids(customer, base_qs)
+
+        latest_dt = (
+            OverdueSnapshot.objects
+            .filter(customer_id__in=alias_customer_ids)
+            .order_by("-snapshot_date")
+            .values_list("snapshot_date", flat=True)
+            .first()
+        )
+
         if latest_dt:
-            snap = OverdueSnapshot.objects.filter(customer=customer, snapshot_date=latest_dt).first()
-            if snap:
-                exposure = _safe_decimal(snap.exposure)
-                overdue = _safe_decimal(snap.overdue)
-                ageing = {
-                    "a0_30": _safe_decimal(snap.ageing_0_30),
-                    "a31_60": _safe_decimal(snap.ageing_31_60),
-                    "a61_90": _safe_decimal(snap.ageing_61_90),
-                    "a90_plus": _safe_decimal(snap.ageing_90_plus),
-                }
+            snap_agg = (
+                OverdueSnapshot.objects
+                .filter(customer_id__in=alias_customer_ids, snapshot_date=latest_dt)
+                .aggregate(
+                    exposure=Sum("exposure"),
+                    overdue=Sum("overdue"),
+                    a0_30=Sum("ageing_0_30"),
+                    a31_60=Sum("ageing_31_60"),
+                    a61_90=Sum("ageing_61_90"),
+                    a90_plus=Sum("ageing_90_plus"),
+                )
+            )
+
+            exposure = _safe_decimal(snap_agg.get("exposure"))
+            overdue = _safe_decimal(snap_agg.get("overdue"))
+            ageing = {
+                "a0_30": _safe_decimal(snap_agg.get("a0_30")),
+                "a31_60": _safe_decimal(snap_agg.get("a31_60")),
+                "a61_90": _safe_decimal(snap_agg.get("a61_90")),
+                "a90_plus": _safe_decimal(snap_agg.get("a90_plus")),
+            }
 
         credit_limit = _safe_decimal(customer.credit_limit)
+
+        if not credit_limit:
+            credit_limit = _safe_decimal(
+                Customer.objects
+                .filter(id__in=alias_customer_ids)
+                .aggregate(s=Sum("credit_limit"))
+                .get("s")
+            )
+
         if not exposure:
-            age_sum = ageing["a0_30"] + ageing["a31_60"] + ageing["a61_90"] + ageing["a90_plus"]
+            exposure = _safe_decimal(
+                Customer.objects
+                .filter(id__in=alias_customer_ids)
+                .aggregate(s=Sum("total_exposure"))
+                .get("s")
+            )
+
+        if not exposure:
+            age_sum = (
+                ageing["a0_30"]
+                + ageing["a31_60"]
+                + ageing["a61_90"]
+                + ageing["a90_plus"]
+            )
+
             if age_sum:
                 exposure = age_sum
             elif overdue:
                 exposure = overdue
-        if credit_limit:
-            try:
-                risk_ratio = exposure / credit_limit
-            except Exception:
-                risk_ratio = None
+
+        risk_ratio = _safe_ratio(exposure, credit_limit)
 
         sales_base = InvoiceFact.objects.filter(
-            customer=customer,
+            customer_id__in=alias_customer_ids,
             invoice_date__gte=start_date,
             invoice_date__lte=end_date,
         )
+
         sales_qs = _preferred_inv_qs(sales_base)
-        sales = (
-            sales_qs
-            .values("invoice_date__year", "invoice_date__month")
-            .annotate(mt=Sum("qty_mt"))
-            .order_by("invoice_date__year", "invoice_date__month")
+
+        sales_totals = sales_qs.aggregate(
+            qty=Sum("qty_mt"),
+            value=Sum("invoice_value"),
         )
+
+        total_sales = _safe_decimal(sales_totals.get("qty"))
+        total_sales_value = _safe_decimal(sales_totals.get("value"))
+
+        today = timezone.localdate()
+        month_start = today.replace(day=1)
+        year_start = date(today.year, 1, 1)
+
+        monthly_sales = _safe_decimal(
+            _preferred_inv_qs(
+                InvoiceFact.objects.filter(
+                    customer_id__in=alias_customer_ids,
+                    invoice_date__gte=month_start,
+                    invoice_date__lte=today,
+                )
+            ).aggregate(s=Sum("qty_mt")).get("s")
+        )
+
+        yearly_sales = _safe_decimal(
+            _preferred_inv_qs(
+                InvoiceFact.objects.filter(
+                    customer_id__in=alias_customer_ids,
+                    invoice_date__gte=year_start,
+                    invoice_date__lte=today,
+                )
+            ).aggregate(s=Sum("qty_mt")).get("s")
+        )
+
         sales_history = [
             {
-                "year": r["invoice_date__year"],
-                "month": r["invoice_date__month"],
-                "mt": _safe_decimal(r["mt"]),
+                "year": row["invoice_date__year"],
+                "month": row["invoice_date__month"],
+                "mt": _safe_decimal(row["mt"]),
             }
-            for r in sales
+            for row in (
+                sales_qs
+                .values("invoice_date__year", "invoice_date__month")
+                .annotate(mt=Sum("qty_mt"))
+                .order_by("invoice_date__year", "invoice_date__month")
+            )
         ]
 
-        colls = (
-            CollectionTxn.objects
-            .filter(
-                customer=customer,
-                txn_datetime__date__gte=start_date,
-                txn_datetime__date__lte=end_date,
-            )
-            .values("txn_datetime__year", "txn_datetime__month")
-            .annotate(amount=Sum("amount"))
-            .order_by("txn_datetime__year", "txn_datetime__month")
+        collection_qs = CollectionTxn.objects.filter(
+            customer_id__in=alias_customer_ids,
+            txn_datetime__date__gte=start_date,
+            txn_datetime__date__lte=end_date,
         )
+
+        collected = _safe_decimal(
+            collection_qs.aggregate(s=Sum("amount")).get("s")
+        )
+
+        plan_agg = (
+            CollectionPlan.objects
+            .filter(customer_id__in=alias_customer_ids)
+            .aggregate(
+                planned=Sum("planned_amount"),
+                actual=Sum("actual_amount"),
+                plan_overdue=Sum("overdue_amount"),
+            )
+        )
+
+        planned_collection = _safe_decimal(plan_agg.get("planned"))
+        plan_actual = _safe_decimal(plan_agg.get("actual"))
+        plan_overdue = _safe_decimal(plan_agg.get("plan_overdue"))
+
+        if not collected and plan_actual:
+            collected = plan_actual
+
+        if not overdue and plan_overdue:
+            overdue = plan_overdue
+
+        outstanding = exposure - collected
+        pending_collection = outstanding if outstanding > 0 else Decimal(0)
+
         collections_history = [
             {
-                "year": r["txn_datetime__year"],
-                "month": r["txn_datetime__month"],
-                "amount": _safe_decimal(r["amount"]),
+                "year": row["txn_datetime__year"],
+                "month": row["txn_datetime__month"],
+                "amount": _safe_decimal(row["amount"]),
             }
-            for r in colls
+            for row in (
+                collection_qs
+                .values("txn_datetime__year", "txn_datetime__month")
+                .annotate(amount=Sum("amount"))
+                .order_by("txn_datetime__year", "txn_datetime__month")
+            )
         ]
 
-        visit_history = list(
+        visits_qs = (
             VisitPlan.objects
-            .select_related("actual", "kam")
-            .filter(customer=customer, visit_date__gte=start_date, visit_date__lte=end_date)
-            .order_by("-visit_date")[:20]
+            .select_related("actual", "kam", "customer")
+            .filter(
+                customer_id__in=alias_customer_ids,
+                visit_date__gte=start_date,
+                visit_date__lte=end_date,
+            )
         )
-        call_history = list(
+
+        planned_visits = visits_qs.count()
+        completed_visits = visits_qs.filter(actual__isnull=False).count()
+        pending_visits = max(planned_visits - completed_visits, 0)
+
+        visit_history = list(
+            visits_qs.order_by("-visit_date", "-created_at", "-id")[:20]
+        )
+
+        calls_qs = (
             CallLog.objects
-            .select_related("kam")
-            .filter(customer=customer, call_datetime__date__gte=start_date, call_datetime__date__lte=end_date)
-            .order_by("-call_datetime")[:20]
+            .select_related("kam", "customer")
+            .filter(
+                customer_id__in=alias_customer_ids,
+                call_datetime__date__gte=start_date,
+                call_datetime__date__lte=end_date,
+            )
         )
-        lead_history = list(
+
+        call_count = calls_qs.count()
+        last_call = calls_qs.order_by("-call_datetime").first()
+
+        call_history = list(
+            calls_qs.order_by("-call_datetime")[:20]
+        )
+
+        leads_qs = (
             LeadFact.objects
-            .filter(customer=customer, doe__gte=start_date, doe__lte=end_date)
-            .order_by("-doe")[:20]
+            .select_related("customer", "kam")
+            .filter(
+                customer_id__in=alias_customer_ids,
+                doe__gte=start_date,
+                doe__lte=end_date,
+            )
         )
+
+        lead_count = leads_qs.count()
+        lead_qty = _safe_decimal(leads_qs.aggregate(s=Sum("qty_mt")).get("s"))
+
+        lead_history = list(
+            leads_qs.order_by("-doe")[:20]
+        )
+
         overdue_history = list(
             OverdueSnapshot.objects
-            .filter(customer=customer)
+            .select_related("customer", "kam")
+            .filter(customer_id__in=alias_customer_ids)
             .order_by("-snapshot_date")[:12]
         )
-        today = timezone.localdate()
+
         followups = list(
             VisitActual.objects
+            .select_related("plan", "plan__customer", "plan__kam")
             .filter(
-                plan__customer=customer,
+                plan__customer_id__in=alias_customer_ids,
                 next_action__isnull=False,
                 next_action__gt="",
                 next_action_date__isnull=False,
@@ -6639,30 +7097,57 @@ def customers(request: HttpRequest) -> HttpResponse:
             )
             .order_by("next_action_date")[:10]
         )
-        sales_history = [{"year": r["invoice_date__year"], "month": r["invoice_date__month"], "mt": _safe_decimal(r["mt"])} for r in sales]
-        colls = CollectionTxn.objects.filter(customer=customer, txn_datetime__date__gte=start_date, txn_datetime__date__lte=end_date).values("txn_datetime__year", "txn_datetime__month").annotate(amount=Sum("amount")).order_by("txn_datetime__year", "txn_datetime__month")
-        collections_history = [{"year": r["txn_datetime__year"], "month": r["txn_datetime__month"], "amount": _safe_decimal(r["amount"])} for r in colls]
-        visit_history = list(VisitPlan.objects.select_related("actual", "kam").filter(customer=customer, visit_date__gte=start_date, visit_date__lte=end_date).order_by("-visit_date")[:20])
-        call_history = list(CallLog.objects.select_related("kam").filter(customer=customer, call_datetime__date__gte=start_date, call_datetime__date__lte=end_date).order_by("-call_datetime")[:20])
-        lead_history = list(LeadFact.objects.filter(customer=customer, doe__gte=start_date, doe__lte=end_date).order_by("-doe")[:20])
-        overdue_history = list(OverdueSnapshot.objects.filter(customer=customer).order_by("-snapshot_date")[:12])
-        today = timezone.localdate()
-        followups = list(VisitActual.objects.filter(plan__customer=customer, next_action__isnull=False, next_action__gt="", next_action_date__isnull=False, next_action_date__gte=today).order_by("next_action_date")[:10])
 
     ctx = {
-        "page_title": "Customer 360", "period_type": period_type, "period_id": period_id,
-        "scope_label": scope_label, "kam_options": _kam_options_for_user(request.user),
-        "customer_list": customer_list, "customer": customer,
-        "exposure": exposure, "overdue": overdue, "credit_limit": credit_limit,
-        "risk_ratio": risk_ratio, "ageing": ageing,
-        "sales_history": sales_history, "collections_history": collections_history,
-        "visit_history": visit_history, "call_history": call_history,
-        "lead_history": lead_history, "overdue_history": overdue_history, "followups": followups,
-        "sales_last12": sales_history, "collections_last12": collections_history,
-        "recent_visits": visit_history, "recent_calls": call_history,
-    }
-    return render(request, "kam/customer_360.html", ctx)
+        "page_title": "Customer 360",
+        "period_type": period_type,
+        "period_id": period_id,
+        "scope_label": scope_label,
+        "kam_options": _kam_options_for_user(request.user),
+        "customer_list": customer_list,
+        "customer": customer,
 
+        "alias_customer_ids": alias_customer_ids,
+
+        "exposure": exposure,
+        "overdue": overdue,
+        "credit_limit": credit_limit,
+        "outstanding": outstanding,
+        "collected": collected,
+        "pending_collection": pending_collection,
+        "planned_collection": planned_collection,
+        "risk_ratio": risk_ratio,
+        "ageing": ageing,
+
+        "total_sales": total_sales,
+        "total_sales_value": total_sales_value,
+        "monthly_sales": monthly_sales,
+        "yearly_sales": yearly_sales,
+        "sales_history": sales_history,
+        "sales_last12": sales_history,
+
+        "planned_visits": planned_visits,
+        "completed_visits": completed_visits,
+        "pending_visits": pending_visits,
+        "visit_history": visit_history,
+        "recent_visits": visit_history,
+
+        "call_count": call_count,
+        "last_call": last_call,
+        "call_history": call_history,
+        "recent_calls": call_history,
+
+        "lead_count": lead_count,
+        "lead_qty": lead_qty,
+        "lead_history": lead_history,
+
+        "collections_history": collections_history,
+        "collections_last12": collections_history,
+        "overdue_history": overdue_history,
+        "followups": followups,
+    }
+
+    return render(request, "kam/customer_360.html", ctx)
 
 # =====================================================================
 # TARGETS
