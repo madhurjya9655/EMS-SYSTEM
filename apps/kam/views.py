@@ -837,27 +837,40 @@ def _is_kam_candidate(u: User, codes: Optional[set] = None) -> bool:
 
 def _customer_qs_for_user(user: User):
     """
-    Canonical customer scope for KAM dashboard, Plan Visit, and customer APIs.
+    Canonical customer scope for KAM dashboard, Plan Visit, and Customer360.
 
     Visibility rules:
       Admin   -> all valid customers
-      Manager -> customers belonging to all reporting/team KAMs
+      Manager -> customers belonging to reporting/team KAMs + own KAM customers
       KAM     -> own customers only
 
-    Source rule:
-      Customer list comes from PostgreSQL Customer records, which are
-      populated by Google Sheets sync from the Customer Details tab.
+    Important production fix:
+      Some users are classified as Manager by permissions/groups but also have
+      their own KAM customers and facts. Example: pratik@blueoceansteels.com.
 
-    Important:
-      This function must NOT read Google Sheets directly.
-      Google Sheets -> sync -> PostgreSQL -> views/dropdowns.
+      Old behavior:
+        If _is_manager(user) was True and manager had no reporting KAMs,
+        the function returned Customer.objects.none(), hiding user's own customers.
+
+      New behavior:
+        Manager scope always includes the user's own id as well as team ids.
+        This preserves manager visibility and fixes hybrid Manager/KAM users.
+
+    PostgreSQL sources included:
+      1. Customer.kam
+      2. Customer.primary_kam
+      3. KAMAssignment
+      4. InvoiceFact.kam
+      5. LeadFact.kam
+      6. CollectionTxn.kam
+      7. OverdueSnapshot.kam
+      8. CollectionPlan.kam
+
+    This function must not read Google Sheets directly.
     """
     if not user or not getattr(user, "is_authenticated", False):
         return Customer.objects.none()
 
-    # Defensive import:
-    # This prevents NameError even if global import is accidentally missed
-    # during deploy/merge.
     try:
         from .models import KAMAssignment as _KAMAssignment
     except Exception:
@@ -869,6 +882,7 @@ def _customer_qs_for_user(user: User):
 
     base_qs = (
         Customer.objects
+        .select_related("kam", "primary_kam")
         .filter(name__isnull=False)
         .exclude(name__exact="")
     )
@@ -877,17 +891,6 @@ def _customer_qs_for_user(user: User):
         return base_qs.distinct().order_by("name", "code")
 
     def _customers_for_kam_ids(kam_ids):
-        """
-        Resolve customers for one or more KAM user IDs.
-
-        Customer may be connected to a KAM through:
-          1. Customer.kam
-          2. Customer.primary_kam
-          3. KAMAssignment
-          4. InvoiceFact.kam
-          5. LeadFact.kam
-          6. CollectionTxn.kam
-        """
         kam_ids = sorted({int(k) for k in (kam_ids or []) if k})
 
         if not kam_ids:
@@ -916,12 +919,26 @@ def _customer_qs_for_user(user: User):
             .values_list("customer_id", flat=True)
         )
 
+        overdue_customer_ids = (
+            OverdueSnapshot.objects
+            .filter(kam_id__in=kam_ids, customer_id__isnull=False)
+            .values_list("customer_id", flat=True)
+        )
+
+        collection_plan_customer_ids = (
+            CollectionPlan.objects
+            .filter(kam_id__in=kam_ids, customer_id__isnull=False)
+            .values_list("customer_id", flat=True)
+        )
+
         q_obj = (
             Q(kam_id__in=kam_ids)
             | Q(primary_kam_id__in=kam_ids)
             | Q(id__in=invoice_customer_ids)
             | Q(id__in=lead_customer_ids)
             | Q(id__in=collection_customer_ids)
+            | Q(id__in=overdue_customer_ids)
+            | Q(id__in=collection_plan_customer_ids)
         )
 
         if _KAMAssignment is not None:
@@ -937,29 +954,25 @@ def _customer_qs_for_user(user: User):
 
             q_obj = q_obj | Q(id__in=assignment_customer_ids)
 
-        qs = (
+        return (
             base_qs
             .filter(q_obj)
             .distinct()
             .order_by("name", "code")
         )
 
-        logger.info(
-            "Customer scope resolved. user_id=%s username=%s kam_ids=%s count=%s",
-            getattr(user, "id", None),
-            getattr(user, "username", None),
-            kam_ids,
-            qs.count(),
-        )
-
-        return qs
-
     if _is_manager(user):
-        kam_ids = _kams_managed_by_manager(user)
+        kam_ids = set(_kams_managed_by_manager(user))
+
+        # Critical fix:
+        # Include the manager user's own id as well.
+        # This fixes hybrid Manager/KAM users such as Pratik.
+        if getattr(user, "id", None):
+            kam_ids.add(user.id)
 
         if not kam_ids:
             logger.warning(
-                "Manager has no reporting/team KAM IDs. manager_id=%s username=%s",
+                "Manager/KAM has no team or own KAM ID. user_id=%s username=%s",
                 getattr(user, "id", None),
                 getattr(user, "username", None),
             )
