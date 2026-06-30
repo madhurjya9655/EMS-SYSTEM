@@ -753,6 +753,45 @@
 
   </div>
 
+
+  <div class="kam-section-card">
+    <div class="kam-section-head">
+      <div>
+        <h2 class="kam-section-title">Recent Visit Plans</h2>
+        <div class="kam-section-subtitle">One row per saved visit plan.</div>
+      </div>
+    </div>
+
+    <div class="kam-table-wrap">
+      <table class="kam-lines-table">
+        <thead>
+          <tr>
+            <th>Visit Date</th>
+            <th>Customer / Entity</th>
+            <th>Purpose of Visit</th>
+            <th>Status</th>
+            <th>Assigned KAM</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for plan in recent_visits %}
+            <tr>
+              <td>{{ plan.visit_date|date:"d M Y" }}</td>
+              <td>{{ plan.recent_customer_name }}</td>
+              <td>{{ plan.recent_purpose }}</td>
+              <td>{{ plan.recent_status }}</td>
+              <td>{{ plan.recent_kam_name }}</td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="5" class="text-center text-muted py-4">No recent visit plans found.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
 </div>
 
 <script>
