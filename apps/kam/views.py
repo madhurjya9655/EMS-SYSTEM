@@ -5391,14 +5391,11 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
     Visit History page.
 
     Production-safe update:
-    - Keeps existing queryset/service flow.
-    - Adds server-side KAM filter.
-    - Adds server-side date_range dropdown filter:
-        weekly / monthly / quarterly / yearly
-    - Keeps old time_filter values backward-compatible.
-    - Uses select_related / prefetch_related to avoid N+1.
-    - Does not change approval workflow.
-    - Does not change reports/emails/APIs.
+    - Uses VisitPlan as the Visit History row source because customer selected
+      during Plan Visit is stored on VisitPlan.customer.
+    - Keeps existing scoping, filters, workflow, permissions, URLs, and APIs.
+    - Uses select_related and grouped aggregate lookups to avoid N+1 queries.
+    - Does not change approval, post visit, collection, or call log logic.
     """
     can_view_all = _is_manager(request.user)
 
@@ -5424,10 +5421,9 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
         )
 
     qs = (
-        _visitbatch_qs_for_user(request.user)
-        .select_related("kam")
-        .prefetch_related("lines", "lines__customer", "lines__actual")
-        .order_by("-created_at")
+        _visitplan_qs_for_user(request.user)
+        .select_related("customer", "kam", "batch", "actual", "approved_by", "rejected_by")
+        .order_by("-visit_date", "-created_at", "-id")
     )
 
     status_filter = (request.GET.get("status") or "").strip().upper()
@@ -5439,8 +5435,92 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
         qs,
         request,
         kam_field="kam_id",
-        date_field="from_date",
+        date_field="visit_date",
     )
+
+    rows = list(qs[:300])
+
+    customer_ids = sorted(
+        {
+            int(plan.customer_id)
+            for plan in rows
+            if getattr(plan, "customer_id", None)
+        }
+    )
+
+    kam_ids = sorted(
+        {
+            int(plan.kam_id)
+            for plan in rows
+            if getattr(plan, "kam_id", None)
+        }
+    )
+
+    calls_map = {}
+
+    if customer_ids and kam_ids:
+        calls_qs = (
+            CallLog.objects
+            .filter(customer_id__in=customer_ids, kam_id__in=kam_ids)
+            .values("customer_id", "kam_id")
+            .annotate(total=models.Count("id"))
+        )
+
+        calls_map = {
+            (row["customer_id"], row["kam_id"]): row["total"]
+            for row in calls_qs
+        }
+
+    collections_map = {}
+
+    if customer_ids and kam_ids:
+        collections_qs = (
+            CollectionTxn.objects
+            .filter(customer_id__in=customer_ids, kam_id__in=kam_ids)
+            .values("customer_id", "kam_id")
+            .annotate(total=Sum("amount"))
+        )
+
+        collections_map = {
+            (row["customer_id"], row["kam_id"]): _safe_decimal(row["total"])
+            for row in collections_qs
+        }
+
+    for plan in rows:
+        customer_name = ""
+
+        if getattr(plan, "customer_id", None) and getattr(plan, "customer", None):
+            customer_name = (getattr(plan.customer, "name", "") or "").strip()
+
+        if not customer_name:
+            customer_name = (getattr(plan, "counterparty_name", "") or "").strip()
+
+        plan.customer_display_name = customer_name
+        plan.manager_status_display = _manager_visit_business_status(plan)
+        plan.visit_status_display = _manager_visit_business_status(plan)
+
+        actual = getattr(plan, "actual", None)
+
+        if plan.approval_status == STATUS_COMPLETED:
+            plan.post_visit_status_display = "Accepted"
+        elif _post_visit_submitted(plan):
+            plan.post_visit_status_display = "Submitted"
+        else:
+            plan.post_visit_status_display = "Pending"
+
+        plan.next_meeting_display = (
+            getattr(actual, "next_action_date", None)
+            if actual
+            else None
+        )
+
+        aggregate_key = (
+            getattr(plan, "customer_id", None),
+            getattr(plan, "kam_id", None),
+        )
+
+        plan.total_calls = calls_map.get(aggregate_key, 0)
+        plan.total_collections = collections_map.get(aggregate_key, Decimal(0))
 
     kam_dropdown_options = []
 
@@ -5453,10 +5533,10 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
                     .order_by("first_name", "last_name", "username")
                 )
             else:
-                kam_ids = _kams_managed_by_manager(request.user)
+                kam_ids_for_dropdown = _kams_managed_by_manager(request.user)
                 kam_dropdown_options = list(
                     User.objects
-                    .filter(is_active=True, id__in=kam_ids)
+                    .filter(is_active=True, id__in=kam_ids_for_dropdown)
                     .order_by("first_name", "last_name", "username")
                 )
         except Exception:
@@ -5473,19 +5553,14 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
     time_filter = (request.GET.get("time_filter") or "").strip().lower()
 
     ctx = {
-        "rows": list(qs[:300]),
+        "rows": rows,
         "can_view_all": can_view_all,
         "status_filter": status_filter,
         "selected_kam": selected_kam,
-
-        # New Visit History dropdown state.
         "date_range": date_range,
-
-        # Backward-compatible aliases for older templates/pages.
         "time_filter": time_filter,
         "filter_from": request.GET.get("from_date", "") or request.GET.get("from", ""),
         "filter_to": request.GET.get("to_date", "") or request.GET.get("to", ""),
-
         "kam_dropdown_options": kam_dropdown_options,
     }
 

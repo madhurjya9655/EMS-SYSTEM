@@ -298,7 +298,7 @@
     justify-content: flex-end;
     align-items: center;
     flex-wrap: nowrap;
-    min-width: 352px;
+    min-width: 280px;
   }
 
   .btn-xs {
@@ -417,7 +417,7 @@
     <div>
       <h1 class="visit-history-title">Visit History</h1>
       <div class="visit-history-subtitle">
-        Customer-wise visit history with post-visit update, call log, and collection entry in one row.
+        Customer-wise visit history with post-visit update and collection entry in one row.
       </div>
     </div>
 
@@ -426,6 +426,14 @@
         <i class="fas fa-plus"></i>
         Plan New Visit
       </a>
+
+      {% if user|has_permission:"kam_call_new" or user.is_superuser %}
+        <a href="{% url 'kam:call_new' %}" class="visit-history-btn visit-history-btn-outline">
+          <i class="fas fa-phone"></i>
+          Call Log
+        </a>
+      {% endif %}
+
       <a href="{% url 'kam:dashboard' %}" class="visit-history-btn visit-history-btn-outline">
         <i class="fas fa-arrow-left"></i>
         Dashboard
@@ -642,12 +650,6 @@
                     {% if plan.approval_status == "APPROVED" or plan.approval_status == "COMPLETED" %}
                       <a href="{% url 'kam:visits' %}?plan={{ plan.id }}" class="btn btn-xs btn-outline-success" title="Update post visit details">
                         <i class="fas fa-clipboard-check"></i>Post Visit
-                      </a>
-                    {% endif %}
-
-                    {% if user|has_permission:"kam_call_new" or user.is_superuser %}
-                      <a href="{% url 'kam:call_new' %}{% if plan.customer_id %}?customer={{ plan.customer_id }}{% endif %}" class="btn btn-xs btn-outline-secondary" title="Call log">
-                        <i class="fas fa-phone"></i>Call Log
                       </a>
                     {% endif %}
 
