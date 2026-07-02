@@ -6,406 +6,73 @@
 
 {% block head_extra %}
 <style>
-  .kam-plan-page {
-    max-width: 100%;
-  }
-
-  .kam-plan-header {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-    margin-bottom: 22px;
-  }
-
-  .kam-plan-title {
-    margin: 0;
-    font-size: 34px;
-    font-weight: 500;
-    color: #07172f;
-  }
-
-  .kam-plan-subtitle {
-    margin-top: 6px;
-    font-size: 17px;
-    color: #607086;
-  }
-
-  .kam-header-actions {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .kam-btn-soft {
-    border: 1px solid #bcd2ff;
-    color: #477cff;
-    background: #f7faff;
-    border-radius: 9px;
-    padding: 10px 16px;
-    font-weight: 600;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .kam-btn-outline {
-    border: 1px solid #718096;
-    color: #4a5568;
-    background: #fff;
-    border-radius: 9px;
-    padding: 10px 16px;
-    font-weight: 600;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .kam-tabs {
-    display: flex;
-    align-items: center;
-    border-bottom: 1px solid #d9dee8;
-    margin-bottom: 0;
-  }
-
-  .kam-tabs .nav-link {
-    border: 0;
-    border-radius: 0;
-    padding: 14px 20px;
-    font-weight: 700;
-    color: #5f6f83;
-    background: transparent;
-  }
-
-  .kam-tabs .nav-link.active {
-    color: #477cff;
-    background: #fff;
-    border: 1px solid #d9dee8;
-    border-bottom-color: #fff;
-    margin-bottom: -1px;
-  }
-
-  .kam-tab-panel {
-    background: #fff;
-    border: 1px solid #d9dee8;
-    border-top: 0;
-    padding: 28px 20px 20px;
-  }
-
-  .kam-form-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr 1.5fr;
-    gap: 22px;
-    align-items: end;
-    margin-bottom: 28px;
-  }
-
-  .kam-field {
-    width: 100%;
-  }
-
-  .kam-label {
-    display: block;
-    margin-bottom: 8px;
-    color: #162033;
-    font-size: 15px;
-    font-weight: 700;
-  }
-
-  .kam-label .required {
-    color: #ef4444;
-  }
-
-  .kam-field input,
-  .kam-field select,
-  .kam-field textarea {
-    width: 100%;
-    min-height: 42px;
-    border: 1px solid #a8b0bd;
-    border-radius: 0;
-    background: #fff;
-    color: #1f2937;
-    font-size: 16px;
-    padding: 8px 10px;
-    box-sizing: border-box;
-  }
-
-  .kam-field textarea {
-    min-height: 64px;
-    resize: vertical;
-  }
-
-  .kam-help {
-    font-size: 12px;
-    color: #718096;
-    margin-top: 5px;
-  }
-
-  .kam-error {
-    color: #dc2626;
-    font-size: 12px;
-    margin-top: 5px;
-  }
-
-  .kam-info-alert {
-    background: #eff6ff;
-    border: 1px solid #bfdbfe;
-    color: #1e40af;
-    border-radius: 8px;
-    padding: 11px 13px;
-    font-size: 13px;
-    margin-bottom: 18px;
-  }
-
-  .kam-warning-alert {
-    background: #fff7ed;
-    border: 1px solid #fed7aa;
-    color: #9a3412;
-    border-radius: 8px;
-    padding: 11px 13px;
-    font-size: 13px;
-    margin-bottom: 18px;
-  }
-
-  .kam-section-card {
-    border: 1px solid #e7eaf0;
-    border-radius: 12px;
-    background: #fff;
-    box-shadow: 0 8px 18px rgba(15, 23, 42, .06);
-    overflow: hidden;
-    margin-bottom: 28px;
-  }
-
-  .kam-section-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    padding: 20px 24px;
-    border-bottom: 1px solid #edf0f4;
-    flex-wrap: wrap;
-  }
-
-  .kam-section-title {
-    font-size: 18px;
-    font-weight: 800;
-    color: #020617;
-    margin: 0;
-  }
-
-  .kam-section-subtitle {
-    color: #64748b;
-    font-size: 16px;
-    font-weight: 600;
-    margin-top: 4px;
-  }
-
-  .kam-add-line-btn {
-    border: 1px solid #bcd2ff;
-    background: #fff;
-    color: #477cff;
-    border-radius: 9px;
-    padding: 10px 16px;
-    font-weight: 700;
-    display: inline-flex;
-    align-items: center;
-    gap: 9px;
-  }
-
-  .kam-table-wrap {
-    width: 100%;
-    overflow-x: auto;
-  }
-
-  .kam-lines-table {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
-  }
-
-  .kam-lines-table th {
-    background: #f8fafc;
-    padding: 12px 12px;
-    border-bottom: 1px solid #e7eaf0;
-    color: #020617;
-    font-size: 16px;
-    font-weight: 800;
-    white-space: nowrap;
-    vertical-align: middle;
-  }
-
-  .kam-lines-table td {
-    padding: 10px 12px;
-    vertical-align: middle;
-  }
-
-  .kam-line-input {
-    width: 100%;
-    height: 48px;
-    border: 1px solid #d9dee8;
-    border-radius: 14px;
-    padding: 10px 16px;
-    font-size: 16px;
-    color: #1f2937;
-    box-sizing: border-box;
-  }
-
-  .kam-line-input::placeholder {
-    color: #97a1b3;
-  }
-
-  .kam-remove-line {
-    width: 44px;
-    height: 44px;
-    border: 1px solid #fb7185;
-    color: #e11d48;
-    background: #fff;
-    border-radius: 10px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .kam-action-row {
-    display: flex;
-    align-items: center;
-    gap: 18px;
-    flex-wrap: wrap;
-    margin-top: 20px;
-  }
-
-  .kam-save-btn {
-    min-width: 160px;
-    height: 48px;
-    border: 1px solid #718096;
-    color: #5f6f83;
-    background: #fff;
-    border-radius: 14px;
-    font-size: 16px;
-    font-weight: 700;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 9px;
-  }
-
-  .kam-submit-btn {
-    min-width: 215px;
-    height: 48px;
-    border: 0;
-    color: #fff;
-    background: linear-gradient(135deg, #477cff, #4f83ff);
-    border-radius: 14px;
-    font-size: 16px;
-    font-weight: 800;
-    box-shadow: 0 8px 18px rgba(71, 124, 255, .28);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 9px;
-  }
-
-  .kam-manager-note {
-    color: #607086;
-    font-size: 17px;
-    display: inline-flex;
-    align-items: center;
-    gap: 9px;
-  }
-
-  .kam-customer-mode {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-bottom: 8px;
-  }
-
-  .kam-customer-mode .btn {
-    border-radius: 8px;
-    font-weight: 700;
-  }
-
-  .manual-preview-box {
-    display: none;
-    background: #ecfdf5;
-    border: 1px solid #6ee7b7;
-    border-radius: 8px;
-    padding: 8px 10px;
-    font-size: 13px;
-    color: #065f46;
-    margin-top: 8px;
-  }
-
-  .manual-preview-box.visible {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .customer-empty-warning {
-    border: 1px dashed #ffc107;
-    background: #fff8e1;
-    color: #7a5b00;
-    border-radius: 8px;
-    padding: 8px 10px;
-    font-size: 13px;
-    margin-top: 8px;
-  }
-
-  @media (max-width: 1100px) {
-    .kam-form-grid {
-      grid-template-columns: 1fr 1fr;
-    }
-  }
-
-  @media (max-width: 768px) {
-    .kam-form-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .kam-plan-title {
-      font-size: 28px;
-    }
-
-    .kam-action-row {
-      align-items: stretch;
-      flex-direction: column;
-    }
-
-    .kam-save-btn,
-    .kam-submit-btn {
-      width: 100%;
-    }
-  }
+  .kam-plan-page { max-width: 100%; }
+  .kam-plan-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
+  .kam-title { margin: 0; font-size: 30px; font-weight: 800; color: #0f172a; letter-spacing: -.02em; }
+  .kam-subtitle { margin-top: 6px; color: #64748b; font-size: 14px; }
+  .kam-header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .kam-btn { min-height: 40px; border-radius: 12px; padding: 9px 14px; font-weight: 700; display: inline-flex; align-items: center; gap: 8px; text-decoration: none; border: 1px solid #dbe3ef; }
+  .kam-btn-primary { background: #2563eb; color: #fff; border-color: #2563eb; box-shadow: 0 10px 22px rgba(37, 99, 235, .22); }
+  .kam-btn-soft { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
+  .kam-btn-outline { color: #475569; background: #fff; }
+  .kam-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 18px; box-shadow: 0 16px 36px rgba(15, 23, 42, .07); overflow: hidden; margin-bottom: 22px; }
+  .kam-card-head { padding: 18px 22px; border-bottom: 1px solid #edf2f7; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .kam-card-title { margin: 0; font-size: 17px; font-weight: 800; color: #0f172a; }
+  .kam-card-subtitle { margin-top: 3px; font-size: 13px; color: #64748b; }
+  .kam-card-body { padding: 22px; }
+  .kam-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; align-items: start; }
+  .kam-field-wide { grid-column: 1 / -1; }
+  .kam-label { display: block; margin-bottom: 7px; font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: #475569; }
+  .kam-label .required { color: #dc2626; }
+  .kam-field .form-control, .kam-field .form-select, .kam-field input, .kam-field select, .kam-field textarea { width: 100%; min-height: 44px; border: 1px solid #d8e0ec; border-radius: 12px; color: #0f172a; font-size: 14px; padding: 10px 12px; background: #fff; box-shadow: none; }
+  .kam-field textarea { min-height: 96px; resize: none; line-height: 1.45; }
+  .kam-help { font-size: 12px; color: #64748b; margin-top: 6px; }
+  .kam-error { color: #dc2626; font-size: 12px; margin-top: 6px; }
+  .kam-alert { border-radius: 14px; padding: 12px 14px; font-size: 13px; margin-bottom: 18px; border: 1px solid #bfdbfe; color: #1e40af; background: #eff6ff; }
+  .customer-picker { border: 1px solid #d8e0ec; border-radius: 14px; padding: 10px; background: #fff; }
+  .customer-search { width: 100%; min-height: 42px; border: 1px solid #e2e8f0; border-radius: 12px; padding: 9px 12px; outline: 0; }
+  .customer-options { max-height: 220px; overflow-y: auto; margin-top: 8px; border: 1px solid #edf2f7; border-radius: 12px; }
+  .customer-option { width: 100%; border: 0; border-bottom: 1px solid #edf2f7; background: #fff; padding: 10px 12px; text-align: left; display: flex; flex-direction: column; gap: 2px; }
+  .customer-option:hover { background: #f8fafc; }
+  .customer-option:last-child { border-bottom: 0; }
+  .customer-option .name { font-weight: 800; color: #0f172a; }
+  .customer-option .meta { font-size: 12px; color: #64748b; }
+  .selected-chip-wrap, .kam-chip-wrap { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .kam-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; border-radius: 999px; padding: 7px 10px; background: #eef2ff; color: #3730a3; font-size: 12px; font-weight: 800; border: 1px solid #c7d2fe; }
+  .kam-chip button { width: 18px; height: 18px; border: 0; border-radius: 999px; background: #c7d2fe; color: #312e81; line-height: 18px; padding: 0; }
+  .manual-customer-box { margin-top: 14px; border-top: 1px dashed #d8e0ec; padding-top: 14px; }
+  .purpose-tools { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-top: 6px; font-size: 12px; color: #64748b; }
+  .kam-action-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+  .kam-action-row .btn { min-height: 44px; border-radius: 12px; padding-left: 18px; padding-right: 18px; font-weight: 800; }
+  .table-modern { margin: 0; min-width: 860px; }
+  .table-modern thead th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: #475569; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 13px 14px; border-bottom: 1px solid #e2e8f0; }
+  .table-modern tbody td { padding: 14px; vertical-align: middle; border-bottom: 1px solid #edf2f7; color: #334155; font-size: 13px; }
+  .table-modern tbody tr:hover { background: #f8fafc; }
+  .status-badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 9px; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+  .status-draft { background: #f1f5f9; color: #475569; }
+  .status-pending { background: #fff7ed; color: #c2410c; }
+  .status-approved { background: #ecfdf5; color: #047857; }
+  .status-rejected { background: #fef2f2; color: #b91c1c; }
+  .status-completed { background: #eff6ff; color: #1d4ed8; }
+  .empty-row { text-align: center; color: #64748b; padding: 28px !important; }
+  @media (max-width: 1100px) { .kam-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 768px) { .kam-title { font-size: 25px; } .kam-form-grid { grid-template-columns: 1fr; } .kam-card-body { padding: 16px; } .kam-action-row .btn, .kam-btn { width: 100%; justify-content: center; } }
 </style>
-
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 {% endblock %}
 
 {% block content %}
 <div class="kam-plan-page">
-
   <div class="kam-plan-header">
     <div>
-      <h1 class="kam-plan-title">Plan Visit</h1>
-      <div class="kam-plan-subtitle">
-        Create a visit plan for your assigned customers or add a new customer safely.
-      </div>
+      <h1 class="kam-title">Plan Visit</h1>
+      <div class="kam-subtitle">Plan one route with multiple existing customers and optional new customer creation.</div>
     </div>
-
     <div class="kam-header-actions">
-      <a href="{% url 'kam:visit_batches' %}" class="kam-btn-outline">
-        <i class="fas fa-clock-rotate-left"></i>
-        Visit History
-      </a>
-
-      <a href="{% url 'kam:dashboard' %}" class="kam-btn-soft">
-        <i class="fas fa-arrow-left"></i>
-        Dashboard
-      </a>
+      <a href="{% url 'kam:visits' %}" class="kam-btn kam-btn-primary"><i class="fas fa-plus"></i>Plan New Visit</a>
+      <a href="{% url 'kam:call_new' %}" class="kam-btn kam-btn-soft"><i class="fas fa-phone"></i>Call Log</a>
+      <a href="{% url 'kam:visit_batches' %}" class="kam-btn kam-btn-outline"><i class="fas fa-clock-rotate-left"></i>Visit History</a>
+      <a href="{% url 'kam:dashboard' %}" class="kam-btn kam-btn-outline"><i class="fas fa-arrow-left"></i>Dashboard</a>
     </div>
   </div>
 
@@ -420,553 +87,249 @@
     </div>
   {% endif %}
 
-  <ul class="nav kam-tabs" role="tablist">
-    <li class="nav-item" role="presentation">
-      <button class="nav-link active"
-              id="singleVisitTab"
-              data-bs-toggle="tab"
-              data-bs-target="#singleVisitPanel"
-              type="button"
-              role="tab"
-              aria-controls="singleVisitPanel"
-              aria-selected="true">
-        Single Visit
-      </button>
-    </li>
+  <form method="post" novalidate id="singleVisitForm" class="kam-card">
+    {% csrf_token %}
+    <input type="hidden" name="mode" value="single">
+    <input type="hidden" name="form_kind" value="single">
 
-    {% if batch_form %}
-      <li class="nav-item" role="presentation">
-        <button class="nav-link"
-                id="multiVisitTab"
-                data-bs-toggle="tab"
-                data-bs-target="#multiVisitPanel"
-                type="button"
-                role="tab"
-                aria-controls="multiVisitPanel"
-                aria-selected="false">
-          Multi Visit
-        </button>
-      </li>
-    {% endif %}
-  </ul>
-
-  <div class="tab-content">
-
-    <div class="tab-pane fade show active kam-tab-panel"
-         id="singleVisitPanel"
-         role="tabpanel"
-         aria-labelledby="singleVisitTab">
-
-      <div class="kam-info-alert">
-        <i class="fas fa-circle-info me-1"></i>
-        Customer dropdown shows only customers assigned to the logged-in KAM.
-        For a new customer, choose <strong>New Customer</strong>. On successful save, the customer is created and becomes available in future existing-customer dropdowns.
+    <div class="kam-card-head">
+      <div>
+        <h2 class="kam-card-title">Plan New Visit</h2>
+        <div class="kam-card-subtitle">Use the customer search to add multiple customers to one route.</div>
       </div>
+    </div>
 
-      <form method="post" novalidate id="singleVisitForm">
-        {% csrf_token %}
-        <input type="hidden" name="mode" value="single">
-        <input type="hidden" name="form_kind" value="single">
+    <div class="kam-card-body">
+      <div class="kam-alert"><i class="fas fa-circle-info me-1"></i> Customer dropdown is scoped to assigned customers. New customer is created only once and mapped to the KAM.</div>
 
-        {% if single_form.non_field_errors %}
-          <div class="alert alert-danger">
-            {% for error in single_form.non_field_errors %}
-              <div>{{ error }}</div>
-            {% endfor %}
-          </div>
-        {% endif %}
+      {% if single_form.non_field_errors %}
+        <div class="alert alert-danger">
+          {% for error in single_form.non_field_errors %}<div>{{ error }}</div>{% endfor %}
+        </div>
+      {% endif %}
 
-        <div class="kam-form-grid">
-
-          <div class="kam-field">
-            <label class="kam-label" for="{{ single_form.visit_category.id_for_label }}">
-              Visit Category <span class="required">*</span>
-            </label>
-            {{ single_form.visit_category }}
-            {% if single_form.visit_category.errors %}
-              <div class="kam-error">{{ single_form.visit_category.errors|join:", " }}</div>
-            {% endif %}
-          </div>
-
-          <div class="kam-field">
-            <label class="kam-label" for="{{ single_form.visit_date.id_for_label }}">
-              Visit Date <span class="required">*</span>
-            </label>
-            {{ single_form.visit_date }}
-            {% if single_form.visit_date.errors %}
-              <div class="kam-error">{{ single_form.visit_date.errors|join:", " }}</div>
-            {% endif %}
-          </div>
-
-          <div class="kam-field">
-            <label class="kam-label" for="{{ single_form.location.id_for_label }}">
-              Location <span class="required">*</span>
-            </label>
-            {{ single_form.location }}
-            {% if single_form.location.errors %}
-              <div class="kam-error">{{ single_form.location.errors|join:", " }}</div>
-            {% endif %}
-          </div>
-
-          <div class="kam-field" id="customerModeWrap">
-            <label class="kam-label">
-              Customer <span class="required">*</span>
-            </label>
-
-            <div class="kam-customer-mode">
-              <button type="button" class="btn btn-sm btn-primary" id="existingCustomerBtn">
-                Existing Customer
-              </button>
-              <button type="button" class="btn btn-sm btn-outline-primary" id="newCustomerBtn">
-                New Customer
-              </button>
-            </div>
-
-            <div id="existingCustomerWrap">
-              {{ single_form.customer }}
-              {% if single_form.customer.errors %}
-                <div class="kam-error">{{ single_form.customer.errors|join:", " }}</div>
-              {% endif %}
-
-              {% if single_form.fields.customer.queryset.count == 0 %}
-                <div class="customer-empty-warning">
-                  No assigned customers found. Use New Customer or check KAM assignment sync.
-                </div>
-              {% endif %}
-            </div>
-
-            <div id="manualCustomerWrap" style="display:none;">
-              <input type="text"
-                     name="manual_customer"
-                     id="manualCustomerInput"
-                     class="form-control"
-                     maxlength="255"
-                     autocomplete="off"
-                     placeholder="Enter new customer name">
-              <div class="kam-help">
-                This customer will be created automatically after successful save and assigned to your KAM mapping.
-              </div>
-              <div class="manual-preview-box" id="manualCustomerPreview">
-                <i class="fas fa-check-circle"></i>
-                <span id="manualCustomerPreviewText"></span>
-              </div>
-            </div>
-          </div>
-
-          <div class="kam-field" id="counterpartyWrap" style="display:none;">
-            <label class="kam-label" for="{{ single_form.counterparty_name.id_for_label }}">
-              Vendor / Supplier / Warehouse Name <span class="required">*</span>
-            </label>
-            {{ single_form.counterparty_name }}
-            {% if single_form.counterparty_name.errors %}
-              <div class="kam-error">{{ single_form.counterparty_name.errors|join:", " }}</div>
-            {% endif %}
-          </div>
-
+      <div class="kam-form-grid">
+        <div class="kam-field">
+          <label class="kam-label" for="{{ single_form.visit_category.id_for_label }}">Visit Category <span class="required">*</span></label>
+          {{ single_form.visit_category }}
+          {% if single_form.visit_category.errors %}<div class="kam-error">{{ single_form.visit_category.errors|join:", " }}</div>{% endif %}
         </div>
 
         <div class="kam-field">
-          <label class="kam-label" for="{{ single_form.purpose.id_for_label }}">
-            Purpose of Visit <span class="required">*</span>
-          </label>
-          {{ single_form.purpose }}
-          {% if single_form.purpose.errors %}
-            <div class="kam-error">{{ single_form.purpose.errors|join:", " }}</div>
-          {% endif %}
-          <div class="kam-help">
-            Purpose of Visit is mandatory before saving or submitting to manager.
-          </div>
+          <label class="kam-label" for="{{ single_form.visit_date.id_for_label }}">Visit Date <span class="required">*</span></label>
+          {{ single_form.visit_date }}
+          {% if single_form.visit_date.errors %}<div class="kam-error">{{ single_form.visit_date.errors|join:", " }}</div>{% endif %}
         </div>
 
-        <div class="kam-action-row">
-          <button type="submit" name="action" value="draft" class="kam-save-btn">
-            <i class="fas fa-save"></i>
-            Save Draft
-          </button>
-
-          <button type="submit" name="action" value="submit" class="kam-submit-btn">
-            <i class="fas fa-paper-plane"></i>
-            Submit to Manager
-          </button>
-
-          <div class="kam-manager-note">
-            <i class="fas fa-envelope"></i>
-            Manager approval mail is sent immediately on submit.
-          </div>
-        </div>
-      </form>
-    </div>
-
-    {% if batch_form %}
-      <div class="tab-pane fade kam-tab-panel"
-           id="multiVisitPanel"
-           role="tabpanel"
-           aria-labelledby="multiVisitTab">
-
-        <div class="kam-warning-alert">
-          <i class="fas fa-triangle-exclamation me-1"></i>
-          Existing batch visit workflow is preserved for historical production data.
+        <div class="kam-field">
+          <label class="kam-label" for="{{ single_form.location.id_for_label }}">Location <span class="required">*</span></label>
+          {{ single_form.location }}
+          {% if single_form.location.errors %}<div class="kam-error">{{ single_form.location.errors|join:", " }}</div>{% endif %}
         </div>
 
-        <form method="post" novalidate id="batchVisitForm">
-          {% csrf_token %}
-          <input type="hidden" name="mode" value="batch">
-          <input type="hidden" name="form_kind" value="batch">
-
-          {% if batch_form.non_field_errors %}
-            <div class="alert alert-danger">
-              {% for error in batch_form.non_field_errors %}
-                <div>{{ error }}</div>
+        <div class="kam-field kam-field-wide" id="customerModeWrap">
+          <label class="kam-label">Existing Customers <span class="required">*</span></label>
+          <div class="customer-picker" id="customerPicker">
+            <input type="search" class="customer-search" id="customerSearch" placeholder="Search existing customers by name, code or location">
+            <div class="selected-chip-wrap" id="selectedCustomerChips"></div>
+            <div id="selectedCustomerInputs"></div>
+            <div class="customer-options" id="customerOptions">
+              {% for customer in customers %}
+                <button type="button" class="customer-option" data-customer-id="{{ customer.id }}" data-customer-name="{{ customer.name|escape }}" data-search="{{ customer.name|default:''|lower }} {{ customer.code|default:''|lower }} {{ customer.address|default:''|lower }}">
+                  <span class="name">{{ customer.name }}</span>
+                  <span class="meta">{{ customer.code|default:"No code" }}{% if customer.address %} · {{ customer.address|truncatechars:80 }}{% endif %}</span>
+                </button>
+              {% empty %}
+                <div class="p-3 text-muted small">No assigned customers found. Add a new customer below or check assignment sync.</div>
               {% endfor %}
             </div>
-          {% endif %}
-
-          <div class="kam-form-grid">
-
-            <div class="kam-field">
-              <label class="kam-label" for="{{ batch_form.visit_category.id_for_label }}">
-                Visit Category <span class="required">*</span>
-              </label>
-              {{ batch_form.visit_category }}
-              {% if batch_form.visit_category.errors %}
-                <div class="kam-error">{{ batch_form.visit_category.errors|join:", " }}</div>
-              {% endif %}
-            </div>
-
-            <div class="kam-field">
-              <label class="kam-label" for="{{ batch_form.from_date.id_for_label }}">
-                From Date <span class="required">*</span>
-              </label>
-              {{ batch_form.from_date }}
-              {% if batch_form.from_date.errors %}
-                <div class="kam-error">{{ batch_form.from_date.errors|join:", " }}</div>
-              {% endif %}
-            </div>
-
-            <div class="kam-field">
-              <label class="kam-label" for="{{ batch_form.to_date.id_for_label }}">
-                To Date <span class="required">*</span>
-              </label>
-              {{ batch_form.to_date }}
-              {% if batch_form.to_date.errors %}
-                <div class="kam-error">{{ batch_form.to_date.errors|join:", " }}</div>
-              {% endif %}
-            </div>
-
-            <div class="kam-field">
-              <label class="kam-label" for="{{ batch_form.purpose.id_for_label }}">
-                Purpose of Visit <span class="required">*</span>
-              </label>
-              {{ batch_form.purpose }}
-              {% if batch_form.purpose.errors %}
-                <div class="kam-error">{{ batch_form.purpose.errors|join:", " }}</div>
-              {% endif %}
-            </div>
-
           </div>
+          {% if single_form.customer.errors %}<div class="kam-error">{{ single_form.customer.errors|join:", " }}</div>{% endif %}
 
-          {% if line_forms %}
-            <div class="kam-section-card">
-              <div class="kam-section-head">
-                <div>
-                  <h2 class="kam-section-title">Visit Lines</h2>
-                  <div class="kam-section-subtitle">Add customer/vendor visit lines for this batch.</div>
-                </div>
-
-                <button type="button" class="kam-add-line-btn" id="addBatchLineBtn">
-                  <i class="fas fa-plus"></i>
-                  Add Line
-                </button>
-              </div>
-
-              <div class="kam-table-wrap">
-                <table class="kam-lines-table">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>Customer / Entity</th>
-                      <th>Visit Date</th>
-                      <th>Purpose</th>
-                      <th>Remove</th>
-                    </tr>
-                  </thead>
-                  <tbody id="batchLinesBody">
-                    {% for line_form in line_forms %}
-                      <tr class="batch-line-row">
-                        <td>{{ forloop.counter }}</td>
-
-                        <td>
-                          {{ line_form.customer }}
-                          {{ line_form.counterparty_name }}
-
-                          {% if line_form.customer.errors %}
-                            <div class="kam-error">{{ line_form.customer.errors|join:", " }}</div>
-                          {% endif %}
-
-                          {% if line_form.counterparty_name.errors %}
-                            <div class="kam-error">{{ line_form.counterparty_name.errors|join:", " }}</div>
-                          {% endif %}
-                        </td>
-
-                        <td>
-                          {{ line_form.visit_date }}
-                          {% if line_form.visit_date.errors %}
-                            <div class="kam-error">{{ line_form.visit_date.errors|join:", " }}</div>
-                          {% endif %}
-                        </td>
-
-                        <td>
-                          {{ line_form.purpose }}
-                          {% if line_form.purpose.errors %}
-                            <div class="kam-error">{{ line_form.purpose.errors|join:", " }}</div>
-                          {% endif %}
-                        </td>
-
-                        <td class="text-center">
-                          <button type="button" class="kam-remove-line">
-                            <i class="fas fa-trash"></i>
-                          </button>
-                        </td>
-                      </tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          {% endif %}
-
-          <div class="kam-action-row">
-            <button type="submit" name="action" value="draft" class="kam-save-btn">
-              <i class="fas fa-save"></i>
-              Save Draft
-            </button>
-
-            <button type="submit" name="action" value="submit" class="kam-submit-btn">
-              <i class="fas fa-paper-plane"></i>
-              Submit Batch to Manager
-            </button>
+          <div class="manual-customer-box">
+            <label class="kam-label" for="manualCustomerInput">New Customer</label>
+            <input type="text" name="manual_customer" id="manualCustomerInput" class="form-control" maxlength="255" autocomplete="off" placeholder="Optional: Future Metal Pvt Ltd">
+            <div class="kam-help">Optional. This can be saved together with all selected existing customers.</div>
+            <div class="selected-chip-wrap" id="manualCustomerPreview"></div>
           </div>
-        </form>
+        </div>
 
+        <div class="kam-field kam-field-wide" id="counterpartyWrap" style="display:none;">
+          <label class="kam-label" for="{{ single_form.counterparty_name.id_for_label }}">Vendor / Supplier / Warehouse Name <span class="required">*</span></label>
+          {{ single_form.counterparty_name }}
+          {% if single_form.counterparty_name.errors %}<div class="kam-error">{{ single_form.counterparty_name.errors|join:", " }}</div>{% endif %}
+        </div>
+
+        <div class="kam-field kam-field-wide">
+          <label class="kam-label" for="{{ single_form.purpose.id_for_label }}">Purpose of Visit <span class="required">*</span></label>
+          {{ single_form.purpose }}
+          {% if single_form.purpose.errors %}<div class="kam-error">{{ single_form.purpose.errors|join:", " }}</div>{% endif %}
+          <div class="purpose-tools">
+            <span>Write clear agenda, collection follow-up, sales opportunity or relationship purpose.</span>
+            <span><span id="purposeCount">0</span>/2000</span>
+          </div>
+        </div>
       </div>
-    {% endif %}
 
-  </div>
-
-
-  <div class="kam-section-card">
-    <div class="kam-section-head">
-      <div>
-        <h2 class="kam-section-title">Recent Visit Plans</h2>
-        <div class="kam-section-subtitle">One row per saved visit plan.</div>
+      <div class="kam-action-row">
+        <button type="submit" name="action" value="draft" class="btn btn-outline-secondary"><i class="fas fa-save me-1"></i>Save Draft</button>
+        <button type="submit" name="action" value="submit" class="btn btn-primary"><i class="fas fa-paper-plane me-1"></i>Submit to Manager</button>
+        <span class="text-muted small"><i class="fas fa-envelope me-1"></i>Manager approval workflow is preserved.</span>
       </div>
     </div>
+  </form>
 
-    <div class="kam-table-wrap">
-      <table class="kam-lines-table">
+  <div class="kam-card">
+    <div class="kam-card-head">
+      <div>
+        <h2 class="kam-card-title">Recent Visit Table</h2>
+        <div class="kam-card-subtitle">Latest saved visits with clean status and customer chips.</div>
+      </div>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover align-middle table-modern">
         <thead>
           <tr>
             <th>Visit Date</th>
-            <th>Customer / Entity</th>
+            <th>Customer Name</th>
             <th>Purpose of Visit</th>
-            <th>Status</th>
             <th>Assigned KAM</th>
+            <th>Status</th>
+            <th class="text-end">Actions</th>
           </tr>
         </thead>
         <tbody>
           {% for plan in recent_visits %}
             <tr>
-              <td>{{ plan.visit_date|date:"d M Y" }}</td>
-              <td>{{ plan.recent_customer_name }}</td>
-              <td>{{ plan.recent_purpose }}</td>
-              <td>{{ plan.recent_status }}</td>
+              <td class="text-nowrap">{{ plan.visit_date|date:"d M Y" }}</td>
+              <td>
+                <div class="kam-chip-wrap">
+                  {% for name in plan.customer_badge_names %}<span class="kam-chip">{{ name }}</span>{% empty %}<span class="text-muted">{{ plan.recent_customer_name }}</span>{% endfor %}
+                </div>
+              </td>
+              <td>{{ plan.recent_purpose|truncatechars:110 }}</td>
               <td>{{ plan.recent_kam_name }}</td>
+              <td>
+                {% if plan.approval_status == status_constants.COMPLETED %}<span class="status-badge status-completed">Completed</span>
+                {% elif plan.approval_status == status_constants.APPROVED %}<span class="status-badge status-approved">Approved</span>
+                {% elif plan.approval_status == status_constants.REJECTED %}<span class="status-badge status-rejected">Rejected</span>
+                {% elif plan.approval_status == status_constants.PENDING_APPROVAL %}<span class="status-badge status-pending">Pending</span>
+                {% else %}<span class="status-badge status-draft">{{ plan.recent_status }}</span>{% endif %}
+              </td>
+              <td class="text-end"><a href="{% url 'kam:visits' %}?plan={{ plan.id }}" class="btn btn-sm btn-outline-primary">Open</a></td>
             </tr>
           {% empty %}
-            <tr>
-              <td colspan="5" class="text-center text-muted py-4">No recent visit plans found.</td>
-            </tr>
+            <tr><td colspan="6" class="empty-row">No recent visit plans found.</td></tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   </div>
-
 </div>
 
 <script>
 (function () {
-  const categoryField =
-    document.getElementById("id_single-visit_category") ||
-    document.getElementById("id_single_visit_category") ||
-    document.getElementById("id_visit_category");
-
-  const existingCustomerBtn = document.getElementById("existingCustomerBtn");
-  const newCustomerBtn = document.getElementById("newCustomerBtn");
-  const existingCustomerWrap = document.getElementById("existingCustomerWrap");
-  const manualCustomerWrap = document.getElementById("manualCustomerWrap");
-  const manualCustomerInput = document.getElementById("manualCustomerInput");
-  const manualCustomerPreview = document.getElementById("manualCustomerPreview");
-  const manualCustomerPreviewText = document.getElementById("manualCustomerPreviewText");
-
-  const customerSelect =
-    document.getElementById("id_single-customer") ||
-    document.getElementById("id_single_customer") ||
-    document.getElementById("id_customer");
-
-  const counterpartyWrap = document.getElementById("counterpartyWrap");
-
-  const counterpartyInput =
-    document.getElementById("id_single-counterparty_name") ||
-    document.getElementById("id_single_counterparty_name") ||
-    document.getElementById("id_counterparty_name");
-
+  const categoryField = document.getElementById("id_single-visit_category") || document.getElementById("id_visit_category");
   const customerModeWrap = document.getElementById("customerModeWrap");
-
-  let customerMode = "existing";
-
-  function setCustomerMode(mode) {
-    customerMode = mode;
-
-    if (!existingCustomerBtn || !newCustomerBtn || !existingCustomerWrap || !manualCustomerWrap) {
-      return;
-    }
-
-    if (mode === "manual") {
-      existingCustomerBtn.classList.remove("btn-primary");
-      existingCustomerBtn.classList.add("btn-outline-primary");
-
-      newCustomerBtn.classList.remove("btn-outline-primary");
-      newCustomerBtn.classList.add("btn-primary");
-
-      existingCustomerWrap.style.display = "none";
-      manualCustomerWrap.style.display = "";
-
-      if (customerSelect) {
-        customerSelect.value = "";
-        customerSelect.removeAttribute("required");
-      }
-
-      if (manualCustomerInput) {
-        manualCustomerInput.setAttribute("required", "required");
-        manualCustomerInput.focus();
-      }
-
-    } else {
-      existingCustomerBtn.classList.remove("btn-outline-primary");
-      existingCustomerBtn.classList.add("btn-primary");
-
-      newCustomerBtn.classList.remove("btn-primary");
-      newCustomerBtn.classList.add("btn-outline-primary");
-
-      existingCustomerWrap.style.display = "";
-      manualCustomerWrap.style.display = "none";
-
-      if (manualCustomerInput) {
-        manualCustomerInput.value = "";
-        manualCustomerInput.removeAttribute("required");
-      }
-
-      if (manualCustomerPreview) {
-        manualCustomerPreview.classList.remove("visible");
-      }
-
-      if (customerSelect) {
-        customerSelect.setAttribute("required", "required");
-      }
-    }
-  }
+  const counterpartyWrap = document.getElementById("counterpartyWrap");
+  const counterpartyInput = document.getElementById("id_single-counterparty_name") || document.getElementById("id_counterparty_name");
+  const searchInput = document.getElementById("customerSearch");
+  const optionsWrap = document.getElementById("customerOptions");
+  const chipsWrap = document.getElementById("selectedCustomerChips");
+  const hiddenWrap = document.getElementById("selectedCustomerInputs");
+  const manualInput = document.getElementById("manualCustomerInput");
+  const manualPreview = document.getElementById("manualCustomerPreview");
+  const purposeField = document.getElementById("id_single-purpose") || document.getElementById("id_purpose");
+  const purposeCount = document.getElementById("purposeCount");
+  const selected = new Map();
 
   function isCustomerCategory(value) {
     const normalized = String(value || "").toUpperCase();
     return normalized === "CUSTOMER" || normalized === "CUSTOMER_VISIT";
   }
 
-  function syncCategoryUI() {
-    const isCustomer = isCustomerCategory(categoryField ? categoryField.value : "");
+  function renderSelected() {
+    chipsWrap.innerHTML = "";
+    hiddenWrap.innerHTML = "";
+    selected.forEach(function (name, id) {
+      const chip = document.createElement("span");
+      chip.className = "kam-chip";
+      chip.textContent = name + " ";
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", "Remove " + name);
+      remove.addEventListener("click", function () { selected.delete(id); renderSelected(); });
+      chip.appendChild(remove);
+      chipsWrap.appendChild(chip);
 
-    if (isCustomer) {
-      if (customerModeWrap) {
-        customerModeWrap.style.display = "";
-      }
-
-      if (counterpartyWrap) {
-        counterpartyWrap.style.display = "none";
-      }
-
-      if (counterpartyInput) {
-        counterpartyInput.value = "";
-        counterpartyInput.removeAttribute("required");
-      }
-
-      if (customerMode === "manual") {
-        setCustomerMode("manual");
-      } else {
-        setCustomerMode("existing");
-      }
-
-    } else {
-      if (customerModeWrap) {
-        customerModeWrap.style.display = "none";
-      }
-
-      if (counterpartyWrap) {
-        counterpartyWrap.style.display = "";
-      }
-
-      if (counterpartyInput) {
-        counterpartyInput.setAttribute("required", "required");
-      }
-
-      if (customerSelect) {
-        customerSelect.value = "";
-        customerSelect.removeAttribute("required");
-      }
-
-      if (manualCustomerInput) {
-        manualCustomerInput.value = "";
-        manualCustomerInput.removeAttribute("required");
-      }
-    }
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "customers_selected[]";
+      input.value = id;
+      hiddenWrap.appendChild(input);
+    });
   }
+
+  function filterOptions() {
+    const query = (searchInput.value || "").trim().toLowerCase();
+    optionsWrap.querySelectorAll(".customer-option").forEach(function (button) {
+      const haystack = button.getAttribute("data-search") || "";
+      const id = button.getAttribute("data-customer-id");
+      button.style.display = (!query || haystack.indexOf(query) !== -1) && !selected.has(id) ? "" : "none";
+    });
+  }
+
+  if (optionsWrap) {
+    optionsWrap.querySelectorAll(".customer-option").forEach(function (button) {
+      button.addEventListener("click", function () {
+        const id = button.getAttribute("data-customer-id");
+        const name = button.getAttribute("data-customer-name");
+        if (id && name) { selected.set(id, name); renderSelected(); filterOptions(); }
+      });
+    });
+  }
+
+  if (searchInput) { searchInput.addEventListener("input", filterOptions); }
 
   function syncManualPreview() {
-    if (!manualCustomerInput || !manualCustomerPreview || !manualCustomerPreviewText) {
-      return;
-    }
-
-    const value = manualCustomerInput.value.trim();
-
-    if (value.length > 0) {
-      manualCustomerPreviewText.textContent = "New customer will be created: " + value;
-      manualCustomerPreview.classList.add("visible");
-    } else {
-      manualCustomerPreview.classList.remove("visible");
+    if (!manualInput || !manualPreview) return;
+    const value = manualInput.value.trim();
+    manualPreview.innerHTML = "";
+    if (value) {
+      const chip = document.createElement("span");
+      chip.className = "kam-chip";
+      chip.textContent = value + " will be created";
+      manualPreview.appendChild(chip);
     }
   }
 
-  if (existingCustomerBtn) {
-    existingCustomerBtn.addEventListener("click", function () {
-      setCustomerMode("existing");
-    });
+  function syncCategoryUI() {
+    const isCustomer = isCustomerCategory(categoryField ? categoryField.value : "");
+    if (customerModeWrap) customerModeWrap.style.display = isCustomer ? "" : "none";
+    if (counterpartyWrap) counterpartyWrap.style.display = isCustomer ? "none" : "";
+    if (counterpartyInput) {
+      if (isCustomer) { counterpartyInput.value = ""; counterpartyInput.removeAttribute("required"); }
+      else { counterpartyInput.setAttribute("required", "required"); }
+    }
   }
 
-  if (newCustomerBtn) {
-    newCustomerBtn.addEventListener("click", function () {
-      setCustomerMode("manual");
-    });
+  function syncPurpose() {
+    if (!purposeField) return;
+    purposeField.style.height = "auto";
+    purposeField.style.height = Math.max(96, purposeField.scrollHeight) + "px";
+    if (purposeCount) purposeCount.textContent = String((purposeField.value || "").length);
   }
 
-  if (manualCustomerInput) {
-    manualCustomerInput.addEventListener("input", syncManualPreview);
-  }
+  if (manualInput) manualInput.addEventListener("input", syncManualPreview);
+  if (categoryField) categoryField.addEventListener("change", syncCategoryUI);
+  if (purposeField) purposeField.addEventListener("input", syncPurpose);
 
-  if (categoryField) {
-    categoryField.addEventListener("change", syncCategoryUI);
-  }
-
-  syncCategoryUI();
+  renderSelected();
+  filterOptions();
   syncManualPreview();
+  syncCategoryUI();
+  syncPurpose();
 })();
 </script>
 {% endblock %}

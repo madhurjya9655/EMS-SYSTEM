@@ -1,683 +1,392 @@
 {# FILE: templates/kam/visit_batches.html #}
 {% extends "base.html" %}
-{% load humanize user_filters %}
+{% load humanize %}
 
-{% block title %}Visit History — BOS Lakshya{% endblock %}
-{% block breadcrumb %}Visit History{% endblock %}
+{% block title %}Visit History{% endblock %}
+{% block breadcrumb %}KAM / Visit History{% endblock %}
 
 {% block head_extra %}
 <style>
-  .visit-history-page { width: 100%; }
+  .vh-page-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:22px; }
+  .vh-title { margin:0; font-size:30px; font-weight:850; color:#0f172a; letter-spacing:-.02em; }
+  .vh-subtitle { margin-top:6px; color:#64748b; font-size:14px; }
+  .vh-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .vh-btn { min-height:46px; border-radius:13px; padding:10px 16px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; gap:8px; text-decoration:none; border:1px solid #dbe3ef; background:#fff; color:#334155; white-space:nowrap; }
+  .vh-btn:hover { color:#1d4ed8; border-color:#bfdbfe; background:#f8fbff; }
+  .vh-btn-primary { background:#4f83ff; border-color:#4f83ff; color:#fff; box-shadow:0 14px 30px rgba(79,131,255,.28); }
+  .vh-btn-primary:hover { color:#fff; background:#3f73ef; border-color:#3f73ef; }
 
-  .visit-history-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 18px;
-    flex-wrap: wrap;
-    margin-bottom: 18px;
+  .vh-filter-card { position:sticky; top:8px; z-index:6; background:#fff; border:1px solid #e2e8f0; border-radius:20px; box-shadow:0 16px 38px rgba(15,23,42,.07); padding:18px; margin-bottom:24px; }
+  .vh-filter-top { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+  .vh-filter-title { display:flex; align-items:center; gap:9px; font-size:14px; font-weight:900; color:#0f172a; }
+  .vh-filter-title i { color:#4f83ff; }
+  .vh-filter-hint { font-size:12px; color:#64748b; font-weight:650; }
+  .vh-filter-grid { display:grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap:12px; align-items:end; }
+  .vh-filter-status { grid-column: span 2; }
+  .vh-filter-kam { grid-column: span 2; }
+  .vh-filter-customer { grid-column: span 3; }
+  .vh-filter-date { grid-column: span 2; }
+  .vh-filter-range { grid-column: span 3; }
+  .vh-filter-field { min-width:0; }
+  .vh-label { display:block; margin-bottom:8px; color:#94a3b8; font-size:11px; font-weight:850; letter-spacing:.08em; text-transform:uppercase; }
+  .vh-filter-field .form-control, .vh-filter-field .form-select { width:100%; min-height:48px; border:1px solid #d8e0ec; border-radius:14px; color:#0f172a; padding:10px 14px; box-shadow:none; background:#fff; }
+  .vh-filter-field .form-control:focus, .vh-filter-field .form-select:focus { border-color:#4f83ff; box-shadow:0 0 0 .2rem rgba(79,131,255,.12); }
+
+  .vh-customer-combobox { position:relative; }
+  .vh-customer-trigger { width:100%; min-height:48px; border:1px solid #d8e0ec; border-radius:14px; background:#fff; color:#0f172a; padding:8px 12px 8px 14px; display:flex; align-items:center; justify-content:space-between; gap:10px; text-align:left; box-shadow:none; }
+  .vh-customer-trigger:hover, .vh-customer-combobox.is-open .vh-customer-trigger { border-color:#4f83ff; box-shadow:0 0 0 .2rem rgba(79,131,255,.10); }
+  .vh-customer-trigger-text { display:block; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-weight:750; }
+  .vh-customer-trigger-icon { flex:0 0 auto; color:#64748b; font-size:12px; }
+  .vh-customer-panel { display:none; position:absolute; top:calc(100% + 8px); left:0; right:0; z-index:30; background:#fff; border:1px solid #dbe3ef; border-radius:16px; box-shadow:0 22px 48px rgba(15,23,42,.18); overflow:hidden; }
+  .vh-customer-combobox.is-open .vh-customer-panel { display:block; }
+  .vh-customer-search-wrap { padding:10px; border-bottom:1px solid #edf2f7; background:#f8fafc; }
+  .vh-customer-search { width:100%; min-height:42px; border:1px solid #d8e0ec; border-radius:12px; padding:9px 12px; color:#0f172a; outline:none; }
+  .vh-customer-search:focus { border-color:#4f83ff; box-shadow:0 0 0 .18rem rgba(79,131,255,.12); }
+  .vh-customer-list { max-height:286px; overflow-y:auto; padding:6px; }
+  .vh-customer-option { width:100%; border:0; background:#fff; color:#0f172a; display:flex; flex-direction:column; gap:2px; padding:10px 11px; border-radius:11px; text-align:left; }
+  .vh-customer-option:hover, .vh-customer-option.is-active { background:#eef4ff; color:#1d4ed8; }
+  .vh-customer-option-name { font-size:13px; font-weight:850; line-height:1.25; }
+  .vh-customer-option-meta { font-size:11.5px; color:#64748b; line-height:1.25; }
+  .vh-customer-empty { display:none; padding:16px 12px; text-align:center; color:#64748b; font-size:12px; font-weight:700; }
+  .vh-customer-list.is-empty .vh-customer-empty { display:block; }
+  .vh-customer-list.is-empty .vh-customer-option { display:none !important; }
+
+  .vh-filter-actions { display:flex; justify-content:flex-end; gap:10px; align-items:center; margin-top:14px; padding-top:14px; border-top:1px solid #edf2f7; }
+  .vh-filter-actions .vh-btn { min-height:46px; padding:10px 18px; }
+
+  .vh-table-card { background:#fff; border:1px solid #e2e8f0; border-radius:18px; overflow:hidden; box-shadow:0 12px 30px rgba(15,23,42,.06); }
+  .vh-card-head { padding:20px 22px; border-bottom:1px solid #edf2f7; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  .vh-card-title { margin:0; font-size:17px; font-weight:850; color:#0f172a; display:flex; align-items:center; gap:10px; }
+  .count-pill { background:#4f83ff; color:#fff; border-radius:999px; font-size:12px; padding:5px 9px; font-weight:850; }
+  .vh-table { margin:0; min-width:1220px; }
+  .vh-table thead th { position:sticky; top:0; z-index:2; background:#f8fafc; color:#64748b; font-size:11px; font-weight:850; text-transform:uppercase; letter-spacing:.06em; padding:14px 12px; border-bottom:1px solid #e2e8f0; white-space:nowrap; }
+  .vh-table tbody td { padding:16px 12px; vertical-align:middle; border-bottom:1px solid #edf2f7; color:#0f172a; font-size:14px; }
+  .vh-table tbody tr:hover { background:#f8fafc; }
+  .customer-chip-wrap { display:flex; flex-wrap:wrap; gap:7px; max-width:360px; }
+  .customer-chip { display:inline-flex; align-items:center; max-width:100%; border-radius:10px; background:#eef4ff; border:1px solid #d9e7ff; color:#2563eb; font-weight:800; padding:6px 9px; line-height:1.25; white-space:normal; word-break:break-word; }
+  .category-chip { display:inline-flex; border-radius:9px; background:#eef4ff; color:#4f83ff; padding:6px 10px; font-size:12px; font-weight:850; line-height:1.2; }
+  .status-pill { display:inline-flex; align-items:center; justify-content:center; border-radius:999px; min-width:86px; padding:7px 10px; font-size:11px; font-weight:850; text-transform:uppercase; letter-spacing:.04em; }
+  .status-approved { background:#ecfdf5; color:#059669; }
+  .status-completed { background:#eff6ff; color:#2563eb; }
+  .status-pending { background:#fffbeb; color:#d97706; }
+  .status-rejected { background:#fef2f2; color:#dc2626; }
+  .status-draft { background:#f1f5f9; color:#64748b; }
+  .purpose-cell { max-width:320px; white-space:normal; line-height:1.4; font-weight:650; }
+  .kam-cell { min-width:130px; font-weight:750; }
+  .action-group { display:flex; justify-content:flex-end; gap:7px; flex-wrap:wrap; }
+  .empty-state { padding:44px 20px; text-align:center; color:#64748b; }
+
+  @media (max-width:1400px){
+    .vh-filter-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+    .vh-filter-status, .vh-filter-kam, .vh-filter-date { grid-column: span 2; }
+    .vh-filter-customer, .vh-filter-range { grid-column: span 3; }
   }
-
-  .visit-history-title {
-    margin: 0;
-    font-size: 30px;
-    font-weight: 800;
-    color: var(--text);
-    letter-spacing: -0.03em;
+  @media (max-width:900px){
+    .vh-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .vh-filter-status, .vh-filter-kam, .vh-filter-customer, .vh-filter-date, .vh-filter-range { grid-column: span 1; }
+    .vh-filter-card { position:static; }
+    .vh-customer-panel { position:absolute; left:0; right:0; top:calc(100% + 8px); }
   }
-
-  .visit-history-subtitle {
-    margin-top: 6px;
-    font-size: 14px;
-    color: var(--muted);
-    line-height: 1.45;
-  }
-
-  .visit-history-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .visit-history-btn {
-    min-height: 39px;
-    border-radius: 10px;
-    padding: 8px 14px;
-    font-size: 13px;
-    font-weight: 700;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    text-decoration: none;
-  }
-
-  .visit-history-btn-primary {
-    border: 1px solid var(--primary);
-    background: var(--primary);
-    color: #fff;
-    box-shadow: 0 10px 18px rgba(71, 124, 255, .22);
-  }
-
-  .visit-history-btn-primary:hover { color: #fff; background: var(--primary-dark, #3867e8); }
-
-  .visit-history-btn-outline {
-    border: 1px solid var(--border-strong, #7b8794);
-    background: #fff;
-    color: var(--text-secondary);
-  }
-
-  .visit-history-btn-outline:hover { color: var(--text); background: #f8fafc; }
-
-  .visit-filter-card,
-  .visit-table-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    box-shadow: var(--shadow-xs);
-  }
-
-  .visit-filter-card {
-    padding: 16px 18px;
-    margin-bottom: 18px;
-  }
-
-  .filter-bar {
-    display: flex;
-    align-items: flex-end;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .filter-group {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-width: 160px;
-  }
-
-  .filter-group.filter-date { min-width: 145px; }
-
-  .filter-label {
-    font-size: 10.5px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-    color: #98a2b3;
-  }
-
-  .filter-bar .form-select,
-  .filter-bar .form-control {
-    min-height: 40px;
-    border-radius: 11px;
-    border: 1px solid #d7dde8;
-    font-size: 13px;
-    color: var(--text);
-    background-color: #fff;
-    box-shadow: none;
-  }
-
-  .filter-bar .form-select:focus,
-  .filter-bar .form-control:focus {
-    border-color: var(--primary);
-    box-shadow: 0 0 0 .16rem rgba(71, 124, 255, .14);
-  }
-
-  .filter-actions {
-    display: flex;
-    gap: 8px;
-    align-items: flex-end;
-  }
-
-  .visit-table-card { overflow: hidden; }
-
-  .visit-table-header {
-    min-height: 58px;
-    padding: 14px 18px;
-    border-bottom: 1px solid var(--border-light);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    flex-wrap: wrap;
-  }
-
-  .visit-table-title {
-    margin: 0;
-    font-size: 15px;
-    font-weight: 800;
-    color: var(--text);
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .visit-count-badge {
-    min-width: 24px;
-    height: 24px;
-    padding: 0 8px;
-    border-radius: 999px;
-    background: var(--primary);
-    color: #fff;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    font-weight: 800;
-  }
-
-  .visit-table-meta {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text-secondary);
-  }
-
-  .visit-table-wrap {
-    width: 100%;
-    overflow-x: auto;
-  }
-
-  .visit-table {
-    width: 100%;
-    min-width: 1460px;
-    margin-bottom: 0;
-    table-layout: auto;
-  }
-
-  .visit-table th {
-    background: #f8fafc;
-    font-size: 10.5px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: .055em;
-    color: #667085;
-    white-space: nowrap;
-    padding: 10px 8px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .visit-table td {
-    font-size: 12.5px;
-    vertical-align: middle;
-    padding: 10px 8px;
-    border-bottom: 1px solid var(--border-light);
-  }
-
-  .visit-table tbody tr:last-child td { border-bottom: 0; }
-  .visit-table tbody tr:hover { background: #fbfdff; }
-
-  .visit-id-cell {
-    width: 42px;
-    color: var(--muted);
-    font-weight: 800;
-  }
-
-  .date-cell {
-    min-width: 92px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    line-height: 1.3;
-    white-space: nowrap;
-  }
-
-  .customer-cell {
-    min-width: 180px;
-    max-width: 245px;
-    color: var(--text);
-    font-weight: 800;
-    line-height: 1.35;
-  }
-
-  .customer-code {
-    margin-top: 2px;
-    color: var(--muted);
-    font-size: 11px;
-    font-weight: 600;
-  }
-
-  .category-pill {
-    display: inline-flex;
-    align-items: center;
-    max-width: 120px;
-    line-height: 1.2;
-    font-size: 11.5px;
-    font-weight: 800;
-    color: var(--primary);
-    background: var(--primary-soft, #eef4ff);
-    padding: 4px 8px;
-    border-radius: 8px;
-  }
-
-  .purpose-cell {
-    min-width: 185px;
-    max-width: 285px;
-    color: var(--text);
-    font-weight: 600;
-    line-height: 1.35;
-  }
-
-  .kam-cell {
-    min-width: 105px;
-    font-weight: 800;
-    color: var(--text);
-  }
-
-  .status-pill {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    font-size: 10.5px;
-    font-weight: 800;
-    padding: 5px 9px;
-    border-radius: 999px;
-    text-transform: uppercase;
-    letter-spacing: .035em;
-    white-space: nowrap;
-  }
-
-  .status-pill.approved  { background: #ecfdf5; color: #059669; }
-  .status-pill.accepted  { background: #ecfdf5; color: #059669; }
-  .status-pill.completed { background: #eff6ff; color: #2563eb; }
-  .status-pill.pending   { background: #fffbeb; color: #d97706; }
-  .status-pill.submitted { background: #eef4ff; color: #477cff; }
-  .status-pill.draft     { background: #f3f4f6; color: #6b7280; }
-  .status-pill.rejected  { background: #fef2f2; color: #dc2626; }
-
-  .numeric-cell {
-    text-align: center;
-    white-space: nowrap;
-    font-weight: 800;
-    color: var(--text-secondary);
-  }
-
-  .table-action-wrap {
-    display: flex;
-    gap: 5px;
-    justify-content: flex-end;
-    align-items: center;
-    flex-wrap: nowrap;
-    min-width: 280px;
-  }
-
-  .btn-xs {
-    min-height: 31px;
-    font-size: 11px;
-    padding: 5px 7px;
-    border-radius: 8px;
-    font-weight: 800;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    white-space: nowrap;
-  }
-
-  .empty-state {
-    padding: 48px 20px;
-    text-align: center;
-    color: var(--subtle);
-  }
-
-  .empty-state i {
-    font-size: 30px;
-    display: block;
-    margin-bottom: 10px;
-    color: #b5bdca;
-  }
-
-  @media (max-width: 992px) {
-    .visit-table { min-width: 1420px; }
-  }
-
-  @media (max-width: 768px) {
-    .visit-history-header { align-items: stretch; }
-    .visit-history-actions { width: 100%; }
-    .visit-history-btn { flex: 1; }
-
-    .visit-filter-card {
-      padding: 14px;
-      border-radius: 14px;
-    }
-
-    .filter-group,
-    .filter-group.filter-date,
-    .filter-bar .form-select,
-    .filter-bar .form-control {
-      width: 100%;
-      min-width: 0;
-    }
-
-    .filter-actions { width: 100%; }
-    .filter-actions .btn { flex: 1; }
-
-    .visit-table-header { padding: 14px 16px; }
-    .visit-history-title { font-size: 26px; }
-
-    .visit-table {
-      min-width: 0;
-    }
-
-    .visit-table thead { display: none; }
-    .visit-table,
-    .visit-table tbody,
-    .visit-table tr,
-    .visit-table td {
-      display: block;
-      width: 100%;
-    }
-
-    .visit-table tr {
-      border-bottom: 1px solid var(--border-light);
-      padding: 12px 14px;
-    }
-
-    .visit-table td {
-      border-bottom: 0;
-      padding: 7px 0;
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      text-align: right;
-    }
-
-    .visit-table td::before {
-      content: attr(data-label);
-      font-size: 11px;
-      font-weight: 800;
-      text-transform: uppercase;
-      letter-spacing: .06em;
-      color: #98a2b3;
-      text-align: left;
-      flex: 0 0 40%;
-    }
-
-    .customer-cell,
-    .purpose-cell,
-    .kam-cell,
-    .date-cell {
-      min-width: 0;
-      max-width: none;
-    }
-
-    .table-action-wrap {
-      justify-content: flex-end;
-      flex-wrap: wrap;
-      min-width: 0;
-      max-width: 58%;
-    }
+  @media (max-width:640px){
+    .vh-title{font-size:25px;}
+    .vh-filter-grid { grid-template-columns:1fr; }
+    .vh-filter-status, .vh-filter-kam, .vh-filter-customer, .vh-filter-date, .vh-filter-range { grid-column: span 1; }
+    .vh-filter-actions { flex-direction:column; }
+    .vh-actions,.vh-btn,.vh-filter-actions .vh-btn{width:100%;justify-content:center;}
   }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="visit-history-page">
-
-  <div class="visit-history-header">
-    <div>
-      <h1 class="visit-history-title">Visit History</h1>
-      <div class="visit-history-subtitle">
-        Customer-wise visit history with post-visit update and collection entry in one row.
-      </div>
-    </div>
-
-    <div class="visit-history-actions">
-      <a href="{% url 'kam:plan' %}" class="visit-history-btn visit-history-btn-primary">
-        <i class="fas fa-plus"></i>
-        Plan New Visit
-      </a>
-
-      {% if user|has_permission:"kam_call_new" or user.is_superuser %}
-        <a href="{% url 'kam:call_new' %}" class="visit-history-btn visit-history-btn-outline">
-          <i class="fas fa-phone"></i>
-          Call Log
-        </a>
-      {% endif %}
-
-      <a href="{% url 'kam:dashboard' %}" class="visit-history-btn visit-history-btn-outline">
-        <i class="fas fa-arrow-left"></i>
-        Dashboard
-      </a>
-    </div>
+<div class="vh-page-head">
+  <div>
+    <h1 class="vh-title">Visit History</h1>
+    <div class="vh-subtitle">Customer-wise visit history with post-visit update and collection entry in one row.</div>
   </div>
-
-  {% if messages %}
-    {% for message in messages %}
-      <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show mb-3" role="alert">
-        {{ message }}
-        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-      </div>
-    {% endfor %}
-  {% endif %}
-
-  <div class="visit-filter-card">
-    <form method="get" class="filter-bar">
-      <div class="filter-group">
-        <span class="filter-label">Status</span>
-        <select name="status" class="form-select form-select-sm">
-          <option value="" {% if not status_filter %}selected{% endif %}>All Statuses</option>
-          <option value="APPROVED" {% if status_filter == "APPROVED" %}selected{% endif %}>Approved</option>
-          <option value="COMPLETED" {% if status_filter == "COMPLETED" %}selected{% endif %}>Completed</option>
-          <option value="PENDING_APPROVAL" {% if status_filter == "PENDING_APPROVAL" %}selected{% endif %}>Pending Approval</option>
-          <option value="DRAFT" {% if status_filter == "DRAFT" %}selected{% endif %}>Draft</option>
-          <option value="REJECTED" {% if status_filter == "REJECTED" %}selected{% endif %}>Rejected</option>
-        </select>
-      </div>
-
-      {% if can_view_all %}
-        <div class="filter-group">
-          <span class="filter-label">KAM</span>
-          <select name="kam" class="form-select form-select-sm">
-            <option value="" {% if not selected_kam %}selected{% endif %}>All KAMs</option>
-            {% for kam in kam_dropdown_options %}
-              <option value="{{ kam.id }}" {% if selected_kam|stringformat:"s" == kam.id|stringformat:"s" %}selected{% endif %}>
-                {{ kam.get_full_name|default:kam.username }}
-              </option>
-            {% endfor %}
-          </select>
-        </div>
-      {% endif %}
-
-      <div class="filter-group filter-date">
-        <span class="filter-label">Date Range</span>
-        <input type="date" name="from_date" class="form-control form-control-sm" value="{{ filter_from }}">
-      </div>
-
-      <div class="filter-group filter-date">
-        <span class="filter-label">To</span>
-        <input type="date" name="to_date" class="form-control form-control-sm" value="{{ filter_to }}">
-      </div>
-
-      <div class="filter-group">
-        <span class="filter-label">Quick Range</span>
-        <select name="date_range" class="form-select form-select-sm">
-          <option value="" {% if not date_range %}selected{% endif %}>Custom / All</option>
-          <option value="weekly" {% if date_range == "weekly" %}selected{% endif %}>Weekly</option>
-          <option value="monthly" {% if date_range == "monthly" %}selected{% endif %}>Monthly</option>
-          <option value="quarterly" {% if date_range == "quarterly" %}selected{% endif %}>Quarterly</option>
-          <option value="yearly" {% if date_range == "yearly" %}selected{% endif %}>Yearly</option>
-        </select>
-      </div>
-
-      <div class="filter-actions">
-        <button type="submit" class="btn btn-sm btn-primary">
-          <i class="fas fa-filter me-1"></i>
-          Apply
-        </button>
-        <a href="{% url 'kam:visit_batches' %}" class="btn btn-sm btn-outline-secondary">
-          <i class="fas fa-rotate-left me-1"></i>
-          Reset
-        </a>
-      </div>
-    </form>
-  </div>
-
-  <div class="visit-table-card">
-    <div class="visit-table-header">
-      <div class="visit-table-title">
-        <i class="fas fa-clock-rotate-left"></i>
-        Visit History
-        <span class="visit-count-badge">{{ rows|length }}</span>
-      </div>
-
-      {% if can_view_all %}
-        <div class="visit-table-meta">Showing managed KAM visits</div>
-      {% else %}
-        <div class="visit-table-meta">Showing your visits</div>
-      {% endif %}
-    </div>
-
-    <div class="visit-table-wrap">
-      {% if rows %}
-        <table class="table table-sm table-hover align-middle visit-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Visit Date</th>
-              <th>Customer Name</th>
-              <th>Category</th>
-              <th>Purpose of Visit</th>
-              <th>KAM</th>
-              <th class="text-center">Manager Status</th>
-              <th class="text-center">Visit Status</th>
-              <th class="text-center">Post Visit Status</th>
-              <th>Next Meeting</th>
-              <th class="text-center">Total Calls</th>
-              <th class="text-center">Total Collections</th>
-              <th class="text-end">Actions</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {% for plan in rows %}
-              <tr>
-                <td class="visit-id-cell" data-label="#">{{ forloop.counter }}</td>
-
-                <td class="date-cell" data-label="Visit Date">
-                  {{ plan.visit_date|date:"d M Y" }}
-                  {% if plan.visit_date_to and plan.visit_date_to != plan.visit_date %}
-                    <div class="text-muted small">to {{ plan.visit_date_to|date:"d M Y" }}</div>
-                  {% endif %}
-                </td>
-
-                <td class="customer-cell" data-label="Customer Name">
-                  {{ plan.customer_display_name }}
-                  {% if plan.customer and plan.customer.code %}
-                    <div class="customer-code">{{ plan.customer.code }}</div>
-                  {% endif %}
-                </td>
-
-                <td data-label="Category">
-                  <span class="category-pill">{{ plan.get_visit_category_display }}</span>
-                </td>
-
-                <td class="purpose-cell" data-label="Purpose of Visit" title="{{ plan.purpose|default:'' }}">
-                  {{ plan.purpose|default:"—" }}
-                </td>
-
-                <td class="kam-cell" data-label="KAM">
-                  {{ plan.kam.get_full_name|default:plan.kam.username }}
-                </td>
-
-                <td class="text-center" data-label="Manager Status">
-                  {% if plan.approval_status == "APPROVED" %}
-                    <span class="status-pill approved">Approved</span>
-                  {% elif plan.approval_status == "COMPLETED" %}
-                    <span class="status-pill completed">Completed</span>
-                  {% elif plan.approval_status == "PENDING_APPROVAL" %}
-                    <span class="status-pill pending">Pending</span>
-                  {% elif plan.approval_status == "DRAFT" %}
-                    <span class="status-pill draft">Draft</span>
-                  {% elif plan.approval_status == "REJECTED" %}
-                    <span class="status-pill rejected">Rejected</span>
-                  {% else %}
-                    <span class="status-pill draft">{{ plan.manager_status_display }}</span>
-                  {% endif %}
-                </td>
-
-                <td class="text-center" data-label="Visit Status">
-                  {% if plan.visit_status_display == "Completed" %}
-                    <span class="status-pill completed">Completed</span>
-                  {% elif plan.visit_status_display == "Rejected" %}
-                    <span class="status-pill rejected">Rejected</span>
-                  {% elif plan.visit_status_display == "Draft" %}
-                    <span class="status-pill draft">Draft</span>
-                  {% else %}
-                    <span class="status-pill pending">Pending</span>
-                  {% endif %}
-                </td>
-
-                <td class="text-center" data-label="Post Visit Status">
-                  {% if plan.post_visit_status_display == "Accepted" %}
-                    <span class="status-pill accepted">Accepted</span>
-                  {% elif plan.post_visit_status_display == "Submitted" %}
-                    <span class="status-pill submitted">Submitted</span>
-                  {% else %}
-                    <span class="status-pill pending">Pending</span>
-                  {% endif %}
-                </td>
-
-                <td class="date-cell" data-label="Next Meeting">
-                  {% if plan.next_meeting_display %}
-                    {{ plan.next_meeting_display|date:"d M Y" }}
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
-
-                <td class="numeric-cell" data-label="Total Calls">{{ plan.total_calls|default:0 }}</td>
-
-                <td class="numeric-cell" data-label="Total Collections">
-                  ₹{{ plan.total_collections|default:0|floatformat:2|intcomma }}
-                </td>
-
-                <td class="text-end" data-label="Actions">
-                  <div class="table-action-wrap">
-                    {% if plan.batch_id %}
-                      <a href="{% url 'kam:visit_batch_detail' plan.batch_id %}" class="btn btn-xs btn-outline-secondary" title="View visit">
-                        <i class="fas fa-eye"></i>View
-                      </a>
-                    {% else %}
-                      <a href="{% url 'kam:single_visit_detail' plan.id %}" class="btn btn-xs btn-outline-secondary" title="View visit">
-                        <i class="fas fa-eye"></i>View
-                      </a>
-                    {% endif %}
-
-                    <a href="{% url 'kam:visit_history_edit' plan.id %}" class="btn btn-xs btn-outline-primary" title="Edit visit">
-                      <i class="fas fa-pen-to-square"></i>Edit
-                    </a>
-
-                    {% if plan.approval_status == "APPROVED" or plan.approval_status == "COMPLETED" %}
-                      <a href="{% url 'kam:visits' %}?plan={{ plan.id }}" class="btn btn-xs btn-outline-success" title="Update post visit details">
-                        <i class="fas fa-clipboard-check"></i>Post Visit
-                      </a>
-                    {% endif %}
-
-                    {% if user|has_permission:"kam_collection_new" or user.is_superuser %}
-                      <a href="{% url 'kam:collection_new' %}{% if plan.customer_id %}?customer={{ plan.customer_id }}{% endif %}" class="btn btn-xs btn-outline-secondary" title="Collection">
-                        <i class="fas fa-indian-rupee-sign"></i>Collection
-                      </a>
-                    {% endif %}
-                  </div>
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      {% else %}
-        <div class="empty-state">
-          <i class="fas fa-clock-rotate-left"></i>
-          <div class="fw-semibold">No visit history found.</div>
-          <div class="text-muted small mt-1">
-            {% if status_filter or selected_kam or date_range or filter_from or filter_to %}
-              Try removing filters.
-            {% else %}
-              Start by <a href="{% url 'kam:plan' %}">planning a visit</a>.
-            {% endif %}
-          </div>
-        </div>
-      {% endif %}
-    </div>
+  <div class="vh-actions">
+    <a href="{% url 'kam:plan' %}" class="vh-btn vh-btn-primary"><i class="fas fa-plus"></i>Plan New Visit</a>
+    <a href="{% url 'kam:call_new' %}" class="vh-btn"><i class="fas fa-phone"></i>Call Log</a>
+    <a href="{% url 'kam:dashboard' %}" class="vh-btn"><i class="fas fa-arrow-left"></i>Dashboard</a>
   </div>
 </div>
+
+{% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show mb-3" role="alert">
+      {{ message }}
+      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+  {% endfor %}
+{% endif %}
+
+<form method="get" class="vh-filter-card" id="visitHistoryFilterForm">
+  <div class="vh-filter-top">
+    <div class="vh-filter-title"><i class="fas fa-filter"></i> Filters</div>
+    <div class="vh-filter-hint"></div>
+  </div>
+
+  <div class="vh-filter-grid">
+    <div class="vh-filter-field vh-filter-status">
+      <label class="vh-label">Status</label>
+      <select name="status" class="form-select">
+        <option value="" {% if not status_filter %}selected{% endif %}>All Statuses</option>
+        <option value="DRAFT" {% if status_filter == "DRAFT" %}selected{% endif %}>Draft</option>
+        <option value="PENDING_APPROVAL" {% if status_filter == "PENDING_APPROVAL" %}selected{% endif %}>Pending Approval</option>
+        <option value="APPROVED" {% if status_filter == "APPROVED" %}selected{% endif %}>Approved</option>
+        <option value="COMPLETED" {% if status_filter == "COMPLETED" %}selected{% endif %}>Completed</option>
+        <option value="REJECTED" {% if status_filter == "REJECTED" %}selected{% endif %}>Rejected</option>
+      </select>
+    </div>
+
+    {% if can_view_all %}
+      <div class="vh-filter-field vh-filter-kam">
+        <label class="vh-label">KAM</label>
+        <select name="kam" class="form-select">
+          <option value="" {% if not selected_kam %}selected{% endif %}>All KAMs</option>
+          {% for kam in kam_dropdown_options %}
+            <option value="{{ kam.id }}" {% if selected_kam|stringformat:'s' == kam.id|stringformat:'s' %}selected{% endif %}>{{ kam.get_full_name|default:kam.username }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    {% endif %}
+
+    <div class="vh-filter-field vh-filter-customer">
+      <label class="vh-label">Customer</label>
+      <div class="vh-customer-combobox" id="visitHistoryCustomerCombobox">
+        <input type="hidden" name="customer" id="visitHistoryCustomerValue" value="{{ selected_customer|default:'' }}">
+        <button type="button" class="vh-customer-trigger" id="visitHistoryCustomerTrigger" aria-haspopup="listbox" aria-expanded="false">
+          <span class="vh-customer-trigger-text" id="visitHistoryCustomerText">All Customers</span>
+          <span class="vh-customer-trigger-icon"><i class="fas fa-chevron-down"></i></span>
+        </button>
+        <div class="vh-customer-panel" id="visitHistoryCustomerPanel">
+          <div class="vh-customer-search-wrap">
+            <input type="search" class="vh-customer-search" id="visitHistoryCustomerSearch" placeholder="Search customer name or code" autocomplete="off">
+          </div>
+          <div class="vh-customer-list" id="visitHistoryCustomerList" role="listbox">
+            <button type="button" class="vh-customer-option" data-value="" data-label="All Customers" data-search="all customers">
+              <span class="vh-customer-option-name">All Customers</span>
+              <span class="vh-customer-option-meta">Show visits for every customer</span>
+            </button>
+            {% for customer in customer_dropdown_options %}
+              <button type="button" class="vh-customer-option" data-value="{{ customer.id }}" data-label="{{ customer.name|escape }}{% if customer.code %} — {{ customer.code|escape }}{% endif %}" data-search="{{ customer.name|default:''|lower }} {{ customer.code|default:''|lower }}">
+                <span class="vh-customer-option-name">{{ customer.name }}</span>
+                {% if customer.code %}<span class="vh-customer-option-meta">{{ customer.code }}</span>{% endif %}
+              </button>
+            {% endfor %}
+            <div class="vh-customer-empty">No matching customer found.</div>
+          </div>
+        </div>
+      </div>
+      <noscript>
+        <select name="customer" class="form-select mt-2">
+          <option value="" {% if not selected_customer %}selected{% endif %}>All Customers</option>
+          {% for customer in customer_dropdown_options %}
+            <option value="{{ customer.id }}" {% if selected_customer|stringformat:'s' == customer.id|stringformat:'s' %}selected{% endif %}>{{ customer.name }}{% if customer.code %} — {{ customer.code }}{% endif %}</option>
+          {% endfor %}
+        </select>
+      </noscript>
+    </div>
+
+    <div class="vh-filter-field vh-filter-date">
+      <label class="vh-label">From Date</label>
+      <input type="date" name="from_date" class="form-control" value="{{ filter_from }}">
+    </div>
+
+    <div class="vh-filter-field vh-filter-date">
+      <label class="vh-label">To Date</label>
+      <input type="date" name="to_date" class="form-control" value="{{ filter_to }}">
+    </div>
+
+    <div class="vh-filter-field vh-filter-range">
+      <label class="vh-label">Quick Range</label>
+      <select name="date_range" class="form-select">
+        <option value="" {% if not date_range and not time_filter %}selected{% endif %}>Custom / All</option>
+        <option value="weekly" {% if date_range == "weekly" or time_filter == "weekly" %}selected{% endif %}>Current Week</option>
+        <option value="monthly" {% if date_range == "monthly" or time_filter == "current_month" %}selected{% endif %}>Current Month</option>
+        <option value="quarterly" {% if date_range == "quarterly" or time_filter == "current_quarter" %}selected{% endif %}>Current Quarter</option>
+        <option value="yearly" {% if date_range == "yearly" or time_filter == "current_year" %}selected{% endif %}>Current Year</option>
+      </select>
+    </div>
+
+  </div>
+
+  <div class="vh-filter-actions">
+    <button type="submit" class="vh-btn vh-btn-primary"><i class="fas fa-filter"></i>Apply</button>
+    <a href="{% url 'kam:visit_batches' %}" class="vh-btn"><i class="fas fa-rotate-left"></i>Reset</a>
+  </div>
+</form>
+
+<div class="vh-table-card">
+  <div class="vh-card-head">
+    <h2 class="vh-card-title"><i class="fas fa-clock-rotate-left"></i>Visit History <span class="count-pill">{{ rows|length }}</span></h2>
+    <div class="text-muted small fw-semibold">{% if can_view_all %}Showing managed KAM visits{% else %}Showing your visits{% endif %}</div>
+  </div>
+
+  {% if rows %}
+    <div class="table-responsive">
+      <table class="table table-hover align-middle vh-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Visit Date</th>
+            <th>Customer Name</th>
+            <th>Category</th>
+            <th>Purpose of Visit</th>
+            <th>KAM</th>
+            <th>Manager Status</th>
+            <th>Visit Status</th>
+            <th>Post Visit Status</th>
+            <th>Next Meeting</th>
+            <th>Total Calls</th>
+            <th>Total Collection</th>
+            <th class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for plan in rows %}
+            <tr>
+              <td class="fw-bold">{{ forloop.counter }}</td>
+              <td class="text-nowrap">{{ plan.visit_date|date:"d M Y" }}</td>
+              <td>
+                <div class="customer-chip-wrap">
+                  {% for name in plan.customer_badge_names %}
+                    <span class="customer-chip">{{ name }}</span>
+                  {% empty %}
+                    <span class="customer-chip">{{ plan.customer_display_name|default:"—" }}</span>
+                  {% endfor %}
+                </div>
+              </td>
+              <td><span class="category-chip">{{ plan.get_visit_category_display }}</span></td>
+              <td class="purpose-cell">{{ plan.purpose|default:"—" }}</td>
+              <td class="kam-cell">{{ plan.kam.get_full_name|default:plan.kam.username }}</td>
+              <td>
+                {% if plan.manager_status_display == "Completed" %}<span class="status-pill status-completed">Completed</span>
+                {% elif plan.manager_status_display == "Approved" %}<span class="status-pill status-approved">Approved</span>
+                {% elif plan.manager_status_display == "Rejected" %}<span class="status-pill status-rejected">Rejected</span>
+                {% elif plan.manager_status_display == "Draft" %}<span class="status-pill status-draft">Draft</span>
+                {% else %}<span class="status-pill status-pending">Pending</span>{% endif %}
+              </td>
+              <td>
+                {% if plan.visit_status_display == "Completed" %}<span class="status-pill status-completed">Completed</span>
+                {% elif plan.visit_status_display == "Rejected" %}<span class="status-pill status-rejected">Rejected</span>
+                {% elif plan.visit_status_display == "Draft" %}<span class="status-pill status-draft">Draft</span>
+                {% else %}<span class="status-pill status-pending">Pending</span>{% endif %}
+              </td>
+              <td>
+                {% if plan.post_visit_status_display == "Accepted" %}<span class="status-pill status-completed">Accepted</span>
+                {% elif plan.post_visit_status_display == "Submitted" %}<span class="status-pill status-approved">Submitted</span>
+                {% else %}<span class="status-pill status-pending">Pending</span>{% endif %}
+              </td>
+              <td class="text-nowrap">{{ plan.next_meeting_display|date:"d M Y"|default:"—" }}</td>
+              <td>{{ plan.total_calls|default:0 }}</td>
+              <td>{{ plan.total_collections|floatformat:2|intcomma }}</td>
+              <td class="text-end">
+                <div class="action-group">
+                  <a href="{% url 'kam:visit_history_edit' plan.id %}" class="btn btn-sm btn-outline-primary">Edit</a>
+                  {% if plan.batch_id %}
+                    <a href="{% url 'kam:visit_batch_detail' plan.batch_id %}" class="btn btn-sm btn-outline-secondary">Batch</a>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state">No visit history found for the selected filters.</div>
+  {% endif %}
+</div>
+
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    const combo = document.getElementById("visitHistoryCustomerCombobox");
+    const trigger = document.getElementById("visitHistoryCustomerTrigger");
+    const triggerText = document.getElementById("visitHistoryCustomerText");
+    const valueInput = document.getElementById("visitHistoryCustomerValue");
+    const searchInput = document.getElementById("visitHistoryCustomerSearch");
+    const list = document.getElementById("visitHistoryCustomerList");
+
+    if (!combo || !trigger || !triggerText || !valueInput || !searchInput || !list) {
+      return;
+    }
+
+    const options = Array.from(list.querySelectorAll(".vh-customer-option"));
+
+    function setOpen(isOpen) {
+      combo.classList.toggle("is-open", isOpen);
+      trigger.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      if (isOpen) {
+        searchInput.value = "";
+        filterOptions("");
+        window.setTimeout(function () { searchInput.focus(); }, 30);
+      }
+    }
+
+    function filterOptions(query) {
+      const needle = (query || "").trim().toLowerCase();
+      let visibleCount = 0;
+
+      options.forEach(function (option) {
+        const haystack = (option.getAttribute("data-search") || option.textContent || "").toLowerCase();
+        const show = !needle || haystack.indexOf(needle) !== -1;
+        option.style.display = show ? "flex" : "none";
+        if (show) {
+          visibleCount += 1;
+        }
+      });
+
+      list.classList.toggle("is-empty", visibleCount === 0);
+    }
+
+    function selectOption(option) {
+      if (!option) {
+        return;
+      }
+
+      valueInput.value = option.getAttribute("data-value") || "";
+      triggerText.textContent = option.getAttribute("data-label") || "All Customers";
+
+      options.forEach(function (item) {
+        item.classList.toggle("is-active", item === option);
+      });
+
+      setOpen(false);
+    }
+
+    const selected = options.find(function (option) {
+      return String(option.getAttribute("data-value") || "") === String(valueInput.value || "");
+    });
+
+    if (selected) {
+      selectOption(selected);
+    }
+
+    trigger.addEventListener("click", function () {
+      setOpen(!combo.classList.contains("is-open"));
+    });
+
+    searchInput.addEventListener("input", function () {
+      filterOptions(searchInput.value);
+    });
+
+    options.forEach(function (option) {
+      option.addEventListener("click", function () {
+        selectOption(option);
+      });
+    });
+
+    document.addEventListener("click", function (event) {
+      if (!combo.contains(event.target)) {
+        setOpen(false);
+      }
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    });
+  });
+</script>
 {% endblock %}

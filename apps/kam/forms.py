@@ -257,7 +257,8 @@ class SingleVisitForm(forms.ModelForm):
         self.fields["customer"].widget.attrs.update(
             {
                 "class": "form-select",
-                "data-placeholder": "Select customer",
+                "data-placeholder": "Search and select customer",
+                "data-role": "legacy-single-customer",
             }
         )
 
@@ -309,6 +310,25 @@ class SingleVisitForm(forms.ModelForm):
         purpose = (data.get("purpose") or "").strip()
 
         manual_customer = (self.data.get("manual_customer") or "").strip()
+        selected_customer_ids = []
+
+        if hasattr(self.data, "getlist"):
+            raw_selected_ids = (
+                self.data.getlist("customers_selected[]")
+                or self.data.getlist("customers_selected")
+                or self.data.getlist(f"{self.prefix}-customers")
+                or self.data.getlist("customers")
+            )
+        else:
+            raw_selected_ids = []
+
+        for raw_id in raw_selected_ids:
+            raw_id = str(raw_id or "").strip()
+            if raw_id.isdigit():
+                selected_customer_ids.append(int(raw_id))
+
+        selected_customer_ids = list(dict.fromkeys(selected_customer_ids))
+        data["selected_customer_ids"] = selected_customer_ids
 
         if not visit_category:
             self.add_error("visit_category", "Visit Category is required.")
@@ -331,20 +351,20 @@ class SingleVisitForm(forms.ModelForm):
             data["purpose"] = purpose
 
         if visit_category == VisitPlan.CAT_CUSTOMER:
-            if not customer and not manual_customer:
+            if not customer and not selected_customer_ids and not manual_customer:
                 self.add_error(
                     "customer",
-                    "Customer is required. Select an existing customer or enter a new one.",
+                    "Customer is required. Select one or more existing customers or enter a new one.",
                 )
 
             if counterparty_name:
                 self.add_error(
                     "counterparty_name",
-                    "Manual name must be empty for Customer Visit. Select a customer instead.",
+                    "Manual name must be empty for Customer Visit. Select customers or enter a new customer instead.",
                 )
 
         else:
-            if customer:
+            if customer or selected_customer_ids:
                 self.add_error(
                     "customer",
                     "Customer must be empty for non-customer visits.",

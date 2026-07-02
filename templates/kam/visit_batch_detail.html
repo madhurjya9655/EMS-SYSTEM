@@ -2,107 +2,119 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="container-fluid">
-  <div class="d-flex align-items-center justify-content-between mb-3">
-    <div>
-      <h3 class="mb-1">Batch #{{ batch.id }}</h3>
-      <div class="text-muted small">
-        {{ batch.kam.username }} • {{ batch.get_visit_category_display }} • {{ batch.from_date }} → {{ batch.to_date }}
-      </div>
-      <div class="small mt-1"><span class="fw-semibold">Remarks:</span> {{ batch.purpose|default:"-" }}</div>
-    </div>
-    <div class="d-flex gap-2">
-      <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:visit_batches' %}">Back</a>
+<style>
+  .vb-page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+  .vb-title { margin: 0; font-size: 26px; font-weight: 850; color: #0f172a; }
+  .vb-meta { color: #64748b; font-size: 13px; margin-top: 5px; }
+  .vb-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 18px; box-shadow: 0 12px 28px rgba(15, 23, 42, .06); overflow: hidden; }
+  .vb-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  .vb-chip-wrap { display: flex; flex-wrap: wrap; gap: 7px; }
+  .vb-chip { display: inline-flex; align-items: center; border-radius: 999px; padding: 6px 10px; background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe; font-size: 12px; font-weight: 800; white-space: normal; }
+  .vb-status { display: inline-flex; align-items: center; border-radius: 999px; padding: 6px 10px; font-size: 11px; font-weight: 850; text-transform: uppercase; letter-spacing: .04em; }
+  .vb-status.approved { background: #ecfdf5; color: #047857; }
+  .vb-status.rejected { background: #fef2f2; color: #b91c1c; }
+  .vb-status.draft { background: #f1f5f9; color: #475569; }
+  .vb-status.pending { background: #fff7ed; color: #c2410c; }
+  .vb-table { margin: 0; min-width: 900px; }
+  .vb-table thead th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: #475569; font-size: 11px; font-weight: 850; text-transform: uppercase; letter-spacing: .06em; padding: 13px 14px; border-bottom: 1px solid #e2e8f0; }
+  .vb-table tbody td { padding: 14px; vertical-align: middle; border-bottom: 1px solid #edf2f7; font-size: 13px; color: #334155; }
+  .vb-table tbody tr:hover { background: #f8fafc; }
+  .vb-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .vb-actions .btn { border-radius: 12px; font-weight: 800; }
+</style>
 
+<div class="container-fluid">
+  <div class="vb-page-head">
+    <div>
+      <h3 class="vb-title">Batch #{{ batch.id }}</h3>
+      <div class="vb-meta">{{ batch.kam.username }} • {{ batch.get_visit_category_display }} • {{ batch.from_date }} → {{ batch.to_date }}</div>
+      <div class="small mt-2"><span class="fw-semibold">Purpose / Remarks:</span> {{ batch.purpose|default:"-" }}</div>
+    </div>
+    <div class="vb-actions">
+      <a class="btn btn-sm btn-outline-secondary" href="{% url 'kam:visit_batches' %}">Back</a>
       {% if can_delete %}
         <form method="post" action="{% url 'kam:visit_batch_delete' batch.id %}">
           {% csrf_token %}
-          <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete draft batch #{{ batch.id }}?');">
-            Delete Draft
-          </button>
+          <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete draft batch #{{ batch.id }}?');">Delete Draft</button>
         </form>
       {% endif %}
     </div>
   </div>
 
-  <div class="mb-3">
+  <div class="vb-summary">
     <span class="fw-semibold">Status:</span>
-    {% if batch.approval_status == "APPROVED" %}
-      <span class="badge bg-success">APPROVED</span>
-    {% elif batch.approval_status == "REJECTED" %}
-      <span class="badge bg-danger">REJECTED</span>
-    {% elif batch.approval_status == "DRAFT" %}
-    {% if batch.approval_status == "REJECTED" and batch.rejection_reason %}
-  <div class="alert alert-danger mt-3">
-    <strong>Rejection Reason:</strong> {{ batch.rejection_reason }}
-    {% if can_edit %}
-      <hr>
-      <a href="{% url 'kam:plan' %}" class="btn btn-sm btn-outline-danger">
-        Create New Batch (Resubmit)
-      </a>
-    {% endif %}
+    {% if batch.approval_status == "APPROVED" %}<span class="vb-status approved">Approved</span>
+    {% elif batch.approval_status == "REJECTED" %}<span class="vb-status rejected">Rejected</span>
+    {% elif batch.approval_status == "DRAFT" %}<span class="vb-status draft">Draft</span>
+    {% else %}<span class="vb-status pending">{{ batch.approval_status }}</span>{% endif %}
+    {% if batch.approved_by %}<span class="text-muted small">by {{ batch.approved_by.username }} at {{ batch.approved_at }}</span>{% endif %}
   </div>
-{% endif %}
-      <span class="badge bg-secondary">DRAFT</span>
-    {% else %}
-      <span class="badge bg-warning text-dark">{{ batch.approval_status }}</span>
-    {% endif %}
 
-    {% if batch.approved_by %}
-      <span class="text-muted small ms-2">by {{ batch.approved_by.username }} at {{ batch.approved_at }}</span>
-    {% endif %}
-  </div>
+  {% if batch.approval_status == "REJECTED" and batch.rejection_reason %}
+    <div class="alert alert-danger mt-3">
+      <strong>Rejection Reason:</strong> {{ batch.rejection_reason }}
+      {% if can_edit %}
+        <hr>
+        <a href="{% url 'kam:plan' %}" class="btn btn-sm btn-outline-danger">Create New Batch (Resubmit)</a>
+      {% endif %}
+    </div>
+  {% endif %}
 
   {% if can_approve and batch.approval_status != "APPROVED" and batch.approval_status != "REJECTED" and batch.approval_status != "DRAFT" %}
-    <div class="d-flex gap-2 mb-3">
+    <div class="d-flex gap-2 mb-3 flex-wrap">
       <form method="post" action="{% url 'kam:visit_batch_approve' batch.id %}">
         {% csrf_token %}
         <button class="btn btn-success" type="submit">Approve Batch</button>
       </form>
-      <form method="post" action="{% url 'kam:visit_batch_reject' batch.id %}">
+      <form method="post" action="{% url 'kam:visit_batch_reject' batch.id %}" class="d-flex gap-2 flex-wrap">
         {% csrf_token %}
-        <input class="form-control form-control-sm d-inline-block" style="width:320px" name="reason" placeholder="Reject reason (optional)" />
+        <input class="form-control form-control-sm" style="width:320px;max-width:100%;" name="reason" placeholder="Reject reason (optional)">
         <button class="btn btn-outline-danger" type="submit">Reject Batch</button>
       </form>
     </div>
   {% endif %}
 
-  <div class="table-responsive">
-    <table class="table table-sm table-striped align-middle">
-      <thead class="table-light">
-        <tr>
-          <th>Customer / Counterparty</th>
-          <th style="width:180px;">Date</th>
-          <th>Purpose</th>
-          <th style="width:220px;">Location</th>
-          <th style="width:160px;">Expected Sales (MT)</th>
-          <th style="width:170px;">Expected Collection (₹)</th>
-          <th style="width:150px;">Line Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for p in lines %}
+  <div class="vb-card">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle vb-table">
+        <thead>
           <tr>
-            <td>
-              {% if p.customer %}
-                <div class="fw-semibold">{{ p.customer.name }}</div>
-                <div class="text-muted small">{{ p.customer.code|default:"" }}</div>
-              {% else %}
-                <div class="fw-semibold">{{ p.counterparty_name }}</div>
-              {% endif %}
-            </td>
-            <td>{{ p.visit_date }}{% if p.visit_date_to %} → {{ p.visit_date_to }}{% endif %}</td>
-            <td>{{ p.purpose|default:"-" }}</td>
-            <td>{{ p.location|default:"-" }}</td>
-            <td>{{ p.expected_sales_mt|default:"-" }}</td>
-            <td>{{ p.expected_collection|default:"-" }}</td>
-            <td>{{ p.approval_status }}</td>
+            <th>Customer Name</th>
+            <th style="width:180px;">Visit Date</th>
+            <th>Purpose of Visit</th>
+            <th style="width:220px;">Location</th>
+            <th style="width:160px;">Expected Sales (MT)</th>
+            <th style="width:170px;">Expected Collection (₹)</th>
+            <th style="width:150px;">Line Status</th>
           </tr>
-        {% empty %}
-          <tr><td colspan="7" class="text-muted">No lines found.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for p in lines %}
+            <tr>
+              <td>
+                <div class="vb-chip-wrap">
+                  {% for name in p.customer_badge_names %}<span class="vb-chip">{{ name }}</span>{% empty %}<span class="vb-chip">{{ p.customer_display_name|default:"-" }}</span>{% endfor %}
+                </div>
+                {% if p.customer and p.customer.code %}<div class="text-muted small mt-1">{{ p.customer.code }}</div>{% endif %}
+              </td>
+              <td>{{ p.visit_date }}{% if p.visit_date_to %} → {{ p.visit_date_to }}{% endif %}</td>
+              <td>{{ p.purpose|default:"-" }}</td>
+              <td>{{ p.location|default:"-" }}</td>
+              <td>{{ p.expected_sales_mt|default:"-" }}</td>
+              <td>{{ p.expected_collection|default:"-" }}</td>
+              <td>
+                {% if p.approval_status == "APPROVED" %}<span class="vb-status approved">Approved</span>
+                {% elif p.approval_status == "REJECTED" %}<span class="vb-status rejected">Rejected</span>
+                {% elif p.approval_status == "DRAFT" %}<span class="vb-status draft">Draft</span>
+                {% else %}<span class="vb-status pending">{{ p.approval_status }}</span>{% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7" class="text-muted text-center py-4">No lines found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 {% endblock %}

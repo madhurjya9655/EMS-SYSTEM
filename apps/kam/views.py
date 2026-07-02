@@ -1275,6 +1275,139 @@ def _require_purpose_of_visit(value: str, *, max_length: int = 2000) -> str:
     return value
 
 
+
+
+def _get_or_create_manual_customer_for_kam(*, name: str, kam_user: User) -> Tuple[Customer, bool]:
+    """
+    Create/map one manually entered customer without duplicating customer data.
+    Reuses Customer + KAMAssignment only.
+    """
+    clean_name = (name or "").strip()
+
+    if not clean_name:
+        raise ValueError("Customer name is required.")
+
+    with transaction.atomic():
+        customer_obj = (
+            Customer.objects
+            .select_for_update()
+            .filter(name__iexact=clean_name)
+            .first()
+        )
+
+        created = False
+
+        if not customer_obj:
+            customer_obj = Customer.objects.create(
+                name=clean_name,
+                kam=kam_user,
+                primary_kam=kam_user,
+                source=Customer.SOURCE_MANUAL,
+                created_by=kam_user,
+            )
+            created = True
+
+        changed_fields = []
+
+        if hasattr(customer_obj, "kam_id") and not customer_obj.kam_id:
+            customer_obj.kam = kam_user
+            changed_fields.append("kam")
+
+        if hasattr(customer_obj, "primary_kam_id") and not customer_obj.primary_kam_id:
+            customer_obj.primary_kam = kam_user
+            changed_fields.append("primary_kam")
+
+        if hasattr(customer_obj, "source") and not getattr(customer_obj, "source", None):
+            customer_obj.source = Customer.SOURCE_MANUAL
+            changed_fields.append("source")
+
+        if hasattr(customer_obj, "created_by_id") and not getattr(customer_obj, "created_by_id", None):
+            customer_obj.created_by = kam_user
+            changed_fields.append("created_by")
+
+        if changed_fields:
+            if hasattr(customer_obj, "updated_at"):
+                changed_fields.append("updated_at")
+            customer_obj.save(update_fields=changed_fields)
+
+        KAMAssignment.objects.get_or_create(
+            customer=customer_obj,
+            kam=kam_user,
+            defaults={"active_from": timezone.localdate()},
+        )
+
+    return customer_obj, created
+
+
+def _visit_plan_customer_names(plan: "VisitPlan") -> List[str]:
+    names = []
+
+    batch_names = getattr(plan, "batch_customer_names", None)
+    if batch_names:
+        return list(batch_names)
+
+    if getattr(plan, "customer_id", None) and getattr(plan, "customer", None):
+        name = (getattr(plan.customer, "name", "") or "").strip()
+        if name:
+            names.append(name)
+    else:
+        name = (getattr(plan, "counterparty_name", "") or "").strip()
+        if name:
+            names.append(name)
+
+    return names
+
+
+def _attach_visit_customer_display(rows: List["VisitPlan"]) -> List["VisitPlan"]:
+    """
+    Attach customer chip data to VisitPlan rows without N+1 queries.
+    For batch/multi-customer route rows, every line receives the complete
+    ordered customer list from the same VisitBatch.
+    """
+    rows = list(rows or [])
+    batch_ids = sorted({int(row.batch_id) for row in rows if getattr(row, "batch_id", None)})
+
+    names_by_batch: Dict[int, List[str]] = {}
+
+    if batch_ids:
+        batch_lines = (
+            VisitPlan.objects
+            .select_related("customer")
+            .filter(batch_id__in=batch_ids)
+            .order_by("batch_id", "customer__name", "counterparty_name", "id")
+        )
+
+        seen_by_batch = {}
+
+        for line in batch_lines:
+            if getattr(line, "customer_id", None) and getattr(line, "customer", None):
+                name = (getattr(line.customer, "name", "") or "").strip()
+            else:
+                name = (getattr(line, "counterparty_name", "") or "").strip()
+
+            if not name:
+                continue
+
+            bucket = names_by_batch.setdefault(line.batch_id, [])
+            seen = seen_by_batch.setdefault(line.batch_id, set())
+            key = name.upper()
+
+            if key not in seen:
+                seen.add(key)
+                bucket.append(name)
+
+    for row in rows:
+        if getattr(row, "batch_id", None) and row.batch_id in names_by_batch:
+            names = names_by_batch.get(row.batch_id, [])
+        else:
+            names = _visit_plan_customer_names(row)
+
+        row.customer_badge_names = names
+        row.customer_display_name = " / ".join(names) if names else "-"
+        row.recent_customer_name = row.customer_display_name
+
+    return rows
+
 def _post_meeting_details_complete(actual: Optional["VisitActual"]) -> bool:
     """
     Post-meeting workflow completion check.
@@ -3951,8 +4084,31 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             or ""
         ).strip().upper()
 
+        selected_ids: List[int] = []
+        for raw_id in (
+            request.POST.getlist("customers_selected[]")
+            or request.POST.getlist("customers_selected")
+            or request.POST.getlist(f"{SINGLE_PREFIX}-customers")
+            or request.POST.getlist("customers")
+        ):
+            try:
+                selected_ids.append(int(raw_id))
+            except Exception:
+                continue
+
+        legacy_customer_id = (
+            request.POST.get(f"{SINGLE_PREFIX}-customer")
+            or request.POST.get("customer")
+            or ""
+        ).strip()
+
+        if legacy_customer_id.isdigit():
+            selected_ids.append(int(legacy_customer_id))
+
+        selected_ids = list(dict.fromkeys(selected_ids))
+
         if "customer" in single_form.fields:
-            if manual_customer_name or raw_category != "CUSTOMER":
+            if manual_customer_name or selected_ids or raw_category != "CUSTOMER":
                 single_form.fields["customer"].required = False
 
         if single_form.is_valid():
@@ -3968,89 +4124,64 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             if submit_action == "submit":
                 submit_action = "submit_to_manager"
 
-            plan: VisitPlan = single_form.save(commit=False)
-            plan.kam = user
-            plan.batch = None
+            base_plan: VisitPlan = single_form.save(commit=False)
+            base_plan.kam = user
+            base_plan.batch = None
 
             try:
-                plan.purpose = _require_purpose_of_visit(plan.purpose)
+                base_plan.purpose = _require_purpose_of_visit(base_plan.purpose)
             except ValueError as exc:
                 messages.error(request, str(exc))
                 return redirect(reverse("kam:plan"))
 
+            reporting_officer = None
+
             try:
                 profile = getattr(user, "profile", None)
                 if profile and getattr(profile, "reporting_officer_id", None):
-                    plan.reporting_officer = profile.reporting_officer
+                    reporting_officer = profile.reporting_officer
             except Exception:
                 logger.exception(
-                    "Failed to assign reporting officer on single visit draft. user_id=%s",
+                    "Failed to resolve reporting officer on single visit draft. user_id=%s",
                     getattr(user, "id", None),
                 )
 
-            if plan.visit_category == VisitPlan.CAT_CUSTOMER:
+            if submit_action not in {"save_draft", "submit_to_manager"}:
+                messages.error(request, "Invalid submit action.")
+                return redirect(reverse("kam:plan"))
+
+            approval_status = (
+                VisitPlan.DRAFT
+                if submit_action == "save_draft"
+                else VisitPlan.PENDING_APPROVAL
+            )
+
+            proceed_flag = submit_action == "submit_to_manager"
+            mgr_user = None
+            cc_users: List[User] = []
+
+            if proceed_flag:
+                mgr_user = _active_manager_for_kam(user)
+
+                if not mgr_user or not getattr(mgr_user, "email", None):
+                    messages.error(
+                        request,
+                        "No reporting officer assigned to your profile. "
+                        "Contact admin to set your Reporting Officer in your profile.",
+                    )
+                    return redirect(reverse("kam:plan"))
+
+                cc_users = _active_cc_for_kam(user)
+
+            created_manual_customer = False
+
+            if base_plan.visit_category == VisitPlan.CAT_CUSTOMER:
                 if manual_customer_name:
                     try:
-                        with transaction.atomic():
-                            customer_obj = (
-                                Customer.objects
-                                .select_for_update()
-                                .filter(name__iexact=manual_customer_name)
-                                .first()
-                            )
-
-                            created = False
-
-                            if not customer_obj:
-                                customer_obj = Customer.objects.create(
-                                    name=manual_customer_name,
-                                    kam=user,
-                                    primary_kam=user,
-                                    source=Customer.SOURCE_MANUAL,
-                                    created_by=user,
-                                )
-                                created = True
-
-                            changed_fields = []
-
-                            if hasattr(customer_obj, "kam_id") and not customer_obj.kam_id:
-                                customer_obj.kam = user
-                                changed_fields.append("kam")
-
-                            if hasattr(customer_obj, "primary_kam_id") and not customer_obj.primary_kam_id:
-                                customer_obj.primary_kam = user
-                                changed_fields.append("primary_kam")
-
-                            if hasattr(customer_obj, "source") and not getattr(customer_obj, "source", None):
-                                customer_obj.source = Customer.SOURCE_MANUAL
-                                changed_fields.append("source")
-
-                            if hasattr(customer_obj, "created_by_id") and not getattr(customer_obj, "created_by_id", None):
-                                customer_obj.created_by = user
-                                changed_fields.append("created_by")
-
-                            if changed_fields:
-                                if hasattr(customer_obj, "updated_at"):
-                                    changed_fields.append("updated_at")
-                                customer_obj.save(update_fields=changed_fields)
-
-                            KAMAssignment.objects.get_or_create(
-                                customer=customer_obj,
-                                kam=user,
-                                defaults={
-                                    "active_from": timezone.localdate(),
-                                },
-                            )
-
-                        plan.customer = customer_obj
-                        plan.counterparty_name = ""
-
-                        if created:
-                            messages.info(
-                                request,
-                                f"New customer '{customer_obj.name}' created automatically.",
-                            )
-
+                        manual_customer, created_manual_customer = _get_or_create_manual_customer_for_kam(
+                            name=manual_customer_name,
+                            kam_user=user,
+                        )
                     except Exception as exc:
                         logger.exception(
                             "Failed to create/map manual customer. name=%s user_id=%s",
@@ -4063,121 +4194,305 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                         )
                         return redirect(reverse("kam:plan"))
 
-                elif plan.customer_id:
-                    if not customer_qs.filter(id=plan.customer_id).exists():
-                        messages.error(
-                            request,
-                            "Invalid customer selection. You can only select customers assigned to your KAM mapping.",
-                        )
-                        return redirect(reverse("kam:plan"))
+                    selected_ids.append(manual_customer.id)
+                    selected_ids = list(dict.fromkeys(selected_ids))
 
-                    plan.counterparty_name = ""
-
-                else:
+                if not selected_ids:
                     messages.error(
                         request,
-                        "Customer is required. Select an existing customer or enter a new one.",
+                        "Customer is required. Select one or more existing customers or enter a new one.",
                     )
                     return redirect(reverse("kam:plan"))
 
-            else:
-                plan.customer = None
+                refreshed_customer_qs = _customer_qs_for_user(user).order_by("name", "code")
+                valid_selected_customers = list(
+                    refreshed_customer_qs
+                    .filter(id__in=selected_ids)
+                    .order_by("name", "code")
+                )
 
-            if not (plan.location or "").strip():
-                if (
-                    plan.visit_category == VisitPlan.CAT_CUSTOMER
-                    and plan.customer
-                    and plan.customer.address
-                ):
-                    plan.location = plan.customer.address
+                valid_ids = {customer.id for customer in valid_selected_customers}
+                invalid_ids = [cid for cid in selected_ids if cid not in valid_ids]
 
-            if submit_action == "save_draft":
-                plan.approval_status = VisitPlan.DRAFT
-                plan.save()
+                if invalid_ids:
+                    messages.error(
+                        request,
+                        "One or more selected customers are outside your allowed scope.",
+                    )
+                    return redirect(reverse("kam:plan"))
+
+                if not valid_selected_customers:
+                    messages.error(
+                        request,
+                        "Customer is required. Select one or more existing customers or enter a new one.",
+                    )
+                    return redirect(reverse("kam:plan"))
+
+                create_route_batch = len(valid_selected_customers) > 1
+
+                with transaction.atomic():
+                    batch = None
+
+                    if create_route_batch:
+                        batch = VisitBatch.objects.create(
+                            kam=user,
+                            from_date=base_plan.visit_date,
+                            to_date=base_plan.visit_date,
+                            visit_category=VisitBatch.CAT_CUSTOMER,
+                            purpose=base_plan.purpose,
+                            approval_status=approval_status,
+                            submitted_at=timezone.now() if proceed_flag else None,
+                        )
+
+                    created_plans: List[VisitPlan] = []
+
+                    for customer in valid_selected_customers:
+                        plan = VisitPlan(
+                            batch=batch,
+                            customer=customer,
+                            counterparty_name="",
+                            kam=user,
+                            visit_date=base_plan.visit_date,
+                            visit_date_to=getattr(base_plan, "visit_date_to", None),
+                            visit_type=VisitPlan.PLANNED,
+                            visit_category=VisitPlan.CAT_CUSTOMER,
+                            purpose=base_plan.purpose,
+                            location=(base_plan.location or customer.address or "").strip() or None,
+                            expected_sales_mt=getattr(base_plan, "expected_sales_mt", None),
+                            expected_collection=getattr(base_plan, "expected_collection", None),
+                            approval_status=approval_status,
+                            submitted_at=timezone.now() if proceed_flag else None,
+                        )
+
+                        if reporting_officer is not None and hasattr(plan, "reporting_officer"):
+                            plan.reporting_officer = reporting_officer
+
+                        plan.save()
+                        created_plans.append(plan)
+
+                        VisitApprovalAudit.objects.create(
+                            plan=plan,
+                            batch=batch,
+                            actor=user,
+                            action=VisitApprovalAudit.ACTION_SUBMIT,
+                            note=(
+                                "Submitted to manager for approval"
+                                if proceed_flag
+                                else "Saved as draft"
+                            ),
+                            actor_ip=_get_ip(request),
+                        )
+
+                    if batch:
+                        VisitApprovalAudit.objects.create(
+                            batch=batch,
+                            actor=user,
+                            action=VisitApprovalAudit.ACTION_SUBMIT,
+                            note=(
+                                "Multi-customer route submitted to manager"
+                                if proceed_flag
+                                else "Multi-customer route saved as draft"
+                            ),
+                            actor_ip=_get_ip(request),
+                        )
+
+                    if proceed_flag and batch:
+                        batch_id = batch.id
+                        selected_customer_ids_for_email = [customer.id for customer in valid_selected_customers]
+
+                        def _send_route_batch_approval_after_commit():
+                            try:
+                                fresh_batch = VisitBatch.objects.select_related("kam").get(id=batch_id)
+                                email_customers = list(
+                                    Customer.objects
+                                    .filter(id__in=selected_customer_ids_for_email)
+                                    .order_by("name", "code")
+                                )
+
+                                approve_url = request.build_absolute_uri(
+                                    reverse(
+                                        "kam:direct_batch_approve",
+                                        args=[_make_batch_token(fresh_batch.id, "APPROVE")],
+                                    )
+                                )
+
+                                reject_url = request.build_absolute_uri(
+                                    reverse(
+                                        "kam:direct_batch_reject",
+                                        args=[_make_batch_token(fresh_batch.id, "REJECT")],
+                                    )
+                                )
+
+                                html_body = _build_batch_approval_email(
+                                    request=request,
+                                    batch=fresh_batch,
+                                    kam_user=user,
+                                    visit_category_label=_VISIT_CATEGORY_LABELS.get(
+                                        fresh_batch.visit_category,
+                                        fresh_batch.visit_category,
+                                    ),
+                                    remarks=base_plan.purpose,
+                                    approve_url=approve_url,
+                                    reject_url=reject_url,
+                                    customers=email_customers,
+                                    counterparty_names=[],
+                                    manager_user=mgr_user,
+                                    cc_users=cc_users,
+                                )
+
+                                subject = (
+                                    f"[KAM] Approval Required: Visit Route #{fresh_batch.id} "
+                                    f"({fresh_batch.from_date}) - {user.get_full_name() or user.username}"
+                                )
+
+                                sent_ok = _send_safe_mail(subject, html_body, [mgr_user], cc_users)
+
+                                if not sent_ok:
+                                    logger.warning(
+                                        "Approval email could not be sent for multi-customer route batch #%s",
+                                        fresh_batch.id,
+                                    )
+                            except Exception:
+                                logger.exception(
+                                    "Multi-customer route approval email failed after commit. batch_id=%s",
+                                    batch_id,
+                                )
+
+                        transaction.on_commit(_send_route_batch_approval_after_commit)
+
+                    elif proceed_flag:
+                        plan_id = created_plans[0].id
+
+                        def _send_single_approval_after_commit():
+                            try:
+                                fresh_plan = (
+                                    VisitPlan.objects
+                                    .select_related("customer", "kam")
+                                    .get(id=plan_id)
+                                )
+
+                                approve_token = _make_single_token(fresh_plan.id, "APPROVE")
+                                reject_token = _make_single_token(fresh_plan.id, "REJECT")
+
+                                approve_url = request.build_absolute_uri(
+                                    reverse("kam:single_visit_approve_link", args=[approve_token])
+                                )
+                                reject_url = request.build_absolute_uri(
+                                    reverse("kam:single_visit_reject_link", args=[reject_token])
+                                )
+
+                                subject = (
+                                    f"[KAM] Approval Required: Single Visit #{fresh_plan.id} "
+                                    f"({fresh_plan.visit_date}) - {user.get_full_name() or user.username}"
+                                )
+
+                                html_body = _build_single_visit_approval_email(
+                                    request=request,
+                                    plan=fresh_plan,
+                                    kam_user=user,
+                                    manager_user=mgr_user,
+                                    approve_url=approve_url,
+                                    reject_url=reject_url,
+                                    cc_users=cc_users,
+                                )
+
+                                sent_ok = _send_safe_mail(subject, html_body, [mgr_user], cc_users)
+
+                                if not sent_ok:
+                                    logger.warning(
+                                        "Approval email could not be sent for single visit #%s",
+                                        fresh_plan.id,
+                                    )
+                            except Exception:
+                                logger.exception(
+                                    "Single visit approval email failed after commit. plan_id=%s",
+                                    plan_id,
+                                )
+
+                        transaction.on_commit(_send_single_approval_after_commit)
+
+                if created_manual_customer:
+                    messages.info(
+                        request,
+                        f"New customer '{manual_customer_name}' created automatically.",
+                    )
+
+                if proceed_flag:
+                    messages.success(
+                        request,
+                        f"Visit submitted for manager approval with {len(valid_selected_customers)} customer(s).",
+                    )
+                else:
+                    messages.success(
+                        request,
+                        f"Visit saved as Draft with {len(valid_selected_customers)} customer(s).",
+                    )
+
+                return redirect(reverse("kam:plan"))
+
+            base_plan.customer = None
+            base_plan.counterparty_name = (base_plan.counterparty_name or "").strip() or None
+            base_plan.location = (base_plan.location or "").strip() or None
+            base_plan.approval_status = approval_status
+            base_plan.submitted_at = timezone.now() if proceed_flag else None
+
+            if reporting_officer is not None and hasattr(base_plan, "reporting_officer"):
+                base_plan.reporting_officer = reporting_officer
+
+            with transaction.atomic():
+                base_plan.save()
 
                 VisitApprovalAudit.objects.create(
-                    plan=plan,
+                    plan=base_plan,
                     actor=user,
                     action=VisitApprovalAudit.ACTION_SUBMIT,
-                    note="Saved as draft",
+                    note=(
+                        "Submitted to manager for approval"
+                        if proceed_flag
+                        else "Saved as draft"
+                    ),
                     actor_ip=_get_ip(request),
                 )
 
-                messages.success(request, f"Single visit saved as Draft (#{plan.id}).")
-                return redirect(reverse("kam:plan"))
+                if proceed_flag:
+                    plan_id = base_plan.id
 
-            if submit_action == "submit_to_manager":
-                mgr_user = _active_manager_for_kam(user)
+                    def _send_non_customer_single_approval_after_commit():
+                        try:
+                            fresh_plan = VisitPlan.objects.select_related("customer", "kam").get(id=plan_id)
+                            approve_token = _make_single_token(fresh_plan.id, "APPROVE")
+                            reject_token = _make_single_token(fresh_plan.id, "REJECT")
+                            approve_url = request.build_absolute_uri(
+                                reverse("kam:single_visit_approve_link", args=[approve_token])
+                            )
+                            reject_url = request.build_absolute_uri(
+                                reverse("kam:single_visit_reject_link", args=[reject_token])
+                            )
+                            subject = (
+                                f"[KAM] Approval Required: Single Visit #{fresh_plan.id} "
+                                f"({fresh_plan.visit_date}) - {user.get_full_name() or user.username}"
+                            )
+                            html_body = _build_single_visit_approval_email(
+                                request=request,
+                                plan=fresh_plan,
+                                kam_user=user,
+                                manager_user=mgr_user,
+                                approve_url=approve_url,
+                                reject_url=reject_url,
+                                cc_users=cc_users,
+                            )
+                            sent_ok = _send_safe_mail(subject, html_body, [mgr_user], cc_users)
+                            if not sent_ok:
+                                logger.warning("Approval email could not be sent for single visit #%s", fresh_plan.id)
+                        except Exception:
+                            logger.exception("Single non-customer approval email failed after commit. plan_id=%s", plan_id)
 
-                if not mgr_user or not getattr(mgr_user, "email", None):
-                    messages.error(
-                        request,
-                        "No reporting officer assigned to your profile. "
-                        "Contact admin to set your Reporting Officer in your profile.",
-                    )
-                    return redirect(reverse("kam:plan"))
+                    transaction.on_commit(_send_non_customer_single_approval_after_commit)
 
-                with transaction.atomic():
-                    plan.approval_status = VisitPlan.PENDING_APPROVAL
-                    plan.submitted_at = timezone.now()
-                    plan.save()
-
-                    VisitApprovalAudit.objects.create(
-                        plan=plan,
-                        actor=user,
-                        action=VisitApprovalAudit.ACTION_SUBMIT,
-                        note="Submitted to manager for approval",
-                        actor_ip=_get_ip(request),
-                    )
-
-                approve_token = _make_single_token(plan.id, "APPROVE")
-                reject_token = _make_single_token(plan.id, "REJECT")
-
-                approve_url = request.build_absolute_uri(
-                    reverse("kam:single_visit_approve_link", args=[approve_token])
-                )
-
-                reject_url = request.build_absolute_uri(
-                    reverse("kam:single_visit_reject_link", args=[reject_token])
-                )
-
-                subject = (
-                    f"[KAM] Approval Required: Single Visit #{plan.id} "
-                    f"({plan.visit_date}) - {user.get_full_name() or user.username}"
-                )
-
-                cc_users = _active_cc_for_kam(user)
-
-                html_body = _build_single_visit_approval_email(
-                    request=request,
-                    plan=plan,
-                    kam_user=user,
-                    manager_user=mgr_user,
-                    approve_url=approve_url,
-                    reject_url=reject_url,
-                    cc_users=cc_users,
-                )
-
-                sent_ok = _send_safe_mail(
-                    subject,
-                    html_body,
-                    [mgr_user],
-                    cc_users,
-                )
-
-                if not sent_ok:
-                    logger.warning(
-                        "Approval email could not be sent for single visit #%s",
-                        plan.id,
-                    )
-
-                messages.success(
-                    request,
-                    f"Single visit #{plan.id} submitted for manager approval.",
-                )
-                return redirect(reverse("kam:plan"))
-
-            messages.error(request, "Invalid submit action.")
+            messages.success(
+                request,
+                f"Single visit #{base_plan.id} {'submitted for manager approval' if proceed_flag else 'saved as Draft'}.",
+            )
             return redirect(reverse("kam:plan"))
 
         messages.error(request, "Single visit has errors. Please correct and save again.")
@@ -4684,7 +4999,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
         # Recent Visit Plans must be rendered from VisitPlan rows only.
         # One VisitPlan row = one visit = one customer/entity + one stored purpose.
-        my_plans = list(
+        my_plans = _attach_visit_customer_display(list(
             _visitplan_qs_for_user(user)
             .filter(
                 visit_date__gte=plan_window_start,
@@ -4693,7 +5008,7 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             .select_related("customer", "kam", "batch", "actual")
             .order_by("-visit_date", "-created_at", "-id")
             .distinct()[:25]
-        )
+        ))
 
         for plan in my_plans:
             if getattr(plan, "customer_id", None) and getattr(plan, "customer", None):
@@ -4714,7 +5029,8 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             else:
                 recent_kam_name = ""
 
-            plan.recent_customer_name = recent_customer_name or "-"
+            if not getattr(plan, "recent_customer_name", None):
+                plan.recent_customer_name = recent_customer_name or "-"
             plan.recent_purpose = recent_purpose or "-"
             plan.recent_status = recent_status or "-"
             plan.recent_kam_name = recent_kam_name or "-"
@@ -5379,6 +5695,62 @@ def _wants_json(request: HttpRequest) -> bool:
     return "application/json" in (request.headers.get("Accept") or "").lower()
 
 
+def _visit_history_customer_options_for_user(user: User):
+    """
+    Customer Master source for Visit History customer filter.
+
+    Reuses the canonical Customer queryset already used by Plan Visit and
+    Customer360. This keeps new manually-created / synced customers available
+    automatically without hardcoded names or duplicate storage.
+    """
+    try:
+        return (
+            _customer_qs_for_user(user)
+            .filter(name__isnull=False)
+            .exclude(name__exact="")
+            .distinct()
+            .order_by("name", "code")
+        )
+    except Exception:
+        logger.exception(
+            "Failed to build Visit History customer dropdown. user_id=%s",
+            getattr(user, "id", None),
+        )
+        return Customer.objects.none()
+
+
+def _selected_visit_history_customer_id(request: HttpRequest, customer_qs) -> Optional[int]:
+    """
+    Resolve selected Visit History customer safely inside the user's customer scope.
+    Filtering is by exact Customer.id stored on VisitPlan.customer_id.
+    """
+    raw_customer = (
+        request.GET.get("customer")
+        or request.GET.get("customer_id")
+        or ""
+    ).strip()
+
+    if not raw_customer or raw_customer.upper() in {"ALL", "*"}:
+        return None
+
+    if not raw_customer.isdigit():
+        return None
+
+    customer_id = int(raw_customer)
+
+    try:
+        if customer_qs.filter(id=customer_id).exists():
+            return customer_id
+    except Exception:
+        logger.exception(
+            "Failed to validate Visit History customer filter. customer_id=%s user_id=%s",
+            customer_id,
+            getattr(getattr(request, "user", None), "id", None),
+        )
+
+    return None
+
+
 @login_required(login_url="/accounts/login/")
 @require_any_kam_code("kam_plan", "kam_manager")
 def visit_batches(request: HttpRequest) -> HttpResponse:
@@ -5393,11 +5765,21 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
     Production-safe update:
     - Uses VisitPlan as the Visit History row source because customer selected
       during Plan Visit is stored on VisitPlan.customer.
+    - Reuses _customer_qs_for_user() as the canonical Customer Master source
+      for the Customer dropdown.
+    - Applies exact Customer.id filtering against VisitPlan.customer_id.
     - Keeps existing scoping, filters, workflow, permissions, URLs, and APIs.
     - Uses select_related and grouped aggregate lookups to avoid N+1 queries.
     - Does not change approval, post visit, collection, or call log logic.
     """
     can_view_all = _is_manager(request.user)
+
+    customer_dropdown_options_qs = _visit_history_customer_options_for_user(request.user)
+    selected_customer_id = _selected_visit_history_customer_id(
+        request,
+        customer_dropdown_options_qs,
+    )
+    selected_customer = str(selected_customer_id or "")
 
     if not _visitplan_workflow_schema_ready():
         messages.error(
@@ -5412,11 +5794,13 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
                 "can_view_all": can_view_all,
                 "status_filter": "",
                 "selected_kam": "",
+                "selected_customer": selected_customer,
                 "date_range": "",
                 "time_filter": "",
                 "filter_from": "",
                 "filter_to": "",
                 "kam_dropdown_options": [],
+                "customer_dropdown_options": list(customer_dropdown_options_qs),
             },
         )
 
@@ -5438,7 +5822,10 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
         date_field="visit_date",
     )
 
-    rows = list(qs[:300])
+    if selected_customer_id:
+        qs = qs.filter(customer_id=selected_customer_id)
+
+    rows = _attach_visit_customer_display(list(qs[:300]))
 
     customer_ids = sorted(
         {
@@ -5557,11 +5944,13 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
         "can_view_all": can_view_all,
         "status_filter": status_filter,
         "selected_kam": selected_kam,
+        "selected_customer": selected_customer,
         "date_range": date_range,
         "time_filter": time_filter,
         "filter_from": request.GET.get("from_date", "") or request.GET.get("from", ""),
         "filter_to": request.GET.get("to_date", "") or request.GET.get("to", ""),
         "kam_dropdown_options": kam_dropdown_options,
+        "customer_dropdown_options": list(customer_dropdown_options_qs),
     }
 
     return render(request, "kam/visit_batches.html", ctx)
@@ -5601,6 +5990,15 @@ def visit_batches_api(request: HttpRequest) -> JsonResponse:
         kam_field="kam_id",
         date_field="from_date",
     )
+
+    customer_dropdown_options_qs = _visit_history_customer_options_for_user(request.user)
+    selected_customer_id = _selected_visit_history_customer_id(
+        request,
+        customer_dropdown_options_qs,
+    )
+
+    if selected_customer_id:
+        qs = qs.filter(lines__customer_id=selected_customer_id).distinct()
 
     batches = []
 
@@ -5815,7 +6213,7 @@ def visit_history_edit(request: HttpRequest, plan_id: int) -> HttpResponse:
 @require_any_kam_code("kam_manager", "kam_plan")
 def visit_batch_detail(request: HttpRequest, batch_id: int) -> HttpResponse:
     b = get_object_or_404(_visitbatch_qs_for_user(request.user), id=batch_id)
-    lines = list(VisitPlan.objects.select_related("customer").filter(batch=b).order_by("customer__name"))
+    lines = _attach_visit_customer_display(list(VisitPlan.objects.select_related("customer", "kam", "batch").filter(batch=b).order_by("customer__name", "counterparty_name", "id")))
     can_approve = _is_manager(request.user)
     return render(request, "kam/visit_batch_detail.html", {"page_title": f"Visit History — Batch #{b.id}", "batch": b, "lines": lines, "can_approve": can_approve, "can_edit": (not _is_manager(request.user)) and (b.approval_status in {STATUS_DRAFT, STATUS_REJECTED}), "can_delete": (not _is_manager(request.user)) and (b.approval_status in {STATUS_DRAFT})})
 
@@ -6033,7 +6431,7 @@ def visits(request: HttpRequest) -> HttpResponse:
         date_field="visit_date",
     )
 
-    rows = list(rows_qs[:300])
+    rows = _attach_visit_customer_display(list(rows_qs[:300]))
 
     selected_plan = None
 
@@ -6047,6 +6445,9 @@ def visits(request: HttpRequest) -> HttpResponse:
 
     if selected_plan is None and rows:
         selected_plan = rows[0]
+
+    if selected_plan:
+        _attach_visit_customer_display([selected_plan])
 
     existing_actual = getattr(selected_plan, "actual", None) if selected_plan else None
     workflow_completed = bool(

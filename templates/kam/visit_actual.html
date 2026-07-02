@@ -1,6 +1,4 @@
 {# FILE: templates/kam/visit_actual.html #}
-{# PURPOSE: Visits & Calls — update approved visit actual/post-meeting workflow. #}
-{# UPDATED: Purpose of Visit mandatory + Next Meeting Date hidden until manager post-visit review completes workflow. #}
 {% extends "base.html" %}
 {% load humanize %}
 
@@ -9,226 +7,58 @@
 
 {% block head_extra %}
 <style>
-  .vc-page-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-    margin-bottom: 18px;
-  }
-
-  .vc-filter-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px 16px;
-    margin-bottom: 18px;
-  }
-
-  .vc-filter-grid {
-    display: flex;
-    align-items: flex-end;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .vc-filter-field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .vc-filter-label {
-    font-size: 10.5px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: .06em;
-    color: var(--subtle);
-  }
-
-  .vc-filter-field .form-control,
-  .vc-filter-field .form-select {
-    height: 36px;
-    font-size: 13px;
-    min-width: 150px;
-  }
-
-  .vc-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow: hidden;
-    box-shadow: var(--shadow-xs);
-  }
-
-  .vc-card-header {
-    padding: 13px 16px;
-    border-bottom: 1px solid var(--border-light);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    font-size: 13px;
-    font-weight: 800;
-  }
-
-  .vc-card-body {
-    padding: 16px;
-  }
-
-  .vc-label {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text-secondary);
-    margin-bottom: 5px;
-    display: block;
-  }
-
-  .vc-help {
-    font-size: 11.5px;
-    color: var(--muted);
-    margin-top: 4px;
-  }
-
-  .visit-table th {
-    font-size: 11px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: .05em;
-    color: var(--muted);
-    white-space: nowrap;
-  }
-
-  .visit-table td {
-    font-size: 13px;
-    vertical-align: middle;
-  }
-
-  .purpose-cell {
-    max-width: 230px;
-    color: var(--muted);
-    line-height: 1.35;
-  }
-
-  .status-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 9px;
-    border-radius: 999px;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-  }
-
-  .status-pill.approved {
-    background: #ecfdf5;
-    color: #10b981;
-  }
-
-  .status-pill.completed {
-    background: #eff6ff;
-    color: #2563eb;
-  }
-
-  .status-pill.pending {
-    background: #fffbeb;
-    color: #f59e0b;
-  }
-
-  .status-pill.draft {
-    background: #f3f4f6;
-    color: #6b7280;
-  }
-
-  .status-pill.rejected {
-    background: #fef2f2;
-    color: #ef4444;
-  }
-
-  .selected-plan-box {
-    background: #f8fafc;
-    border: 1px solid var(--border-light);
-    border-radius: 10px;
-    padding: 12px 14px;
-    margin-bottom: 16px;
-  }
-
-  .selected-plan-title {
-    font-size: 13px;
-    font-weight: 800;
-    color: var(--text);
-    margin-bottom: 5px;
-  }
-
-  .selected-plan-meta {
-    font-size: 12px;
-    color: var(--muted);
-  }
-
-  .workflow-note {
-    background: #eff6ff;
-    border: 1px solid #bfdbfe;
-    color: #1e40af;
-    border-radius: 8px;
-    padding: 10px 12px;
-    font-size: 12px;
-    line-height: 1.5;
-    margin-bottom: 12px;
-  }
-
-  .next-date-locked {
-    background: #fff7ed;
-    border: 1px solid #fed7aa;
-    color: #9a3412;
-    border-radius: 8px;
-    padding: 10px 12px;
-    font-size: 12px;
-    margin-bottom: 12px;
-  }
-
-  .empty-state {
-    padding: 36px 20px;
-    text-align: center;
-    color: var(--subtle);
-    font-size: 13px;
-  }
-
-  @media (max-width: 768px) {
-    .vc-filter-field,
-    .vc-filter-field .form-control,
-    .vc-filter-field .form-select {
-      width: 100%;
-      min-width: 0;
-    }
-  }
+  .vc-page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+  .vc-title { margin: 0; font-size: 28px; font-weight: 850; color: #0f172a; letter-spacing: -.02em; }
+  .vc-subtitle { margin: 5px 0 0; color: #64748b; font-size: 13px; }
+  .vc-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .vc-actions .btn { border-radius: 12px; font-weight: 800; min-height: 38px; }
+  .vc-filter-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 18px; box-shadow: 0 12px 28px rgba(15, 23, 42, .06); padding: 16px; margin-bottom: 18px; position: sticky; top: 0; z-index: 5; }
+  .vc-filter-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; align-items: end; }
+  .vc-filter-field { display: flex; flex-direction: column; gap: 6px; }
+  .vc-filter-label { font-size: 11px; font-weight: 850; text-transform: uppercase; letter-spacing: .06em; color: #64748b; }
+  .vc-filter-field .form-control, .vc-filter-field .form-select { min-height: 40px; border-radius: 12px; border-color: #d8e0ec; font-size: 13px; }
+  .vc-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 18px; overflow: hidden; box-shadow: 0 12px 28px rgba(15, 23, 42, .06); }
+  .vc-card-header { padding: 15px 18px; border-bottom: 1px solid #edf2f7; display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px; font-weight: 850; color: #0f172a; }
+  .vc-card-body { padding: 18px; }
+  .visit-table { margin: 0; min-width: 920px; }
+  .visit-table thead th { position: sticky; top: 0; z-index: 2; background: #f8fafc; color: #475569; font-size: 11px; font-weight: 850; text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; padding: 13px 14px; border-bottom: 1px solid #e2e8f0; }
+  .visit-table tbody td { font-size: 13px; vertical-align: middle; padding: 14px; border-bottom: 1px solid #edf2f7; color: #334155; }
+  .visit-table tbody tr:hover { background: #f8fafc; }
+  .customer-chip-wrap { display: flex; flex-wrap: wrap; gap: 7px; max-width: 310px; }
+  .customer-chip { display: inline-flex; align-items: center; border-radius: 999px; padding: 6px 10px; background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe; font-size: 12px; font-weight: 800; line-height: 1.15; white-space: normal; }
+  .purpose-cell { max-width: 260px; color: #64748b; line-height: 1.4; white-space: normal; }
+  .status-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 850; padding: 5px 10px; border-radius: 999px; text-transform: uppercase; letter-spacing: .04em; }
+  .status-pill.completed { background: #eff6ff; color: #1d4ed8; }
+  .status-pill.pending { background: #fff7ed; color: #c2410c; }
+  .status-pill.draft { background: #f1f5f9; color: #475569; }
+  .status-pill.rejected { background: #fef2f2; color: #b91c1c; }
+  .selected-plan-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; padding: 13px 14px; margin-bottom: 16px; }
+  .selected-plan-title { font-size: 14px; font-weight: 850; color: #0f172a; margin-bottom: 7px; }
+  .selected-plan-meta { font-size: 12px; color: #64748b; }
+  .workflow-note { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; border-radius: 12px; padding: 11px 13px; font-size: 12px; line-height: 1.5; margin-bottom: 12px; }
+  .next-date-locked { background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; border-radius: 12px; padding: 11px 13px; font-size: 12px; margin-bottom: 12px; }
+  .vc-label { font-size: 12px; font-weight: 850; color: #475569; margin-bottom: 6px; display: block; text-transform: uppercase; letter-spacing: .04em; }
+  .vc-help { font-size: 11.5px; color: #64748b; margin-top: 5px; }
+  .vc-card .form-control, .vc-card .form-select { border-radius: 12px; border-color: #d8e0ec; min-height: 40px; }
+  .vc-card textarea.form-control { min-height: 88px; resize: none; }
+  .purpose-tools { display: flex; justify-content: space-between; gap: 10px; margin-top: 5px; font-size: 11.5px; color: #64748b; }
+  .empty-state { padding: 36px 20px; text-align: center; color: #64748b; font-size: 13px; }
+  @media (max-width: 1200px) { .vc-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 768px) { .vc-title { font-size: 24px; } .vc-filter-card { position: static; } .vc-filter-grid { grid-template-columns: 1fr; } .vc-actions .btn { width: 100%; } }
 </style>
 {% endblock %}
 
 {% block content %}
-
 <div class="vc-page-head">
   <div>
-    <h1 class="page-title">Visits &amp; Calls</h1>
-    <p class="text-muted small mt-1">
-      Update approved visits after customer meetings and review recent visit/call activity.
-    </p>
+    <h1 class="vc-title">Visits &amp; Calls</h1>
+    <p class="vc-subtitle">Update approved visits after customer meetings and review recent visit/call activity.</p>
   </div>
-
-  <div class="d-flex gap-2 flex-wrap">
-    <a href="{% url 'kam:plan' %}" class="btn btn-sm btn-primary">
-      <i class="fas fa-plus me-1"></i>Plan Visit
-    </a>
-
-    <a href="{% url 'kam:visit_batches' %}" class="btn btn-sm btn-outline-secondary">
-      <i class="fas fa-clock-rotate-left me-1"></i>Visit History
-    </a>
-
-    <a href="{% url 'kam:dashboard' %}" class="btn btn-sm btn-outline-secondary">
-      <i class="fas fa-arrow-left me-1"></i>Dashboard
-    </a>
+  <div class="vc-actions">
+    <a href="{% url 'kam:plan' %}" class="btn btn-sm btn-primary"><i class="fas fa-plus me-1"></i>Plan New Visit</a>
+    <a href="{% url 'kam:call_new' %}" class="btn btn-sm btn-outline-primary"><i class="fas fa-phone me-1"></i>Call Log</a>
+    <a href="{% url 'kam:visit_batches' %}" class="btn btn-sm btn-outline-secondary"><i class="fas fa-clock-rotate-left me-1"></i>Visit History</a>
+    <a href="{% url 'kam:dashboard' %}" class="btn btn-sm btn-outline-secondary"><i class="fas fa-arrow-left me-1"></i>Dashboard</a>
   </div>
 </div>
 
@@ -243,37 +73,25 @@
 
 <form method="get" class="vc-filter-card">
   <div class="vc-filter-grid">
-
     {% if can_choose_kam %}
       <div class="vc-filter-field">
         <label class="vc-filter-label">KAM</label>
         <select name="kam" class="form-select form-select-sm">
           <option value="">All KAMs</option>
           {% for kam in kam_dropdown_options %}
-            <option value="{{ kam.id }}" {% if selected_kam_id|stringformat:"s" == kam.id|stringformat:"s" %}selected{% endif %}>
-              {{ kam.get_full_name|default:kam.username }}
-            </option>
+            <option value="{{ kam.id }}" {% if selected_kam_id|stringformat:"s" == kam.id|stringformat:"s" %}selected{% endif %}>{{ kam.get_full_name|default:kam.username }}</option>
           {% endfor %}
         </select>
       </div>
     {% endif %}
-
     <div class="vc-filter-field">
       <label class="vc-filter-label">From Date</label>
-      <input type="date"
-             name="from_date"
-             class="form-control form-control-sm"
-             value="{{ filter_from }}">
+      <input type="date" name="from_date" class="form-control form-control-sm" value="{{ filter_from }}">
     </div>
-
     <div class="vc-filter-field">
       <label class="vc-filter-label">To Date</label>
-      <input type="date"
-             name="to_date"
-             class="form-control form-control-sm"
-             value="{{ filter_to }}">
+      <input type="date" name="to_date" class="form-control form-control-sm" value="{{ filter_to }}">
     </div>
-
     <div class="vc-filter-field">
       <label class="vc-filter-label">Time Filter</label>
       <select name="time_filter" class="form-select form-select-sm">
@@ -283,90 +101,53 @@
         <option value="current_year" {% if time_filter == "current_year" %}selected{% endif %}>Current Year</option>
       </select>
     </div>
-
     <div class="d-flex gap-2 align-items-end">
-      <button type="submit" class="btn btn-sm btn-primary">
-        <i class="fas fa-filter me-1"></i>Apply
-      </button>
-
-      <a href="{% url 'kam:visits' %}" class="btn btn-sm btn-outline-secondary">
-        Reset
-      </a>
+      <button type="submit" class="btn btn-sm btn-primary"><i class="fas fa-filter me-1"></i>Apply</button>
+      <a href="{% url 'kam:visits' %}" class="btn btn-sm btn-outline-secondary">Reset</a>
     </div>
-
   </div>
 </form>
 
 <div class="row g-3">
-
   <div class="col-lg-7">
     <div class="vc-card">
       <div class="vc-card-header">
-        <span>
-          <i class="fas fa-route me-2 text-muted"></i>Approved Visits
-        </span>
+        <span><i class="fas fa-route me-2 text-muted"></i>Approved Visits</span>
         <span class="text-muted small">{{ rows|length|default:0 }} records</span>
       </div>
-
       {% if rows %}
         <div class="table-responsive">
-          <table class="table table-sm table-hover align-middle mb-0 visit-table">
-            <thead class="table-light">
+          <table class="table table-hover align-middle visit-table">
+            <thead>
               <tr>
-                <th>Date</th>
-                <th>Customer / Entity</th>
+                <th>Visit Date</th>
+                <th>Customer Name</th>
                 <th>Purpose of Visit</th>
-                <th>KAM</th>
+                <th>Assigned KAM</th>
                 <th>Status</th>
-                <th class="text-end">Action</th>
+                <th class="text-end">Actions</th>
               </tr>
             </thead>
-
             <tbody>
               {% for plan in rows %}
                 <tr>
-                  <td class="text-nowrap">
-                    {{ plan.visit_date|date:"d M Y" }}
-                  </td>
-
+                  <td class="text-nowrap">{{ plan.visit_date|date:"d M Y" }}</td>
                   <td>
-                    {% if plan.customer %}
-                      <div class="fw-semibold">{{ plan.customer.name }}</div>
-                      {% if plan.customer.code %}
-                        <div class="text-muted small">{{ plan.customer.code }}</div>
-                      {% endif %}
-                    {% else %}
-                      <div class="fw-semibold">{{ plan.counterparty_name|default:"—" }}</div>
-                    {% endif %}
+                    <div class="customer-chip-wrap">
+                      {% for name in plan.customer_badge_names %}<span class="customer-chip">{{ name }}</span>{% empty %}<span class="text-muted">{{ plan.customer_display_name|default:"—" }}</span>{% endfor %}
+                    </div>
                   </td>
-
-                  <td class="purpose-cell">
-                    {{ plan.purpose|default:"—"|truncatechars:80 }}
-                  </td>
-
+                  <td class="purpose-cell">{{ plan.purpose|default:"—"|truncatechars:100 }}</td>
+                  <td>{{ plan.kam.get_full_name|default:plan.kam.username }}</td>
                   <td>
-                    {{ plan.kam.get_full_name|default:plan.kam.username }}
+                    {% if plan.approval_status == "COMPLETED" %}<span class="status-pill completed">Completed</span>
+                    {% elif plan.approval_status == "APPROVED" %}<span class="status-pill pending">Pending</span>
+                    {% elif plan.approval_status == "PENDING_APPROVAL" %}<span class="status-pill pending">Pending</span>
+                    {% elif plan.approval_status == "REJECTED" %}<span class="status-pill rejected">Rejected</span>
+                    {% else %}<span class="status-pill draft">{{ plan.approval_status|default:"Draft" }}</span>{% endif %}
                   </td>
-
-                  <td>
-                    {% if plan.approval_status == "COMPLETED" %}
-                      <span class="status-pill completed">Completed</span>
-                    {% elif plan.approval_status == "APPROVED" %}
-                      <span class="status-pill pending">Pending</span>
-                    {% elif plan.approval_status == "PENDING_APPROVAL" %}
-                      <span class="status-pill pending">Pending</span>
-                    {% elif plan.approval_status == "REJECTED" %}
-                      <span class="status-pill rejected">Rejected</span>
-                    {% else %}
-                      <span class="status-pill draft">{{ plan.approval_status|default:"Draft" }}</span>
-                    {% endif %}
-                  </td>
-
                   <td class="text-end">
-                    <a href="{% url 'kam:visits' %}?plan={{ plan.id }}"
-                       class="btn btn-sm {% if selected_plan and selected_plan.id == plan.id %}btn-primary{% else %}btn-outline-primary{% endif %}">
-                      Edit
-                    </a>
+                    <a href="{% url 'kam:visits' %}?plan={{ plan.id }}" class="btn btn-sm {% if selected_plan and selected_plan.id == plan.id %}btn-primary{% else %}btn-outline-primary{% endif %}">Edit</a>
                   </td>
                 </tr>
               {% endfor %}
@@ -374,96 +155,51 @@
           </table>
         </div>
       {% else %}
-        <div class="empty-state">
-          No approved visits found for selected filters.
-        </div>
+        <div class="empty-state">No approved visits found for selected filters.</div>
       {% endif %}
     </div>
   </div>
 
   <div class="col-lg-5">
     <div class="vc-card">
-      <div class="vc-card-header">
-        <span>
-          <i class="fas fa-clipboard-check me-2 text-muted"></i>Post Visit Form
-        </span>
-      </div>
-
+      <div class="vc-card-header"><span><i class="fas fa-clipboard-check me-2 text-muted"></i>Post Visit Form</span></div>
       <div class="vc-card-body">
-
         {% if selected_plan %}
-
           <div class="selected-plan-box">
             <div class="selected-plan-title">
-              Visit #{{ selected_plan.id }}
-              —
-              {% if selected_plan.customer %}
-                {{ selected_plan.customer.name }}
-              {% else %}
-                {{ selected_plan.counterparty_name|default:"—" }}
-              {% endif %}
+              Visit #{{ selected_plan.id }} —
+              {% for name in selected_plan.customer_badge_names %}{{ name }}{% if not forloop.last %}, {% endif %}{% empty %}{{ selected_plan.customer_display_name|default:"—" }}{% endfor %}
             </div>
-
-            <div class="selected-plan-meta">
-              {{ selected_plan.visit_date|date:"d M Y" }}
-              ·
-              {{ selected_plan.kam.get_full_name|default:selected_plan.kam.username }}
-              ·
-              {{ selected_plan.get_visit_category_display }}
+            <div class="customer-chip-wrap mb-2">
+              {% for name in selected_plan.customer_badge_names %}<span class="customer-chip">{{ name }}</span>{% endfor %}
             </div>
+            <div class="selected-plan-meta">{{ selected_plan.visit_date|date:"d M Y" }} · {{ selected_plan.kam.get_full_name|default:selected_plan.kam.username }} · {{ selected_plan.get_visit_category_display }}</div>
           </div>
 
-          <div class="workflow-note">
-            <strong>Lifecycle Rule:</strong>
-            Submitting post-visit details sends manager review mail.
-            The visit remains Pending until the manager accepts the post-visit review.
-          </div>
-
-          {% if not workflow_completed %}
-            <div class="next-date-locked">
-              <strong>Next Meeting Date is hidden.</strong>
-              It appears only after manager post-visit review completes the workflow.
-            </div>
-          {% endif %}
+          <div class="workflow-note"><strong>Lifecycle Rule:</strong> Submitting post-visit details sends manager review mail. The visit remains Pending until manager accepts the post-visit review.</div>
+          {% if not workflow_completed %}<div class="next-date-locked"><strong>Next Meeting Date is hidden.</strong> It appears only after manager post-visit review completes the workflow.</div>{% endif %}
 
           {% if actual_form.non_field_errors %}
-            <div class="alert alert-danger">
-              {% for err in actual_form.non_field_errors %}
-                <div>{{ err }}</div>
-              {% endfor %}
-            </div>
+            <div class="alert alert-danger">{% for err in actual_form.non_field_errors %}<div>{{ err }}</div>{% endfor %}</div>
           {% endif %}
 
           <form method="post" novalidate>
             {% csrf_token %}
             <input type="hidden" name="plan_id" value="{{ selected_plan.id }}">
-
             <div class="mb-3">
-              <label class="vc-label">
-                Purpose of Visit <span class="text-danger">*</span>
-              </label>
-              <textarea name="purpose"
-                        class="form-control form-control-sm"
-                        rows="2"
-                        required
-                        placeholder="Enter Purpose of Visit">{{ selected_plan.purpose|default_if_none:'' }}</textarea>
-              <div class="vc-help">Purpose of Visit is mandatory.</div>
+              <label class="vc-label">Purpose of Visit <span class="text-danger">*</span></label>
+              <textarea name="purpose" id="postVisitPurpose" class="form-control form-control-sm" rows="3" required placeholder="Enter visit agenda, customer discussion purpose, collection follow-up, sales opportunity or relationship objective">{{ selected_plan.purpose|default_if_none:'' }}</textarea>
+              <div class="purpose-tools"><span>Purpose of Visit is mandatory.</span><span><span id="postVisitPurposeCount">0</span>/2000</span></div>
             </div>
 
             {% for field in actual_form %}
               {% if field.name == "next_action_date" %}
                 {% if workflow_completed %}
                   <div class="mb-3" id="nextMeetingDateWrap">
-                    <label class="vc-label" for="{{ field.id_for_label }}">
-                      Next Meeting Date
-                    </label>
+                    <label class="vc-label" for="{{ field.id_for_label }}">Next Meeting Date</label>
                     {{ field }}
-                    {% if field.errors %}
-                      <div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>
-                    {% endif %}
-                    <div class="vc-help">
-                      Available because manager has reviewed the post visit and completed the workflow.
-                    </div>
+                    {% if field.errors %}<div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>{% endif %}
+                    <div class="vc-help">Available because manager has reviewed the post visit and completed the workflow.</div>
                   </div>
                 {% else %}
                   {{ field }}
@@ -471,58 +207,40 @@
               {% elif field.name == "reminder_cc_manager" %}
                 <div class="form-check mb-3">
                   {{ field }}
-                  <label class="form-check-label" for="{{ field.id_for_label }}">
-                    {{ field.label }}
-                  </label>
-                  {% if field.errors %}
-                    <div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>
-                  {% endif %}
+                  <label class="form-check-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                  {% if field.errors %}<div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>{% endif %}
                 </div>
               {% else %}
                 <div class="mb-3">
-                  <label class="vc-label" for="{{ field.id_for_label }}">
-                    {{ field.label }}
-                    {% if field.field.required %}<span class="text-danger">*</span>{% endif %}
-                  </label>
+                  <label class="vc-label" for="{{ field.id_for_label }}">{{ field.label }}{% if field.field.required %}<span class="text-danger"> *</span>{% endif %}</label>
                   {{ field }}
-                  {% if field.errors %}
-                    <div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>
-                  {% endif %}
-
-                  {% if field.name == "meeting_notes" %}
-                    <div class="vc-help">
-                      Enter Discussion Summary, Customer Feedback, and Remarks.
-                    </div>
-                  {% elif field.name == "actual_sales_mt" %}
-                    <div class="vc-help">
-                      Enter Sales Opportunity if available.
-                    </div>
-                  {% elif field.name == "next_action" %}
-                    <div class="vc-help">
-                      Enter Required Follow-up and Next Action.
-                    </div>
-                  {% endif %}
+                  {% if field.errors %}<div class="text-danger small mt-1">{{ field.errors|join:", " }}</div>{% endif %}
+                  {% if field.name == "meeting_notes" %}<div class="vc-help">Enter Discussion Summary, Customer Feedback, and Remarks.</div>{% elif field.name == "actual_sales_mt" %}<div class="vc-help">Enter Sales Opportunity if available.</div>{% elif field.name == "next_action" %}<div class="vc-help">Enter Required Follow-up and Next Action.</div>{% endif %}
                 </div>
               {% endif %}
             {% endfor %}
-
-            <button type="submit" class="btn btn-primary w-100">
-              <i class="fas fa-save me-1"></i>Save Post Visit
-            </button>
+            <button type="submit" class="btn btn-primary w-100"><i class="fas fa-save me-1"></i>Save Post Visit</button>
           </form>
-
         {% else %}
-
-          <div class="empty-state">
-            Select an approved visit from the list to enter post-visit details.
-          </div>
-
+          <div class="empty-state">Select an approved visit from the list to enter post-visit details.</div>
         {% endif %}
-
       </div>
     </div>
   </div>
-
 </div>
 
+<script>
+(function () {
+  const purpose = document.getElementById('postVisitPurpose');
+  const count = document.getElementById('postVisitPurposeCount');
+  function syncPurpose() {
+    if (!purpose) return;
+    purpose.style.height = 'auto';
+    purpose.style.height = Math.max(88, purpose.scrollHeight) + 'px';
+    if (count) count.textContent = String((purpose.value || '').length);
+  }
+  if (purpose) purpose.addEventListener('input', syncPurpose);
+  syncPurpose();
+})();
+</script>
 {% endblock %}
