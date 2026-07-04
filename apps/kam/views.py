@@ -20,6 +20,7 @@ from django.utils.html import strip_tags
 from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
 from django.db import transaction, models, connection
 from django.db.models import Sum, Q, F
+from django.db.models.functions import TruncDate
 from django.db.utils import OperationalError, ProgrammingError
 from django.http import (
     Http404,
@@ -2549,6 +2550,190 @@ def _kam_options_for_user(user: User) -> List[str]:
     return list(
         User.objects.filter(is_active=True, id__in=allowed_ids).order_by("username").values_list("username", flat=True)
     )
+
+
+def _manager_customer_dropdown_options():
+    """
+    Manager View customer filter source.
+
+    Reuses the canonical Customer Master table populated by Google Sheet sync
+    and manual ERP customer creation. This intentionally does not hardcode any
+    customer names and does not duplicate customer data.
+    """
+    return (
+        Customer.objects
+        .filter(name__isnull=False)
+        .exclude(name__exact="")
+        .only("id", "name", "code")
+        .order_by("name", "code", "id")
+    )
+
+
+def _selected_manager_customer_id(request: HttpRequest) -> Optional[int]:
+    raw_customer = (
+        request.GET.get("customer")
+        or request.GET.get("customer_id")
+        or ""
+    ).strip()
+
+    if not raw_customer or raw_customer.upper() in {"ALL", "*"}:
+        return None
+
+    if not raw_customer.isdigit():
+        return None
+
+    customer_id = int(raw_customer)
+
+    exists = (
+        Customer.objects
+        .filter(id=customer_id, name__isnull=False)
+        .exclude(name__exact="")
+        .exists()
+    )
+
+    return customer_id if exists else None
+
+
+def _apply_manager_customer_filter(qs, customer_id: Optional[int], field_name: str = "customer_id"):
+    if not customer_id:
+        return qs
+    return qs.filter(**{field_name: customer_id})
+
+
+def _manager_visit_customer_name(plan: "VisitPlan") -> str:
+    """
+    Customer Name column for Manager View.
+
+    For Customer Visit rows, display the exact Customer Master name selected
+    during Plan Visit. Do not fall back to counterparty/entity text.
+    """
+    if getattr(plan, "customer_id", None) and getattr(plan, "customer", None):
+        name = (getattr(plan.customer, "name", "") or "").strip()
+        if name:
+            return name
+    return "No customer selected"
+
+
+def _visit_approval_status_label(plan: "VisitPlan") -> str:
+    try:
+        return plan.get_approval_status_display()
+    except Exception:
+        return (getattr(plan, "approval_status", "") or "-").replace("_", " ").title()
+
+
+def _attach_manager_visit_readonly_details(visits: List["VisitPlan"]) -> List["VisitPlan"]:
+    """
+    Attach read-only display attributes for Manager View without N+1 queries.
+
+    Uses existing VisitPlan / VisitActual / CallLog / CollectionTxn data only.
+    Call and collection detail rows are grouped by customer + KAM + visit date.
+    """
+    visits = list(visits or [])
+
+    for visit in visits:
+        actual = getattr(visit, "actual", None)
+        visit.manager_customer_name = _manager_visit_customer_name(visit)
+        visit.manager_approval_status_label = _visit_approval_status_label(visit)
+        visit.manager_meeting_outcome = _post_visit_meeting_outcome_text(actual)
+        visit.manager_attachment_text = _safe_actual_attachment_text(actual)
+        visit.manager_call_rows = []
+        visit.manager_collection_rows = []
+
+    customer_ids = sorted({
+        int(getattr(visit, "customer_id", 0))
+        for visit in visits
+        if getattr(visit, "customer_id", None)
+    })
+    kam_ids = sorted({
+        int(getattr(visit, "kam_id", 0))
+        for visit in visits
+        if getattr(visit, "kam_id", None)
+    })
+    visit_dates = [
+        getattr(visit, "visit_date", None)
+        for visit in visits
+        if getattr(visit, "visit_date", None)
+    ]
+
+    if not customer_ids or not kam_ids or not visit_dates:
+        return visits
+
+    min_visit_date = min(visit_dates)
+    max_visit_date = max(visit_dates)
+
+    start_dt = timezone.make_aware(
+        timezone.datetime(min_visit_date.year, min_visit_date.month, min_visit_date.day, 0, 0, 0)
+    )
+    end_dt = timezone.make_aware(
+        timezone.datetime(max_visit_date.year, max_visit_date.month, max_visit_date.day, 0, 0, 0)
+    ) + timezone.timedelta(days=1)
+
+    calls_by_key: Dict[Tuple[int, int, date], List[CallLog]] = {}
+
+    call_rows = (
+        CallLog.objects
+        .select_related("customer", "kam")
+        .filter(
+            customer_id__in=customer_ids,
+            kam_id__in=kam_ids,
+            call_datetime__gte=start_dt,
+            call_datetime__lt=end_dt,
+        )
+        .order_by("-call_datetime", "-id")
+    )
+
+    for call in call_rows:
+        try:
+            call_date = timezone.localtime(call.call_datetime).date()
+        except Exception:
+            call_date = call.call_datetime.date() if call.call_datetime else None
+
+        if not call_date:
+            continue
+
+        calls_by_key.setdefault(
+            (call.customer_id, call.kam_id, call_date),
+            [],
+        ).append(call)
+
+    collections_by_key: Dict[Tuple[int, int, date], List[CollectionTxn]] = {}
+
+    collection_rows = (
+        CollectionTxn.objects
+        .select_related("customer", "kam")
+        .filter(
+            customer_id__in=customer_ids,
+            kam_id__in=kam_ids,
+            txn_datetime__gte=start_dt,
+            txn_datetime__lt=end_dt,
+        )
+        .order_by("-txn_datetime", "-id")
+    )
+
+    for txn in collection_rows:
+        try:
+            txn_date = timezone.localtime(txn.txn_datetime).date()
+        except Exception:
+            txn_date = txn.txn_datetime.date() if txn.txn_datetime else None
+
+        if not txn_date:
+            continue
+
+        collections_by_key.setdefault(
+            (txn.customer_id, txn.kam_id, txn_date),
+            [],
+        ).append(txn)
+
+    for visit in visits:
+        key = (
+            getattr(visit, "customer_id", None),
+            getattr(visit, "kam_id", None),
+            getattr(visit, "visit_date", None),
+        )
+        visit.manager_call_rows = calls_by_key.get(key, [])
+        visit.manager_collection_rows = collections_by_key.get(key, [])
+
+    return visits
 
 def _kam_dropdown_options_for_user(user: User) -> List[User]:
     """
@@ -5482,9 +5667,51 @@ def customer_360_api(request: HttpRequest, customer_id: int) -> JsonResponse:
 
     alias_customer_ids = _customer360_alias_customer_ids(customer, accessible_qs)
 
+    scoped_overdue_qs = _filter_qs_by_kam_scope(
+        OverdueSnapshot.objects.filter(customer_id__in=alias_customer_ids),
+        request.user,
+        None,
+        "kam_id",
+    )
+    scoped_sales_qs = _filter_qs_by_kam_scope(
+        InvoiceFact.objects.filter(customer_id__in=alias_customer_ids),
+        request.user,
+        None,
+        "kam_id",
+    )
+    scoped_collection_qs = _filter_qs_by_kam_scope(
+        CollectionTxn.objects.filter(customer_id__in=alias_customer_ids),
+        request.user,
+        None,
+        "kam_id",
+    )
+    scoped_collection_plan_qs = _filter_qs_by_kam_scope(
+        CollectionPlan.objects.filter(customer_id__in=alias_customer_ids),
+        request.user,
+        None,
+        "kam_id",
+    )
+    scoped_visit_qs = _filter_qs_by_kam_scope(
+        VisitPlan.objects.filter(customer_id__in=alias_customer_ids),
+        request.user,
+        None,
+        "kam_id",
+    )
+    scoped_call_qs = _filter_qs_by_kam_scope(
+        CallLog.objects.filter(customer_id__in=alias_customer_ids),
+        request.user,
+        None,
+        "kam_id",
+    )
+    scoped_lead_qs = _filter_qs_by_kam_scope(
+        LeadFact.objects.filter(customer_id__in=alias_customer_ids),
+        request.user,
+        None,
+        "kam_id",
+    )
+
     latest_snapshot_date = (
-        OverdueSnapshot.objects
-        .filter(customer_id__in=alias_customer_ids)
+        scoped_overdue_qs
         .order_by("-snapshot_date")
         .values_list("snapshot_date", flat=True)
         .first()
@@ -5501,8 +5728,8 @@ def customer_360_api(request: HttpRequest, customer_id: int) -> JsonResponse:
 
     if latest_snapshot_date:
         snapshot_agg = (
-            OverdueSnapshot.objects
-            .filter(customer_id__in=alias_customer_ids, snapshot_date=latest_snapshot_date)
+            scoped_overdue_qs
+            .filter(snapshot_date=latest_snapshot_date)
             .aggregate(
                 exposure=Sum("exposure"),
                 overdue=Sum("overdue"),
@@ -5546,9 +5773,7 @@ def customer_360_api(request: HttpRequest, customer_id: int) -> JsonResponse:
         elif overdue:
             exposure = overdue
 
-    sales_qs = _preferred_inv_qs(
-        InvoiceFact.objects.filter(customer_id__in=alias_customer_ids)
-    )
+    sales_qs = _preferred_inv_qs(scoped_sales_qs)
 
     sales_agg = sales_qs.aggregate(
         total_mt=Sum("qty_mt"),
@@ -5564,8 +5789,7 @@ def customer_360_api(request: HttpRequest, customer_id: int) -> JsonResponse:
 
     monthly_sales = _safe_decimal(
         _preferred_inv_qs(
-            InvoiceFact.objects.filter(
-                customer_id__in=alias_customer_ids,
+            scoped_sales_qs.filter(
                 invoice_date__gte=month_start,
                 invoice_date__lte=today,
             )
@@ -5574,8 +5798,7 @@ def customer_360_api(request: HttpRequest, customer_id: int) -> JsonResponse:
 
     yearly_sales = _safe_decimal(
         _preferred_inv_qs(
-            InvoiceFact.objects.filter(
-                customer_id__in=alias_customer_ids,
+            scoped_sales_qs.filter(
                 invoice_date__gte=year_start,
                 invoice_date__lte=today,
             )
@@ -5583,15 +5806,13 @@ def customer_360_api(request: HttpRequest, customer_id: int) -> JsonResponse:
     )
 
     collected = _safe_decimal(
-        CollectionTxn.objects
-        .filter(customer_id__in=alias_customer_ids)
+        scoped_collection_qs
         .aggregate(received=Sum("amount"))
         .get("received")
     )
 
     plan_agg = (
-        CollectionPlan.objects
-        .filter(customer_id__in=alias_customer_ids)
+        scoped_collection_plan_qs
         .aggregate(
             planned=Sum("planned_amount"),
             actual=Sum("actual_amount"),
@@ -5612,17 +5833,17 @@ def customer_360_api(request: HttpRequest, customer_id: int) -> JsonResponse:
     outstanding = exposure - collected
     pending_collection = outstanding if outstanding > 0 else Decimal(0)
 
-    visits = VisitPlan.objects.filter(customer_id__in=alias_customer_ids)
+    visits = scoped_visit_qs
     planned_visits = visits.count()
     completed_visits = visits.filter(actual__isnull=False).count()
     pending_visits = max(planned_visits - completed_visits, 0)
     last_visit = visits.order_by("-visit_date").first()
 
-    calls = CallLog.objects.filter(customer_id__in=alias_customer_ids)
+    calls = scoped_call_qs
     call_count = calls.count()
     last_call = calls.order_by("-call_datetime").first()
 
-    leads = LeadFact.objects.filter(customer_id__in=alias_customer_ids)
+    leads = scoped_lead_qs
     lead_count = leads.count()
     lead_qty = _safe_decimal(leads.aggregate(s=Sum("qty_mt")).get("s"))
 
@@ -5699,18 +5920,65 @@ def _visit_history_customer_options_for_user(user: User):
     """
     Customer Master source for Visit History customer filter.
 
-    Reuses the canonical Customer queryset already used by Plan Visit and
-    Customer360. This keeps new manually-created / synced customers available
-    automatically without hardcoded names or duplicate storage.
+    Production rule:
+    - Admin sees all valid customers.
+    - Manager sees customers in permitted reporting scope.
+    - KAM sees only customers assigned to that KAM through the existing
+      Customer Master / KAMAssignment / synced fact ownership sources.
+
+    Reuses _customer_qs_for_user() so newly synced/manual customers appear
+    automatically and no duplicate customer data is created.
     """
     try:
-        return (
+        qs = (
             _customer_qs_for_user(user)
             .filter(name__isnull=False)
             .exclude(name__exact="")
             .distinct()
             .order_by("name", "code")
         )
+
+        # Defence-in-depth for pure KAM users: never let this dropdown fall
+        # back to global Customer.objects. The canonical helper already scopes
+        # by KAM; this guard keeps the contract explicit for Visit History.
+        if not _is_manager(user) and not _is_admin(user):
+            return qs.filter(
+                Q(kam=user)
+                | Q(primary_kam=user)
+                | Q(id__in=KAMAssignment.objects.filter(
+                    kam=user,
+                ).filter(
+                    Q(active_to__isnull=True)
+                    | Q(active_to__gte=timezone.localdate())
+                ).values_list("customer_id", flat=True))
+                | Q(id__in=VisitPlan.objects.filter(
+                    kam=user,
+                    customer_id__isnull=False,
+                ).values_list("customer_id", flat=True))
+                | Q(id__in=InvoiceFact.objects.filter(
+                    kam=user,
+                    customer_id__isnull=False,
+                ).values_list("customer_id", flat=True))
+                | Q(id__in=LeadFact.objects.filter(
+                    kam=user,
+                    customer_id__isnull=False,
+                ).values_list("customer_id", flat=True))
+                | Q(id__in=CollectionTxn.objects.filter(
+                    kam=user,
+                    customer_id__isnull=False,
+                ).values_list("customer_id", flat=True))
+                | Q(id__in=OverdueSnapshot.objects.filter(
+                    kam=user,
+                    customer_id__isnull=False,
+                ).values_list("customer_id", flat=True))
+                | Q(id__in=CollectionPlan.objects.filter(
+                    kam=user,
+                    customer_id__isnull=False,
+                ).values_list("customer_id", flat=True))
+            ).distinct().order_by("name", "code")
+
+        return qs
+
     except Exception:
         logger.exception(
             "Failed to build Visit History customer dropdown. user_id=%s",
@@ -5780,6 +6048,12 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
         customer_dropdown_options_qs,
     )
     selected_customer = str(selected_customer_id or "")
+    customer_all_label = "All Customers" if can_view_all else "All Assigned Customers"
+    customer_all_help = (
+        "Show visits for every customer in permitted scope"
+        if can_view_all
+        else "Show visits only for customers assigned to you"
+    )
 
     if not _visitplan_workflow_schema_ready():
         messages.error(
@@ -5801,6 +6075,8 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
                 "filter_to": "",
                 "kam_dropdown_options": [],
                 "customer_dropdown_options": list(customer_dropdown_options_qs),
+                "customer_all_label": customer_all_label,
+                "customer_all_help": customer_all_help,
             },
         )
 
@@ -5843,33 +6119,51 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
         }
     )
 
+    visit_dates = sorted(
+        {
+            plan.visit_date
+            for plan in rows
+            if getattr(plan, "visit_date", None)
+        }
+    )
+
     calls_map = {}
 
-    if customer_ids and kam_ids:
+    if customer_ids and kam_ids and visit_dates:
         calls_qs = (
             CallLog.objects
-            .filter(customer_id__in=customer_ids, kam_id__in=kam_ids)
-            .values("customer_id", "kam_id")
+            .filter(
+                customer_id__in=customer_ids,
+                kam_id__in=kam_ids,
+                call_datetime__date__in=visit_dates,
+            )
+            .annotate(activity_date=TruncDate("call_datetime"))
+            .values("customer_id", "kam_id", "activity_date")
             .annotate(total=models.Count("id"))
         )
 
         calls_map = {
-            (row["customer_id"], row["kam_id"]): row["total"]
+            (row["customer_id"], row["kam_id"], row["activity_date"]): row["total"]
             for row in calls_qs
         }
 
     collections_map = {}
 
-    if customer_ids and kam_ids:
+    if customer_ids and kam_ids and visit_dates:
         collections_qs = (
             CollectionTxn.objects
-            .filter(customer_id__in=customer_ids, kam_id__in=kam_ids)
-            .values("customer_id", "kam_id")
+            .filter(
+                customer_id__in=customer_ids,
+                kam_id__in=kam_ids,
+                txn_datetime__date__in=visit_dates,
+            )
+            .annotate(activity_date=TruncDate("txn_datetime"))
+            .values("customer_id", "kam_id", "activity_date")
             .annotate(total=Sum("amount"))
         )
 
         collections_map = {
-            (row["customer_id"], row["kam_id"]): _safe_decimal(row["total"])
+            (row["customer_id"], row["kam_id"], row["activity_date"]): _safe_decimal(row["total"])
             for row in collections_qs
         }
 
@@ -5883,6 +6177,7 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
             customer_name = (getattr(plan, "counterparty_name", "") or "").strip()
 
         plan.customer_display_name = customer_name
+        plan.customer_badge_names = [customer_name] if customer_name else []
         plan.manager_status_display = _manager_visit_business_status(plan)
         plan.visit_status_display = _manager_visit_business_status(plan)
 
@@ -5904,8 +6199,12 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
         aggregate_key = (
             getattr(plan, "customer_id", None),
             getattr(plan, "kam_id", None),
+            getattr(plan, "visit_date", None),
         )
 
+        # Strict date binding: row-level Post Visit History metrics must belong
+        # only to the opened/selected Visit Date. Do not mix calls or
+        # collections from other dates for the same customer/KAM.
         plan.total_calls = calls_map.get(aggregate_key, 0)
         plan.total_collections = collections_map.get(aggregate_key, Decimal(0))
 
@@ -5951,6 +6250,8 @@ def visit_batches_page(request: HttpRequest) -> HttpResponse:
         "filter_to": request.GET.get("to_date", "") or request.GET.get("to", ""),
         "kam_dropdown_options": kam_dropdown_options,
         "customer_dropdown_options": list(customer_dropdown_options_qs),
+        "customer_all_label": customer_all_label,
+        "customer_all_help": customer_all_help,
     }
 
     return render(request, "kam/visit_batches.html", ctx)
@@ -6043,16 +6344,13 @@ def visit_history_edit(request: HttpRequest, plan_id: int) -> HttpResponse:
     """
     user = request.user
 
+    if _is_manager(user) and not _is_admin(user):
+        return HttpResponseForbidden("403 Forbidden: Managers can only view visit records.")
+
     if _is_admin(user):
         plan = get_object_or_404(
             VisitPlan.objects.select_related("customer", "kam", "batch", "actual"),
             id=plan_id,
-        )
-    elif _is_manager(user):
-        plan = get_object_or_404(
-            VisitPlan.objects.select_related("customer", "kam", "batch", "actual"),
-            id=plan_id,
-            kam_id__in=_kams_managed_by_manager(user),
         )
     else:
         plan = get_object_or_404(
@@ -6599,7 +6897,19 @@ def manager_view(request: HttpRequest) -> HttpResponse:
         active_tab = "visits"
 
     kam_options = _kam_options_for_user(request.user)
+    customer_dropdown_options = list(_manager_customer_dropdown_options())
+
     selected_user = request.GET.get("user", "") or request.GET.get("kam", "")
+    selected_customer_id = _selected_manager_customer_id(request)
+    selected_customer = str(selected_customer_id or "")
+    selected_customer_label = "ALL"
+
+    if selected_customer_id:
+        for customer_option in customer_dropdown_options:
+            if customer_option.id == selected_customer_id:
+                selected_customer_label = customer_option.name
+                break
+
     time_filter = request.GET.get("time_filter", "")
     focus_visit = (request.GET.get("focus_visit") or "").strip()
 
@@ -6650,7 +6960,9 @@ def manager_view(request: HttpRequest) -> HttpResponse:
             date_field="visit_date",
         )
 
-        visits_data = list(visit_qs[:300])
+        visit_qs = _apply_manager_customer_filter(visit_qs, selected_customer_id)
+
+        visits_data = _attach_manager_visit_readonly_details(list(visit_qs[:300]))
 
         for visit in visits_data:
             visit.business_status = _manager_visit_business_status(visit)
@@ -6692,6 +7004,8 @@ def manager_view(request: HttpRequest) -> HttpResponse:
             scope_kam_id,
             "kam_id",
         )
+
+        call_qs = _apply_manager_customer_filter(call_qs, selected_customer_id)
 
         from_d = _parse_iso_date(request.GET.get("from_date") or request.GET.get("from") or "")
         to_d = _parse_iso_date(request.GET.get("to_date") or request.GET.get("to") or "")
@@ -6737,6 +7051,8 @@ def manager_view(request: HttpRequest) -> HttpResponse:
             "kam_id",
         )
 
+        collection_qs = _apply_manager_customer_filter(collection_qs, selected_customer_id)
+
         from_d = _parse_iso_date(request.GET.get("from_date") or request.GET.get("from") or "")
         to_d = _parse_iso_date(request.GET.get("to_date") or request.GET.get("to") or "")
         time_start, time_end = _visit_time_filter_bounds(time_filter)
@@ -6777,6 +7093,8 @@ def manager_view(request: HttpRequest) -> HttpResponse:
             "kam_id",
         )
 
+        lead_qs = _apply_manager_customer_filter(lead_qs, selected_customer_id)
+
         from_d = _parse_iso_date(request.GET.get("from_date") or request.GET.get("from") or "")
         to_d = _parse_iso_date(request.GET.get("to_date") or request.GET.get("to") or "")
         time_start, time_end = _visit_time_filter_bounds(time_filter)
@@ -6810,6 +7128,7 @@ def manager_view(request: HttpRequest) -> HttpResponse:
 
         "range_label": "Filtered View",
         "scope_label": selected_user or "ALL",
+        "selected_customer_label": selected_customer_label,
 
         "filter_from": request.GET.get("from_date", "") or request.GET.get("from", ""),
         "filter_to": request.GET.get("to_date", "") or request.GET.get("to", ""),
@@ -6818,6 +7137,8 @@ def manager_view(request: HttpRequest) -> HttpResponse:
 
         "selected_user": selected_user,
         "kam_options": kam_options,
+        "selected_customer": selected_customer,
+        "customer_dropdown_options": customer_dropdown_options,
 
         "visits_data": visits_data,
         "customer_history_map": customer_history_map,

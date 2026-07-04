@@ -7,92 +7,514 @@
 
 {% block head_extra %}
 <style>
-  .vh-page-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:22px; }
-  .vh-title { margin:0; font-size:30px; font-weight:850; color:#0f172a; letter-spacing:-.02em; }
-  .vh-subtitle { margin-top:6px; color:#64748b; font-size:14px; }
-  .vh-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-  .vh-btn { min-height:46px; border-radius:13px; padding:10px 16px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; gap:8px; text-decoration:none; border:1px solid #dbe3ef; background:#fff; color:#334155; white-space:nowrap; }
-  .vh-btn:hover { color:#1d4ed8; border-color:#bfdbfe; background:#f8fbff; }
-  .vh-btn-primary { background:#4f83ff; border-color:#4f83ff; color:#fff; box-shadow:0 14px 30px rgba(79,131,255,.28); }
-  .vh-btn-primary:hover { color:#fff; background:#3f73ef; border-color:#3f73ef; }
+  .vh-page-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 22px;
+  }
 
-  .vh-filter-card { position:sticky; top:8px; z-index:6; background:#fff; border:1px solid #e2e8f0; border-radius:20px; box-shadow:0 16px 38px rgba(15,23,42,.07); padding:18px; margin-bottom:24px; }
-  .vh-filter-top { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
-  .vh-filter-title { display:flex; align-items:center; gap:9px; font-size:14px; font-weight:900; color:#0f172a; }
-  .vh-filter-title i { color:#4f83ff; }
-  .vh-filter-hint { font-size:12px; color:#64748b; font-weight:650; }
-  .vh-filter-grid { display:grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap:12px; align-items:end; }
-  .vh-filter-status { grid-column: span 2; }
-  .vh-filter-kam { grid-column: span 2; }
-  .vh-filter-customer { grid-column: span 3; }
-  .vh-filter-date { grid-column: span 2; }
-  .vh-filter-range { grid-column: span 3; }
-  .vh-filter-field { min-width:0; }
-  .vh-label { display:block; margin-bottom:8px; color:#94a3b8; font-size:11px; font-weight:850; letter-spacing:.08em; text-transform:uppercase; }
-  .vh-filter-field .form-control, .vh-filter-field .form-select { width:100%; min-height:48px; border:1px solid #d8e0ec; border-radius:14px; color:#0f172a; padding:10px 14px; box-shadow:none; background:#fff; }
-  .vh-filter-field .form-control:focus, .vh-filter-field .form-select:focus { border-color:#4f83ff; box-shadow:0 0 0 .2rem rgba(79,131,255,.12); }
+  .vh-title {
+    margin: 0;
+    font-size: 30px;
+    font-weight: 850;
+    color: #0f172a;
+    letter-spacing: -.02em;
+  }
 
-  .vh-customer-combobox { position:relative; }
-  .vh-customer-trigger { width:100%; min-height:48px; border:1px solid #d8e0ec; border-radius:14px; background:#fff; color:#0f172a; padding:8px 12px 8px 14px; display:flex; align-items:center; justify-content:space-between; gap:10px; text-align:left; box-shadow:none; }
-  .vh-customer-trigger:hover, .vh-customer-combobox.is-open .vh-customer-trigger { border-color:#4f83ff; box-shadow:0 0 0 .2rem rgba(79,131,255,.10); }
-  .vh-customer-trigger-text { display:block; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-weight:750; }
-  .vh-customer-trigger-icon { flex:0 0 auto; color:#64748b; font-size:12px; }
-  .vh-customer-panel { display:none; position:absolute; top:calc(100% + 8px); left:0; right:0; z-index:30; background:#fff; border:1px solid #dbe3ef; border-radius:16px; box-shadow:0 22px 48px rgba(15,23,42,.18); overflow:hidden; }
-  .vh-customer-combobox.is-open .vh-customer-panel { display:block; }
-  .vh-customer-search-wrap { padding:10px; border-bottom:1px solid #edf2f7; background:#f8fafc; }
-  .vh-customer-search { width:100%; min-height:42px; border:1px solid #d8e0ec; border-radius:12px; padding:9px 12px; color:#0f172a; outline:none; }
-  .vh-customer-search:focus { border-color:#4f83ff; box-shadow:0 0 0 .18rem rgba(79,131,255,.12); }
-  .vh-customer-list { max-height:286px; overflow-y:auto; padding:6px; }
-  .vh-customer-option { width:100%; border:0; background:#fff; color:#0f172a; display:flex; flex-direction:column; gap:2px; padding:10px 11px; border-radius:11px; text-align:left; }
-  .vh-customer-option:hover, .vh-customer-option.is-active { background:#eef4ff; color:#1d4ed8; }
-  .vh-customer-option-name { font-size:13px; font-weight:850; line-height:1.25; }
-  .vh-customer-option-meta { font-size:11.5px; color:#64748b; line-height:1.25; }
-  .vh-customer-empty { display:none; padding:16px 12px; text-align:center; color:#64748b; font-size:12px; font-weight:700; }
-  .vh-customer-list.is-empty .vh-customer-empty { display:block; }
-  .vh-customer-list.is-empty .vh-customer-option { display:none !important; }
+  .vh-subtitle {
+    margin-top: 6px;
+    color: #64748b;
+    font-size: 14px;
+  }
 
-  .vh-filter-actions { display:flex; justify-content:flex-end; gap:10px; align-items:center; margin-top:14px; padding-top:14px; border-top:1px solid #edf2f7; }
-  .vh-filter-actions .vh-btn { min-height:46px; padding:10px 18px; }
+  .vh-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
 
-  .vh-table-card { background:#fff; border:1px solid #e2e8f0; border-radius:18px; overflow:hidden; box-shadow:0 12px 30px rgba(15,23,42,.06); }
-  .vh-card-head { padding:20px 22px; border-bottom:1px solid #edf2f7; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
-  .vh-card-title { margin:0; font-size:17px; font-weight:850; color:#0f172a; display:flex; align-items:center; gap:10px; }
-  .count-pill { background:#4f83ff; color:#fff; border-radius:999px; font-size:12px; padding:5px 9px; font-weight:850; }
-  .vh-table { margin:0; min-width:1220px; }
-  .vh-table thead th { position:sticky; top:0; z-index:2; background:#f8fafc; color:#64748b; font-size:11px; font-weight:850; text-transform:uppercase; letter-spacing:.06em; padding:14px 12px; border-bottom:1px solid #e2e8f0; white-space:nowrap; }
-  .vh-table tbody td { padding:16px 12px; vertical-align:middle; border-bottom:1px solid #edf2f7; color:#0f172a; font-size:14px; }
-  .vh-table tbody tr:hover { background:#f8fafc; }
-  .customer-chip-wrap { display:flex; flex-wrap:wrap; gap:7px; max-width:360px; }
-  .customer-chip { display:inline-flex; align-items:center; max-width:100%; border-radius:10px; background:#eef4ff; border:1px solid #d9e7ff; color:#2563eb; font-weight:800; padding:6px 9px; line-height:1.25; white-space:normal; word-break:break-word; }
-  .category-chip { display:inline-flex; border-radius:9px; background:#eef4ff; color:#4f83ff; padding:6px 10px; font-size:12px; font-weight:850; line-height:1.2; }
-  .status-pill { display:inline-flex; align-items:center; justify-content:center; border-radius:999px; min-width:86px; padding:7px 10px; font-size:11px; font-weight:850; text-transform:uppercase; letter-spacing:.04em; }
+  .vh-btn {
+    min-height: 44px;
+    border-radius: 13px;
+    padding: 10px 16px;
+    font-weight: 800;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    text-decoration: none;
+    border: 1px solid #dbe3ef;
+    background: #fff;
+    color: #334155;
+    white-space: nowrap;
+    line-height: 1;
+    transition: .16s ease;
+  }
+
+  .vh-btn:hover {
+    color: #1d4ed8;
+    border-color: #bfdbfe;
+    background: #f8fbff;
+    transform: translateY(-1px);
+  }
+
+  .vh-btn-primary {
+    background: linear-gradient(135deg, #4f83ff 0%, #3468f7 100%);
+    border-color: #4f83ff;
+    color: #fff;
+    box-shadow: 0 14px 30px rgba(79,131,255,.28);
+  }
+
+  .vh-btn-primary:hover {
+    color: #fff;
+    background: linear-gradient(135deg, #3f73ef 0%, #2958da 100%);
+    border-color: #3f73ef;
+  }
+
+  .vh-filter-card {
+    position: sticky;
+    top: 8px;
+    z-index: 6;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 22px;
+    box-shadow: 0 18px 44px rgba(15,23,42,.07);
+    padding: 18px 22px 20px;
+    margin-bottom: 24px;
+  }
+
+  .vh-filter-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+
+  .vh-filter-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 15px;
+    font-weight: 900;
+    color: #0f172a;
+    letter-spacing: -.01em;
+  }
+
+  .vh-filter-title i {
+    color: #4f83ff;
+    font-size: 15px;
+  }
+
+  .vh-filter-hint {
+    font-size: 12px;
+    color: #64748b;
+    font-weight: 650;
+  }
+
+  .vh-filter-grid {
+    display: grid;
+    grid-template-columns:
+      minmax(150px, .9fr)
+      minmax(150px, .9fr)
+      minmax(280px, 1.45fr)
+      minmax(150px, .9fr)
+      minmax(150px, .9fr)
+      minmax(170px, 1fr);
+    gap: 14px;
+    align-items: end;
+  }
+
+  .vh-filter-field {
+    min-width: 0;
+  }
+
+  .vh-filter-status,
+  .vh-filter-kam,
+  .vh-filter-customer,
+  .vh-filter-date,
+  .vh-filter-range {
+    grid-column: span 1;
+  }
+
+  .vh-label {
+    display: block;
+    margin: 0 0 7px;
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 850;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    line-height: 1.2;
+  }
+
+  .vh-filter-field .form-control,
+  .vh-filter-field .form-select {
+    width: 100%;
+    min-height: 46px;
+    height: 46px;
+    border: 1px solid #d8e0ec;
+    border-radius: 14px;
+    color: #0f172a;
+    padding: 10px 14px;
+    box-shadow: none;
+    background-color: #fff;
+    font-size: 14px;
+    font-weight: 650;
+  }
+
+  .vh-filter-field .form-control:focus,
+  .vh-filter-field .form-select:focus {
+    border-color: #4f83ff;
+    box-shadow: 0 0 0 .2rem rgba(79,131,255,.12);
+  }
+
+  .vh-customer-combobox {
+    position: relative;
+  }
+
+  .vh-customer-trigger {
+    width: 100%;
+    min-height: 46px;
+    height: 46px;
+    border: 1px solid #d8e0ec;
+    border-radius: 14px;
+    background: #fff;
+    color: #0f172a;
+    padding: 9px 13px 9px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    text-align: left;
+    box-shadow: none;
+    transition: .16s ease;
+  }
+
+  .vh-customer-trigger:hover,
+  .vh-customer-combobox.is-open .vh-customer-trigger {
+    border-color: #4f83ff;
+    box-shadow: 0 0 0 .2rem rgba(79,131,255,.10);
+  }
+
+  .vh-customer-trigger-text {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-weight: 750;
+    font-size: 14px;
+  }
+
+  .vh-customer-trigger-icon {
+    flex: 0 0 auto;
+    color: #64748b;
+    font-size: 12px;
+  }
+
+  .vh-customer-panel {
+    display: none;
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    right: 0;
+    z-index: 50;
+    background: #fff;
+    border: 1px solid #dbe3ef;
+    border-radius: 16px;
+    box-shadow: 0 22px 48px rgba(15,23,42,.18);
+    overflow: hidden;
+  }
+
+  .vh-customer-combobox.is-open .vh-customer-panel {
+    display: block;
+  }
+
+  .vh-customer-search-wrap {
+    padding: 10px;
+    border-bottom: 1px solid #edf2f7;
+    background: #f8fafc;
+  }
+
+  .vh-customer-search {
+    width: 100%;
+    min-height: 42px;
+    border: 1px solid #d8e0ec;
+    border-radius: 12px;
+    padding: 9px 12px;
+    color: #0f172a;
+    outline: none;
+    font-size: 13px;
+  }
+
+  .vh-customer-search:focus {
+    border-color: #4f83ff;
+    box-shadow: 0 0 0 .18rem rgba(79,131,255,.12);
+  }
+
+  .vh-customer-list {
+    max-height: 286px;
+    overflow-y: auto;
+    padding: 6px;
+  }
+
+  .vh-customer-option {
+    width: 100%;
+    border: 0;
+    background: #fff;
+    color: #0f172a;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 11px;
+    border-radius: 11px;
+    text-align: left;
+  }
+
+  .vh-customer-option:hover,
+  .vh-customer-option.is-active {
+    background: #eef4ff;
+    color: #1d4ed8;
+  }
+
+  .vh-customer-option-name {
+    font-size: 13px;
+    font-weight: 850;
+    line-height: 1.25;
+  }
+
+  .vh-customer-option-meta {
+    font-size: 11.5px;
+    color: #64748b;
+    line-height: 1.25;
+  }
+
+  .vh-customer-empty {
+    display: none;
+    padding: 16px 12px;
+    text-align: center;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .vh-customer-list.is-empty .vh-customer-empty {
+    display: block;
+  }
+
+  .vh-customer-list.is-empty .vh-customer-option {
+    display: none !important;
+  }
+
+  .vh-filter-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    align-items: center;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid #edf2f7;
+  }
+
+  .vh-filter-actions .vh-btn {
+    min-height: 46px;
+    padding: 10px 20px;
+  }
+
+  .vh-table-card {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 12px 30px rgba(15,23,42,.06);
+  }
+
+  .vh-card-head {
+    padding: 20px 22px;
+    border-bottom: 1px solid #edf2f7;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .vh-card-title {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 850;
+    color: #0f172a;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .count-pill {
+    background: #4f83ff;
+    color: #fff;
+    border-radius: 999px;
+    font-size: 12px;
+    padding: 5px 9px;
+    font-weight: 850;
+  }
+
+  .vh-table {
+    margin: 0;
+    min-width: 1220px;
+  }
+
+  .vh-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #f8fafc;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 850;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    padding: 14px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    white-space: nowrap;
+  }
+
+  .vh-table tbody td {
+    padding: 16px 12px;
+    vertical-align: middle;
+    border-bottom: 1px solid #edf2f7;
+    color: #0f172a;
+    font-size: 14px;
+  }
+
+  .vh-table tbody tr:hover {
+    background: #f8fafc;
+  }
+
+  .customer-chip-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    max-width: 360px;
+  }
+
+  .customer-chip {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    border-radius: 10px;
+    background: #eef4ff;
+    border: 1px solid #d9e7ff;
+    color: #2563eb;
+    font-weight: 800;
+    padding: 6px 9px;
+    line-height: 1.25;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .category-chip {
+    display: inline-flex;
+    border-radius: 9px;
+    background: #eef4ff;
+    color: #4f83ff;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 850;
+    line-height: 1.2;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    min-width: 86px;
+    padding: 7px 10px;
+    font-size: 11px;
+    font-weight: 850;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+
   .status-approved { background:#ecfdf5; color:#059669; }
   .status-completed { background:#eff6ff; color:#2563eb; }
   .status-pending { background:#fffbeb; color:#d97706; }
   .status-rejected { background:#fef2f2; color:#dc2626; }
   .status-draft { background:#f1f5f9; color:#64748b; }
-  .purpose-cell { max-width:320px; white-space:normal; line-height:1.4; font-weight:650; }
-  .kam-cell { min-width:130px; font-weight:750; }
-  .action-group { display:flex; justify-content:flex-end; gap:7px; flex-wrap:wrap; }
-  .empty-state { padding:44px 20px; text-align:center; color:#64748b; }
 
-  @media (max-width:1400px){
-    .vh-filter-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-    .vh-filter-status, .vh-filter-kam, .vh-filter-date { grid-column: span 2; }
-    .vh-filter-customer, .vh-filter-range { grid-column: span 3; }
+  .purpose-cell {
+    max-width: 320px;
+    white-space: normal;
+    line-height: 1.4;
+    font-weight: 650;
   }
-  @media (max-width:900px){
-    .vh-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .vh-filter-status, .vh-filter-kam, .vh-filter-customer, .vh-filter-date, .vh-filter-range { grid-column: span 1; }
-    .vh-filter-card { position:static; }
-    .vh-customer-panel { position:absolute; left:0; right:0; top:calc(100% + 8px); }
+
+  .kam-cell {
+    min-width: 130px;
+    font-weight: 750;
   }
-  @media (max-width:640px){
-    .vh-title{font-size:25px;}
-    .vh-filter-grid { grid-template-columns:1fr; }
-    .vh-filter-status, .vh-filter-kam, .vh-filter-customer, .vh-filter-date, .vh-filter-range { grid-column: span 1; }
-    .vh-filter-actions { flex-direction:column; }
-    .vh-actions,.vh-btn,.vh-filter-actions .vh-btn{width:100%;justify-content:center;}
+
+  .action-group {
+    display: flex;
+    justify-content: flex-end;
+    gap: 7px;
+    flex-wrap: wrap;
+  }
+
+  .empty-state {
+    padding: 44px 20px;
+    text-align: center;
+    color: #64748b;
+  }
+
+  @media (max-width: 1500px) {
+    .vh-filter-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 992px) {
+    .vh-filter-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .vh-filter-card {
+      position: static;
+    }
+
+    .vh-customer-panel {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(100% + 8px);
+    }
+  }
+
+  @media (max-width: 640px) {
+    .vh-title {
+      font-size: 25px;
+    }
+
+    .vh-filter-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .vh-filter-actions {
+      flex-direction: column;
+    }
+
+    .vh-actions,
+    .vh-btn,
+    .vh-filter-actions .vh-btn {
+      width: 100%;
+      justify-content: center;
+    }
   }
 </style>
 {% endblock %}
@@ -122,7 +544,7 @@
 <form method="get" class="vh-filter-card" id="visitHistoryFilterForm">
   <div class="vh-filter-top">
     <div class="vh-filter-title"><i class="fas fa-filter"></i> Filters</div>
-    <div class="vh-filter-hint"></div>
+    <div class="vh-filter-hint">{% if can_view_all %}Managed KAM scope{% else %}Assigned customer scope{% endif %}</div>
   </div>
 
   <div class="vh-filter-grid">
@@ -155,7 +577,7 @@
       <div class="vh-customer-combobox" id="visitHistoryCustomerCombobox">
         <input type="hidden" name="customer" id="visitHistoryCustomerValue" value="{{ selected_customer|default:'' }}">
         <button type="button" class="vh-customer-trigger" id="visitHistoryCustomerTrigger" aria-haspopup="listbox" aria-expanded="false">
-          <span class="vh-customer-trigger-text" id="visitHistoryCustomerText">All Customers</span>
+          <span class="vh-customer-trigger-text" id="visitHistoryCustomerText">{{ customer_all_label|default:"All Assigned Customers" }}</span>
           <span class="vh-customer-trigger-icon"><i class="fas fa-chevron-down"></i></span>
         </button>
         <div class="vh-customer-panel" id="visitHistoryCustomerPanel">
@@ -163,9 +585,9 @@
             <input type="search" class="vh-customer-search" id="visitHistoryCustomerSearch" placeholder="Search customer name or code" autocomplete="off">
           </div>
           <div class="vh-customer-list" id="visitHistoryCustomerList" role="listbox">
-            <button type="button" class="vh-customer-option" data-value="" data-label="All Customers" data-search="all customers">
-              <span class="vh-customer-option-name">All Customers</span>
-              <span class="vh-customer-option-meta">Show visits for every customer</span>
+            <button type="button" class="vh-customer-option" data-value="" data-label="{{ customer_all_label|default:'All Assigned Customers' }}" data-search="{{ customer_all_label|default:'all assigned customers'|lower }} assigned customers permitted scope">
+              <span class="vh-customer-option-name">{{ customer_all_label|default:"All Assigned Customers" }}</span>
+              <span class="vh-customer-option-meta">{{ customer_all_help|default:"Show visits only for customers assigned to you" }}</span>
             </button>
             {% for customer in customer_dropdown_options %}
               <button type="button" class="vh-customer-option" data-value="{{ customer.id }}" data-label="{{ customer.name|escape }}{% if customer.code %} — {{ customer.code|escape }}{% endif %}" data-search="{{ customer.name|default:''|lower }} {{ customer.code|default:''|lower }}">
@@ -179,7 +601,7 @@
       </div>
       <noscript>
         <select name="customer" class="form-select mt-2">
-          <option value="" {% if not selected_customer %}selected{% endif %}>All Customers</option>
+          <option value="" {% if not selected_customer %}selected{% endif %}>{{ customer_all_label|default:"All Assigned Customers" }}</option>
           {% for customer in customer_dropdown_options %}
             <option value="{{ customer.id }}" {% if selected_customer|stringformat:'s' == customer.id|stringformat:'s' %}selected{% endif %}>{{ customer.name }}{% if customer.code %} — {{ customer.code }}{% endif %}</option>
           {% endfor %}
@@ -345,7 +767,7 @@
       }
 
       valueInput.value = option.getAttribute("data-value") || "";
-      triggerText.textContent = option.getAttribute("data-label") || "All Customers";
+      triggerText.textContent = option.getAttribute("data-label") || "{{ customer_all_label|default:'All Assigned Customers' }}";
 
       options.forEach(function (item) {
         item.classList.toggle("is-active", item === option);
