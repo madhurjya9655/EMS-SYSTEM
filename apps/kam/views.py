@@ -2621,6 +2621,57 @@ def _visit_approval_status_label(plan: "VisitPlan") -> str:
         return (getattr(plan, "approval_status", "") or "-").replace("_", " ").title()
 
 
+
+def _safe_display_attr(obj, *attrs: str, default: str = "-") -> str:
+    """
+    Read optional model attributes safely for templates.
+
+    Production reason:
+    VisitActual fields differ across deployed schemas. Templates must not access
+    optional/nonexistent fields such as competitor_info directly because strict
+    template rendering can raise VariableDoesNotExist.
+    """
+    if not obj:
+        return default
+
+    for attr in attrs:
+        if not attr:
+            continue
+        try:
+            value = getattr(obj, attr, None)
+        except Exception:
+            value = None
+
+        if value is None:
+            continue
+
+        text = str(value).strip()
+        if text:
+            return text
+
+    return default
+
+
+def _safe_display_decimal_attr(obj, *attrs: str, default: str = "-") -> str:
+    if not obj:
+        return default
+
+    for attr in attrs:
+        try:
+            value = getattr(obj, attr, None)
+        except Exception:
+            value = None
+
+        if value in (None, ""):
+            continue
+
+        try:
+            return str(value)
+        except Exception:
+            continue
+
+    return default
+
 def _attach_manager_visit_readonly_details(visits: List["VisitPlan"]) -> List["VisitPlan"]:
     """
     Attach read-only display attributes for Manager View without N+1 queries.
@@ -2636,6 +2687,76 @@ def _attach_manager_visit_readonly_details(visits: List["VisitPlan"]) -> List["V
         visit.manager_approval_status_label = _visit_approval_status_label(visit)
         visit.manager_meeting_outcome = _post_visit_meeting_outcome_text(actual)
         visit.manager_attachment_text = _safe_actual_attachment_text(actual)
+
+        visit.manager_post_datetime = getattr(actual, "actual_datetime", None) if actual else None
+        visit.manager_next_meeting_date = getattr(actual, "next_action_date", None) if actual else None
+        visit.manager_sales_opportunity = getattr(actual, "actual_sales_mt", None) if actual else None
+        visit.manager_collection_amount = getattr(actual, "actual_collection", None) if actual else None
+        visit.manager_followup_text = _safe_display_attr(
+            actual,
+            "next_action",
+            "follow_up_details",
+            "followup_details",
+            "follow_up",
+        )
+
+        visit.manager_quantity_text = _safe_display_decimal_attr(
+            actual,
+            "quantity",
+            "qty",
+            "actual_quantity",
+            "actual_sales_mt",
+        )
+        visit.manager_meeting_summary_text = _safe_display_attr(
+            actual,
+            "summary",
+            "meeting_summary",
+            "meeting_notes",
+        )
+        visit.manager_discussion_text = _safe_display_attr(
+            actual,
+            "meeting_notes",
+            "discussion",
+            "discussion_summary",
+            "customer_feedback",
+        )
+
+        if actual and getattr(actual, "not_success_reason", None):
+            try:
+                visit.manager_issues_text = actual.get_not_success_reason_display()
+            except Exception:
+                visit.manager_issues_text = _safe_display_attr(actual, "not_success_reason")
+        else:
+            visit.manager_issues_text = _safe_display_attr(actual, "issues", "issue")
+
+        visit.manager_challenges_text = _safe_display_attr(
+            actual,
+            "challenges",
+            "challenge",
+            "customer_challenges",
+        )
+        visit.manager_competitor_information_text = _safe_display_attr(
+            actual,
+            "competitor_information",
+            "competitor_info",
+            "competitor",
+            "competitor_details",
+        )
+        visit.manager_products_discussed_text = _safe_display_attr(
+            actual,
+            "products_discussed",
+            "product_discussed",
+            "products",
+            "product_details",
+        )
+        visit.manager_remarks_text = _safe_display_attr(
+            actual,
+            "remarks",
+            "remark",
+            "summary",
+            "meeting_notes",
+        )
+
         visit.manager_call_rows = []
         visit.manager_collection_rows = []
 

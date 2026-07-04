@@ -951,7 +951,7 @@
                   </div>
                   <div class="readonly-field">
                     <div class="readonly-label">Next Meeting Date</div>
-                    <div class="readonly-value">{{ v.actual.next_action_date|date:"d M Y"|default:"-" }}</div>
+                    <div class="readonly-value">{{ v.manager_next_meeting_date|date:"d M Y"|default:"-" }}</div>
                   </div>
                   <div class="readonly-field">
                     <div class="readonly-label">Location</div>
@@ -965,7 +965,7 @@
                 <div class="readonly-grid">
                   <div class="readonly-field">
                     <div class="readonly-label">Post Meeting Date & Time</div>
-                    <div class="readonly-value">{{ v.actual.actual_datetime|date:"d M Y H:i"|default:"-" }}</div>
+                    <div class="readonly-value">{{ v.manager_post_datetime|date:"d M Y H:i"|default:"-" }}</div>
                   </div>
                   <div class="readonly-field">
                     <div class="readonly-label">Meeting Outcome</div>
@@ -973,47 +973,47 @@
                   </div>
                   <div class="readonly-field">
                     <div class="readonly-label">Sales Opportunity</div>
-                    <div class="readonly-value">{% if v.actual.actual_sales_mt %}{{ v.actual.actual_sales_mt|floatformat:3 }} MT{% else %}-{% endif %}</div>
+                    <div class="readonly-value">{% if v.manager_sales_opportunity %}{{ v.manager_sales_opportunity|floatformat:3 }} MT{% else %}-{% endif %}</div>
                   </div>
                   <div class="readonly-field">
                     <div class="readonly-label">Quantity</div>
-                    <div class="readonly-value">{{ v.actual.quantity|default:v.actual.actual_sales_mt|default:"-" }}</div>
+                    <div class="readonly-value">{{ v.manager_quantity_text|default:"-" }}</div>
                   </div>
                   <div class="readonly-field readonly-wide">
                     <div class="readonly-label">Meeting Summary</div>
-                    <div class="readonly-value">{{ v.actual.summary|default:"-" }}</div>
+                    <div class="readonly-value">{{ v.manager_meeting_summary_text|default:"-" }}</div>
                   </div>
                   <div class="readonly-field readonly-wide">
                     <div class="readonly-label">Discussion</div>
-                    <div class="readonly-value">{{ v.actual.meeting_notes|default:"-" }}</div>
+                    <div class="readonly-value">{{ v.manager_discussion_text|default:"-" }}</div>
                   </div>
                   <div class="readonly-field readonly-wide">
                     <div class="readonly-label">Collection Details</div>
-                    <div class="readonly-value">{% if v.actual.actual_collection %}Rs. {{ v.actual.actual_collection|floatformat:0|intcomma }}{% else %}-{% endif %}</div>
+                    <div class="readonly-value">{% if v.manager_collection_amount %}Rs. {{ v.manager_collection_amount|floatformat:0|intcomma }}{% else %}-{% endif %}</div>
                   </div>
                   <div class="readonly-field readonly-wide">
                     <div class="readonly-label">Follow-up Details</div>
-                    <div class="readonly-value">{{ v.actual.next_action|default:"-" }}</div>
+                    <div class="readonly-value">{{ v.manager_followup_text|default:"-" }}</div>
                   </div>
                   <div class="readonly-field">
                     <div class="readonly-label">Issues</div>
-                    <div class="readonly-value">{% if v.actual.not_success_reason %}{{ v.actual.get_not_success_reason_display }}{% else %}{{ v.actual.issues|default:"-" }}{% endif %}</div>
+                    <div class="readonly-value">{{ v.manager_issues_text|default:"-" }}</div>
                   </div>
                   <div class="readonly-field">
                     <div class="readonly-label">Challenges</div>
-                    <div class="readonly-value">{{ v.actual.challenges|default:"-" }}</div>
+                    <div class="readonly-value">{{ v.manager_challenges_text|default:"-" }}</div>
                   </div>
                   <div class="readonly-field">
                     <div class="readonly-label">Competitor Information</div>
-                    <div class="readonly-value">{{ v.actual.competitor_information|default:v.actual.competitor_info|default:"-" }}</div>
+                    <div class="readonly-value">{{ v.manager_competitor_information_text|default:"-" }}</div>
                   </div>
                   <div class="readonly-field">
                     <div class="readonly-label">Products Discussed</div>
-                    <div class="readonly-value">{{ v.actual.products_discussed|default:v.actual.product_discussed|default:"-" }}</div>
+                    <div class="readonly-value">{{ v.manager_products_discussed_text|default:"-" }}</div>
                   </div>
                   <div class="readonly-field readonly-wide">
                     <div class="readonly-label">Remarks</div>
-                    <div class="readonly-value">{{ v.actual.remarks|default:v.actual.summary|default:"-" }}</div>
+                    <div class="readonly-value">{{ v.manager_remarks_text|default:"-" }}</div>
                   </div>
                   <div class="readonly-field readonly-wide">
                     <div class="readonly-label">Attachments</div>
@@ -1039,7 +1039,7 @@
                         <tr>
                           <td>{{ call.call_datetime|date:"d M Y H:i" }}</td>
                           <td>{{ call.duration_minutes|default:0 }} min</td>
-                          <td>{{ call.summary|default:call.notes|default:"-" }}</td>
+                          <td>{{ call.summary|default:"-" }}</td>
                           <td>{{ call.outcome|default:"-" }}</td>
                         </tr>
                       {% empty %}
@@ -1069,7 +1069,7 @@
                           <td>{{ txn.txn_datetime|date:"d M Y H:i" }}</td>
                           <td class="text-end">Rs. {{ txn.amount|floatformat:0|intcomma }}</td>
                           <td>{{ txn.mode|default:"-" }}</td>
-                          <td>{{ txn.reference_no|default:txn.reference|default:"-" }}</td>
+                          <td>{{ txn.reference_no|default:"-" }}</td>
                           <td>{{ txn.notes|default:"-" }}</td>
                         </tr>
                       {% empty %}
@@ -1398,7 +1398,7 @@
                   <td>{{ txn.kam.get_full_name|default:txn.kam.username }}</td>
                   <td class="text-end">Rs. {{ txn.amount|floatformat:0|intcomma }}</td>
                   <td>{{ txn.mode|default:"-" }}</td>
-                  <td>{{ txn.reference_no|default:txn.reference|default:"-" }}</td>
+                  <td>{{ txn.reference_no|default:"-" }}</td>
                 </tr>
               {% endfor %}
             </tbody>
