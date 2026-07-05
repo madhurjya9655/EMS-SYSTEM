@@ -742,11 +742,12 @@ class VisitBatchForm(forms.ModelForm):
             "purpose",
         ]
         widgets = {
-            "from_date": forms.DateInput(attrs={"type": "date"}),
-            "to_date": forms.DateInput(attrs={"type": "date"}),
+            "from_date": forms.DateInput(attrs={"type": "date", "class": "form-control"}),
+            "to_date": forms.DateInput(attrs={"type": "date", "class": "form-control"}),
             "purpose": forms.Textarea(
                 attrs={
                     "rows": 2,
+                    "class": "form-control",
                     "placeholder": "Enter Purpose of Visit",
                     "required": "required",
                 }
@@ -765,10 +766,13 @@ class VisitBatchForm(forms.ModelForm):
         self.fields["purpose"].label = "Purpose of Visit"
         self.fields["purpose"].widget.attrs.update(
             {
-                "required": "required",
+                "class": "form-control",
                 "placeholder": "Enter Purpose of Visit",
+                    "required": "required",
             }
         )
+
+        self.fields["visit_category"].widget.attrs.update({"class": "form-select"})
 
         if customer_queryset is not None:
             self.fields["customers"].queryset = customer_queryset.order_by("name", "code")
@@ -793,8 +797,8 @@ class VisitBatchForm(forms.ModelForm):
 
         if not purpose:
             self.add_error("purpose", "Purpose of Visit is required.")
-        elif len(purpose) > 1000:
-            self.add_error("purpose", "Purpose of Visit is too long (max 1000 characters).")
+        elif len(purpose) > 2000:
+            self.add_error("purpose", "Purpose of Visit is too long (max 2000 characters).")
         else:
             data["purpose"] = purpose
 

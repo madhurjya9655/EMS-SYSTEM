@@ -4843,13 +4843,10 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
             from_date = batch_form.cleaned_data.get("from_date")
             to_date = batch_form.cleaned_data.get("to_date")
 
-            try:
-                remarks = _require_purpose_of_visit(
-                    batch_form.cleaned_data.get("purpose"),
-                    max_length=1000,
-                )
-            except ValueError as exc:
-                messages.error(request, str(exc))
+            remarks = (batch_form.cleaned_data.get("purpose") or "").strip()
+
+            if len(remarks) > 1000:
+                messages.error(request, "General Remarks is too long (max 1000 characters).")
                 return redirect(reverse("kam:plan"))
 
             selected_ids: List[int] = []
@@ -4864,67 +4861,98 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                 selected_customers = batch_form.cleaned_data.get("customers") or []
                 selected_ids = [customer.id for customer in selected_customers]
 
-            manual_names = [
-                name.strip()
-                for name in request.POST.getlist("batch_manual_customer[]")
-                if (name or "").strip()
+            manual_line_data_by_customer_id: Dict[int, dict] = {}
+
+            manual_row_names = [
+                (name or "").strip()
+                for name in (
+                    request.POST.getlist("batch_manual_customer_name[]")
+                    or request.POST.getlist("batch_manual_customer[]")
+                )
             ]
+            manual_row_locations = request.POST.getlist("batch_manual_location[]")
+            manual_row_purposes = request.POST.getlist("batch_manual_purpose[]")
+            manual_row_expected_sales = request.POST.getlist("batch_manual_expected_sales_mt[]")
+            manual_row_expected_collections = request.POST.getlist("batch_manual_expected_collection[]")
 
-            for manual_name in manual_names:
+            for idx, manual_name in enumerate(manual_row_names):
+                manual_name = (manual_name or "").strip()
+
+                if not manual_name:
+                    continue
+
+                manual_location = (
+                    manual_row_locations[idx]
+                    if idx < len(manual_row_locations)
+                    else ""
+                ).strip()
+                manual_purpose = (
+                    manual_row_purposes[idx]
+                    if idx < len(manual_row_purposes)
+                    else ""
+                ).strip()
+                manual_expected_sales_raw = (
+                    manual_row_expected_sales[idx]
+                    if idx < len(manual_row_expected_sales)
+                    else ""
+                ).strip()
+                manual_expected_collection_raw = (
+                    manual_row_expected_collections[idx]
+                    if idx < len(manual_row_expected_collections)
+                    else ""
+                ).strip()
+
                 try:
-                    with transaction.atomic():
-                        manual_customer = (
-                            Customer.objects
-                            .select_for_update()
-                            .filter(name__iexact=manual_name)
-                            .first()
-                        )
+                    manual_purpose = _require_purpose_of_visit(
+                        manual_purpose,
+                        max_length=500,
+                    )
+                except ValueError:
+                    messages.error(
+                        request,
+                        f"Purpose / Remarks is required for new customer: {manual_name}",
+                    )
+                    return redirect(reverse("kam:plan"))
 
-                        created = False
+                if not manual_location:
+                    messages.error(
+                        request,
+                        f"Location is required for new customer: {manual_name}",
+                    )
+                    return redirect(reverse("kam:plan"))
 
-                        if not manual_customer:
-                            manual_customer = Customer.objects.create(
-                                name=manual_name,
-                                kam=user,
-                                primary_kam=user,
-                                source=Customer.SOURCE_MANUAL,
-                                created_by=user,
-                            )
-                            created = True
+                manual_expected_sales = _parse_decimal_or_none(manual_expected_sales_raw)
+                manual_expected_collection = _parse_decimal_or_none(manual_expected_collection_raw)
 
-                        changed_fields = []
+                if manual_expected_sales_raw and manual_expected_sales is None:
+                    messages.error(
+                        request,
+                        f"Expected Sales (MT) is invalid for new customer: {manual_name}",
+                    )
+                    return redirect(reverse("kam:plan"))
 
-                        if hasattr(manual_customer, "kam_id") and not manual_customer.kam_id:
-                            manual_customer.kam = user
-                            changed_fields.append("kam")
+                if manual_expected_collection_raw and manual_expected_collection is None:
+                    messages.error(
+                        request,
+                        f"Expected Collection is invalid for new customer: {manual_name}",
+                    )
+                    return redirect(reverse("kam:plan"))
 
-                        if hasattr(manual_customer, "primary_kam_id") and not manual_customer.primary_kam_id:
-                            manual_customer.primary_kam = user
-                            changed_fields.append("primary_kam")
-
-                        if hasattr(manual_customer, "source") and not getattr(manual_customer, "source", None):
-                            manual_customer.source = Customer.SOURCE_MANUAL
-                            changed_fields.append("source")
-
-                        if hasattr(manual_customer, "created_by_id") and not getattr(manual_customer, "created_by_id", None):
-                            manual_customer.created_by = user
-                            changed_fields.append("created_by")
-
-                        if changed_fields:
-                            if hasattr(manual_customer, "updated_at"):
-                                changed_fields.append("updated_at")
-                            manual_customer.save(update_fields=changed_fields)
-
-                        KAMAssignment.objects.get_or_create(
-                            customer=manual_customer,
-                            kam=user,
-                            defaults={
-                                "active_from": timezone.localdate(),
-                            },
-                        )
+                try:
+                    manual_customer, created = _get_or_create_manual_customer_for_kam(
+                        name=manual_name,
+                        kam_user=user,
+                    )
 
                     if manual_customer.id not in selected_ids:
                         selected_ids.append(manual_customer.id)
+
+                    manual_line_data_by_customer_id[manual_customer.id] = {
+                        "location": manual_location,
+                        "purpose": manual_purpose,
+                        "expected_sales_mt": manual_expected_sales,
+                        "expected_collection": manual_expected_collection,
+                    }
 
                     if created:
                         logger.info(
@@ -4974,15 +5002,34 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                     return redirect(reverse("kam:plan"))
 
                 for customer in valid_selected_customers:
+                    manual_line_data = manual_line_data_by_customer_id.get(customer.id, {})
+                    line_location = (
+                        manual_line_data.get("location")
+                        or request.POST.get(f"location_{customer.id}")
+                        or ""
+                    ).strip()
+                    line_purpose = (
+                        manual_line_data.get("purpose")
+                        or request.POST.get(f"purpose_{customer.id}")
+                        or ""
+                    ).strip()
+
+                    if not line_location:
+                        messages.error(
+                            request,
+                            f"Location is required for customer: {customer.name}",
+                        )
+                        return redirect(reverse("kam:plan"))
+
                     try:
                         _require_purpose_of_visit(
-                            request.POST.get(f"purpose_{customer.id}"),
+                            line_purpose,
                             max_length=500,
                         )
                     except ValueError:
                         messages.error(
                             request,
-                            f"Purpose of Visit is required for customer: {customer.name}",
+                            f"Purpose / Remarks is required for customer: {customer.name}",
                         )
                         return redirect(reverse("kam:plan"))
 
@@ -5096,17 +5143,30 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
 
                 if visit_category == VisitBatch.CAT_CUSTOMER:
                     for customer in valid_selected_customers:
+                        manual_line_data = manual_line_data_by_customer_id.get(customer.id, {})
+
                         purpose = _require_purpose_of_visit(
-                            request.POST.get(f"purpose_{customer.id}"),
+                            manual_line_data.get("purpose")
+                            or request.POST.get(f"purpose_{customer.id}"),
                             max_length=500,
                         )
 
+                        location = (
+                            manual_line_data.get("location")
+                            or request.POST.get(f"location_{customer.id}")
+                            or ""
+                        ).strip()
+
                         expected_sales_mt_raw = (
-                            request.POST.get(f"expected_sales_mt_{customer.id}") or ""
+                            str(manual_line_data.get("expected_sales_mt") or "")
+                            if customer.id in manual_line_data_by_customer_id
+                            else (request.POST.get(f"expected_sales_mt_{customer.id}") or "")
                         )
 
                         expected_collection_raw = (
-                            request.POST.get(f"expected_collection_{customer.id}") or ""
+                            str(manual_line_data.get("expected_collection") or "")
+                            if customer.id in manual_line_data_by_customer_id
+                            else (request.POST.get(f"expected_collection_{customer.id}") or "")
                         )
 
                         expected_sales = _parse_decimal_or_none(expected_sales_mt_raw)
@@ -5128,7 +5188,13 @@ def weekly_plan(request: HttpRequest) -> HttpResponse:
                             transaction.set_rollback(True)
                             return redirect(reverse("kam:plan"))
 
-                        location = (customer.address or "").strip()
+                        if not location:
+                            messages.error(
+                                request,
+                                f"Location is required for customer: {customer.name}",
+                            )
+                            transaction.set_rollback(True)
+                            return redirect(reverse("kam:plan"))
 
                         VisitPlan.objects.create(
                             batch=batch,

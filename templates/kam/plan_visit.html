@@ -25,13 +25,13 @@
   .kam-label { display: block; margin-bottom: 7px; font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: #475569; }
   .kam-label .required { color: #dc2626; }
   .kam-field .form-control, .kam-field .form-select, .kam-field input, .kam-field select, .kam-field textarea { width: 100%; min-height: 44px; border: 1px solid #d8e0ec; border-radius: 12px; color: #0f172a; font-size: 14px; padding: 10px 12px; background: #fff; box-shadow: none; }
-  .kam-field textarea { min-height: 96px; resize: none; line-height: 1.45; }
+  .kam-field textarea { min-height: 96px; resize: vertical; line-height: 1.45; }
   .kam-help { font-size: 12px; color: #64748b; margin-top: 6px; }
   .kam-error { color: #dc2626; font-size: 12px; margin-top: 6px; }
   .kam-alert { border-radius: 14px; padding: 12px 14px; font-size: 13px; margin-bottom: 18px; border: 1px solid #bfdbfe; color: #1e40af; background: #eff6ff; }
   .customer-picker { border: 1px solid #d8e0ec; border-radius: 14px; padding: 10px; background: #fff; }
   .customer-search { width: 100%; min-height: 42px; border: 1px solid #e2e8f0; border-radius: 12px; padding: 9px 12px; outline: 0; }
-  .customer-options { max-height: 220px; overflow-y: auto; margin-top: 8px; border: 1px solid #edf2f7; border-radius: 12px; }
+  .customer-options { max-height: 240px; overflow-y: auto; margin-top: 8px; border: 1px solid #edf2f7; border-radius: 12px; }
   .customer-option { width: 100%; border: 0; border-bottom: 1px solid #edf2f7; background: #fff; padding: 10px 12px; text-align: left; display: flex; flex-direction: column; gap: 2px; }
   .customer-option:hover { background: #f8fafc; }
   .customer-option:last-child { border-bottom: 0; }
@@ -41,9 +41,17 @@
   .kam-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; border-radius: 999px; padding: 7px 10px; background: #eef2ff; color: #3730a3; font-size: 12px; font-weight: 800; border: 1px solid #c7d2fe; }
   .kam-chip button { width: 18px; height: 18px; border: 0; border-radius: 999px; background: #c7d2fe; color: #312e81; line-height: 18px; padding: 0; }
   .manual-customer-box { margin-top: 14px; border-top: 1px dashed #d8e0ec; padding-top: 14px; }
-  .purpose-tools { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-top: 6px; font-size: 12px; color: #64748b; }
+  .manual-customer-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .manual-customer-row .form-control { flex: 1 1 320px; }
   .kam-action-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
   .kam-action-row .btn { min-height: 44px; border-radius: 12px; padding-left: 18px; padding-right: 18px; font-weight: 800; }
+  .bulk-lines-table { min-width: 1120px; margin: 0; }
+  .bulk-lines-table th { background: #f8fafc; color: #475569; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 13px 12px; border-bottom: 1px solid #e2e8f0; }
+  .bulk-lines-table td { padding: 12px; vertical-align: top; border-bottom: 1px solid #edf2f7; }
+  .bulk-lines-table .form-control { min-height: 40px; border-radius: 10px; font-size: 13px; }
+  .bulk-customer-name { font-weight: 800; color: #0f172a; }
+  .bulk-customer-meta { font-size: 12px; color: #64748b; margin-top: 2px; }
+  .bulk-empty { padding: 22px; text-align: center; color: #64748b; border: 1px dashed #cbd5e1; border-radius: 14px; background: #f8fafc; }
   .table-modern { margin: 0; min-width: 860px; }
   .table-modern thead th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: #475569; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 13px 14px; border-bottom: 1px solid #e2e8f0; }
   .table-modern tbody td { padding: 14px; vertical-align: middle; border-bottom: 1px solid #edf2f7; color: #334155; font-size: 13px; }
@@ -66,10 +74,11 @@
   <div class="kam-plan-header">
     <div>
       <h1 class="kam-title">Plan Visit</h1>
-      <div class="kam-subtitle">Plan one route with multiple existing customers and optional new customer creation.</div>
+      <div class="kam-subtitle">Create one visit batch with independent customer visit lines.</div>
     </div>
     <div class="kam-header-actions">
       <a href="{% url 'kam:visits' %}" class="kam-btn kam-btn-primary"><i class="fas fa-plus"></i>Plan New Visit</a>
+      <a href="#bulkVisitForm" class="kam-btn kam-btn-primary"><i class="fas fa-layer-group"></i>Bulk Visit</a>
       <a href="{% url 'kam:call_new' %}" class="kam-btn kam-btn-soft"><i class="fas fa-phone"></i>Call Log</a>
       <a href="{% url 'kam:visit_batches' %}" class="kam-btn kam-btn-outline"><i class="fas fa-clock-rotate-left"></i>Visit History</a>
       <a href="{% url 'kam:dashboard' %}" class="kam-btn kam-btn-outline"><i class="fas fa-arrow-left"></i>Dashboard</a>
@@ -87,44 +96,57 @@
     </div>
   {% endif %}
 
-  <form method="post" novalidate id="singleVisitForm" class="kam-card">
+  <form method="post" novalidate id="bulkVisitForm" class="kam-card">
     {% csrf_token %}
-    <input type="hidden" name="mode" value="single">
-    <input type="hidden" name="form_kind" value="single">
+    <input type="hidden" name="mode" value="batch">
+    <input type="hidden" name="form_kind" value="batch">
 
     <div class="kam-card-head">
       <div>
-        <h2 class="kam-card-title">Plan New Visit</h2>
-        <div class="kam-card-subtitle">Use the customer search to add multiple customers to one route.</div>
+        <h2 class="kam-card-title">Bulk Visit</h2>
+        <div class="kam-card-subtitle">One batch approval request with one independent visit line per customer.</div>
       </div>
     </div>
 
     <div class="kam-card-body">
-      <div class="kam-alert"><i class="fas fa-circle-info me-1"></i> Customer dropdown is scoped to assigned customers. New customer is created only once and mapped to the KAM.</div>
+      <div class="kam-alert"><i class="fas fa-circle-info me-1"></i> Customer list comes from the existing customer master and is scoped to your assigned customers.</div>
 
-      {% if single_form.non_field_errors %}
+      {% if batch_form.non_field_errors %}
         <div class="alert alert-danger">
-          {% for error in single_form.non_field_errors %}<div>{{ error }}</div>{% endfor %}
+          {% for error in batch_form.non_field_errors %}<div>{{ error }}</div>{% endfor %}
         </div>
       {% endif %}
 
       <div class="kam-form-grid">
         <div class="kam-field">
-          <label class="kam-label" for="{{ single_form.visit_category.id_for_label }}">Visit Category <span class="required">*</span></label>
-          {{ single_form.visit_category }}
-          {% if single_form.visit_category.errors %}<div class="kam-error">{{ single_form.visit_category.errors|join:", " }}</div>{% endif %}
+          <label class="kam-label" for="{{ batch_form.visit_category.id_for_label }}">Visit Category <span class="required">*</span></label>
+          {{ batch_form.visit_category }}
+          {% if batch_form.visit_category.errors %}<div class="kam-error">{{ batch_form.visit_category.errors|join:", " }}</div>{% endif %}
         </div>
 
         <div class="kam-field">
-          <label class="kam-label" for="{{ single_form.visit_date.id_for_label }}">Visit Date <span class="required">*</span></label>
-          {{ single_form.visit_date }}
-          {% if single_form.visit_date.errors %}<div class="kam-error">{{ single_form.visit_date.errors|join:", " }}</div>{% endif %}
+          <label class="kam-label" for="{{ batch_form.from_date.id_for_label }}">From Date <span class="required">*</span></label>
+          {{ batch_form.from_date }}
+          {% if batch_form.from_date.errors %}<div class="kam-error">{{ batch_form.from_date.errors|join:", " }}</div>{% endif %}
         </div>
 
         <div class="kam-field">
-          <label class="kam-label" for="{{ single_form.location.id_for_label }}">Location <span class="required">*</span></label>
-          {{ single_form.location }}
-          {% if single_form.location.errors %}<div class="kam-error">{{ single_form.location.errors|join:", " }}</div>{% endif %}
+          <label class="kam-label" for="{{ batch_form.to_date.id_for_label }}">To Date <span class="required">*</span></label>
+          {{ batch_form.to_date }}
+          {% if batch_form.to_date.errors %}<div class="kam-error">{{ batch_form.to_date.errors|join:", " }}</div>{% endif %}
+        </div>
+
+        <div class="kam-field kam-field-wide">
+          <label class="kam-label" for="{{ batch_form.purpose.id_for_label }}">Purpose of Visit <span class="required">*</span></label>
+          <textarea
+            name="{{ batch_form.purpose.html_name }}"
+            id="{{ batch_form.purpose.id_for_label }}"
+            class="form-control"
+            rows="2"
+            required
+          >{% if batch_form.purpose.value %}{{ batch_form.purpose.value }}{% endif %}</textarea>
+          {% if batch_form.purpose.errors %}<div class="kam-error">{{ batch_form.purpose.errors|join:", " }}</div>{% endif %}
+          <div class="kam-help">Mandatory. This is copied into every selected customer row and can be edited per customer if needed.</div>
         </div>
 
         <div class="kam-field kam-field-wide" id="customerModeWrap">
@@ -135,7 +157,7 @@
             <div id="selectedCustomerInputs"></div>
             <div class="customer-options" id="customerOptions">
               {% for customer in customers %}
-                <button type="button" class="customer-option" data-customer-id="{{ customer.id }}" data-customer-name="{{ customer.name|escape }}" data-search="{{ customer.name|default:''|lower }} {{ customer.code|default:''|lower }} {{ customer.address|default:''|lower }}">
+                <button type="button" class="customer-option" data-customer-id="{{ customer.id }}" data-customer-name="{{ customer.name|escape }}" data-customer-code="{{ customer.code|default:''|escape }}" data-customer-location="{{ customer.address|default:''|escape }}" data-search="{{ customer.name|default:''|lower }} {{ customer.code|default:''|lower }} {{ customer.address|default:''|lower }}">
                   <span class="name">{{ customer.name }}</span>
                   <span class="meta">{{ customer.code|default:"No code" }}{% if customer.address %} · {{ customer.address|truncatechars:80 }}{% endif %}</span>
                 </button>
@@ -144,37 +166,51 @@
               {% endfor %}
             </div>
           </div>
-          {% if single_form.customer.errors %}<div class="kam-error">{{ single_form.customer.errors|join:", " }}</div>{% endif %}
+          {% if batch_form.customers.errors %}<div class="kam-error">{{ batch_form.customers.errors|join:", " }}</div>{% endif %}
 
           <div class="manual-customer-box">
             <label class="kam-label" for="manualCustomerInput">New Customer</label>
-            <input type="text" name="manual_customer" id="manualCustomerInput" class="form-control" maxlength="255" autocomplete="off" placeholder="Optional: Future Metal Pvt Ltd">
-            <div class="kam-help">Optional. This can be saved together with all selected existing customers.</div>
-            <div class="selected-chip-wrap" id="manualCustomerPreview"></div>
+            <div class="manual-customer-row">
+              <input type="text" id="manualCustomerInput" class="form-control" maxlength="255" autocomplete="off" placeholder="Optional: Future Metal Pvt Ltd">
+              <button type="button" class="btn btn-outline-primary" id="addManualCustomerBtn"><i class="fas fa-user-plus me-1"></i>Add New Customer Row</button>
+            </div>
+            <div class="kam-help">Optional. This creates a new customer row in the Bulk Visit table and maps the customer to the KAM after save.</div>
           </div>
         </div>
+      </div>
 
-        <div class="kam-field kam-field-wide" id="counterpartyWrap" style="display:none;">
-          <label class="kam-label" for="{{ single_form.counterparty_name.id_for_label }}">Vendor / Supplier / Warehouse Name <span class="required">*</span></label>
-          {{ single_form.counterparty_name }}
-          {% if single_form.counterparty_name.errors %}<div class="kam-error">{{ single_form.counterparty_name.errors|join:", " }}</div>{% endif %}
+      <div class="mt-4">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+          <div>
+            <h3 class="kam-card-title">Customer Visit Lines</h3>
+            <div class="kam-card-subtitle">Each row becomes one individual visit under this batch.</div>
+          </div>
+
         </div>
 
-        <div class="kam-field kam-field-wide">
-          <label class="kam-label" for="{{ single_form.purpose.id_for_label }}">Purpose of Visit <span class="required">*</span></label>
-          {{ single_form.purpose }}
-          {% if single_form.purpose.errors %}<div class="kam-error">{{ single_form.purpose.errors|join:", " }}</div>{% endif %}
-          <div class="purpose-tools">
-            <span>Write clear agenda, collection follow-up, sales opportunity or relationship purpose.</span>
-            <span><span id="purposeCount">0</span>/2000</span>
-          </div>
+        <div id="bulkEmptyState" class="bulk-empty">Select customers above to create editable visit lines.</div>
+
+        <div class="table-responsive d-none" id="bulkLinesWrap">
+          <table class="table bulk-lines-table">
+            <thead>
+              <tr>
+                <th style="width: 20%;">Customer</th>
+                <th style="width: 20%;">Location <span class="required">*</span></th>
+                <th style="width: 26%;">Purpose of Visit <span class="required">*</span></th>
+                <th style="width: 12%;">Expected Sales (MT)</th>
+                <th style="width: 14%;">Expected Collection</th>
+                <th style="width: 8%;" class="text-end">Action</th>
+              </tr>
+            </thead>
+            <tbody id="bulkLinesBody"></tbody>
+          </table>
         </div>
       </div>
 
       <div class="kam-action-row">
         <button type="submit" name="action" value="draft" class="btn btn-outline-secondary"><i class="fas fa-save me-1"></i>Save Draft</button>
         <button type="submit" name="action" value="submit" class="btn btn-primary"><i class="fas fa-paper-plane me-1"></i>Submit to Manager</button>
-        <span class="text-muted small"><i class="fas fa-envelope me-1"></i>Manager approval workflow is preserved.</span>
+        <span class="text-muted small"><i class="fas fa-envelope me-1"></i>One approval email is sent for the batch.</span>
       </div>
     </div>
   </form>
@@ -229,37 +265,84 @@
 
 <script>
 (function () {
-  const categoryField = document.getElementById("id_single-visit_category") || document.getElementById("id_visit_category");
+  const categoryField = document.getElementById("id_batch-visit_category") || document.getElementById("id_visit_category");
   const customerModeWrap = document.getElementById("customerModeWrap");
-  const counterpartyWrap = document.getElementById("counterpartyWrap");
-  const counterpartyInput = document.getElementById("id_single-counterparty_name") || document.getElementById("id_counterparty_name");
   const searchInput = document.getElementById("customerSearch");
   const optionsWrap = document.getElementById("customerOptions");
   const chipsWrap = document.getElementById("selectedCustomerChips");
   const hiddenWrap = document.getElementById("selectedCustomerInputs");
-  const manualInput = document.getElementById("manualCustomerInput");
-  const manualPreview = document.getElementById("manualCustomerPreview");
-  const purposeField = document.getElementById("id_single-purpose") || document.getElementById("id_purpose");
-  const purposeCount = document.getElementById("purposeCount");
+  const linesWrap = document.getElementById("bulkLinesWrap");
+  const linesBody = document.getElementById("bulkLinesBody");
+  const emptyState = document.getElementById("bulkEmptyState");
+  const addManualCustomerBtn = document.getElementById("addManualCustomerBtn");
+  const manualCustomerInput = document.getElementById("manualCustomerInput");
+  const batchPurposeField = document.getElementById("id_batch-purpose") || document.getElementById("id_purpose");
   const selected = new Map();
+  let manualCounter = 0;
+
+  function esc(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
 
   function isCustomerCategory(value) {
     const normalized = String(value || "").toUpperCase();
     return normalized === "CUSTOMER" || normalized === "CUSTOMER_VISIT";
   }
 
+  function rowHtml(customer) {
+    const safeId = esc(customer.id);
+    const safeName = esc(customer.name);
+    const safeCode = esc(customer.code || "No code");
+    const safeLocation = esc(customer.location || "");
+    return `
+      <tr data-row-id="${safeId}">
+        <td>
+          <div class="bulk-customer-name">${safeName}</div>
+          <div class="bulk-customer-meta">${safeCode}</div>
+        </td>
+        <td><textarea class="form-control" name="location_${safeId}" rows="2" required>${safeLocation}</textarea></td>
+        <td><textarea class="form-control bulk-line-purpose" name="purpose_${safeId}" rows="2" placeholder="Purpose of Visit" required>${esc(batchPurposeField ? batchPurposeField.value : "")}</textarea></td>
+        <td><input class="form-control" type="number" step="0.001" min="0" name="expected_sales_mt_${safeId}" placeholder="0.000"></td>
+        <td><input class="form-control" type="number" step="0.01" min="0" name="expected_collection_${safeId}" placeholder="0.00"></td>
+        <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger" data-remove-id="${safeId}"><i class="fas fa-trash"></i></button></td>
+      </tr>`;
+  }
+
+  function manualRowHtml(index, customerName) {
+    return `
+      <tr data-manual-row="${index}">
+        <td><input class="form-control" type="text" name="batch_manual_customer_name[]" maxlength="255" placeholder="New customer name" value="${esc(customerName || "")}" required></td>
+        <td><textarea class="form-control" name="batch_manual_location[]" rows="2" placeholder="Location" required></textarea></td>
+        <td><textarea class="form-control bulk-line-purpose" name="batch_manual_purpose[]" rows="2" placeholder="Purpose of Visit" required>${esc(batchPurposeField ? batchPurposeField.value : "")}</textarea></td>
+        <td><input class="form-control" type="number" step="0.001" min="0" name="batch_manual_expected_sales_mt[]" placeholder="0.000"></td>
+        <td><input class="form-control" type="number" step="0.01" min="0" name="batch_manual_expected_collection[]" placeholder="0.00"></td>
+        <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger" data-remove-manual="${index}"><i class="fas fa-trash"></i></button></td>
+      </tr>`;
+  }
+
   function renderSelected() {
     chipsWrap.innerHTML = "";
     hiddenWrap.innerHTML = "";
-    selected.forEach(function (name, id) {
+    linesBody.innerHTML = "";
+
+    selected.forEach(function (customer, id) {
       const chip = document.createElement("span");
       chip.className = "kam-chip";
-      chip.textContent = name + " ";
+      chip.textContent = customer.name + " ";
       const remove = document.createElement("button");
       remove.type = "button";
       remove.textContent = "×";
-      remove.setAttribute("aria-label", "Remove " + name);
-      remove.addEventListener("click", function () { selected.delete(id); renderSelected(); });
+      remove.setAttribute("aria-label", "Remove " + customer.name);
+      remove.addEventListener("click", function () {
+        selected.delete(id);
+        renderSelected();
+        filterOptions();
+      });
       chip.appendChild(remove);
       chipsWrap.appendChild(chip);
 
@@ -268,7 +351,17 @@
       input.name = "customers_selected[]";
       input.value = id;
       hiddenWrap.appendChild(input);
+
+      linesBody.insertAdjacentHTML("beforeend", rowHtml(customer));
     });
+
+    syncEmptyState();
+  }
+
+  function syncEmptyState() {
+    const hasRows = linesBody.querySelectorAll("tr").length > 0;
+    emptyState.classList.toggle("d-none", hasRows);
+    linesWrap.classList.toggle("d-none", !hasRows);
   }
 
   function filterOptions() {
@@ -284,52 +377,92 @@
     optionsWrap.querySelectorAll(".customer-option").forEach(function (button) {
       button.addEventListener("click", function () {
         const id = button.getAttribute("data-customer-id");
-        const name = button.getAttribute("data-customer-name");
-        if (id && name) { selected.set(id, name); renderSelected(); filterOptions(); }
+        const customer = {
+          id: id,
+          name: button.getAttribute("data-customer-name") || "Customer",
+          code: button.getAttribute("data-customer-code") || "",
+          location: button.getAttribute("data-customer-location") || ""
+        };
+        if (id) {
+          selected.set(id, customer);
+          renderSelected();
+          filterOptions();
+        }
       });
     });
   }
 
-  if (searchInput) { searchInput.addEventListener("input", filterOptions); }
+  if (searchInput) searchInput.addEventListener("input", filterOptions);
 
-  function syncManualPreview() {
-    if (!manualInput || !manualPreview) return;
-    const value = manualInput.value.trim();
-    manualPreview.innerHTML = "";
-    if (value) {
-      const chip = document.createElement("span");
-      chip.className = "kam-chip";
-      chip.textContent = value + " will be created";
-      manualPreview.appendChild(chip);
-    }
+  if (linesBody) {
+    linesBody.addEventListener("click", function (event) {
+      const removeBtn = event.target.closest("[data-remove-id]");
+      if (removeBtn) {
+        selected.delete(removeBtn.getAttribute("data-remove-id"));
+        renderSelected();
+        filterOptions();
+        return;
+      }
+
+      const removeManualBtn = event.target.closest("[data-remove-manual]");
+      if (removeManualBtn) {
+        const row = removeManualBtn.closest("tr");
+        if (row) row.remove();
+        syncEmptyState();
+      }
+    });
+  }
+
+  if (addManualCustomerBtn) {
+    addManualCustomerBtn.addEventListener("click", function () {
+      manualCounter += 1;
+      const manualName = manualCustomerInput ? manualCustomerInput.value.trim() : "";
+      linesBody.insertAdjacentHTML("beforeend", manualRowHtml(manualCounter, manualName));
+      if (manualCustomerInput) manualCustomerInput.value = "";
+      syncEmptyState();
+    });
+  }
+
+  if (manualCustomerInput) {
+    manualCustomerInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (addManualCustomerBtn) addManualCustomerBtn.click();
+      }
+    });
+  }
+
+  function syncLinePurposeDefaults() {
+    if (!batchPurposeField || !linesBody) return;
+    const value = batchPurposeField.value || "";
+    linesBody.querySelectorAll(".bulk-line-purpose").forEach(function (textarea) {
+      if (!textarea.dataset.userEdited || textarea.value.trim() === "") {
+        textarea.value = value;
+      }
+    });
+  }
+
+  if (batchPurposeField) {
+    batchPurposeField.addEventListener("input", syncLinePurposeDefaults);
+  }
+
+  if (linesBody) {
+    linesBody.addEventListener("input", function (event) {
+      if (event.target && event.target.classList.contains("bulk-line-purpose")) {
+        event.target.dataset.userEdited = "1";
+      }
+    });
   }
 
   function syncCategoryUI() {
-    const isCustomer = isCustomerCategory(categoryField ? categoryField.value : "");
-    if (customerModeWrap) customerModeWrap.style.display = isCustomer ? "" : "none";
-    if (counterpartyWrap) counterpartyWrap.style.display = isCustomer ? "none" : "";
-    if (counterpartyInput) {
-      if (isCustomer) { counterpartyInput.value = ""; counterpartyInput.removeAttribute("required"); }
-      else { counterpartyInput.setAttribute("required", "required"); }
-    }
+    if (customerModeWrap) customerModeWrap.style.display = "";
   }
 
-  function syncPurpose() {
-    if (!purposeField) return;
-    purposeField.style.height = "auto";
-    purposeField.style.height = Math.max(96, purposeField.scrollHeight) + "px";
-    if (purposeCount) purposeCount.textContent = String((purposeField.value || "").length);
-  }
-
-  if (manualInput) manualInput.addEventListener("input", syncManualPreview);
   if (categoryField) categoryField.addEventListener("change", syncCategoryUI);
-  if (purposeField) purposeField.addEventListener("input", syncPurpose);
-
   renderSelected();
+  syncLinePurposeDefaults();
   filterOptions();
-  syncManualPreview();
   syncCategoryUI();
-  syncPurpose();
 })();
 </script>
 {% endblock %}
